@@ -4,27 +4,30 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from fantasy_baseball.streaks.data.schema import get_connection
 from fantasy_baseball.streaks.pipeline import _refresh_streaks_db, _should_refit
 
 
-def test_should_refit_true_when_no_fits(seeded_pipeline_conn_no_fits) -> None:
-    assert _should_refit(seeded_pipeline_conn_no_fits, max_age_days=14, force=False) is True
+def test_should_refit_true_when_no_fits() -> None:
+    # Empty model_fits -> refit. No pipeline seed needed: _should_refit reads
+    # only MAX(fit_timestamp), so a bare connection exercises the decision.
+    conn = get_connection(":memory:")
+    assert _should_refit(conn, max_age_days=14, force=False) is True
+    conn.close()
 
 
-def test_should_refit_false_when_recent_fits(seeded_pipeline_conn_with_recent_fits) -> None:
-    assert (
-        _should_refit(seeded_pipeline_conn_with_recent_fits, max_age_days=14, force=False) is False
-    )
+def test_should_refit_false_when_recent_fits(conn_with_recent_fit) -> None:
+    assert _should_refit(conn_with_recent_fit, max_age_days=14, force=False) is False
 
 
-def test_should_refit_true_when_stale_fits(seeded_pipeline_conn_with_old_fits) -> None:
-    assert _should_refit(seeded_pipeline_conn_with_old_fits, max_age_days=14, force=False) is True
+def test_should_refit_true_when_stale_fits(conn_with_old_fit) -> None:
+    assert _should_refit(conn_with_old_fit, max_age_days=14, force=False) is True
 
 
 def test_should_refit_true_when_forced_even_if_recent(
-    seeded_pipeline_conn_with_recent_fits,
+    conn_with_recent_fit,
 ) -> None:
-    assert _should_refit(seeded_pipeline_conn_with_recent_fits, max_age_days=14, force=True) is True
+    assert _should_refit(conn_with_recent_fit, max_age_days=14, force=True) is True
 
 
 def test_refresh_streaks_db_passes_incremental_to_fetch_season(

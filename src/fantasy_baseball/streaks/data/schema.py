@@ -179,15 +179,26 @@ _SCHEMA_DDL = [
 # single instance process-wide -- a caller must not be able to corrupt it.
 IntendedSchema = Mapping[str, tuple[tuple[str, str, bool], ...]]
 
+# Per-table raw catalog as ``(name, duckdb_type, not_null, is_pk)`` -- the single
+# pass the intended-schema and primary-key views both project from.
+_TableCatalog = Mapping[str, tuple[tuple[str, str, bool, bool], ...]]
 
-def _build_intended_schema() -> IntendedSchema:
-    """Each table's intended columns as ``(name, duckdb_type, not_null)``.
 
-    Built by running ``_SCHEMA_DDL`` into a throwaway in-memory DB and reading
-    DuckDB's own catalog back. That keeps ``_SCHEMA_DDL`` the single source of
-    truth and yields normalized type strings (including ``DOUBLE[]`` /
-    ``VARCHAR[]``) with no Python->SQL type map. Returned read-only since the
-    caller (``_intended_schema``) caches and shares one instance.
+@functools.cache
+def _catalog() -> _TableCatalog:
+    """Each table's columns as ``(name, duckdb_type, not_null, is_pk)``.
+
+    Built once (cached) by running ``_SCHEMA_DDL`` into a throwaway in-memory DB
+    and reading DuckDB's own catalog back -- ``PRAGMA table_info`` yields
+    ``(cid, name, type, notnull, dflt, pk)``, so name/type/not_null/pk are
+    ``r[1]/r[2]/r[3]/r[5]``. Keeps ``_SCHEMA_DDL`` the single source of truth
+    (normalized type strings, no Python->SQL type map) and introspects the DDL
+    *once* per process for both the column-catalog and primary-key views below.
+
+    Lazy (not built at import) so importing this module never runs DDL: a
+    malformed-DDL or DuckDB-engine error then surfaces inside the first
+    ``init_schema`` call -- where the caller can handle it -- rather than as an
+    ImportError that bricks every module that imports schema.
     """
     scratch = duckdb.connect(":memory:")
     try:
@@ -196,7 +207,7 @@ def _build_intended_schema() -> IntendedSchema:
         return MappingProxyType(
             {
                 table: tuple(
-                    (r[1], r[2], bool(r[3]))
+                    (r[1], r[2], bool(r[3]), bool(r[5]))
                     for r in scratch.execute(f'PRAGMA table_info("{table}")').fetchall()
                 )
                 for (table,) in scratch.execute("SHOW TABLES").fetchall()
@@ -208,21 +219,27 @@ def _build_intended_schema() -> IntendedSchema:
 
 @functools.cache
 def _intended_schema() -> IntendedSchema:
-    """Intended column catalog, built lazily from ``_SCHEMA_DDL`` and cached.
-
-    Lazy (not built at import) so importing this module never runs DDL: a
-    malformed-DDL or DuckDB-engine error then surfaces inside the first
-    ``init_schema`` call -- where the caller can handle it -- rather than as an
-    ImportError that bricks every module that imports schema. Cached, so
-    ``init_schema`` pays no scratch-DB rebuild per connection open.
-    """
-    return _build_intended_schema()
+    """Intended column catalog ``(name, type, not_null)``, from the cached ``_catalog``."""
+    return MappingProxyType(
+        {table: tuple((c[0], c[1], c[2]) for c in cols) for table, cols in _catalog().items()}
+    )
 
 
 def _table_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
     """Column names currently on *table*. The table must exist (DuckDB's
     PRAGMA table_info raises CatalogException for a missing table)."""
     return {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+
+
+def table_primary_key(table: str) -> tuple[str, ...]:
+    """PRIMARY KEY column names for *table*, from the cached ``_SCHEMA_DDL`` catalog.
+
+    Keeps the DDL the single source of truth -- callers (e.g. ``load._bulk_upsert``'s
+    dedupe) never hand-restate a PK that can drift -- without paying a catalog
+    query per call on the ingestion hot path. PRIMARY KEY columns never drift
+    additively (the self-heal only ADDs nullable columns), so the intended key
+    always equals the live table's key."""
+    return tuple(c[0] for c in _catalog()[table] if c[3])
 
 
 def get_connection(path: Path | str = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnection:

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import FrozenInstanceError
 from datetime import date, timedelta
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -24,52 +25,65 @@ from fantasy_baseball.streaks.inference import (
     score_player_windows,
     top_drivers,
 )
-from tests.test_streaks.test_predictors import _seed_pipeline
+from tests.test_streaks.conftest import _seed_two_seasons
 
 
-def _seed_two_seasons(conn) -> None:
-    """Seed enough data that refit_models_for_report has a 2-season train set."""
-    _seed_pipeline(conn, season=2023)
-    _seed_pipeline(conn, season=2024)
+def _example_feature_rows() -> pd.DataFrame:
+    """Several diverse rows in EXPECTED_FEATURE_COLUMNS order.
 
-
-@pytest.fixture
-def seeded_pipeline_conn():
-    """Phase-4 fit + persist sequence on a 2-season fixture.
-
-    Mirrors the setup used by every fit-and-score test in this file: 2023+2024
-    seasons seeded, then ``refit_models_for_report`` invoked so ``model_fits``
-    has the fresh rows the loader will read back.
+    The persist->reconstruct round-trip is the only guard that the stored
+    coef / scaler params stay column-aligned with EXPECTED_FEATURE_COLUMNS, so
+    one row isn't enough: a feature-column reordering or scaler-mean/scale
+    misalignment could cancel out at a single lucky set of values. These rows
+    vary the pt_bucket one-hot (low/mid/high) and span cold/moderate/hot
+    peripheral magnitudes, so predict_proba matches fresh vs loaded across ALL
+    rows only if every step is reconstructed correctly.
     """
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
-    return conn
-
-
-def _example_feature_row() -> pd.DataFrame:
-    """Single-row DataFrame in EXPECTED_FEATURE_COLUMNS order.
-
-    Constant non-trivial values so the StandardScaler transform produces
-    a deterministic non-zero input to LogisticRegression — predict_proba
-    will return identical numbers across fresh vs loaded pipelines only
-    if every step is correctly reconstructed.
-    """
-    row = {
-        "streak_strength_numeric": 3.0,
-        "babip": 0.310,
-        "k_pct": 0.22,
-        "bb_pct": 0.08,
-        "iso": 0.180,
-        "ev_avg": 90.0,
-        "barrel_pct": 0.08,
-        "xwoba_avg": 0.355,
-        "season_rate_in_category": 0.15,
-        "pt_bucket_low": 0,
-        "pt_bucket_mid": 1,
-        "pt_bucket_high": 0,
-    }
-    return pd.DataFrame([row], columns=list(EXPECTED_FEATURE_COLUMNS))
+    rows = [
+        {  # mid bucket, moderate peripherals
+            "streak_strength_numeric": 3.0,
+            "babip": 0.310,
+            "k_pct": 0.22,
+            "bb_pct": 0.08,
+            "iso": 0.180,
+            "ev_avg": 90.0,
+            "barrel_pct": 0.08,
+            "xwoba_avg": 0.355,
+            "season_rate_in_category": 0.15,
+            "pt_bucket_low": 0,
+            "pt_bucket_mid": 1,
+            "pt_bucket_high": 0,
+        },
+        {  # low bucket, cold peripherals
+            "streak_strength_numeric": 1.0,
+            "babip": 0.250,
+            "k_pct": 0.30,
+            "bb_pct": 0.04,
+            "iso": 0.090,
+            "ev_avg": 84.0,
+            "barrel_pct": 0.02,
+            "xwoba_avg": 0.280,
+            "season_rate_in_category": 0.05,
+            "pt_bucket_low": 1,
+            "pt_bucket_mid": 0,
+            "pt_bucket_high": 0,
+        },
+        {  # high bucket, hot peripherals
+            "streak_strength_numeric": 5.0,
+            "babip": 0.380,
+            "k_pct": 0.15,
+            "bb_pct": 0.14,
+            "iso": 0.280,
+            "ev_avg": 95.0,
+            "barrel_pct": 0.16,
+            "xwoba_avg": 0.420,
+            "season_rate_in_category": 0.28,
+            "pt_bucket_low": 0,
+            "pt_bucket_mid": 0,
+            "pt_bucket_high": 1,
+        },
+    ]
+    return pd.DataFrame(rows, columns=list(EXPECTED_FEATURE_COLUMNS))
 
 
 def test_dense_streak_strength_bins_to_quintile() -> None:
@@ -125,10 +139,9 @@ def test_dense_quintile_cutoffs_matches_training_population() -> None:
     assert cutoffs[0] <= cutoffs[1] <= cutoffs[2] <= cutoffs[3]
 
 
-def test_top_drivers_excludes_non_peripheral_features_by_default() -> None:
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+def test_top_drivers_excludes_non_peripheral_features_by_default(seeded_fitted_conn) -> None:
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     model = fitted[("r", "above")]
     # Build a feature row with all peripherals at their training mean (0
     # after StandardScaler) — the top-k will surface whichever has a
@@ -153,10 +166,9 @@ def test_top_drivers_excludes_non_peripheral_features_by_default() -> None:
         }
 
 
-def test_score_player_windows_returns_one_row_per_category() -> None:
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+def test_score_player_windows_returns_one_row_per_category(seeded_fitted_conn) -> None:
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     # Pick a player who is in the fixture and whose window_end is in 2024.
     last_window = conn.execute(
         "SELECT player_id, MAX(window_end) FROM hitter_windows WHERE window_days = 14 GROUP BY player_id LIMIT 1"
@@ -180,10 +192,9 @@ def test_score_player_windows_returns_one_row_per_category() -> None:
     assert not skips
 
 
-def test_score_player_windows_skips_player_with_no_window() -> None:
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+def test_score_player_windows_skips_player_with_no_window(seeded_fitted_conn) -> None:
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     scores, skips = score_player_windows(
         conn,
         models=fitted,
@@ -198,12 +209,11 @@ def test_score_player_windows_skips_player_with_no_window() -> None:
     assert skips[0].reason == "no_window"
 
 
-def test_score_player_windows_emits_probability_only_when_label_non_neutral_and_model_exists() -> (
-    None
-):
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+def test_score_player_windows_emits_probability_only_when_label_non_neutral_and_model_exists(
+    seeded_fitted_conn,
+) -> None:
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     # Grab any player_id present in windows.
     pid_row = conn.execute("SELECT player_id FROM hitter_windows LIMIT 1").fetchone()
     assert pid_row is not None
@@ -233,12 +243,13 @@ def test_score_player_windows_emits_probability_only_when_label_non_neutral_and_
             assert s.drivers == ()
 
 
-def test_score_player_windows_handles_missing_projection_rate_gracefully() -> None:
+def test_score_player_windows_handles_missing_projection_rate_gracefully(
+    seeded_fitted_conn,
+) -> None:
     """If a dense cat label is hot/cold but projection_rate is missing,
     the score row carries the label but no probability."""
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     # Wipe projection rates so dense lookups return None.
     conn.execute("DELETE FROM hitter_projection_rates")
     pid_row = conn.execute("SELECT player_id FROM hitter_windows LIMIT 1").fetchone()
@@ -281,20 +292,27 @@ def test_score_skip_reasons_are_typed() -> None:
     assert skip.reason == "no_window"
 
 
-def test_load_models_from_fits_round_trips_predictions(seeded_pipeline_conn) -> None:
-    """A model loaded from model_fits scores identically to the freshly-refit one (within tolerance)."""
+def test_load_models_from_fits_round_trips_predictions(seeded_pipeline_conn_no_fits) -> None:
+    """A model loaded from model_fits scores identically to the freshly-refit one (within tolerance).
+
+    Seeds via the shared no-fits fixture, then fits here: the test needs the
+    live ``fresh`` pipelines (refit's return value) to compare against the ones
+    ``load_models_from_fits`` reconstructs from the persisted rows.
+    """
     fresh = refit_models_for_report(
-        seeded_pipeline_conn, season_set_train="2023-2024", window_days=14
+        seeded_pipeline_conn_no_fits, season_set_train="2023-2024", window_days=14
     )
-    loaded = load_models_from_fits(seeded_pipeline_conn)
+    loaded = load_models_from_fits(seeded_pipeline_conn_no_fits)
 
     assert set(loaded.keys()) == set(fresh.keys())
-    X = _example_feature_row()  # 1-row DataFrame matching EXPECTED_FEATURE_COLUMNS
+    X = _example_feature_rows()  # several diverse rows matching EXPECTED_FEATURE_COLUMNS
     for key, fresh_model in fresh.items():
         loaded_model = loaded[key]
-        p_fresh = fresh_model.pipeline.predict_proba(X)[0, 1]
-        p_loaded = loaded_model.pipeline.predict_proba(X)[0, 1]
-        assert abs(p_fresh - p_loaded) < 1e-9, (
+        p_fresh = fresh_model.pipeline.predict_proba(X)[:, 1]
+        p_loaded = loaded_model.pipeline.predict_proba(X)[:, 1]
+        # rtol=0 keeps this a strict absolute 1e-9 check (np.allclose defaults
+        # rtol=1e-5, which would loosen the "byte-identical" round-trip ~5000x).
+        assert np.allclose(p_fresh, p_loaded, rtol=0, atol=1e-9), (
             f"Mismatch for {key}: fresh={p_fresh}, loaded={p_loaded}"
         )
         # Quintile cutoffs should also round-trip exactly for dense cats.
