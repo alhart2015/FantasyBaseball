@@ -168,6 +168,34 @@ _SCHEMA_DDL = [
 ]
 
 
+# Columns added to a table AFTER its original CREATE. ``CREATE TABLE IF NOT
+# EXISTS`` never alters an existing table, and the streaks DuckDB is gitignored
+# data -- a dev box's DB created before a column was added never gets recreated.
+# init_schema ALTERs these onto pre-existing tables so additive drift can't
+# throw a BinderException on the next insert (e.g. ``launch_speed_angle``).
+#
+# Every entry MUST be a nullable additive column. This mechanism only heals
+# additive drift -- it never drops or retypes. Destructive changes (drop
+# ``barrel``, PK shape changes) still go through migrate.py. When you add a
+# column to a table above, add it here too.
+_ADDITIVE_COLUMNS: dict[str, tuple[tuple[str, str], ...]] = {
+    "hitter_projection_rates": (
+        ("r_per_pa", "DOUBLE"),
+        ("rbi_per_pa", "DOUBLE"),
+        ("avg", "DOUBLE"),
+    ),
+    "hitter_statcast_pa": (("launch_speed_angle", "INTEGER"),),
+    "model_fits": (
+        ("feature_columns", "VARCHAR[]"),
+        ("coef", "DOUBLE[]"),
+        ("intercept", "DOUBLE"),
+        ("scaler_mean", "DOUBLE[]"),
+        ("scaler_scale", "DOUBLE[]"),
+        ("dense_quintile_cutoffs", "DOUBLE[]"),
+    ),
+}
+
+
 def get_connection(path: Path | str = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnection:
     """Open (or create) the streaks DuckDB at *path* and return the connection.
 
@@ -182,6 +210,11 @@ def get_connection(path: Path | str = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnect
 
 
 def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
-    """Create all streaks tables if they don't already exist."""
+    """Create all streaks tables if they don't already exist, then heal any
+    additive column drift on pre-existing tables (see ``_ADDITIVE_COLUMNS``).
+    """
     for ddl in _SCHEMA_DDL:
         conn.execute(ddl)
+    for table, columns in _ADDITIVE_COLUMNS.items():
+        for name, sql_type in columns:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS {name} {sql_type}")
