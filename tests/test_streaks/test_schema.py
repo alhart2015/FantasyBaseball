@@ -234,6 +234,50 @@ def test_init_schema_heals_all_additive_columns() -> None:
     }.issubset(fits_cols)
 
 
+def test_init_schema_leaves_unknown_columns_untouched() -> None:
+    """The healer is strictly additive: a legacy column absent from _SCHEMA_DDL
+    (e.g. the pre-Phase-5 ``barrel`` column) must survive init_schema untouched,
+    not be dropped. Pins the 'never drops or retypes' guarantee so a future
+    symmetric-diff refactor can't silently delete data and stay green.
+    """
+    conn = duckdb.connect(":memory:")
+    conn.execute(
+        "CREATE TABLE hitter_statcast_pa ("
+        "player_id INTEGER, date DATE, pa_index INTEGER, barrel BOOLEAN, "
+        "PRIMARY KEY (player_id, date, pa_index))"
+    )
+
+    init_schema(conn)
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_statcast_pa')").fetchall()}
+    assert "barrel" in cols  # legacy column NOT in _SCHEMA_DDL -- must be preserved
+    assert "launch_speed_angle" in cols  # the genuinely-missing column is still healed
+
+
+def test_heal_skips_not_null_additive_column(monkeypatch, caplog) -> None:
+    """A NOT NULL additive column can't be ALTER-added to a populated table, so
+    the healer must skip it with a warning -- not silently add it as nullable
+    (which would diverge healed DBs from fresh ones).
+    """
+    from fantasy_baseball.streaks.data import schema
+
+    conn = duckdb.connect(":memory:")
+    conn.execute("CREATE TABLE t (id INTEGER, PRIMARY KEY (id))")
+    conn.execute("INSERT INTO t VALUES (1)")  # populated -> NOT NULL add is impossible
+    monkeypatch.setattr(
+        schema,
+        "_intended_schema",
+        lambda: {"t": [("id", "INTEGER", True), ("req", "INTEGER", True)]},
+    )
+
+    with caplog.at_level("WARNING"):
+        schema._heal_additive_drift(conn)
+
+    cols = {r[1] for r in conn.execute("PRAGMA table_info('t')").fetchall()}
+    assert "req" not in cols  # skipped, not silently added as nullable
+    assert any("req" in m for m in caplog.messages)
+
+
 def test_model_fits_table_exists() -> None:
     conn = get_connection(":memory:")
     info = conn.execute("PRAGMA table_info('model_fits')").fetchall()

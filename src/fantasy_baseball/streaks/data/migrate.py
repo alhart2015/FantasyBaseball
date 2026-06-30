@@ -8,6 +8,11 @@ committed re-fetch, since ALTER ADD COLUMN cannot reinstate the
 up the PK shape change for ``cold_method``; other tables are untouched.
 Both functions are idempotent (``DROP TABLE IF EXISTS`` plus
 ``CREATE TABLE IF NOT EXISTS``) and safe to re-run.
+
+Phases 4, 5, and B were additive column adds; that work now lives in
+``init_schema``'s additive-drift healer, so those functions are thin wrappers
+over ``init_schema`` (Phase 5 additionally drops the legacy ``barrel`` column,
+the one step the additive healer cannot do).
 """
 
 from __future__ import annotations
@@ -16,7 +21,7 @@ import logging
 
 import duckdb
 
-from fantasy_baseball.streaks.data.schema import init_schema
+from fantasy_baseball.streaks.data.schema import _table_columns, init_schema
 
 logger = logging.getLogger(__name__)
 
@@ -56,24 +61,19 @@ def migrate_to_phase_3(conn: duckdb.DuckDBPyConnection) -> None:
 def migrate_to_phase_4(conn: duckdb.DuckDBPyConnection) -> None:
     """Add Phase 4 columns/tables. Idempotent and non-destructive.
 
-    Adds three nullable rate columns to ``hitter_projection_rates``
-    (``r_per_pa``, ``rbi_per_pa``, ``avg``) so dense-cat continuation
-    models can take ``season_rate_in_category`` as a feature. Then calls
-    ``init_schema`` to ensure the ``model_fits`` table exists.
+    Phase 4 adds three nullable rate columns to ``hitter_projection_rates``
+    (``r_per_pa``, ``rbi_per_pa``, ``avg``) so dense-cat continuation models can
+    take ``season_rate_in_category`` as a feature, plus the ``model_fits``
+    table. ``init_schema``'s additive-drift healer now adds these columns, so
+    this is a thin wrapper kept for the ``--phase 4`` CLI and back reference
+    (see the module docstring for why 4/5/b are wrappers).
 
-    Existing Phase 3 rows (hr_per_pa + sb_per_pa only) survive with NULL
-    in the new columns. Re-run ``scripts/streaks/load_projections.py``
-    after this migration to backfill them.
-
-    ``hitter_games`` / ``hitter_statcast_pa`` / ``hitter_windows`` /
-    ``thresholds`` / ``hitter_streak_labels`` / ``continuation_rates``
-    are untouched.
+    Existing Phase 3 rows (hr_per_pa + sb_per_pa only) survive with NULL in the
+    new columns. Re-run ``scripts/streaks/load_projections.py`` after this
+    migration to backfill them.
     """
-    for col in ("r_per_pa", "rbi_per_pa", "avg"):
-        conn.execute(f"ALTER TABLE hitter_projection_rates ADD COLUMN IF NOT EXISTS {col} DOUBLE")
-        logger.info("ALTER hitter_projection_rates ADD COLUMN IF NOT EXISTS %s", col)
     init_schema(conn)
-    logger.info("Recreated/ensured Phase 4 tables via init_schema (model_fits)")
+    logger.info("Ensured Phase 4 columns/tables via init_schema")
 
 
 def migrate_to_phase_5(conn: duckdb.DuckDBPyConnection) -> None:
@@ -90,13 +90,13 @@ def migrate_to_phase_5(conn: duckdb.DuckDBPyConnection) -> None:
     ``launch_speed_angle = NULL`` after the migration. Re-run
     ``scripts/streaks/fetch_history.py --force-statcast --season {year}``
     for each year of data to backfill the new column via INSERT OR REPLACE.
+
+    Adding ``launch_speed_angle`` is now handled by ``init_schema``'s
+    additive-drift healer; the only step unique to this migration is dropping
+    the legacy ``barrel`` column, which the additive healer cannot do.
     """
     init_schema(conn)
-    cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_statcast_pa')").fetchall()}
-    if "launch_speed_angle" not in cols:
-        conn.execute("ALTER TABLE hitter_statcast_pa ADD COLUMN launch_speed_angle INTEGER")
-        logger.info("ALTER hitter_statcast_pa ADD COLUMN launch_speed_angle INTEGER")
-    if "barrel" in cols:
+    if "barrel" in _table_columns(conn, "hitter_statcast_pa"):
         conn.execute("ALTER TABLE hitter_statcast_pa DROP COLUMN barrel")
         logger.info("ALTER hitter_statcast_pa DROP COLUMN barrel")
 
@@ -118,18 +118,10 @@ def migrate_to_phase_b(conn: duckdb.DuckDBPyConnection) -> None:
     Existing Phase 4 rows survive with NULL in the new columns; the loader
     skips rows it cannot reconstruct, so the next ``refit_models_for_report``
     call repopulates them automatically.
+
+    ``init_schema``'s additive-drift healer now adds the six columns, so this
+    is a thin wrapper kept for the ``--phase b`` CLI and back reference (see the
+    module docstring for why 4/5/b are wrappers).
     """
     init_schema(conn)
-    cols = {r[1] for r in conn.execute("PRAGMA table_info('model_fits')").fetchall()}
-    additions = (
-        ("feature_columns", "VARCHAR[]"),
-        ("coef", "DOUBLE[]"),
-        ("intercept", "DOUBLE"),
-        ("scaler_mean", "DOUBLE[]"),
-        ("scaler_scale", "DOUBLE[]"),
-        ("dense_quintile_cutoffs", "DOUBLE[]"),
-    )
-    for col, sql_type in additions:
-        if col not in cols:
-            conn.execute(f"ALTER TABLE model_fits ADD COLUMN {col} {sql_type}")
-            logger.info("ALTER model_fits ADD COLUMN %s %s", col, sql_type)
+    logger.info("Ensured Phase B model_fits columns via init_schema")

@@ -3,7 +3,13 @@
 Usage:
     python -m scripts.streaks.migrate [--db-path PATH] [--phase {2,3,4,5,b}]
 
-Default is ``--phase b`` (latest). After Phase 2 migration, re-run history
+Default is ``--phase b`` (latest). NOTE: additive columns now heal
+automatically on every DB open, so only ``--phase 2`` (full reset) and
+``--phase 3`` (label-table reset) still do distinct work; 4/5/b are retained
+for back reference and the backfill steps below (5 also drops legacy
+``barrel``). See ``streaks/data/migrate.py`` for details.
+
+After Phase 2 migration, re-run history
 fetch (``python -m scripts.streaks.fetch_history --season ...``). After
 Phase 3 migration, re-run ``apply_labels`` to repopulate labels. After
 Phase 4 migration, re-run ``scripts/streaks/load_projections.py`` to
