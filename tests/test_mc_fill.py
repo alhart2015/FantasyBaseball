@@ -36,8 +36,12 @@ def _line(**kw):
     return {c: float(kw.get(c, 0.0)) for c in HITTING_COUNTING}
 
 
-def _bench_sample(b, per_game):
-    return BenchSample(body=b, per_game_counts=_line(**per_game))
+def _bench_sample(b, per_game, capacity=None):
+    return BenchSample(
+        body=b,
+        per_game_counts=_line(**per_game),
+        capacity=b.g_ros_full if capacity is None else capacity,
+    )
 
 
 def _no_replacement(_active_body):
@@ -102,20 +106,53 @@ def test_replacement_per_game_not_overscaled():
     assert abs(res.fill_counts["r"] - expected) < 1e-6
 
 
-def test_fill_never_exceeds_bench_g_ros_full_capacity():
+def test_fill_never_exceeds_bench_capacity():
     # Two OF starters both injured; one bench body eligible for both. Its total
-    # contributed games cannot exceed its g_ros_full -> bounded total fill.
+    # contributed games cannot exceed its per-iteration CAPACITY (no longer the
+    # static g_ros_full -- capacity = g_ros_full*scale, which CAN exceed g_ros_full).
     a1 = _active("S1", "1", g_ros_adj=100.0, pos=Position.OF)
     a2 = _active("S2", "2", g_ros_adj=100.0, pos=Position.OF)
     cap = 10.0
     b = _bench("Depth", "3", g_ros_full=cap, per_game_value=2.0, pos=Position.OF)
     res = allocate_bench_fill(
         [ActiveSample(a1, frac_missed=1.0), ActiveSample(a2, frac_missed=1.0)],
-        [_bench_sample(b, {"r": 1.0})],
-        _no_replacement,  # zero replacement -> only bench contributes
+        [_bench_sample(b, {"r": 1.0}, capacity=cap)],
+        _no_replacement,
     )
-    # bench gives 1 r/game, capped at cap games -> bench-only fill r <= cap.
     assert res.fill_counts["r"] <= cap + 1e-9
+
+
+def test_capacity_below_g_ros_full_limits_fill_and_cascades():
+    # Starter misses 50 games. Best bench bat has capacity 10 (sampled low
+    # availability); the residual cascades to the second bench bat.
+    a = _active("Star", "1", g_ros_adj=100.0, pos=Position.OF)
+    b1 = _bench("D1", "2", g_ros_full=60.0, per_game_value=3.0, pos=Position.OF)
+    b2 = _bench("D2", "3", g_ros_full=60.0, per_game_value=1.0, pos=Position.OF)
+    res = allocate_bench_fill(
+        [ActiveSample(a, frac_missed=0.5)],  # 0.5 * 100 = 50 games missed
+        [
+            _bench_sample(b1, {"r": 1.0}, capacity=10.0),
+            _bench_sample(b2, {"r": 0.5}, capacity=60.0),
+        ],
+        _no_replacement,
+    )
+    # b1: 10 games * 1.0 = 10 r; b2: remaining 40 games * 0.5 = 20 r -> 30 r.
+    assert abs(res.fill_counts["r"] - 30.0) < 1e-9
+
+
+def test_zero_capacity_body_skipped_and_cascades():
+    # Best bench bat sampled fully unavailable (capacity 0) -> contributes nothing
+    # despite the highest rate; the next eligible body covers the shortfall.
+    a = _active("Star", "1", g_ros_adj=100.0, pos=Position.OF)
+    b1 = _bench("D1", "2", g_ros_full=60.0, per_game_value=3.0, pos=Position.OF)
+    b2 = _bench("D2", "3", g_ros_full=60.0, per_game_value=1.0, pos=Position.OF)
+    res = allocate_bench_fill(
+        [ActiveSample(a, frac_missed=0.5)],  # 50 games missed
+        [_bench_sample(b1, {"r": 9.0}, capacity=0.0), _bench_sample(b2, {"r": 0.5}, capacity=60.0)],
+        _no_replacement,
+    )
+    # b1 skipped (cap 0); b2 covers all 50 -> 25 r.
+    assert abs(res.fill_counts["r"] - 25.0) < 1e-9
 
 
 def test_per_game_value_ordering_picks_better_body():

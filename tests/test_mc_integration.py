@@ -140,6 +140,20 @@ def test_frac_missed_exposed_and_in_unit_range():
     assert np.any(result.frac_missed > 0.0)
 
 
+def test_scales_exposed_and_consistent_with_frac_missed():
+    """scales is exposed, shape (n_iter, n_players), and frac_missed == max(0, 1-scales)."""
+    rng = np.random.default_rng(7)
+    result = _apply_variance_batch(_players(), "hitter", rng, 0.4, 6)
+    assert result.scales.shape == (6, 2)
+    np.testing.assert_array_equal(result.frac_missed, np.maximum(0.0, 1.0 - result.scales))
+
+
+def test_scales_empty_player_list_is_shape_correct():
+    """The n_players==0 early return still builds a shape-correct scales array."""
+    result = _apply_variance_batch([], "hitter", np.random.default_rng(1), 0.4, 4)
+    assert result.scales.shape == (4, 0)
+
+
 def test_suppress_repl_removes_replacement_contribution():
     """suppress_repl=True drops the replacement backfill -> strictly lower counts.
 
@@ -236,6 +250,7 @@ def test_apply_variance_batch_pt_volumes_default_is_byte_identical():
 
 from fantasy_baseball.mc_roster import (  # noqa: E402
     ActiveBody,
+    BenchBody,
     EffectiveRoster,
     build_effective_roster,
 )
@@ -355,6 +370,151 @@ def test_injured_active_body_gets_bench_fill():
     no_bench = _simulate_team_hitters_ros_direct(eff_no_bench, 0.2, np.random.default_rng(3), 256)
     # The strong bench bat lifts the team R mean above the bench-less case.
     assert with_bench["R"].mean() > no_bench["R"].mean()
+
+
+# Captured from the CURRENT (deterministic-fill) helper on _bench_deep_roster() at
+# seed 11, fraction_remaining=0.2, n_iter=4000, in Step 2 (paste the printed
+# values). The deterministic fill is reproducible so these are exact; the SAMPLED
+# fill adds independent rate noise -> strictly larger SD. If the default path ever
+# changes, re-capture under git stash (cf. _LEGACY_DEFAULT_COUNTS).
+_DET_R_SD = 9.274950767376799  # <- paste in Step 2
+_DET_RBI_SD = 8.677268778148985  # <- paste in Step 2
+
+
+def _bench_deep_roster():
+    # BenchBat is slotted to the BENCH (Position.BN) so build_effective_roster seats
+    # it in eff.bench, NOT the active set (an OF-slotted bat seats as ACTIVE and
+    # eff.bench would be empty -- the whole feature path would go untested).
+    # positions=[OF] (set by _hitter) keeps it eligible to fill the OF starter.
+    return [
+        _hitter("Starter", Position.OF, "1"),
+        _hitter("BenchBat", Position.BN, "2", r=120, hr=40, rbi=110, sb=30),
+    ]
+
+
+def test_sampled_bench_fill_widens_team_total_sd_vs_deterministic_baseline():
+    """De-bias: the sampled bench fill carries its own rate noise, so the bench-deep
+    team's R/RBI total SD STRICTLY EXCEEDS the pinned pre-change deterministic-fill
+    SD (same fixture, same seed; only the fill sampling changed)."""
+    eff = _eff_roster(_bench_deep_roster())
+    assert len(eff.bench) == 1  # the fixture really seats a bench fill body
+    out = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(11), 4000)
+    assert np.all(np.isfinite(out["R"])) and np.all(np.isfinite(out["RBI"]))
+    assert out["R"].std() > _DET_R_SD
+    assert out["RBI"].std() > _DET_RBI_SD
+
+
+def test_sampled_bench_fill_mean_drift_within_spec_gate():
+    """Mean-drift regression guard for the spec's acceptance gate #3
+    (2026-06-29-sampled-bench-fill-design.md). The per-game RATE is mean-neutral
+    by construction, so the SAMPLED bench fill must NOT inflate a hitter cat's
+    mean above the deterministic-fill baseline -- the finding-#1 UPWARD-bias
+    failure mode the spec HARD-FAILs (> +1%). A modest DOWNWARD drift (the
+    intended capacity-bound re-damping) is expected and allowed (team-total
+    tolerance ~5%).
+
+    The sampled side runs the real production helper. The upward gate is asserted
+    on the bench-FILL component directly (team_total - active_total), so it is NOT
+    diluted by the unchanged ~70-90% active share: an upward rate-inflation
+    regression -- e.g. dividing the FIXED base by the random g*scale,
+    ``base/(g*scale)``, whose ``E[1/scale] > 1`` Jensen amplification inflates the
+    fill -- pushes the fill ratio past 1.01 and FAILS. The deterministic baseline
+    is reconstructed in-test from the SAME active draws (same seed) via the
+    production ``allocate_bench_fill`` -- no captured magic constant, so an
+    unrelated active-draw change moves both sides together.
+
+    Scope note: regressions that DEFLATE the fill (e.g. ``g*max(1, scale)`` or
+    using frac_missed) move the mean DOWNWARD, which the spec explicitly ALLOWS
+    (it hard-fails only upward), so this gate intentionally does not flag them.
+    """
+    from fantasy_baseball.mc_fill import ActiveSample, BenchSample, allocate_bench_fill
+    from fantasy_baseball.simulation import _replacement_line, _sample_hitter_bodies
+    from fantasy_baseball.utils.constants import HITTING_COUNTING, safe_float
+
+    seed, fr, n_iter = 11, 0.2, 6000
+    eff = _eff_roster(_bench_deep_roster())
+    active_bodies = [b for b in eff.active if b.player.player_type == PlayerType.HITTER]
+    bench_bodies = eff.bench
+    assert len(bench_bodies) == 1
+
+    # Production (sampled bench fill).
+    out_sampled = _simulate_team_hitters_ros_direct(eff, fr, np.random.default_rng(seed), n_iter)
+
+    # Deterministic baseline from the SAME active draws: production draws actives
+    # FIRST on the rng, so a fresh rng(seed) reproduces them bit-for-bit. The
+    # deterministic fill is the pre-change behavior (per_game = base/g_ros_full,
+    # capacity = g_ros_full), iteration-independent.
+    active_vb = _sample_hitter_bodies(active_bodies, np.random.default_rng(seed), fr, n_iter)
+    factors = np.array([b.factor for b in active_bodies])
+    realized = {col: active_vb.counts[col] * factors[None, :] for col in HITTING_COUNTING}
+    frac_missed = active_vb.frac_missed
+    bb = bench_bodies[0]
+    base = bb.player.to_flat_dict()
+    det_bs = BenchSample(
+        body=bb,
+        per_game_counts={c: safe_float(base[c]) / bb.g_ros_full for c in HITTING_COUNTING},
+        capacity=bb.g_ros_full,
+    )
+
+    def _repl(ab):
+        return _replacement_line(ab.player.to_flat_dict(), is_hitter=True)
+
+    det_fill = {col: np.zeros(n_iter) for col in HITTING_COUNTING}
+    for it in range(n_iter):
+        actives = [
+            ActiveSample(body=b, frac_missed=float(frac_missed[it, i]))
+            for i, b in enumerate(active_bodies)
+        ]
+        f = allocate_bench_fill(actives, [det_bs], _repl).fill_counts
+        for col in HITTING_COUNTING:
+            det_fill[col][it] = f[col]
+
+    for cat, col in (("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")):
+        active_total = realized[col].sum(axis=1)
+        det_fill_mean = det_fill[col].mean()
+        assert det_fill_mean > 0.0  # fixture sanity: the bench actually fills this cat
+        sampled_fill_mean = (out_sampled[cat] - active_total).mean()
+        det_total_mean = (active_total + det_fill[col]).mean()
+        sampled_total_mean = out_sampled[cat].mean()
+        # HARD FAIL on upward drift > +1% (finding-#1 mean-bias failure mode),
+        # measured on the FILL component so the gate is not diluted by the
+        # unchanged active share.
+        assert sampled_fill_mean <= det_fill_mean * 1.01, (
+            f"{cat}: sampled fill mean {sampled_fill_mean:.3f} exceeds deterministic "
+            f"{det_fill_mean:.3f} by > 1% (finding-#1 upward bias)"
+        )
+        # Team-total downward tolerance (spec gate #3): the intended capacity-bound
+        # re-damping may pull the total down, but not by > 5%.
+        assert sampled_total_mean >= det_total_mean * 0.95, (
+            f"{cat}: sampled total mean {sampled_total_mean:.3f} is > 5% below "
+            f"deterministic {det_total_mean:.3f} (over-damping)"
+        )
+
+
+def test_sampled_bench_fill_is_deterministic_under_seed():
+    """Same seed -> identical team totals (regression guard; passes pre and post)."""
+    eff = _eff_roster(_bench_deep_roster())
+    a = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(5), 128)
+    b = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(5), 128)
+    for cat in ("R", "HR", "RBI", "SB", "ros_h", "ros_ab"):
+        np.testing.assert_array_equal(a[cat], b[cat])
+
+
+def test_zero_volume_bench_body_is_finite_and_skipped():
+    """A g_ros_full==0 bench body hits the EPS guard (games_played = 0*scale = 0 ->
+    capacity 0), contributing nothing with NO division-by-zero. Hand-built so the
+    zero-volume body is guaranteed present regardless of classification."""
+    starter = _hitter("Starter", Position.OF, "1")
+    zero_bench = BenchBody(
+        player=_hitter("ZeroVol", Position.BN, "3", r=120, hr=40, rbi=110, sb=30),
+        g_ros_full=0.0,
+        per_game_value=0.0,
+        eligible_positions=frozenset({Position.OF}),
+    )
+    eff = EffectiveRoster(active=[_active_body(starter)], bench=[zero_bench])
+    out = _simulate_team_hitters_ros_direct(eff, 0.2, np.random.default_rng(4), 256)
+    for cat in ("R", "HR", "RBI", "SB", "ros_h", "ros_ab"):
+        assert np.all(np.isfinite(out[cat]))
 
 
 def test_hitter_team_total_at_least_ytd_with_caller_blend():

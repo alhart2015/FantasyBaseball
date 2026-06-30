@@ -28,6 +28,7 @@ class ActiveSample:
 class BenchSample:
     body: BenchBody
     per_game_counts: dict[str, float]  # sampled HITTING_COUNTING stats PER GAME
+    capacity: float  # games this body may cover THIS iteration (g_ros_full * sampled scale)
 
 
 @dataclass(frozen=True)
@@ -47,13 +48,17 @@ def allocate_bench_fill(
     per_game_value position-eligible bench body with remaining capacity, assign
     min(shortfall, remaining), decrement both; residual -> replacement per-game
     (replacement total / (repl_ab / PA_PER_GAME) -- implied games, NOT
-    / PA_PER_GAME). One bench body's total assigned games
-    <= its g_ros_full. Tie-break: higher per_game_value, then player-id ascending.
+    / PA_PER_GAME). One bench body's total assigned games <= its per-iteration
+    ``capacity`` (g_ros_full * sampled scale; CAN exceed g_ros_full when the body
+    is sampled more available than projected). Tie-break: higher per_game_value,
+    then player-id ascending.
     """
     fill: dict[str, float] = {col: 0.0 for col in HITTING_COUNTING}
 
-    # Remaining capacity per bench body (mutated as we allocate).
-    remaining = {id(bs): bs.body.g_ros_full for bs in benches}
+    # Remaining capacity per bench body (mutated as we allocate). Per-iteration
+    # capacity = g_ros_full * sampled availability (the caller builds it); it can
+    # exceed g_ros_full when the body is sampled MORE available than projected.
+    remaining = {id(bs): bs.capacity for bs in benches}
 
     # Shortfalls, largest games_missed first.
     shortfalls = [
