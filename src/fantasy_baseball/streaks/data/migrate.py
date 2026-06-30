@@ -8,6 +8,12 @@ committed re-fetch, since ALTER ADD COLUMN cannot reinstate the
 up the PK shape change for ``cold_method``; other tables are untouched.
 Both functions are idempotent (``DROP TABLE IF EXISTS`` plus
 ``CREATE TABLE IF NOT EXISTS``) and safe to re-run.
+
+Additive column adds are no longer migrations: ``init_schema``'s additive-drift
+healer adds any missing nullable column on every connection open (see
+``schema.py``). The old additive phase_4 / phase_b functions were therefore
+removed. Phase 5 remains only to drop the legacy ``barrel`` column, the one
+step the additive healer cannot do.
 """
 
 from __future__ import annotations
@@ -16,7 +22,7 @@ import logging
 
 import duckdb
 
-from fantasy_baseball.streaks.data.schema import init_schema
+from fantasy_baseball.streaks.data.schema import _table_columns, init_schema
 
 logger = logging.getLogger(__name__)
 
@@ -53,29 +59,6 @@ def migrate_to_phase_3(conn: duckdb.DuckDBPyConnection) -> None:
     logger.info("Recreated hitter_streak_labels + Phase 3 tables via init_schema")
 
 
-def migrate_to_phase_4(conn: duckdb.DuckDBPyConnection) -> None:
-    """Add Phase 4 columns/tables. Idempotent and non-destructive.
-
-    Adds three nullable rate columns to ``hitter_projection_rates``
-    (``r_per_pa``, ``rbi_per_pa``, ``avg``) so dense-cat continuation
-    models can take ``season_rate_in_category`` as a feature. Then calls
-    ``init_schema`` to ensure the ``model_fits`` table exists.
-
-    Existing Phase 3 rows (hr_per_pa + sb_per_pa only) survive with NULL
-    in the new columns. Re-run ``scripts/streaks/load_projections.py``
-    after this migration to backfill them.
-
-    ``hitter_games`` / ``hitter_statcast_pa`` / ``hitter_windows`` /
-    ``thresholds`` / ``hitter_streak_labels`` / ``continuation_rates``
-    are untouched.
-    """
-    for col in ("r_per_pa", "rbi_per_pa", "avg"):
-        conn.execute(f"ALTER TABLE hitter_projection_rates ADD COLUMN IF NOT EXISTS {col} DOUBLE")
-        logger.info("ALTER hitter_projection_rates ADD COLUMN IF NOT EXISTS %s", col)
-    init_schema(conn)
-    logger.info("Recreated/ensured Phase 4 tables via init_schema (model_fits)")
-
-
 def migrate_to_phase_5(conn: duckdb.DuckDBPyConnection) -> None:
     """Replace ``hitter_statcast_pa.barrel`` (BOOLEAN) with ``launch_speed_angle``
     (INTEGER, Statcast's 1-6 batted-ball classifier).
@@ -90,46 +73,12 @@ def migrate_to_phase_5(conn: duckdb.DuckDBPyConnection) -> None:
     ``launch_speed_angle = NULL`` after the migration. Re-run
     ``scripts/streaks/fetch_history.py --force-statcast --season {year}``
     for each year of data to backfill the new column via INSERT OR REPLACE.
+
+    Adding ``launch_speed_angle`` is now handled by ``init_schema``'s
+    additive-drift healer; the only step unique to this migration is dropping
+    the legacy ``barrel`` column, which the additive healer cannot do.
     """
     init_schema(conn)
-    cols = {r[1] for r in conn.execute("PRAGMA table_info('hitter_statcast_pa')").fetchall()}
-    if "launch_speed_angle" not in cols:
-        conn.execute("ALTER TABLE hitter_statcast_pa ADD COLUMN launch_speed_angle INTEGER")
-        logger.info("ALTER hitter_statcast_pa ADD COLUMN launch_speed_angle INTEGER")
-    if "barrel" in cols:
+    if "barrel" in _table_columns(conn, "hitter_statcast_pa"):
         conn.execute("ALTER TABLE hitter_statcast_pa DROP COLUMN barrel")
         logger.info("ALTER hitter_statcast_pa DROP COLUMN barrel")
-
-
-def migrate_to_phase_b(conn: duckdb.DuckDBPyConnection) -> None:
-    """Add Phase B pipeline-state columns to ``model_fits``. Idempotent.
-
-    Adds six nullable columns so ``load_models_from_fits`` can reconstruct
-    fitted Pipelines without retraining:
-
-    - ``feature_columns`` (VARCHAR[]) — the in-order feature names.
-    - ``coef`` (DOUBLE[]) — LogisticRegression coefficient vector.
-    - ``intercept`` (DOUBLE) — LogisticRegression intercept scalar.
-    - ``scaler_mean`` / ``scaler_scale`` (DOUBLE[]) — StandardScaler params.
-    - ``dense_quintile_cutoffs`` (DOUBLE[]) — quintile breakpoints used to
-      reproduce ``streak_strength_numeric`` at inference time (NULL for
-      sparse cats).
-
-    Existing Phase 4 rows survive with NULL in the new columns; the loader
-    skips rows it cannot reconstruct, so the next ``refit_models_for_report``
-    call repopulates them automatically.
-    """
-    init_schema(conn)
-    cols = {r[1] for r in conn.execute("PRAGMA table_info('model_fits')").fetchall()}
-    additions = (
-        ("feature_columns", "VARCHAR[]"),
-        ("coef", "DOUBLE[]"),
-        ("intercept", "DOUBLE"),
-        ("scaler_mean", "DOUBLE[]"),
-        ("scaler_scale", "DOUBLE[]"),
-        ("dense_quintile_cutoffs", "DOUBLE[]"),
-    )
-    for col, sql_type in additions:
-        if col not in cols:
-            conn.execute(f"ALTER TABLE model_fits ADD COLUMN {col} {sql_type}")
-            logger.info("ALTER model_fits ADD COLUMN %s %s", col, sql_type)

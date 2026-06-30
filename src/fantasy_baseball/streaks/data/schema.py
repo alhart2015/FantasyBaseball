@@ -6,9 +6,15 @@ safe to call on every connection open.
 
 from __future__ import annotations
 
+import functools
+import logging
+from collections.abc import Mapping
 from pathlib import Path
+from types import MappingProxyType
 
 import duckdb
+
+logger = logging.getLogger(__name__)
 
 DEFAULT_DB_PATH = Path("data/streaks/streaks.duckdb")
 
@@ -168,6 +174,57 @@ _SCHEMA_DDL = [
 ]
 
 
+# Per-table intended columns as ``(name, duckdb_type, not_null)``. Immutable
+# (read-only mapping of tuples) because ``_intended_schema`` caches and shares a
+# single instance process-wide -- a caller must not be able to corrupt it.
+IntendedSchema = Mapping[str, tuple[tuple[str, str, bool], ...]]
+
+
+def _build_intended_schema() -> IntendedSchema:
+    """Each table's intended columns as ``(name, duckdb_type, not_null)``.
+
+    Built by running ``_SCHEMA_DDL`` into a throwaway in-memory DB and reading
+    DuckDB's own catalog back. That keeps ``_SCHEMA_DDL`` the single source of
+    truth and yields normalized type strings (including ``DOUBLE[]`` /
+    ``VARCHAR[]``) with no Python->SQL type map. Returned read-only since the
+    caller (``_intended_schema``) caches and shares one instance.
+    """
+    scratch = duckdb.connect(":memory:")
+    try:
+        for ddl in _SCHEMA_DDL:
+            scratch.execute(ddl)
+        return MappingProxyType(
+            {
+                table: tuple(
+                    (r[1], r[2], bool(r[3]))
+                    for r in scratch.execute(f'PRAGMA table_info("{table}")').fetchall()
+                )
+                for (table,) in scratch.execute("SHOW TABLES").fetchall()
+            }
+        )
+    finally:
+        scratch.close()
+
+
+@functools.cache
+def _intended_schema() -> IntendedSchema:
+    """Intended column catalog, built lazily from ``_SCHEMA_DDL`` and cached.
+
+    Lazy (not built at import) so importing this module never runs DDL: a
+    malformed-DDL or DuckDB-engine error then surfaces inside the first
+    ``init_schema`` call -- where the caller can handle it -- rather than as an
+    ImportError that bricks every module that imports schema. Cached, so
+    ``init_schema`` pays no scratch-DB rebuild per connection open.
+    """
+    return _build_intended_schema()
+
+
+def _table_columns(conn: duckdb.DuckDBPyConnection, table: str) -> set[str]:
+    """Column names currently on *table*. The table must exist (DuckDB's
+    PRAGMA table_info raises CatalogException for a missing table)."""
+    return {r[1] for r in conn.execute(f'PRAGMA table_info("{table}")').fetchall()}
+
+
 def get_connection(path: Path | str = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnection:
     """Open (or create) the streaks DuckDB at *path* and return the connection.
 
@@ -182,6 +239,43 @@ def get_connection(path: Path | str = DEFAULT_DB_PATH) -> duckdb.DuckDBPyConnect
 
 
 def init_schema(conn: duckdb.DuckDBPyConnection) -> None:
-    """Create all streaks tables if they don't already exist."""
+    """Create all streaks tables if they don't already exist, then heal any
+    additive column drift on pre-existing tables (see ``_heal_additive_drift``).
+    """
     for ddl in _SCHEMA_DDL:
         conn.execute(ddl)
+    _heal_additive_drift(conn)
+
+
+def _heal_additive_drift(conn: duckdb.DuckDBPyConnection) -> None:
+    """ALTER-ADD any column that ``_SCHEMA_DDL`` declares but an existing table
+    is missing.
+
+    ``CREATE TABLE IF NOT EXISTS`` never alters an existing table, so a
+    gitignored dev DB created before a column was added (e.g.
+    ``launch_speed_angle``) silently lacks it -- and the next insert throws a
+    BinderException. Every added column is logged so an auto-heal leaves a trail
+    instead of mutating the schema silently.
+
+    Strictly additive and nullable-only: the diff only ever finds columns
+    *missing* from the real table (never drops or retypes), and ``ADD COLUMN``
+    on a populated table can only add a nullable column. A NOT NULL additive
+    column therefore cannot be healed in place -- it is skipped with a warning,
+    leaving the loud failure for a real migrate.py migration. Other destructive
+    changes (drop ``barrel``, PK reshape) also go through migrate.py.
+    """
+    for table, columns in _intended_schema().items():
+        existing = _table_columns(conn, table)
+        for name, sql_type, not_null in columns:
+            if name in existing:
+                continue
+            if not_null:
+                logger.warning(
+                    "Cannot auto-heal NOT NULL column %s.%s onto an existing table; "
+                    "run the appropriate migrate.py migration",
+                    table,
+                    name,
+                )
+                continue
+            conn.execute(f'ALTER TABLE "{table}" ADD COLUMN "{name}" {sql_type}')
+            logger.info("Healed schema drift: added %s.%s (%s)", table, name, sql_type)
