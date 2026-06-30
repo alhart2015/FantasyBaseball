@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import fields
 from datetime import date
 from operator import attrgetter
@@ -11,16 +11,12 @@ from typing import Any
 import duckdb
 import pandas as pd
 
+from fantasy_baseball.streaks.data.schema import table_primary_key
 from fantasy_baseball.streaks.models import HitterGame, HitterStatcastPA
 
 # Column lists derive from dataclass field order -- see streaks/models.py.
-# `attrgetter(*cols)` builds a C-level row->tuple extractor that's ~10x faster
-# than dataclasses.astuple (which deepcopies every field) when materializing the
-# DataFrame fed to the bulk insert below.
 _HITTER_GAME_COLS = tuple(f.name for f in fields(HitterGame))
 _STATCAST_COLS = tuple(f.name for f in fields(HitterStatcastPA))
-_hitter_game_row = attrgetter(*_HITTER_GAME_COLS)
-_statcast_row = attrgetter(*_STATCAST_COLS)
 
 
 def _bulk_upsert(
@@ -28,11 +24,13 @@ def _bulk_upsert(
     *,
     table: str,
     columns: tuple[str, ...],
-    extractor: Callable[[Any], tuple[Any, ...]],
-    pk: tuple[str, ...],
     rows: Sequence[Any],
 ) -> None:
     """INSERT OR REPLACE ``rows`` into ``table`` via one bulk DataFrame scan.
+
+    ``columns`` is the dataclass field order (which matches the row tuple
+    ``attrgetter`` extracts); the table's primary key is read from the live
+    schema so the dedupe below can't drift from the DDL.
 
     DuckDB is columnar: a row-by-row ``executemany`` of INSERT OR REPLACE costs
     ~4ms/row (per-row PK-conflict handling), so seeding a season of Statcast PAs
@@ -52,8 +50,14 @@ def _bulk_upsert(
     """
     if not rows:
         return
+    # attrgetter(*columns) is a C-level row->tuple extractor, ~10x faster than
+    # dataclasses.astuple (which deepcopies every field) when materializing the
+    # frame; the column order matches `columns` so the SELECT lines up.
+    extractor = attrgetter(*columns)
     df = pd.DataFrame([extractor(r) for r in rows], columns=list(columns), dtype=object)
-    df = df.drop_duplicates(subset=list(pk), keep="last")
+    pk = table_primary_key(table)
+    if pk:  # guard a future PK-less table: drop_duplicates(subset=[]) raises
+        df = df.drop_duplicates(subset=list(pk), keep="last")
     collist = ", ".join(columns)
     conn.register("_bulk_upsert_df", df)
     try:
@@ -70,14 +74,7 @@ def upsert_hitter_games(conn: duckdb.DuckDBPyConnection, rows: Sequence[HitterGa
     Empty input is a no-op. DuckDB's `INSERT OR REPLACE` handles PK collisions
     atomically; within-batch duplicate keys resolve last-wins.
     """
-    _bulk_upsert(
-        conn,
-        table="hitter_games",
-        columns=_HITTER_GAME_COLS,
-        extractor=_hitter_game_row,
-        pk=("player_id", "game_pk"),
-        rows=rows,
-    )
+    _bulk_upsert(conn, table="hitter_games", columns=_HITTER_GAME_COLS, rows=rows)
 
 
 def upsert_statcast_pa(conn: duckdb.DuckDBPyConnection, rows: Sequence[HitterStatcastPA]) -> None:
@@ -85,14 +82,7 @@ def upsert_statcast_pa(conn: duckdb.DuckDBPyConnection, rows: Sequence[HitterSta
 
     Empty input is a no-op; within-batch duplicate keys resolve last-wins.
     """
-    _bulk_upsert(
-        conn,
-        table="hitter_statcast_pa",
-        columns=_STATCAST_COLS,
-        extractor=_statcast_row,
-        pk=("player_id", "date", "pa_index"),
-        rows=rows,
-    )
+    _bulk_upsert(conn, table="hitter_statcast_pa", columns=_STATCAST_COLS, rows=rows)
 
 
 def existing_player_seasons(
