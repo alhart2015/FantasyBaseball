@@ -296,22 +296,21 @@ def test_report_with_empty_roster_renders_placeholder() -> None:
     assert "_No free-agent signals._" in md
 
 
-def test_build_report_end_to_end_against_seeded_db() -> None:
+def test_build_report_end_to_end_against_seeded_db(seeded_fitted_conn) -> None:
     """build_report wires inference + Yahoo data + rendering together.
 
-    Uses the same seeded DB as ``test_inference.py`` and synthetic Yahoo
-    hitters with mlbam_ids that match the fixture player_ids. Asserts
-    that the resulting Report contains the expected sections.
+    Uses the shared seeded+fitted DB and synthetic Yahoo hitters with
+    mlbam_ids that match the fixture player_ids. Asserts that the resulting
+    Report contains the expected sections. This test exercises report
+    *wiring*, not the fit math, so it reconstructs models from the shared fit
+    via ``load_models_from_fits`` rather than refitting (the real end-to-end
+    refit path stays covered by ``test_compute_streak_report_end_to_end``).
     """
-    from fantasy_baseball.streaks.data.schema import get_connection
-    from fantasy_baseball.streaks.inference import refit_models_for_report
+    from fantasy_baseball.streaks.inference import load_models_from_fits
     from fantasy_baseball.streaks.reports.sunday import build_report
-    from tests.test_streaks.test_predictors import _seed_pipeline
 
-    conn = get_connection(":memory:")
-    _seed_pipeline(conn, season=2023)
-    _seed_pipeline(conn, season=2024)
-    models = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+    conn = seeded_fitted_conn
+    models = load_models_from_fits(conn)
 
     # Hitter player_ids in the fixture are 1..16. Yahoo names are
     # P1..P16 (matching the fixture's HitterGame.name). Build a

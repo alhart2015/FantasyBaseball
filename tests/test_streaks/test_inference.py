@@ -125,10 +125,9 @@ def test_dense_quintile_cutoffs_matches_training_population() -> None:
     assert cutoffs[0] <= cutoffs[1] <= cutoffs[2] <= cutoffs[3]
 
 
-def test_top_drivers_excludes_non_peripheral_features_by_default() -> None:
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+def test_top_drivers_excludes_non_peripheral_features_by_default(seeded_fitted_conn) -> None:
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     model = fitted[("r", "above")]
     # Build a feature row with all peripherals at their training mean (0
     # after StandardScaler) — the top-k will surface whichever has a
@@ -153,10 +152,9 @@ def test_top_drivers_excludes_non_peripheral_features_by_default() -> None:
         }
 
 
-def test_score_player_windows_returns_one_row_per_category() -> None:
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+def test_score_player_windows_returns_one_row_per_category(seeded_fitted_conn) -> None:
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     # Pick a player who is in the fixture and whose window_end is in 2024.
     last_window = conn.execute(
         "SELECT player_id, MAX(window_end) FROM hitter_windows WHERE window_days = 14 GROUP BY player_id LIMIT 1"
@@ -180,10 +178,9 @@ def test_score_player_windows_returns_one_row_per_category() -> None:
     assert not skips
 
 
-def test_score_player_windows_skips_player_with_no_window() -> None:
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+def test_score_player_windows_skips_player_with_no_window(seeded_fitted_conn) -> None:
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     scores, skips = score_player_windows(
         conn,
         models=fitted,
@@ -198,12 +195,11 @@ def test_score_player_windows_skips_player_with_no_window() -> None:
     assert skips[0].reason == "no_window"
 
 
-def test_score_player_windows_emits_probability_only_when_label_non_neutral_and_model_exists() -> (
-    None
-):
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+def test_score_player_windows_emits_probability_only_when_label_non_neutral_and_model_exists(
+    seeded_fitted_conn,
+) -> None:
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     # Grab any player_id present in windows.
     pid_row = conn.execute("SELECT player_id FROM hitter_windows LIMIT 1").fetchone()
     assert pid_row is not None
@@ -233,12 +229,13 @@ def test_score_player_windows_emits_probability_only_when_label_non_neutral_and_
             assert s.drivers == ()
 
 
-def test_score_player_windows_handles_missing_projection_rate_gracefully() -> None:
+def test_score_player_windows_handles_missing_projection_rate_gracefully(
+    seeded_fitted_conn,
+) -> None:
     """If a dense cat label is hot/cold but projection_rate is missing,
     the score row carries the label but no probability."""
-    conn = get_connection(":memory:")
-    _seed_two_seasons(conn)
-    fitted = refit_models_for_report(conn, season_set_train="2023-2024", window_days=14)
+    conn = seeded_fitted_conn
+    fitted = load_models_from_fits(conn)
     # Wipe projection rates so dense lookups return None.
     conn.execute("DELETE FROM hitter_projection_rates")
     pid_row = conn.execute("SELECT player_id FROM hitter_windows LIMIT 1").fetchone()

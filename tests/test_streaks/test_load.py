@@ -83,6 +83,15 @@ def test_upsert_hitter_games_empty_list_is_noop(conn):
     assert count == 0
 
 
+def test_upsert_hitter_games_within_batch_duplicate_is_last_wins(conn):
+    # Two rows with the same PK (player_id, game_pk) in ONE call: the later
+    # row must win, matching the old row-by-row executemany semantics that the
+    # bulk-insert path's drop_duplicates(keep="last") preserves.
+    upsert_hitter_games(conn, [_row(hr=1), _row(hr=2)])
+    rows = conn.execute("SELECT player_id, game_pk, hr FROM hitter_games").fetchall()
+    assert rows == [(660271, 20240401, 2)]
+
+
 def _statcast_row(player_id=660271, dt=date(2024, 4, 1), pa_index=1, event="single"):
     return HitterStatcastPA(
         player_id=player_id,
@@ -123,6 +132,16 @@ def test_upsert_statcast_pa_empty_noop(conn):
     upsert_statcast_pa(conn, [])
     count = conn.execute("SELECT COUNT(*) FROM hitter_statcast_pa").fetchone()[0]
     assert count == 0
+
+
+def test_upsert_statcast_pa_within_batch_duplicate_is_last_wins(conn):
+    # Same PK (player_id, date, pa_index) twice in one call -> last row wins.
+    upsert_statcast_pa(
+        conn,
+        [_statcast_row(pa_index=1, event="single"), _statcast_row(pa_index=1, event="double")],
+    )
+    rows = conn.execute("SELECT pa_index, event FROM hitter_statcast_pa").fetchall()
+    assert rows == [(1, "double")]
 
 
 def test_existing_player_seasons_empty(conn):
