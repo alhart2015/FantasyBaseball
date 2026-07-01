@@ -13,7 +13,9 @@ docs that import them from this module continue to work.
 
 The schema mirrors the dataclass fields 1:1 — round-trip equality holds
 because every dataclass involved is ``frozen=True`` (default-generated
-``__eq__`` compares fields).
+``__eq__`` compares fields). ``days_since_last_game`` is read with
+``.get()`` so payloads cached before that field existed deserialize to
+``None`` (the field default) rather than raising.
 """
 
 from __future__ import annotations
@@ -77,6 +79,7 @@ def _serialize_row(r: ReportRow) -> dict[str, Any]:
         "composite": r.composite,
         "max_probability": r.max_probability,
         "scores": {cat: _serialize_score(score) for cat, score in r.scores.items()},
+        "days_since_last_game": r.days_since_last_game,
     }
 
 
@@ -91,6 +94,7 @@ def _deserialize_row(p: dict[str, Any]) -> ReportRow:
             cast(StreakCategory, cat): _deserialize_score(score)
             for cat, score in p["scores"].items()
         },
+        days_since_last_game=p.get("days_since_last_game"),
     )
 
 
