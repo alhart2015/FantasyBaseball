@@ -214,14 +214,17 @@ def test_run_draft_value_end_to_end_and_known_pick():
 
     players, teams = dv.run_draft_value()
     assert players and teams
-    # every team roll-up has a credited count and a case3 count
+    # every team roll-up has a credited count, a case3 count, and a waiver count
     assert all(t.credited_count >= 0 for t in teams)
+    assert all(t.waiver_count >= 0 for t in teams)
+    # this tool grades the DRAFT only: no waiver players are scored into `players`
+    assert all(p.baseline_kind != "waiver" for p in players)
     # known-pick sanity: a specific keeper resolves with a finite projected value
     soto = next(
         (p for p in players if normalize_name(dv._strip_suffix(p.name)) == "juan soto"), None
     )
     assert soto is not None and soto.value_proj == soto.value_proj  # not NaN
-    assert soto.baseline_kind in ("keeper", "drafted", "waiver")
+    assert soto.baseline_kind in ("keeper", "drafted")
 
     # Namesake-collision guard (mlbam-id join): the drafted Mason Miller is the
     # A's/Padres closer (mlbam 695243, ~37 SV projected), NOT the scrub namesake
@@ -271,8 +274,9 @@ def test_team_rollup_sum_avg_count():
             luck=None,
         ),
     ]
-    r = dv.roll_up_team("Hart of the Order", pvs, case3_count=2, horizon="proj")
+    r = dv.roll_up_team("Hart of the Order", pvs, case3_count=2, horizon="proj", waiver_count=3)
     assert r.credited_count == 2
     assert abs(r.sum_value - 7.0) < 1e-9  # value_proj: 4.0 + 3.0
     assert abs(r.avg_value - 3.5) < 1e-9
     assert r.case3_count == 2
+    assert r.waiver_count == 3

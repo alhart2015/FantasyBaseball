@@ -696,7 +696,9 @@ class TeamRollup:
     ``sum_value`` sums the chosen-horizon per-player values (``value_proj`` when
     ``horizon == "proj"``, else ``value_ytd``); ``avg_value`` divides by the number
     of credited players (``NaN`` when none are credited). ``credited_count`` is that
-    number; ``case3_count`` is passed through from the caller's classification.
+    number (drafted + keeper only). ``case3_count`` is the per-team trade-excluded
+    count; ``waiver_count`` is the per-team waiver/in-season pickup count -- both are
+    informational and NOT part of the draft grade.
     """
 
     team: str
@@ -704,6 +706,7 @@ class TeamRollup:
     avg_value: float
     credited_count: int
     case3_count: int
+    waiver_count: int
 
 
 def roll_up_team(
@@ -711,20 +714,23 @@ def roll_up_team(
     player_values: list[PlayerValue],
     case3_count: int,
     horizon: str = "proj",
+    waiver_count: int = 0,
 ) -> TeamRollup:
     """Roll a team's per-player values into sum, per-player average, and counts.
 
     ``horizon`` picks ``value_proj`` (``"proj"``) or ``value_ytd`` (otherwise). Only
     non-``None`` values are credited (values can be ``0.0`` or negative, so filter on
     ``is not None``, never truthiness). ``avg_value`` is ``NaN`` when no player is
-    credited. ``case3_count`` is passed through unchanged.
+    credited. ``player_values`` excludes waivers (drafted + keeper only), so the sum,
+    average, and credited count naturally cover only the draft. ``case3_count`` and
+    ``waiver_count`` are passed through unchanged (both informational).
     """
     attr = "value_proj" if horizon == "proj" else "value_ytd"
     vals = [getattr(pv, attr) for pv in player_values if getattr(pv, attr) is not None]
     n = len(vals)
     total = sum(vals)
     avg = total / n if n else float("nan")
-    return TeamRollup(team, total, avg, n, case3_count)
+    return TeamRollup(team, total, avg, n, case3_count, waiver_count)
 
 
 def _split_suffix(raw_name: str) -> tuple[str, str | None]:
@@ -853,6 +859,7 @@ def run_draft_value(
 
     players: list[PlayerValue] = []
     case3: dict[str, int] = {}
+    waiver_count: dict[str, int] = {}
     for entry in rosters:
         team = entry["team"]
         # One suffix scan yields both the stripped name and the definitive two-way type
@@ -864,6 +871,12 @@ def run_draft_value(
         kind = classify_acquisition(team, norm, drafted_by, kept_by, add_by)
         if kind == "trade_excluded":
             case3[team] = case3.get(team, 0) + 1
+            continue
+        # This tool grades the DRAFT only (keepers + drafted picks). Waiver / in-season
+        # pickups are evaluated separately by the transaction analyzer (deltaRoto), so
+        # skip them here: count them (informational) but build no PlayerValue.
+        if kind == "waiver":
+            waiver_count[team] = waiver_count.get(team, 0) + 1
             continue
         ptype, positions = _resolve_type_and_positions(
             norm, full_by_name, td_by_name, bindex, forced_type=suffix_type
@@ -885,13 +898,12 @@ def run_draft_value(
         # draft-order ordinal among on-board drafted picks; also the compute slot arg
         # (slot == rank for drafted, None otherwise), so compute it once and reuse.
         rank = slot_by_name.get(norm) if kind == "drafted" else None
+        # Only keeper + drafted reach here (waiver/trade_excluded are skipped above).
         if kind == "keeper":
             base_proj, base_ytd = par_proj.keeper_par, par_ytd.keeper_par
-        elif kind == "drafted":
+        else:  # drafted
             base_proj = par_proj.par_for_slot(rank) if rank else 0.0
             base_ytd = par_ytd.par_for_slot(rank) if rank else 0.0
-        else:  # waiver
-            base_proj = base_ytd = 0.0
         pv = compute_player_value(
             team,
             entry["player_name"],
@@ -914,5 +926,8 @@ def run_draft_value(
     for pv in players:
         by_team.setdefault(pv.team, []).append(pv)
     all_teams = {entry["team"] for entry in rosters}
-    teams = [roll_up_team(t, by_team.get(t, []), case3.get(t, 0)) for t in sorted(all_teams)]
+    teams = [
+        roll_up_team(t, by_team.get(t, []), case3.get(t, 0), waiver_count=waiver_count.get(t, 0))
+        for t in sorted(all_teams)
+    ]
     return players, teams

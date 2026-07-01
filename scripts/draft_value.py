@@ -25,10 +25,15 @@ def _fmt(x: float | None) -> str:
 
 def main() -> None:
     players, teams = run_draft_value()
+    footer = (
+        "NOTE: This grades the DRAFT only (keepers + drafted picks). Waiver / "
+        "in-season pickups are evaluated separately by the transaction analyzer "
+        "(deltaRoto) -- see the /transactions dashboard."
+    )
     lines = ["# Draft Value Report", ""]
-    lines.append("## Team leaderboard (projected, headline = avg)")
-    lines.append("| Team | avg | sum | credited | trade-excl |")
-    lines.append("|---|---|---|---|---|")
+    lines.append("## DRAFT GRADE (keepers + drafted picks)")
+    lines.append("| Team | avg | sum | drafted+kept | waiver | trade-excl |")
+    lines.append("|---|---|---|---|---|---|")
     for t in sorted(
         teams,
         key=lambda r: r.avg_value if r.avg_value == r.avg_value else -9e9,
@@ -36,7 +41,7 @@ def main() -> None:
     ):
         lines.append(
             f"| {t.team} | {_fmt(t.avg_value)} | {_fmt(t.sum_value)} "
-            f"| {t.credited_count} | {t.case3_count} |"
+            f"| {t.credited_count} | {t.waiver_count} | {t.case3_count} |"
         )
     lines.append("")
     lines.append("## Per-player (projected)")
@@ -60,6 +65,8 @@ def main() -> None:
             f"| {_fmt(p.est_var_proj)} | {par} | {_fmt(p.skill)} | {_fmt(p.luck)} "
             f"| {_fmt(p.value_proj)} | {_fmt(p.value_ytd)} |"
         )
+    lines.append("")
+    lines.append(footer)
     report = "\n".join(lines)
     out = Path("data/analysis/draft_value_report.md")
     out.parent.mkdir(parents=True, exist_ok=True)
