@@ -414,3 +414,34 @@ def test_row_from_scores_active_when_window_is_recent() -> None:
         today=today,
     )
     assert row.days_since_last_game is None
+
+
+def _report_with_inactive_roster_row() -> Report:
+    row = _row_from_scores(
+        name="Oneil Cruz",
+        positions=("SS",),
+        player_id=1,
+        scores=_neutral_scores(date(2026, 6, 1)),
+        today=date(2026, 6, 1) + timedelta(days=30),
+    )
+    return Report(
+        report_date=date(2026, 7, 1),
+        window_end=date(2026, 6, 1),
+        team_name="Hart of the Order",
+        league_id=5652,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(),
+        skipped=(),
+    )
+
+
+def test_render_markdown_shows_inactive_marker() -> None:
+    md = render_markdown(_report_with_inactive_roster_row())
+    assert "Oneil Cruz (inactive - 30 days)" in md
+
+
+def test_render_terminal_shows_inactive_marker() -> None:
+    txt = render_terminal(_report_with_inactive_roster_row(), no_color=True)
+    assert "Oneil Cruz (inactive - 30 days)" in txt

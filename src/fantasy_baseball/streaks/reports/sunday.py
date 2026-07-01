@@ -417,6 +417,17 @@ def _format_positions(positions: tuple[str, ...]) -> str:
     return "/".join(positions) if positions else ""
 
 
+def _name_cell(row: ReportRow) -> str:
+    """Player-name cell, with an inactive marker appended when the player's
+    most-recent window is stale (see ReportRow.days_since_last_game). Appended
+    into the name cell rather than added as a column so the fixed header /
+    separator / column-width layout of both renderers is untouched. ASCII only.
+    """
+    if row.days_since_last_game is not None:
+        return f"{row.name} (inactive - {row.days_since_last_game} days)"
+    return row.name
+
+
 def _markdown_separator_row(n_cols: int) -> str:
     """Three dashes per column — minimal valid markdown separator."""
     return "|" + "|".join([" --- "] * n_cols) + "|"
@@ -431,7 +442,7 @@ def _roster_table_markdown(rows: Sequence[ReportRow]) -> list[str]:
     ]
     for row in rows:
         cells = [
-            row.name,
+            _name_cell(row),
             _format_positions(row.positions),
             _signed(row.composite),
         ]
@@ -611,7 +622,7 @@ def render_terminal(report: Report, *, no_color: bool = False) -> str:
         ]
         for r in report.roster_rows:
             row = [
-                r.name,
+                _name_cell(r),
                 _format_positions(r.positions),
                 _signed(r.composite),
             ]
