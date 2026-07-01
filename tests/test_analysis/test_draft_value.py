@@ -103,3 +103,71 @@ def test_ytd_fraction_is_not_linear_in_f(synthetic_scale):
     half = dv.score_var(_hitter_line(), ["OF"], "hitter", scale, fraction=0.5)
     assert half < full  # counting-dominated: to-date VAR is smaller
     assert abs(half - 0.5 * full) > 1e-6  # but NOT linear in f (rate component invariant)
+
+
+def test_value_decomposition_identity(synthetic_scale):
+    scale = synthetic_scale
+    line = _hitter_line()
+    pv = dv.compute_player_value(
+        team="Hart of the Order",
+        name="Test Bat",
+        player_type="hitter",
+        positions=["OF"],
+        baseline_proj=5.0,
+        baseline_ytd=2.5,
+        baseline_kind="drafted",
+        preseason_var=8.0,
+        full_line=line,
+        todate_line=line,
+        scale=scale,
+        fraction=0.5,
+    )
+    # projected decomposition holds exactly
+    assert abs((pv.skill + pv.luck) - pv.value_proj) < 1e-9
+    # YTD is value-only
+    assert pv.value_ytd is not None
+
+
+def test_offboard_waiver_gem_skill_luck_na(synthetic_scale):
+    scale = synthetic_scale
+    line = _hitter_line()
+    pv = dv.compute_player_value(
+        team="Hart of the Order",
+        name="Gem",
+        player_type="hitter",
+        positions=["OF"],
+        baseline_proj=0.0,
+        baseline_ytd=0.0,
+        baseline_kind="waiver",
+        preseason_var=None,
+        full_line=line,
+        todate_line=line,
+        scale=scale,
+        fraction=0.5,
+    )
+    assert pv.skill is None and pv.luck is None
+    assert pv.value_proj is not None  # value still computed vs replacement (0)
+
+
+def test_convergence_ytd_equals_proj_at_f1(synthetic_scale):
+    # spec oracle 3: at f=1 (ROS->0), with full_line == todate_line and matching
+    # baselines, the YTD value converges to the projected value. Non-tautological:
+    # it exercises BOTH horizon paths (est_proj at fraction=1.0 vs est_ytd at fraction=1.0)
+    # and both baselines through the real value computation.
+    scale = synthetic_scale
+    line = _hitter_line()
+    pv = dv.compute_player_value(
+        team="Hart of the Order",
+        name="Test Bat",
+        player_type="hitter",
+        positions=["OF"],
+        baseline_proj=5.0,
+        baseline_ytd=5.0,
+        baseline_kind="drafted",
+        preseason_var=8.0,
+        full_line=line,
+        todate_line=line,
+        scale=scale,
+        fraction=1.0,
+    )
+    assert abs(pv.value_proj - pv.value_ytd) < 1e-9

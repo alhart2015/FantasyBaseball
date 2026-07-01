@@ -432,6 +432,84 @@ def load_actual_to_date_lines() -> dict[str, Any]:
     return out
 
 
+@dataclass
+class PlayerValue:
+    """Per-player realized value with a projected skill/luck decomposition.
+
+    ``value_proj`` subtracts the full-season ``baseline_proj``; ``value_ytd``
+    subtracts the to-date ``baseline_ytd`` -- the two horizons have distinct pars
+    and must never be conflated. ``skill``/``luck`` are only defined when the player
+    was on the preseason board (``preseason_var is not None``); off-board fliers get
+    ``None`` for both (value vs replacement is still computed).
+    """
+
+    team: str
+    name: str
+    player_type: str
+    slot: int | None
+    baseline_kind: str
+    preseason_var: float | None
+    est_var_proj: float | None
+    est_var_ytd: float | None
+    value_proj: float | None
+    value_ytd: float | None
+    skill: float | None
+    luck: float | None
+
+
+def compute_player_value(
+    team: str,
+    name: str,
+    player_type: str,
+    positions: list[str],
+    baseline_proj: float,
+    baseline_ytd: float,
+    baseline_kind: str,
+    preseason_var: float | None,
+    full_line: dict[str, Any] | None,
+    todate_line: dict[str, Any] | None,
+    scale: ScaleInputs,
+    fraction: float,
+) -> PlayerValue:
+    """Score a player's projected and YTD VAR and decompose the projected value.
+
+    ``full_line`` is scored at ``fraction=1.0`` (full-season projection); ``todate_line``
+    is scored at the elapsed ``fraction`` (to-date scale). ``value_proj``/``value_ytd``
+    subtract the full-season and to-date baselines respectively (never conflate them).
+    ``skill``/``luck`` split the projected value only when both a preseason VAR and a
+    projected estimate exist; otherwise both are ``None``.
+    """
+    est_proj = (
+        score_var(full_line, positions, player_type, scale, 1.0) if full_line is not None else None
+    )
+    est_ytd = (
+        score_var(todate_line, positions, player_type, scale, fraction)
+        if todate_line is not None
+        else None
+    )
+    value_proj = (est_proj - baseline_proj) if est_proj is not None else None
+    value_ytd = (est_ytd - baseline_ytd) if est_ytd is not None else None
+    if preseason_var is not None and est_proj is not None:
+        skill: float | None = preseason_var - baseline_proj
+        luck: float | None = est_proj - preseason_var
+    else:
+        skill = luck = None
+    return PlayerValue(
+        team,
+        name,
+        player_type,
+        None,
+        baseline_kind,
+        preseason_var,
+        est_proj,
+        est_ytd,
+        value_proj,
+        value_ytd,
+        skill,
+        luck,
+    )
+
+
 def season_fraction() -> float:
     """League games played / full schedule. v1: date-based fraction of the MLB season.
 
