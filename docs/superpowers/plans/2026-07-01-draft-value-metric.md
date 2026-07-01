@@ -274,7 +274,7 @@ def frozen_drift_summary(board_df, frozen_path=None, tol=0.05) -> dict:
 - [ ] **Step 6: Run the test.**
 
 Run: `pytest tests/test_analysis/test_draft_value.py::test_build_preseason_board_returns_scale_and_soft_frozen -v`
-Expected: PASS. The soft check returns a summary and logs a warning about drift (expected — the Apr-1 CSVs + current code give a self-consistent scale; the frozen board is a sanity signal only). The real single-scale guarantee is verified in Task 2 (score_var reproduces this board's own var).
+Expected: PASS. The soft check logs a drift warning — and the drift is expected to be **near-total, not marginal**: verified 2026-07-01, essentially all ~3669 joined players exceed the 0.05 tol (median ~0.83, max ~2.3 VAR) because the blend/SGP/VAR code churned since the draft-day freeze. This is fine and expected — do NOT treat it as a failure or try to make the frozen check pass. The Apr-1 CSVs + current code give ONE internally self-consistent scale used for preseason, par, realized, and estimate alike; the real single-scale guarantee is Task 2's exact `score_var == board.var` oracle (0.0 diff), not this frozen sanity signal.
 
 - [ ] **Step 7: Commit.**
 
