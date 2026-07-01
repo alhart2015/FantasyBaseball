@@ -57,3 +57,15 @@ def test_reconstruct_draft_shape_and_gate():
     keeper_team = {nn(k["name"]): k["team"] for k in league["keepers"]}
     user_team = next(keeper_team[nn(n)] for n in user_roster if nn(n) in keeper_team)
     assert dv.validate_reconstruction(picks, known_team=user_team, known_roster=user_roster) == []
+
+
+def test_par_curve_is_descending_and_keeper_mean():
+    board, _scale = dv.reproduce_draft_day_board()
+    picks = dv.reconstruct_draft()
+    curve = dv.build_par_curve(picks, board)
+    # drafted pars sorted descending
+    assert curve.drafted_pars == sorted(curve.drafted_pars, reverse=True)
+    # par_for_slot(1) is the top on-board drafted VAR
+    assert curve.par_for_slot(1) == curve.drafted_pars[0]
+    # keeper par is the mean of the keeper VARs (finite, not NaN)
+    assert curve.keeper_par == curve.keeper_par

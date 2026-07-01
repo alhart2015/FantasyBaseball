@@ -286,3 +286,88 @@ def validate_reconstruction(
                 f"known-team {known_team} roster mismatch: missing {sorted(want - recon)[:5]}"
             )
     return problems
+
+
+def _board_index(board: pd.DataFrame) -> dict[str, Any]:
+    """Map ``name_normalized::player_type`` -> board row (VAR tie-break on collisions)."""
+    idx: dict[str, Any] = {}
+    for _, row in board.iterrows():
+        key = f"{row['name_normalized']}::{row['player_type']}"
+        cur = idx.get(key)
+        if cur is None or float(row["var"]) > float(cur["var"]):
+            idx[key] = row
+    return idx
+
+
+def preseason_var_lookup(board: pd.DataFrame) -> dict[str, float]:
+    """Preseason VAR keyed by ``name_normalized::player_type`` (collision-resolved)."""
+    return {k: float(v["var"]) for k, v in _board_index(board).items()}
+
+
+def _match_board_row(name: str, bindex: dict[str, Any]) -> Any:
+    """Join a pick name to its board row across both player types; None if off-board."""
+    norm = normalize_name(name)
+    for ptype in ("hitter", "pitcher"):
+        row = bindex.get(f"{norm}::{ptype}")
+        if row is not None:
+            return row
+    return None
+
+
+@dataclass
+class ParCurve:
+    """Draft-slot par expectation: sorted on-board drafted VAR plus keeper flat par."""
+
+    drafted_pars: list[float]
+    keeper_par: float
+
+    def par_for_slot(self, ordinal: int) -> float:
+        # ordinal is 1-based among ON-BOARD drafted picks (sorted descending)
+        return self.drafted_pars[ordinal - 1]
+
+
+def _var_for_row(row: Any, scale: ScaleInputs | None, fraction: float) -> float:
+    """VAR for a board row: preseason VAR at f=1, else rescored on the to-date scale."""
+    if fraction == 1.0:
+        return float(row["var"])
+    if scale is None:
+        raise ValueError("scale is required when fraction != 1.0")
+    ptype = str(row["player_type"])
+    keys = (
+        ("r", "hr", "rbi", "sb", "avg", "ab")
+        if ptype == "hitter"
+        else ("w", "k", "sv", "era", "whip", "ip")
+    )
+    line = {k: row[k] for k in keys}
+    return score_var(line, list(row["positions"]), ptype, scale, fraction)
+
+
+def build_par_curve(
+    picks: list[DraftPick],
+    board: pd.DataFrame,
+    fraction: float = 1.0,
+    scale: ScaleInputs | None = None,
+) -> ParCurve:
+    """Build the par curve from reconstructed picks joined to the preseason board.
+
+    On-board drafted players contribute their (optionally to-date rescored) preseason
+    VAR to a descending par curve; off-board fliers are skipped so the curve shrinks.
+    Keeper par is the flat mean of the keeper VARs (keepers are elite, always on-board).
+    ``fraction < 1.0`` requires ``scale`` so ``_var_for_row`` can rescore to the
+    to-date scale.
+    """
+    bindex = _board_index(board)
+    drafted_vars: list[float] = []
+    keeper_vars: list[float] = []
+    for p in picks:
+        row = _match_board_row(p.player_name, bindex)
+        if row is None:
+            continue  # off-board flier: excluded from par curve
+        v = _var_for_row(row, scale, fraction)
+        if p.is_keeper:
+            keeper_vars.append(v)
+        else:
+            drafted_vars.append(v)
+    drafted_vars.sort(reverse=True)
+    keeper_par = sum(keeper_vars) / len(keeper_vars) if keeper_vars else float("nan")
+    return ParCurve(drafted_vars, keeper_par)
