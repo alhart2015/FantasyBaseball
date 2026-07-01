@@ -15,6 +15,9 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_board_from_frames
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
+from fantasy_baseball.sgp.var import calculate_var
+from fantasy_baseball.utils.constants import REPLACEMENT_BY_POSITION, Category
 
 logger = logging.getLogger(__name__)
 
@@ -27,7 +30,7 @@ _CONFIG = _REPO_ROOT / "config" / "league.yaml"
 
 @dataclass(frozen=True)
 class ScaleInputs:
-    denoms: dict[str, Any]
+    denoms: dict[Category, float]
     repl_rates: dict[str, Any]
     replacement_levels: dict[str, Any]
     team_ab: int
@@ -106,3 +109,102 @@ def frozen_drift_summary(
             summary["max"],
         )
     return summary
+
+
+_COUNTING_HIT = ("r", "hr", "rbi", "sb", "ab")  # ab is volume (scales)
+_COUNTING_PIT = ("w", "k", "sv", "ip")  # ip is volume (scales)
+
+
+def _to_date_floors(scale: ScaleInputs, fraction: float) -> dict[str, float]:
+    """Recompute position floors on a to-date scale (NOT scale.replacement_levels * f).
+
+    Floor SGP is NOT linear in f: its rate component is f-invariant while only the
+    counting component scales. So rebuild each floor from REPLACEMENT_BY_POSITION with
+    counting+volume * f, rates held, team volumes * f. At f=1 this reproduces the
+    board's position_aware_replacement_levels floors.
+    """
+    if fraction == 1.0:
+        return scale.replacement_levels
+    floors: dict[str, float] = {}
+    team_ab = scale.team_ab * fraction
+    team_ip = scale.team_ip * fraction
+    for pos, raw in REPLACEMENT_BY_POSITION.items():
+        line: dict[str, Any] = dict(raw)
+        for k in ("r", "hr", "rbi", "sb", "ab", "w", "k", "sv", "ip"):
+            if k in line:
+                line[k] = line[k] * fraction
+        is_pitcher = "ip" in raw
+        # derive rate stats the floor line implies, held constant vs f
+        if is_pitcher:
+            ip = raw["ip"] or 1.0
+            line["era"] = (raw["er"] / ip) * 9.0
+            line["whip"] = (raw["bb"] + raw["h_allowed"]) / ip
+            line["player_type"] = (
+                "pitcher"  # StrEnum-compatible; required by calculate_player_sgp dispatch
+            )
+        else:
+            ab = raw["ab"] or 1.0
+            line["avg"] = raw["h"] / ab
+            line["player_type"] = "hitter"
+        floors[pos] = calculate_player_sgp(
+            pd.Series(line),
+            denoms=scale.denoms,
+            team_ab=int(team_ab),
+            team_ip=int(team_ip),
+            replacement_avg=scale.repl_rates["avg"],
+            replacement_era=scale.repl_rates["era"],
+            replacement_whip=scale.repl_rates["whip"],
+        )
+    # UTIL floor mirrors the board: max of the hitter floors (see replacement.py).
+    hitter_floors = [floors[p] for p in ("C", "1B", "2B", "3B", "SS", "OF") if p in floors]
+    if hitter_floors:
+        floors["UTIL"] = max(hitter_floors)
+    return floors
+
+
+def score_var(
+    line: dict[str, Any],
+    positions: list[str],
+    player_type: str,
+    scale: ScaleInputs,
+    fraction: float = 1.0,
+) -> float:
+    """Score a stat line into VAR on the board scale (projected or YTD-scaled).
+
+    ``fraction < 1.0`` applies the YTD to-date scaling: counting + volume + team
+    volumes scale by ``fraction`` while rates (AVG/ERA/WHIP) are held, and the
+    position floors are recomputed on the same to-date scale. ``player_type`` is
+    ``"hitter"`` or ``"pitcher"``.
+    """
+    # player_type must be "hitter"/"pitcher" (StrEnum-compatible) so calculate_player_sgp
+    # dispatches (player.get("player_type") == PlayerType.HITTER/PITCHER, player_value.py:104,121).
+    scaled: dict[str, Any] = dict(line)
+    scaled["player_type"] = player_type
+    counting = _COUNTING_HIT if player_type == "hitter" else _COUNTING_PIT
+    if fraction != 1.0:
+        for k in counting:
+            if scaled.get(k) is not None:
+                scaled[k] = scaled[k] * fraction
+    team_ab = scale.team_ab * fraction
+    team_ip = scale.team_ip * fraction
+    total_sgp = calculate_player_sgp(
+        pd.Series(scaled),
+        denoms=scale.denoms,
+        team_ab=int(team_ab),
+        team_ip=int(team_ip),
+        replacement_avg=scale.repl_rates["avg"],
+        replacement_era=scale.repl_rates["era"],
+        replacement_whip=scale.repl_rates["whip"],
+    )
+    floors = _to_date_floors(scale, fraction)
+    # calculate_var needs total_sgp + positions + ip (pitcher floor routing reads
+    # player.get("ip", 0.0) via _pitcher_floor_key -> role_from_ip, var.py:18).
+    series = pd.Series(
+        {
+            "total_sgp": total_sgp,
+            "positions": list(positions),
+            "player_type": player_type,
+            "ip": scaled.get("ip", 0.0),
+        }
+    )
+    return calculate_var(series, floors)
