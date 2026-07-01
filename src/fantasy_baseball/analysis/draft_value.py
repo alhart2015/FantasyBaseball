@@ -575,3 +575,41 @@ def classify_acquisition(
     if norm_name in add_by_team.get(tkey, set()):
         return "waiver"
     return "trade_excluded"
+
+
+@dataclass
+class TeamRollup:
+    """Per-team draft-value roll-up: sum, per-player average, and credited counts.
+
+    ``sum_value`` sums the chosen-horizon per-player values (``value_proj`` when
+    ``horizon == "proj"``, else ``value_ytd``); ``avg_value`` divides by the number
+    of credited players (``NaN`` when none are credited). ``credited_count`` is that
+    number; ``case3_count`` is passed through from the caller's classification.
+    """
+
+    team: str
+    sum_value: float
+    avg_value: float
+    credited_count: int
+    case3_count: int
+
+
+def roll_up_team(
+    team: str,
+    player_values: list[PlayerValue],
+    case3_count: int,
+    horizon: str = "proj",
+) -> TeamRollup:
+    """Roll a team's per-player values into sum, per-player average, and counts.
+
+    ``horizon`` picks ``value_proj`` (``"proj"``) or ``value_ytd`` (otherwise). Only
+    non-``None`` values are credited (values can be ``0.0`` or negative, so filter on
+    ``is not None``, never truthiness). ``avg_value`` is ``NaN`` when no player is
+    credited. ``case3_count`` is passed through unchanged.
+    """
+    attr = "value_proj" if horizon == "proj" else "value_ytd"
+    vals = [getattr(pv, attr) for pv in player_values if getattr(pv, attr) is not None]
+    n = len(vals)
+    total = sum(vals)
+    avg = total / n if n else float("nan")
+    return TeamRollup(team, total, avg, n, case3_count)

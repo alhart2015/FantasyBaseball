@@ -194,3 +194,42 @@ def test_convergence_ytd_equals_proj_at_f1(synthetic_scale):
         fraction=1.0,
     )
     assert abs(pv.value_proj - pv.value_ytd) < 1e-9
+
+
+def test_team_rollup_sum_avg_count():
+    # PlayerValue has 12 fields; construct with keywords to avoid positional drift.
+    pvs = [
+        dv.PlayerValue(
+            team="Hart of the Order",
+            name="A",
+            player_type="hitter",
+            slot=1,
+            baseline_kind="drafted",
+            preseason_var=8.0,
+            est_var_proj=10.0,
+            est_var_ytd=6.0,
+            value_proj=4.0,
+            value_ytd=2.5,
+            skill=2.0,
+            luck=2.0,
+        ),
+        dv.PlayerValue(
+            team="Hart of the Order",
+            name="B",
+            player_type="hitter",
+            slot=None,
+            baseline_kind="waiver",
+            preseason_var=None,
+            est_var_proj=3.0,
+            est_var_ytd=1.5,
+            value_proj=3.0,
+            value_ytd=1.4,
+            skill=None,
+            luck=None,
+        ),
+    ]
+    r = dv.roll_up_team("Hart of the Order", pvs, case3_count=2, horizon="proj")
+    assert r.credited_count == 2
+    assert abs(r.sum_value - 7.0) < 1e-9  # value_proj: 4.0 + 3.0
+    assert abs(r.avg_value - 3.5) < 1e-9
+    assert r.case3_count == 2
