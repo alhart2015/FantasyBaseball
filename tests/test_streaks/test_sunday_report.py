@@ -435,14 +435,7 @@ def test_report_with_skipped_players_renders_footer() -> None:
 
 def _neutral_scores(window_end: date) -> list[PlayerCategoryScore]:
     return [
-        PlayerCategoryScore(
-            player_id=1,
-            category=cat,
-            label="neutral",
-            probability=None,
-            drivers=(),
-            window_end=window_end,
-        )
+        _score(player_id=1, category=cat, window_end=window_end)
         for cat in ("hr", "r", "rbi", "sb", "avg")
     ]
 
