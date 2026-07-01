@@ -31,9 +31,9 @@ Root cause is recency, not a bad calculation:
 - The /streaks **web page** (`web/templates/season/streaks.html` +
   `_streaks_row.html`, rendered by `web/season_routes.py:609-618` from the
   serialized `cache:streak_scores` dict) and the lineup chip (`indicator.py` via
-  `build_indicator`, called from `season_routes.py:642` on `/streaks` and
-  `:684-697` on `/lineup/tbodies`) both read that same payload, so both show the
-  stale label. (The continuation-probability chip is a separate, out-of-scope
+  `build_indicator`, called from `season_routes.py:652` on `/lineup` and `:697`
+  on `/lineup/tbodies`) both read that same payload, so both show the stale
+  label. (The continuation-probability chip is a separate, out-of-scope
   future item — it does not currently consume this payload.)
 
 ## Goal
