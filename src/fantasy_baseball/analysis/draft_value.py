@@ -155,14 +155,14 @@ def _to_date_floors(scale: ScaleInputs, fraction: float) -> dict[str, float]:
         is_pitcher = "ip" in raw
         # derive rate stats the floor line implies, held constant vs f
         if is_pitcher:
-            ip = raw["ip"] or 1.0
+            ip = raw["ip"]
             line["era"] = (raw["er"] / ip) * 9.0
             line["whip"] = (raw["bb"] + raw["h_allowed"]) / ip
             line["player_type"] = (
                 "pitcher"  # StrEnum-compatible; required by calculate_player_sgp dispatch
             )
         else:
-            ab = raw["ab"] or 1.0
+            ab = raw["ab"]
             line["avg"] = raw["h"] / ab
             line["player_type"] = "hitter"
         floors[pos] = calculate_player_sgp(
@@ -272,7 +272,11 @@ def reconstruct_draft() -> list[DraftPick]:
     flat_teams = [(rnd_i + 1, team) for rnd_i, rnd in enumerate(rounds) for team in rnd]
     live_teams = flat_teams[n_keep:]  # drop the 30 keeper-round slots (rounds 1-3)
     live = drafted[n_keep:]
-    for slot, (name, (rnd, team)) in enumerate(zip(live, live_teams, strict=False), start=1):
+    assert len(live) == len(live_teams), (
+        f"draft reconstruction mismatch: {len(live)} live picks vs "
+        f"{len(live_teams)} live slots (both should be 200)"
+    )
+    for slot, (name, (rnd, team)) in enumerate(zip(live, live_teams, strict=True), start=1):
         picks.append(DraftPick(slot, rnd, team, name, False))
     return picks
 
@@ -287,6 +291,9 @@ def validate_reconstruction(
     """
     problems: list[str] = []
     league = _load_league()
+    n_live = sum(1 for p in picks if not p.is_keeper)
+    if n_live != 200:
+        problems.append(f"non-keeper pick count {n_live} != 200")
     keeper_norm = {(normalize_name(k["name"]), k["team"]) for k in league["keepers"]}
     recon_keeper_norm = {(normalize_name(p.player_name), p.team) for p in picks if p.is_keeper}
     missing = keeper_norm - recon_keeper_norm
@@ -394,12 +401,12 @@ def _hit_line_from(rec: dict[str, Any]) -> dict[str, Any]:
         "rbi": rec.get("rbi", 0),
         "sb": rec.get("sb", 0),
         "ab": rec.get("ab", 0),
-        "avg": (rec["h"] / rec["ab"]) if rec.get("ab") else 0.0,
+        "avg": (rec.get("h", 0) / rec["ab"]) if rec.get("ab") else 0.0,
     }
 
 
 def _pit_line_from(rec: dict[str, Any]) -> dict[str, Any]:
-    ip = rec.get("ip") or 0.0
+    ip = rec.get("ip", 0.0)
     return {
         "w": rec.get("w", 0),
         "k": rec.get("k", 0),
@@ -481,6 +488,7 @@ def compute_player_value(
     todate_line: dict[str, Any] | None,
     scale: ScaleInputs,
     fraction: float,
+    slot: int | None = None,
 ) -> PlayerValue:
     """Score a player's projected and YTD VAR and decompose the projected value.
 
@@ -509,7 +517,7 @@ def compute_player_value(
         team,
         name,
         player_type,
-        None,
+        slot,
         baseline_kind,
         preseason_var,
         est_proj,
@@ -522,11 +530,12 @@ def compute_player_value(
 
 
 def season_fraction() -> float:
-    """League games played / full schedule. v1: date-based fraction of the MLB season.
+    """League-wide elapsed fraction of the MLB season, computed purely from the date.
 
-    Read the elapsed fraction from the standings snapshot game count if available;
-    otherwise fall back to a date-based fraction. Pin the exact source when wiring
-    the CLI (Task 9) against real standings; keep this helper the single source.
+    Clamps ``today`` to the [season_start, season_end] window and returns elapsed
+    days / total days. This is a date-based approximation of games played (it does
+    NOT read any standings snapshot or per-team game count); it is the single source
+    of the to-date scaling fraction ``f``.
     """
     season_start = date(2026, 3, 26)
     season_end = date(2026, 9, 28)
@@ -633,21 +642,28 @@ def _default_positions(player_type: str) -> list[str]:
 
 
 def _resolve_type_and_positions(
-    norm_name: str, full_lines: dict[str, Any], bindex: dict[str, Any]
+    norm_name: str,
+    full_lines: dict[str, Any],
+    todate_lines: dict[str, Any],
+    bindex: dict[str, Any],
 ) -> tuple[str, list[str]]:
     """Return ``(player_type, positions)`` for a rostered player.
 
     Prefer the preseason board row (real eligible positions); else infer the type
-    from whichever full-season line exists and attach board default positions;
-    off-board with no line falls back to hitter. Ohtani resolves to the hitter line
-    (batter only) because the board keys him as a hitter.
+    from whichever full-season OR to-date line exists and attach board default
+    positions; off-board with no line falls back to hitter. Consulting the to-date
+    lines matters for off-board players with game logs but no full-season projection
+    (e.g. a pitcher who would otherwise default to hitter/OF and be un-credited).
+    Ohtani resolves to the hitter line (batter only) because the board keys him as a
+    hitter.
     """
     for ptype in ("hitter", "pitcher"):
         row = bindex.get(f"{norm_name}::{ptype}")
         if row is not None:
             return ptype, list(row["positions"])
     for ptype in ("hitter", "pitcher"):
-        if f"{norm_name}::{ptype}" in full_lines:
+        key = f"{norm_name}::{ptype}"
+        if key in full_lines or key in todate_lines:
             return ptype, _default_positions(ptype)
     return "hitter", _default_positions("hitter")
 
@@ -718,7 +734,7 @@ def run_draft_value(
         if kind == "trade_excluded":
             case3[team] = case3.get(team, 0) + 1
             continue
-        ptype, positions = _resolve_type_and_positions(norm, full_lines, bindex)
+        ptype, positions = _resolve_type_and_positions(norm, full_lines, todate_lines, bindex)
         key = f"{norm}::{ptype}"
         pre = preseason.get(key)
         full_line = full_lines.get(key)
@@ -744,6 +760,7 @@ def run_draft_value(
             todate_line,
             scale,
             f,
+            slot=slot_by_name.get(norm) if kind == "drafted" else None,
         )
         players.append(pv)
 

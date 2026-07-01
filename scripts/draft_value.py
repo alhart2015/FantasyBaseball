@@ -40,16 +40,25 @@ def main() -> None:
         )
     lines.append("")
     lines.append("## Per-player (projected)")
-    lines.append("| Player | kind | preVAR | estVAR | skill | luck | value | valueYTD |")
-    lines.append("|---|---|---|---|---|---|---|---|")
+    lines.append(
+        "| Player | kind | slot | preVAR | estVAR | par | skill | luck | value | valueYTD |"
+    )
+    lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for p in sorted(
         players,
         key=lambda p: p.value_proj if p.value_proj is not None else -9e9,
         reverse=True,
     ):
+        slot = "  -" if p.slot is None else f"{p.slot:3d}"
+        par = (
+            _fmt(p.est_var_proj - p.value_proj)
+            if p.est_var_proj is not None and p.value_proj is not None
+            else "  N/A"
+        )
         lines.append(
-            f"| {p.name} | {p.baseline_kind} | {_fmt(p.preseason_var)} | {_fmt(p.est_var_proj)} "
-            f"| {_fmt(p.skill)} | {_fmt(p.luck)} | {_fmt(p.value_proj)} | {_fmt(p.value_ytd)} |"
+            f"| {p.name} | {p.baseline_kind} | {slot} | {_fmt(p.preseason_var)} "
+            f"| {_fmt(p.est_var_proj)} | {par} | {_fmt(p.skill)} | {_fmt(p.luck)} "
+            f"| {_fmt(p.value_proj)} | {_fmt(p.value_ytd)} |"
         )
     report = "\n".join(lines)
     out = Path("data/analysis/draft_value_report.md")
