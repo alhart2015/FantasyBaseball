@@ -35,47 +35,51 @@ SGP because:
 Preseason VAR, realized VAR, and estimate VAR **must all be computed on one
 scale**, or `value`, `skill`, and `luck` are meaningless.
 
-**Preseason VAR + par curve come from the FROZEN draft-day board, not a live
-rebuild.** `VAR_preseason(player)` and the par curve MUST read the frozen
-draft-day `var` column in `data/draft_state_board.json` (verified: a list of
-~3669 rows, each `{name, player_id=fg_id::player_type, positions, var, adp,
-player_type}`). Re-running `build_draft_board(conn)` mid-season would read a
-**mutated** in-season positions table (players gain eligibility) and a possibly
-newer projections snapshot, producing different VARs than the ones the draft was
-actually made against — silently drifting the par curve, `skill`, and every slot
-expectation. The frozen JSON is the authoritative draft-day vintage; use it.
+**The working source is a REPRODUCED draft-day board; the frozen JSON is the
+validation anchor.** The module reproduces the draft-day board by running
+`build_draft_board` against the **draft-day vintage** — the preseason projection
+CSVs in `data/projections/2026/` and the draft-day `positions` table — read from
+`data/fantasy.db` via `get_connection()` (`db.py`), which holds the
+`blended_projections` (year 2026) and `positions` tables the board reads. **This
+is NOT the live in-season KV store** (`local.db`): `build_draft_board` never
+touches the KV store, and re-running against mutated in-season positions
+(players gain eligibility) would drift VARs off the draft-day vintage. The plan
+must confirm `fantasy.db` still holds the draft-day projection + positions vintage
+(and reseed it from the CSVs + `data/player_positions.json` if it has moved on).
 
-**Realized/estimate VAR must reuse the board's exact scale inputs.**
-`build_draft_board` computes SGP twice — the second pass uses **pool-derived rate
-baselines** (`calculate_replacement_rates(pool, starters)` in
-`draft/board.py:61-72`) for AVG/ERA/WHIP, plus `team_ab`/`team_ip` and the
-`sgp_denominators`, and derives VAR against `position_aware_replacement_levels`
-built on *those same* rates (`board.py:74`). The frozen JSON stores only `var`
-(not the floors, rates, denominators, or team volumes), so the module MUST obtain,
-and reuse for every realized/estimate line:
+The reproduced board is the working source of, all on one scale and full
+precision: `VAR_preseason(player)`, the **par curve**, each player's preseason
+**stat line including volumes `ab`/`ip`** (needed for YTD scaling and rate SGP),
+`positions` (for floor routing), and the reused scale inputs below. The board's
+scale inputs are **determinate module defaults** — `get_sgp_denominators()` code
+defaults (NOT `league.yaml`), `team_ab=5500`, `team_ip=1450`
+(`player_value.py`), and the pool-derived rates from
+`calculate_replacement_rates(pool, starters)` — so a realized/estimate line MUST
+be scored with those same denominators, rates, `team_ab`/`team_ip`, and the
+per-position floors from `position_aware_replacement_levels`. Calling
+`calculate_player_sgp` with the module rate defaults (0.250 / 4.50 / 1.35) instead
+of the pool-derived rates is a silent scale bug and is prohibited.
 
-1. the same `sgp_denominators` the board used (note: `get_sgp_denominators()`
-   returns code defaults, NOT `league.yaml` — pin whichever the board build used),
-2. the same pool-derived replacement **rates** (`replacement_avg`,
-   `replacement_era`, `replacement_whip`) from `calculate_replacement_rates`,
-3. the same `team_ab` / `team_ip`,
-4. the same per-position VAR floors from `position_aware_replacement_levels`.
+**Reproduction must replicate the board's two-pass ordering** (first pass with
+default rates sets `total_sgp`, which selects the replacement band at
+`replacement.py:112-114`; the second pass overwrites `total_sgp` with pool-derived
+rates — `board.py:58-72`); a single-pass rebuild picks a different band and drifts
+the scale. **Preferred mechanism:** extend `build_draft_board` to also return the
+pool-derived rates + floors it used, rather than hand-rebuilding them.
 
-**Mechanism (preferred): extend `build_draft_board` to also return these four
-inputs**, and run it against the **draft-day projection + positions vintage**
-(preseason `data/projections` files; not the live in-season tables). A
-hand-rebuild "from the same pool + config" is discouraged because it must
-replicate the board's **two-pass ordering** exactly (first pass with default rates
-sets `total_sgp`, which selects the replacement band at `replacement.py:112-114`;
-the second pass overwrites `total_sgp` with pool-derived rates — `board.py:58-72`).
-A single-pass rebuild picks a different band and silently drifts the scale.
-
-**Validation gate (single-scale oracle):** the reproduced board's `var` MUST
-reproduce the frozen `draft_state_board.json` `var` column to within float
-tolerance for every joined player. This both proves the reused floors/rates are
-draft-day-consistent and catches any projection/positions vintage mismatch loudly.
-Calling `calculate_player_sgp` with module defaults (0.250 / 4.50 / 1.35) instead
-of the reused inputs is a silent scale bug and is prohibited.
+**Validation gate + drift handling (single-scale oracle).** The reproduced board's
+`var` MUST reproduce the frozen `data/draft_state_board.json` `var` column for
+every joined player **to within 0.05** (the frozen `var` is persisted rounded to 1
+decimal by `serialize_board`, `state.py`, so a tighter float tolerance is
+unachievable by construction). A pass proves the reused floors/rates are
+draft-day-consistent. **If it does NOT pass** (the var-computing path has churned
+since the freeze — plausible given recent board/SGP refactors), that is a **loud
+stop for investigation, never a reason to loosen the tolerance**: the plan resolves
+it by pinning the reproduction to the draft-day board code (e.g. the draft-day
+commit) or by an explicit, bounded decision — it does not silently ship a drifted
+scale. Because `VAR_preseason`/`par` are read from the reproduced (full-precision)
+board — not the rounded JSON — there is no rounding seam in `value`/`luck`; the
+frozen JSON is used only as the anchor.
 
 ## Core metric
 
@@ -157,8 +161,9 @@ above and the volumes need scaling. Then:
   its `team_ab`/`team_ip` by `f` too (it is not "unscaled" — only the player's real
   accumulated counting stats are used as-is; the team denominators still scale).
 - `par_to_date(slot)` = the drafted par curve rebuilt from **expected-to-date**
-  VAR (each drafted player's frozen-board preseason line scaled by `f` through the
-  path above, VAR recomputed with to-date floors), sorted descending.
+  VAR (each drafted player's **reproduced-board** preseason stat line — which
+  carries `ab`/`ip`, unlike the frozen JSON — scaled by `f` through the path above,
+  VAR recomputed with to-date floors), sorted descending.
 
 Rate-category proration is inherently approximate (SGP rate value is defined
 against a full-season team volume), which is a further reason YTD is the
@@ -282,18 +287,24 @@ These are known limitations; the roll-up will be refined after seeing real outpu
 
 ## Data sources (existing — mostly KV-store blobs, not `data/` files)
 
-Most inputs are KV-store blobs (Upstash on Render, SQLite locally), **not** flat
-`data/` files, so a local CLI run needs a live or freshly-synced store. Per repo
-memory, `run_season_dashboard.py` can clobber local state via Upstash sync — the
-plan must specify how the CLI obtains a consistent snapshot (e.g. `--no-sync` or
-an explicit read path).
+The **in-season** inputs (game logs, current rosters, full-season projections,
+transactions) are KV-store blobs (Upstash on Render, SQLite `local.db` locally),
+**not** flat `data/` files, so the CLI needs a live or freshly-synced store for
+those; per repo memory, `run_season_dashboard.py` can clobber local state via
+Upstash sync, so the plan must specify how the CLI obtains a consistent snapshot
+(e.g. `--no-sync` or an explicit read path). The **draft-day board** inputs are
+the exception — they live in `data/fantasy.db` (a separate SQLite DB from the KV
+`local.db`) and in `data/projections/2026/`, and are read via `get_connection()`,
+not the KV store.
 
-- **Preseason VAR + par curve:** the **frozen** `data/draft_state_board.json`
-  (`var`, `player_id=fg_id::player_type`, `positions`) — the draft-day vintage.
-- **Reused scale inputs (floors/rates/denoms/team volumes):** a `build_draft_board`
-  run against the **draft-day projection + positions vintage**, validated to
-  reproduce the frozen `var` (see Single-scale requirement) — NOT a live in-season
-  `build_draft_board(conn)`.
+- **Reproduced draft-day board (working source):** `build_draft_board` run against
+  the draft-day vintage in `data/fantasy.db` (`blended_projections` 2026 +
+  draft-day `positions`) via `get_connection()` — provides `VAR_preseason`, the par
+  curve, per-player preseason lines (with `ab`/`ip`), `positions`, and the reused
+  scale inputs (floors/rates/denoms/team volumes). NOT the KV store; NOT a live
+  in-season rebuild.
+- **Frozen board (validation anchor only):** `data/draft_state_board.json` `var`
+  column — used solely to validate the reproduction (see Single-scale requirement).
 - **2026 pick-by-pick (team + overall slot):** reconstructed from
   `data/draft_state.json` `drafted_players` + `config/draft_order.json`
   (snake order + `trades`) + `config/league.yaml` keepers. See invariant below.
@@ -343,6 +354,14 @@ split), and key on `name::player_type` with **VAR tie-break on normalized-name
 collisions** (repo convention). The namesake collision path is the known
 silent-data-loss risk and must be logged, not swallowed.
 
+**Positions for floor routing.** `calculate_var` routes to a per-position floor via
+`player["positions"]` (`sgp/var.py`), but the actual-to-date and full-season
+estimate lines (game logs / `full_season_projections`) are MLBAM-keyed and do not
+carry the board's `positions`. Each estimate/YTD line MUST inherit `positions`
+(hence the SP/RP role that selects the pitcher floor) from its joined
+reproduced-board row before `calculate_var` is called, or floor selection — and
+thus VAR — is undefined for the realized/estimate horizons.
+
 ### Two-way players (Ohtani)
 
 `league.yaml` marks Ohtani "batter only." Game-log totals split hitter/pitcher by
@@ -360,8 +379,10 @@ hitter/pitcher type collision on the normalized name.
   - acquisition classifier (drafted / kept / waiver / trade-excluded / dropped),
   - team roll-up (sum + per-player average + credited count).
 - **CLI script** `scripts/draft_value.py`: prints a per-player table (slot, par,
-  preseason VAR, estimate VAR, skill, luck, value) and a per-team leaderboard,
-  with YTD and projected columns, and writes a markdown report artifact.
+  preseason VAR, estimate VAR, value — plus skill/luck **for the projected horizon
+  only**, rendered N/A under YTD and for off-board players) and a per-team
+  leaderboard, with YTD and projected value columns, and writes a markdown report
+  artifact.
 - Output surface for v1 is the CLI + markdown; a season-dashboard page is deferred.
 
 ## Validation / acceptance criteria (test oracles)
@@ -370,9 +391,11 @@ The metric is correctness-critical and "who drafted well" has no external ground
 truth, so the plan MUST include these testable oracles:
 
 1. **Frozen-board single-scale check:** the reproduced draft-day board's `var`
-   reproduces the frozen `data/draft_state_board.json` `var` column within float
-   tolerance for every joined player. Proves the reused floors/rates/denoms/volumes
-   are draft-day-consistent AND that `VAR_preseason` matches the frozen source.
+   reproduces the frozen `data/draft_state_board.json` `var` column **within 0.05**
+   (the frozen `var` is persisted rounded to 1 dp by `serialize_board`) for every
+   joined player. Proves the reused floors/rates/denoms/volumes are
+   draft-day-consistent. A failure is a loud stop for drift investigation, never a
+   tolerance-loosening exercise.
 2. **Estimate-scale check:** for an on-board player with actual + ROS == preseason
    projection (synthetic fixture), `VAR(estimate)` reproduces `VAR_preseason`
    within tolerance. Guards the realized/estimate scale bug on the projected path.
