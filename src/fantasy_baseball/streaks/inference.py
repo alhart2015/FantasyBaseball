@@ -62,6 +62,13 @@ logger = logging.getLogger(__name__)
 # column order used by :mod:`streaks.reports.sunday`.
 REPORT_CATEGORIES: tuple[StreakCategory, ...] = ("hr", "r", "rbi", "sb", "avg")
 
+# A player whose most-recent scoreable window ends more than this many days
+# before the run date has no *current* streak: his hot/cold label is frozen at
+# his last game (see the staleness spec). Such a player is forced neutral in
+# score_player_windows. Absorbs Statcast's 1-2 day publication lag plus normal
+# off-days; catches any multi-week IL stint. Strict >: exactly 4 days is current.
+STALE_TOLERANCE_DAYS: int = 4
+
 # Pipeline step name for the LogisticRegression layer; mirrors the
 # constant in :mod:`streaks.analysis.predictors`. Re-declared here rather
 # than imported because the predictors module marks it private.
@@ -703,8 +710,13 @@ def score_player_windows(
     window_end_on_or_before: date,
     window_days: int = 14,
     scoring_season: int,
+    stale_after_days: int | None = STALE_TOLERANCE_DAYS,
 ) -> tuple[list[PlayerCategoryScore], list[ScoreSkip]]:
     """Score every (player, REPORT_CATEGORIES) for the listed player_ids.
+
+    Players whose most-recent window ends more than ``stale_after_days``
+    before ``window_end_on_or_before`` are forced to neutral scores (pass
+    ``None`` to disable).
 
     ``window_end_on_or_before`` is normally ``date.today()`` — Statcast
     has a 1-2 day publication lag so the most recent window typically
@@ -743,9 +755,28 @@ def score_player_windows(
             skips.append(ScoreSkip(player_id=player_id, reason="no_window"))
             continue
         window_end = pd.Timestamp(window["window_end"]).date()
+        is_stale = (
+            stale_after_days is not None
+            and (window_end_on_or_before - window_end).days > stale_after_days
+        )
         peripherals_null = any(pd.isna(window[c]) for c in _PERIPHERAL_COLS)
 
         for category in REPORT_CATEGORIES:
+            if is_stale:
+                # No current streak: the window is frozen at the player's last
+                # game. Emit a neutral score (kept, not skipped) so the report
+                # grid stays uniform and the day-count stays recoverable.
+                scores.append(
+                    PlayerCategoryScore(
+                        player_id=player_id,
+                        category=category,
+                        label="neutral",
+                        probability=None,
+                        drivers=(),
+                        window_end=window_end,
+                    )
+                )
+                continue
             label = labels.get((player_id, category), "neutral")
             score = _score_one(
                 player_id=player_id,
