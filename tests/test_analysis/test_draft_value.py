@@ -81,12 +81,22 @@ def test_par_curve_is_descending_and_keeper_mean():
 
 
 def test_full_season_and_actual_loaders_shape():
-    full = dv.load_full_season_lines()
-    assert full, "no full-season lines (KV store not synced?)"
-    k = next(iter(full))
+    full_by_mlbam, full_by_name = dv.load_full_season_lines()
+    assert full_by_name, "no full-season lines (KV store not synced?)"
+    assert full_by_mlbam, "no mlbam-keyed full-season lines (KV store not synced?)"
+    # name map is keyed name_normalized::player_type; mlbam map is keyed int id
+    k = next(iter(full_by_name))
     assert "::" in k
-    line = full[k]
+    line = full_by_name[k]
     assert any(s in line for s in ("hr", "k"))
+    mk = next(iter(full_by_mlbam))
+    assert isinstance(mk, int)
+    assert any(s in full_by_mlbam[mk] for s in ("hr", "k"))
+    # actual-to-date loader has the same tuple shape
+    td_by_mlbam, td_by_name = dv.load_actual_to_date_lines()
+    assert td_by_mlbam and td_by_name, "no game-log lines (KV store not synced?)"
+    assert "::" in next(iter(td_by_name))
+    assert isinstance(next(iter(td_by_mlbam)), int)
 
 
 def test_season_fraction_in_unit_range():
@@ -209,6 +219,21 @@ def test_run_draft_value_end_to_end_and_known_pick():
     )
     assert soto is not None and soto.value_proj == soto.value_proj  # not NaN
     assert soto.baseline_kind in ("keeper", "drafted", "waiver")
+
+    # Namesake-collision guard (mlbam-id join): the drafted Mason Miller is the
+    # A's/Padres closer (mlbam 695243, ~37 SV projected), NOT the scrub namesake
+    # (mlbam 692223, ~2 IP). Before the fix the name-keyed dict let the scrub
+    # overwrite the closer and his estVAR came out deeply negative (~-6.7). His
+    # projected estVAR must now be clearly positive (near his closer projection).
+    miller = next(
+        (p for p in players if normalize_name(dv._strip_suffix(p.name)) == "mason miller"), None
+    )
+    assert miller is not None, "Mason Miller not on any current roster -- update this guard"
+    assert miller.est_var_proj is not None
+    assert miller.est_var_proj > 2.0, (
+        f"Mason Miller estVAR {miller.est_var_proj} looks like the scrub namesake's "
+        "line, not the closer's -- mlbam-id join regressed"
+    )
 
 
 def test_team_rollup_sum_avg_count():

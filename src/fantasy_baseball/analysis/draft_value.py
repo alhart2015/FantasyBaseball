@@ -17,7 +17,11 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.cache_keys import CacheKey
 from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.data.projections import blend_projections
-from fantasy_baseball.data.redis_store import _PLAYER_SUFFIX_RE, get_latest_weekly_rosters
+from fantasy_baseball.data.redis_store import (
+    _PLAYER_SUFFIX_RE,
+    get_game_log_totals,
+    get_latest_weekly_rosters,
+)
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_board_from_frames
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -27,7 +31,6 @@ from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 from fantasy_baseball.utils.time_utils import compute_fraction_remaining, local_today
 from fantasy_baseball.web.season_data import (
-    _load_game_log_totals,
     read_cache_dict,
     read_cache_list,
 )
@@ -420,37 +423,123 @@ def _pit_line_from(rec: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def load_full_season_lines() -> dict[str, Any]:
-    """Full-season projection lines keyed ``name_normalized::player_type``.
+def _row_mlbam(row: Any) -> int | None:
+    """Extract a real integer mlbam id from a board row or projection record.
+
+    Board rows and projection records carry ``mlbam_id`` as a float that may be
+    NaN (an id-less player). Returns the int id when present and finite, else
+    ``None`` (also None for a ``None`` row, so callers can pass a missing row).
+    """
+    try:
+        v = row["mlbam_id"]
+    except (KeyError, IndexError, TypeError):
+        return None
+    if v is None or v != v:  # None or NaN (NaN != NaN)
+        return None
+    return int(v)
+
+
+def _insert_by_name(
+    by_name: dict[str, Any],
+    name_mlbam: dict[str, int | None],
+    key: str,
+    line: dict[str, Any],
+    volume_key: str,
+    mlbam: int | None,
+) -> None:
+    """Insert ``line`` into ``by_name`` keeping the higher-volume namesake.
+
+    When two different players normalize to the same ``name::player_type`` key,
+    the real MLB player (more ``ab`` for hitters / ``ip`` for pitchers) wins over
+    a scrub namesake, so the fallback name-join scores the intended player. The
+    collision is logged (not swallowed), naming both mlbam ids. The mlbam-keyed
+    map is the authoritative join; this name map is only a fallback for rows that
+    lack an id on either side.
+    """
+    cur = by_name.get(key)
+    if cur is None:
+        by_name[key] = line
+        name_mlbam[key] = mlbam
+        return
+    cur_vol = float(cur[volume_key])
+    new_vol = float(line[volume_key])
+    new_wins = new_vol > cur_vol
+    logger.warning(
+        "draft-value: namesake collision on %s (%s=%.1f); keeping mlbam=%s over "
+        "mlbam=%s (kept %.1f vs dropped %.1f)",
+        key,
+        volume_key,
+        max(cur_vol, new_vol),
+        mlbam if new_wins else name_mlbam.get(key),
+        name_mlbam.get(key) if new_wins else mlbam,
+        max(cur_vol, new_vol),
+        min(cur_vol, new_vol),
+    )
+    if new_wins:
+        by_name[key] = line
+        name_mlbam[key] = mlbam
+
+
+def load_full_season_lines() -> tuple[dict[int, dict[str, Any]], dict[str, Any]]:
+    """Full-season projection lines, keyed by mlbam id AND by ``name::player_type``.
 
     Reads ``CacheKey.FULL_SEASON_PROJECTIONS`` from the KV store (Upstash on
-    Render, SQLite locally). Records are MLBAM-keyed with a ``name`` field, so
-    normalize the name and tag the player type explicitly. Returns ``{}`` when
-    the KV store lacks the blob (unsynced local runtime).
+    Render, SQLite locally). Each record carries a real ``mlbam_id`` and a
+    ``name``. Returns ``(by_mlbam, by_name)``: ``by_mlbam`` is the authoritative
+    join (immune to namesake collisions like the two Mason Millers), keyed by int
+    mlbam id; ``by_name`` is a fallback keyed ``name_normalized::player_type`` that
+    keeps the higher-volume namesake so the real MLB player wins over a scrub.
+    Returns ``({}, {})`` when the KV store lacks the blob (unsynced local runtime).
     """
     payload = read_cache_dict(CacheKey.FULL_SEASON_PROJECTIONS) or {}
-    out: dict[str, Any] = {}
-    for rec in payload.get("hitters", []):
-        out[_pkey(normalize_name(rec["name"]), "hitter")] = _hit_line_from(rec)
-    for rec in payload.get("pitchers", []):
-        out[_pkey(normalize_name(rec["name"]), "pitcher")] = _pit_line_from(rec)
-    return out
+    by_mlbam: dict[int, dict[str, Any]] = {}
+    by_name: dict[str, Any] = {}
+    name_mlbam: dict[str, int | None] = {}
+    for ptype, recs, builder, vol in (
+        ("hitter", payload.get("hitters", []), _hit_line_from, "ab"),
+        ("pitcher", payload.get("pitchers", []), _pit_line_from, "ip"),
+    ):
+        for rec in recs:
+            line = builder(rec)
+            mlbam = _row_mlbam(rec)
+            if mlbam is not None:
+                by_mlbam[mlbam] = line
+            key = _pkey(normalize_name(rec["name"]), ptype)
+            _insert_by_name(by_name, name_mlbam, key, line, vol, mlbam)
+    return by_mlbam, by_name
 
 
-def load_actual_to_date_lines() -> dict[str, Any]:
-    """Actual season-to-date lines keyed ``name_normalized::player_type``.
+def load_actual_to_date_lines() -> tuple[dict[int, dict[str, Any]], dict[str, Any]]:
+    """Actual season-to-date lines, keyed by mlbam id AND by ``name::player_type``.
 
-    Reads aggregated game-log totals via ``_load_game_log_totals`` (already
-    keyed by normalized name in separate hitter/pitcher dicts, which gives the
-    player type directly). Returns ``{}`` when the KV store has no game logs.
+    Reads aggregated game-log totals via ``get_game_log_totals`` (keyed by string
+    mlbam id, with a ``name`` field). Returns ``(by_mlbam, by_name)``: ``by_mlbam``
+    is the authoritative int-mlbam join; ``by_name`` is a fallback keyed
+    ``name_normalized::player_type`` keeping the higher-volume namesake. Returns
+    ``({}, {})`` when the KV store has no game logs.
     """
-    hitter_logs, pitcher_logs = _load_game_log_totals()
-    out: dict[str, Any] = {}
-    for norm, rec in hitter_logs.items():
-        out[_pkey(norm, "hitter")] = _hit_line_from(rec)
-    for norm, rec in pitcher_logs.items():
-        out[_pkey(norm, "pitcher")] = _pit_line_from(rec)
-    return out
+    client = get_kv()
+    by_mlbam: dict[int, dict[str, Any]] = {}
+    by_name: dict[str, Any] = {}
+    name_mlbam: dict[str, int | None] = {}
+    for ptype, logs, builder, vol in (
+        ("hitter", get_game_log_totals(client, "hitters"), _hit_line_from, "ab"),
+        ("pitcher", get_game_log_totals(client, "pitchers"), _pit_line_from, "ip"),
+    ):
+        for mid_str, rec in logs.items():
+            line = builder(rec)
+            try:
+                mlbam: int | None = int(mid_str)
+            except (TypeError, ValueError):
+                mlbam = None
+            if mlbam is not None:
+                by_mlbam[mlbam] = line
+            name = rec.get("name") or ""
+            if not name:
+                continue
+            key = _pkey(normalize_name(name), ptype)
+            _insert_by_name(by_name, name_mlbam, key, line, vol, mlbam)
+    return by_mlbam, by_name
 
 
 @dataclass
@@ -734,8 +823,8 @@ def run_draft_value(
     preseason = {k: float(v["var"]) for k, v in bindex.items()}
     par_proj = build_par_curve(picks, board, fraction=1.0, bindex=bindex)
     par_ytd = build_par_curve(picks, board, fraction=f, scale=scale, bindex=bindex)
-    full_lines = load_full_season_lines()
-    todate_lines = load_actual_to_date_lines()
+    full_by_mlbam, full_by_name = load_full_season_lines()
+    td_by_mlbam, td_by_name = load_actual_to_date_lines()
 
     # draft/keep sets by team; DRAFT-ORDER ordinal among on-board drafted picks.
     # par(slot) = drafted_pars[ordinal-1] (drafted_pars is VAR-sorted desc): the k-th
@@ -774,12 +863,22 @@ def run_draft_value(
             case3[team] = case3.get(team, 0) + 1
             continue
         ptype, positions = _resolve_type_and_positions(
-            norm, full_lines, todate_lines, bindex, forced_type=suffix_type
+            norm, full_by_name, td_by_name, bindex, forced_type=suffix_type
         )
         key = _pkey(norm, ptype)
         pre = preseason.get(key)
-        full_line = full_lines.get(key)
-        todate_line = todate_lines.get(key)
+        # Join lines by mlbam id first (immune to namesake collisions like the two
+        # Mason Millers), falling back to the name key only when the board row has
+        # no id. Explicit None checks -- never `x or fallback` (a 0.0-valued line
+        # dict is falsy but valid).
+        row = bindex.get(key)
+        mlbam = _row_mlbam(row)
+        full_line = full_by_mlbam.get(mlbam) if mlbam is not None else None
+        if full_line is None:
+            full_line = full_by_name.get(key)
+        todate_line = td_by_mlbam.get(mlbam) if mlbam is not None else None
+        if todate_line is None:
+            todate_line = td_by_name.get(key)
         # draft-order ordinal among on-board drafted picks; also the compute slot arg
         # (slot == rank for drafted, None otherwise), so compute it once and reuse.
         rank = slot_by_name.get(norm) if kind == "drafted" else None
