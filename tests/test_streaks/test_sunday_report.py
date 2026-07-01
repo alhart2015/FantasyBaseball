@@ -359,6 +359,63 @@ def test_build_report_end_to_end_against_seeded_db(seeded_fitted_conn) -> None:
     assert "Hart of the Order" in md
 
 
+def test_build_report_end_to_end_keeps_and_annotates_inactive_roster(
+    seeded_fitted_conn,
+) -> None:
+    """Stale roster players are kept, annotated with days-since, and neutralized.
+
+    Same setup as ``test_build_report_end_to_end_against_seeded_db`` but with
+    ``today`` pushed 30 days past the latest seeded window_end so every seeded
+    player is inactive (>4 days stale). The report must retain the roster rows
+    (belt-and-suspenders: inactive players are annotated, not dropped), stamp
+    ``days_since_last_game`` on each, and force the composite to neutral.
+    """
+    from fantasy_baseball.streaks.inference import load_models_from_fits
+    from fantasy_baseball.streaks.reports.sunday import build_report
+
+    conn = seeded_fitted_conn
+    models = load_models_from_fits(conn)
+
+    name_to_mlbam = {f"p{i}": i for i in range(1, 17)}
+    roster = [
+        YahooHitter(name="P2", positions=("OF",), yahoo_id="2", status=""),
+        YahooHitter(name="P4", positions=("1B",), yahoo_id="4", status=""),
+        # Pitcher — should be filtered.
+        YahooHitter(name="Tarik Skubal", positions=("SP",), yahoo_id="99", status=""),
+    ]
+    fas = [
+        YahooHitter(name="P6", positions=("2B",), yahoo_id="6", status=""),
+        YahooHitter(name="P8", positions=("3B",), yahoo_id="8", status=""),
+    ]
+    latest_end = conn.execute(
+        "SELECT MAX(window_end) FROM hitter_windows WHERE window_days = 14"
+    ).fetchone()[0]
+    latest_end = latest_end if isinstance(latest_end, date) else date.fromisoformat(str(latest_end))
+    # Push today 30 days past the latest window so every player is stale.
+    today = latest_end + timedelta(days=30)
+
+    report = build_report(
+        conn,
+        league_config_team_name="Hart of the Order",
+        league_config_league_id=5652,
+        models=models,
+        roster_hitters=roster,
+        fa_hitters=fas,
+        name_to_mlbam=name_to_mlbam,
+        today=today,
+        season_set_train="2023-2024",
+        scoring_season=2024,
+        window_days=14,
+        top_n_fas=10,
+    )
+    # Inactive roster players are kept (not dropped), same count as the active test.
+    assert len(report.roster_rows) == 2
+    # Each row is annotated with the exact staleness (all share the latest window_end).
+    assert all(r.days_since_last_game == 30 for r in report.roster_rows)
+    # Each row is forced neutral.
+    assert all(r.composite == 0 for r in report.roster_rows)
+
+
 def test_report_with_skipped_players_renders_footer() -> None:
     report = Report(
         report_date=date(2026, 5, 11),

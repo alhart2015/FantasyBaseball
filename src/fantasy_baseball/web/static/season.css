@@ -3366,6 +3366,7 @@ td[style*="--neg"] {
 .streak-chip.streak-cold    { background: #1f3556;          color: #9fc1ff; }
 .streak-chip.streak-neutral { background: var(--surface-soft); color: var(--ink-faint); }
 .streak-chip + .streak-chip { margin-left: 4px; }
+.streak-inactive { color: var(--ink-faint); font-size: 0.85em; margin-left: 6px; }
 
 /* Streaks page layout */
 .streaks-section { margin-bottom: 32px; }
