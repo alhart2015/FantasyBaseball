@@ -37,18 +37,19 @@ scale**, or `value`, `skill`, and `luck` are meaningless.
 
 **The working source is a REPRODUCED draft-day board; the frozen JSON is the
 validation anchor.** The module reproduces the draft-day board by running
-`build_draft_board` against the **draft-day vintage** — the preseason projection
-CSVs in `data/projections/2026/` and the draft-day `positions` table — read from
-`data/fantasy.db` via `get_connection()` (`db.py`), which holds the
-`blended_projections` (year 2026) and `positions` tables the board reads. **This
-is NOT the live in-season KV store** (`local.db`): `build_draft_board` never
-touches the KV store, and re-running against mutated in-season positions
-(players gain eligibility) would drift VARs off the draft-day vintage. The plan
-must confirm `fantasy.db` still holds the draft-day projection + positions vintage
-(and reseed it from the CSVs + `data/player_positions.json` if it has moved on).
+`build_draft_board` against the **draft-day vintage** stored in `data/fantasy.db`
+(read via `get_connection()`, `db.py`) — the `blended_projections` and `positions`
+tables the board reads (`get_blended_projections` / `get_positions`). **This is NOT
+the live in-season KV store** (`local.db`): `build_draft_board` never touches the
+KV store, and re-running against mutated in-season positions (players gain
+eligibility) would drift VARs off the draft-day vintage. The plan must confirm
+`fantasy.db` still holds the draft-day vintage — validated by Oracle 1, treating
+"the projections the table currently holds" as the vintage, since the table has no
+season discriminator column — and reseed it from the preseason projection CSVs in
+`data/projections/2026/` + `data/player_positions.json` if it has moved on.
 
-The reproduced board is the working source of, all on one scale and full
-precision: `VAR_preseason(player)`, the **par curve**, each player's preseason
+The reproduced board is the working source of the following, all on one scale and
+full precision: `VAR_preseason(player)`, the **par curve**, each player's preseason
 **stat line including volumes `ab`/`ip`** (needed for YTD scaling and rate SGP),
 `positions` (for floor routing), and the reused scale inputs below. The board's
 scale inputs are **determinate module defaults** — `get_sgp_denominators()` code
@@ -314,8 +315,9 @@ not the KV store.
   `derive_full_season` (reuse, do not recompute).
 - **Current rosters:** latest `weekly_rosters` snapshot (KV / `weekly_rosters`
   table). The plan pins the accessor and the "latest snapshot" selection.
-- **Transactions:** league-wide add/drop feed (`analysis/transactions.py` /
-  `fetch_all_transactions`), per-team via `destination_team_name`.
+- **Transactions:** league-wide add/drop feed (`fetch_all_transactions` in
+  `lineup/yahoo_roster.py`; parsing helpers in `analysis/transactions.py`),
+  per-team via `destination_team_name`.
 
 ### Draft-slot reconstruction invariant (must be validated at runtime)
 
@@ -357,10 +359,17 @@ silent-data-loss risk and must be logged, not swallowed.
 **Positions for floor routing.** `calculate_var` routes to a per-position floor via
 `player["positions"]` (`sgp/var.py`), but the actual-to-date and full-season
 estimate lines (game logs / `full_season_projections`) are MLBAM-keyed and do not
-carry the board's `positions`. Each estimate/YTD line MUST inherit `positions`
-(hence the SP/RP role that selects the pitcher floor) from its joined
-reproduced-board row before `calculate_var` is called, or floor selection — and
-thus VAR — is undefined for the realized/estimate horizons.
+carry `positions`. Each estimate/YTD line MUST be given `positions` (hence the
+SP/RP role that selects the pitcher floor) before `calculate_var` is called:
+
+- **On-board players** inherit `positions` from their joined reproduced-board row.
+- **Off-board players** (waiver gems / fliers with no board row — a first-class
+  population for which `value` is still computed, skill/luck N/A) get `positions`
+  the way the board itself does: via `get_positions` / `_attach_positions` with the
+  board's default fallback (`board.py`), NOT from a (nonexistent) board-row join.
+
+Without this, floor selection — and thus VAR — is undefined for exactly the
+off-board waiver adds the report is meant to celebrate.
 
 ### Two-way players (Ohtani)
 
