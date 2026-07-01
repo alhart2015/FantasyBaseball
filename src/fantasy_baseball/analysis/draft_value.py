@@ -186,16 +186,15 @@ def score_var(
     player_type: str,
     scale: ScaleInputs,
     fraction: float = 1.0,
-    floors: dict[str, float] | None = None,
 ) -> float:
     """Score a stat line into VAR on the board scale (projected or YTD-scaled).
 
     ``fraction < 1.0`` applies the YTD to-date scaling: counting + volume + team
     volumes scale by ``fraction`` while rates (AVG/ERA/WHIP) are held, and the
     position floors are recomputed on the same to-date scale. ``player_type`` is
-    ``"hitter"`` or ``"pitcher"``. Pass ``floors`` to reuse a to-date floor table
-    already computed for this ``fraction`` (must equal ``_to_date_floors(scale,
-    fraction)``); when ``None`` it is recomputed here.
+    ``"hitter"`` or ``"pitcher"``. The floors are always recomputed here via
+    ``_to_date_floors`` (which early-returns the board floors at ``fraction==1.0``,
+    so the projected path stays cheap).
     """
     # player_type must be "hitter"/"pitcher" (StrEnum-compatible) so calculate_player_sgp
     # dispatches (player.get("player_type") == PlayerType.HITTER/PITCHER, player_value.py:104,121).
@@ -209,8 +208,7 @@ def score_var(
     team_ab = scale.team_ab * fraction
     team_ip = scale.team_ip * fraction
     total_sgp = _sgp(scaled, scale, team_ab, team_ip)
-    if floors is None:
-        floors = _to_date_floors(scale, fraction)
+    floors = _to_date_floors(scale, fraction)
     # calculate_var needs total_sgp + positions + ip (pitcher floor routing reads
     # player.get("ip", 0.0) via _pitcher_floor_key -> role_from_ip, var.py:18).
     series = pd.Series(
@@ -340,7 +338,6 @@ def _var_for_row(
     row: Any,
     scale: ScaleInputs | None,
     fraction: float,
-    floors: dict[str, float] | None = None,
 ) -> float:
     """VAR for a board row: preseason VAR at f=1, else rescored on the to-date scale."""
     if fraction == 1.0:
@@ -354,7 +351,7 @@ def _var_for_row(
         else ("w", "k", "sv", "era", "whip", "ip")
     )
     line = {k: row[k] for k in keys}
-    return score_var(line, list(row["positions"]), ptype, scale, fraction, floors=floors)
+    return score_var(line, list(row["positions"]), ptype, scale, fraction)
 
 
 def build_par_curve(
@@ -363,7 +360,6 @@ def build_par_curve(
     fraction: float = 1.0,
     scale: ScaleInputs | None = None,
     bindex: dict[str, Any] | None = None,
-    floors: dict[str, float] | None = None,
 ) -> ParCurve:
     """Build the par curve from reconstructed picks joined to the preseason board.
 
@@ -372,8 +368,7 @@ def build_par_curve(
     Keeper par is the flat mean of the keeper VARs (keepers are elite, always on-board).
     ``fraction < 1.0`` requires ``scale`` so ``_var_for_row`` can rescore to the
     to-date scale. Pass ``bindex`` to reuse a prebuilt board index instead of
-    rebuilding it from ``board``, and ``floors`` to reuse a to-date floor table for
-    this ``fraction`` instead of recomputing it per row.
+    rebuilding it from ``board``.
     """
     if bindex is None:
         bindex = _board_index(board)
@@ -383,7 +378,7 @@ def build_par_curve(
         row = _match_board_row(p.player_name, bindex)
         if row is None:
             continue  # off-board flier: excluded from par curve
-        v = _var_for_row(row, scale, fraction, floors=floors)
+        v = _var_for_row(row, scale, fraction)
         if p.is_keeper:
             keeper_vars.append(v)
         else:
@@ -394,18 +389,27 @@ def build_par_curve(
 
 
 def _hit_line_from(rec: dict[str, Any]) -> dict[str, Any]:
+    # A JSON-null on a KV round-trip can land ab=None; calculate_avg guards on
+    # denom > 0, which raises TypeError against a literal None, so coerce None->0.
+    ab = rec.get("ab", 0)
+    if ab is None:
+        ab = 0
     return {
         "r": rec.get("r", 0),
         "hr": rec.get("hr", 0),
         "rbi": rec.get("rbi", 0),
         "sb": rec.get("sb", 0),
-        "ab": rec.get("ab", 0),
-        "avg": calculate_avg(rec.get("h", 0), rec.get("ab", 0), default=0.0),
+        "ab": ab,
+        "avg": calculate_avg(rec.get("h", 0), ab, default=0.0),
     }
 
 
 def _pit_line_from(rec: dict[str, Any]) -> dict[str, Any]:
+    # ip=None (JSON-null on a KV round-trip) would raise TypeError in the rate-stat
+    # denom guards (denom > 0), so coerce None->0 before scoring.
     ip = rec.get("ip", 0.0)
+    if ip is None:
+        ip = 0.0
     return {
         "w": rec.get("w", 0),
         "k": rec.get("k", 0),
@@ -488,7 +492,6 @@ def compute_player_value(
     scale: ScaleInputs,
     fraction: float,
     slot: int | None = None,
-    floors_ytd: dict[str, float] | None = None,
 ) -> PlayerValue:
     """Score a player's projected and YTD VAR and decompose the projected value.
 
@@ -496,14 +499,13 @@ def compute_player_value(
     is scored at the elapsed ``fraction`` (to-date scale). ``value_proj``/``value_ytd``
     subtract the full-season and to-date baselines respectively (never conflate them).
     ``skill``/``luck`` split the projected value only when both a preseason VAR and a
-    projected estimate exist; otherwise both are ``None``. ``floors_ytd`` optionally
-    reuses a precomputed to-date floor table for the ``fraction`` YTD scoring.
+    projected estimate exist; otherwise both are ``None``.
     """
     est_proj = (
         score_var(full_line, positions, player_type, scale, 1.0) if full_line is not None else None
     )
     est_ytd = (
-        score_var(todate_line, positions, player_type, scale, fraction, floors=floors_ytd)
+        score_var(todate_line, positions, player_type, scale, fraction)
         if todate_line is not None
         else None
     )
@@ -633,24 +635,28 @@ def roll_up_team(
     return TeamRollup(team, total, avg, n, case3_count)
 
 
-def _strip_suffix(name: str) -> str:
-    """Drop Yahoo's trailing " (Batter)"/" (Pitcher)" annotation before normalizing."""
-    return _PLAYER_SUFFIX_RE.sub("", name).strip()
-
-
-def _type_from_suffix(raw_name: str) -> str | None:
-    """Definitive player_type from a Yahoo " (Batter)"/" (Pitcher)" suffix, else None.
+def _split_suffix(raw_name: str) -> tuple[str, str | None]:
+    """Split a Yahoo name into ``(stripped_name, player_type_or_None)`` in one regex scan.
 
     Two-way players (e.g. Shohei Ohtani) appear as separate roster rows with a
-    " (Batter)" / " (Pitcher)" tag. That tag is authoritative for how the entry
-    should be scored, so honor it instead of the hitter-first board inference in
-    ``_resolve_type_and_positions`` (which would score the drafted-pitcher row on
-    the hitter's VAR and double-credit the team's hitting).
+    trailing " (Batter)" / " (Pitcher)" tag. That tag is authoritative for how the
+    entry should be scored, so return it as a definitive player_type alongside the
+    annotation-stripped name (honoring it over the hitter-first board inference in
+    ``_resolve_type_and_positions``, which would score the drafted-pitcher row on the
+    hitter's VAR and double-credit the team's hitting). Non-two-way names have no
+    suffix and yield ``None``. The regex is end-anchored, so ``m.start()`` marks the
+    stripped-name boundary -- one ``search`` covers both outputs.
     """
     m = _PLAYER_SUFFIX_RE.search(raw_name)
     if m is None:
-        return None
-    return "pitcher" if "pitcher" in m.group(0).lower() else "hitter"
+        return raw_name.strip(), None
+    ptype = "pitcher" if "pitcher" in m.group(0).lower() else "hitter"
+    return raw_name[: m.start()].strip(), ptype
+
+
+def _strip_suffix(name: str) -> str:
+    """Drop Yahoo's trailing " (Batter)"/" (Pitcher)" annotation before normalizing."""
+    return _split_suffix(name)[0]
 
 
 def _default_positions(player_type: str) -> list[str]:
@@ -663,17 +669,28 @@ def _resolve_type_and_positions(
     full_lines: dict[str, Any],
     todate_lines: dict[str, Any],
     bindex: dict[str, Any],
+    forced_type: str | None = None,
 ) -> tuple[str, list[str]]:
     """Return ``(player_type, positions)`` for a rostered player.
 
-    Prefer the preseason board row (real eligible positions); else infer the type
-    from whichever full-season OR to-date line exists and attach board default
-    positions; off-board with no line falls back to hitter. Consulting the to-date
-    lines matters for off-board players with game logs but no full-season projection
-    (e.g. a pitcher who would otherwise default to hitter/OF and be un-credited).
-    Ohtani resolves to the hitter line (batter only) because the board keys him as a
-    hitter.
+    When ``forced_type`` is given (a Yahoo " (Batter)"/" (Pitcher)" suffix is
+    authoritative for how a two-way row is scored), return that type with positions
+    from the matching board row if present, else the board defaults -- bypassing the
+    hitter-first inference so e.g. Ohtani's pitcher row joins the pitcher board/line
+    and the team is not double-credited for his hitting.
+
+    Otherwise: prefer the preseason board row (real eligible positions); else infer
+    the type from whichever full-season OR to-date line exists and attach board
+    default positions; off-board with no line falls back to hitter. Consulting the
+    to-date lines matters for off-board players with game logs but no full-season
+    projection (e.g. a pitcher who would otherwise default to hitter/OF and be
+    un-credited). Ohtani resolves to the hitter line (batter only) because the board
+    keys him as a hitter.
     """
+    if forced_type is not None:
+        row = bindex.get(_pkey(norm_name, forced_type))
+        positions = list(row["positions"]) if row is not None else _default_positions(forced_type)
+        return forced_type, positions
     for ptype in ("hitter", "pitcher"):
         row = bindex.get(_pkey(norm_name, ptype))
         if row is not None:
@@ -715,13 +732,8 @@ def run_draft_value(
 
     bindex = _board_index(board)
     preseason = {k: float(v["var"]) for k, v in bindex.items()}
-    # to-date floors depend only on (scale, f); compute once and reuse across every
-    # YTD scoring path (par curve + per-player est_ytd) instead of per-call.
-    floors_ytd = _to_date_floors(scale, f)
     par_proj = build_par_curve(picks, board, fraction=1.0, bindex=bindex)
-    par_ytd = build_par_curve(
-        picks, board, fraction=f, scale=scale, bindex=bindex, floors=floors_ytd
-    )
+    par_ytd = build_par_curve(picks, board, fraction=f, scale=scale, bindex=bindex)
     full_lines = load_full_season_lines()
     todate_lines = load_actual_to_date_lines()
 
@@ -751,31 +763,29 @@ def run_draft_value(
     case3: dict[str, int] = {}
     for entry in rosters:
         team = entry["team"]
-        raw_name = entry["player_name"]
-        norm = normalize_name(_strip_suffix(raw_name))  # strip "(Batter)/(Pitcher)"
+        # One suffix scan yields both the stripped name and the definitive two-way type
+        # (a Yahoo "(Batter)/(Pitcher)" tag is authoritative for how the row is scored,
+        # so e.g. Ohtani's pitcher row joins the pitcher board/line and the team is not
+        # double-credited for his hitting); None means no suffix -> board inference.
+        stripped_name, suffix_type = _split_suffix(entry["player_name"])
+        norm = normalize_name(stripped_name)
         kind = classify_acquisition(team, norm, drafted_by, kept_by, add_by)
         if kind == "trade_excluded":
             case3[team] = case3.get(team, 0) + 1
             continue
-        # A Yahoo "(Batter)/(Pitcher)" suffix is DEFINITIVE for how this two-way row is
-        # scored: honor it (positions from the matching board row, else defaults) instead
-        # of hitter-first board inference, so e.g. Ohtani's pitcher row joins the pitcher
-        # board/line and the team is not double-credited for his hitting.
-        suffix_type = _type_from_suffix(raw_name)
-        if suffix_type is not None:
-            ptype = suffix_type
-            row = bindex.get(_pkey(norm, ptype))
-            positions = list(row["positions"]) if row is not None else _default_positions(ptype)
-        else:
-            ptype, positions = _resolve_type_and_positions(norm, full_lines, todate_lines, bindex)
+        ptype, positions = _resolve_type_and_positions(
+            norm, full_lines, todate_lines, bindex, forced_type=suffix_type
+        )
         key = _pkey(norm, ptype)
         pre = preseason.get(key)
         full_line = full_lines.get(key)
         todate_line = todate_lines.get(key)
+        # draft-order ordinal among on-board drafted picks; also the compute slot arg
+        # (slot == rank for drafted, None otherwise), so compute it once and reuse.
+        rank = slot_by_name.get(norm) if kind == "drafted" else None
         if kind == "keeper":
             base_proj, base_ytd = par_proj.keeper_par, par_ytd.keeper_par
         elif kind == "drafted":
-            rank = slot_by_name.get(norm)  # draft-order ordinal
             base_proj = par_proj.par_for_slot(rank) if rank else 0.0
             base_ytd = par_ytd.par_for_slot(rank) if rank else 0.0
         else:  # waiver
@@ -793,8 +803,7 @@ def run_draft_value(
             todate_line,
             scale,
             f,
-            slot=slot_by_name.get(norm) if kind == "drafted" else None,
-            floors_ytd=floors_ytd,
+            slot=rank,
         )
         players.append(pv)
 
