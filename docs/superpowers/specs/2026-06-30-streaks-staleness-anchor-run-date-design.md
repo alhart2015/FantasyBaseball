@@ -30,9 +30,11 @@ Root cause is recency, not a bad calculation:
   streak.
 - The /streaks **web page** (`web/templates/season/streaks.html` +
   `_streaks_row.html`, rendered by `web/season_routes.py:609-618` from the
-  serialized `cache:streak_scores` dict) and the lineup + continuation chips
-  (`indicator.py`, `season_routes.py:642`) both read that same payload, so both
-  show the stale label.
+  serialized `cache:streak_scores` dict) and the lineup chip (`indicator.py` via
+  `build_indicator`, called from `season_routes.py:642` on `/streaks` and
+  `:684-697` on `/lineup/tbodies`) both read that same payload, so both show the
+  stale label. (The continuation-probability chip is a separate, out-of-scope
+  future item — it does not currently consume this payload.)
 
 ## Goal
 
@@ -149,8 +151,12 @@ There is **no HTML renderer of the `Report` dataclass.** The surfaces are:
 
 - **Developer reports** — `reports/sunday.render_markdown` (`sunday.py:469`) and
   `reports/sunday.render_terminal` (`sunday.py:576`, terminal, not HTML). Both
-  consume the `Report` dataclass. Add an "inactive - N days" marker to a row's
-  cell/line when `row.days_since_last_game is not None`.
+  consume the `Report` dataclass. When `row.days_since_last_game is not None`,
+  **append the marker into the player-name cell** (e.g. `"Oneil Cruz (inactive -
+  30 days)"`) rather than adding a new column. Both renderers have a fixed
+  header + a `len(headers)`-derived separator/column-width layout, so an
+  in-cell append avoids header, separator-row, and `_column_widths` churn in
+  both renderers.
 - **The /streaks web page** (the surface where the bug was observed) — the Jinja
   templates `web/templates/season/streaks.html` + `_streaks_row.html`, rendered
   from the **serialized dict** (`read_cache_dict(CacheKey.STREAK_SCORES)`), not
@@ -169,10 +175,12 @@ All new marker text is **ASCII-only** (repo convention): use a hyphen, not an en
 dash. (Pre-existing non-ASCII glyphs in `sunday.py`/`indicator.py` are not in
 scope and are left as-is.)
 
-The golden HTML snapshot `tests/test_web/snapshots/streaks.html`
-(`tests/test_web/test_streaks_snapshot.py`) will change once `_streaks_row.html`
-is edited; regenerate it as part of this work and eyeball the diff to confirm
-only the intended marker/tone changes appear.
+The template marker must be guarded (`{% if row.days_since_last_game %}`). The
+golden HTML snapshot `tests/test_web/snapshots/streaks.html`
+(`tests/test_web/test_streaks_snapshot.py`) seeds an **active** row, so a
+properly-guarded marker may leave the snapshot unchanged; regenerate it as part
+of this work and eyeball the diff to confirm only intended marker/tone changes
+appear (a no-op diff is acceptable and expected for an all-active fixture).
 
 ### 4. Free-agent behavior
 
@@ -203,7 +211,9 @@ a pickup signal). The "inactive - N days" annotation therefore appears only on
   last field), `_row_from_scores(today=...)`, `build_report` threading, the
   `render_markdown` and `render_terminal` renderers.
 - `streaks/dashboard.py` — payload serialize/deserialize of the new field
-  (`.get` on read).
+  (`.get` on read). Update the module docstring's "mirrors the dataclass fields
+  1:1 - round-trip equality holds" note to record the tolerant `.get()`
+  back-compat for `days_since_last_game`.
 - `streaks/indicator.py` — inactive tooltip.
 - `web/templates/season/_streaks_row.html` (and/or `streaks.html`) — render the
   inactive marker on the web page.
@@ -221,11 +231,23 @@ a pickup signal). The "inactive - N days" annotation therefore appears only on
     confirm they still pass unchanged.
 - `_row_from_scores`: sets `days_since_last_game` when the window is stale,
   `None` when recent.
+- `build_report` integration (`test_sunday_report.py`): this test anchors
+  `today = latest_end` (the global `MAX(window_end)` across all seeded players),
+  so under default-on staleness any fixture player whose latest window predates
+  that global max by > 4 days is now forced neutral. Confirm it still passes —
+  its assertions (roster row count, rows kept-not-dropped, `len(fa_rows) <=
+  len(fas)`) are robust to this. If a player intended to be active flips to
+  neutral, adjust the fixture so intended-active players' windows sit within 4
+  days of `latest_end`.
 - `dashboard` payload: `days_since_last_game` round-trips through
-  serialize/deserialize. The round-trip fixture must include a **stale
-  (non-None)** row, not only an active one, so a forgotten `_deserialize_row`
-  update is actually caught (the existing `_example_report` fixture yields
-  `days_since == 1` -> `None`, which would mask an asymmetry).
+  serialize/deserialize. The round-trip fixture must include a row with
+  `days_since_last_game` set to an **explicit non-None int**. This field is a
+  *stored* `ReportRow` attribute (defaulting to `None`) computed only inside
+  `_row_from_scores`, never at `ReportRow(...)` construction — so the fixture
+  must pass `days_since_last_game=<int>` explicitly. (Merely moving
+  `report_date`/`window_end` apart does NOT auto-populate it; the existing
+  `_example_report` row leaves it at the `None` default, which would mask a
+  forgotten `_deserialize_row` update.)
 - `indicator`: inactive tooltip appears when the field is present; active chips
   are unchanged.
 - Web: `test_streaks_snapshot.py` regenerated; `test_streaks_route.py` /
