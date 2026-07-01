@@ -3,7 +3,7 @@
    for this player) and `row`. Click the header row to toggle. #}
 {% set player_drivers = payload.driver_lines | selectattr("player_name", "equalto", row.name) | list %}
 <tr class="expandable" onclick="toggleStreakRow(this)">
-  <td>{{ row.name }}</td>
+  <td>{{ row.name }}{% if row.days_since_last_game %} <span class="streak-inactive">(inactive - {{ row.days_since_last_game }} days)</span>{% endif %}</td>
   <td>{{ row.positions | join(", ") }}</td>
   {% for cat in ["avg", "hr", "r", "rbi", "sb"] %}
     {% set score = row.scores.get(cat) %}

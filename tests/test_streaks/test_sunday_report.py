@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from fantasy_baseball.streaks.inference import (
     Driver,
@@ -16,6 +16,7 @@ from fantasy_baseball.streaks.reports.sunday import (
     _composite,
     _format_cell,
     _max_probability,
+    _row_from_scores,
     _signed,
     render_markdown,
     render_terminal,
@@ -358,6 +359,63 @@ def test_build_report_end_to_end_against_seeded_db(seeded_fitted_conn) -> None:
     assert "Hart of the Order" in md
 
 
+def test_build_report_end_to_end_keeps_and_annotates_inactive_roster(
+    seeded_fitted_conn,
+) -> None:
+    """Stale roster players are kept, annotated with days-since, and neutralized.
+
+    Same setup as ``test_build_report_end_to_end_against_seeded_db`` but with
+    ``today`` pushed 30 days past the latest seeded window_end so every seeded
+    player is inactive (>4 days stale). The report must retain the roster rows
+    (belt-and-suspenders: inactive players are annotated, not dropped), stamp
+    ``days_since_last_game`` on each, and force the composite to neutral.
+    """
+    from fantasy_baseball.streaks.inference import load_models_from_fits
+    from fantasy_baseball.streaks.reports.sunday import build_report
+
+    conn = seeded_fitted_conn
+    models = load_models_from_fits(conn)
+
+    name_to_mlbam = {f"p{i}": i for i in range(1, 17)}
+    roster = [
+        YahooHitter(name="P2", positions=("OF",), yahoo_id="2", status=""),
+        YahooHitter(name="P4", positions=("1B",), yahoo_id="4", status=""),
+        # Pitcher — should be filtered.
+        YahooHitter(name="Tarik Skubal", positions=("SP",), yahoo_id="99", status=""),
+    ]
+    fas = [
+        YahooHitter(name="P6", positions=("2B",), yahoo_id="6", status=""),
+        YahooHitter(name="P8", positions=("3B",), yahoo_id="8", status=""),
+    ]
+    latest_end = conn.execute(
+        "SELECT MAX(window_end) FROM hitter_windows WHERE window_days = 14"
+    ).fetchone()[0]
+    latest_end = latest_end if isinstance(latest_end, date) else date.fromisoformat(str(latest_end))
+    # Push today 30 days past the latest window so every player is stale.
+    today = latest_end + timedelta(days=30)
+
+    report = build_report(
+        conn,
+        league_config_team_name="Hart of the Order",
+        league_config_league_id=5652,
+        models=models,
+        roster_hitters=roster,
+        fa_hitters=fas,
+        name_to_mlbam=name_to_mlbam,
+        today=today,
+        season_set_train="2023-2024",
+        scoring_season=2024,
+        window_days=14,
+        top_n_fas=10,
+    )
+    # Inactive roster players are kept (not dropped), same count as the active test.
+    assert len(report.roster_rows) == 2
+    # Each row is annotated with the exact staleness (all share the latest window_end).
+    assert all(r.days_since_last_game == 30 for r in report.roster_rows)
+    # Each row is forced neutral.
+    assert all(r.composite == 0 for r in report.roster_rows)
+
+
 def test_report_with_skipped_players_renders_footer() -> None:
     report = Report(
         report_date=date(2026, 5, 11),
@@ -373,3 +431,67 @@ def test_report_with_skipped_players_renders_footer() -> None:
     md = render_markdown(report)
     assert "Skipped 1 player(s)" in md
     assert "Prospect McProspect" in md
+
+
+def _neutral_scores(window_end: date) -> list[PlayerCategoryScore]:
+    return [
+        _score(player_id=1, category=cat, window_end=window_end)
+        for cat in ("hr", "r", "rbi", "sb", "avg")
+    ]
+
+
+def test_row_from_scores_marks_inactive_when_window_is_stale() -> None:
+    window_end = date(2026, 6, 1)
+    today = window_end + timedelta(days=10)  # 10 > 4
+    row = _row_from_scores(
+        name="Oneil Cruz",
+        positions=("SS",),
+        player_id=1,
+        scores=_neutral_scores(window_end),
+        today=today,
+    )
+    assert row.days_since_last_game == 10
+
+
+def test_row_from_scores_active_when_window_is_recent() -> None:
+    window_end = date(2026, 6, 1)
+    today = window_end + timedelta(days=2)  # 2 <= 4
+    row = _row_from_scores(
+        name="Active Guy",
+        positions=("OF",),
+        player_id=1,
+        scores=_neutral_scores(window_end),
+        today=today,
+    )
+    assert row.days_since_last_game is None
+
+
+def _report_with_inactive_roster_row() -> Report:
+    row = _row_from_scores(
+        name="Oneil Cruz",
+        positions=("SS",),
+        player_id=1,
+        scores=_neutral_scores(date(2026, 6, 1)),
+        today=date(2026, 6, 1) + timedelta(days=30),
+    )
+    return Report(
+        report_date=date(2026, 7, 1),
+        window_end=date(2026, 6, 1),
+        team_name="Hart of the Order",
+        league_id=5652,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(),
+        skipped=(),
+    )
+
+
+def test_render_markdown_shows_inactive_marker() -> None:
+    md = render_markdown(_report_with_inactive_roster_row())
+    assert "Oneil Cruz (inactive - 30 days)" in md
+
+
+def test_render_terminal_shows_inactive_marker() -> None:
+    txt = render_terminal(_report_with_inactive_roster_row(), no_color=True)
+    assert "Oneil Cruz (inactive - 30 days)" in txt

@@ -327,3 +327,87 @@ def test_load_models_from_fits_raises_when_table_empty() -> None:
     conn = get_connection(":memory:")
     with pytest.raises(RuntimeError, match="model_fits is empty"):
         load_models_from_fits(conn)
+
+
+def _stale_target(conn):
+    """(player_id, latest window_end) for a player whose latest 14d window has a
+    non-neutral label in the scored partitions -- so forcing him neutral is observable."""
+    row = conn.execute(
+        """
+        WITH latest AS (
+            SELECT player_id, MAX(window_end) AS we
+            FROM hitter_windows WHERE window_days = 14 GROUP BY player_id
+        )
+        SELECT latest.player_id, latest.we
+        FROM latest
+        JOIN hitter_streak_labels l
+          ON l.player_id = latest.player_id
+         AND l.window_end = latest.we
+         AND l.window_days = 14
+        WHERE l.label != 'neutral'
+          AND ((l.category IN ('r', 'rbi', 'avg') AND l.cold_method = 'empirical')
+               OR (l.category IN ('hr', 'sb') AND l.cold_method = 'poisson_p20'))
+        LIMIT 1
+        """
+    ).fetchone()
+    assert row is not None, "fixture has no player with a non-neutral latest window"
+    pid, we = int(row[0]), row[1]
+    return pid, we if isinstance(we, date) else date.fromisoformat(str(we))
+
+
+def test_score_player_windows_forces_neutral_when_window_is_stale(seeded_fitted_conn) -> None:
+    conn = seeded_fitted_conn
+    models = load_models_from_fits(conn)
+    pid, end = _stale_target(conn)
+    kw = dict(
+        models=models,
+        player_ids=[pid],
+        window_end_on_or_before=end + timedelta(days=10),  # 10 > 4 -> stale
+        window_days=14,
+        scoring_season=2024,
+    )
+
+    # Baseline with staleness disabled: the stale window still scores its DB
+    # labels, so at least one category is non-neutral (guaranteed by _stale_target).
+    raw, _ = score_player_windows(conn, stale_after_days=None, **kw)
+    assert any(s.label != "neutral" for s in raw), "target should have a live streak"
+
+    # Default (staleness on) forces every category neutral for the same player.
+    forced, skips = score_player_windows(conn, **kw)
+    assert not skips  # still has a window; not a no_window skip
+    assert len(forced) == len(REPORT_CATEGORIES)
+    for s in forced:
+        assert s.label == "neutral"
+        assert s.probability is None
+        assert s.drivers == ()
+        assert s.window_end == end  # window_end preserved for the day-count
+
+
+def test_score_player_windows_stale_after_days_none_disables_forcing(seeded_fitted_conn) -> None:
+    conn = seeded_fitted_conn
+    models = load_models_from_fits(conn)
+    pid, end = _stale_target(conn)
+
+    # Active baseline: run_date 1 day after window end -> days_since=1, not stale.
+    active, _ = score_player_windows(
+        conn,
+        models=models,
+        player_ids=[pid],
+        window_end_on_or_before=end + timedelta(days=1),
+        window_days=14,
+        scoring_season=2024,
+    )
+    # Far run_date but staleness disabled -> same labels as the active baseline
+    # (the same window is selected; nothing is forced).
+    disabled, _ = score_player_windows(
+        conn,
+        models=models,
+        player_ids=[pid],
+        window_end_on_or_before=end + timedelta(days=10),
+        window_days=14,
+        scoring_season=2024,
+        stale_after_days=None,
+    )
+    active_labels = {s.category: s.label for s in active}
+    disabled_labels = {s.category: s.label for s in disabled}
+    assert disabled_labels == active_labels

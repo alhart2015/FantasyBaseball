@@ -22,6 +22,7 @@ import pandas as pd
 from fantasy_baseball.streaks.data.projections import discover_projection_files
 from fantasy_baseball.streaks.inference import (
     REPORT_CATEGORIES,
+    STALE_TOLERANCE_DAYS,
     Driver,
     FittedModel,
     PlayerCategoryScore,
@@ -70,6 +71,10 @@ class ReportRow:
 
     ``scores`` is keyed by category for fast cell lookup in the renderer;
     missing entries render as ``—``.
+
+    ``days_since_last_game`` is set (an int) only when the player's
+    most-recent window is stale (> STALE_TOLERANCE_DAYS before the run
+    date) -- i.e. he is inactive; ``None`` means active/recent.
     """
 
     name: str
@@ -78,6 +83,7 @@ class ReportRow:
     composite: int
     scores: dict[StreakCategory, PlayerCategoryScore]
     max_probability: float
+    days_since_last_game: int | None = None
 
     @property
     def sort_key(self) -> tuple[float, float, str]:
@@ -221,8 +227,17 @@ def _row_from_scores(
     positions: tuple[str, ...],
     player_id: int,
     scores: list[PlayerCategoryScore],
+    today: date,
 ) -> ReportRow:
     by_cat = {s.category: s for s in scores}
+    # window_end is identical across a player's category scores (stamped once
+    # per player in score_player_windows), so any score carries it.
+    window_end = scores[0].window_end if scores else None
+    days_since_last_game: int | None = None
+    if window_end is not None:
+        days = (today - window_end).days
+        if days > STALE_TOLERANCE_DAYS:
+            days_since_last_game = days
     return ReportRow(
         name=name,
         positions=positions,
@@ -230,6 +245,7 @@ def _row_from_scores(
         composite=_composite(scores),
         scores=by_cat,
         max_probability=_max_probability(scores),
+        days_since_last_game=days_since_last_game,
     )
 
 
@@ -311,6 +327,7 @@ def build_report(
                 positions=tuple(hitter.positions),
                 player_id=mlbam,
                 scores=scores,
+                today=today,
             )
         )
     roster_rows.sort(key=lambda r: r.sort_key)
@@ -329,6 +346,7 @@ def build_report(
             positions=tuple(hitter.positions),
             player_id=mlbam,
             scores=scores,
+            today=today,
         )
         if row.composite == 0:
             continue
@@ -399,6 +417,17 @@ def _format_positions(positions: tuple[str, ...]) -> str:
     return "/".join(positions) if positions else ""
 
 
+def _name_cell(row: ReportRow) -> str:
+    """Player-name cell, with an inactive marker appended when the player's
+    most-recent window is stale (see ReportRow.days_since_last_game). Appended
+    into the name cell rather than added as a column so the fixed header /
+    separator / column-width layout of both renderers is untouched. ASCII only.
+    """
+    if row.days_since_last_game is not None:
+        return f"{row.name} (inactive - {row.days_since_last_game} days)"
+    return row.name
+
+
 def _markdown_separator_row(n_cols: int) -> str:
     """Three dashes per column — minimal valid markdown separator."""
     return "|" + "|".join([" --- "] * n_cols) + "|"
@@ -413,7 +442,7 @@ def _roster_table_markdown(rows: Sequence[ReportRow]) -> list[str]:
     ]
     for row in rows:
         cells = [
-            row.name,
+            _name_cell(row),
             _format_positions(row.positions),
             _signed(row.composite),
         ]
@@ -593,7 +622,7 @@ def render_terminal(report: Report, *, no_color: bool = False) -> str:
         ]
         for r in report.roster_rows:
             row = [
-                r.name,
+                _name_cell(r),
                 _format_positions(r.positions),
                 _signed(r.composite),
             ]

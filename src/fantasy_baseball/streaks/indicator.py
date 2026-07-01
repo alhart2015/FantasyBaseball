@@ -86,11 +86,12 @@ def build_indicator(name: str, payload: dict[str, Any] | None) -> Indicator | No
     elif composite < 0:
         tone = "cold"
     else:
-        return Indicator(
-            tone="neutral",
-            label="—",
-            tooltip="composite=0 (no active streaks)",
-        )
+        days = row.get("days_since_last_game")
+        if days is not None:
+            tooltip = f"Inactive - {days} days"
+        else:
+            tooltip = "composite=0 (no active streaks)"
+        return Indicator(tone="neutral", label="—", tooltip=tooltip)
 
     label = _top_cat_label(row, tone)
     target = tone  # lowercase label key in the cache

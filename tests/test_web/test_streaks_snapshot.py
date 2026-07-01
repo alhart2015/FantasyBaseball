@@ -101,3 +101,38 @@ def test_streaks_html_snapshot(client, kv_isolation) -> None:
         f"Diff the response against {SNAPSHOT_PATH} and either fix the route/template "
         "or delete the snapshot to regenerate."
     )
+
+
+def test_streaks_page_shows_inactive_marker(client, kv_isolation) -> None:
+    score = PlayerCategoryScore(
+        player_id=2,
+        category="hr",
+        label="neutral",
+        probability=None,
+        drivers=(),
+        window_end=date(2026, 5, 1),
+    )
+    row = ReportRow(
+        name="Injured Guy",
+        positions=("1B",),
+        player_id=2,
+        composite=0,
+        scores={"hr": score},
+        max_probability=0.0,
+        days_since_last_game=30,
+    )
+    rpt = Report(
+        report_date=date(2026, 5, 31),
+        window_end=date(2026, 5, 1),
+        team_name="Hart of the Order",
+        league_id=5652,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(),
+        skipped=(),
+    )
+    write_cache(CacheKey.STREAK_SCORES, serialize_report(rpt))
+    resp = client.get("/streaks")
+    assert resp.status_code == 200
+    assert "(inactive - 30 days)" in resp.data.decode()

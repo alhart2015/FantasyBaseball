@@ -70,6 +70,47 @@ def test_serialize_report_round_trips() -> None:
     assert rebuilt == original
 
 
+def _example_report_inactive() -> Report:
+    """A report whose single roster row is inactive (days_since_last_game set)."""
+    score = PlayerCategoryScore(
+        player_id=592518,
+        category="hr",
+        label="neutral",
+        probability=None,
+        drivers=(),
+        window_end=date(2026, 5, 1),
+    )
+    row = ReportRow(
+        name="Injured Guy",
+        positions=("1B",),
+        player_id=592518,
+        composite=0,
+        scores={"hr": score},
+        max_probability=0.0,
+        days_since_last_game=30,  # MUST be set explicitly; it is a stored field
+    )
+    return Report(
+        report_date=date(2026, 5, 31),
+        window_end=date(2026, 5, 1),
+        team_name="Hart of the Order",
+        league_id=5652,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(),
+        skipped=(),
+    )
+
+
+def test_serialize_report_round_trips_inactive_row() -> None:
+    original = _example_report_inactive()
+    payload = serialize_report(original)
+    assert payload["roster_rows"][0]["days_since_last_game"] == 30
+    rebuilt = deserialize_report(payload)
+    assert rebuilt == original
+    assert rebuilt.roster_rows[0].days_since_last_game == 30
+
+
 def test_build_indicator_hot_picks_top_hot_cat() -> None:
     payload = serialize_report(_example_report())
     ind = build_indicator("Juan Soto", payload)
@@ -150,6 +191,14 @@ def test_build_indicator_neutral_when_composite_zero() -> None:
     assert ind is not None
     assert ind.tone == "neutral"
     assert ind.label == "—"
+
+
+def test_build_indicator_inactive_row_shows_days_tooltip() -> None:
+    payload = serialize_report(_example_report_inactive())
+    ind = build_indicator("Injured Guy", payload)
+    assert ind is not None
+    assert ind.tone == "neutral"
+    assert ind.tooltip == "Inactive - 30 days"
 
 
 def test_build_indicator_unresolved_player() -> None:
