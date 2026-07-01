@@ -18,9 +18,7 @@ from fantasy_baseball.data.cache_keys import CacheKey
 from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.data.redis_store import (
-    _PLAYER_SUFFIX_RE,
     get_game_log_totals,
-    get_latest_weekly_rosters,
 )
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_board_from_frames
@@ -32,7 +30,6 @@ from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calc
 from fantasy_baseball.utils.time_utils import compute_fraction_remaining, local_today
 from fantasy_baseball.web.season_data import (
     read_cache_dict,
-    read_cache_list,
 )
 
 logger = logging.getLogger(__name__)
@@ -584,6 +581,7 @@ def compute_player_value(
     scale: ScaleInputs,
     fraction: float,
     slot: int | None = None,
+    missing_line_est: float | None = None,
 ) -> PlayerValue:
     """Score a player's projected and YTD VAR and decompose the projected value.
 
@@ -592,14 +590,21 @@ def compute_player_value(
     subtract the full-season and to-date baselines respectively (never conflate them).
     ``skill``/``luck`` split the projected value only when both a preseason VAR and a
     projected estimate exist; otherwise both are ``None``.
+
+    ``missing_line_est`` is the estimated VAR used when a stat line is absent. Default
+    ``None`` yields ``None`` estimates (skip). Pass ``0.0`` to score a drafted/kept
+    player who never played at replacement level, so value == ``0 - par == -par`` and a
+    wasted pick is penalized rather than silently dropped.
     """
     est_proj = (
-        score_var(full_line, positions, player_type, scale, 1.0) if full_line is not None else None
+        score_var(full_line, positions, player_type, scale, 1.0)
+        if full_line is not None
+        else missing_line_est
     )
     est_ytd = (
         score_var(todate_line, positions, player_type, scale, fraction)
         if todate_line is not None
-        else None
+        else missing_line_est
     )
     value_proj = (est_proj - baseline_proj) if est_proj is not None else None
     value_ytd = (est_ytd - baseline_ytd) if est_ytd is not None else None
@@ -641,120 +646,42 @@ def season_fraction() -> float:
     return max(0.0, min(1.0, elapsed))
 
 
-def normalize_name_team(team: str) -> str:
-    """Normalize a fantasy team name for keying: trimmed and lowercased."""
-    return team.strip().lower()
-
-
-def load_add_txns_by_team() -> dict[str, set[str]]:
-    """Map fantasy team (normalized) -> set of normalized add-txn player names.
-
-    Reads the raw ``CacheKey.TRANSACTIONS`` LIST payload from the KV store and
-    keeps only successful adds (``status`` unset or ``"successful"``). Used by the
-    elimination-model classifier to distinguish waiver pickups from trade
-    acquisitions. Returns ``{}`` when the KV store lacks the blob.
-    """
-    txns = read_cache_list(CacheKey.TRANSACTIONS) or []
-    by_team: dict[str, set[str]] = {}
-    for t in txns:
-        if t.get("status") not in (None, "successful"):
-            continue
-        add_name = t.get("add_name")
-        team = t.get("team")
-        if add_name and team:
-            by_team.setdefault(normalize_name_team(team), set()).add(normalize_name(add_name))
-    return by_team
-
-
-def classify_acquisition(
-    team: str,
-    norm_name: str,
-    drafted_by_team: dict[str, set[str]],
-    kept_by_team: dict[str, set[str]],
-    add_by_team: dict[str, set[str]],
-) -> str:
-    """Classify how ``team`` acquired ``norm_name`` via elimination precedence.
-
-    Precedence: drafted -> keeper -> waiver -> trade_excluded. A rostered player
-    with no draft/keep/add record was trade-acquired, which the draft-value metric
-    excludes. Draft/keep beat a later same-team re-add of the same player.
-    """
-    tkey = normalize_name_team(team)
-    if norm_name in drafted_by_team.get(tkey, set()):
-        return "drafted"
-    if norm_name in kept_by_team.get(tkey, set()):
-        return "keeper"
-    if norm_name in add_by_team.get(tkey, set()):
-        return "waiver"
-    return "trade_excluded"
-
-
 @dataclass
 class TeamRollup:
-    """Per-team draft-value roll-up: sum, per-player average, and credited counts.
+    """Per-team draft-value roll-up: sum, per-player average, and credited count.
 
     ``sum_value`` sums the chosen-horizon per-player values (``value_proj`` when
     ``horizon == "proj"``, else ``value_ytd``); ``avg_value`` divides by the number
     of credited players (``NaN`` when none are credited). ``credited_count`` is that
-    number (drafted + keeper only). ``case3_count`` is the per-team trade-excluded
-    count; ``waiver_count`` is the per-team waiver/in-season pickup count -- both are
-    informational and NOT part of the draft grade.
+    number: every drafted pick + keeper credited to the team that drafted/kept the
+    player, regardless of a later drop or trade.
     """
 
     team: str
     sum_value: float
     avg_value: float
     credited_count: int
-    case3_count: int
-    waiver_count: int
 
 
 def roll_up_team(
     team: str,
     player_values: list[PlayerValue],
-    case3_count: int,
     horizon: str = "proj",
-    waiver_count: int = 0,
 ) -> TeamRollup:
-    """Roll a team's per-player values into sum, per-player average, and counts.
+    """Roll a team's per-player values into sum, per-player average, and count.
 
     ``horizon`` picks ``value_proj`` (``"proj"``) or ``value_ytd`` (otherwise). Only
     non-``None`` values are credited (values can be ``0.0`` or negative, so filter on
     ``is not None``, never truthiness). ``avg_value`` is ``NaN`` when no player is
-    credited. ``player_values`` excludes waivers (drafted + keeper only), so the sum,
-    average, and credited count naturally cover only the draft. ``case3_count`` and
-    ``waiver_count`` are passed through unchanged (both informational).
+    credited. ``player_values`` covers every drafted pick + keeper credited to the
+    team, so the sum, average, and credited count grade the full draft.
     """
     attr = "value_proj" if horizon == "proj" else "value_ytd"
     vals = [getattr(pv, attr) for pv in player_values if getattr(pv, attr) is not None]
     n = len(vals)
     total = sum(vals)
     avg = total / n if n else float("nan")
-    return TeamRollup(team, total, avg, n, case3_count, waiver_count)
-
-
-def _split_suffix(raw_name: str) -> tuple[str, str | None]:
-    """Split a Yahoo name into ``(stripped_name, player_type_or_None)`` in one regex scan.
-
-    Two-way players (e.g. Shohei Ohtani) appear as separate roster rows with a
-    trailing " (Batter)" / " (Pitcher)" tag. That tag is authoritative for how the
-    entry should be scored, so return it as a definitive player_type alongside the
-    annotation-stripped name (honoring it over the hitter-first board inference in
-    ``_resolve_type_and_positions``, which would score the drafted-pitcher row on the
-    hitter's VAR and double-credit the team's hitting). Non-two-way names have no
-    suffix and yield ``None``. The regex is end-anchored, so ``m.start()`` marks the
-    stripped-name boundary -- one ``search`` covers both outputs.
-    """
-    m = _PLAYER_SUFFIX_RE.search(raw_name)
-    if m is None:
-        return raw_name.strip(), None
-    ptype = "pitcher" if "pitcher" in m.group(0).lower() else "hitter"
-    return raw_name[: m.start()].strip(), ptype
-
-
-def _strip_suffix(name: str) -> str:
-    """Drop Yahoo's trailing " (Batter)"/" (Pitcher)" annotation before normalizing."""
-    return _split_suffix(name)[0]
+    return TeamRollup(team, total, avg, n)
 
 
 def _default_positions(player_type: str) -> list[str]:
@@ -762,42 +689,69 @@ def _default_positions(player_type: str) -> list[str]:
     return ["OF"] if player_type == "hitter" else ["SP"]
 
 
-def _resolve_type_and_positions(
-    norm_name: str,
-    full_lines: dict[str, Any],
-    todate_lines: dict[str, Any],
-    bindex: dict[str, Any],
-    forced_type: str | None = None,
-) -> tuple[str, list[str]]:
-    """Return ``(player_type, positions)`` for a rostered player.
+def _assign_pick_types(
+    picks: list[DraftPick],
+    board: pd.DataFrame,
+    league: dict[str, Any],
+) -> list[tuple[DraftPick, str]]:
+    """Assign a player_type to every pick, two-way aware.
 
-    When ``forced_type`` is given (a Yahoo " (Batter)"/" (Pitcher)" suffix is
-    authoritative for how a two-way row is scored), return that type with positions
-    from the matching board row if present, else the board defaults -- bypassing the
-    hitter-first inference so e.g. Ohtani's pitcher row joins the pitcher board/line
-    and the team is not double-credited for his hitting.
+    Draft-pick names are bare (no Yahoo " (Batter)"/" (Pitcher)" suffix), so a
+    two-way player (e.g. Shohei Ohtani) appears as two picks under one name -- once
+    as a keeper and once as a drafted pick. Iterating picks IN ORDER and tracking
+    which board types each normalized name has already claimed lets the second pick
+    take the remaining type: Ohtani's keeper claims "hitter" (his "batter only"
+    keeper note), so the drafted Ohtani takes "pitcher".
 
-    Otherwise: prefer the preseason board row (real eligible positions); else infer
-    the type from whichever full-season OR to-date line exists and attach board
-    default positions; off-board with no line falls back to hitter. Consulting the
-    to-date lines matters for off-board players with game logs but no full-season
-    projection (e.g. a pitcher who would otherwise default to hitter/OF and be
-    un-credited). Ohtani resolves to the hitter line (batter only) because the board
-    keys him as a hitter.
+    A KEEPER honors its league.yaml note ("batter only" -> hitter, "pitcher only" ->
+    pitcher); otherwise it takes the sole board type, else defaults to hitter (or the
+    lone pitcher type, or hitter off-board). A DRAFTED pick prefers an unclaimed board
+    type (pitcher first, so a two-way second pick becomes pitcher), else the sole
+    board type, else hitter.
     """
-    if forced_type is not None:
-        row = bindex.get(_pkey(norm_name, forced_type))
-        positions = list(row["positions"]) if row is not None else _default_positions(forced_type)
-        return forced_type, positions
-    for ptype in ("hitter", "pitcher"):
-        row = bindex.get(_pkey(norm_name, ptype))
-        if row is not None:
-            return ptype, list(row["positions"])
-    for ptype in ("hitter", "pitcher"):
-        key = _pkey(norm_name, ptype)
-        if key in full_lines or key in todate_lines:
-            return ptype, _default_positions(ptype)
-    return "hitter", _default_positions("hitter")
+    bindex = _board_index(board)
+    avail: dict[str, set[str]] = {}
+    for key in bindex:
+        norm, ptype = key.rsplit("::", 1)
+        avail.setdefault(norm, set()).add(ptype)
+    keeper_notes: dict[str, str] = {}
+    for k in league["keepers"]:
+        note = k.get("note")
+        if note:
+            keeper_notes[normalize_name(k["name"])] = str(note).lower()
+
+    claimed: dict[str, set[str]] = {}
+    result: list[tuple[DraftPick, str]] = []
+    for p in picks:
+        norm = normalize_name(p.player_name)
+        avail_types = avail.get(norm, set())
+        if p.is_keeper:
+            note = keeper_notes.get(norm, "")
+            if "batter only" in note:
+                ptype = "hitter"
+            elif "pitcher only" in note:
+                ptype = "pitcher"
+            elif len(avail_types) == 1:
+                ptype = next(iter(avail_types))
+            elif "hitter" in avail_types:
+                ptype = "hitter"
+            elif avail_types:  # board has only pitcher
+                ptype = "pitcher"
+            else:  # off-board keeper
+                ptype = "hitter"
+        else:  # drafted
+            unclaimed = avail_types - claimed.get(norm, set())
+            if unclaimed:
+                ptype = "pitcher" if "pitcher" in unclaimed else next(iter(unclaimed))
+            elif len(avail_types) == 1:
+                ptype = next(iter(avail_types))
+            elif "hitter" in avail_types:
+                ptype = "hitter"
+            else:  # off-board flier
+                ptype = "hitter"
+        claimed.setdefault(norm, set()).add(ptype)
+        result.append((p, ptype))
+    return result
 
 
 def run_draft_value(
@@ -807,9 +761,12 @@ def run_draft_value(
 
     Reproduces the preseason board (+ soft frozen drift check), reconstructs the
     draft and enforces the reconstruction gate, builds projected and to-date par
-    curves, loads full-season + actual lines and current rosters/transactions,
-    classifies each rostered player, scores their value, and rolls up per team.
-    Returns ``(player_values, team_rollups)``.
+    curves, then scores EVERY drafted pick + keeper (30 keepers + 200 drafted) by
+    full-season realized value vs par, crediting the team that drafted/kept the
+    player -- regardless of a later drop or trade. Waivers stay out (deferred to the
+    transaction analyzer). A drafted/kept player who never played is scored at
+    replacement (value == -par), so a wasted pick is penalized. Returns
+    ``(player_values, team_rollups)``.
     """
     board, scale = reproduce_draft_day_board()
     frozen_drift_summary(board)  # soft: logs a warning on large drift, never raises
@@ -835,13 +792,11 @@ def run_draft_value(
     full_by_mlbam, full_by_name = load_full_season_lines()
     td_by_mlbam, td_by_name = load_actual_to_date_lines()
 
-    # draft/keep sets by team; DRAFT-ORDER ordinal among on-board drafted picks.
+    # DRAFT-ORDER ordinal among on-board drafted picks.
     # par(slot) = drafted_pars[ordinal-1] (drafted_pars is VAR-sorted desc): the k-th
     # on-board drafted pick is measured against the k-th-best available VAR. This is the
     # spec's par(slot). Do NOT index by the player's OWN VAR rank -- that makes
     # par == own VAR, so skill == preseason_var - par == 0 for every drafted player.
-    drafted_by: dict[str, set[str]] = {}
-    kept_by: dict[str, set[str]] = {}
     slot_by_name: dict[str, int] = {}  # norm_name -> draft-order ordinal among on-board drafted
     onboard_ordinal = 0
     for p in sorted((pk for pk in picks if not pk.is_keeper), key=lambda x: x.slot or 0):
@@ -849,46 +804,21 @@ def run_draft_value(
             continue  # off-board flier: excluded from par curve and slot indexing
         onboard_ordinal += 1
         slot_by_name[normalize_name(p.player_name)] = onboard_ordinal
-    for p in picks:
-        tkey = normalize_name_team(p.team)
-        target = kept_by if p.is_keeper else drafted_by
-        target.setdefault(tkey, set()).add(normalize_name(p.player_name))
 
-    add_by = load_add_txns_by_team()
-    rosters = get_latest_weekly_rosters(get_kv())
-
+    # Score every pick (keepers + drafted), two-way aware, crediting pick.team.
+    typed_picks = _assign_pick_types(picks, board, league)
     players: list[PlayerValue] = []
-    case3: dict[str, int] = {}
-    waiver_count: dict[str, int] = {}
-    for entry in rosters:
-        team = entry["team"]
-        # One suffix scan yields both the stripped name and the definitive two-way type
-        # (a Yahoo "(Batter)/(Pitcher)" tag is authoritative for how the row is scored,
-        # so e.g. Ohtani's pitcher row joins the pitcher board/line and the team is not
-        # double-credited for his hitting); None means no suffix -> board inference.
-        stripped_name, suffix_type = _split_suffix(entry["player_name"])
-        norm = normalize_name(stripped_name)
-        kind = classify_acquisition(team, norm, drafted_by, kept_by, add_by)
-        if kind == "trade_excluded":
-            case3[team] = case3.get(team, 0) + 1
-            continue
-        # This tool grades the DRAFT only (keepers + drafted picks). Waiver / in-season
-        # pickups are evaluated separately by the transaction analyzer (deltaRoto), so
-        # skip them here: count them (informational) but build no PlayerValue.
-        if kind == "waiver":
-            waiver_count[team] = waiver_count.get(team, 0) + 1
-            continue
-        ptype, positions = _resolve_type_and_positions(
-            norm, full_by_name, td_by_name, bindex, forced_type=suffix_type
-        )
+    for pick, ptype in typed_picks:
+        norm = normalize_name(pick.player_name)
         key = _pkey(norm, ptype)
+        row = bindex.get(key)  # may be None: off-board flier
         pre = preseason.get(key)
+        mlbam = _row_mlbam(row)
+        positions = list(row["positions"]) if row is not None else _default_positions(ptype)
         # Join lines by mlbam id first (immune to namesake collisions like the two
         # Mason Millers), falling back to the name key only when the board row has
         # no id. Explicit None checks -- never `x or fallback` (a 0.0-valued line
         # dict is falsy but valid).
-        row = bindex.get(key)
-        mlbam = _row_mlbam(row)
         full_line = full_by_mlbam.get((mlbam, ptype)) if mlbam is not None else None
         if full_line is None:
             full_line = full_by_name.get(key)
@@ -897,37 +827,35 @@ def run_draft_value(
             todate_line = td_by_name.get(key)
         # draft-order ordinal among on-board drafted picks; also the compute slot arg
         # (slot == rank for drafted, None otherwise), so compute it once and reuse.
-        rank = slot_by_name.get(norm) if kind == "drafted" else None
-        # Only keeper + drafted reach here (waiver/trade_excluded are skipped above).
-        if kind == "keeper":
+        rank = slot_by_name.get(norm) if not pick.is_keeper else None
+        if pick.is_keeper:
             base_proj, base_ytd = par_proj.keeper_par, par_ytd.keeper_par
         else:  # drafted
             base_proj = par_proj.par_for_slot(rank) if rank else 0.0
             base_ytd = par_ytd.par_for_slot(rank) if rank else 0.0
         pv = compute_player_value(
-            team,
-            entry["player_name"],
-            ptype,
-            positions,
-            base_proj,
-            base_ytd,
-            kind,
-            pre,
-            full_line,
-            todate_line,
-            scale,
-            f,
-            slot=rank,
+            team=pick.team,
+            name=pick.player_name,
+            player_type=ptype,
+            positions=positions,
+            baseline_proj=base_proj,
+            baseline_ytd=base_ytd,
+            baseline_kind=("keeper" if pick.is_keeper else "drafted"),
+            preseason_var=pre,
+            full_line=full_line,
+            todate_line=todate_line,
+            scale=scale,
+            fraction=f,
+            slot=(rank if not pick.is_keeper else None),
+            # A drafted/kept player with NO stat line (never played) is scored at
+            # replacement (0.0), so value == 0 - par == -par (a wasted pick is penalized).
+            missing_line_est=0.0,
         )
         players.append(pv)
 
-    # group by team (PlayerValue carries .team) and roll up with the per-team case-3 count
+    # group by team (PlayerValue carries .team) and roll up
     by_team: dict[str, list[PlayerValue]] = {}
     for pv in players:
         by_team.setdefault(pv.team, []).append(pv)
-    all_teams = {entry["team"] for entry in rosters}
-    teams = [
-        roll_up_team(t, by_team.get(t, []), case3.get(t, 0), waiver_count=waiver_count.get(t, 0))
-        for t in sorted(all_teams)
-    ]
+    teams = [roll_up_team(t, pvs) for t, pvs in sorted(by_team.items())]
     return players, teams

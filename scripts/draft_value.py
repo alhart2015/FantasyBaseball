@@ -32,16 +32,15 @@ def main() -> None:
     )
     lines = ["# Draft Value Report", ""]
     lines.append("## DRAFT GRADE (keepers + drafted picks)")
-    lines.append("| Team | avg | sum | drafted+kept | waiver | trade-excl |")
-    lines.append("|---|---|---|---|---|---|")
+    lines.append("| Team | avg | sum | picks |")
+    lines.append("|---|---|---|---|")
     for t in sorted(
         teams,
         key=lambda r: r.avg_value if r.avg_value == r.avg_value else -9e9,
         reverse=True,
     ):
         lines.append(
-            f"| {t.team} | {_fmt(t.avg_value)} | {_fmt(t.sum_value)} "
-            f"| {t.credited_count} | {t.waiver_count} | {t.case3_count} |"
+            f"| {t.team} | {_fmt(t.avg_value)} | {_fmt(t.sum_value)} | {t.credited_count} |"
         )
     lines.append("")
     lines.append("## Per-player (projected)")

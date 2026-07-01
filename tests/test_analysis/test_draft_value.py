@@ -107,29 +107,6 @@ def test_season_fraction_in_unit_range():
     assert 0.0 <= f <= 1.0
 
 
-def test_classify_precedence():
-    drafted = {"hart of the order": {"juan soto"}}
-    kept = {"hart of the order": {"julio rodriguez"}}
-    adds = {"hart of the order": {"matt mclain", "juan soto"}}  # soto also re-added
-    # draft/keep precedence beats a later same-team re-add
-    assert (
-        dv.classify_acquisition("Hart of the Order", "juan soto", drafted, kept, adds) == "drafted"
-    )
-    assert (
-        dv.classify_acquisition("Hart of the Order", "julio rodriguez", drafted, kept, adds)
-        == "keeper"
-    )
-    # pure waiver add
-    assert (
-        dv.classify_acquisition("Hart of the Order", "matt mclain", drafted, kept, adds) == "waiver"
-    )
-    # rostered, no draft/keep, no add -> trade-acquired -> excluded
-    assert (
-        dv.classify_acquisition("Hart of the Order", "some trade guy", drafted, kept, adds)
-        == "trade_excluded"
-    )
-
-
 def test_ytd_fraction_is_not_linear_in_f(synthetic_scale):
     # Guards the f*floor_full bug: rate SGP is f-invariant while counting scales by f,
     # so a to-date VAR does NOT simply equal f * full VAR. This is oracle 5 at the
@@ -185,6 +162,29 @@ def test_offboard_waiver_gem_skill_luck_na(synthetic_scale):
     assert pv.value_proj is not None  # value still computed vs replacement (0)
 
 
+def test_missing_line_est_scores_at_replacement(synthetic_scale):
+    # A drafted/kept player with NO stat line (never played) is scored at the
+    # replacement estimate (0.0), so value == 0 - par == -par (wasted pick penalized).
+    scale = synthetic_scale
+    pv = dv.compute_player_value(
+        team="Hart of the Order",
+        name="Never Played",
+        player_type="hitter",
+        positions=["OF"],
+        baseline_proj=5.0,
+        baseline_ytd=2.5,
+        baseline_kind="drafted",
+        preseason_var=None,
+        full_line=None,
+        todate_line=None,
+        scale=scale,
+        fraction=0.5,
+        missing_line_est=0.0,
+    )
+    assert pv.value_proj == -5.0
+    assert pv.est_var_proj == 0.0
+
+
 def test_convergence_ytd_equals_proj_at_f1(synthetic_scale):
     # spec oracle 3: at f=1 (ROS->0), with full_line == todate_line and matching
     # baselines, the YTD value converges to the projected value. Non-tautological:
@@ -214,32 +214,39 @@ def test_run_draft_value_end_to_end_and_known_pick():
 
     players, teams = dv.run_draft_value()
     assert players and teams
-    # every team roll-up has a credited count, a case3 count, and a waiver count
+    # every graded pick is a keeper or a drafted pick -- no waiver
     assert all(t.credited_count >= 0 for t in teams)
-    assert all(t.waiver_count >= 0 for t in teams)
-    # this tool grades the DRAFT only: no waiver players are scored into `players`
-    assert all(p.baseline_kind != "waiver" for p in players)
+    assert all(p.baseline_kind in ("keeper", "drafted") for p in players)
+    # every team drafted/kept roughly a full roster's worth of picks (3 keepers + 20
+    # drafted); credited_count counts only picks with a finite value, so allow slack.
+    assert all(18 <= t.credited_count <= 25 for t in teams), {
+        t.team: t.credited_count for t in teams
+    }
     # known-pick sanity: a specific keeper resolves with a finite projected value
-    soto = next(
-        (p for p in players if normalize_name(dv._strip_suffix(p.name)) == "juan soto"), None
-    )
+    soto = next((p for p in players if normalize_name(p.name) == "juan soto"), None)
     assert soto is not None and soto.value_proj == soto.value_proj  # not NaN
-    assert soto.baseline_kind in ("keeper", "drafted")
+    assert soto.baseline_kind == "keeper"
 
-    # Namesake-collision guard (mlbam-id join): the drafted Mason Miller is the
-    # A's/Padres closer (mlbam 695243, ~37 SV projected), NOT the scrub namesake
-    # (mlbam 692223, ~2 IP). Before the fix the name-keyed dict let the scrub
-    # overwrite the closer and his estVAR came out deeply negative (~-6.7). His
-    # projected estVAR must now be clearly positive (near his closer projection).
-    miller = next(
-        (p for p in players if normalize_name(dv._strip_suffix(p.name)) == "mason miller"), None
-    )
-    assert miller is not None, "Mason Miller not on any current roster -- update this guard"
+    # Mason Miller (the closer) was DRAFTED and is scored regardless of any later
+    # drop/trade. Namesake-collision guard (mlbam-id join): the drafted Mason Miller
+    # is the A's/Padres closer (mlbam 695243, ~37 SV projected), NOT the scrub
+    # namesake (mlbam 692223, ~2 IP). His projected estVAR must be clearly positive.
+    miller = next((p for p in players if normalize_name(p.name) == "mason miller"), None)
+    assert miller is not None, "Mason Miller not among drafted picks -- update this guard"
+    assert miller.baseline_kind == "drafted"
     assert miller.est_var_proj is not None
     assert miller.est_var_proj > 2.0, (
         f"Mason Miller estVAR {miller.est_var_proj} looks like the scrub namesake's "
         "line, not the closer's -- mlbam-id join regressed"
     )
+
+    # Two-way player: Shohei Ohtani appears TWICE -- once as a keeper hitter (his
+    # "batter only" keeper note) and once as a drafted pitcher (the remaining board
+    # type after the keeper claimed hitter).
+    ohtani = [p for p in players if normalize_name(p.name) == "shohei ohtani"]
+    assert len(ohtani) == 2, f"expected 2 Ohtani rows, got {len(ohtani)}"
+    kinds = {(o.baseline_kind, o.player_type) for o in ohtani}
+    assert kinds == {("keeper", "hitter"), ("drafted", "pitcher")}, kinds
 
 
 def test_team_rollup_sum_avg_count():
@@ -274,9 +281,7 @@ def test_team_rollup_sum_avg_count():
             luck=None,
         ),
     ]
-    r = dv.roll_up_team("Hart of the Order", pvs, case3_count=2, horizon="proj", waiver_count=3)
+    r = dv.roll_up_team("Hart of the Order", pvs, horizon="proj")
     assert r.credited_count == 2
     assert abs(r.sum_value - 7.0) < 1e-9  # value_proj: 4.0 + 3.0
     assert abs(r.avg_value - 3.5) < 1e-9
-    assert r.case3_count == 2
-    assert r.waiver_count == 3
