@@ -31,39 +31,59 @@
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/test_streaks/test_inference.py` (it already imports `date`, `timedelta`, `score_player_windows`, `load_models_from_fits`, `REPORT_CATEGORIES`, and the `seeded_fitted_conn` fixture):
+Add to `tests/test_streaks/test_inference.py` (it already imports `date`, `timedelta`, `score_player_windows`, `load_models_from_fits`, `REPORT_CATEGORIES`, and the `seeded_fitted_conn` fixture).
+
+`_stale_target` deliberately selects a player whose **latest** 14d window carries a *non-neutral* label in the partitions `score_player_windows` reads. This makes the forcing test a valid TDD red-first: before the change, scoring that player at a far run_date yields his non-neutral label (so `all label=="neutral"` FAILS); after the change he is forced neutral (PASS). The `assert row is not None` fails loudly if the fixture ever stops producing a non-neutral latest window, rather than letting the test go vacuously green.
 
 ```python
-def _latest_window(conn):
-    """Return (player_id, window_end date) for the most recent 14d window."""
-    we = conn.execute(
-        "SELECT MAX(window_end) FROM hitter_windows WHERE window_days = 14"
-    ).fetchone()[0]
-    end = we if isinstance(we, date) else date.fromisoformat(str(we))
-    pid = conn.execute(
-        "SELECT player_id FROM hitter_windows WHERE window_days = 14 AND window_end = ? LIMIT 1",
-        [end],
-    ).fetchone()[0]
-    return int(pid), end
+def _stale_target(conn):
+    """(player_id, latest window_end) for a player whose latest 14d window has a
+    non-neutral label in the scored partitions -- so forcing him neutral is observable."""
+    row = conn.execute(
+        """
+        WITH latest AS (
+            SELECT player_id, MAX(window_end) AS we
+            FROM hitter_windows WHERE window_days = 14 GROUP BY player_id
+        )
+        SELECT latest.player_id, latest.we
+        FROM latest
+        JOIN hitter_streak_labels l
+          ON l.player_id = latest.player_id
+         AND l.window_end = latest.we
+         AND l.window_days = 14
+        WHERE l.label != 'neutral'
+          AND ((l.category IN ('r', 'rbi', 'avg') AND l.cold_method = 'empirical')
+               OR (l.category IN ('hr', 'sb') AND l.cold_method = 'poisson_p20'))
+        LIMIT 1
+        """
+    ).fetchone()
+    assert row is not None, "fixture has no player with a non-neutral latest window"
+    pid, we = int(row[0]), row[1]
+    return pid, we if isinstance(we, date) else date.fromisoformat(str(we))
 
 
 def test_score_player_windows_forces_neutral_when_window_is_stale(seeded_fitted_conn) -> None:
     conn = seeded_fitted_conn
     models = load_models_from_fits(conn)
-    pid, end = _latest_window(conn)
-
-    # run_date 10 days after the window end -> stale (> 4).
-    scores, skips = score_player_windows(
-        conn,
+    pid, end = _stale_target(conn)
+    kw = dict(
         models=models,
         player_ids=[pid],
-        window_end_on_or_before=end + timedelta(days=10),
+        window_end_on_or_before=end + timedelta(days=10),  # 10 > 4 -> stale
         window_days=14,
         scoring_season=2024,
     )
-    assert not skips  # the player still has a window; not a no_window skip
-    assert len(scores) == len(REPORT_CATEGORIES)
-    for s in scores:
+
+    # Baseline with staleness disabled: the stale window still scores its DB
+    # labels, so at least one category is non-neutral (guaranteed by _stale_target).
+    raw, _ = score_player_windows(conn, stale_after_days=None, **kw)
+    assert any(s.label != "neutral" for s in raw), "target should have a live streak"
+
+    # Default (staleness on) forces every category neutral for the same player.
+    forced, skips = score_player_windows(conn, **kw)
+    assert not skips  # still has a window; not a no_window skip
+    assert len(forced) == len(REPORT_CATEGORIES)
+    for s in forced:
         assert s.label == "neutral"
         assert s.probability is None
         assert s.drivers == ()
@@ -73,7 +93,7 @@ def test_score_player_windows_forces_neutral_when_window_is_stale(seeded_fitted_
 def test_score_player_windows_stale_after_days_none_disables_forcing(seeded_fitted_conn) -> None:
     conn = seeded_fitted_conn
     models = load_models_from_fits(conn)
-    pid, end = _latest_window(conn)
+    pid, end = _stale_target(conn)
 
     # Active baseline: run_date 1 day after window end -> days_since=1, not stale.
     active, _ = score_player_windows(
@@ -96,7 +116,7 @@ def test_score_player_windows_stale_after_days_none_disables_forcing(seeded_fitt
 - [ ] **Step 2: Run the tests to verify they fail**
 
 Run: `python -m pytest tests/test_streaks/test_inference.py::test_score_player_windows_forces_neutral_when_window_is_stale tests/test_streaks/test_inference.py::test_score_player_windows_stale_after_days_none_disables_forcing -v`
-Expected: FAIL — `score_player_windows() got an unexpected keyword argument 'stale_after_days'` (second test) and the forcing test fails because scores are not forced neutral.
+Expected: FAIL — both tests call `score_player_windows(..., stale_after_days=...)`, which is an unknown keyword before Step 4, so both raise `TypeError: score_player_windows() got an unexpected keyword argument 'stale_after_days'`. (After Step 4 the forcing behavior is what turns the first test green.)
 
 - [ ] **Step 3: Add the constant**
 
@@ -201,15 +221,17 @@ git commit -m "feat(streaks): force neutral scores for stale windows (run-date a
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/test_streaks/test_sunday_report.py` (import `date`/`timedelta` and `PlayerCategoryScore` if not already imported; `_row_from_scores` and `STALE_TOLERANCE_DAYS` come from the modules below):
+Imports first. `test_sunday_report.py` already imports `date`, `Driver`,
+`PlayerCategoryScore`, `Report`, `ReportRow`, `render_markdown`, `render_terminal`.
+Do NOT re-import those (ruff `F811` redefinition fails `ruff check`). Make only
+these two edits to the existing import blocks:
+- change `from datetime import date` to `from datetime import date, timedelta`;
+- add `_row_from_scores` to the existing
+  `from fantasy_baseball.streaks.reports.sunday import (...)` block.
+
+Then add these test helpers + tests:
 
 ```python
-from datetime import date, timedelta
-
-from fantasy_baseball.streaks.inference import PlayerCategoryScore
-from fantasy_baseball.streaks.reports.sunday import _row_from_scores
-
-
 def _neutral_scores(window_end: date) -> list[PlayerCategoryScore]:
     return [
         PlayerCategoryScore(
@@ -247,30 +269,24 @@ Expected: FAIL — `_row_from_scores() got an unexpected keyword argument 'today
 
 - [ ] **Step 3: Add the field and the import**
 
-In `src/fantasy_baseball/streaks/reports/sunday.py`, add to the existing `from fantasy_baseball.streaks.inference import (...)` block the name `STALE_TOLERANCE_DAYS`.
+In `src/fantasy_baseball/streaks/reports/sunday.py`, add `STALE_TOLERANCE_DAYS`
+to the existing `from fantasy_baseball.streaks.inference import (...)` block.
 
-Add the field to `ReportRow` as the **last field, with an explicit default** (the dataclass is `frozen=True` with no other defaulted fields):
+Then add ONE field to `ReportRow`. Do **not** rewrite the class — it has two
+`@property` methods (`sort_key`/`fa_sort_key`, ~lines 82-90) that are load-bearing
+in `build_report`'s sort; leave them and the existing docstring intact. Insert
+this single line immediately after `max_probability: float` (the last data field,
+~line 80) and BEFORE the first `@property` (it is the only defaulted field, so it
+must be last among the fields):
 
 ```python
-@dataclass(frozen=True)
-class ReportRow:
-    """One player's row in the rendered report.
-
-    ``scores`` is keyed by category for fast cell lookup in the renderer;
-    ...
-    ``days_since_last_game`` is set (an int) only when the player's most-recent
-    window is stale (> STALE_TOLERANCE_DAYS before the run date) -- i.e. he is
-    inactive; ``None`` means active/recent.
-    """
-
-    name: str
-    positions: tuple[str, ...]
-    player_id: int
-    composite: int
-    scores: dict[StreakCategory, PlayerCategoryScore]
-    max_probability: float
     days_since_last_game: int | None = None
 ```
+
+Also append one sentence to the `ReportRow` docstring: `` ``days_since_last_game``
+is set (an int) only when the player's most-recent window is stale (>
+STALE_TOLERANCE_DAYS before the run date) -- i.e. he is inactive; ``None`` means
+active/recent.``
 
 - [ ] **Step 4: Add `today` to `_row_from_scores`**
 
@@ -456,12 +472,11 @@ git commit -m "feat(streaks): serialize days_since_last_game in the streak paylo
 
 - [ ] **Step 1: Write the failing test**
 
-Add to `tests/test_streaks/test_sunday_report.py` (import `render_markdown`, `render_terminal`, `Report` if not already imported):
+Add to `tests/test_streaks/test_sunday_report.py`. `render_markdown`,
+`render_terminal`, and `Report` are already imported (do NOT re-import — `F811`).
+This test reuses `_neutral_scores` and `_row_from_scores` from Task 2 (same file):
 
 ```python
-from fantasy_baseball.streaks.reports.sunday import render_markdown, render_terminal
-
-
 def _report_with_inactive_roster_row() -> Report:
     row = _row_from_scores(
         name="Oneil Cruz", positions=("SS",), player_id=1,
@@ -580,11 +595,17 @@ In `indicator.py`, replace the `composite == 0` branch (currently returns the ge
 ```python
     else:
         days = row.get("days_since_last_game")
-        tooltip = f"Inactive - {days} days" if days is not None else "composite=0 (no active streaks)"
+        if days is not None:
+            tooltip = f"Inactive - {days} days"
+        else:
+            tooltip = "composite=0 (no active streaks)"
         return Indicator(tone="neutral", label="—", tooltip=tooltip)
 ```
 
-(Leave the `label="—"` as-is; it is pre-existing non-ASCII and out of scope. Only the new `"Inactive - N days"` string is added, and it is ASCII.)
+(Written as an if/else block, not a one-line ternary, so it stays under the
+100-char line limit and passes `ruff format --check`. Leave the `label="—"`
+as-is; it is pre-existing non-ASCII and out of scope. Only the new
+`"Inactive - N days"` string is added, and it is ASCII.)
 
 - [ ] **Step 4: Run the tests to verify they pass**
 
@@ -622,7 +643,11 @@ In `_streaks_row.html`, replace line 6 (`<td>{{ row.name }}</td>`) with:
 - [ ] **Step 2: Confirm the snapshot is unchanged (active fixture)**
 
 Run: `python -m pytest tests/test_web/test_streaks_snapshot.py -v`
-Expected: PASS. The snapshot's canonical row is active (`window_end=2026-5-10`, `report_date=2026-5-11` -> not stale -> `days_since_last_game` is `null`), so the guarded marker renders nothing and the HTML does not drift.
+Expected: PASS. The snapshot's canonical row is a hand-built `ReportRow(...)`
+(`_seed_canonical_report`) that never sets `days_since_last_game`, so it is `None`
+by default (the only thing that computes it, `_row_from_scores`, is not on this
+path). `None` -> the `{% if %}` guard is falsy -> the marker renders nothing ->
+the HTML does not drift.
 
 If instead it FAILS with drift (should not happen for the active fixture, but if template whitespace shifts), regenerate and eyeball:
 
