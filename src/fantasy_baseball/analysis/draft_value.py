@@ -22,7 +22,11 @@ from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import REPLACEMENT_BY_POSITION, Category
 from fantasy_baseball.utils.name_utils import normalize_name
-from fantasy_baseball.web.season_data import _load_game_log_totals, read_cache_dict
+from fantasy_baseball.web.season_data import (
+    _load_game_log_totals,
+    read_cache_dict,
+    read_cache_list,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -523,3 +527,51 @@ def season_fraction() -> float:
     total = (season_end - season_start).days
     done = max(0, min(total, (today - season_start).days))
     return done / total
+
+
+def normalize_name_team(team: str) -> str:
+    """Normalize a fantasy team name for keying: trimmed and lowercased."""
+    return team.strip().lower()
+
+
+def load_add_txns_by_team() -> dict[str, set[str]]:
+    """Map fantasy team (normalized) -> set of normalized add-txn player names.
+
+    Reads the raw ``CacheKey.TRANSACTIONS`` LIST payload from the KV store and
+    keeps only successful adds (``status`` unset or ``"successful"``). Used by the
+    elimination-model classifier to distinguish waiver pickups from trade
+    acquisitions. Returns ``{}`` when the KV store lacks the blob.
+    """
+    txns = read_cache_list(CacheKey.TRANSACTIONS) or []
+    by_team: dict[str, set[str]] = {}
+    for t in txns:
+        if t.get("status") not in (None, "successful"):
+            continue
+        add_name = t.get("add_name")
+        team = t.get("team")
+        if add_name and team:
+            by_team.setdefault(normalize_name_team(team), set()).add(normalize_name(add_name))
+    return by_team
+
+
+def classify_acquisition(
+    team: str,
+    norm_name: str,
+    drafted_by_team: dict[str, set[str]],
+    kept_by_team: dict[str, set[str]],
+    add_by_team: dict[str, set[str]],
+) -> str:
+    """Classify how ``team`` acquired ``norm_name`` via elimination precedence.
+
+    Precedence: drafted -> keeper -> waiver -> trade_excluded. A rostered player
+    with no draft/keep/add record was trade-acquired, which the draft-value metric
+    excludes. Draft/keep beat a later same-team re-add of the same player.
+    """
+    tkey = normalize_name_team(team)
+    if norm_name in drafted_by_team.get(tkey, set()):
+        return "drafted"
+    if norm_name in kept_by_team.get(tkey, set()):
+        return "keeper"
+    if norm_name in add_by_team.get(tkey, set()):
+        return "waiver"
+    return "trade_excluded"

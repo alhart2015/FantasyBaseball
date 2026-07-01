@@ -94,6 +94,29 @@ def test_season_fraction_in_unit_range():
     assert 0.0 <= f <= 1.0
 
 
+def test_classify_precedence():
+    drafted = {"hart of the order": {"juan soto"}}
+    kept = {"hart of the order": {"julio rodriguez"}}
+    adds = {"hart of the order": {"matt mclain", "juan soto"}}  # soto also re-added
+    # draft/keep precedence beats a later same-team re-add
+    assert (
+        dv.classify_acquisition("Hart of the Order", "juan soto", drafted, kept, adds) == "drafted"
+    )
+    assert (
+        dv.classify_acquisition("Hart of the Order", "julio rodriguez", drafted, kept, adds)
+        == "keeper"
+    )
+    # pure waiver add
+    assert (
+        dv.classify_acquisition("Hart of the Order", "matt mclain", drafted, kept, adds) == "waiver"
+    )
+    # rostered, no draft/keep, no add -> trade-acquired -> excluded
+    assert (
+        dv.classify_acquisition("Hart of the Order", "some trade guy", drafted, kept, adds)
+        == "trade_excluded"
+    )
+
+
 def test_ytd_fraction_is_not_linear_in_f(synthetic_scale):
     # Guards the f*floor_full bug: rate SGP is f-invariant while counting scales by f,
     # so a to-date VAR does NOT simply equal f * full VAR. This is oracle 5 at the
