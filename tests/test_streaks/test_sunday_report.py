@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 
 from fantasy_baseball.streaks.inference import (
     Driver,
@@ -16,6 +16,7 @@ from fantasy_baseball.streaks.reports.sunday import (
     _composite,
     _format_cell,
     _max_probability,
+    _row_from_scores,
     _signed,
     render_markdown,
     render_terminal,
@@ -373,3 +374,43 @@ def test_report_with_skipped_players_renders_footer() -> None:
     md = render_markdown(report)
     assert "Skipped 1 player(s)" in md
     assert "Prospect McProspect" in md
+
+
+def _neutral_scores(window_end: date) -> list[PlayerCategoryScore]:
+    return [
+        PlayerCategoryScore(
+            player_id=1,
+            category=cat,
+            label="neutral",
+            probability=None,
+            drivers=(),
+            window_end=window_end,
+        )
+        for cat in ("hr", "r", "rbi", "sb", "avg")
+    ]
+
+
+def test_row_from_scores_marks_inactive_when_window_is_stale() -> None:
+    window_end = date(2026, 6, 1)
+    today = window_end + timedelta(days=10)  # 10 > 4
+    row = _row_from_scores(
+        name="Oneil Cruz",
+        positions=("SS",),
+        player_id=1,
+        scores=_neutral_scores(window_end),
+        today=today,
+    )
+    assert row.days_since_last_game == 10
+
+
+def test_row_from_scores_active_when_window_is_recent() -> None:
+    window_end = date(2026, 6, 1)
+    today = window_end + timedelta(days=2)  # 2 <= 4
+    row = _row_from_scores(
+        name="Active Guy",
+        positions=("OF",),
+        player_id=1,
+        scores=_neutral_scores(window_end),
+        today=today,
+    )
+    assert row.days_since_last_game is None
