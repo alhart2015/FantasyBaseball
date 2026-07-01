@@ -196,6 +196,21 @@ def test_convergence_ytd_equals_proj_at_f1(synthetic_scale):
     assert abs(pv.value_proj - pv.value_ytd) < 1e-9
 
 
+def test_run_draft_value_end_to_end_and_known_pick():
+    from fantasy_baseball.utils.name_utils import normalize_name
+
+    players, teams = dv.run_draft_value()
+    assert players and teams
+    # every team roll-up has a credited count and a case3 count
+    assert all(t.credited_count >= 0 for t in teams)
+    # known-pick sanity: a specific keeper resolves with a finite projected value
+    soto = next(
+        (p for p in players if normalize_name(dv._strip_suffix(p.name)) == "juan soto"), None
+    )
+    assert soto is not None and soto.value_proj == soto.value_proj  # not NaN
+    assert soto.baseline_kind in ("keeper", "drafted", "waiver")
+
+
 def test_team_rollup_sum_avg_count():
     # PlayerValue has 12 fields; construct with keywords to avoid positional drift.
     pvs = [

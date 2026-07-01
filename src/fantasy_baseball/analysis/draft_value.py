@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 import statistics
 from dataclasses import dataclass
 from datetime import date
@@ -15,7 +16,9 @@ import yaml
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.cache_keys import CacheKey
+from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.data.projections import blend_projections
+from fantasy_baseball.data.redis_store import get_latest_weekly_rosters
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_board_from_frames
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -38,6 +41,10 @@ _CONFIG_DIR = _REPO_ROOT / "config"
 _CONFIG = _CONFIG_DIR / "league.yaml"
 _DRAFT_ORDER = _CONFIG_DIR / "draft_order.json"
 _DRAFT_STATE = _REPO_ROOT / "data" / "draft_state.json"
+
+# Yahoo tags some dual-eligibility names with a trailing " (Batter)"/" (Pitcher)"
+# (e.g. Shohei Ohtani). Strip it before normalize_name so cross-source joins line up.
+_YAHOO_SUFFIX_RE = re.compile(r"\s*\((?:Batter|Pitcher)\)\s*$", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -613,3 +620,137 @@ def roll_up_team(
     total = sum(vals)
     avg = total / n if n else float("nan")
     return TeamRollup(team, total, avg, n, case3_count)
+
+
+def _strip_suffix(name: str) -> str:
+    """Drop Yahoo's trailing " (Batter)"/" (Pitcher)" annotation before normalizing."""
+    return _YAHOO_SUFFIX_RE.sub("", name).strip()
+
+
+def _default_positions(player_type: str) -> list[str]:
+    """Off-board default positions matching the board's default-attach convention."""
+    return ["OF"] if player_type == "hitter" else ["SP"]
+
+
+def _resolve_type_and_positions(
+    norm_name: str, full_lines: dict[str, Any], bindex: dict[str, Any]
+) -> tuple[str, list[str]]:
+    """Return ``(player_type, positions)`` for a rostered player.
+
+    Prefer the preseason board row (real eligible positions); else infer the type
+    from whichever full-season line exists and attach board default positions;
+    off-board with no line falls back to hitter. Ohtani resolves to the hitter line
+    (batter only) because the board keys him as a hitter.
+    """
+    for ptype in ("hitter", "pitcher"):
+        row = bindex.get(f"{norm_name}::{ptype}")
+        if row is not None:
+            return ptype, list(row["positions"])
+    for ptype in ("hitter", "pitcher"):
+        if f"{norm_name}::{ptype}" in full_lines:
+            return ptype, _default_positions(ptype)
+    return "hitter", _default_positions("hitter")
+
+
+def run_draft_value(
+    fraction: float | None = None,
+) -> tuple[list[PlayerValue], list[TeamRollup]]:
+    """Orchestrate the draft-value metric end-to-end against the synced KV store.
+
+    Reproduces the preseason board (+ soft frozen drift check), reconstructs the
+    draft and enforces the reconstruction gate, builds projected and to-date par
+    curves, loads full-season + actual lines and current rosters/transactions,
+    classifies each rostered player, scores their value, and rolls up per team.
+    Returns ``(player_values, team_rollups)``.
+    """
+    board, scale = reproduce_draft_day_board()
+    frozen_drift_summary(board)  # soft: logs a warning on large drift, never raises
+    picks = reconstruct_draft()
+    # enforce the reconstruction gate against the user's known roster (spec oracle 6b)
+    state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
+    user_roster: list[str] = state.get("user_roster") or []
+    league = _load_league()
+    keeper_team = {normalize_name(k["name"]): k["team"] for k in league["keepers"]}
+    user_team = next(
+        (keeper_team[normalize_name(n)] for n in user_roster if normalize_name(n) in keeper_team),
+        None,
+    )
+    gate = validate_reconstruction(picks, known_team=user_team, known_roster=user_roster)
+    if gate:
+        raise RuntimeError(f"Draft reconstruction gate failed: {gate}")
+    f = season_fraction() if fraction is None else fraction
+
+    bindex = _board_index(board)
+    preseason = preseason_var_lookup(board)
+    par_proj = build_par_curve(picks, board, fraction=1.0)
+    par_ytd = build_par_curve(picks, board, fraction=f, scale=scale)
+    full_lines = load_full_season_lines()
+    todate_lines = load_actual_to_date_lines()
+
+    # draft/keep sets by team; DRAFT-ORDER ordinal among on-board drafted picks.
+    # par(slot) = drafted_pars[ordinal-1] (drafted_pars is VAR-sorted desc): the k-th
+    # on-board drafted pick is measured against the k-th-best available VAR. This is the
+    # spec's par(slot). Do NOT index by the player's OWN VAR rank -- that makes
+    # par == own VAR, so skill == preseason_var - par == 0 for every drafted player.
+    drafted_by: dict[str, set[str]] = {}
+    kept_by: dict[str, set[str]] = {}
+    slot_by_name: dict[str, int] = {}  # norm_name -> draft-order ordinal among on-board drafted
+    onboard_ordinal = 0
+    for p in sorted((pk for pk in picks if not pk.is_keeper), key=lambda x: x.slot or 0):
+        if _match_board_row(p.player_name, bindex) is None:
+            continue  # off-board flier: excluded from par curve and slot indexing
+        onboard_ordinal += 1
+        slot_by_name[normalize_name(p.player_name)] = onboard_ordinal
+    for p in picks:
+        tkey = normalize_name_team(p.team)
+        target = kept_by if p.is_keeper else drafted_by
+        target.setdefault(tkey, set()).add(normalize_name(p.player_name))
+
+    add_by = load_add_txns_by_team()
+    rosters = get_latest_weekly_rosters(get_kv())
+
+    players: list[PlayerValue] = []
+    case3: dict[str, int] = {}
+    for entry in rosters:
+        team = entry["team"]
+        norm = normalize_name(_strip_suffix(entry["player_name"]))  # strip "(Batter)/(Pitcher)"
+        kind = classify_acquisition(team, norm, drafted_by, kept_by, add_by)
+        if kind == "trade_excluded":
+            case3[team] = case3.get(team, 0) + 1
+            continue
+        ptype, positions = _resolve_type_and_positions(norm, full_lines, bindex)
+        key = f"{norm}::{ptype}"
+        pre = preseason.get(key)
+        full_line = full_lines.get(key)
+        todate_line = todate_lines.get(key)
+        if kind == "keeper":
+            base_proj, base_ytd = par_proj.keeper_par, par_ytd.keeper_par
+        elif kind == "drafted":
+            rank = slot_by_name.get(norm)  # draft-order ordinal
+            base_proj = par_proj.par_for_slot(rank) if rank else 0.0
+            base_ytd = par_ytd.par_for_slot(rank) if rank else 0.0
+        else:  # waiver
+            base_proj = base_ytd = 0.0
+        pv = compute_player_value(
+            team,
+            entry["player_name"],
+            ptype,
+            positions,
+            base_proj,
+            base_ytd,
+            kind,
+            pre,
+            full_line,
+            todate_line,
+            scale,
+            f,
+        )
+        players.append(pv)
+
+    # group by team (PlayerValue carries .team) and roll up with the per-team case-3 count
+    by_team: dict[str, list[PlayerValue]] = {}
+    for pv in players:
+        by_team.setdefault(pv.team, []).append(pv)
+    all_teams = {entry["team"] for entry in rosters}
+    teams = [roll_up_team(t, by_team.get(t, []), case3.get(t, 0)) for t in sorted(all_teams)]
+    return players, teams
