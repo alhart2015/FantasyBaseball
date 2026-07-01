@@ -1,6 +1,8 @@
 import json as _json
 from collections import Counter
 
+import pytest
+
 from fantasy_baseball.analysis import draft_value as dv
 from fantasy_baseball.utils.name_utils import normalize_name as nn
 
@@ -9,6 +11,13 @@ def _hitter_line(**kw):
     base = {"r": 90, "hr": 30, "rbi": 95, "sb": 12, "avg": 0.280, "ab": 560}
     base.update(kw)
     return base
+
+
+@pytest.fixture(scope="module")
+def synthetic_scale():
+    # build the real board/scale once for all oracle tests in this module
+    _board, scale = dv.reproduce_draft_day_board()
+    return scale
 
 
 def test_score_var_reproduces_board_var_for_onboard_player():
@@ -69,3 +78,28 @@ def test_par_curve_is_descending_and_keeper_mean():
     assert curve.par_for_slot(1) == curve.drafted_pars[0]
     # keeper par is the mean of the keeper VARs (finite, not NaN)
     assert curve.keeper_par == curve.keeper_par
+
+
+def test_full_season_and_actual_loaders_shape():
+    full = dv.load_full_season_lines()
+    assert full, "no full-season lines (KV store not synced?)"
+    k = next(iter(full))
+    assert "::" in k
+    line = full[k]
+    assert any(s in line for s in ("hr", "k"))
+
+
+def test_season_fraction_in_unit_range():
+    f = dv.season_fraction()
+    assert 0.0 <= f <= 1.0
+
+
+def test_ytd_fraction_is_not_linear_in_f(synthetic_scale):
+    # Guards the f*floor_full bug: rate SGP is f-invariant while counting scales by f,
+    # so a to-date VAR does NOT simply equal f * full VAR. This is oracle 5 at the
+    # score_var level (a distinct, non-tautological check that f=1 convergence cannot see).
+    scale = synthetic_scale
+    full = dv.score_var(_hitter_line(), ["OF"], "hitter", scale, fraction=1.0)
+    half = dv.score_var(_hitter_line(), ["OF"], "hitter", scale, fraction=0.5)
+    assert half < full  # counting-dominated: to-date VAR is smaller
+    assert abs(half - 0.5 * full) > 1e-6  # but NOT linear in f (rate component invariant)

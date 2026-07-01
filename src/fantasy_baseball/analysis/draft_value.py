@@ -6,6 +6,7 @@ import json
 import logging
 import statistics
 from dataclasses import dataclass
+from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -13,6 +14,7 @@ import pandas as pd
 import yaml
 
 from fantasy_baseball.config import load_config
+from fantasy_baseball.data.cache_keys import CacheKey
 from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_board_from_frames
@@ -20,6 +22,7 @@ from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import REPLACEMENT_BY_POSITION, Category
 from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.web.season_data import _load_game_log_totals, read_cache_dict
 
 logger = logging.getLogger(__name__)
 
@@ -371,3 +374,74 @@ def build_par_curve(
     drafted_vars.sort(reverse=True)
     keeper_par = sum(keeper_vars) / len(keeper_vars) if keeper_vars else float("nan")
     return ParCurve(drafted_vars, keeper_par)
+
+
+def _hit_line_from(rec: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "r": rec.get("r", 0),
+        "hr": rec.get("hr", 0),
+        "rbi": rec.get("rbi", 0),
+        "sb": rec.get("sb", 0),
+        "ab": rec.get("ab", 0),
+        "avg": (rec["h"] / rec["ab"]) if rec.get("ab") else 0.0,
+    }
+
+
+def _pit_line_from(rec: dict[str, Any]) -> dict[str, Any]:
+    ip = rec.get("ip") or 0.0
+    return {
+        "w": rec.get("w", 0),
+        "k": rec.get("k", 0),
+        "sv": rec.get("sv", 0),
+        "ip": ip,
+        "era": (rec.get("er", 0) / ip * 9.0) if ip else 0.0,
+        "whip": ((rec.get("bb", 0) + rec.get("h_allowed", 0)) / ip) if ip else 0.0,
+    }
+
+
+def load_full_season_lines() -> dict[str, Any]:
+    """Full-season projection lines keyed ``name_normalized::player_type``.
+
+    Reads ``CacheKey.FULL_SEASON_PROJECTIONS`` from the KV store (Upstash on
+    Render, SQLite locally). Records are MLBAM-keyed with a ``name`` field, so
+    normalize the name and tag the player type explicitly. Returns ``{}`` when
+    the KV store lacks the blob (unsynced local runtime).
+    """
+    payload = read_cache_dict(CacheKey.FULL_SEASON_PROJECTIONS) or {}
+    out: dict[str, Any] = {}
+    for rec in payload.get("hitters", []):
+        out[f"{normalize_name(rec['name'])}::hitter"] = _hit_line_from(rec)
+    for rec in payload.get("pitchers", []):
+        out[f"{normalize_name(rec['name'])}::pitcher"] = _pit_line_from(rec)
+    return out
+
+
+def load_actual_to_date_lines() -> dict[str, Any]:
+    """Actual season-to-date lines keyed ``name_normalized::player_type``.
+
+    Reads aggregated game-log totals via ``_load_game_log_totals`` (already
+    keyed by normalized name in separate hitter/pitcher dicts, which gives the
+    player type directly). Returns ``{}`` when the KV store has no game logs.
+    """
+    hitter_logs, pitcher_logs = _load_game_log_totals()
+    out: dict[str, Any] = {}
+    for norm, rec in hitter_logs.items():
+        out[f"{norm}::hitter"] = _hit_line_from(rec)
+    for norm, rec in pitcher_logs.items():
+        out[f"{norm}::pitcher"] = _pit_line_from(rec)
+    return out
+
+
+def season_fraction() -> float:
+    """League games played / full schedule. v1: date-based fraction of the MLB season.
+
+    Read the elapsed fraction from the standings snapshot game count if available;
+    otherwise fall back to a date-based fraction. Pin the exact source when wiring
+    the CLI (Task 9) against real standings; keep this helper the single source.
+    """
+    season_start = date(2026, 3, 26)
+    season_end = date(2026, 9, 28)
+    today = date.today()
+    total = (season_end - season_start).days
+    done = max(0, min(total, (today - season_start).days))
+    return done / total
