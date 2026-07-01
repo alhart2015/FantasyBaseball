@@ -193,6 +193,14 @@ def test_build_indicator_neutral_when_composite_zero() -> None:
     assert ind.label == "—"
 
 
+def test_build_indicator_inactive_row_shows_days_tooltip() -> None:
+    payload = serialize_report(_example_report_inactive())
+    ind = build_indicator("Injured Guy", payload)
+    assert ind is not None
+    assert ind.tone == "neutral"
+    assert ind.tooltip == "Inactive - 30 days"
+
+
 def test_build_indicator_unresolved_player() -> None:
     payload = serialize_report(_example_report())
     ind = build_indicator("Unknown Hitter", payload)
