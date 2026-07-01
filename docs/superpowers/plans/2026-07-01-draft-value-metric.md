@@ -273,9 +273,11 @@ def _to_date_floors(scale: ScaleInputs, fraction: float) -> dict:
             ip = raw["ip"] or 1.0
             line["era"] = (raw["er"] / ip) * 9.0
             line["whip"] = (raw["bb"] + raw["h_allowed"]) / ip
+            line["player_type"] = "pitcher"  # StrEnum-compatible; required by calculate_player_sgp dispatch
         else:
             ab = raw["ab"] or 1.0
             line["avg"] = raw["h"] / ab
+            line["player_type"] = "hitter"
         floors[pos] = calculate_player_sgp(
             pd.Series(line),
             denoms=scale.denoms,
@@ -285,14 +287,18 @@ def _to_date_floors(scale: ScaleInputs, fraction: float) -> dict:
             replacement_era=scale.repl_rates["era"],
             replacement_whip=scale.repl_rates["whip"],
         )
-    # UTIL floor mirrors board convention: reuse the OF floor if present
-    if "UTIL" in scale.replacement_levels and "UTIL" not in floors:
-        floors["UTIL"] = floors.get("OF", scale.replacement_levels["UTIL"])
+    # UTIL floor mirrors the board: max of the hitter floors (see replacement.py).
+    hitter_floors = [floors[p] for p in ("C", "1B", "2B", "3B", "SS", "OF") if p in floors]
+    if hitter_floors:
+        floors["UTIL"] = max(hitter_floors)
     return floors
 
 
 def score_var(line, positions, player_type, scale, fraction=1.0):
+    # player_type must be "hitter"/"pitcher" (StrEnum-compatible) so calculate_player_sgp
+    # dispatches (player.get("player_type") == PlayerType.HITTER/PITCHER, player_value.py:104,121).
     scaled = dict(line)
+    scaled["player_type"] = player_type
     counting = _COUNTING_HIT if player_type == "hitter" else _COUNTING_PIT
     if fraction != 1.0:
         for k in counting:
@@ -310,11 +316,20 @@ def score_var(line, positions, player_type, scale, fraction=1.0):
         replacement_whip=scale.repl_rates["whip"],
     )
     floors = _to_date_floors(scale, fraction)
-    series = pd.Series({"total_sgp": total_sgp, "positions": list(positions), "player_type": player_type})
+    # calculate_var needs total_sgp + positions + ip (pitcher floor routing reads
+    # player.get("ip", 0.0) via _pitcher_floor_key -> role_from_ip, var.py:18).
+    series = pd.Series({
+        "total_sgp": total_sgp,
+        "positions": list(positions),
+        "player_type": player_type,
+        "ip": scaled.get("ip", 0.0),
+    })
     return calculate_var(series, floors)
 ```
 
-Note: verify `calculate_var` reads `player_type` for the SP/RP floor routing; if it reads `ip` instead, include `ip` in `series`. Read `sgp/var.py` `_pitcher_floor_key` before finalizing and adjust the `series` fields to match exactly what it needs.
+Both `player_type` (for `calculate_player_sgp` dispatch) and `ip` (for `calculate_var`
+pitcher-floor routing via `_pitcher_floor_key`) are included in the Series — that is
+exactly what the two functions read. Do not omit either.
 
 - [ ] **Step 4: Run tests to verify pass.**
 
@@ -343,17 +358,27 @@ git commit -m "feat(draft-value): score_var on board scale with to-date floor sc
 
 ```python
 def test_reconstruct_draft_shape_and_gate():
+    import json as _json
+    from collections import Counter
+    from fantasy_baseball.utils.name_utils import normalize_name as nn
+
     picks = dv.reconstruct_draft()
     keepers = [p for p in picks if p.is_keeper]
     drafted = [p for p in picks if not p.is_keeper]
     assert len(keepers) == 30
     assert len(drafted) == 200
     # every team owns exactly 3 keepers
-    from collections import Counter
-    kc = Counter(p.team for p in keepers)
-    assert set(kc.values()) == {3}
-    # validation gate passes on real data (30/30 keeper match, names present)
-    assert dv.validate_reconstruction(picks) == []
+    assert set(Counter(p.team for p in keepers).values()) == {3}
+
+    # ENFORCE the known-roster gate (spec oracle 6b): the user's roster must
+    # reconstruct exactly. Infer the user's team from its keepers, then assert its
+    # reconstructed roster is a superset of state["user_roster"].
+    state = _json.loads(dv._DRAFT_STATE.read_text(encoding="utf-8"))
+    user_roster = state["user_roster"]
+    league = dv._load_league()
+    keeper_team = {nn(k["name"]): k["team"] for k in league["keepers"]}
+    user_team = next(keeper_team[nn(n)] for n in user_roster if nn(n) in keeper_team)
+    assert dv.validate_reconstruction(picks, known_team=user_team, known_roster=user_roster) == []
 ```
 
 - [ ] **Step 2: Run to confirm failure.**
@@ -363,7 +388,7 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement reconstruction.**
 
-Read `config/draft_order.json` (`rounds`, `trades`) and `data/draft_state.json` (`drafted_players`) and `config/league.yaml` (`keepers`). The invariant: `drafted_players[0:30]` are the 30 keepers (in `league.yaml` order); `drafted_players[30:230]` are the 200 live picks in snake order. Build the live pick->team map by flattening `draft_order.json` `rounds` in order and applying `trades` (swap the team at `[round-1][slot-1]`), then zip against `drafted_players[30:230]`.
+Read `config/draft_order.json` (`rounds`, `trades`) and `data/draft_state.json` (`drafted_players`) and `config/league.yaml` (`keepers`). The invariant (VERIFIED against real data — reconstructing the user's team reproduces `state["user_roster"]` 23/23 with this mapping, and only 3/23 without the keeper-round skip): `draft_order.json` `rounds` is the FULL 23x10 = 230-slot snake order; **rounds 1-3 (the first 30 slots) are consumed by the 30 keepers**, so the 200 live picks map to `rounds[3:]` (rounds 4-23). `drafted_players[0:30]` are the 30 keepers in `league.yaml` order; `drafted_players[30:230]` are the 200 live picks in snake order. Build the live pick->team map by flattening ALL rounds (with absolute round numbers), applying `trades` on the absolute `[round-1][slot-1]` cell (trades are on rounds 5/6/13/18/23, all in the live range), then SKIP the first 30 keeper-round slots and zip against `drafted_players[30:230]`.
 
 ```python
 import yaml
@@ -375,7 +400,7 @@ _DRAFT_STATE = _REPO_ROOT / "data" / "draft_state.json"
 @dataclass(frozen=True)
 class DraftPick:
     slot: int | None      # 1..200 live-pick ordinal; None for keepers
-    round: int            # 0 for keepers
+    round: int            # 0 for keepers; else absolute draft round (4..23)
     team: str
     player_name: str
     is_keeper: bool
@@ -398,13 +423,15 @@ def reconstruct_draft() -> list[DraftPick]:
     for i, kd in enumerate(keeper_defs):
         picks.append(DraftPick(None, 0, kd["team"], drafted[i], True))
 
-    # live picks: flatten rounds, apply trades, zip to drafted[n_keep:]
+    # live picks: flatten ALL rounds (absolute round numbers), apply trades on the
+    # absolute cell, then SKIP the first n_keep keeper-round slots and zip to live picks.
     rounds = [list(r) for r in order["rounds"]]
     for tr in order.get("trades", []):
         rounds[tr["round"] - 1][tr["slot"] - 1] = tr["to"]
     flat_teams = [(rnd_i + 1, team) for rnd_i, rnd in enumerate(rounds) for team in rnd]
+    live_teams = flat_teams[n_keep:]           # drop the 30 keeper-round slots (rounds 1-3)
     live = drafted[n_keep:]
-    for slot, (name, (rnd, team)) in enumerate(zip(live, flat_teams), start=1):
+    for slot, (name, (rnd, team)) in enumerate(zip(live, live_teams), start=1):
         picks.append(DraftPick(slot, rnd, team, name, False))
     return picks
 
@@ -511,10 +538,10 @@ class ParCurve:
 def _var_for_row(row, scale, fraction):
     if fraction == 1.0:
         return float(row["var"])
-    ptype = row["player_type"]
+    ptype = str(row["player_type"])
     keys = ("r", "hr", "rbi", "sb", "avg", "ab") if ptype == "hitter" else ("w", "k", "sv", "era", "whip", "ip")
     line = {k: row[k] for k in keys}
-    return dv_score := score_var(line, list(row["positions"]), ptype, scale, fraction)
+    return score_var(line, list(row["positions"]), ptype, scale, fraction)
 
 
 def build_par_curve(picks, board, fraction=1.0, scale=None) -> ParCurve:
@@ -535,7 +562,9 @@ def build_par_curve(picks, board, fraction=1.0, scale=None) -> ParCurve:
     return ParCurve(drafted_vars, keeper_par)
 ```
 
-(Remove the walrus in `_var_for_row`; write `return score_var(...)` plainly — shown here only to flag the fraction path. Clean it up when implementing.)
+Note: `build_par_curve(picks, board, fraction=1.0, scale=None)` — when `fraction < 1.0`
+you MUST pass `scale` (from `reproduce_draft_day_board`) so `_var_for_row` can rescore.
+`str(row["player_type"])` normalizes the StrEnum to `"hitter"`/`"pitcher"`.
 
 - [ ] **Step 4: Run the test.**
 
@@ -563,6 +592,16 @@ git commit -m "feat(draft-value): par curve (drafted curve + keeper mean)"
 - [ ] **Step 1: Write the failing tests (loaders + f=1 convergence + f<1 correctness).**
 
 ```python
+import pytest
+
+
+@pytest.fixture(scope="module")
+def synthetic_scale():
+    # build the real board/scale once for all oracle tests in this module
+    _board, scale = dv.reproduce_draft_day_board()
+    return scale
+
+
 def test_full_season_and_actual_loaders_shape():
     full = dv.load_full_season_lines()
     assert full, "no full-season lines (KV store not synced?)"
@@ -572,34 +611,30 @@ def test_full_season_and_actual_loaders_shape():
     assert any(s in line for s in ("hr", "k"))
 
 
-def test_convergence_f1_equals_full_season(synthetic_scale):
-    # a healthy player: actual+ROS == preseason; at f=1 YTD == projected
-    scale = synthetic_scale
-    line = _hitter_line()
-    proj = dv.score_var(line, ["OF"], "hitter", scale, fraction=1.0)
-    ytd = dv.score_var(line, ["OF"], "hitter", scale, fraction=1.0)
-    assert abs(proj - ytd) < 1e-9
+def test_season_fraction_in_unit_range():
+    f = dv.season_fraction()
+    assert 0.0 <= f <= 1.0
 
 
-def test_ytd_f_half_linear_player(synthetic_scale):
-    # actual-to-date == 0.5 * full for a linear healthy player; YTD VAR reproduces
-    # the f-consistent VAR and does NOT collapse the rate component (guards f*floor_full).
+def test_ytd_fraction_is_not_linear_in_f(synthetic_scale):
+    # Guards the f*floor_full bug: rate SGP is f-invariant while counting scales by f,
+    # so a to-date VAR does NOT simply equal f * full VAR. This is oracle 4 at the
+    # score_var level (a distinct, non-tautological check that f=1 convergence cannot see).
     scale = synthetic_scale
-    full_line = _hitter_line()
-    todate = {k: (v * 0.5 if k in ("r", "hr", "rbi", "sb", "ab") else v) for k, v in full_line.items()}
-    # score_var applies the *0.5 itself when fraction=0.5, so pass the FULL line:
-    ytd = dv.score_var(full_line, ["OF"], "hitter", scale, fraction=0.5)
-    # manual: same line scaled by hand at fraction=1.0 against to-date floors
-    assert ytd == ytd  # finite
-    # counting-dominated: half-season VAR strictly less than full, strictly > 0-scale
-    assert dv.score_var(full_line, ["OF"], "hitter", scale, fraction=0.5) < dv.score_var(full_line, ["OF"], "hitter", scale, fraction=1.0)
+    full = dv.score_var(_hitter_line(), ["OF"], "hitter", scale, fraction=1.0)
+    half = dv.score_var(_hitter_line(), ["OF"], "hitter", scale, fraction=0.5)
+    assert half < full                         # counting-dominated: to-date VAR is smaller
+    assert abs(half - 0.5 * full) > 1e-6       # but NOT linear in f (rate component invariant)
 ```
 
-Add a `synthetic_scale` fixture that builds a `ScaleInputs` from the real board once (`board, scale = dv.reproduce_draft_day_board()`), so oracle tests do not re-run the board each time.
+The `synthetic_scale` fixture (module-scoped) builds the real board/scale once so the
+oracle tests here and in Task 6 do not re-run the board each time. The value-level
+convergence oracle (YTD value == projected value at f=1) lives in Task 6, where
+`compute_player_value` exists.
 
 - [ ] **Step 2: Run to confirm failure.**
 
-Run: `pytest tests/test_analysis/test_draft_value.py -k "loaders or convergence or ytd_f_half" -v`
+Run: `pytest tests/test_analysis/test_draft_value.py -k "loaders or season_fraction or not_linear" -v`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement the loaders + fraction.**
@@ -608,8 +643,7 @@ Read the full-season cache (`CacheKey.FULL_SEASON_PROJECTIONS`) via `read_cache`
 
 ```python
 from fantasy_baseball.data.cache_keys import CacheKey
-from fantasy_baseball.data.redis_store import read_cache
-from fantasy_baseball.web.season_data import _load_game_log_totals
+from fantasy_baseball.web.season_data import read_cache, _load_game_log_totals  # read_cache lives here, NOT redis_store
 
 
 def _hit_line_from(rec):
@@ -663,7 +697,7 @@ def season_fraction() -> float:
 
 - [ ] **Step 4: Run the tests.**
 
-Run: `pytest tests/test_analysis/test_draft_value.py -k "loaders or convergence or ytd_f_half" -v`
+Run: `pytest tests/test_analysis/test_draft_value.py -k "loaders or season_fraction or not_linear" -v`
 Expected: PASS. If `load_full_season_lines` is empty, the KV store is not synced — note this; the CLI (Task 9) documents the sync/`--no-sync` requirement.
 
 - [ ] **Step 5: Commit.**
@@ -711,11 +745,26 @@ def test_offboard_waiver_gem_skill_luck_na(synthetic_scale):
     )
     assert pv.skill is None and pv.luck is None
     assert pv.value_proj is not None  # value still computed vs replacement (0)
+
+
+def test_convergence_ytd_equals_proj_at_f1(synthetic_scale):
+    # spec oracle 3: at f=1 (ROS->0), with full_line == todate_line and matching
+    # baselines, the YTD value converges to the projected value. Non-tautological:
+    # it exercises BOTH horizon paths (est_proj at fraction=1.0 vs est_ytd at fraction=1.0)
+    # and both baselines through the real value computation.
+    scale = synthetic_scale
+    line = _hitter_line()
+    pv = dv.compute_player_value(
+        team="Hart of the Order", name="Test Bat", player_type="hitter", positions=["OF"],
+        baseline_proj=5.0, baseline_ytd=5.0, baseline_kind="drafted", preseason_var=8.0,
+        full_line=line, todate_line=line, scale=scale, fraction=1.0,
+    )
+    assert abs(pv.value_proj - pv.value_ytd) < 1e-9
 ```
 
 - [ ] **Step 2: Run to confirm failure.**
 
-Run: `pytest tests/test_analysis/test_draft_value.py -k "decomposition or offboard" -v`
+Run: `pytest tests/test_analysis/test_draft_value.py -k "decomposition or offboard or convergence" -v`
 Expected: FAIL.
 
 - [ ] **Step 3: Implement `compute_player_value`.**
@@ -758,7 +807,7 @@ The two horizons' pars are distinct — the caller (Task 9) computes both.
 
 - [ ] **Step 4: Run the tests.**
 
-Run: `pytest tests/test_analysis/test_draft_value.py -k "decomposition or offboard" -v`
+Run: `pytest tests/test_analysis/test_draft_value.py -k "decomposition or offboard or convergence" -v`
 Expected: PASS.
 
 - [ ] **Step 5: Commit.**
@@ -860,13 +909,18 @@ git commit -m "feat(draft-value): elimination-model acquisition classifier"
 
 ```python
 def test_team_rollup_sum_avg_count():
+    # PlayerValue has 12 fields; construct with keywords to avoid positional drift.
     pvs = [
-        dv.PlayerValue("A", "hitter", None, "drafted", 8.0, 10.0, 6.0, 4.0, 2.5, None, None),
-        dv.PlayerValue("B", "hitter", None, "waiver", None, 3.0, 1.5, 3.0, 1.4, None, None),
+        dv.PlayerValue(team="Hart of the Order", name="A", player_type="hitter", slot=1,
+                       baseline_kind="drafted", preseason_var=8.0, est_var_proj=10.0,
+                       est_var_ytd=6.0, value_proj=4.0, value_ytd=2.5, skill=2.0, luck=2.0),
+        dv.PlayerValue(team="Hart of the Order", name="B", player_type="hitter", slot=None,
+                       baseline_kind="waiver", preseason_var=None, est_var_proj=3.0,
+                       est_var_ytd=1.5, value_proj=3.0, value_ytd=1.4, skill=None, luck=None),
     ]
     r = dv.roll_up_team("Hart of the Order", pvs, case3_count=2, horizon="proj")
     assert r.credited_count == 2
-    assert abs(r.sum_value - 7.0) < 1e-9   # 4.0 + 3.0
+    assert abs(r.sum_value - 7.0) < 1e-9   # value_proj: 4.0 + 3.0
     assert abs(r.avg_value - 3.5) < 1e-9
     assert r.case3_count == 2
 ```
@@ -926,12 +980,13 @@ git commit -m "feat(draft-value): team roll-up (sum + per-player avg + counts)"
 
 ```python
 def test_run_draft_value_end_to_end_and_known_pick():
+    from fantasy_baseball.utils.name_utils import normalize_name
     players, teams = dv.run_draft_value()
     assert players and teams
     # every team roll-up has a credited count and a case3 count
     assert all(t.credited_count >= 0 for t in teams)
     # known-pick sanity: a specific keeper resolves with a finite projected value
-    soto = next((p for p in players if normalize_name(p.name) == "juan soto"), None)
+    soto = next((p for p in players if normalize_name(dv._strip_suffix(p.name)) == "juan soto"), None)
     assert soto is not None and soto.value_proj == soto.value_proj  # not NaN
     assert soto.baseline_kind in ("keeper", "drafted", "waiver")
 ```
@@ -946,7 +1001,16 @@ Expected: FAIL.
 Wire the pieces: reproduce board (+ validate; raise on drift), reconstruct draft (+ validate gate), build projected and to-date par curves, load full-season + actual lines, load current rosters (`get_latest_weekly_rosters`) and add-txns, classify each current-roster player, compute values, roll up per team. Off-board players get positions via the board's default-attach convention (`["OF"]` for hitters, `["SP"]` for pitchers) resolved by their game-log/full-season type. Ohtani resolves to the hitter line ("batter only").
 
 ```python
-from fantasy_baseball.data.redis_store import get_latest_weekly_rosters, _get_client  # confirm client accessor
+import re as _re
+
+from fantasy_baseball.data.kv_store import get_kv
+from fantasy_baseball.data.redis_store import get_latest_weekly_rosters
+
+_YAHOO_SUFFIX_RE = _re.compile(r"\s*\((?:Batter|Pitcher)\)\s*$")
+
+
+def _strip_suffix(name):
+    return _YAHOO_SUFFIX_RE.sub("", name).strip()
 
 
 def _default_positions(player_type):
@@ -955,7 +1019,7 @@ def _default_positions(player_type):
 
 def _resolve_type_and_positions(norm_name, full_lines, bindex):
     """Return (player_type, positions). Prefer board row; else infer from which
-    full-season/actual line exists; Ohtani -> hitter (batter only)."""
+    full-season line exists; off-board -> board default positions. Ohtani -> hitter."""
     for ptype in ("hitter", "pitcher"):
         row = bindex.get(f"{norm_name}::{ptype}")
         if row is not None:
@@ -967,12 +1031,21 @@ def _resolve_type_and_positions(norm_name, full_lines, bindex):
 
 
 def run_draft_value(fraction=None):
+    import json as _json
+
     board, scale = reproduce_draft_day_board()
     mism = validate_scale_against_frozen(board)
     if mism:
         raise RuntimeError(f"Draft-day board drift ({len(mism)}); investigate, do not loosen tol: {mism[:3]}")
     picks = reconstruct_draft()
-    gate = validate_reconstruction(picks)
+    # enforce the reconstruction gate against the user's known roster (spec oracle 6b)
+    state = _json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
+    user_roster = state.get("user_roster") or []
+    league = _load_league()
+    keeper_team = {normalize_name(k["name"]): k["team"] for k in league["keepers"]}
+    user_team = next((keeper_team[normalize_name(n)] for n in user_roster
+                      if normalize_name(n) in keeper_team), None)
+    gate = validate_reconstruction(picks, known_team=user_team, known_roster=user_roster)
     if gate:
         raise RuntimeError(f"Draft reconstruction gate failed: {gate}")
     f = season_fraction() if fraction is None else fraction
@@ -984,38 +1057,30 @@ def run_draft_value(fraction=None):
     full_lines = load_full_season_lines()
     todate_lines = load_actual_to_date_lines()
 
-    # draft/keep sets by team (normalized)
+    # draft/keep sets by team; DRAFT-ORDER ordinal among on-board drafted picks.
+    # par(slot) = drafted_pars[ordinal-1] (drafted_pars is VAR-sorted desc): the k-th
+    # on-board drafted pick is measured against the k-th-best available VAR. This is the
+    # spec's par(slot). Do NOT index by the player's OWN VAR rank -- that makes
+    # par == own VAR, so skill = preseason_var - par == 0 for every drafted player.
     drafted_by, kept_by = {}, {}
-    slot_by_name = {}  # norm_name -> on-board drafted ordinal
-    # assign on-board drafted ordinals in draft order for par_for_slot
+    slot_by_name = {}  # norm_name -> draft-order ordinal among on-board drafted
     onboard_ordinal = 0
-    for p in sorted([pk for pk in picks if not pk.is_keeper], key=lambda x: x.slot):
-        row = _match_board_row(p.player_name, bindex)
-        if row is None:
-            continue
+    for p in sorted((pk for pk in picks if not pk.is_keeper), key=lambda x: x.slot):
+        if _match_board_row(p.player_name, bindex) is None:
+            continue  # off-board flier: excluded from par curve and slot indexing
         onboard_ordinal += 1
         slot_by_name[normalize_name(p.player_name)] = onboard_ordinal
     for p in picks:
         tkey = normalize_name_team(p.team)
-        norm = normalize_name(p.player_name)
-        (kept_by if p.is_keeper else drafted_by).setdefault(tkey, set()).add(norm)
+        (kept_by if p.is_keeper else drafted_by).setdefault(tkey, set()).add(normalize_name(p.player_name))
 
     add_by = load_add_txns_by_team()
-    rosters = get_latest_weekly_rosters(_get_client())
+    rosters = get_latest_weekly_rosters(get_kv())
 
-    # par curves sorted descending; ordinal from slot_by_name indexes par_for_slot
-    # but par curves are sorted by VAR, not draft order -> par_for_slot uses the
-    # ordinal position AFTER sorting. Map each drafted player to par by their sorted
-    # rank: build once.
-    # (Implementation detail: par_for_slot(ordinal) expects the sorted-descending
-    #  index. Assign each on-board drafted player par = drafted_pars[rank] where rank
-    #  is their position in the VAR-sorted order. Two players can't share a rank;
-    #  zip sorted picks-by-preseason-var to drafted_pars.)
     players, case3 = [], {}
     for entry in rosters:
         team = entry["team"]
-        raw_name = entry["player_name"]
-        norm = normalize_name(raw_name)
+        norm = normalize_name(_strip_suffix(entry["player_name"]))  # strip "(Batter)/(Pitcher)"
         kind = classify_acquisition(team, norm, drafted_by, kept_by, add_by)
         if kind == "trade_excluded":
             case3[team] = case3.get(team, 0) + 1
@@ -1025,20 +1090,19 @@ def run_draft_value(fraction=None):
         pre = preseason.get(key)
         full_line = full_lines.get(key)
         todate_line = todate_lines.get(key)
-        # baselines
         if kind == "keeper":
             base_proj, base_ytd = par_proj.keeper_par, par_ytd.keeper_par
         elif kind == "drafted":
-            rank = slot_by_name.get(norm)
+            rank = slot_by_name.get(norm)  # draft-order ordinal
             base_proj = par_proj.par_for_slot(rank) if rank else 0.0
             base_ytd = par_ytd.par_for_slot(rank) if rank else 0.0
         else:  # waiver
             base_proj = base_ytd = 0.0
-        pv = compute_player_value(team, raw_name, ptype, positions, base_proj, base_ytd,
-                                  kind, pre, full_line, todate_line, scale, f)
+        pv = compute_player_value(team, entry["player_name"], ptype, positions,
+                                  base_proj, base_ytd, kind, pre, full_line, todate_line, scale, f)
         players.append(pv)
 
-    # group by team (PlayerValue carries .team) and roll up, passing the case-3 count
+    # group by team (PlayerValue carries .team) and roll up with the per-team case-3 count
     by_team: dict[str, list] = {}
     for pv in players:
         by_team.setdefault(pv.team, []).append(pv)
@@ -1047,33 +1111,10 @@ def run_draft_value(fraction=None):
     return players, teams
 ```
 
-The `drafted` baseline above uses `assign_drafted_par` (defined next), NOT the raw
-draft ordinal: `par_for_slot(ordinal)` indexes the VAR-sorted `drafted_pars`, so each
-on-board drafted player must be assigned the par at their *preseason-VAR rank*, not
-their draft-order position. Replace the `slot_by_name` / `par_for_slot(rank)` baseline
-logic with this helper (build once, before the roster loop):
-
-```python
-def assign_drafted_par(picks, board, par_curve) -> dict:
-    """norm_name -> par value, assigned by preseason-VAR rank among on-board drafted."""
-    bindex = _board_index(board)
-    scored = []
-    for p in picks:
-        if p.is_keeper:
-            continue
-        row = _match_board_row(p.player_name, bindex)
-        if row is not None:
-            scored.append((normalize_name(p.player_name), float(row["var"])))
-    scored.sort(key=lambda t: t[1], reverse=True)  # same order as drafted_pars
-    return {name: par_curve.drafted_pars[i] for i, (name, _var) in enumerate(scored)}
-```
-
-In `run_draft_value`, compute `par_by_name_proj = assign_drafted_par(picks, board, par_proj)`
-and `par_by_name_ytd = assign_drafted_par(picks, board_ytd_or_scaled, par_ytd)` (for the
-YTD map, the ranks are the same players; reuse the proj ranks but pull pars from
-`par_ytd.drafted_pars` at the same index), then set `base_proj = par_by_name_proj.get(norm, 0.0)`
-and `base_ytd = par_by_name_ytd.get(norm, 0.0)` for the `drafted` branch. Delete the
-now-unused `slot_by_name` block.
+Note: `par_ytd.par_for_slot(rank)` uses the same draft-order `rank`; `par_ytd.drafted_pars`
+is the to-date VAR list (same on-board players, sorted desc), so slot `rank` maps to the
+`rank`-th best to-date VAR — the to-date par for that slot. Both horizons share one
+draft-order ordinal, only the par values differ.
 
 - [ ] **Step 4: Implement the CLI + markdown renderer.**
 
