@@ -480,7 +480,7 @@ def _insert_by_name(
         name_mlbam[key] = mlbam
 
 
-def load_full_season_lines() -> tuple[dict[int, dict[str, Any]], dict[str, Any]]:
+def load_full_season_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], dict[str, Any]]:
     """Full-season projection lines, keyed by mlbam id AND by ``name::player_type``.
 
     Reads ``CacheKey.FULL_SEASON_PROJECTIONS`` from the KV store (Upstash on
@@ -492,7 +492,7 @@ def load_full_season_lines() -> tuple[dict[int, dict[str, Any]], dict[str, Any]]
     Returns ``({}, {})`` when the KV store lacks the blob (unsynced local runtime).
     """
     payload = read_cache_dict(CacheKey.FULL_SEASON_PROJECTIONS) or {}
-    by_mlbam: dict[int, dict[str, Any]] = {}
+    by_mlbam: dict[tuple[int, str], dict[str, Any]] = {}
     by_name: dict[str, Any] = {}
     name_mlbam: dict[str, int | None] = {}
     for ptype, recs, builder, vol in (
@@ -503,13 +503,16 @@ def load_full_season_lines() -> tuple[dict[int, dict[str, Any]], dict[str, Any]]
             line = builder(rec)
             mlbam = _row_mlbam(rec)
             if mlbam is not None:
-                by_mlbam[mlbam] = line
+                # Key by (mlbam, player_type): a two-way player (e.g. Ohtani) has a
+                # hitter AND a pitcher record under ONE mlbam id; keying by id alone
+                # would let one overwrite the other.
+                by_mlbam[(mlbam, ptype)] = line
             key = _pkey(normalize_name(rec["name"]), ptype)
             _insert_by_name(by_name, name_mlbam, key, line, vol, mlbam)
     return by_mlbam, by_name
 
 
-def load_actual_to_date_lines() -> tuple[dict[int, dict[str, Any]], dict[str, Any]]:
+def load_actual_to_date_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], dict[str, Any]]:
     """Actual season-to-date lines, keyed by mlbam id AND by ``name::player_type``.
 
     Reads aggregated game-log totals via ``get_game_log_totals`` (keyed by string
@@ -519,7 +522,7 @@ def load_actual_to_date_lines() -> tuple[dict[int, dict[str, Any]], dict[str, An
     ``({}, {})`` when the KV store has no game logs.
     """
     client = get_kv()
-    by_mlbam: dict[int, dict[str, Any]] = {}
+    by_mlbam: dict[tuple[int, str], dict[str, Any]] = {}
     by_name: dict[str, Any] = {}
     name_mlbam: dict[str, int | None] = {}
     for ptype, logs, builder, vol in (
@@ -533,7 +536,7 @@ def load_actual_to_date_lines() -> tuple[dict[int, dict[str, Any]], dict[str, An
             except (TypeError, ValueError):
                 mlbam = None
             if mlbam is not None:
-                by_mlbam[mlbam] = line
+                by_mlbam[(mlbam, ptype)] = line
             name = rec.get("name") or ""
             if not name:
                 continue
@@ -873,10 +876,10 @@ def run_draft_value(
         # dict is falsy but valid).
         row = bindex.get(key)
         mlbam = _row_mlbam(row)
-        full_line = full_by_mlbam.get(mlbam) if mlbam is not None else None
+        full_line = full_by_mlbam.get((mlbam, ptype)) if mlbam is not None else None
         if full_line is None:
             full_line = full_by_name.get(key)
-        todate_line = td_by_mlbam.get(mlbam) if mlbam is not None else None
+        todate_line = td_by_mlbam.get((mlbam, ptype)) if mlbam is not None else None
         if todate_line is None:
             todate_line = td_by_name.get(key)
         # draft-order ordinal among on-board drafted picks; also the compute slot arg

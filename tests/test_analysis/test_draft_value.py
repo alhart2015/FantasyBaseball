@@ -84,19 +84,22 @@ def test_full_season_and_actual_loaders_shape():
     full_by_mlbam, full_by_name = dv.load_full_season_lines()
     assert full_by_name, "no full-season lines (KV store not synced?)"
     assert full_by_mlbam, "no mlbam-keyed full-season lines (KV store not synced?)"
-    # name map is keyed name_normalized::player_type; mlbam map is keyed int id
+    # name map is keyed name_normalized::player_type; mlbam map is keyed
+    # (int mlbam id, player_type) so a two-way player's hitter and pitcher
+    # records do not collide under one id.
     k = next(iter(full_by_name))
     assert "::" in k
     line = full_by_name[k]
     assert any(s in line for s in ("hr", "k"))
     mk = next(iter(full_by_mlbam))
-    assert isinstance(mk, int)
+    assert isinstance(mk, tuple) and isinstance(mk[0], int) and mk[1] in ("hitter", "pitcher")
     assert any(s in full_by_mlbam[mk] for s in ("hr", "k"))
     # actual-to-date loader has the same tuple shape
     td_by_mlbam, td_by_name = dv.load_actual_to_date_lines()
     assert td_by_mlbam and td_by_name, "no game-log lines (KV store not synced?)"
     assert "::" in next(iter(td_by_name))
-    assert isinstance(next(iter(td_by_mlbam)), int)
+    tk = next(iter(td_by_mlbam))
+    assert isinstance(tk, tuple) and isinstance(tk[0], int) and tk[1] in ("hitter", "pitcher")
 
 
 def test_season_fraction_in_unit_range():
