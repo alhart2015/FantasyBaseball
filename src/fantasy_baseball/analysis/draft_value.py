@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import yaml
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.projections import blend_projections
@@ -18,6 +19,7 @@ from fantasy_baseball.draft.board import build_board_from_frames
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import REPLACEMENT_BY_POSITION, Category
+from fantasy_baseball.utils.name_utils import normalize_name
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,10 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FROZEN_BOARD = _REPO_ROOT / "data" / "draft_state_board.json"
 _PRESEASON_CSVS = _REPO_ROOT / "data" / "projections" / "2026"
 _POSITIONS_JSON = _REPO_ROOT / "data" / "player_positions.json"
-_CONFIG = _REPO_ROOT / "config" / "league.yaml"
+_CONFIG_DIR = _REPO_ROOT / "config"
+_CONFIG = _CONFIG_DIR / "league.yaml"
+_DRAFT_ORDER = _CONFIG_DIR / "draft_order.json"
+_DRAFT_STATE = _REPO_ROOT / "data" / "draft_state.json"
 
 
 @dataclass(frozen=True)
@@ -208,3 +213,76 @@ def score_var(
         }
     )
     return calculate_var(series, floors)
+
+
+@dataclass(frozen=True)
+class DraftPick:
+    slot: int | None  # 1..200 live-pick ordinal; None for keepers
+    round: int  # 0 for keepers; else absolute draft round (4..23)
+    team: str
+    player_name: str
+    is_keeper: bool
+
+
+def _load_league() -> dict[str, Any]:
+    data: dict[str, Any] = yaml.safe_load(_CONFIG.read_text(encoding="utf-8"))
+    return data
+
+
+def reconstruct_draft() -> list[DraftPick]:
+    """Reconstruct (team, slot) per 2026 pick from draft_order + draft_state + keepers.
+
+    ``draft_order.json`` ``rounds`` is the full 23x10 snake order; rounds 1-3 (the
+    first 30 slots) are consumed by the 30 keepers, so the 200 live picks map to the
+    remaining slots. ``drafted_players[0:30]`` are the keepers in league.yaml order;
+    ``drafted_players[30:230]`` are the live picks in snake order. Trades are applied
+    on the absolute ``[round-1][slot-1]`` cell before the keeper-round slots are
+    skipped.
+    """
+    order = json.loads(_DRAFT_ORDER.read_text(encoding="utf-8"))
+    state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
+    league = _load_league()
+    drafted: list[str] = state["drafted_players"]
+    keeper_defs: list[dict[str, Any]] = league["keepers"]
+
+    picks: list[DraftPick] = []
+    n_keep = len(keeper_defs)
+    for i, kd in enumerate(keeper_defs):
+        picks.append(DraftPick(None, 0, kd["team"], drafted[i], True))
+
+    # live picks: flatten ALL rounds (absolute round numbers), apply trades on the
+    # absolute cell, then SKIP the first n_keep keeper-round slots and zip to live picks.
+    rounds: list[list[str]] = [list(r) for r in order["rounds"]]
+    for tr in order.get("trades", []):
+        rounds[tr["round"] - 1][tr["slot"] - 1] = tr["to"]
+    flat_teams = [(rnd_i + 1, team) for rnd_i, rnd in enumerate(rounds) for team in rnd]
+    live_teams = flat_teams[n_keep:]  # drop the 30 keeper-round slots (rounds 1-3)
+    live = drafted[n_keep:]
+    for slot, (name, (rnd, team)) in enumerate(zip(live, live_teams, strict=False), start=1):
+        picks.append(DraftPick(slot, rnd, team, name, False))
+    return picks
+
+
+def validate_reconstruction(
+    picks: list[DraftPick],
+    known_team: str | None = None,
+    known_roster: list[str] | None = None,
+) -> list[str]:
+    """Runtime gate: every keeper maps to its owning team, and (optionally) a known
+    team's roster reconstructs as a superset. Returns a list of problems ([] == pass).
+    """
+    problems: list[str] = []
+    league = _load_league()
+    keeper_norm = {(normalize_name(k["name"]), k["team"]) for k in league["keepers"]}
+    recon_keeper_norm = {(normalize_name(p.player_name), p.team) for p in picks if p.is_keeper}
+    missing = keeper_norm - recon_keeper_norm
+    if missing:
+        problems.append(f"keeper mismatch (missing {len(missing)}): {sorted(missing)[:5]}")
+    if known_team and known_roster:
+        recon = {normalize_name(p.player_name) for p in picks if p.team == known_team}
+        want = {normalize_name(n) for n in known_roster}
+        if not want <= recon:
+            problems.append(
+                f"known-team {known_team} roster mismatch: missing {sorted(want - recon)[:5]}"
+            )
+    return problems

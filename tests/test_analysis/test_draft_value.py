@@ -1,4 +1,8 @@
+import json as _json
+from collections import Counter
+
 from fantasy_baseball.analysis import draft_value as dv
+from fantasy_baseball.utils.name_utils import normalize_name as nn
 
 
 def _hitter_line(**kw):
@@ -33,3 +37,23 @@ def test_build_preseason_board_returns_scale_and_soft_frozen():
     summary = dv.frozen_drift_summary(board)
     assert summary["joined"] > 0
     assert set(summary) >= {"joined", "over_tol", "max", "median"}
+
+
+def test_reconstruct_draft_shape_and_gate():
+    picks = dv.reconstruct_draft()
+    keepers = [p for p in picks if p.is_keeper]
+    drafted = [p for p in picks if not p.is_keeper]
+    assert len(keepers) == 30
+    assert len(drafted) == 200
+    # every team owns exactly 3 keepers
+    assert set(Counter(p.team for p in keepers).values()) == {3}
+
+    # ENFORCE the known-roster gate (spec oracle 6b): the user's roster must
+    # reconstruct exactly. Infer the user's team from its keepers, then assert its
+    # reconstructed roster is a superset of state["user_roster"].
+    state = _json.loads(dv._DRAFT_STATE.read_text(encoding="utf-8"))
+    user_roster = state["user_roster"]
+    league = dv._load_league()
+    keeper_team = {nn(k["name"]): k["team"] for k in league["keepers"]}
+    user_team = next(keeper_team[nn(n)] for n in user_roster if nn(n) in keeper_team)
+    assert dv.validate_reconstruction(picks, known_team=user_team, known_roster=user_roster) == []
