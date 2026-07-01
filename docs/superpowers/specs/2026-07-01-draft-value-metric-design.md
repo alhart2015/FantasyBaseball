@@ -33,16 +33,26 @@ SGP because:
 ### Single-scale requirement (CRITICAL — do not skip)
 
 Preseason VAR, realized VAR, and estimate VAR **must all be computed on one
-scale**, or `value`, `skill`, and `luck` are meaningless. `build_draft_board`
-computes SGP twice — the second pass uses **pool-derived rate baselines**
-(`calculate_replacement_rates(pool, starters)` in `draft/board.py:61-72`) for
-AVG/ERA/WHIP, plus `team_ab`/`team_ip` and the `sgp_denominators`, and derives VAR
-against `position_aware_replacement_levels` built on *those same* rates
-(`board.py:74`). The board DataFrame returns only the final `var` scalar — it does
-**not** expose the rate baselines, floors, denominators, or team volumes it used.
+scale**, or `value`, `skill`, and `luck` are meaningless.
 
-Therefore the draft-value module MUST reproduce the identical inputs when scoring
-any realized/estimate line:
+**Preseason VAR + par curve come from the FROZEN draft-day board, not a live
+rebuild.** `VAR_preseason(player)` and the par curve MUST read the frozen
+draft-day `var` column in `data/draft_state_board.json` (verified: a list of
+~3669 rows, each `{name, player_id=fg_id::player_type, positions, var, adp,
+player_type}`). Re-running `build_draft_board(conn)` mid-season would read a
+**mutated** in-season positions table (players gain eligibility) and a possibly
+newer projections snapshot, producing different VARs than the ones the draft was
+actually made against — silently drifting the par curve, `skill`, and every slot
+expectation. The frozen JSON is the authoritative draft-day vintage; use it.
+
+**Realized/estimate VAR must reuse the board's exact scale inputs.**
+`build_draft_board` computes SGP twice — the second pass uses **pool-derived rate
+baselines** (`calculate_replacement_rates(pool, starters)` in
+`draft/board.py:61-72`) for AVG/ERA/WHIP, plus `team_ab`/`team_ip` and the
+`sgp_denominators`, and derives VAR against `position_aware_replacement_levels`
+built on *those same* rates (`board.py:74`). The frozen JSON stores only `var`
+(not the floors, rates, denominators, or team volumes), so the module MUST obtain,
+and reuse for every realized/estimate line:
 
 1. the same `sgp_denominators` the board used (note: `get_sgp_denominators()`
    returns code defaults, NOT `league.yaml` — pin whichever the board build used),
@@ -51,10 +61,21 @@ any realized/estimate line:
 3. the same `team_ab` / `team_ip`,
 4. the same per-position VAR floors from `position_aware_replacement_levels`.
 
-The plan must decide the mechanism: either (a) extend `build_draft_board` to also
-return these inputs, or (b) rebuild them deterministically from the same
-projection pool + config. Calling `calculate_player_sgp` with module defaults
-(0.250 / 4.50 / 1.35) instead is a silent scale bug and is prohibited.
+**Mechanism (preferred): extend `build_draft_board` to also return these four
+inputs**, and run it against the **draft-day projection + positions vintage**
+(preseason `data/projections` files; not the live in-season tables). A
+hand-rebuild "from the same pool + config" is discouraged because it must
+replicate the board's **two-pass ordering** exactly (first pass with default rates
+sets `total_sgp`, which selects the replacement band at `replacement.py:112-114`;
+the second pass overwrites `total_sgp` with pool-derived rates — `board.py:58-72`).
+A single-pass rebuild picks a different band and silently drifts the scale.
+
+**Validation gate (single-scale oracle):** the reproduced board's `var` MUST
+reproduce the frozen `draft_state_board.json` `var` column to within float
+tolerance for every joined player. This both proves the reused floors/rates are
+draft-day-consistent and catches any projection/positions vintage mismatch loudly.
+Calling `calculate_player_sgp` with module defaults (0.250 / 4.50 / 1.35) instead
+of the reused inputs is a silent scale bug and is prohibited.
 
 ## Core metric
 
@@ -94,7 +115,7 @@ report two horizons:
   The full-season estimate line (actual-to-date counting stats + rest-of-season
   projected counting stats, with rates recomputed from the combined line)
   **already exists** as `derive_full_season` -> `CacheKey.FULL_SEASON_PROJECTIONS`
-  (`data/ros_pipeline.py:113-155,273`). Reuse that cached line (MLBAM-keyed);
+  (`data/ros_pipeline.py`, `derive_full_season` ~line 140). Reuse that cached line (MLBAM-keyed);
   do not re-derive it. Answers "projected final draft value." This is the headline
   horizon because it is not distorted by the availability bias below.
 - **YTD value (secondary)** = `VAR(actual-to-date) - par_to_date(slot)`.
@@ -105,26 +126,44 @@ test oracle (see Validation).
 
 ### YTD to-date scaling — exact rules (the fiddliest math)
 
-Let `f` = season fraction elapsed (see below). To build the **expected-to-date**
-line for a player: multiply **volume and counting stats** by `f`
-(`ab, ip, r, hr, rbi, sb, w, k, sv, er, bb, h, h_allowed` -> `* f`) and leave
-**rate stats unchanged** (`avg, era, whip` are NOT scaled — a 0.125 AVG is
-nonsense). Then run `calculate_player_sgp` on that scaled line.
+Let `f` = season fraction elapsed (see below). **One rule applied consistently to
+every line — player, floor, and par — computed through the same to-date SGP
+path:** multiply the **counting stats `calculate_player_sgp` actually consumes**
+by `f` (`r, hr, rbi, sb` for hitters; `w, k, sv` for pitchers; plus the volume
+`ab`, `ip`) and leave **rate stats unchanged** (`avg, era, whip` are NOT scaled —
+a 0.125 AVG is nonsense). Note `calculate_player_sgp` reads `avg/era/whip`
+directly and does not consume `h/er/bb/h_allowed`, so only the counting stats
+above and the volumes need scaling. Then:
 
 - `team_ab` / `team_ip` passed to `calculate_player_sgp` **must also be scaled by
   `f`** so the marginal rate-SGP (which is `player_ab/team_ab`-weighted,
-  `player_value.py:21-45`) stays proportionally correct. Scaling player volume but
-  not team volume distorts rate SGP.
-- **Position VAR floors for YTD** = the full-season floor SGP **multiplied by
-  `f`**. Floor SGP is linear in the underlying line, so `floor_todate = f *
-  floor_full` is valid and avoids re-deriving empirical waiver lines at partial
-  volume. Do **not** fraction-scale the internal replacement *rates* (0.250 etc.);
-  only the resulting floor SGP scales.
+  `player_value.py:21-45`) stays proportionally correct. Under this scaling a
+  player's rate-SGP is `f`-invariant (numerator and denominator both carry `f`),
+  while counting-SGP scales by `f`.
+- **Position VAR floors for YTD are recomputed through the SAME to-date path** —
+  scale the empirical replacement line's counting stats and its `team_ab`/`team_ip`
+  by `f`, hold its rates, and run `calculate_player_sgp`. Do **NOT** use
+  `f * floor_full`: floor SGP is **not** linear in `f`, because its rate component
+  (ERA/WHIP/AVG marginal) is `f`-invariant while only its counting component
+  scales — `f * floor_full` wrongly shrinks the rate component and mis-scales the
+  floor by up to ~0.3-0.4 SGP for pitchers at `f=0.5`. This requires the module to
+  reach the empirical replacement *lines* (from `REPLACEMENT_BY_POSITION` /
+  `position_aware_replacement_levels`), not just the returned floor SGP; the plan
+  must expose them. Do **not** fraction-scale the internal replacement *rates*
+  (0.250 etc.).
+- Both the **actual-to-date** side and the **expected-to-date** side use the
+  **same scaled `team_ab`/`team_ip` (`f * full`)** and the same to-date floors, so
+  a player's actual and its slot's par live on one scale. The actual side scales
+  its `team_ab`/`team_ip` by `f` too (it is not "unscaled" — only the player's real
+  accumulated counting stats are used as-is; the team denominators still scale).
 - `par_to_date(slot)` = the drafted par curve rebuilt from **expected-to-date**
-  preseason VAR (i.e. each drafted player's preseason line scaled by `f`, VAR
-  recomputed with to-date floors), sorted descending.
-- The **actual-to-date** side uses real accumulated stats (unscaled) with the
-  **same to-date floors** (`f * floor_full`).
+  VAR (each drafted player's frozen-board preseason line scaled by `f` through the
+  path above, VAR recomputed with to-date floors), sorted descending.
+
+Rate-category proration is inherently approximate (SGP rate value is defined
+against a full-season team volume), which is a further reason YTD is the
+**secondary** horizon. The plan must add an `f<1` oracle (see Validation) since
+convergence at `f=1` cannot catch a partial-season floor/volume error.
 
 ### Season fraction `f` and its known bias
 
@@ -187,7 +226,30 @@ this precedence (first match wins):
 Players **not on any current roster** (dropped, or traded away) are **excluded**
 entirely. Every current-roster player must fall into exactly one of the three
 cases above — the classifier must assert this and log any unclassifiable player
-rather than silently dropping it.
+rather than silently dropping it. **The classifier must also report the count of
+case-3 (trade-excluded) players per team**: because case 3 is a residual bucket, a
+transaction-name-join regression (a real waiver add whose name fails to match the
+add feed) silently lands in case 3, and a case-3 count that is implausibly high is
+the eyeball signal for that regression.
+
+### Known classifier false-positives / edge cases (bounded, stated)
+
+- **Totality is not correctness.** The exactly-one-bucket assertion guarantees a
+  player lands *somewhere*, not in the *right* bucket. A normalized-name miss on
+  the add feed pushes a genuine waiver add into case 3 (silently excluded). Hence
+  the case-3 count safeguard above.
+- **Stale add + later trade-reacquire (same team).** A player added off waivers by
+  a team, dropped, then re-acquired by that team **via trade** still carries the
+  old "add" txn, so case 2 credits waiver value for a stint that was actually a
+  trade. Distinguishing this needs ownership-period tracking (out of scope), so it
+  is an accepted bounded false-positive.
+- **Commissioner / non-add-drop moves.** The feed is `add,drop` only; a
+  commissioner-forced roster placement (Yahoo `commish` type) yields a
+  currently-rostered player with no add txn -> case 3 -> excluded. Rare in this
+  league; surfaced by the case-3 count if it happens.
+- **Trade round-trip back to the drafter** (drafted by A -> traded to B -> traded
+  back to A): case-1 precedence credits A at the draft slot. Defensible (A did
+  draft him and currently rosters him); noted for completeness.
 
 ### Accepted attribution limitations (stated, not hidden)
 
@@ -226,8 +288,12 @@ memory, `run_season_dashboard.py` can clobber local state via Upstash sync — t
 plan must specify how the CLI obtains a consistent snapshot (e.g. `--no-sync` or
 an explicit read path).
 
-- **Preseason board:** `build_draft_board(conn)` -> per-player VAR, `total_sgp`,
-  positions, ids; plus the reused scale inputs (see Single-scale requirement).
+- **Preseason VAR + par curve:** the **frozen** `data/draft_state_board.json`
+  (`var`, `player_id=fg_id::player_type`, `positions`) — the draft-day vintage.
+- **Reused scale inputs (floors/rates/denoms/team volumes):** a `build_draft_board`
+  run against the **draft-day projection + positions vintage**, validated to
+  reproduce the frozen `var` (see Single-scale requirement) — NOT a live in-season
+  `build_draft_board(conn)`.
 - **2026 pick-by-pick (team + overall slot):** reconstructed from
   `data/draft_state.json` `drafted_players` + `config/draft_order.json`
   (snake order + `trades`) + `config/league.yaml` keepers. See invariant below.
@@ -303,19 +369,31 @@ hitter/pitcher type collision on the normalized name.
 The metric is correctness-critical and "who drafted well" has no external ground
 truth, so the plan MUST include these testable oracles:
 
-1. **Single-scale check:** for a player present on the board with actual == ROS ==
-   preseason projection (synthetic fixture), `VAR(estimate)` reproduces
-   `VAR_preseason` to within float tolerance. Guards the scale bug.
-2. **Convergence:** with `f` -> 1 and ROS -> 0 (synthetic end-of-season fixture),
-   YTD value and projected value converge for every player.
-3. **Decomposition identity:** for on-board players on the projected horizon,
+1. **Frozen-board single-scale check:** the reproduced draft-day board's `var`
+   reproduces the frozen `data/draft_state_board.json` `var` column within float
+   tolerance for every joined player. Proves the reused floors/rates/denoms/volumes
+   are draft-day-consistent AND that `VAR_preseason` matches the frozen source.
+2. **Estimate-scale check:** for an on-board player with actual + ROS == preseason
+   projection (synthetic fixture), `VAR(estimate)` reproduces `VAR_preseason`
+   within tolerance. Guards the realized/estimate scale bug on the projected path.
+3. **Convergence (f=1):** with `f` -> 1 and ROS -> 0 (synthetic end-of-season
+   fixture), YTD value and projected value converge for every player.
+4. **YTD partial-season correctness (`f<1`):** with a synthetic *healthy* player
+   whose actual-to-date == `f *` full projection exactly (linear accumulation,
+   rates == projected) at `f=0.5`, YTD `VAR(actual-to-date)` and `par_to_date`
+   reproduce the `f`-consistent VAR — specifically it catches a `f * floor_full`
+   floor that would mis-scale the rate component. Convergence at `f=1` cannot see
+   this, so this oracle is mandatory, not optional.
+5. **Decomposition identity:** for on-board players on the projected horizon,
    `skill + luck == value` exactly (float tolerance).
-4. **Slot-reconstruction gate:** the three assertions in the invariant section
+6. **Slot-reconstruction gate:** the three assertions in the invariant section
    (30/30 keeper match, known-team roster match, all drafted names resolved/logged)
    pass on the real 2026 data.
-5. **Classifier totality:** every current-roster player classifies into exactly
-   one bucket; no player is silently dropped; unclassifiable players raise/log.
-6. **Known-pick sanity:** at least one hand-verified player (e.g. a specific
+7. **Classifier totality + case-3 sanity:** every current-roster player classifies
+   into exactly one bucket; no player is silently dropped; unclassifiable players
+   raise/log; and the per-team case-3 (trade-excluded) count is within a plausible
+   band (a spike flags a transaction-join regression).
+8. **Known-pick sanity:** at least one hand-verified player (e.g. a specific
    keeper) has its VAR, par, and value checked against a manual computation.
 
 ## Out of scope for v1
