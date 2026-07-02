@@ -1590,7 +1590,7 @@ class RefreshRun:
         write_cache(CacheKey.TRANSACTION_ANALYZER, cache_data, required=False)
         self._progress(f"Analyzed {len(stored_txns)} total transaction(s)")
 
-    # --- Step 15c: Draft-value grade for the /transactions Draft Grade tab ---
+    # --- Step 15a: Draft-value grade for the /transactions Draft Grade tab ---
     def _compute_draft_value(self) -> None:
         """Grade the draft (keepers + drafted picks) and cache it for the tab.
 

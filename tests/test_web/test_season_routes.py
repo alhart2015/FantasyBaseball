@@ -1987,19 +1987,6 @@ _DRAFT_TEAM = {
 }
 
 
-def test_transactions_renders_both_tabs(client):
-    with patch(
-        "fantasy_baseball.web.season_routes.read_cache_dict",
-        side_effect=_txn_draft_cache([], [_DRAFT_TEAM]),
-    ):
-        resp = client.get("/transactions")
-    assert resp.status_code == 200
-    body = resp.get_data(as_text=True)
-    assert "tab-strip" in body
-    assert "Draft Grade" in body
-    assert "Juan Soto" in body
-
-
 def test_transactions_draft_empty_placeholder(client):
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
@@ -2014,7 +2001,7 @@ def test_transactions_draft_empty_placeholder(client):
 
 def test_transactions_empty_txn_but_populated_draft(client):
     # Post-draft / pre-first-transaction: txn empty, draft populated.
-    # Guards the hoist-out-of-conditional restructure.
+    # Guards the hoist-out-of-conditional restructure AND that both tabs render.
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
         side_effect=_txn_draft_cache([], [_DRAFT_TEAM]),
@@ -2023,6 +2010,7 @@ def test_transactions_empty_txn_but_populated_draft(client):
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "tab-strip" in body
+    assert "Draft Grade" in body  # both tab labels render
     assert "switchTab" in body  # tab JS hoisted, present regardless of txn_data
     assert "toggleTxnDetail" in body  # expand JS hoisted too
     assert "Juan Soto" in body  # draft rows render

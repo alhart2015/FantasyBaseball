@@ -939,6 +939,11 @@ def _finite(x: float | None) -> float | None:
     return x if x is not None and math.isfinite(x) else None
 
 
+def _rank(value: float | None) -> float:
+    """Sort key that sinks None/NaN to the bottom of a descending sort."""
+    return -math.inf if value is None or math.isnan(value) else value
+
+
 def build_draft_value_cache(players: list[PlayerValue], teams: list[TeamRollup]) -> dict[str, Any]:
     """Serialize run_draft_value() output into a JSON-safe, template-ready dict.
 
@@ -954,23 +959,13 @@ def build_draft_value_cache(players: list[PlayerValue], teams: list[TeamRollup])
         by_team.setdefault(p.team, []).append(p)
 
     out_teams: list[dict[str, Any]] = []
-    for tr in sorted(
-        teams,
-        key=lambda t: -math.inf if math.isnan(t.avg_value) else t.avg_value,
-        reverse=True,
-    ):
+    for tr in sorted(teams, key=lambda t: _rank(t.avg_value), reverse=True):
         roster = by_team.get(tr.team, [])
         types_by_name: dict[str, set[str]] = {}
         for p in roster:
             types_by_name.setdefault(p.name, set()).add(str(p.player_type))
         out_players: list[dict[str, Any]] = []
-        for p in sorted(
-            roster,
-            key=lambda p: (
-                -math.inf if p.value_proj is None or math.isnan(p.value_proj) else p.value_proj
-            ),
-            reverse=True,
-        ):
+        for p in sorted(roster, key=lambda p: _rank(p.value_proj), reverse=True):
             suffix = ""
             if len(types_by_name.get(p.name, ())) > 1:
                 suffix = " (P)" if str(p.player_type) == "pitcher" else " (H)"
