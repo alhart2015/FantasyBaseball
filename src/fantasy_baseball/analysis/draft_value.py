@@ -932,3 +932,69 @@ def run_draft_value(
         by_team.setdefault(pv.team, []).append(pv)
     teams = [roll_up_team(t, pvs) for t, pvs in sorted(by_team.items())]
     return players, teams
+
+
+def _finite(x: float | None) -> float | None:
+    """Map None/NaN/inf -> None so the payload survives strict JSON + Jinja."""
+    return x if x is not None and math.isfinite(x) else None
+
+
+def _rank(value: float | None) -> float:
+    """Sort key that sinks non-finite/None values to the bottom of a descending sort.
+
+    Sinks exactly what ``_finite`` nulls (None/NaN/inf), so a value that renders as a
+    blank ``-`` cell also sorts last rather than by a raw ``inf`` key.
+    """
+    return value if value is not None and math.isfinite(value) else -math.inf
+
+
+def build_draft_value_cache(players: list[PlayerValue], teams: list[TeamRollup]) -> dict[str, Any]:
+    """Serialize run_draft_value() output into a JSON-safe, template-ready dict.
+
+    Groups ``players`` by ``.team`` under each ``TeamRollup`` (teams sorted by
+    ``avg_value`` desc with NaN sunk; players sorted by ``value_proj`` desc with
+    None/NaN sunk). Every float field passes through ``_finite`` so no non-finite
+    value reaches strict JSON or Jinja. Within each team, a ``name`` appearing
+    under more than one ``player_type`` gets a ` (H)`/` (P)` ``display_name``
+    suffix (two-way disambiguation); all other rows get ``display_name == name``.
+    """
+    by_team: dict[str, list[PlayerValue]] = {}
+    for p in players:
+        by_team.setdefault(p.team, []).append(p)
+
+    out_teams: list[dict[str, Any]] = []
+    for tr in sorted(teams, key=lambda t: _rank(t.avg_value), reverse=True):
+        roster = by_team.get(tr.team, [])
+        types_by_name: dict[str, set[str]] = {}
+        for p in roster:
+            types_by_name.setdefault(p.name, set()).add(str(p.player_type))
+        out_players: list[dict[str, Any]] = []
+        for p in sorted(roster, key=lambda p: _rank(p.value_proj), reverse=True):
+            suffix = ""
+            if len(types_by_name.get(p.name, ())) > 1:
+                suffix = " (P)" if str(p.player_type) == "pitcher" else " (H)"
+            out_players.append(
+                {
+                    "name": p.name,
+                    "display_name": f"{p.name}{suffix}",
+                    "player_type": str(p.player_type),
+                    "kind": p.baseline_kind,
+                    "slot": p.slot,
+                    "preseason_var": _finite(p.preseason_var),
+                    "est_var_proj": _finite(p.est_var_proj),
+                    "value_proj": _finite(p.value_proj),
+                    "value_ytd": _finite(p.value_ytd),
+                    "skill": _finite(p.skill),
+                    "luck": _finite(p.luck),
+                }
+            )
+        out_teams.append(
+            {
+                "team": tr.team,
+                "avg_value": _finite(tr.avg_value),
+                "sum_value": _finite(tr.sum_value),
+                "credited_count": tr.credited_count,
+                "players": out_players,
+            }
+        )
+    return {"horizon": "proj", "teams": out_teams}

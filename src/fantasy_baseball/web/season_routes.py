@@ -1891,12 +1891,14 @@ def register_routes(app: Flask) -> None:
     def transactions():
         meta = read_meta()
         txn_cache = read_cache_dict(CacheKey.TRANSACTION_ANALYZER) or {}
+        draft_cache = read_cache_dict(CacheKey.DRAFT_VALUE) or {}
         config = _load_config()
         return render_template(
             "season/transactions.html",
             meta=meta,
             active_page="transactions",
             txn_data=txn_cache.get("teams", []),
+            draft_data=draft_cache.get("teams", []),
             user_team=config.team_name,
         )
 

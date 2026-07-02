@@ -1,22 +1,27 @@
 {% extends "season/base.html" %}
 {% block content %}
 <style>
-/* Layout-only rules; theming lives in season.css under .page-transactions. */
+/* Layout-only rules; theming lives in season.css. */
 .txn-summary { cursor: pointer; }
 .txn-detail { display: none; }
 .txn-detail.open { display: table-row; }
 .txn-inner-table { width: 100%; }
+.tab-panel { display: none; }
+.tab-panel.active { display: block; }
 </style>
 
 <div class="page-transactions">
 <div class="page-header">
-    <h2>Transaction Analyzer</h2>
+    <nav class="tab-strip" id="txn-tab-strip">
+        <button type="button" class="active" data-panel="panel-transactions" onclick="switchTab(this)">Transactions</button>
+        <button type="button" data-panel="panel-draft" onclick="switchTab(this)">Draft Grade</button>
+    </nav>
 </div>
 
+<div id="panel-transactions" class="tab-panel active">
 {% if not txn_data %}
 <p class="placeholder-text">No transaction data. Click "Refresh Data" to fetch from Yahoo.</p>
 {% else %}
-
 <table class="data-table">
     <thead>
         <tr>
@@ -93,8 +98,83 @@
     {% endfor %}
     </tbody>
 </table>
+{% endif %}
+</div>
+
+<div id="panel-draft" class="tab-panel">
+{% if not draft_data %}
+<p class="placeholder-text">No draft data. Click "Refresh Data" to compute the draft grade.</p>
+{% else %}
+<table class="data-table">
+    <thead>
+        <tr>
+            <th>Team</th>
+            <th>avg</th>
+            <th>sum</th>
+            <th>picks</th>
+        </tr>
+    </thead>
+    <tbody>
+    {% for team in draft_data %}
+        <tr class="txn-summary {% if team.team == user_team %}user-team{% endif %}" onclick="toggleTxnDetail(this)">
+            <td class="team-name">{{ team.team }}</td>
+            <td class="{{ 'value-positive' if team.avg_value is not none and team.avg_value > 0 else 'value-negative' if team.avg_value is not none and team.avg_value < 0 else '' }}">
+                {{ '%+.1f'|format(team.avg_value) if team.avg_value is not none else '—' }}
+            </td>
+            <td>{{ '%+.1f'|format(team.sum_value) if team.sum_value is not none else '—' }}</td>
+            <td>{{ team.credited_count }}</td>
+        </tr>
+        <tr class="txn-detail">
+            <td colspan="4">
+                <table class="txn-inner-table">
+                    <thead>
+                        <tr style="color:var(--text-secondary);font-size:11px;">
+                            <th style="text-align:left">Player</th>
+                            <th style="text-align:left">kind</th>
+                            <th style="text-align:right">slot</th>
+                            <th style="text-align:right">preVAR</th>
+                            <th style="text-align:right">estVAR</th>
+                            <th style="text-align:right">value</th>
+                            <th style="text-align:right">valueYTD</th>
+                            <th style="text-align:right">skill</th>
+                            <th style="text-align:right">luck</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                    {% for p in team.players %}
+                        <tr>
+                            <td>{{ p.display_name }}</td>
+                            <td>{{ p.kind }}</td>
+                            <td style="text-align:right">{{ p.slot if p.slot is not none else '—' }}</td>
+                            <td style="text-align:right">{{ '%.1f'|format(p.preseason_var) if p.preseason_var is not none else '—' }}</td>
+                            <td style="text-align:right">{{ '%.1f'|format(p.est_var_proj) if p.est_var_proj is not none else '—' }}</td>
+                            <td style="text-align:right" class="{{ 'value-positive' if p.value_proj is not none and p.value_proj > 0 else 'value-negative' if p.value_proj is not none and p.value_proj < 0 else '' }}">
+                                {{ '%+.1f'|format(p.value_proj) if p.value_proj is not none else '—' }}
+                            </td>
+                            <td style="text-align:right">{{ '%+.1f'|format(p.value_ytd) if p.value_ytd is not none else '—' }}</td>
+                            <td style="text-align:right">{{ '%+.1f'|format(p.skill) if p.skill is not none else '—' }}</td>
+                            <td style="text-align:right">{{ '%+.1f'|format(p.luck) if p.luck is not none else '—' }}</td>
+                        </tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+            </td>
+        </tr>
+    {% endfor %}
+    </tbody>
+</table>
+{% endif %}
+</div>
 
 <script>
+function switchTab(btn) {
+    document.querySelectorAll('#txn-tab-strip button').forEach(function (b) { b.classList.remove('active'); });
+    btn.classList.add('active');
+    var target = btn.dataset.panel;
+    document.querySelectorAll('.tab-panel').forEach(function (panel) {
+        panel.classList.toggle('active', panel.id === target);
+    });
+}
 function toggleTxnDetail(row) {
     var detail = row.nextElementSibling;
     if (detail && detail.classList.contains('txn-detail')) {
@@ -103,6 +183,5 @@ function toggleTxnDetail(row) {
 }
 </script>
 
-{% endif %}
 </div>
 {% endblock %}

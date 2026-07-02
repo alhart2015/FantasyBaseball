@@ -1944,3 +1944,73 @@ def test_standings_route_team_ytd_absent_when_legacy_payload(client):
     # from_dict defaults missing team_ytd to {} so the modal can still
     # render the row (zero values) instead of crashing on undefined.
     assert team_payload.get("team_ytd") == {}
+
+
+def _txn_draft_cache(txn_teams, draft_teams):
+    """side_effect for read_cache_dict keyed by CacheKey.value."""
+    values = {
+        CacheKey.TRANSACTION_ANALYZER.value: {"teams": txn_teams}
+        if txn_teams is not None
+        else None,
+        CacheKey.DRAFT_VALUE.value: {"horizon": "proj", "teams": draft_teams}
+        if draft_teams is not None
+        else None,
+    }
+
+    def _fake(key, *_a, **_k):
+        v = values.get(key.value)
+        return v if isinstance(v, dict) else None
+
+    return _fake
+
+
+_DRAFT_TEAM = {
+    "team": "Hart of the Order",
+    "avg_value": 4.2,
+    "sum_value": 58.1,
+    "credited_count": 14,
+    "players": [
+        {
+            "name": "Juan Soto",
+            "display_name": "Juan Soto",
+            "player_type": "hitter",
+            "kind": "keeper",
+            "slot": None,
+            "preseason_var": 38.1,
+            "est_var_proj": 44.3,
+            "value_proj": 12.3,
+            "value_ytd": 3.1,
+            "skill": 6.1,
+            "luck": 6.2,
+        }
+    ],
+}
+
+
+def test_transactions_draft_empty_placeholder(client):
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        side_effect=_txn_draft_cache([], None),
+    ):
+        resp = client.get("/transactions")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "tab-strip" in body  # tab strip present even with empty draft data
+    assert "No draft data" in body
+
+
+def test_transactions_empty_txn_but_populated_draft(client):
+    # Post-draft / pre-first-transaction: txn empty, draft populated.
+    # Guards the hoist-out-of-conditional restructure AND that both tabs render.
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        side_effect=_txn_draft_cache([], [_DRAFT_TEAM]),
+    ):
+        resp = client.get("/transactions")
+    assert resp.status_code == 200
+    body = resp.get_data(as_text=True)
+    assert "tab-strip" in body
+    assert "Draft Grade" in body  # both tab labels render
+    assert "switchTab" in body  # tab JS hoisted, present regardless of txn_data
+    assert "toggleTxnDetail" in body  # expand JS hoisted too
+    assert "Juan Soto" in body  # draft rows render

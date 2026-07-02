@@ -288,3 +288,117 @@ def test_team_rollup_sum_avg_count():
     assert r.credited_count == 2
     assert abs(r.sum_value - 7.0) < 1e-9  # value_proj: 4.0 + 3.0
     assert abs(r.avg_value - 3.5) < 1e-9
+
+
+def _pv(team, name, value_proj, **kw):
+    """Construct a PlayerValue with sensible finite defaults; override via kw."""
+    fields = dict(
+        player_type="hitter",
+        slot=None,
+        baseline_kind="drafted",
+        preseason_var=10.0,
+        est_var_proj=12.0,
+        est_var_ytd=6.0,
+        value_ytd=2.0,
+        skill=1.0,
+        luck=1.0,
+    )
+    fields.update(kw)
+    return dv.PlayerValue(team=team, name=name, value_proj=value_proj, **fields)
+
+
+def test_build_cache_groups_and_sorts_teams_and_players():
+    players = [
+        _pv("Bravo", "B1", 1.0),
+        _pv("Bravo", "B2", 5.0),
+        _pv("Alpha", "A1", 3.0),
+    ]
+    teams = [
+        dv.TeamRollup("Alpha", 3.0, 3.0, 1),
+        dv.TeamRollup("Bravo", 6.0, 3.0, 2),
+    ]
+    out = dv.build_draft_value_cache(players, teams)
+    assert out["horizon"] == "proj"
+    names = [t["team"] for t in out["teams"]]
+    # Equal avg_value (3.0, 3.0) -> stable order preserves input (Alpha, Bravo)
+    assert names == ["Alpha", "Bravo"]
+    bravo = next(t for t in out["teams"] if t["team"] == "Bravo")
+    # players sorted by value_proj desc within team
+    assert [p["name"] for p in bravo["players"]] == ["B2", "B1"]
+    assert bravo["credited_count"] == 2
+
+
+def test_build_cache_nan_avg_team_sinks():
+    players = [_pv("Good", "G", 4.0), _pv("Empty", "E", float("nan"))]
+    teams = [
+        dv.TeamRollup("Empty", 0.0, float("nan"), 0),
+        dv.TeamRollup("Good", 4.0, 4.0, 1),
+    ]
+    out = dv.build_draft_value_cache(players, teams)
+    assert out["teams"][0]["team"] == "Good"
+    assert out["teams"][-1]["team"] == "Empty"
+    assert out["teams"][-1]["avg_value"] is None  # NaN -> null
+
+
+def test_build_cache_nonfinite_to_null_and_strict_json():
+    players = [_pv("T", "P", float("nan"), skill=float("inf"), luck=float("-inf"))]
+    teams = [dv.TeamRollup("T", 0.0, 0.0, 0)]
+    out = dv.build_draft_value_cache(players, teams)
+    p = out["teams"][0]["players"][0]
+    assert p["value_proj"] is None
+    assert p["skill"] is None
+    assert p["luck"] is None
+    # No non-finite float leaks -> strict JSON succeeds.
+    _json.dumps(out, allow_nan=False)
+
+
+def test_build_cache_off_board_flier_nulls_but_finite_value():
+    players = [_pv("T", "Flier", 0.0, preseason_var=None, skill=None, luck=None)]
+    teams = [dv.TeamRollup("T", 0.0, 0.0, 1)]
+    out = dv.build_draft_value_cache(players, teams)
+    p = out["teams"][0]["players"][0]
+    assert p["preseason_var"] is None
+    assert p["skill"] is None
+    assert p["luck"] is None
+    assert p["value_proj"] == 0.0  # finite, still present
+
+
+def test_build_cache_field_mapping():
+    players = [_pv("T", "P", 3.0, baseline_kind="keeper")]
+    teams = [dv.TeamRollup("T", 3.0, 3.0, 1)]
+    p = dv.build_draft_value_cache(players, teams)["teams"][0]["players"][0]
+    assert "est_var_ytd" not in p  # dropped
+    assert p["value_ytd"] == 2.0  # kept
+    assert p["kind"] == "keeper"  # baseline_kind -> kind
+    assert isinstance(p["player_type"], str)
+
+
+def test_build_cache_credited_count_may_be_below_player_count():
+    # Two rows, one ungradeable (NaN value_proj); rollup credits only 1.
+    players = [_pv("T", "Good", 3.0), _pv("T", "NaNrow", float("nan"))]
+    teams = [dv.TeamRollup("T", 3.0, 3.0, 1)]
+    team = dv.build_draft_value_cache(players, teams)["teams"][0]
+    assert team["credited_count"] == 1
+    assert len(team["players"]) == 2
+    nan_row = next(p for p in team["players"] if p["name"] == "NaNrow")
+    assert nan_row["value_proj"] is None
+
+
+def test_build_cache_two_way_display_name_per_team():
+    # Same name, both types, SAME team -> suffixed; identical name solo on
+    # ANOTHER team -> no suffix (per-team scope).
+    players = [
+        _pv("T1", "Shohei Ohtani", 5.0, player_type="hitter"),
+        _pv("T1", "Shohei Ohtani", 4.0, player_type="pitcher"),
+        _pv("T2", "Shohei Ohtani", 3.0, player_type="hitter"),
+    ]
+    teams = [
+        dv.TeamRollup("T1", 9.0, 4.5, 2),
+        dv.TeamRollup("T2", 3.0, 3.0, 1),
+    ]
+    out = dv.build_draft_value_cache(players, teams)
+    t1 = next(t for t in out["teams"] if t["team"] == "T1")
+    t2 = next(t for t in out["teams"] if t["team"] == "T2")
+    disp_t1 = sorted(p["display_name"] for p in t1["players"])
+    assert disp_t1 == ["Shohei Ohtani (H)", "Shohei Ohtani (P)"]
+    assert t2["players"][0]["display_name"] == "Shohei Ohtani"  # solo -> no suffix
