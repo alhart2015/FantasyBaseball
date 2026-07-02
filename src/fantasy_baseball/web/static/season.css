@@ -3613,7 +3613,7 @@ td[style*="--neg"] {
     .page-stash .stash-table td { padding: 7px 4px; font-size: 11.5px; }
 }
 
-/* Tab strip — shared by /trends and /transactions. Promoted from trends.html. */
+/* Tab strip -- shared by /trends and /transactions. Promoted from trends.html. */
 .tab-strip {
   display: flex;
   gap: 4px;
