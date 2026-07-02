@@ -7,7 +7,11 @@ import pandas as pd
 from fantasy_baseball.data.db import get_blended_projections, get_positions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
-from fantasy_baseball.sgp.player_value import calculate_player_sgp
+from fantasy_baseball.sgp.player_value import (
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
+    calculate_player_sgp,
+)
 from fantasy_baseball.sgp.replacement import (
     calculate_replacement_rates,
     position_aware_replacement_levels,
@@ -29,11 +33,29 @@ def build_draft_board(
     """Build a ranked draft board from projections and position data in SQLite."""
     hitters, pitchers = get_blended_projections(conn)
     positions = get_positions(conn)
+    board, _scale = build_board_from_frames(hitters, pitchers, positions, roster_slots, num_teams)
+    return board
 
+
+def build_board_from_frames(
+    hitters: pd.DataFrame,
+    pitchers: pd.DataFrame,
+    positions: dict[str, list[str]],
+    roster_slots: dict[str, int] | None = None,
+    num_teams: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """Compute a ranked draft board from already-loaded projection frames + a
+    positions dict.
+
+    Shared by build_draft_board (DB source) and the draft-value module (Apr-1
+    CSV source). Returns ``(board, scale)`` where ``scale`` carries the pool-derived
+    rates + floors + team volumes so realized/estimate VAR can be scored on the SAME
+    scale. Callers that only need the board (build_draft_board) discard ``scale``.
+    """
     # Build normalized lookup for positions.
     # When names collide after normalization (e.g. 'José Ramírez' the 3B
     # vs 'Jose Ramirez' the minor-league P), keep the entry with more
-    # eligible positions — the MLB player will have real positions while
+    # eligible positions -- the MLB player will have real positions while
     # the prospect typically only has a generic 'P' or 'OF'.
     norm_positions: dict[str, list[str]] = {}
     for k, v in positions.items():
@@ -82,7 +104,7 @@ def build_draft_board(
     # Add normalized name column for matching
     pool["name_normalized"] = pool["name"].apply(normalize_name)
 
-    # Unique player ID — use fg_id when available (handles same-name players
+    # Unique player ID -- use fg_id when available (handles same-name players
     # like Max Muncy LAD vs Max Muncy ATH), fall back to name::type.
     if "fg_id" in pool.columns and pool["fg_id"].notna().all():
         pool["player_id"] = pool["fg_id"].astype(str) + "::" + pool["player_type"]
@@ -91,7 +113,14 @@ def build_draft_board(
 
     board = pool.sort_values("var", ascending=False).reset_index(drop=True)
     _validate_top_adp_players(board, hitters, pitchers)
-    return board
+    scale = {
+        "denoms": denoms,
+        "repl_rates": repl_rates,
+        "replacement_levels": replacement_levels,
+        "team_ab": DEFAULT_TEAM_AB,
+        "team_ip": DEFAULT_TEAM_IP,
+    }
+    return board, scale
 
 
 def rebuild_board(config_path: Path, board_path: Path) -> int:
