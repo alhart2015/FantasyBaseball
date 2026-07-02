@@ -47,20 +47,28 @@ def _top_cat_label(row: dict[str, Any], tone: Literal["hot", "cold"]) -> str:
     """Find the cat with the highest probability matching the tone.
 
     Alphabetical tiebreak on the category enum value for determinism.
-    The displayed label uppercases both the tone and the category code.
+    The displayed label uppercases both the tone and the category code, and
+    appends the top cat's P(continuation) as a percent (e.g. ``HOT · HR 62%``)
+    so a weak streak ("cold 55%") reads differently from a strong one on the
+    chip itself, not just in the tooltip. The percent is omitted when the
+    model has no probability for that cat (rather than rendering "0%").
     """
     target = tone  # labels in the cache are lowercase ("hot"/"cold")
-    candidates: list[tuple[float, str]] = []
+    candidates: list[tuple[float, str, float | None]] = []
     for cat_value, score in row["scores"].items():
         if score["label"] != target:
             continue
-        prob = score["probability"] if score["probability"] is not None else 0.0
-        candidates.append((prob, cat_value))
+        raw = score["probability"]
+        prob = raw if raw is not None else 0.0
+        candidates.append((prob, cat_value, raw))
     if not candidates:
         return "—"
     candidates.sort(key=lambda x: (-x[0], x[1]))
-    top_cat = candidates[0][1]
-    return f"{target.upper()} · {top_cat.upper()}"
+    _, top_cat, top_prob = candidates[0]
+    base = f"{target.upper()} · {top_cat.upper()}"
+    if top_prob is None:
+        return base
+    return f"{base} {round(top_prob * 100)}%"
 
 
 def build_indicator(name: str, payload: dict[str, Any] | None) -> Indicator | None:

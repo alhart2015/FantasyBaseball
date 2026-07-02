@@ -116,7 +116,7 @@ def test_build_indicator_hot_picks_top_hot_cat() -> None:
     ind = build_indicator("Juan Soto", payload)
     assert ind is not None
     assert ind.tone == "hot"
-    assert ind.label == "HOT · HR"
+    assert ind.label == "HOT · HR 62%"
 
 
 def test_build_indicator_cold_picks_top_cold_cat() -> None:
@@ -155,7 +155,7 @@ def test_build_indicator_cold_picks_top_cold_cat() -> None:
     ind = build_indicator("Juan Soto", payload)
     assert ind is not None
     assert ind.tone == "cold"
-    assert ind.label == "COLD · HR"
+    assert ind.label == "COLD · HR 62%"
 
 
 def test_build_indicator_neutral_when_composite_zero() -> None:
@@ -253,7 +253,7 @@ def test_build_indicator_tiebreak_alphabetical() -> None:
     payload = serialize_report(rpt)
     ind = build_indicator("Tied Guy", payload)
     assert ind is not None
-    assert ind.label == "HOT · HR"  # HR alphabetically before R
+    assert ind.label == "HOT · HR 60%"  # HR alphabetically before R
 
 
 def test_indicator_is_frozen() -> None:
