@@ -940,8 +940,12 @@ def _finite(x: float | None) -> float | None:
 
 
 def _rank(value: float | None) -> float:
-    """Sort key that sinks None/NaN to the bottom of a descending sort."""
-    return -math.inf if value is None or math.isnan(value) else value
+    """Sort key that sinks non-finite/None values to the bottom of a descending sort.
+
+    Sinks exactly what ``_finite`` nulls (None/NaN/inf), so a value that renders as a
+    blank ``-`` cell also sorts last rather than by a raw ``inf`` key.
+    """
+    return value if value is not None and math.isfinite(value) else -math.inf
 
 
 def build_draft_value_cache(players: list[PlayerValue], teams: list[TeamRollup]) -> dict[str, Any]:
