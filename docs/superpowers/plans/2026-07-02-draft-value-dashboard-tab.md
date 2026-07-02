@@ -52,13 +52,9 @@
 
 - [ ] **Step 1: Write the failing tests**
 
-Add to `tests/test_analysis/test_draft_value.py` (top-level, after existing imports — `import json`, `import math` may be needed; `from fantasy_baseball.analysis import draft_value as dv` already imported):
+Add to `tests/test_analysis/test_draft_value.py` (top-level). The file already imports `json as _json` and `draft_value as dv` (lines 1, 6) — reuse `_json`; **do not add new imports** (an unused `import math`/duplicate `import json` would fail the Task 1 Step 5 ruff gate with F401):
 
 ```python
-import json
-import math
-
-
 def _pv(team, name, value_proj, **kw):
     """Construct a PlayerValue with sensible finite defaults; override via kw."""
     defaults = dict(
@@ -131,7 +127,7 @@ def test_build_cache_nonfinite_to_null_and_strict_json():
     assert p["skill"] is None
     assert p["luck"] is None
     # No non-finite float leaks -> strict JSON succeeds.
-    json.dumps(out, allow_nan=False)
+    _json.dumps(out, allow_nan=False)
 
 
 def test_build_cache_off_board_flier_nulls_but_finite_value():
@@ -375,7 +371,7 @@ Expected: FAIL — `test_draft_value_cache_written` errors (no `_compute_draft_v
 
 - [ ] **Step 4: Add the `_compute_draft_value` step**
 
-In `src/fantasy_baseball/web/refresh_pipeline.py`, add the call in `run()` immediately after `self._analyze_transactions()` (line ~520):
+In `src/fantasy_baseball/web/refresh_pipeline.py`, add the call in the step sequence in `RefreshRun._run_pipeline_steps()` (line ~498) immediately after `self._analyze_transactions()` (line ~520):
 
 ```python
         self._analyze_transactions()
@@ -419,8 +415,8 @@ Expected: PASS.
 
 - [ ] **Step 6: Run the gates**
 
-Run: `ruff check src/fantasy_baseball/data/cache_keys.py src/fantasy_baseball/web/refresh_pipeline.py tests/test_web/ && ruff format --check src/fantasy_baseball/data/cache_keys.py src/fantasy_baseball/web/refresh_pipeline.py tests/test_web/`
-Expected: clean. (`refresh_pipeline.py` may not be under `[tool.mypy].files`; skip mypy if so, else run it.)
+Run: `ruff check src/fantasy_baseball/data/cache_keys.py src/fantasy_baseball/web/refresh_pipeline.py tests/test_web/ && ruff format --check src/fantasy_baseball/data/cache_keys.py src/fantasy_baseball/web/refresh_pipeline.py tests/test_web/ && mypy src/fantasy_baseball/web/refresh_pipeline.py`
+Expected: clean. (`refresh_pipeline.py` IS under `[tool.mypy].files` — run mypy on it; the new method returns `None` and uses typed `write_cache`/`CacheKey`, so it type-checks.)
 
 - [ ] **Step 7: Commit**
 
@@ -819,8 +815,8 @@ Expected: PASS (3 tests).
 
 - [ ] **Step 6: Run the gates**
 
-Run: `ruff check src/fantasy_baseball/web/season_routes.py tests/test_web/test_season_routes.py && ruff format --check src/fantasy_baseball/web/season_routes.py tests/test_web/test_season_routes.py`
-Expected: clean.
+Run: `ruff check src/fantasy_baseball/web/season_routes.py tests/test_web/test_season_routes.py && ruff format --check src/fantasy_baseball/web/season_routes.py tests/test_web/test_season_routes.py && mypy src/fantasy_baseball/web/season_routes.py`
+Expected: clean. (`season_routes.py` IS under `[tool.mypy].files`; the added `read_cache_dict(...) or {}` + `.get("teams", [])` are already-typed calls, so it type-checks.)
 
 - [ ] **Step 7: Commit**
 
