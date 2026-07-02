@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import statistics
 from dataclasses import dataclass
 from datetime import date
@@ -11,7 +12,6 @@ from pathlib import Path
 from typing import Any
 
 import pandas as pd
-import yaml
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.cache_keys import CacheKey
@@ -23,6 +23,7 @@ from fantasy_baseball.data.redis_store import (
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_board_from_frames
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
+from fantasy_baseball.sgp.rankings import rank_key
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import REPLACEMENT_BY_POSITION, Category
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -42,11 +43,6 @@ _CONFIG_DIR = _REPO_ROOT / "config"
 _CONFIG = _CONFIG_DIR / "league.yaml"
 _DRAFT_ORDER = _CONFIG_DIR / "draft_order.json"
 _DRAFT_STATE = _REPO_ROOT / "data" / "draft_state.json"
-
-
-def _pkey(norm: str, ptype: str) -> str:
-    """Cross-source join key: ``name_normalized::player_type``."""
-    return f"{norm}::{ptype}"
 
 
 @dataclass(frozen=True)
@@ -77,7 +73,6 @@ def reproduce_draft_day_board() -> tuple[pd.DataFrame, ScaleInputs]:
         positions,
         roster_slots=config.roster_slots or None,
         num_teams=config.num_teams,
-        return_scale=True,
     )
     scale = ScaleInputs(**scale_d)
     return board, scale
@@ -95,7 +90,14 @@ def frozen_drift_summary(
     systematic drift is worth surfacing (wrong config/vintage) but is not a stop.
     """
     frozen_path = Path(frozen_path) if frozen_path else _FROZEN_BOARD
-    frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
+    empty: dict[str, float] = {"joined": 0, "over_tol": 0, "max": 0.0, "median": 0.0}
+    try:
+        frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        # SOFT check: a missing (deleted to force a rebuild) or malformed frozen board
+        # must not abort the whole report -- log and skip the cross-check.
+        logger.warning("draft-value: skipping frozen drift check (%s): %s", frozen_path, exc)
+        return empty
     frozen_var = {
         row["player_id"]: float(row["var"])
         for row in frozen
@@ -135,8 +137,12 @@ def _sgp(line: dict[str, Any], scale: ScaleInputs, team_ab: float, team_ip: floa
     return calculate_player_sgp(
         pd.Series(line),
         denoms=scale.denoms,
-        team_ab=int(team_ab),
-        team_ip=int(team_ip),
+        # Floor team volumes at 1: near f=0 (opening day) team_ab/team_ip scale toward 0
+        # and int() truncates them to 0, which zeroes the rate-SGP denominator
+        # (one_sgp_in_hits = denom * team_ab) and yields NaN. A real run (f>~0.001) is
+        # unaffected; this only rescues the degenerate to-date scale from silent NaN.
+        team_ab=max(1, int(team_ab)),
+        team_ip=max(1, int(team_ip)),
         replacement_avg=scale.repl_rates["avg"],
         replacement_era=scale.repl_rates["era"],
         replacement_whip=scale.repl_rates["whip"],
@@ -186,37 +192,60 @@ def score_var(
     player_type: str,
     scale: ScaleInputs,
     fraction: float = 1.0,
+    scale_counting: bool = True,
+    floors: dict[str, float] | None = None,
 ) -> float:
     """Score a stat line into VAR on the board scale (projected or YTD-scaled).
 
-    ``fraction < 1.0`` applies the YTD to-date scaling: counting + volume + team
-    volumes scale by ``fraction`` while rates (AVG/ERA/WHIP) are held, and the
-    position floors are recomputed on the same to-date scale. ``player_type`` is
-    ``"hitter"`` or ``"pitcher"``. The floors are always recomputed here via
-    ``_to_date_floors`` (which early-returns the board floors at ``fraction==1.0``,
-    so the projected path stays cheap).
+    ``fraction < 1.0`` applies the YTD to-date scaling: the team volumes scale by
+    ``fraction`` and the position floors are recomputed on the same to-date scale,
+    while rates (AVG/ERA/WHIP) are held. ``player_type`` is ``"hitter"`` or
+    ``"pitcher"``. The to-date floors default to ``_to_date_floors(scale, fraction)``
+    (which early-returns the board floors at ``fraction==1.0``, so the projected path
+    stays cheap); pass a prebuilt ``floors`` to reuse one dict across the many YTD calls
+    at a fixed ``fraction`` instead of rebuilding it each call.
+
+    ``scale_counting`` governs the LINE's counting stats. The EXPECTED / par side
+    (a projected full-season line) keeps the default ``True`` so its counting stats
+    scale by ``fraction`` to a to-date expectation. The ACTUAL-to-date side passes
+    ``False``: those counting stats are already accumulated to date and must be used
+    as-is -- per the spec, only the team denominators scale on the actual side.
+    Double-scaling the actual line understates every player's to-date value.
     """
     # player_type must be "hitter"/"pitcher" (StrEnum-compatible) so calculate_player_sgp
     # dispatches (player.get("player_type") == PlayerType.HITTER/PITCHER, player_value.py:104,121).
     scaled: dict[str, Any] = dict(line)
     scaled["player_type"] = player_type
     counting = _COUNTING_HIT if player_type == "hitter" else _COUNTING_PIT
-    if fraction != 1.0:
+    if fraction != 1.0 and scale_counting:
         for k in counting:
             if scaled.get(k) is not None:
                 scaled[k] = scaled[k] * fraction
     team_ab = scale.team_ab * fraction
     team_ip = scale.team_ip * fraction
     total_sgp = _sgp(scaled, scale, team_ab, team_ip)
-    floors = _to_date_floors(scale, fraction)
-    # calculate_var needs total_sgp + positions + ip (pitcher floor routing reads
-    # player.get("ip", 0.0) via _pitcher_floor_key -> role_from_ip, var.py:18).
+    if floors is None:
+        floors = _to_date_floors(scale, fraction)
+    # calculate_var routes the pitcher floor by ip (var.py:18 _pitcher_floor_key ->
+    # role_from_ip, 100-IP threshold) -- but a starter/reliever ROLE is a full-season
+    # property. Route by a full-season-equivalent ip so a real SP is graded vs the SP
+    # floor even mid-season (its to-date ip ~90 would otherwise route to the RP floor,
+    # and the actual and par sides could land on opposite sides of the cutoff). f in
+    # {0, 1} needs no rescale.
+    if player_type == "pitcher" and fraction not in (0.0, 1.0):
+        # par line carries its pre-scale projected ip; the actual line extrapolates its
+        # accumulated ip to full-season pace (ip / f).
+        raw_ip = line.get("ip", 0.0)
+        raw_ip = 0.0 if raw_ip is None else float(raw_ip)
+        routing_ip = raw_ip if scale_counting else raw_ip / fraction
+    else:
+        routing_ip = scaled.get("ip", 0.0)
     series = pd.Series(
         {
             "total_sgp": total_sgp,
             "positions": list(positions),
             "player_type": player_type,
-            "ip": scaled.get("ip", 0.0),
+            "ip": routing_ip,
         }
     )
     return calculate_var(series, floors)
@@ -228,11 +257,6 @@ class DraftPick:
     team: str
     player_name: str
     is_keeper: bool
-
-
-def _load_league() -> dict[str, Any]:
-    data: dict[str, Any] = yaml.safe_load(_CONFIG.read_text(encoding="utf-8"))
-    return data
 
 
 def reconstruct_draft() -> list[DraftPick]:
@@ -247,9 +271,15 @@ def reconstruct_draft() -> list[DraftPick]:
     """
     order = json.loads(_DRAFT_ORDER.read_text(encoding="utf-8"))
     state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
-    league = _load_league()
     drafted: list[str] = state["drafted_players"]
-    keeper_defs: list[dict[str, Any]] = league["keepers"]
+    keeper_defs: list[dict[str, Any]] = load_config(_CONFIG).keepers
+    # load_config defaults keepers to [] on a missing/misspelled section (config.py),
+    # so fail fast with a clear cause rather than a misleading downstream pick-count error.
+    if not keeper_defs:
+        raise ValueError(
+            f"No keepers in {_CONFIG}: draft reconstruction requires the league.yaml "
+            "'keepers:' section. Check the config is present and the key is spelled correctly."
+        )
 
     picks: list[DraftPick] = []
     n_keep = len(keeper_defs)
@@ -282,11 +312,11 @@ def validate_reconstruction(
     team's roster reconstructs as a superset. Returns a list of problems ([] == pass).
     """
     problems: list[str] = []
-    league = _load_league()
+    keepers = load_config(_CONFIG).keepers
     n_live = sum(1 for p in picks if not p.is_keeper)
     if n_live != 200:
         problems.append(f"non-keeper pick count {n_live} != 200")
-    keeper_norm = {(normalize_name(k["name"]), k["team"]) for k in league["keepers"]}
+    keeper_norm = {(normalize_name(k["name"]), k["team"]) for k in keepers}
     recon_keeper_norm = {(normalize_name(p.player_name), p.team) for p in picks if p.is_keeper}
     missing = keeper_norm - recon_keeper_norm
     if missing:
@@ -305,21 +335,11 @@ def _board_index(board: pd.DataFrame) -> dict[str, Any]:
     """Map ``name_normalized::player_type`` -> board row (VAR tie-break on collisions)."""
     idx: dict[str, Any] = {}
     for _, row in board.iterrows():
-        key = _pkey(row["name_normalized"], row["player_type"])
+        key = rank_key(row["name"], row["player_type"])
         cur = idx.get(key)
         if cur is None or float(row["var"]) > float(cur["var"]):
             idx[key] = row
     return idx
-
-
-def _match_board_row(name: str, bindex: dict[str, Any]) -> Any:
-    """Join a pick name to its board row across both player types; None if off-board."""
-    norm = normalize_name(name)
-    for ptype in ("hitter", "pitcher"):
-        row = bindex.get(_pkey(norm, ptype))
-        if row is not None:
-            return row
-    return None
 
 
 @dataclass
@@ -338,6 +358,7 @@ def _var_for_row(
     row: Any,
     scale: ScaleInputs | None,
     fraction: float,
+    floors: dict[str, float] | None = None,
 ) -> float:
     """VAR for a board row: preseason VAR at f=1, else rescored on the to-date scale."""
     if fraction == 1.0:
@@ -351,38 +372,36 @@ def _var_for_row(
         else ("w", "k", "sv", "era", "whip", "ip")
     )
     line = {k: row[k] for k in keys}
-    return score_var(line, list(row["positions"]), ptype, scale, fraction)
+    return score_var(line, list(row["positions"]), ptype, scale, fraction, floors=floors)
 
 
 def build_par_curve(
-    picks: list[DraftPick],
-    board: pd.DataFrame,
+    typed_picks: list[tuple[DraftPick, str]],
+    bindex: dict[str, Any],
     fraction: float = 1.0,
     scale: ScaleInputs | None = None,
-    bindex: dict[str, Any] | None = None,
+    floors: dict[str, float] | None = None,
 ) -> ParCurve:
-    """Build the par curve from reconstructed picks joined to the preseason board.
+    """Build the par curve from typed picks joined to the preseason board.
 
-    On-board drafted players contribute their (optionally to-date rescored) preseason
-    VAR to a descending par curve; off-board fliers are skipped so the curve shrinks.
-    Keeper par is the flat mean of the keeper VARs (keepers are elite, always on-board).
-    ``fraction < 1.0`` requires ``scale`` so ``_var_for_row`` can rescore to the
-    to-date scale. Pass ``bindex`` to reuse a prebuilt board index instead of
-    rebuilding it from ``board``.
+    Each pick is matched to its board row by its ASSIGNED ``name::player_type``, so a
+    two-way player's drafted-pitcher pick contributes his PITCHER VAR (not his hitter
+    VAR) -- consistent with how that pick is scored, and not double-counting the bat
+    already credited to his keeper. On-board drafted players contribute their
+    (optionally to-date rescored) preseason VAR to a descending par curve; off-board
+    fliers are skipped so the curve shrinks. Keeper par is the flat mean of the keeper
+    VARs. ``fraction < 1.0`` requires ``scale`` so ``_var_for_row`` can rescore to the
+    to-date scale; pass ``floors`` (the to-date floors at that ``fraction``) to reuse
+    one dict across all picks instead of rebuilding it per pick.
     """
-    if bindex is None:
-        bindex = _board_index(board)
     drafted_vars: list[float] = []
     keeper_vars: list[float] = []
-    for p in picks:
-        row = _match_board_row(p.player_name, bindex)
+    for pick, ptype in typed_picks:
+        row = bindex.get(rank_key(pick.player_name, ptype))
         if row is None:
             continue  # off-board flier: excluded from par curve
-        v = _var_for_row(row, scale, fraction)
-        if p.is_keeper:
-            keeper_vars.append(v)
-        else:
-            drafted_vars.append(v)
+        v = _var_for_row(row, scale, fraction, floors=floors)
+        (keeper_vars if pick.is_keeper else drafted_vars).append(v)
     drafted_vars.sort(reverse=True)
     keeper_par = sum(keeper_vars) / len(keeper_vars) if keeper_vars else float("nan")
     return ParCurve(drafted_vars, keeper_par)
@@ -504,7 +523,10 @@ def load_full_season_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], dic
                 # hitter AND a pitcher record under ONE mlbam id; keying by id alone
                 # would let one overwrite the other.
                 by_mlbam[(mlbam, ptype)] = line
-            key = _pkey(normalize_name(rec["name"]), ptype)
+            name = rec.get("name") or ""
+            if not name:
+                continue  # nameless record: mlbam-keyed above, but no name fallback
+            key = rank_key(name, ptype)
             _insert_by_name(by_name, name_mlbam, key, line, vol, mlbam)
     return by_mlbam, by_name
 
@@ -537,7 +559,7 @@ def load_actual_to_date_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], 
             name = rec.get("name") or ""
             if not name:
                 continue
-            key = _pkey(normalize_name(name), ptype)
+            key = rank_key(name, ptype)
             _insert_by_name(by_name, name_mlbam, key, line, vol, mlbam)
     return by_mlbam, by_name
 
@@ -582,6 +604,7 @@ def compute_player_value(
     fraction: float,
     slot: int | None = None,
     missing_line_est: float | None = None,
+    floors_ytd: dict[str, float] | None = None,
 ) -> PlayerValue:
     """Score a player's projected and YTD VAR and decompose the projected value.
 
@@ -594,7 +617,8 @@ def compute_player_value(
     ``missing_line_est`` is the estimated VAR used when a stat line is absent. Default
     ``None`` yields ``None`` estimates (skip). Pass ``0.0`` to score a drafted/kept
     player who never played at replacement level, so value == ``0 - par == -par`` and a
-    wasted pick is penalized rather than silently dropped.
+    wasted pick is penalized rather than silently dropped. ``floors_ytd`` is the
+    prebuilt to-date floors at ``fraction`` (reused across picks); ``None`` rebuilds it.
     """
     est_proj = (
         score_var(full_line, positions, player_type, scale, 1.0)
@@ -602,7 +626,18 @@ def compute_player_value(
         else missing_line_est
     )
     est_ytd = (
-        score_var(todate_line, positions, player_type, scale, fraction)
+        # todate_line is the ACTUAL season-to-date accumulation: score it as-is
+        # (scale_counting=False) so its counting stats are NOT re-scaled by f. Only
+        # the team denominators + floors scale to date (spec: YTD to-date scaling).
+        score_var(
+            todate_line,
+            positions,
+            player_type,
+            scale,
+            fraction,
+            scale_counting=False,
+            floors=floors_ytd,
+        )
         if todate_line is not None
         else missing_line_est
     )
@@ -671,13 +706,34 @@ def roll_up_team(
     """Roll a team's per-player values into sum, per-player average, and count.
 
     ``horizon`` picks ``value_proj`` (``"proj"``) or ``value_ytd`` (otherwise). Only
-    non-``None`` values are credited (values can be ``0.0`` or negative, so filter on
-    ``is not None``, never truthiness). ``avg_value`` is ``NaN`` when no player is
-    credited. ``player_values`` covers every drafted pick + keeper credited to the
+    finite values are credited (values can be ``0.0`` or negative, so filter on
+    ``is not None``, never truthiness; ``NaN`` is also dropped so an unmatched keeper's
+    NaN par cannot poison the whole team sum). ``avg_value`` is ``NaN`` when no player
+    is credited. ``player_values`` covers every drafted pick + keeper credited to the
     team, so the sum, average, and credited count grade the full draft.
     """
     attr = "value_proj" if horizon == "proj" else "value_ytd"
-    vals = [getattr(pv, attr) for pv in player_values if getattr(pv, attr) is not None]
+    # Dropping NaN avoids poisoning the sum, but NaN means a player couldn't be graded
+    # (e.g. keeper_par is NaN because no keeper matched the board) -- surface it rather
+    # than silently grading over an incomplete roster.
+    vals: list[float] = []
+    dropped_nan = 0
+    for pv in player_values:
+        v = getattr(pv, attr)
+        if v is None:
+            continue
+        if math.isnan(v):
+            dropped_nan += 1
+        else:
+            vals.append(v)
+    if dropped_nan:
+        logger.warning(
+            "draft-value: team %s has %d ungradeable player(s) (NaN %s -- unmatched "
+            "keeper/board?) excluded from the roll-up; the grade covers the rest.",
+            team,
+            dropped_nan,
+            attr,
+        )
     n = len(vals)
     total = sum(vals)
     avg = total / n if n else float("nan")
@@ -689,10 +745,21 @@ def _default_positions(player_type: str) -> list[str]:
     return ["OF"] if player_type == "hitter" else ["SP"]
 
 
+def _resolve_type(avail_types: set[str]) -> str:
+    """Fallback type when notes/claims don't decide: the sole board type, else hitter.
+
+    ``avail_types`` is drawn from {"hitter", "pitcher"}, so a 2-element set is always
+    {hitter, pitcher} and an empty set is off-board -- both default to hitter.
+    """
+    if len(avail_types) == 1:
+        return next(iter(avail_types))
+    return "hitter"
+
+
 def _assign_pick_types(
     picks: list[DraftPick],
-    board: pd.DataFrame,
-    league: dict[str, Any],
+    bindex: dict[str, Any],
+    keepers: list[dict[str, Any]],
 ) -> list[tuple[DraftPick, str]]:
     """Assign a player_type to every pick, two-way aware.
 
@@ -704,18 +771,25 @@ def _assign_pick_types(
     keeper note), so the drafted Ohtani takes "pitcher".
 
     A KEEPER honors its league.yaml note ("batter only" -> hitter, "pitcher only" ->
-    pitcher); otherwise it takes the sole board type, else defaults to hitter (or the
-    lone pitcher type, or hitter off-board). A DRAFTED pick prefers an unclaimed board
-    type (pitcher first, so a two-way second pick becomes pitcher), else the sole
-    board type, else hitter.
+    pitcher); otherwise it falls back to the sole board type (else hitter). A DRAFTED
+    pick prefers an unclaimed board type (pitcher first, so a two-way second pick
+    becomes pitcher), else the same sole-board-type-or-hitter fallback.
+
+    KNOWN LIMITATION: picks carry only a name (draft_state has no per-pick mlbam id),
+    so this cannot distinguish ONE two-way player from TWO DISTINCT same-name players
+    of different types (e.g. a hitter and a pitcher both named "Will Smith"). Both are
+    treated as a single two-way name and the board's two types are split across the
+    picks by claim order, which mis-assigns type (and thus the joined stat line) for
+    genuinely-distinct namesakes. Fixing this needs per-pick identity threaded through
+    reconstruct_draft. Accepted for v1 (no such collision in the 2026 draft); revisit
+    if the reconstruction ever gains mlbam ids.
     """
-    bindex = _board_index(board)
     avail: dict[str, set[str]] = {}
     for key in bindex:
         norm, ptype = key.rsplit("::", 1)
         avail.setdefault(norm, set()).add(ptype)
     keeper_notes: dict[str, str] = {}
-    for k in league["keepers"]:
+    for k in keepers:
         note = k.get("note")
         if note:
             keeper_notes[normalize_name(k["name"])] = str(note).lower()
@@ -731,24 +805,14 @@ def _assign_pick_types(
                 ptype = "hitter"
             elif "pitcher only" in note:
                 ptype = "pitcher"
-            elif len(avail_types) == 1:
-                ptype = next(iter(avail_types))
-            elif "hitter" in avail_types:
-                ptype = "hitter"
-            elif avail_types:  # board has only pitcher
-                ptype = "pitcher"
-            else:  # off-board keeper
-                ptype = "hitter"
+            else:
+                ptype = _resolve_type(avail_types)
         else:  # drafted
             unclaimed = avail_types - claimed.get(norm, set())
             if unclaimed:
                 ptype = "pitcher" if "pitcher" in unclaimed else next(iter(unclaimed))
-            elif len(avail_types) == 1:
-                ptype = next(iter(avail_types))
-            elif "hitter" in avail_types:
-                ptype = "hitter"
-            else:  # off-board flier
-                ptype = "hitter"
+            else:
+                ptype = _resolve_type(avail_types)
         claimed.setdefault(norm, set()).add(ptype)
         result.append((p, ptype))
     return result
@@ -774,8 +838,8 @@ def run_draft_value(
     # enforce the reconstruction gate against the user's known roster (spec oracle 6b)
     state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
     user_roster: list[str] = state.get("user_roster") or []
-    league = _load_league()
-    keeper_team = {normalize_name(k["name"]): k["team"] for k in league["keepers"]}
+    keepers = load_config(_CONFIG).keepers
+    keeper_team = {normalize_name(k["name"]): k["team"] for k in keepers}
     user_team = next(
         (keeper_team[normalize_name(n)] for n in user_roster if normalize_name(n) in keeper_team),
         None,
@@ -786,33 +850,41 @@ def run_draft_value(
     f = season_fraction() if fraction is None else fraction
 
     bindex = _board_index(board)
-    preseason = {k: float(v["var"]) for k, v in bindex.items()}
-    par_proj = build_par_curve(picks, board, fraction=1.0, bindex=bindex)
-    par_ytd = build_par_curve(picks, board, fraction=f, scale=scale, bindex=bindex)
+    # Assign each pick a player_type up front (two-way aware) so the par curve, the
+    # slot index, and the scoring all join the board by the SAME name::player_type key.
+    # Matching type-agnostically here would credit a two-way player's drafted-pitcher
+    # pick with his hitter VAR, corrupting the drafted par curve for every slot.
+    typed_picks = _assign_pick_types(picks, bindex, keepers)
+    # The to-date floors are pure over (scale, f), so build them once and reuse across
+    # the YTD par curve and every player's YTD score instead of rebuilding per call.
+    floors_ytd = _to_date_floors(scale, f)
+    par_proj = build_par_curve(typed_picks, bindex, fraction=1.0)
+    par_ytd = build_par_curve(typed_picks, bindex, fraction=f, scale=scale, floors=floors_ytd)
     full_by_mlbam, full_by_name = load_full_season_lines()
     td_by_mlbam, td_by_name = load_actual_to_date_lines()
 
-    # DRAFT-ORDER ordinal among on-board drafted picks.
+    # DRAFT-ORDER ordinal among on-board drafted picks, keyed by name::player_type.
     # par(slot) = drafted_pars[ordinal-1] (drafted_pars is VAR-sorted desc): the k-th
     # on-board drafted pick is measured against the k-th-best available VAR. This is the
     # spec's par(slot). Do NOT index by the player's OWN VAR rank -- that makes
     # par == own VAR, so skill == preseason_var - par == 0 for every drafted player.
-    slot_by_name: dict[str, int] = {}  # norm_name -> draft-order ordinal among on-board drafted
+    slot_by_key: dict[str, int] = {}
     onboard_ordinal = 0
-    for p in sorted((pk for pk in picks if not pk.is_keeper), key=lambda x: x.slot or 0):
-        if _match_board_row(p.player_name, bindex) is None:
+    for pick, ptype in sorted(
+        (tp for tp in typed_picks if not tp[0].is_keeper), key=lambda tp: tp[0].slot or 0
+    ):
+        key = rank_key(pick.player_name, ptype)
+        if bindex.get(key) is None:
             continue  # off-board flier: excluded from par curve and slot indexing
         onboard_ordinal += 1
-        slot_by_name[normalize_name(p.player_name)] = onboard_ordinal
+        slot_by_key[key] = onboard_ordinal
 
-    # Score every pick (keepers + drafted), two-way aware, crediting pick.team.
-    typed_picks = _assign_pick_types(picks, board, league)
+    # Score every pick (keepers + drafted), crediting pick.team.
     players: list[PlayerValue] = []
     for pick, ptype in typed_picks:
-        norm = normalize_name(pick.player_name)
-        key = _pkey(norm, ptype)
+        key = rank_key(pick.player_name, ptype)
         row = bindex.get(key)  # may be None: off-board flier
-        pre = preseason.get(key)
+        pre = float(row["var"]) if row is not None else None
         mlbam = _row_mlbam(row)
         positions = list(row["positions"]) if row is not None else _default_positions(ptype)
         # Join lines by mlbam id first (immune to namesake collisions like the two
@@ -827,12 +899,12 @@ def run_draft_value(
             todate_line = td_by_name.get(key)
         # draft-order ordinal among on-board drafted picks; also the compute slot arg
         # (slot == rank for drafted, None otherwise), so compute it once and reuse.
-        rank = slot_by_name.get(norm) if not pick.is_keeper else None
+        rank = slot_by_key.get(key) if not pick.is_keeper else None
         if pick.is_keeper:
             base_proj, base_ytd = par_proj.keeper_par, par_ytd.keeper_par
         else:  # drafted
-            base_proj = par_proj.par_for_slot(rank) if rank else 0.0
-            base_ytd = par_ytd.par_for_slot(rank) if rank else 0.0
+            base_proj = par_proj.par_for_slot(rank) if rank is not None else 0.0
+            base_ytd = par_ytd.par_for_slot(rank) if rank is not None else 0.0
         pv = compute_player_value(
             team=pick.team,
             name=pick.player_name,
@@ -846,10 +918,11 @@ def run_draft_value(
             todate_line=todate_line,
             scale=scale,
             fraction=f,
-            slot=(rank if not pick.is_keeper else None),
+            slot=rank,  # already None for keepers (see rank assignment above)
             # A drafted/kept player with NO stat line (never played) is scored at
             # replacement (0.0), so value == 0 - par == -par (a wasted pick is penalized).
             missing_line_est=0.0,
+            floors_ytd=floors_ytd,  # prebuilt to-date floors, reused across all picks
         )
         players.append(pv)
 

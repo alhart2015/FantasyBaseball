@@ -10,6 +10,7 @@ sync first (see ``run_season_dashboard.py``; it syncs from Upstash at startup
 unless ``--no-sync``). This script is read-only and does not sync on its own.
 """
 
+import math
 import sys
 from pathlib import Path
 
@@ -36,7 +37,7 @@ def main() -> None:
     lines.append("|---|---|---|---|")
     for t in sorted(
         teams,
-        key=lambda r: r.avg_value if r.avg_value == r.avg_value else -9e9,
+        key=lambda r: -math.inf if math.isnan(r.avg_value) else r.avg_value,
         reverse=True,
     ):
         lines.append(
@@ -50,7 +51,11 @@ def main() -> None:
     lines.append("|---|---|---|---|---|---|---|---|---|---|")
     for p in sorted(
         players,
-        key=lambda p: p.value_proj if p.value_proj is not None else -9e9,
+        # Sink None AND NaN (NaN value_proj arises when keeper_par is NaN -- no keeper
+        # matched the board); a NaN sort key gives Timsort an undefined, scrambled order.
+        key=lambda p: (
+            -math.inf if p.value_proj is None or math.isnan(p.value_proj) else p.value_proj
+        ),
         reverse=True,
     ):
         slot = "  -" if p.slot is None else f"{p.slot:3d}"

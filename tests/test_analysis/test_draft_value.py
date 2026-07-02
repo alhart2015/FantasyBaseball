@@ -62,8 +62,8 @@ def test_reconstruct_draft_shape_and_gate():
     # reconstructed roster is a superset of state["user_roster"].
     state = _json.loads(dv._DRAFT_STATE.read_text(encoding="utf-8"))
     user_roster = state["user_roster"]
-    league = dv._load_league()
-    keeper_team = {nn(k["name"]): k["team"] for k in league["keepers"]}
+    keepers = dv.load_config(dv._CONFIG).keepers
+    keeper_team = {nn(k["name"]): k["team"] for k in keepers}
     user_team = next(keeper_team[nn(n)] for n in user_roster if nn(n) in keeper_team)
     assert dv.validate_reconstruction(picks, known_team=user_team, known_roster=user_roster) == []
 
@@ -71,7 +71,10 @@ def test_reconstruct_draft_shape_and_gate():
 def test_par_curve_is_descending_and_keeper_mean():
     board, _scale = dv.reproduce_draft_day_board()
     picks = dv.reconstruct_draft()
-    curve = dv.build_par_curve(picks, board)
+    bindex = dv._board_index(board)
+    keepers = dv.load_config(dv._CONFIG).keepers
+    typed_picks = dv._assign_pick_types(picks, bindex, keepers)
+    curve = dv.build_par_curve(typed_picks, bindex)
     # drafted pars sorted descending
     assert curve.drafted_pars == sorted(curve.drafted_pars, reverse=True)
     # par_for_slot(1) is the top on-board drafted VAR

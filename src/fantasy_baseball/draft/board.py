@@ -29,25 +29,28 @@ def build_draft_board(
     conn,
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
-    return_scale: bool = False,
-):
+) -> pd.DataFrame:
     """Build a ranked draft board from projections and position data in SQLite."""
     hitters, pitchers = get_blended_projections(conn)
     positions = get_positions(conn)
-    return build_board_from_frames(
-        hitters, pitchers, positions, roster_slots, num_teams, return_scale
-    )
+    board, _scale = build_board_from_frames(hitters, pitchers, positions, roster_slots, num_teams)
+    return board
 
 
 def build_board_from_frames(
-    hitters, pitchers, positions, roster_slots=None, num_teams=None, return_scale=False
-):
+    hitters: pd.DataFrame,
+    pitchers: pd.DataFrame,
+    positions: dict[str, list[str]],
+    roster_slots: dict[str, int] | None = None,
+    num_teams: int | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Compute a ranked draft board from already-loaded projection frames + a
     positions dict.
 
     Shared by build_draft_board (DB source) and the draft-value module (Apr-1
-    CSV source). When return_scale, also returns the pool-derived rates + floors
-    so realized/estimate VAR can be scored on the SAME scale.
+    CSV source). Returns ``(board, scale)`` where ``scale`` carries the pool-derived
+    rates + floors + team volumes so realized/estimate VAR can be scored on the SAME
+    scale. Callers that only need the board (build_draft_board) discard ``scale``.
     """
     # Build normalized lookup for positions.
     # When names collide after normalization (e.g. 'José Ramírez' the 3B
@@ -110,16 +113,14 @@ def build_board_from_frames(
 
     board = pool.sort_values("var", ascending=False).reset_index(drop=True)
     _validate_top_adp_players(board, hitters, pitchers)
-    if return_scale:
-        scale = {
-            "denoms": denoms,
-            "repl_rates": repl_rates,
-            "replacement_levels": replacement_levels,
-            "team_ab": DEFAULT_TEAM_AB,
-            "team_ip": DEFAULT_TEAM_IP,
-        }
-        return board, scale
-    return board
+    scale = {
+        "denoms": denoms,
+        "repl_rates": repl_rates,
+        "replacement_levels": replacement_levels,
+        "team_ab": DEFAULT_TEAM_AB,
+        "team_ip": DEFAULT_TEAM_IP,
+    }
+    return board, scale
 
 
 def rebuild_board(config_path: Path, board_path: Path) -> int:
