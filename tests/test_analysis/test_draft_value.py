@@ -292,7 +292,7 @@ def test_team_rollup_sum_avg_count():
 
 def _pv(team, name, value_proj, **kw):
     """Construct a PlayerValue with sensible finite defaults; override via kw."""
-    defaults = dict(
+    fields = dict(
         player_type="hitter",
         slot=None,
         baseline_kind="drafted",
@@ -303,21 +303,8 @@ def _pv(team, name, value_proj, **kw):
         skill=1.0,
         luck=1.0,
     )
-    defaults.update(kw)
-    return dv.PlayerValue(
-        team=team,
-        name=name,
-        player_type=defaults["player_type"],
-        slot=defaults["slot"],
-        baseline_kind=defaults["baseline_kind"],
-        preseason_var=defaults["preseason_var"],
-        est_var_proj=defaults["est_var_proj"],
-        est_var_ytd=defaults["est_var_ytd"],
-        value_proj=value_proj,
-        value_ytd=defaults["value_ytd"],
-        skill=defaults["skill"],
-        luck=defaults["luck"],
-    )
+    fields.update(kw)
+    return dv.PlayerValue(team=team, name=name, value_proj=value_proj, **fields)
 
 
 def test_build_cache_groups_and_sorts_teams_and_players():
