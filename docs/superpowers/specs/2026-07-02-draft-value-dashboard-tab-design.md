@@ -58,8 +58,13 @@ def build_draft_value_cache(
 ```
 
 It transforms the `run_draft_value()` output into a JSON-safe, template-ready
-dict. This keeps all ordering / null-handling logic in Python (unit-testable),
-out of the Jinja template.
+dict. This keeps all ordering / null-handling / grouping logic in Python
+(unit-testable), out of the Jinja template.
+
+**The join.** `run_draft_value()` returns `players` and `teams` as two *separate
+flat lists* (`TeamRollup` carries no players). `build_draft_value_cache` **groups
+`players` by `.team`** and nests each team's players under its `TeamRollup`. A
+player is attached to the team whose `TeamRollup.team` equals `PlayerValue.team`.
 
 **Output shape:**
 
@@ -80,10 +85,10 @@ out of the Jinja template.
           "slot": null,
           "preseason_var": 38.1,
           "est_var_proj": 44.3,
-          "value_proj": 6.2,
+          "value_proj": 12.3,
           "value_ytd": 3.1,
-          "skill": 2.1,
-          "luck": 4.1
+          "skill": 6.1,
+          "luck": 6.2
         }
       ]
     }
@@ -91,23 +96,42 @@ out of the Jinja template.
 }
 ```
 
+(Example numbers are self-consistent: `luck = est_var_proj - preseason_var`
+= 44.3 - 38.1 = 6.2; `value_proj = skill + luck` = 6.1 + 6.2 = 12.3.)
+
 **Rules:**
 
 - Teams sorted by `avg_value` **descending**, with `NaN` avg sunk to the bottom
   (same treatment as the markdown report's leaderboard sort:
   `-inf` for `NaN`).
-- Players within a team sorted by `value_proj` **descending**, with
-  `None`/`NaN` `value_proj` sunk to the bottom (mirrors the report's per-player
-  sort key).
+- Players **within each team** sorted by `value_proj` **descending**, with
+  `None`/`NaN` `value_proj` sunk to the bottom. This reuses the report's
+  per-player sort *key* (`-inf` for `None`/`NaN`, descending) but applies it
+  per-team, not over one global list as the CLI does.
 - **`NaN` and `inf` are converted to JSON `null`** on every float field. An
-  unmatched keeper produces `NaN` `value_proj` (keeper_par is `NaN`); raw `NaN`
-  in a payload breaks strict JSON serialization and renders as the string "nan"
-  in Jinja. A single `_finite(x)` helper (`return x if x is not None and
-  math.isfinite(x) else None`) is applied to every float field.
+  unmatched keeper produces `NaN` `value_proj` (keeper_par is `NaN`); a genuine
+  off-board flier can produce `None`. The KV layer's `json.dumps` defaults to
+  `allow_nan=True`, so raw `NaN` would *round-trip* through the cache -- but it
+  then reaches Jinja as a float that renders as the literal string `"nan"`. The
+  conversion exists to keep the template clean (every non-finite value becomes
+  the `null` -> "-" placeholder), not because the write would fail. A single
+  `_finite(x)` helper (`return x if x is not None and math.isfinite(x) else
+  None`) is applied to every float field, so the payload also survives a strict
+  `json.dumps(..., allow_nan=False)` round-trip (asserted in the unit tests).
 - `player_type` is serialized as a plain string (it may be a `str`/`StrEnum`;
   coerce with `str(...)`).
+- `est_var_ytd` (present on `PlayerValue`) is **not** serialized -- it is never
+  displayed. `value_ytd` **is** serialized and rendered in a `valueYTD` column
+  (see §4). Keep the payload to exactly the fields the template consumes.
 - Every drafted pick + keeper is included (off-board fliers too -- they have
   `preseason_var: null`, `skill: null`, `luck: null` but a real `value_proj`).
+- **`credited_count` is the graded-pick count, not the row count.** It comes
+  straight from `TeamRollup.credited_count`, which counts only players with a
+  *finite* `value_proj` (`roll_up_team` drops `None`/`NaN`). The nested
+  `players[]` list additionally includes ungradeable rows (off-board fliers,
+  unmatched-keeper `NaN`), so **`credited_count` may be less than
+  `len(players)`** -- this is intentional (matches the report's "picks" column)
+  and the template labels the outer column "picks" = graded picks.
 
 ### 3. Refresh pipeline step
 
@@ -146,10 +170,39 @@ Rationale:
 - **Runs on Render too** (unlike streaks): every input `run_draft_value()` needs
   is either git-tracked (`data/projections/2026/*.csv`,
   `data/player_positions.json`, `data/draft_state*.json`,
-  `config/draft_order.json`, `config/league.yaml`) or in Upstash
-  (`FULL_SEASON_PROJECTIONS`, game-log totals). No duckdb/`[dev]` dependency. So
-  there is **no `is_remote()` early-return** -- it computes wherever the refresh
-  runs.
+  `config/draft_order.json`, `config/league.yaml`) or in the KV store. No
+  duckdb/`[dev]` dependency. So there is **no `is_remote()` early-return** -- it
+  computes wherever the refresh runs.
+
+**Input freshness / provenance (important -- the step order matters only for game
+logs):**
+
+- **Game-log totals** (`get_game_log_totals`, the YTD side): written earlier in
+  the *same* refresh by `_fetch_game_logs` (step ~4, well before the insertion
+  point). So the to-date side of the grade is fresh on every refresh -- this is
+  the one input for which placing the step after `_analyze_transactions` matters.
+- **`FULL_SEASON_PROJECTIONS`** (the projected side): **NOT written by this
+  pipeline.** The main refresh only ever *reads* that key
+  (`refresh_pipeline.py:699`) and otherwise re-derives full-season projections
+  in-memory; the cached blob is written by the separate `_run_rest_of_season_fetch`
+  cron job (`ros_pipeline.py:273`). So `_compute_draft_value` consumes whatever
+  vintage that job last cached -- exactly the same blob the CLI report reads.
+  Placing the step earlier or later in *this* pipeline does not change its
+  freshness. Acceptable: the projected side is a preseason-anchored estimate and
+  the CLI has always read this same key.
+- **Cold-KV degraded state:** if the ROS-fetch job has never run,
+  `load_full_season_lines()` returns `({}, {})`; every player then falls to
+  `missing_line_est=0.0` and the tab shows an all-negative `-par` grade. This is
+  a degraded-but-valid render (identical to the CLI in that state), not a crash.
+  On Render the ROS job runs regularly, so this is a fresh-environment edge only.
+
+**Performance note (accepted):** `reproduce_draft_day_board()` re-blends the
+projection systems and rebuilds the full board on every refresh, even though the
+draft-day board is season-invariant (only the YTD/projected *estimates* drift).
+This is the same recompute-every-refresh posture the transaction analyzer already
+uses; the cost is a few seconds inside an already-heavy refresh. Not optimized in
+v1 (YAGNI); a future pass could memoize the board/par curves if refresh latency
+becomes a concern.
 
 ### 4. Route + template
 
@@ -170,33 +223,69 @@ return render_template(
 **Template** (`templates/season/transactions.html`): restructure into two tab
 panels under a `.tab-strip`.
 
+**CRITICAL restructure constraint -- hoist shared scaffolding out of the
+data-emptiness conditional.** Today the entire deltaRoto table *and* the
+`<script>` defining `toggleTxnDetail` live inside the page-level
+`{% if not txn_data %}...{% else %}...{% endif %}` (only rendered when
+`txn_data` is non-empty). If we merely wrap that, the common
+**post-draft / pre-first-transaction state** (`txn_data` empty, `draft_data`
+populated -- exactly when the draft grade is most wanted) would hide the tab
+strip and leave both JS functions undefined, so the Draft Grade tab wouldn't
+render or its expand rows would throw. The restructure MUST:
+
+- Hoist the **tab strip** and **both JS functions** (`toggleTxnDetail` and the
+  new `switchTab`) to the top level of `{% block content %}`, outside every
+  `{% if %}` on `txn_data`/`draft_data`.
+- Give **each panel its own independent empty state**: Panel 1 shows its "No
+  transaction data..." placeholder when `txn_data` is empty; Panel 2 shows a
+  "No draft data. Click Refresh Data." placeholder when `draft_data` is empty.
+  The two conditionals are independent -- neither gates the other.
+
+Layout:
+
 - **Tab strip** with two buttons: "Transactions" (active by default) and
-  "Draft Grade". Follows the `trends.html` `.tab-strip` idiom (button with a
-  `data-*` target, `.active` class, JS toggles panel `display`).
-- **Panel 1 "Transactions":** the existing deltaRoto table, unchanged.
+  "Draft Grade". It reuses only the **`.tab-strip` CSS look** from
+  `trends.html`; it does NOT reuse `season_trends.js` (that drives Chart.js
+  dataset swaps on a single canvas, not panel show/hide). The panel toggle is
+  the new `switchTab` function below.
+- **Panel 1 "Transactions":** the existing deltaRoto table, moved verbatim into
+  its panel `<div>` (its own `{% if not txn_data %}` empty state inside).
 - **Panel 2 "Draft Grade":** expandable team leaderboard.
-  - Outer table columns: `Team | avg | sum | picks`. Rows sorted as the cache
-    provides (avg desc). User's team highlighted (`.user-team`) like the
-    deltaRoto table.
+  - Outer table columns: `Team | avg | sum | picks` (`picks` = `credited_count`,
+    the graded-pick count -- may be fewer than the expanded detail rows; see §2).
+    Rows sorted as the cache provides (avg desc). User's team highlighted
+    (`.user-team`) like the deltaRoto table.
   - Each team row is click-to-expand (reuse the page's existing
     `toggleTxnDetail` expand-row idiom -- a hidden sibling `<tr>` toggled
-    `.open`).
+    `.open`). The detail `<tr>` must use `colspan="4"` to match the 4-column
+    outer table (the existing deltaRoto detail row uses `colspan="5"` for its
+    5-column table -- do not copy that number).
   - Detail row: inner table of that team's players, columns
-    `Player | kind | slot | preVAR | estVAR | value | skill | luck`. `value` is
-    `value_proj`. `null` numeric fields render as an em-dash placeholder ("-");
-    positive/negative values get `value-positive` / `value-negative` classes
-    like the deltaRoto table.
+    `Player | kind | slot | preVAR | estVAR | value | valueYTD | skill | luck`.
+    `value` is `value_proj`; `valueYTD` is `value_ytd`. `null` numeric fields
+    render as the placeholder character `—` (U+2014, matching the existing
+    table's placeholder at `transactions.html:46` -- this is an HTML template,
+    so U+2014 is fine; the CLAUDE.md ASCII rule targets `print()`/cp1252 stdout,
+    not UTF-8 templates, which already use `—` and `Δ`). Positive/negative
+    values get `value-positive` / `value-negative` classes like the deltaRoto
+    table.
   - Empty state: when `draft_data` is empty, show "No draft data. Click Refresh
     Data." (mirrors the existing transactions empty state).
 
 **Shared CSS cleanup:** the `.tab-strip` rules currently live inline in
-`trends.html`. Promote them to `season.css` (single definition) and drop the
-inline copy from `trends.html`, so both pages share one source. This is a small,
-in-scope dedup (we are introducing the page's second consumer of the pattern).
+`trends.html`. Promote them to `season.css` (single, **byte-faithful** copy --
+keep the `var(--amber)`/`var(--bg)` active-tab colors exactly; do NOT rescope
+them under `.page-transactions`, or trends regresses) and drop the inline copy
+from `trends.html`. `season.css` is loaded globally via `base.html`, and
+`season_trends.js` keys on `data-*` attributes and `.active` (both preserved),
+so moving only the CSS is safe. Small, in-scope dedup (this page is the pattern's
+second consumer).
 
 **JS:** a small `switchTab(button)` function toggles the two panels' `display`
 and the buttons' `.active` state. The existing `toggleTxnDetail(row)` is reused
-for the Draft Grade expand rows (it toggles `row.nextElementSibling`).
+for the Draft Grade expand rows (it toggles `row.nextElementSibling`). Both must
+live at top level (see the hoist constraint above), not inside a `txn_data`
+conditional.
 
 ## Data flow
 
@@ -220,25 +309,62 @@ GET /transactions
   template empty state. A missing/corrupt cache degrades to the placeholder, not
   a 500.
 - Serialization: `NaN`/`inf`/`None` -> `null`; the template treats `null` as the
-  "-" placeholder.
+  `—` (U+2014) placeholder.
+- **Monitoring gap (accepted, matches the streaks/SPoE posture):** the broad
+  `except` + `required=False` means a *persistently* broken draft-value
+  computation is invisible outside logs -- the tab just shows the empty state or
+  a stale cache, and a caught exception writes nothing. This is the deliberate
+  non-load-bearing-panel trade-off. Because of it, the refresh test must NOT rely
+  on the real computation to prove the wiring (a swallowed raise is
+  indistinguishable from "computed empty"); it patches `run_draft_value` to a
+  known return so a missing/malformed cache is a genuine wiring failure (see
+  Testing).
 
 ## Testing
 
 - **Unit -- `build_draft_value_cache`** (`tests/test_analysis/test_draft_value.py`):
+  Construct `PlayerValue`/`TeamRollup` instances directly (no KV, no board) and
+  assert:
+  - Players are grouped under the correct team (join by `.team`).
   - Team sort by `avg_value` desc; `NaN`-avg team sinks to the bottom.
   - Player sort by `value_proj` desc within a team; `None`/`NaN` sinks.
-  - `NaN`/`inf` on any float field -> `null` (assert JSON round-trips via
-    `json.dumps` with `allow_nan=False` succeeding).
+  - `NaN`/`inf` on any float field -> `null` (assert the payload survives
+    `json.dumps(payload, allow_nan=False)` -- i.e. no non-finite floats leak).
   - Off-board flier: `preseason_var`/`skill`/`luck` are `null`, `value_proj` is
-    a real number.
+    a real number, and the row is still present in `players[]`.
+  - `est_var_ytd` is absent from each player dict; `value_ytd` is present.
+  - `credited_count` passes through from `TeamRollup` unchanged and can be less
+    than `len(players)` (a team with an off-board flier).
   - `player_type` is a plain `str` in the output.
-- **Refresh pipeline** (`tests/test_web/test_refresh_pipeline.py`): extend the
-  existing fixture-driven test to assert `cache:draft_value` is written with the
-  expected top-level shape (`{"teams": [...], "horizon": "proj"}`). Mirror how
-  the test already asserts `TRANSACTION_ANALYZER`.
+- **Refresh pipeline** (`tests/test_web/`): a **dedicated** test (new file or an
+  added test alongside `test_refresh_pipeline.py`), NOT a bare presence check in
+  the shared `test_all_expected_cache_files_written`. Rationale (spec-review
+  finding): `run_draft_value()` reads its inputs by **absolute repo-root path**
+  (`config/league.yaml`, `data/draft_state.json`, `data/projections/2026/*.csv`,
+  ...), which `configured_test_env` cannot isolate, and its
+  `from fantasy_baseball.config import load_config` binding is **not** reached by
+  the fixture's `patch("fantasy_baseball.config.load_config", ...)`. Left
+  unpatched it would run the full real-data computation (slow) and return the
+  *real* league's team names (not `Team 01..12`), and any on-disk draft-file
+  drift would raise -> get swallowed -> silently write nothing. The fixture
+  already stubs `_compute_streaks` for the same class of reason.
+  - So: **patch `fantasy_baseball.analysis.draft_value.run_draft_value`** (the
+    name imported inside `_compute_draft_value`) to return canned
+    `PlayerValue`/`TeamRollup` lists, run `_compute_draft_value` (or the whole
+    refresh with this patch added to the fixture), and assert `cache:draft_value`
+    is written with shape `{"horizon": "proj", "teams": [...]}` and that the
+    canned team/player round-trips (grouping + serialization wired correctly).
+  - Add the same `run_draft_value` patch to `patched_refresh_environment` so the
+    existing full-refresh test does not invoke the heavy real computation; only
+    then may `DRAFT_VALUE` be added to the `test_all_expected_cache_files_written`
+    key list.
 - **Route/render** (`tests/test_web/`): `GET /transactions` returns 200 and the
-  response contains both the tab strip and a Draft Grade team row when the
-  draft-value cache is populated; empty cache renders the placeholder.
+  response contains the tab strip and a Draft Grade team row when the
+  draft-value cache is populated; with an empty draft cache the Draft Grade panel
+  renders its "No draft data" placeholder; **and with an empty `txn_data` but a
+  populated `draft_data`** (the post-draft/pre-transaction state) the tab strip
+  and Draft Grade rows still render and the transactions panel shows its own
+  placeholder -- guarding the hoist-out-of-conditional restructure.
 
 ## Verification gates (from CLAUDE.md)
 
@@ -264,7 +390,8 @@ GET /transactions
 | `src/fantasy_baseball/web/templates/season/transactions.html` | tab strip + Draft Grade panel + JS |
 | `src/fantasy_baseball/web/static/season.css` | promote `.tab-strip` rules |
 | `src/fantasy_baseball/web/templates/season/trends.html` | drop inline `.tab-strip` CSS |
-| `tests/test_analysis/test_draft_value.py` | + `build_draft_value_cache` tests |
-| `tests/test_web/test_refresh_pipeline.py` | assert `DRAFT_VALUE` written |
-| `tests/test_web/...` | route renders both tabs |
+| `tests/test_analysis/test_draft_value.py` | + `build_draft_value_cache` unit tests |
+| `tests/test_web/_refresh_fixture.py` | patch `run_draft_value` -> canned dataclasses |
+| `tests/test_web/test_refresh_pipeline.py` | dedicated `_compute_draft_value` cache-write + shape test; add `DRAFT_VALUE` to expected keys |
+| `tests/test_web/...` | route renders both tabs incl. empty-`txn_data` state |
 ```
