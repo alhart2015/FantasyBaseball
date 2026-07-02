@@ -99,12 +99,13 @@ player is attached to the team whose `TeamRollup.team` equals `PlayerValue.team`
 (Example numbers are self-consistent: `luck = est_var_proj - preseason_var`
 = 44.3 - 38.1 = 6.2; `value_proj = skill + luck` = 6.1 + 6.2 = 12.3.)
 
-**Field mapping.** Each output player dict is a straight projection of
-`PlayerValue`: `name`, `player_type` (via `str(...)`), **`kind` = `baseline_kind`
-verbatim** (`"keeper"`/`"drafted"`, renamed for brevity), `slot`, `preseason_var`,
-`est_var_proj`, `value_proj`, `value_ytd`, `skill`, `luck`. `est_var_ytd` and
-`est_var_proj` both exist on `PlayerValue`; only `est_var_proj` is serialized
-(`est_var_ytd` is never displayed).
+**Field mapping.** Each output player dict is a projection of `PlayerValue`:
+`name`, `display_name` (= `name`, plus a ` (H)`/` (P)` suffix for two-way rows;
+see the `player_type` rule below), `player_type` (via `str(...)`), **`kind` =
+`baseline_kind` verbatim** (`"keeper"`/`"drafted"`, renamed for brevity), `slot`,
+`preseason_var`, `est_var_proj`, `value_proj`, `value_ytd`, `skill`, `luck`.
+`est_var_ytd` and `est_var_proj` both exist on `PlayerValue`; only `est_var_proj`
+is serialized (`est_var_ytd` is never displayed).
 
 **Rules:**
 
@@ -137,26 +138,41 @@ verbatim** (`"keeper"`/`"drafted"`, renamed for brevity), `slot`, `preseason_var
   never played is scored at replacement and gets a **finite** `value_proj`
   (`0.0 - par`). An **off-board flier** therefore has a **finite** `value_proj`
   but `preseason_var`/`skill`/`luck` = `None` (it was never on the board). The
-  **only** ungradeable `value_proj` is an **unmatched keeper**, whose shared
-  `keeper_par` is `NaN` -> every keeper's `value_proj` is `NaN` (all-or-nothing).
-  `value_proj` is never literally `None` in this pipeline. In the real 2026 data
-  all keepers match, so in practice `value_proj` is finite for everyone. The
-  `_finite`/None-sink handling is defensive for the pure function, exercised in
-  unit tests with synthetic `NaN`/`None` rows -- not a routinely-hit path.
-- `player_type` is serialized (as a plain string) and **is consumed** by the
-  template: a two-way player (e.g. Shohei Ohtani) appears as two rows under one
-  name -- hitter and pitcher -- so the "Player" cell appends a type marker
-  (e.g. `Shohei Ohtani (P)`) to disambiguate. It is the one payload field the
-  "Player" column renders alongside `name`.
+  **only** ungradeable `value_proj` is a keeper whose par is `NaN` -- and
+  `keeper_par` is `NaN` **only when the *entire* keeper cohort fails to match the
+  board** (`keeper_vars` empty -> `float("nan")`, `draft_value.py:406`; the code
+  comment at `:717` says "no keeper matched the board"). In that all-or-nothing
+  case *every* keeper's `value_proj` is `NaN`. A **single** unmatched keeper (with
+  any other keeper matched) does NOT cause `NaN`: `keeper_par` is the finite mean
+  of the matched keepers, so that lone keeper is scored against it and **is
+  credited** with a finite `value_proj`. `value_proj` is never literally `None` in
+  this pipeline. In the real 2026 data all keepers match, so in practice
+  `value_proj` is finite for everyone. The `_finite`/None-sink handling is
+  defensive for the pure function, exercised in unit tests with synthetic
+  `NaN`/`None` rows -- not a routinely-hit path.
+- `player_type` is serialized (as a plain string) **and drives a display marker
+  the builder computes in Python** (not the template). A two-way player (e.g.
+  Shohei Ohtani) appears as two rows under one name -- hitter and pitcher, and
+  those two rows may even land on **different teams** (`_assign_pick_types`
+  credits the keeper-hitter to the keeper's team and the drafted-pitcher pick to
+  its own team). So `build_draft_value_cache` detects, **within each team's
+  player list**, any `name` that appears under more than one `player_type` and
+  emits a `display_name` field with a ` (H)`/` (P)` suffix for exactly those
+  rows; all other rows get `display_name == name`. The template renders
+  `display_name` verbatim -- no duplicate-scan in Jinja (consistent with the
+  "logic in Python" rule above). Per-team scope means a solo row never gets a
+  spurious suffix even if the same name appears (as the other type) on a
+  different team. `player_type` itself stays in the payload for tests/debugging.
 - **`credited_count` is the graded-pick count, not the row count.** It comes
   straight from `TeamRollup.credited_count`, which counts only players with a
   *finite* `value_proj` (`roll_up_team` drops `None`/`NaN`). The nested
-  `players[]` list may additionally include ungradeable rows (an unmatched-keeper
-  `NaN`), so **`credited_count` may be less than `len(players)`** when a keeper
-  is unmatched. In the real 2026 data (all keepers match) they are typically
-  equal; the pure function must still handle the inequality (unit-tested with a
-  synthetic `NaN`-`value_proj` row). The template labels the outer column "picks"
-  = graded picks.
+  `players[]` list may additionally include ungradeable rows, so
+  **`credited_count` may be less than `len(players)`**. In this pipeline that
+  gap arises only in the degenerate all-keepers-unmatched case (every keeper row
+  `NaN`; see the previous bullet) -- in the real 2026 data all keepers match and
+  the two are equal. The pure function must still handle the inequality
+  (unit-tested with a synthetic `NaN`-`value_proj` row). The template labels the
+  outer column "picks" = graded picks.
 
 ### 3. Refresh pipeline step
 
@@ -298,9 +314,9 @@ Layout:
     -- do not copy that number).
   - Detail row: inner table of that team's players, columns
     `Player | kind | slot | preVAR | estVAR | value | valueYTD | skill | luck`.
-    - **`Player`** renders `name`, plus a type marker for two-way players
-      (append `(P)`/`(H)` when a name appears as both a pitcher and hitter row)
-      -- disambiguates Ohtani's two rows (see §2, `player_type` is consumed here).
+    - **`Player`** renders the builder-provided `display_name` (which already
+      carries the ` (H)`/` (P)` suffix for two-way rows within a team; see §2).
+      The template does not compute the suffix itself.
     - **`slot`** is `PlayerValue.slot`, which is the **draft-order ordinal among
       on-board drafted picks** (1-based, skipping keepers and off-board fliers) --
       NOT the overall draft-pick number. This matches the CLI report's "slot"
@@ -380,6 +396,10 @@ GET /transactions
     in `players[]`.
   - `est_var_ytd` is absent from each player dict; `value_ytd` is present;
     `kind` == the source `baseline_kind`.
+  - Two-way disambiguation: a team with the same `name` under both `hitter` and
+    `pitcher` gets `display_name` with ` (H)`/` (P)` suffixes on those two rows,
+    while an identically-named solo row on a *different* team keeps
+    `display_name == name` (per-team scope, no spurious suffix).
   - `credited_count` passes through from `TeamRollup` unchanged and can be less
     than `len(players)` -- construct a team whose `TeamRollup.credited_count` is
     below its player count and include a synthetic **`value_proj=NaN`** row (the
