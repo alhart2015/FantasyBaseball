@@ -518,6 +518,7 @@ class RefreshRun:
         self._run_ros_monte_carlo()
         self._compute_spoe()
         self._analyze_transactions()
+        self._compute_draft_value()
         self._compute_streaks()
         self._write_meta()
 
@@ -1588,6 +1589,31 @@ class RefreshRun:
         cache_data = build_cache_output(stored_txns)
         write_cache(CacheKey.TRANSACTION_ANALYZER, cache_data, required=False)
         self._progress(f"Analyzed {len(stored_txns)} total transaction(s)")
+
+    # --- Step 15c: Draft-value grade for the /transactions Draft Grade tab ---
+    def _compute_draft_value(self) -> None:
+        """Grade the draft (keepers + drafted picks) and cache it for the tab.
+
+        Non-load-bearing: run_draft_value() can raise (reconstruction gate /
+        missing keepers), so catch broadly, log, and continue -- a cosmetic
+        panel must never abort a refresh whose load-bearing steps succeeded.
+        required=False leaves any prior cache untouched on failure. Runs on
+        Render too (all inputs are git-tracked or in the KV store; no duckdb).
+        """
+        self._progress("Computing draft value grade...")
+        try:
+            from fantasy_baseball.analysis.draft_value import (
+                build_draft_value_cache,
+                run_draft_value,
+            )
+
+            players, teams = run_draft_value()
+            payload = build_draft_value_cache(players, teams)
+            write_cache(CacheKey.DRAFT_VALUE, payload, required=False)
+            self._progress(f"Draft value cached: {len(teams)} teams")
+        except Exception:
+            log.exception("Draft-value computation failed; cache unchanged")
+            self._progress("Draft value computation failed (continuing)")
 
     # --- Step 15b: Compute streak scores for /streaks + lineup chips ---
     def _compute_streaks(self) -> None:

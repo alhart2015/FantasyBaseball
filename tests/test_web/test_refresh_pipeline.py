@@ -60,12 +60,26 @@ class TestRefreshShape:
             CacheKey.MONTE_CARLO,
             CacheKey.SPOE,
             CacheKey.TRANSACTION_ANALYZER,
+            CacheKey.DRAFT_VALUE,
             CacheKey.META,
             CacheKey.OPP_ROSTERS,
             CacheKey.STASH,
         ]
         for key in expected_keys:
             assert fake_redis.get(redis_key(key)) is not None, f"Missing cache key: {key}"
+
+    def test_draft_value_cache_written(self, configured_test_env, fake_redis):
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+        data = _read(fake_redis, "draft_value")
+        assert isinstance(data, dict)
+        assert data.get("horizon") == "proj"
+        teams = data.get("teams")
+        assert isinstance(teams, list) and teams
+        team = teams[0]
+        assert {"team", "avg_value", "sum_value", "credited_count", "players"} <= team.keys()
+        assert team["players"], "team should carry its canned player row"
+        assert team["players"][0]["display_name"] == "Canned Keeper"
 
     def test_projected_standings_history_populated(self, configured_test_env, fake_redis):
         """Each refresh appends a snapshot to projected_standings_history."""

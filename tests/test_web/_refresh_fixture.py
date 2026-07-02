@@ -11,6 +11,32 @@ TEAM_NAMES = [f"Team {i:02d}" for i in range(1, 13)]  # 12 teams
 USER_TEAM_NAME = "Team 01"
 
 
+def _canned_draft_value():
+    """Canned (players, teams) so the refresh test never runs the heavy
+    real-data draft_value computation (which reads real repo files by
+    absolute path and would return the real league's teams)."""
+    from fantasy_baseball.analysis.draft_value import PlayerValue, TeamRollup
+
+    players = [
+        PlayerValue(
+            team=USER_TEAM_NAME,
+            name="Canned Keeper",
+            player_type="hitter",
+            slot=None,
+            baseline_kind="keeper",
+            preseason_var=10.0,
+            est_var_proj=12.0,
+            est_var_ytd=6.0,
+            value_proj=2.0,
+            value_ytd=1.0,
+            skill=1.0,
+            luck=1.0,
+        )
+    ]
+    teams = [TeamRollup(USER_TEAM_NAME, 2.0, 2.0, 1)]
+    return players, teams
+
+
 def _hitter_proj_row(name: str, fg_id: str, **stats) -> dict:
     """One row of a blended hitter projection table."""
     base = {
@@ -535,6 +561,15 @@ def patched_refresh_environment(
         # at import time, so we also patch each module-level alias.
         patch("fantasy_baseball.data.kv_store.get_kv", return_value=fake_redis),
         patch("fantasy_baseball.web.season_data.get_kv", return_value=fake_redis),
+        # draft-value reads real repo files by absolute path and its
+        # `from fantasy_baseball.config import load_config` binding is not
+        # reached by this fixture's config patch, so left unpatched it would run
+        # the full real-data computation. Patch the function _compute_draft_value
+        # imports (function-body import resolves the module attr at call time).
+        patch(
+            "fantasy_baseball.analysis.draft_value.run_draft_value",
+            side_effect=_canned_draft_value,
+        ),
         # _compute_streaks connects to the real local streaks.duckdb (multi-GB
         # on dev boxes) and runs the full streak inference -- no place in a
         # mocked integration test, and it hung the whole suite once the DB grew
