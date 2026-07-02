@@ -1,7 +1,7 @@
 # Draft Value Dashboard Tab -- Design Spec
 
 **Date:** 2026-07-02
-**Status:** Approved (brainstorming), pending spec-review
+**Status:** Spec-review converged (4 iterations; clean above Low)
 **Branch:** `feature/draft-value-dashboard-tab`
 
 ## Problem
@@ -80,6 +80,7 @@ player is attached to the team whose `TeamRollup.team` equals `PlayerValue.team`
       "players": [
         {
           "name": "Juan Soto",
+          "display_name": "Juan Soto",
           "player_type": "hitter",
           "kind": "keeper",
           "slot": null,
@@ -162,7 +163,12 @@ is serialized (`est_var_ytd` is never displayed).
   `display_name` verbatim -- no duplicate-scan in Jinja (consistent with the
   "logic in Python" rule above). Per-team scope means a solo row never gets a
   spurious suffix even if the same name appears (as the other type) on a
-  different team. `player_type` itself stays in the payload for tests/debugging.
+  different team. Framing note: the suffix is a **same-table collision guard**
+  (two rows for one name in one team's detail table), not a general two-way
+  indicator -- in the real 2026 data Ohtani's kept bat and drafted arm land on
+  different teams, so the suffix typically never renders in production and is
+  exercised mainly by the unit test. `player_type` itself stays in the payload
+  for tests/debugging.
 - **`credited_count` is the graded-pick count, not the row count.** It comes
   straight from `TeamRollup.credited_count`, which counts only players with a
   *finite* `value_proj` (`roll_up_team` drops `None`/`NaN`). The nested
