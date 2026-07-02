@@ -47,24 +47,25 @@ def _top_cat_label(row: dict[str, Any], tone: Literal["hot", "cold"]) -> str:
     """Find the cat with the highest probability matching the tone.
 
     Alphabetical tiebreak on the category enum value for determinism.
-    The displayed label uppercases both the tone and the category code, and
-    appends the top cat's P(continuation) as a percent (e.g. ``HOT · HR 62%``)
-    so a weak streak ("cold 55%") reads differently from a strong one on the
-    chip itself, not just in the tooltip. The percent is omitted when the
-    model has no probability for that cat (rather than rendering "0%").
+    The displayed label uppercases both the tone and the category code, then
+    appends the top cat's P(continuation) as a trailing percent (e.g. a "62%"
+    suffix) so a weak streak ("55%") reads differently from a strong one
+    ("80%") on the chip itself, not just in the tooltip. The percent is dropped
+    only when the model has no probability estimate for that cat (``top_prob``
+    is None); a genuinely computed low value still renders (even "0%"), because
+    that number is exactly the signal the chip exists to surface.
     """
     target = tone  # labels in the cache are lowercase ("hot"/"cold")
-    candidates: list[tuple[float, str, float | None]] = []
-    for cat_value, score in row["scores"].items():
-        if score["label"] != target:
-            continue
-        raw = score["probability"]
-        prob = raw if raw is not None else 0.0
-        candidates.append((prob, cat_value, raw))
+    candidates: list[tuple[str, float | None]] = [
+        (cat_value, score["probability"])
+        for cat_value, score in row["scores"].items()
+        if score["label"] == target
+    ]
     if not candidates:
         return "—"
-    candidates.sort(key=lambda x: (-x[0], x[1]))
-    _, top_cat, top_prob = candidates[0]
+    # Highest P(continuation) first (None sorts as 0.0), alphabetical cat tiebreak.
+    candidates.sort(key=lambda c: (-(c[1] if c[1] is not None else 0.0), c[0]))
+    top_cat, top_prob = candidates[0]
     base = f"{target.upper()} · {top_cat.upper()}"
     if top_prob is None:
         return base
