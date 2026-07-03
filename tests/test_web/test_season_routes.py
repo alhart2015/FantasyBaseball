@@ -1470,6 +1470,8 @@ def test_lineup_injects_streak_chip_when_cache_present(client, kv_isolation) -> 
     body = resp.data.decode()
     assert "streak-chip" in body
     assert "HOT &middot; HR" in body or "HOT · HR" in body
+    # Continuation probability is surfaced on the chip label, not just the tooltip.
+    assert "62%" in body
 
 
 def test_lineup_renders_dash_chip_when_no_streak_cache(client, kv_isolation) -> None:

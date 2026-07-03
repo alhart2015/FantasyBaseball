@@ -79,8 +79,56 @@ def test_build_indicator_hot_from_dict_payload() -> None:
     ind = build_indicator("Juan Soto", payload)
     assert ind is not None
     assert ind.tone == "hot"
-    assert ind.label == "HOT · HR"
+    assert ind.label == "HOT · HR 62%"
     assert "HR (62%)" in ind.tooltip
+
+
+def test_build_indicator_label_distinguishes_continuation_probability() -> None:
+    """The chip label carries P(continuation) so weak and strong streaks differ.
+
+    A cold streak only 55% likely to continue must read differently on the
+    chip itself from one 80% likely to continue -- the whole point of the
+    'surface continuation probability on the chip' work.
+    """
+    from fantasy_baseball.streaks.indicator import build_indicator
+
+    def _cold_payload(prob: float) -> dict[str, object]:
+        return {
+            "roster_rows": [
+                {
+                    "name": "Streaky Guy",
+                    "composite": -1,
+                    "scores": {"sb": {"label": "cold", "probability": prob}},
+                }
+            ],
+            "fa_rows": [],
+        }
+
+    weak = build_indicator("Streaky Guy", _cold_payload(0.55))
+    strong = build_indicator("Streaky Guy", _cold_payload(0.80))
+    assert weak is not None and strong is not None
+    assert weak.label == "COLD · SB 55%"
+    assert strong.label == "COLD · SB 80%"
+    assert weak.label != strong.label
+
+
+def test_build_indicator_label_omits_percent_when_probability_none() -> None:
+    """A hot/cold cat with no model probability keeps the bare label (no '0%')."""
+    from fantasy_baseball.streaks.indicator import build_indicator
+
+    payload = {
+        "roster_rows": [
+            {
+                "name": "No Model",
+                "composite": 1,
+                "scores": {"hr": {"label": "hot", "probability": None}},
+            }
+        ],
+        "fa_rows": [],
+    }
+    ind = build_indicator("No Model", payload)
+    assert ind is not None
+    assert ind.label == "HOT · HR"
 
 
 def test_build_indicator_roster_beats_fa_on_name_collision() -> None:
