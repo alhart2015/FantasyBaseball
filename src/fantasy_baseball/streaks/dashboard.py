@@ -54,6 +54,7 @@ def _serialize_score(s: PlayerCategoryScore) -> dict[str, Any]:
         "category": s.category,  # string Literal
         "label": s.label,  # string Literal
         "probability": s.probability,
+        "probability_baserate": s.probability_baserate,
         "drivers": [_serialize_driver(d) for d in s.drivers],
         "window_end": s.window_end.isoformat() if s.window_end else None,
     }
@@ -61,6 +62,8 @@ def _serialize_score(s: PlayerCategoryScore) -> dict[str, Any]:
 
 def _deserialize_score(p: dict[str, Any]) -> PlayerCategoryScore:
     probability = p["probability"]
+    # .get(): payloads written before the base-rate field existed lack the key.
+    baserate = p.get("probability_baserate")
     return PlayerCategoryScore(
         player_id=int(p["player_id"]),
         category=cast(StreakCategory, p["category"]),
@@ -68,6 +71,7 @@ def _deserialize_score(p: dict[str, Any]) -> PlayerCategoryScore:
         probability=float(probability) if probability is not None else None,
         drivers=tuple(_deserialize_driver(d) for d in p["drivers"]),
         window_end=date.fromisoformat(p["window_end"]) if p["window_end"] else None,
+        probability_baserate=float(baserate) if baserate is not None else None,
     )
 
 

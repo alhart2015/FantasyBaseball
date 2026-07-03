@@ -118,6 +118,13 @@ class PlayerCategoryScore:
       the label is neutral, OR when the label is non-neutral but no model
       was trained for that ``(cat, direction)`` (sparse cats are hot-only
       in Phase 4, so ``sb cold`` ends up here).
+    - ``probability_baserate`` is the stratum base rate for the same event
+      (from ``continuation_rates``, keyed by category/direction/pt_bucket) —
+      the unconditional P(continuation) for *any* player in that stratum.
+      ``probability - probability_baserate`` is the lift the streak adds;
+      raw probabilities are not comparable across categories/directions
+      because base rates range ~0.15-0.81. ``None`` when ``probability``
+      is None or the rates table has no row for the stratum.
     - ``drivers`` is empty when ``probability`` is ``None``.
     - ``window_end`` is the date the scored 14d window ends on (most
       recent in DB). Reports surface this in the header so the reader
@@ -130,6 +137,7 @@ class PlayerCategoryScore:
     probability: float | None
     drivers: tuple[Driver, ...]
     window_end: date | None
+    probability_baserate: float | None = None
 
 
 @dataclass(frozen=True)
@@ -714,6 +722,32 @@ _PERIPHERAL_COLS: tuple[str, ...] = (
 )
 
 
+def load_continuation_base_rates(
+    conn: duckdb.DuckDBPyConnection,
+    *,
+    season_set: str,
+    window_days: int = 14,
+) -> dict[tuple[str, str, str], float]:
+    """Load stratum base rates from ``continuation_rates``.
+
+    Returns ``{(category, direction, pt_bucket): p_baserate}``. The base
+    rate is constant across strength buckets within a stratum, so DISTINCT
+    collapses the per-strength rows. Returns ``{}`` when the table has no
+    rows for the set (``run_continuation.py`` never ran) — scores then
+    carry ``probability_baserate=None`` and the chip falls back to raw
+    percentages.
+    """
+    rows = conn.execute(
+        """
+        SELECT DISTINCT category, direction, pt_bucket, p_baserate
+        FROM continuation_rates
+        WHERE season_set = ? AND window_days = ?
+        """,
+        [season_set, window_days],
+    ).fetchall()
+    return {(str(r[0]), str(r[1]), str(r[2])): float(r[3]) for r in rows}
+
+
 def score_player_windows(
     conn: duckdb.DuckDBPyConnection,
     *,
@@ -723,6 +757,7 @@ def score_player_windows(
     window_days: int = 14,
     scoring_season: int,
     stale_after_days: int | None = STALE_TOLERANCE_DAYS,
+    season_set: str | None = None,
 ) -> tuple[list[PlayerCategoryScore], list[ScoreSkip]]:
     """Score every (player, REPORT_CATEGORIES) for the listed player_ids.
 
@@ -757,6 +792,11 @@ def score_player_windows(
     )
     labels = _load_labels(conn, windows=windows, window_days=window_days)
     rates = _load_projection_rates(conn, player_ids=unique_ids, season=scoring_season)
+    base_rates = (
+        load_continuation_base_rates(conn, season_set=season_set, window_days=window_days)
+        if season_set is not None
+        else {}
+    )
 
     scores: list[PlayerCategoryScore] = []
     skips: list[ScoreSkip] = []
@@ -790,6 +830,7 @@ def score_player_windows(
                 )
                 continue
             label = labels.get((player_id, category), "neutral")
+            direction = "above" if label == "hot" else "below"
             score = _score_one(
                 player_id=player_id,
                 category=category,
@@ -799,6 +840,7 @@ def score_player_windows(
                 peripherals_null=peripherals_null,
                 models=models,
                 season_rate=rates.get((player_id, category)),
+                base_rate=base_rates.get((category, direction, str(window["pt_bucket"]))),
             )
             scores.append(score)
 
@@ -815,12 +857,16 @@ def _score_one(
     peripherals_null: bool,
     models: dict[tuple[StreakCategory, StreakDirection], FittedModel],
     season_rate: float | None,
+    base_rate: float | None = None,
 ) -> PlayerCategoryScore:
     """Build the score for one (player, category) given pre-loaded inputs.
 
     Returns a ``PlayerCategoryScore`` with ``probability=None`` whenever
     we can't score: neutral label, no trained model (sparse cold), no
     projection rate, or NULL peripherals in the current window.
+    ``base_rate`` is the stratum base rate (see
+    :func:`load_continuation_base_rates`); attached only when a
+    probability is computed.
     """
     base = PlayerCategoryScore(
         player_id=player_id,
@@ -870,4 +916,5 @@ def _score_one(
         probability=proba,
         drivers=drivers,
         window_end=window_end,
+        probability_baserate=base_rate,
     )

@@ -411,3 +411,56 @@ def test_score_player_windows_stale_after_days_none_disables_forcing(seeded_fitt
     active_labels = {s.category: s.label for s in active}
     disabled_labels = {s.category: s.label for s in disabled}
     assert disabled_labels == active_labels
+
+
+def test_score_player_windows_attaches_stratum_baserate(seeded_fitted_conn) -> None:
+    """With continuation_rates present and season_set passed, every scored
+    (non-None probability) row carries the stratum base rate the chip needs
+    to display lift instead of an incomparable raw percentage."""
+    from fantasy_baseball.streaks.analysis.continuation import compute_continuation_rates
+    from fantasy_baseball.streaks.inference import (
+        load_models_from_fits,
+        score_player_windows,
+    )
+
+    conn = seeded_fitted_conn
+    compute_continuation_rates(conn, season_set="2023-2024")
+    models = load_models_from_fits(conn)
+    window_end = conn.execute("SELECT MAX(window_end) FROM hitter_windows").fetchone()[0]
+
+    scores, _ = score_player_windows(
+        conn,
+        models=models,
+        player_ids=list(range(1, 17)),
+        window_end_on_or_before=window_end,
+        scoring_season=2024,
+        season_set="2023-2024",
+    )
+    with_prob = [s for s in scores if s.probability is not None]
+    assert with_prob, "fixture produced no scored rows; test is vacuous"
+    assert all(s.probability_baserate is not None for s in with_prob)
+    assert all(0.0 < s.probability_baserate < 1.0 for s in with_prob)
+
+
+def test_score_player_windows_baserate_none_without_season_set(seeded_fitted_conn) -> None:
+    """Omitting season_set (or an empty rates table) degrades gracefully:
+    probabilities still emit, base rates are None, chip falls back to raw %."""
+    from fantasy_baseball.streaks.inference import (
+        load_models_from_fits,
+        score_player_windows,
+    )
+
+    conn = seeded_fitted_conn
+    models = load_models_from_fits(conn)
+    window_end = conn.execute("SELECT MAX(window_end) FROM hitter_windows").fetchone()[0]
+
+    scores, _ = score_player_windows(
+        conn,
+        models=models,
+        player_ids=list(range(1, 17)),
+        window_end_on_or_before=window_end,
+        scoring_season=2024,
+    )
+    with_prob = [s for s in scores if s.probability is not None]
+    assert with_prob
+    assert all(s.probability_baserate is None for s in scores)
