@@ -205,6 +205,20 @@ def compute_streak_report(
                 conn, season_set_train=season_set_train, window_days=window_days
             )
 
+    if not models:
+        # A report scored with zero models carries probability=None on every
+        # row -- labels still light up, so the degradation is invisible on the
+        # dashboard. Fail loudly instead: the refresh path catches this and
+        # keeps the previous (good) STREAK_SCORES cache, and the CLI/push
+        # scripts surface it to the operator.
+        raise RuntimeError(
+            "compute_streak_report: model refit produced 0 models; every "
+            "continuation probability would be None. Likely cause: "
+            "systematically NULL Statcast peripherals in the training seasons "
+            "-- run scripts/streaks/fetch_history.py --force-statcast for "
+            f"each season in {season_set_train!r}, recompute windows, then retry."
+        )
+
     roster_hitters, fa_hitters = _fetch_yahoo_hitters(league, team_name=team_name)
     logger.info(
         "Yahoo fetch complete: %d roster, %d FAs (deduped)",

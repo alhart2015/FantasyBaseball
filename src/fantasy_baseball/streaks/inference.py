@@ -302,7 +302,19 @@ def refit_models_for_report(
         )
 
     upsert_model_fits(conn, fit_rows)
-    logger.info("refit_models_for_report: wrote %d model_fits rows", len(fit_rows))
+    if not fits:
+        # Every (cat, direction) came back empty or single-class. With the full
+        # 2023-2025 corpus present this cannot happen; it means the training
+        # data itself is broken (the un-backfilled-Statcast failure shipped a
+        # probability-less report for weeks at INFO level).
+        logger.error(
+            "refit_models_for_report: fit 0 of %d models -- training frames "
+            "are empty or degenerate. Check for systematically NULL "
+            "peripherals (see build_training_frame ERROR above, if any).",
+            len(PHASE_4_MODELS),
+        )
+    else:
+        logger.info("refit_models_for_report: wrote %d model_fits rows", len(fit_rows))
     return fits
 
 
