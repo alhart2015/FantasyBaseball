@@ -19,23 +19,23 @@ Dispatch four specialist agents to review the codebase in parallel, then consoli
 
 ## Execution
 
-1. **Spawn all three agents in parallel** using the Agent tool with `subagent_type` set to each agent name. Each agent gets a prompt telling it to do a full review of its domain area. Include any user-provided focus areas in each prompt.
+1. **Spawn every agent in the table above in parallel** using the Agent tool with `subagent_type` set to each agent name — all Agent calls in a single message. Each agent gets a prompt telling it to review its domain area. If the user provided focus areas, pass them in each prompt — the agents honor a narrowed scope.
 
-2. **Wait for all three to complete.** Do not synthesize partial results.
+2. **Wait for all of them to complete.** Do not synthesize partial results.
 
 3. **Consolidate findings** into a single report with four severity tiers:
 
 ### Severity Tiers
 
-**CRITICAL** — Will affect correctness of projections or cause crashes on draft day.
-- Bugs that produce wrong player valuations or rankings
-- Crashes or unhandled exceptions in draft-day code paths
+**CRITICAL** — Will affect the correctness of a real decision (draft pick, lineup call, waiver move, trade) or crash a decision-path flow.
+- Bugs that produce wrong player valuations, rankings, or standings
+- Crashes or unhandled exceptions in draft, lineup, or refresh code paths
 - Data pipeline errors that silently corrupt results
-- Projection issues that would lead to clearly bad draft picks
+- Projection or valuation issues that would lead to clearly bad roster decisions
 
-**MEDIUM** — Opportunities to improve projection quality or performance.
+**MEDIUM** — Opportunities to improve result quality or performance.
 - Statistical methodology improvements that would produce better valuations
-- Performance bottlenecks that slow interactive draft or simulation
+- Performance bottlenecks that slow interactive use or simulation
 - Test coverage gaps for important code paths
 - Projection assumptions that are defensible but suboptimal
 
@@ -46,7 +46,7 @@ Dispatch four specialist agents to review the codebase in parallel, then consoli
 - Documentation gaps
 
 **SUGGESTED FEATURES** — Ideas from any expert that would improve the project.
-- New capabilities any of the three experts think would add value
+- New capabilities any of the experts think would add value
 - Enhancements to existing features
 - Data sources or methodologies worth incorporating
 
