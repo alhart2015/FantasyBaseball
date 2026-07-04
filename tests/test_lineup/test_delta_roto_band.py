@@ -539,7 +539,10 @@ def test_reference_none_preserves_legacy_behavior(sample_swap: _Swap) -> None:
     """Waiver/trade callers (before == the anchor roster) are unchanged."""
     kw = sample_swap.band_kwargs
     a = compute_delta_roto_band(**kw)
-    b = compute_delta_roto_band(**kw, reference_players=kw["before_players"])
+    # Equal-but-distinct list so the reference->before split exercises the
+    # keyed _swap_sets path (not the identity shortcut) and must still
+    # reproduce the anchor row exactly.
+    b = compute_delta_roto_band(**kw, reference_players=list(kw["before_players"]))
     assert (a.mean, a.sd, a.p_positive) == (b.mean, b.sd, b.p_positive)
 
 

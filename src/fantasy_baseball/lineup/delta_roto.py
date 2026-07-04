@@ -22,7 +22,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from fantasy_baseball.models.standings import CategoryStats
-from fantasy_baseball.trades.multi_trade import player_key
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     COUNTING_STATS,
@@ -206,6 +205,11 @@ def _swap_sets(
     if before_players is after_players:
         # Identity split (the legacy anchor rebuilding its own row).
         return [], []
+    # Function-local like this module's other trades.* imports:
+    # multi_trade imports delta_roto lazily, so a top-level import here
+    # would half-close an import cycle.
+    from fantasy_baseball.trades.multi_trade import player_key
+
     before_keyed = [(player_key(p), p) for p in before_players]
     after_keyed = [(player_key(p), p) for p in after_players]
     before_keys = {k for k, _ in before_keyed}
