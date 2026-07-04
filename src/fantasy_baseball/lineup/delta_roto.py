@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from fantasy_baseball.models.standings import CategoryStats
+from fantasy_baseball.trades.multi_trade import player_key
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     COUNTING_STATS,
@@ -198,19 +199,19 @@ def _swap_sets(
 
     A player is IN if in ``after`` but not ``before``, OUT if in
     ``before`` but not ``after``. Players shared by both lists cancel
-    (common random numbers) and contribute no variance. Keyed on
-    ``(name, player_type)`` per the repo identity convention -- a
-    two-way player's hitter and pitcher rows share a name and must
-    swap independently.
+    (common random numbers) and contribute no variance. Keyed on the
+    canonical ``name::player_type`` identity -- a two-way player's
+    hitter and pitcher rows share a name and must swap independently.
     """
-
-    def _key(p: Player) -> tuple[str, Any]:
-        return (p.name, p.player_type)
-
-    before_keys = {_key(p) for p in before_players}
-    after_keys = {_key(p) for p in after_players}
-    in_players = [p for p in after_players if _key(p) not in before_keys]
-    out_players = [p for p in before_players if _key(p) not in after_keys]
+    if before_players is after_players:
+        # Identity split (the legacy anchor rebuilding its own row).
+        return [], []
+    before_keyed = [(player_key(p), p) for p in before_players]
+    after_keyed = [(player_key(p), p) for p in after_players]
+    before_keys = {k for k, _ in before_keyed}
+    after_keys = {k for k, _ in after_keyed}
+    in_players = [p for k, p in after_keyed if k not in before_keys]
+    out_players = [p for k, p in before_keyed if k not in after_keys]
     return in_players, out_players
 
 
@@ -268,9 +269,9 @@ def _ev_delta_and_stats(
 
     reference = reference_players if reference_players is not None else before_players
 
-    def _row_for(players: list[Player], ins: list[Player], outs: list[Player]) -> dict[str, Any]:
+    def _row_for(ins: list[Player], outs: list[Player]) -> dict[str, Any]:
         """The user row for a hypothetical lineup, rebuilt off the anchor."""
-        if players is reference or (not ins and not outs):
+        if not ins and not outs:
             return anchor_dict
         return apply_swap_delta(
             anchor_dict,
@@ -280,17 +281,8 @@ def _ev_delta_and_stats(
             team_ip=user_ip,
         )
 
-    if reference is before_players:
-        # Legacy contract: before IS the anchor; the before->after split is
-        # exactly the reference->after split -- reuse it.
-        before_ins: list[Player] = []
-        before_outs: list[Player] = []
-        after_ins, after_outs = in_players, out_players
-    else:
-        before_ins, before_outs = _swap_sets(reference, before_players)
-        after_ins, after_outs = _swap_sets(reference, after_players)
-    user_before_dict = _row_for(before_players, before_ins, before_outs)
-    user_after_dict = _row_for(after_players, after_ins, after_outs)
+    user_before_dict = _row_for(*_swap_sets(reference, before_players))
+    user_after_dict = _row_for(*_swap_sets(reference, after_players))
 
     all_before = dict(all_rows)
     all_before[team_name] = user_before_dict
@@ -456,16 +448,16 @@ def band_reference_lineup(
     test fixtures, pre-fetch callers) -- the band then falls back to the
     legacy before-is-the-anchor contract.
     """
+    if all(p.selected_position is None for p in candidates):
+        # Bare fixtures / pre-fetch callers: no inferable anchor -- fall back
+        # to the legacy before-is-the-anchor contract.
+        return None
     from fantasy_baseball.scoring import _classify_roster
 
     active, _, _ = _classify_roster(candidates)
-    active = [p for p in active if p.selected_position is not None]
-    if not active:
-        # Bare fixtures (no selected positions) or a transition window where
-        # every candidate is benched: no inferable anchor -- fall back to the
-        # legacy before-is-the-anchor contract rather than anchoring on
-        # other_half alone.
-        return None
+    # An empty active set (every slotted candidate benched, e.g. a lineup-set
+    # transition window) still yields a valid anchor: the standings row's
+    # lineup for this half IS empty, so the reference is other_half alone.
     return [*active, *(other_half or [])]
 
 
