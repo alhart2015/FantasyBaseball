@@ -69,8 +69,8 @@ def _hitter(name, positions, slot=None, **stats):
 def _arm(name, *, ip, k, slot=None, status="", w=6.0, sv=0.0, er=30.0, bb=20.0, h_allowed=55.0):
     """A pitcher with explicit IP and K. Other rate inputs default so the
     staff shares near-identical ER/BB/H_allowed and K is the lever."""
-    era = 9.0 * er / ip if ip else 0.0
-    whip = (bb + h_allowed) / ip if ip else 0.0
+    era = 9.0 * er / ip if ip > 0 else 0.0
+    whip = (bb + h_allowed) / ip if ip > 0 else 0.0
     return Player(
         name=name,
         player_type=PlayerType.PITCHER,

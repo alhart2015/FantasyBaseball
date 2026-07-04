@@ -3840,7 +3840,7 @@ class TestProjectRosComponents:
             sb=sb,
             h=h,
             ab=ab,
-            avg=h / ab if ab else 0.0,
+            avg=h / ab if ab > 0 else 0.0,
         )
         return Player(
             name=name,
@@ -3862,8 +3862,8 @@ class TestProjectRosComponents:
             er=er,
             bb=bb,
             h_allowed=h_allowed,
-            era=er * 9.0 / ip if ip else 0.0,
-            whip=(bb + h_allowed) / ip if ip else 0.0,
+            era=er * 9.0 / ip if ip > 0 else 0.0,
+            whip=(bb + h_allowed) / ip if ip > 0 else 0.0,
         )
         return Player(
             name=name,
