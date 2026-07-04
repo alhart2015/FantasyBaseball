@@ -213,22 +213,35 @@ def _ev_delta_and_stats(
     projected_standings: ProjectedStandings,
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
+    reference_players: list[Player] | None = None,
 ) -> tuple[float, CategoryStats, CategoryStats, list[Player], list[Player]]:
     """EV deltaRoto total, before/after stat rows, and the IN/OUT sets.
 
     Mean mechanism (identical to :func:`compute_delta_roto`,
-    :mod:`multi_trade`, and the audit): start from the user's
-    ``projected_standings`` row, subtract the aggregated ROS of the OUT
-    players, add the aggregated ROS of the IN players, score before/after
-    with ``team_sds``, take the total delta. For a one-for-one swap this
-    is exactly ``compute_delta_roto(...).total`` because a single-player
+    :mod:`multi_trade`, and the audit): rebuild each endpoint's user row
+    from the ``projected_standings`` row by subtracting the aggregated ROS
+    of players leaving and adding players entering, score both with
+    ``team_sds``, take the total delta. For a one-for-one swap this is
+    exactly ``compute_delta_roto(...).total`` because a single-player
     ``aggregate_player_stats`` equals ``player_rest_of_season_stats`` and
     ``apply_swap_delta`` is the same call.
 
+    **Anchor contract:** the standings row is the roto total of one
+    specific lineup. ``reference_players`` names that lineup, and both
+    endpoints are rebuilt relative to it. When ``None`` (the legacy
+    default), ``before_players`` is assumed to BE that lineup — valid for
+    the waiver/trade/audit callers, whose "before" is the current roster.
+    Callers whose "before" is itself hypothetical (the lineup optimizer's
+    per-starter counterfactuals) MUST pass ``reference_players``:
+    anchoring an alt lineup on the current-lineup row double-counts every
+    player who is in the current lineup but not in "before" (a current
+    starter's stats end up in the anchor AND in the IN set), which is how
+    reliever rows showed a fictional 101-save team.
+
     Also returns the user team's before/after :class:`CategoryStats` rows
     so the sd path can read the per-category baseline mean and shift, and
-    the IN/OUT player lists from :func:`_swap_sets` so the caller need not
-    recompute the split.
+    the before->after IN/OUT player lists from :func:`_swap_sets` so the
+    caller need not recompute the split.
     """
     from fantasy_baseball.scoring import score_roto_dict
     from fantasy_baseball.trades.evaluate import (
@@ -238,24 +251,35 @@ def _ev_delta_and_stats(
     )
 
     in_players, out_players = _swap_sets(before_players, after_players)
-    loses_ros = aggregate_player_stats(out_players)
-    gains_ros = aggregate_player_stats(in_players)
 
-    all_before = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
-    user_before_dict = all_before[team_name]
+    all_rows = {e.team_name: e.stats.to_dict() for e in projected_standings.entries}
+    anchor_dict = all_rows[team_name]
     # Pull AB/IP off the projected standings entry; pre-PR-110 / legacy
     # entries decay to None via team_baseline_volumes so apply_swap_delta
     # falls back to the constant heuristic.
     user_ab, user_ip = team_baseline_volumes(projected_standings.by_team()[team_name])
-    user_after_dict = apply_swap_delta(
-        user_before_dict,
-        loses_ros,
-        gains_ros,
-        team_ab=user_ab,
-        team_ip=user_ip,
-    )
 
-    all_after = dict(all_before)
+    reference = reference_players if reference_players is not None else before_players
+
+    def _row_for(players: list[Player]) -> dict[str, Any]:
+        """The user row for a hypothetical lineup, rebuilt off the anchor."""
+        ins, outs = _swap_sets(reference, players)
+        if not ins and not outs:
+            return anchor_dict
+        return apply_swap_delta(
+            anchor_dict,
+            aggregate_player_stats(outs),
+            aggregate_player_stats(ins),
+            team_ab=user_ab,
+            team_ip=user_ip,
+        )
+
+    user_before_dict = _row_for(before_players)
+    user_after_dict = _row_for(after_players)
+
+    all_before = dict(all_rows)
+    all_before[team_name] = user_before_dict
+    all_after = dict(all_rows)
     all_after[team_name] = user_after_dict
 
     roto_before = score_roto_dict(all_before, team_sds=team_sds)
@@ -408,6 +432,7 @@ def compute_delta_roto_band(
     *,
     projected_standings: ProjectedStandings,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
+    reference_players: list[Player] | None = None,
 ) -> DeltaRotoBand:
     """Closed-form confidence band for a before->after roster change.
 
@@ -433,9 +458,19 @@ def compute_delta_roto_band(
             ``sqrt(fraction_remaining)`` -- the same combined-SD softness
             ``score_roto`` uses for the points curve. ``None`` falls back
             to the rank step function (no curve softness).
+        reference_players: the lineup the ``projected_standings`` user row
+            reflects. REQUIRED whenever ``before_players`` is itself a
+            hypothetical lineup rather than that roster (see the anchor
+            contract on :func:`_ev_delta_and_stats`); ``None`` keeps the
+            legacy before-is-the-anchor behavior.
     """
     mean, before_cs, after_cs, in_players, out_players = _ev_delta_and_stats(
-        before_players, after_players, projected_standings, team_name, team_sds
+        before_players,
+        after_players,
+        projected_standings,
+        team_name,
+        team_sds,
+        reference_players=reference_players,
     )
 
     var_total = 0.0

@@ -52,6 +52,31 @@ class PitcherStarter:
         }
 
 
+_INACTIVE_SLOTS = frozenset(
+    {Position.BN, Position.IL, Position.IL_PLUS, Position.DL, Position.DL_PLUS}
+)
+
+
+def _band_reference(candidates: list[Player], other_half: list[Player]) -> list[Player] | None:
+    """The lineup the projected-standings user row reflects, for band anchoring.
+
+    The standings row is built from the CURRENT Yahoo lineup, so the correct
+    band anchor is the currently-active subset of ``candidates`` plus the
+    fixed ``other_half`` (see the anchor contract on
+    :func:`fantasy_baseball.lineup.delta_roto._ev_delta_and_stats`; without
+    this, a current starter's stats sit in the anchor AND in the swap's IN
+    set, which is how reliever rows displayed a fictional 101-save team).
+    Returns ``None`` when no candidate carries a selected position (test
+    fixtures, pre-fetch callers) -- the band then falls back to the legacy
+    before-is-the-anchor contract.
+    """
+    active = [p for p in candidates if p.selected_position not in _INACTIVE_SLOTS]
+    active = [p for p in active if p.selected_position is not None]
+    if not active:
+        return None
+    return [*active, *other_half]
+
+
 def _build_hitter_slot_positions(roster_slots: dict[str, int]) -> list[Position]:
     """Return the ordered list of active hitter slot Position values from config."""
     slots: list[Position] = []
@@ -417,6 +442,7 @@ def optimize_hitter_lineup(
                 fraction_remaining,
                 projected_standings=projected_standings,
                 team_sds=team_sds,
+                reference_players=_band_reference(hitters, pitcher_half),
             )
             bands[starter.name] = band_result.to_dict()
 
@@ -537,6 +563,7 @@ def optimize_pitcher_lineup(
                 fraction_remaining,
                 projected_standings=projected_standings,
                 team_sds=team_sds,
+                reference_players=_band_reference(pitchers, hitter_half),
             )
             bands[starter.name] = band_result.to_dict()
 
