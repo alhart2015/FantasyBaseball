@@ -285,8 +285,14 @@ def _ev_delta_and_stats(
             team_ip=user_ip,
         )
 
-    user_before_dict = _row_for(*_swap_sets(reference, before_players))
-    user_after_dict = _row_for(*_swap_sets(reference, after_players))
+    if reference is before_players:
+        # Legacy contract: the reference->after split IS the before->after
+        # split already computed above -- don't re-key both lists.
+        user_before_dict = anchor_dict
+        user_after_dict = _row_for(in_players, out_players)
+    else:
+        user_before_dict = _row_for(*_swap_sets(reference, before_players))
+        user_after_dict = _row_for(*_swap_sets(reference, after_players))
 
     all_before = dict(all_rows)
     all_before[team_name] = user_before_dict
