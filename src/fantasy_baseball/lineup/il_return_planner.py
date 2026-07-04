@@ -291,12 +291,19 @@ def _make_plan(
 
     after_active = [a.player for a in h_assign] + [s.player for s in ps]
     try:
+        # before_active is a re-optimized hypothetical, NOT the lineup the
+        # cached standings row reflects -- anchor on the roster's current
+        # actives per the contract on _ev_delta_and_stats (plans are RANKED
+        # by this mean, so a wrong anchor can reorder drop sets).
+        from fantasy_baseball.lineup.delta_roto import band_reference_lineup
+
         band = compute_delta_roto_band(
             before_active,
             after_active,
             projected_standings.field_stats(team_name),
             team_name,
             fraction_remaining,
+            reference_players=band_reference_lineup(roster),
             projected_standings=projected_standings,
             team_sds=team_sds,
         )

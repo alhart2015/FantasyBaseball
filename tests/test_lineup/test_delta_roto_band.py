@@ -541,3 +541,16 @@ def test_reference_none_preserves_legacy_behavior(sample_swap: _Swap) -> None:
     a = compute_delta_roto_band(**kw)
     b = compute_delta_roto_band(**kw, reference_players=kw["before_players"])
     assert (a.mean, a.sd, a.p_positive) == (b.mean, b.sd, b.p_positive)
+
+
+def test_swap_sets_distinguishes_two_way_players_by_type() -> None:
+    """A two-way player's hitter and pitcher rows share a name; the swap
+    split must key on (name, player_type) so the bat can swap while the
+    arm stays (repo rule: never key on bare names)."""
+    bat = _hitter("Shohei Ohtani")
+    arm = _pitcher("Shohei Ohtani")
+    other = _hitter("Someone Else")
+    ins, outs = _swap_sets([arm, bat], [arm, other])
+    assert [p.name for p in ins] == ["Someone Else"]
+    assert len(outs) == 1
+    assert outs[0] is bat

@@ -196,14 +196,21 @@ def _swap_sets(
 ) -> tuple[list[Player], list[Player]]:
     """Players entering (IN) and leaving (OUT) the user's roster.
 
-    A player is IN if their name is in ``after`` but not ``before``, OUT
-    if in ``before`` but not ``after``. Players shared by both lists
-    cancel (common random numbers) and contribute no variance.
+    A player is IN if in ``after`` but not ``before``, OUT if in
+    ``before`` but not ``after``. Players shared by both lists cancel
+    (common random numbers) and contribute no variance. Keyed on
+    ``(name, player_type)`` per the repo identity convention -- a
+    two-way player's hitter and pitcher rows share a name and must
+    swap independently.
     """
-    before_names = {p.name for p in before_players}
-    after_names = {p.name for p in after_players}
-    in_players = [p for p in after_players if p.name not in before_names]
-    out_players = [p for p in before_players if p.name not in after_names]
+
+    def _key(p: Player) -> tuple[str, Any]:
+        return (p.name, p.player_type)
+
+    before_keys = {_key(p) for p in before_players}
+    after_keys = {_key(p) for p in after_players}
+    in_players = [p for p in after_players if _key(p) not in before_keys]
+    out_players = [p for p in before_players if _key(p) not in after_keys]
     return in_players, out_players
 
 
@@ -229,7 +236,7 @@ def _ev_delta_and_stats(
     **Anchor contract:** the standings row is the roto total of one
     specific lineup. ``reference_players`` names that lineup, and both
     endpoints are rebuilt relative to it. When ``None`` (the legacy
-    default), ``before_players`` is assumed to BE that lineup — valid for
+    default), ``before_players`` is assumed to BE that lineup -- valid for
     the waiver/trade/audit callers, whose "before" is the current roster.
     Callers whose "before" is itself hypothetical (the lineup optimizer's
     per-starter counterfactuals) MUST pass ``reference_players``:
@@ -261,10 +268,9 @@ def _ev_delta_and_stats(
 
     reference = reference_players if reference_players is not None else before_players
 
-    def _row_for(players: list[Player]) -> dict[str, Any]:
+    def _row_for(players: list[Player], ins: list[Player], outs: list[Player]) -> dict[str, Any]:
         """The user row for a hypothetical lineup, rebuilt off the anchor."""
-        ins, outs = _swap_sets(reference, players)
-        if not ins and not outs:
+        if players is reference or (not ins and not outs):
             return anchor_dict
         return apply_swap_delta(
             anchor_dict,
@@ -274,8 +280,17 @@ def _ev_delta_and_stats(
             team_ip=user_ip,
         )
 
-    user_before_dict = _row_for(before_players)
-    user_after_dict = _row_for(after_players)
+    if reference is before_players:
+        # Legacy contract: before IS the anchor; the before->after split is
+        # exactly the reference->after split -- reuse it.
+        before_ins: list[Player] = []
+        before_outs: list[Player] = []
+        after_ins, after_outs = in_players, out_players
+    else:
+        before_ins, before_outs = _swap_sets(reference, before_players)
+        after_ins, after_outs = _swap_sets(reference, after_players)
+    user_before_dict = _row_for(before_players, before_ins, before_outs)
+    user_after_dict = _row_for(after_players, after_ins, after_outs)
 
     all_before = dict(all_rows)
     all_before[team_name] = user_before_dict
@@ -423,6 +438,37 @@ def _category_delta_variance(
     return max(var, 0.0)
 
 
+def band_reference_lineup(
+    candidates: list[Player], other_half: list[Player] | None = None
+) -> list[Player] | None:
+    """Infer the anchor lineup for :func:`compute_delta_roto_band`.
+
+    The projected-standings user row is built from the CURRENT Yahoo
+    lineup, so the band anchor is the currently-active subset of
+    ``candidates`` -- the same slot-first partition the standings row
+    itself uses (``scoring._classify_roster``, so None/unrecognized slots
+    count as active there and here) -- plus the fixed ``other_half``. The
+    result need only equal the anchor lineup *modulo players present in
+    both endpoints*: shared extras (e.g. benched pitchers in the hitter
+    optimizer's fixed half) cancel in :func:`_swap_sets`.
+
+    Returns ``None`` when no candidate carries a selected position (bare
+    test fixtures, pre-fetch callers) -- the band then falls back to the
+    legacy before-is-the-anchor contract.
+    """
+    from fantasy_baseball.scoring import _classify_roster
+
+    active, _, _ = _classify_roster(candidates)
+    active = [p for p in active if p.selected_position is not None]
+    if not active:
+        # Bare fixtures (no selected positions) or a transition window where
+        # every candidate is benched: no inferable anchor -- fall back to the
+        # legacy before-is-the-anchor contract rather than anchoring on
+        # other_half alone.
+        return None
+    return [*active, *(other_half or [])]
+
+
 def compute_delta_roto_band(
     before_players: list[Player],
     after_players: list[Player],
@@ -463,6 +509,16 @@ def compute_delta_roto_band(
             hypothetical lineup rather than that roster (see the anchor
             contract on :func:`_ev_delta_and_stats`); ``None`` keeps the
             legacy before-is-the-anchor behavior.
+
+    Known limitation: the endpoint rows are rebuilt by face-value component
+    arithmetic, while the anchor row itself carries displacement scaling
+    (IL players at partial credit, displaced actives scaled down -- see
+    ``scoring._apply_displacement``). Swapping a *displaced* player
+    therefore moves his full ROS line against a partially-scaled anchor, a
+    second-order error measured at <=0.05 roto points on live data (vs the
+    ~1.0-point anchor artifact this contract exists to prevent). The
+    pool-model ``roto_delta`` next to the band remains the exact
+    selection-grade number.
     """
     mean, before_cs, after_cs, in_players, out_players = _ev_delta_and_stats(
         before_players,
