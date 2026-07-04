@@ -105,6 +105,14 @@ def test_compute_streak_report_end_to_end(
     )
 
     fake_league = object()
+    # Anchor "today" just past the fixture's last window so the 4-day
+    # staleness guard doesn't force every row neutral (which would strip
+    # probabilities and make the assertion below vacuous).
+    from datetime import timedelta
+
+    last_window_end = seeded_pipeline_conn_no_fits.execute(
+        "SELECT MAX(window_end) FROM hitter_windows"
+    ).fetchone()[0]
     report = compute_streak_report(
         seeded_pipeline_conn_no_fits,
         league=fake_league,
@@ -114,6 +122,7 @@ def test_compute_streak_report_end_to_end(
         scoring_season=2024,
         season_set_train="2023-2024",
         force_refit=False,
+        today=last_window_end + timedelta(days=1),
     )
 
     assert report.team_name == "Hart of the Order"
@@ -125,3 +134,54 @@ def test_compute_streak_report_end_to_end(
     # Models must have been refit (no prior fits).
     n_fits = seeded_pipeline_conn_no_fits.execute("SELECT COUNT(*) FROM model_fits").fetchone()[0]
     assert n_fits > 0
+
+    # At least one score must carry a live probability. A report where every
+    # probability is None (models silently missing) shipped to production
+    # once -- labels still light up, so only an end-to-end assertion on the
+    # actual number catches it.
+    all_scores = [
+        score for row in (*report.roster_rows, *report.fa_rows) for score in row.scores.values()
+    ]
+    assert any(s.probability is not None for s in all_scores), (
+        "no score carried a probability -- models fit but scoring never used them"
+    )
+
+
+def test_compute_streak_report_raises_when_zero_models_fit(
+    seeded_pipeline_conn_no_fits, monkeypatch, tmp_path
+) -> None:
+    """Zero fitted models means every probability would be None -- the exact
+    silent degradation that shipped once. The pipeline must raise (so the
+    refresh keeps the previous good cache) instead of scoring model-less."""
+    import pytest
+
+    from fantasy_baseball.streaks import pipeline as pl
+
+    monkeypatch.setattr(
+        "fantasy_baseball.streaks.pipeline.fetch_season",
+        lambda *, season, conn, **kw: {"season": season, "stub": True},
+    )
+    monkeypatch.setattr(
+        "fantasy_baseball.streaks.pipeline.refit_models_for_report",
+        lambda conn, **kw: {},
+    )
+
+    def _fail_if_reached(league, *, team_name):
+        raise AssertionError("must raise before the Yahoo fetch")
+
+    monkeypatch.setattr("fantasy_baseball.streaks.pipeline._fetch_yahoo_hitters", _fail_if_reached)
+
+    projections_root = tmp_path / "projections"
+    (projections_root / "2024").mkdir(parents=True)
+
+    with pytest.raises(RuntimeError, match="0 models"):
+        pl.compute_streak_report(
+            seeded_pipeline_conn_no_fits,
+            league=object(),
+            team_name="Hart of the Order",
+            league_id=5652,
+            projections_root=projections_root,
+            scoring_season=2024,
+            season_set_train="2023-2024",
+            force_refit=True,
+        )

@@ -306,6 +306,7 @@ def build_report(
         window_end_on_or_before=today,
         window_days=window_days,
         scoring_season=scoring_season,
+        season_set=season_set_train,
     )
     scores_by_pid: dict[int, list[PlayerCategoryScore]] = {}
     for s in all_scores:

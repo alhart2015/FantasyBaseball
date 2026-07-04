@@ -263,3 +263,20 @@ def test_indicator_is_frozen() -> None:
     except Exception:
         return
     raise AssertionError("Indicator should be frozen")
+
+
+def test_deserialize_score_tolerates_legacy_payload_without_baserate() -> None:
+    """Payloads cached before probability_baserate existed must still load."""
+    from fantasy_baseball.streaks.dashboard import _deserialize_score
+
+    legacy = {
+        "player_id": 7,
+        "category": "hr",
+        "label": "hot",
+        "probability": 0.62,
+        "drivers": [],
+        "window_end": None,
+    }
+    score = _deserialize_score(legacy)
+    assert score.probability == 0.62
+    assert score.probability_baserate is None

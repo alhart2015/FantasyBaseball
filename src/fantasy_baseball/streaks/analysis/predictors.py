@@ -322,13 +322,39 @@ def build_training_frame(
         "barrel_pct",
         "xwoba_avg",
     ]
+    n_before = len(df)
     df = df.dropna(subset=feature_cols_with_nulls)
+    dropped_frac = 1.0 - len(df) / n_before
+    if dropped_frac > NULL_PERIPHERAL_DROP_ERROR_FRACTION:
+        # A drop this large means a peripheral column is systematically NULL
+        # (e.g. Statcast history never backfilled after a schema migration) --
+        # the model would train on a sliver of the corpus, or nothing at all.
+        # This exact failure silently killed every continuation probability
+        # once already; be loud about it.
+        logger.error(
+            "build_training_frame(%s, %s): NULL-peripheral filter dropped %.0f%% "
+            "of %d rows (threshold %.0f%%). A peripheral column is likely "
+            "systematically NULL -- if Statcast history is missing, run "
+            "scripts/streaks/fetch_history.py --force-statcast per season, "
+            "then recompute windows.",
+            category,
+            direction,
+            dropped_frac * 100,
+            n_before,
+            NULL_PERIPHERAL_DROP_ERROR_FRACTION * 100,
+        )
     if df.empty:
         return df
 
     keep_cols = [*EXPECTED_FEATURE_COLUMNS, "target", "player_id", "season", "window_end"]
     return df[keep_cols].reset_index(drop=True)
 
+
+# Fraction of training rows the NULL-peripheral filter may drop before
+# ``build_training_frame`` logs an ERROR. Normal loss is ~3% (windows with a
+# stray missing Statcast peripheral); anything past this bound indicates a
+# systematically NULL column, e.g. an un-backfilled schema migration.
+NULL_PERIPHERAL_DROP_ERROR_FRACTION: float = 0.25
 
 DEFAULT_C_GRID: tuple[float, ...] = (0.01, 0.1, 1.0, 10.0)
 

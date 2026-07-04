@@ -410,3 +410,42 @@ def test_fit_all_models_skips_models_with_no_training_rows() -> None:
     assert all(v is None for v in result.fits.values())
     n = conn.execute("SELECT COUNT(*) FROM model_fits").fetchone()[0]
     assert n == 0
+
+
+def test_build_training_frame_errors_when_null_peripheral_drop_exceeds_bound(caplog) -> None:
+    """A systematically-NULL peripheral (e.g. un-backfilled Statcast history)
+    must log ERROR, not vanish at INFO. This exact failure shipped a
+    probability-less report: barrel_pct was NULL for 100% of 2023-2025 windows
+    and the dropna removed the entire training corpus."""
+    import logging
+
+    conn = get_connection(":memory:")
+    _seed_pipeline(conn)
+    # Simulate the un-backfilled migration: every window loses barrel_pct.
+    conn.execute("UPDATE hitter_windows SET barrel_pct = NULL")
+
+    with caplog.at_level(logging.ERROR, logger="fantasy_baseball.streaks.analysis.predictors"):
+        df = build_training_frame(
+            conn, category="r", direction="above", season_set="2024", window_days=14
+        )
+
+    assert df.empty
+    errors = [r for r in caplog.records if r.levelno == logging.ERROR]
+    assert errors, "expected an ERROR log when the NULL-peripheral drop exceeds the bound"
+    assert "force-statcast" in errors[0].getMessage()
+
+
+def test_build_training_frame_no_error_log_at_normal_drop_rate(caplog) -> None:
+    """The healthy fixture (only sporadic NULLs) must stay quiet at ERROR."""
+    import logging
+
+    conn = get_connection(":memory:")
+    _seed_pipeline(conn)
+
+    with caplog.at_level(logging.ERROR, logger="fantasy_baseball.streaks.analysis.predictors"):
+        df = build_training_frame(
+            conn, category="r", direction="above", season_set="2024", window_days=14
+        )
+
+    assert not df.empty
+    assert not [r for r in caplog.records if r.levelno == logging.ERROR]
