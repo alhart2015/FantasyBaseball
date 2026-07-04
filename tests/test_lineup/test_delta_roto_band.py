@@ -456,3 +456,104 @@ def test_rate_category_pitcher_swap_band_responds() -> None:
     # variance shifts -> the band has positive width.
     assert band.mean > 0
     assert band.sd > 0
+
+
+def _rp_for_sp_field() -> dict[str, CategoryStats]:
+    """Field with SV and K contested around the user's totals.
+
+    An RP<->SP swap has large opposite-signed SV-vs-K/W deltas; putting both
+    categories on steep curve segments makes anchor errors first-order, the
+    same shape as the production reliever-row artifact.
+    """
+    field: dict[str, CategoryStats] = {}
+    for i in range(8):
+        field[f"Team{i}"] = CategoryStats(
+            r=1000,
+            hr=280,
+            rbi=1050,
+            sb=110,
+            avg=0.255,
+            w=78 + i * 4,
+            k=1150 + i * 60,
+            sv=15 + i * 8,
+            era=3.6 + i * 0.06,
+            whip=1.15 + i * 0.01,
+        )
+    return field
+
+
+@pytest.fixture
+def rp_for_sp_swap() -> _Swap:
+    """Bench-the-closer-for-an-SP swap: the optimizer-counterfactual shape."""
+    before = [_pitcher(f"SP{i}") for i in range(8)] + [
+        _pitcher("Closer", ip=60, w=4, k=70, sv=35, er=18, bb=15, h_allowed=45)
+    ]
+    add_player = _pitcher("NewSP")
+    return _build_swap(before, "Closer", add_player, field=_rp_for_sp_field())
+
+
+def test_reference_anchor_makes_band_antisymmetric(rp_for_sp_swap: _Swap) -> None:
+    """Reversing before/after with the anchor pinned negates the mean exactly.
+
+    The pitcher/hitter optimizers price "starter in" as before=alt-lineup,
+    after=current-lineup, while the standings row (the anchor) reflects
+    CURRENT. reference_players pins the anchor to that roster so both
+    endpoints are rebuilt consistently; the swap delta must then be exactly
+    antisymmetric under endpoint reversal.
+    """
+    kw = rp_for_sp_swap.band_kwargs
+    forward = compute_delta_roto_band(**kw)
+    rev = compute_delta_roto_band(
+        **{
+            **kw,
+            "before_players": kw["after_players"],
+            "after_players": kw["before_players"],
+            "reference_players": kw["before_players"],
+        }
+    )
+    assert rev.mean == pytest.approx(-forward.mean, abs=1e-9)
+    # sd is NOT required to match: the variance path linearizes the points
+    # curve at the "before" operating point, which differs by direction.
+    assert rev.sd > 0.0 and forward.sd > 0.0
+
+
+def test_legacy_reversed_call_double_counts_without_reference(rp_for_sp_swap: _Swap) -> None:
+    """Without reference_players, before=hypothetical anchors on the wrong
+    roster and double-counts the current starter (the fictional-101-saves
+    artifact from the lineup page). Pin that the artifact is material so
+    this test fails if someone 'simplifies' the reference plumbing away.
+    """
+    kw = rp_for_sp_swap.band_kwargs
+    forward = compute_delta_roto_band(**kw)
+    legacy_rev = compute_delta_roto_band(
+        **{
+            **kw,
+            "before_players": kw["after_players"],
+            "after_players": kw["before_players"],
+        }
+    )
+    assert abs(legacy_rev.mean + forward.mean) > 0.05
+
+
+def test_reference_none_preserves_legacy_behavior(sample_swap: _Swap) -> None:
+    """Waiver/trade callers (before == the anchor roster) are unchanged."""
+    kw = sample_swap.band_kwargs
+    a = compute_delta_roto_band(**kw)
+    # Equal-but-distinct list so the reference->before split exercises the
+    # keyed _swap_sets path (not the identity shortcut) and must still
+    # reproduce the anchor row exactly.
+    b = compute_delta_roto_band(**kw, reference_players=list(kw["before_players"]))
+    assert (a.mean, a.sd, a.p_positive) == (b.mean, b.sd, b.p_positive)
+
+
+def test_swap_sets_distinguishes_two_way_players_by_type() -> None:
+    """A two-way player's hitter and pitcher rows share a name; the swap
+    split must key on (name, player_type) so the bat can swap while the
+    arm stays (repo rule: never key on bare names)."""
+    bat = _hitter("Shohei Ohtani")
+    arm = _pitcher("Shohei Ohtani")
+    other = _hitter("Someone Else")
+    ins, outs = _swap_sets([arm, bat], [arm, other])
+    assert [p.name for p in ins] == ["Someone Else"]
+    assert len(outs) == 1
+    assert outs[0] is bat

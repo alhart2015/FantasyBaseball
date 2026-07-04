@@ -1,4 +1,11 @@
 # TODO — In-Season Enhancements
+- [ ] Bare-name keying above `_swap_sets`: `optimizer.apply_lineup_to_roster` (bench_names),
+  `il_return_planner._make_plan` (drop_names/survivors), `compute_one_for_one_band` /
+  `compute_delta_roto` (drop filtering) all key on `p.name`; a rostered two-way player's
+  hitter+pitcher rows would move together. `_swap_sets` now uses `player_key`
+  (name::player_type) -- sweep the layers above to match, and consider promoting
+  `player_key` onto the Player model (6+ modules hand-roll it). Found by loop-review
+  on fix/pitcher-band-anchor, 2026-07-03; pre-existing, latent (no two-way player rostered).
 
 - [ ] **Push streak scores as part of `refresh_remote.py`** -- Streaks reach prod Upstash today only as a *silent, best-effort* side effect of a LOCAL (`RENDER=false`) refresh: `_compute_streaks` runs, then `_push_streak_scores_to_remote` mirrors `cache:streak_scores` and **swallows any failure** (`refresh_pipeline.py:179-206`). The obvious "push to prod" script -- `scripts/refresh_remote.py` -- does NOT update streaks at all: it sets `RENDER=true`, so `_compute_streaks` short-circuits (`if is_remote(): return`, `refresh_pipeline.py:1610`), and its final remote->local sync then CLOBBERS any freshly-computed local streaks with the stale remote copy. Net: a transient Upstash blip (or simply running refresh_remote) leaves prod streaks stale with NO error surfaced -- exactly what happened 2026-07-01 pushing the staleness-anchor fix (see [[reference-pushing-streaks-to-prod]]). Fix: make the streak push a reliable first-class step of `refresh_remote.py` -- after `run_full_refresh`, recompute streaks against the local DuckDB (`compute_streak_report` -> `serialize_report`, the RENDER=false compute path) and `write_cache_to(remote, STREAK_SCORES, payload)` in a retry loop, ordered AFTER (or exempt from) the remote->local sync so it can't be clobbered, and raise a hard error (not a swallow) on push failure -- streaks are the whole reason to run refresh_remote from a dev box. Reuse the standalone recompute+retry-push proven in this session (streaks-only, ~1-3 min, no full refresh needed). Surfaced 2026-07-01.
 

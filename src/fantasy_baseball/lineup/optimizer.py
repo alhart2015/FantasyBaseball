@@ -378,6 +378,12 @@ def optimize_hitter_lineup(
         p for p in full_roster if set(p.positions) & PITCHER_ELIGIBLE and not p.is_on_il()
     ]
 
+    band_reference: list[Player] | None = None
+    if compute_bands and fraction_remaining is not None:
+        from fantasy_baseball.lineup.delta_roto import band_reference_lineup
+
+        band_reference = band_reference_lineup(hitters, pitcher_half)
+
     roto_deltas: dict[str, float] = {}
     bands: dict[str, dict[str, Any]] = {}
     for starter in active_subset:
@@ -417,6 +423,7 @@ def optimize_hitter_lineup(
                 fraction_remaining,
                 projected_standings=projected_standings,
                 team_sds=team_sds,
+                reference_players=band_reference,
             )
             bands[starter.name] = band_result.to_dict()
 
@@ -504,6 +511,12 @@ def optimize_pitcher_lineup(
         p for p in full_roster if not (set(p.positions) & PITCHER_ELIGIBLE) and not p.is_on_il()
     ]
 
+    band_reference: list[Player] | None = None
+    if compute_bands and fraction_remaining is not None:
+        from fantasy_baseball.lineup.delta_roto import band_reference_lineup
+
+        band_reference = band_reference_lineup(pitchers, hitter_half)
+
     roto_deltas: dict[str, float] = {}
     bands: dict[str, dict[str, Any]] = {}
     for starter in active_subset:
@@ -537,6 +550,7 @@ def optimize_pitcher_lineup(
                 fraction_remaining,
                 projected_standings=projected_standings,
                 team_sds=team_sds,
+                reference_players=band_reference,
             )
             bands[starter.name] = band_result.to_dict()
 
