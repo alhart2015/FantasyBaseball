@@ -27,7 +27,7 @@ CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"]
 
 
 def _hitter(name, positions, r=70, hr=20, rbi=70, sb=10, h=120, ab=450, pa=500):
-    avg = (h / ab) if ab else 0
+    avg = (h / ab) if ab > 0 else 0
     return Player(
         name=name,
         player_type=PlayerType.HITTER,

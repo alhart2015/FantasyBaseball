@@ -59,8 +59,7 @@ def test_full_pipeline(fixtures_dir):
     # Use smaller starters_per_position for this test
     small_starters = {"C": 1, "OF": 2, "SS": 1, "2B": 1, "P": 2}
     levels = {
-        pos: row["total_sgp"]
-        for pos, row in find_replacement_players(pool, small_starters).items()
+        pos: row["total_sgp"] for pos, row in find_replacement_players(pool, small_starters).items()
     }
 
     # Step 4: Calculate VAR for each player
