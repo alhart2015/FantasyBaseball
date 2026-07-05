@@ -134,9 +134,11 @@ projections:
 # utils/constants.py). Consumers: the draft board + recommender, in-season
 # leverage / roster audit / IL-return planner, the refresh pipeline, scripts.
 #
-# Adopted 2026-07-05 from the robust trimmed-adjacent-gap calibration over
+# Adopted 2026-07-05 from a robust trimmed-adjacent-gap calibration over
 # 2023-2025 finals + 2026 extrapolated (data/historical_standings.json +
-# live standings; analysis in memory/project_sgp_denominator_calibration):
+# live standings; drop the largest and smallest of the 9 adjacent-team
+# gaps, mean the rest -- the naive mean gap is (max-min)/9, a range
+# estimator hostage to punt teams):
 #   AVG 0.0025 -- the one slam dunk: 6.4 SD below the generic 0.005 default,
 #     tightest CV of all ten categories, below default in 4/4 seasons. One
 #     standings place costs ~2.5 AVG points here, not 5.
