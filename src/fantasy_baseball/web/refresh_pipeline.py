@@ -1448,6 +1448,7 @@ class RefreshRun:
                     seed=42,
                     eos_baseline=self.eos_baseline,
                     team_sds=self.team_sds,
+                    denoms=self._league_denoms(),
                 )
                 header = f"seed=42 n_iter=1000 fraction_remaining={self.fraction_remaining:.4f}\n"
                 with open("phase0_attribution.txt", "w", encoding="ascii", errors="replace") as fh:
@@ -1473,6 +1474,7 @@ class RefreshRun:
                     self.eos_baseline,
                     self.team_sds,
                     self.fraction_remaining,
+                    denoms=self._league_denoms(),
                 )
 
             if rest_of_season_mc_rosters:
@@ -1595,6 +1597,7 @@ class RefreshRun:
             )
             season_start = date.fromisoformat(self.config.season_start)
             season_end = date.fromisoformat(self.config.season_end)
+            sgp_denoms = self._league_denoms()
 
             for txn in new_txns:
                 entry = by_id[txn["transaction_id"]]
@@ -1610,6 +1613,7 @@ class RefreshRun:
                     season_end,
                     partner=partner,
                     team_sds=self.team_sds,
+                    denoms=sgp_denoms,
                 )
                 entry.update(scores)
 
