@@ -131,6 +131,16 @@ def _load_config():
     return _config
 
 
+def _league_denoms() -> dict[Category, float]:
+    """League SGP denominators (config overrides applied over code defaults).
+
+    Cheap to call per request: ``_load_config`` is cached module-globally.
+    """
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    return get_sgp_denominators(_load_config().sgp_overrides)
+
+
 def _compute_worst_roster_by_position() -> dict[str, str]:
     """Cache-backed ``{pool_pos: worst_roster_player_name}``. Empty if roster
     cache is missing."""
@@ -141,10 +151,7 @@ def _compute_worst_roster_by_position() -> dict[str, str]:
     if not roster_raw:
         return {}
     roster = [Player.from_dict(p) for p in roster_raw]
-    config = _load_config()
-    from fantasy_baseball.sgp.denominators import get_sgp_denominators
-
-    return worst_roster_by_position(roster, denoms=get_sgp_denominators(config.sgp_overrides))
+    return worst_roster_by_position(roster, denoms=_league_denoms())
 
 
 def _load_yahoo_league():
@@ -648,7 +655,9 @@ def register_routes(app: Flask) -> None:
         if roster_raw:
             from fantasy_baseball.web.season_data import format_lineup_for_display
 
-            lineup_data = format_lineup_for_display(roster_raw, optimal_raw, basis=basis)
+            lineup_data = format_lineup_for_display(
+                roster_raw, optimal_raw, basis=basis, denoms=_league_denoms()
+            )
             # Attach per-hitter streak chip data so the tbody partial can
             # render a chip column without re-reading the cache itself.
             for hitter in lineup_data["hitters"]:
@@ -695,7 +704,9 @@ def register_routes(app: Flask) -> None:
         optimal_raw = read_cache_dict(CacheKey.LINEUP_OPTIMAL)
         streak_payload = read_cache_dict(CacheKey.STREAK_SCORES)
 
-        lineup_data = format_lineup_for_display(roster_raw, optimal_raw, basis=basis)
+        lineup_data = format_lineup_for_display(
+            roster_raw, optimal_raw, basis=basis, denoms=_league_denoms()
+        )
         for hitter in lineup_data["hitters"]:
             hitter["streak_indicator"] = build_indicator(hitter["name"], streak_payload)
 
@@ -1319,12 +1330,14 @@ def register_routes(app: Flask) -> None:
         pos_map: dict[str, list[str]],
         owner_map: dict[str, str],
         pos: str,
+        denoms: dict[Category, float] | None = None,
     ) -> tuple[list[tuple[dict, PlayerType, float]], list[tuple[dict, PlayerType, float]]]:
         """Walk ros_projections once; return (rostered, fa) lists of
         (projection_dict, ptype, sgp) triples eligible for ``pos``.
 
-        SGP is computed once during the walk so the handler can sort and
-        build records without re-running ``compute_sgp`` on the survivors.
+        SGP is computed once during the walk (on ``denoms`` -- the league's
+        SGP denominators) so the handler can sort and build records without
+        re-running ``compute_sgp`` on the survivors.
         """
         from fantasy_baseball.models.player import HitterStats, PitcherStats
         from fantasy_baseball.utils.name_utils import normalize_name
@@ -1345,8 +1358,7 @@ def register_routes(app: Flask) -> None:
                     ros = HitterStats.from_dict(d)
                 else:
                     ros = PitcherStats.from_dict(d)
-                ros.compute_sgp()
-                sgp = ros.sgp if ros.sgp is not None else 0.0
+                sgp = ros.compute_sgp(denoms)
                 bucket = rostered if owner_map.get(norm) else fas
                 bucket.append((d, ptype, sgp))
         return rostered, fas
@@ -1360,13 +1372,16 @@ def register_routes(app: Flask) -> None:
         audit_index: dict[tuple[str, str], dict],
         worst_by_pos: dict[str, str],
         sgp_hint: float | None = None,
+        denoms: dict[Category, float] | None = None,
     ) -> dict[str, Any]:
         """Build the per-player browse-page record from a ros_projections row.
 
         When ``sgp_hint`` is provided the cached SGP is used directly,
         avoiding a redundant ``compute_sgp`` call. Safe because
         ``HitterStats.compute_sgp`` / ``PitcherStats.compute_sgp`` only
-        assign ``self.sgp`` and return it.
+        assign ``self.sgp`` and return it. Hints must be computed on the
+        same ``denoms`` the caller passes here (both come from
+        ``_league_denoms()`` in the handlers).
         """
         from fantasy_baseball.lineup.roster_audit import fa_target_positions
         from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, RankInfo
@@ -1389,7 +1404,7 @@ def register_routes(app: Flask) -> None:
         if sgp_hint is not None:
             ros.sgp = sgp_hint
         else:
-            ros.compute_sgp()
+            ros.compute_sgp(denoms)
 
         rank_info = lookup_rank(rankings_cache, fg_id, name, ptype)
         positions = [Position.parse(pos) for pos in pos_map.get(norm, [])]
@@ -1526,11 +1541,13 @@ def register_routes(app: Flask) -> None:
         if not ctx["ros_cache"]:
             return jsonify({"players": [], "has_more_fa": False, "next_fa_offset": fa_offset})
 
+        denoms = _league_denoms()
         rostered, fas = _split_rostered_and_fa(
             ctx["ros_cache"],
             ctx["pos_map"],
             ctx["owner_map"],
             pos,
+            denoms=denoms,
         )
         fas.sort(key=lambda t: t[2], reverse=True)
 
@@ -1551,6 +1568,7 @@ def register_routes(app: Flask) -> None:
                         ctx["audit_index"],
                         ctx["worst_by_pos"],
                         sgp_hint=sgp,
+                        denoms=denoms,
                     )
                 )
         for d, ptype, sgp in fa_slice:
@@ -1564,6 +1582,7 @@ def register_routes(app: Flask) -> None:
                     ctx["audit_index"],
                     ctx["worst_by_pos"],
                     sgp_hint=sgp,
+                    denoms=denoms,
                 )
             )
 
@@ -1589,6 +1608,7 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "q must be at least 2 characters"}), 400
 
         ctx = _browse_context()
+        denoms = _league_denoms()
         needle = q.lower()
         rows: list[dict[str, Any]] = []
         for pool_key, ptype in (
@@ -1611,6 +1631,7 @@ def register_routes(app: Flask) -> None:
                         ctx["rankings_cache"],
                         ctx["audit_index"],
                         ctx["worst_by_pos"],
+                        denoms=denoms,
                     )
                 )
                 if len(rows) >= _FIND_RESULT_CAP:
@@ -1656,6 +1677,7 @@ def register_routes(app: Flask) -> None:
             for d in ctx["ros_cache"].get(pool_key, []):
                 by_norm[(normalize_name(d.get("name", "")), ptype)] = (d, ptype)
 
+        denoms = _league_denoms()
         rows: list[dict[str, Any]] = []
         for name, ptype in requested:
             match = by_norm.get((normalize_name(name), ptype))
@@ -1671,6 +1693,7 @@ def register_routes(app: Flask) -> None:
                     ctx["rankings_cache"],
                     ctx["audit_index"],
                     ctx["worst_by_pos"],
+                    denoms=denoms,
                 )
             )
         return jsonify({"players": rows})
@@ -1998,6 +2021,7 @@ def register_routes(app: Flask) -> None:
             pitchers_proj=pitchers_proj,
             rest_of_season_hitters=rest_of_season_hitters,
             rest_of_season_pitchers=rest_of_season_pitchers,
+            denoms=_league_denoms(),
         )
 
         # Render the same Jinja partials the user roster uses, so opponents

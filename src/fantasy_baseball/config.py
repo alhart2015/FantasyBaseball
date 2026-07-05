@@ -1,3 +1,4 @@
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -35,6 +36,11 @@ def _validate_sgp_overrides(raw_overrides: dict) -> dict[str, float]:
     """
     if not raw_overrides:
         return {}
+    if not isinstance(raw_overrides, dict):
+        raise ValueError(
+            "sgp_denominators must be a mapping of category to positive number "
+            f"(e.g. 'HR: 10'), got {type(raw_overrides).__name__}: {raw_overrides!r}"
+        )
     valid_keys = {c.value for c in Category}
     validated: dict[str, float] = {}
     for key, value in raw_overrides.items():
@@ -43,7 +49,14 @@ def _validate_sgp_overrides(raw_overrides: dict) -> dict[str, float]:
                 f"Unknown sgp_denominators category {key!r}. "
                 f"Valid categories: {', '.join(sorted(valid_keys))}"
             )
-        if not isinstance(value, (int, float)) or isinstance(value, bool) or value <= 0:
+        # NaN passes `value <= 0` (all NaN comparisons are False) and inf is
+        # numerically positive, so both need the explicit isfinite gate.
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value <= 0
+        ):
             raise ValueError(
                 f"sgp_denominators value for {key!r} must be a positive number, got {value!r}"
             )

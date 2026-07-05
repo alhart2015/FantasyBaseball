@@ -144,6 +144,52 @@ class TestGetRecommendations:
             assert all(isinstance(p, Position) for p in rec.positions)
 
 
+class TestSgpOverridesFloorsCacheKey:
+    """The floors cache key must normalize Category-enum override keys.
+
+    Category is a plain Enum (unorderable), so sorting raw ``.items()``
+    raises TypeError for enum-keyed overrides. The key sorts on
+    ``Category(k).value`` pairs instead.
+    """
+
+    def test_enum_keyed_overrides_do_not_crash(self):
+        from fantasy_baseball.utils.constants import Category
+
+        board = _make_board()
+        recs = get_recommendations(
+            board,
+            drafted=[],
+            user_roster=[],
+            n=3,
+            sgp_overrides={Category.HR: 5.0, Category.ERA: 0.05},
+        )
+        assert len(recs) == 3
+
+    def test_enum_and_string_keys_share_one_cache_entry(self):
+        from fantasy_baseball.draft.recommender import _replacement_levels_for_board
+        from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, Category
+
+        board = _make_board()
+        levels_enum = _replacement_levels_for_board(
+            board, DEFAULT_ROSTER_SLOTS, 10, {Category.HR: 5.0}
+        )
+        cache_key = board.attrs["_repl_levels_cache"][0]
+        levels_str = _replacement_levels_for_board(board, DEFAULT_ROSTER_SLOTS, 10, {"HR": 5.0})
+        # Same normalized key -> cache hit, identical floors either way.
+        assert board.attrs["_repl_levels_cache"][0] == cache_key
+        assert levels_str == levels_enum
+
+    def test_mixed_enum_and_string_keys_sort_without_typeerror(self):
+        from fantasy_baseball.draft.recommender import _replacement_levels_for_board
+        from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, Category
+
+        board = _make_board()
+        levels = _replacement_levels_for_board(
+            board, DEFAULT_ROSTER_SLOTS, 10, {Category.HR: 5.0, "ERA": 0.05}
+        )
+        assert levels
+
+
 class TestRecommendationCoercion:
     """__post_init__ coerces str inputs to Position for ergonomic construction."""
 

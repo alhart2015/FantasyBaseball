@@ -10,6 +10,7 @@ import numpy as np
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import (
     create_tables,
     get_connection,
@@ -26,6 +27,7 @@ from fantasy_baseball.utils.constants import (
 
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 POSITIONS_PATH = PROJECT_ROOT / "data" / "player_positions.json"
+CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 
 
 def ascii_name(s):
@@ -418,6 +420,7 @@ INVERSE = INVERSE_STATS
 
 
 def main():
+    config = load_config(CONFIG_PATH)
     conn = get_connection(":memory:")
     create_tables(conn)
     load_blended_projections(
@@ -431,6 +434,7 @@ def main():
 
     board = build_draft_board(
         conn=conn,
+        sgp_overrides=config.sgp_overrides,
         num_teams=10,
     )
     conn.close()

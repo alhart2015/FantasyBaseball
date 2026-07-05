@@ -152,6 +152,10 @@ def empirical_pitcher_replacements() -> dict[str, Player]:
         }
         p = Player.from_dict(row)
         if p.rest_of_season is not None:
+            # Default denominators: this stored sgp is informational padding
+            # metadata -- nothing in the recs path reads it (standings math
+            # consumes the raw stat line), so league sgp_overrides are not
+            # threaded here.
             p.rest_of_season.compute_sgp()
         reps[pos] = p
     return reps

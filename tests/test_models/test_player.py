@@ -490,6 +490,24 @@ class TestSgpComputation:
         standalone_sgp = calculate_player_sgp(stats)
         assert our_sgp == pytest.approx(standalone_sgp)
 
+    def test_compute_sgp_threads_denoms(self):
+        """Denominator overrides must reach the SGP math, and a later call
+        with different denoms must overwrite the stored value (no stale
+        cross-denominator cache)."""
+        from fantasy_baseball.models.player import HitterStats
+        from fantasy_baseball.sgp.denominators import get_sgp_denominators
+        from fantasy_baseball.sgp.player_value import calculate_player_sgp
+
+        stats = HitterStats(pa=650, ab=550, h=160, r=100, hr=40, rbi=100, sb=5, avg=0.291)
+        default_sgp = stats.compute_sgp()
+
+        denoms = get_sgp_denominators({"HR": 1.0})  # 1 HR per standings place
+        override_sgp = stats.compute_sgp(denoms)
+        assert override_sgp != pytest.approx(default_sgp)
+        assert override_sgp == pytest.approx(calculate_player_sgp(stats, denoms=denoms))
+        # Stored field reflects the most recent call's basis.
+        assert stats.sgp == pytest.approx(override_sgp)
+
 
 class TestPlayerPositionEnum:
     def test_from_dict_parses_positions_to_enum(self):

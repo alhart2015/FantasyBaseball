@@ -9,6 +9,7 @@ shape the cache files need.
 from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS
+from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 
@@ -49,6 +50,7 @@ def compute_lineup_moves(
     optimal_pitchers: list[PitcherStarter],
     pitcher_bench: list[Player],
     roster_players: list[Player],
+    denoms: dict[Category, float] | None = None,
 ) -> dict:
     """Compare optimizer output to current slots; emit paired swap rows.
 
@@ -80,6 +82,9 @@ def compute_lineup_moves(
     Anything left after both passes is returned as ``unpaired_starts`` /
     ``unpaired_benches`` (rare: caused by IL transitions or asymmetric
     roster changes).
+
+    ``denoms``: league-specific SGP denominators used for the bench-side
+    ordering key; ``None`` keeps the code defaults.
     """
     # --- Build START moves (bench → active boundary crossings) ---
     starts: list[dict] = []
@@ -130,7 +135,7 @@ def compute_lineup_moves(
                 "from": current,
                 "to": "BN",
                 "_player_type": PlayerType.HITTER,
-                "_sgp": _player_sgp(player),
+                "_sgp": _player_sgp(player, denoms),
             }
         )
     for player in pitcher_bench:
@@ -143,25 +148,29 @@ def compute_lineup_moves(
                 "from": current,
                 "to": "BN",
                 "_player_type": PlayerType.PITCHER,
-                "_sgp": _player_sgp(player),
+                "_sgp": _player_sgp(player, denoms),
             }
         )
 
     return _pair_swaps(starts, benches)
 
 
-def _player_sgp(player: Player) -> float:
+def _player_sgp(player: Player, denoms: dict[Category, float] | None = None) -> float:
     """Best-effort SGP read from a Player; 0.0 if no projection attached.
 
     Used as the bench-side ordering key in pass 2 of swap pairing — higher
     SGP means a bigger contribution lost when benched, so it should pair
     with the highest-impact START.
+
+    A pre-populated ``player.rest_of_season.sgp`` is trusted as-is: within
+    one refresh run every populator resolves denominators from the same
+    league config, so the cached value is already on the ``denoms`` basis.
     """
     if player.rest_of_season is None:
         return 0.0
     if player.rest_of_season.sgp is not None:
         return float(player.rest_of_season.sgp)
-    return float(player.rest_of_season.compute_sgp())
+    return float(player.rest_of_season.compute_sgp(denoms))
 
 
 def _pair_swaps(starts: list[dict], benches: list[dict]) -> dict:

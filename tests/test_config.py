@@ -176,6 +176,43 @@ def test_load_config_sgp_overrides_rejects_zero_value(minimal_league_yaml):
         load_config(path)
 
 
+def test_load_config_sgp_overrides_rejects_nan_value(minimal_league_yaml):
+    # YAML `.nan` parses to float("nan"); NaN slips past `value <= 0`
+    # (all NaN comparisons are False) without an explicit isfinite gate.
+    path = minimal_league_yaml(
+        scoring_mode="var", strategy="default", extra={"sgp_denominators": {"HR": float("nan")}}
+    )
+    with pytest.raises(ValueError, match=r"'HR'.*positive"):
+        load_config(path)
+
+
+def test_load_config_sgp_overrides_rejects_inf_value(minimal_league_yaml):
+    # YAML `.inf` parses to float("inf"), which is numerically positive.
+    path = minimal_league_yaml(
+        scoring_mode="var", strategy="default", extra={"sgp_denominators": {"HR": float("inf")}}
+    )
+    with pytest.raises(ValueError, match=r"'HR'.*positive"):
+        load_config(path)
+
+
+def test_load_config_sgp_overrides_rejects_list_form(minimal_league_yaml):
+    # A YAML list under sgp_denominators must raise the actionable
+    # ValueError, not an AttributeError from .items() on a list.
+    path = minimal_league_yaml(
+        scoring_mode="var", strategy="default", extra={"sgp_denominators": ["HR", 10]}
+    )
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_config(path)
+
+
+def test_load_config_sgp_overrides_rejects_scalar_form(minimal_league_yaml):
+    path = minimal_league_yaml(
+        scoring_mode="var", strategy="default", extra={"sgp_denominators": 10}
+    )
+    with pytest.raises(ValueError, match="must be a mapping"):
+        load_config(path)
+
+
 def test_load_config_roster_slots(sample_config):
     config = load_config(sample_config)
     assert config.roster_slots["C"] == 1

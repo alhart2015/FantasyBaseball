@@ -1092,6 +1092,7 @@ class RefreshRun:
     # --- Step 6d: Compute SGP rankings ---
     def _compute_rankings(self):
         self._progress("Computing SGP rankings...")
+        from fantasy_baseball.sgp.denominators import get_sgp_denominators
         from fantasy_baseball.sgp.rankings import (
             build_rankings_lookup,
             compute_rankings_from_game_logs,
@@ -1099,6 +1100,7 @@ class RefreshRun:
             lookup_rank,
         )
 
+        assert self.config is not None
         assert self.hitters_proj is not None
         assert self.pitchers_proj is not None
         assert self.preseason_hitters is not None
@@ -1107,15 +1109,27 @@ class RefreshRun:
         assert self.pitcher_logs is not None
         assert self.roster_players is not None
 
-        rest_of_season_ranks = compute_sgp_rankings(self.hitters_proj, self.pitchers_proj)
-        preseason_ranks = compute_sgp_rankings(self.preseason_hitters, self.preseason_pitchers)
-        current_ranks = compute_rankings_from_game_logs(self.hitter_logs, self.pitcher_logs)
+        # Resolve league denominators once so every ranking basis (ROS,
+        # preseason, current, total) is scored on the same scale.
+        sgp_denoms = get_sgp_denominators(self.config.sgp_overrides)
+
+        rest_of_season_ranks = compute_sgp_rankings(
+            self.hitters_proj, self.pitchers_proj, denoms=sgp_denoms
+        )
+        preseason_ranks = compute_sgp_rankings(
+            self.preseason_hitters, self.preseason_pitchers, denoms=sgp_denoms
+        )
+        current_ranks = compute_rankings_from_game_logs(
+            self.hitter_logs, self.pitcher_logs, denoms=sgp_denoms
+        )
 
         # Full-season (YTD + ROS) leaguewide ranking. The full-season pools are
         # already derived earlier in the pipeline; if they are absent (e.g. no
         # ROS projections), fall back to an empty ranking so rank.total is None.
         if self.full_hitters_proj is not None and self.full_pitchers_proj is not None:
-            total_ranks = compute_sgp_rankings(self.full_hitters_proj, self.full_pitchers_proj)
+            total_ranks = compute_sgp_rankings(
+                self.full_hitters_proj, self.full_pitchers_proj, denoms=sgp_denoms
+            )
         else:
             total_ranks = {}
 
@@ -1201,8 +1215,10 @@ class RefreshRun:
 
     # --- Step 8: Compare optimal to current, find moves ---
     def _compute_moves(self):
+        from fantasy_baseball.sgp.denominators import get_sgp_denominators
         from fantasy_baseball.web.refresh_steps import compute_lineup_moves
 
+        assert self.config is not None
         assert self.optimal_hitters is not None
         assert self.optimal_pitchers_starters is not None
         assert self.optimal_pitchers_bench is not None
@@ -1214,6 +1230,7 @@ class RefreshRun:
             optimal_pitchers=self.optimal_pitchers_starters,
             pitcher_bench=self.optimal_pitchers_bench,
             roster_players=self.roster_players,
+            denoms=get_sgp_denominators(self.config.sgp_overrides),
         )
 
         optimal_data = {

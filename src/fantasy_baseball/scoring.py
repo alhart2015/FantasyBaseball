@@ -381,6 +381,10 @@ def _player_sgp(p: Player) -> float:
     """Calculate total SGP for a player, returning 0 if no ROS stats."""
     if p.rest_of_season is None:
         return 0.0
+    # Default SGP denominators (not league sgp_overrides): no league config
+    # reaches the project_team_stats displacement layer (LeagueContext carries
+    # standings/SDs only), and this value is used purely ordinally to pick the
+    # min-SGP drop candidate in rare fallback paths.
     return calculate_player_sgp(p.rest_of_season)
 
 

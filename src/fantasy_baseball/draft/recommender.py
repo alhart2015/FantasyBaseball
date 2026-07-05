@@ -24,6 +24,7 @@ from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
     DEFAULT_ROSTER_SLOTS,
+    Category,
     compute_starters_per_position,
 )
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -126,7 +127,7 @@ def _replacement_levels_for_board(
     board: pd.DataFrame,
     roster_slots: dict[str, int],
     num_teams: int | None,
-    sgp_overrides: dict[str, float] | None = None,
+    sgp_overrides: dict[Category, float] | dict[str, float] | None = None,
 ) -> dict[str, float]:
     """Position-aware empirical replacement floors for ``board``.
 
@@ -138,7 +139,14 @@ def _replacement_levels_for_board(
     (a freshly built board gets fresh floors) and recomputes if the slot config
     changes, turning hundreds of redundant full-board pandas scans into one.
     """
-    overrides_key = tuple(sorted(sgp_overrides.items())) if sgp_overrides else None
+    # Normalize keys to Category.value strings before sorting: overrides may
+    # arrive keyed by Category enum members (a plain Enum, unorderable), and
+    # sorted() on mixed/enum keys raises TypeError.
+    overrides_key = (
+        tuple(sorted((Category(k).value, v) for k, v in sgp_overrides.items()))
+        if sgp_overrides
+        else None
+    )
     cache_key = (num_teams, tuple(sorted(roster_slots.items())), overrides_key)
     cached = board.attrs.get("_repl_levels_cache")
     if cached is not None and cached[0] == cache_key:
@@ -161,7 +169,7 @@ def get_recommendations(
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
     scoring_mode: str = "var",
-    sgp_overrides: dict[str, float] | None = None,
+    sgp_overrides: dict[Category, float] | dict[str, float] | None = None,
 ) -> list[Recommendation]:
     """Get top draft pick recommendations.
 

@@ -5,7 +5,7 @@ from enum import StrEnum
 from typing import Any
 
 from fantasy_baseball.models.positions import IL_SLOTS, Position
-from fantasy_baseball.utils.constants import IL_STATUSES
+from fantasy_baseball.utils.constants import IL_STATUSES, Category
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 
 
@@ -53,10 +53,21 @@ class HitterStats:
             d["sgp"] = self.sgp
         return d
 
-    def compute_sgp(self) -> float:
+    def compute_sgp(self, denoms: dict[Category, float] | None = None) -> float:
+        """Compute total SGP, optionally on league-specific denominators.
+
+        Cache design: ``self.sgp`` is a stored-result field, NOT a
+        short-circuit memo -- this method always recomputes with the
+        ``denoms`` passed and overwrites ``self.sgp``, so the return value
+        can never be a stale cross-denominator read. Callers that read
+        ``self.sgp`` directly (``to_dict``, swap pairing, sgp_hint paths)
+        see the basis of the most recent ``compute_sgp`` call; within one
+        pipeline/request that basis is uniform because every caller
+        resolves denoms from the same league config.
+        """
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
 
-        self.sgp = calculate_player_sgp(self)
+        self.sgp = calculate_player_sgp(self, denoms=denoms)
         return self.sgp
 
 
@@ -105,10 +116,16 @@ class PitcherStats:
             d["sgp"] = self.sgp
         return d
 
-    def compute_sgp(self) -> float:
+    def compute_sgp(self, denoms: dict[Category, float] | None = None) -> float:
+        """Compute total SGP, optionally on league-specific denominators.
+
+        Same cache design as :meth:`HitterStats.compute_sgp`: always
+        recomputes with the ``denoms`` passed and overwrites ``self.sgp``,
+        so no stale cross-denominator value can be returned.
+        """
         from fantasy_baseball.sgp.player_value import calculate_player_sgp
 
-        self.sgp = calculate_player_sgp(self)
+        self.sgp = calculate_player_sgp(self, denoms=denoms)
         return self.sgp
 
 
