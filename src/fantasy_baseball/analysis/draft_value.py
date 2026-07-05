@@ -22,15 +22,6 @@ from fantasy_baseball.data.redis_store import (
 )
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_board_from_frames
-
-# Team volumes FROZEN at what the 2026 draft-day board was built with.
-# The live DEFAULT_TEAM_AB/IP constants recalibrate over time (1450 -> 1300
-# on 2026-07-05); this module's whole contract is reproducing the DRAFT-DAY
-# scale so historical par curves and per-pick values stay comparable, the
-# same reason it deliberately ignores sgp_denominators overrides. Do not
-# point these at the live defaults.
-_DRAFT_DAY_TEAM_AB = 5500
-_DRAFT_DAY_TEAM_IP = 1450
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.rankings import rank_key
 from fantasy_baseball.sgp.var import calculate_var
@@ -43,6 +34,15 @@ from fantasy_baseball.web.season_data import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Team volumes FROZEN at what the 2026 draft-day board was built with.
+# The live DEFAULT_TEAM_AB/IP constants recalibrate over time (1450 -> 1300
+# on 2026-07-05); this module's whole contract is reproducing the DRAFT-DAY
+# scale so historical par curves and per-pick values stay comparable, the
+# same reason it deliberately ignores sgp_denominators overrides. Do not
+# point these at the live defaults.
+_DRAFT_DAY_TEAM_AB = 5500
+_DRAFT_DAY_TEAM_IP = 1450
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FROZEN_BOARD = _REPO_ROOT / "data" / "draft_state_board.json"
