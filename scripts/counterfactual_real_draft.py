@@ -12,6 +12,14 @@ Then score BOTH final states the same way the sim scores standings (active-lineu
 selection via _score_roto) and compare Hart's roto points, rank, and MC win%.
 
   python scripts/counterfactual_real_draft.py
+
+Valuation basis: CURRENT league calibration (sgp_denominators overrides +
+DEFAULT_TEAM_IP from utils/constants), threaded via build_board_and_context.
+Deliberate 2026-07-05 decision: these retro tools answer "what was the right
+call given the BEST calibration we now have", unlike the draft-value tab,
+which stays frozen at draft-day scale (5500 AB / 1450 IP, default denoms) to
+measure picks against draft-day expectations. The two answer different
+questions and are expected to disagree on pitcher/high-AVG grades.
 """
 
 import json
