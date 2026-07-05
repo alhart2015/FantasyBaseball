@@ -6,7 +6,7 @@ import pandas as pd
 
 from fantasy_baseball.data.db import get_blended_projections, get_positions
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import (
     calculate_replacement_rates,
@@ -25,7 +25,7 @@ logger = logging.getLogger(__name__)
 
 def build_draft_board(
     conn,
-    sgp_overrides: dict[str, float] | None = None,
+    sgp_overrides: SgpOverrides | None = None,
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
 ) -> pd.DataFrame:
@@ -44,7 +44,7 @@ def build_board_from_frames(
     positions: dict[str, list[str]],
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
-    sgp_overrides: dict[str, float] | None = None,
+    sgp_overrides: SgpOverrides | None = None,
     team_ab: int = DEFAULT_TEAM_AB,
     team_ip: int = DEFAULT_TEAM_IP,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:

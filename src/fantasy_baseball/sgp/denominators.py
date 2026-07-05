@@ -1,8 +1,13 @@
 from fantasy_baseball.utils.constants import DEFAULT_SGP_DENOMINATORS, Category
 
+# Override mapping accepted everywhere an ``sgp_overrides`` param exists:
+# keys may be Category members or their string values; values are absolute
+# stat-per-standings-place denominators.
+SgpOverrides = dict[Category, float] | dict[str, float]
+
 
 def get_sgp_denominators(
-    overrides: dict[Category, float] | dict[str, float] | None = None,
+    overrides: SgpOverrides | None = None,
 ) -> dict[Category, float]:
     """Get SGP denominators, optionally overriding defaults.
 

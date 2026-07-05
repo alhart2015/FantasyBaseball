@@ -17,7 +17,7 @@ from fantasy_baseball.lineup.optimizer import (
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.trades.evaluate import (
     apply_swap_delta,
@@ -71,7 +71,6 @@ def build_position_pools(
       goes to SP, sv >= RP_SV_THRESHOLD goes to RP. This works around
       Yahoo leagues that only surface a generic "P" slot, where
       fa.positions == ["P"] for every pitcher.
-
     """
     if denoms is None:
         denoms = get_sgp_denominators()
@@ -110,7 +109,6 @@ def worst_roster_by_position(
     (C/1B/2B/3B/SS/OF) pick the lowest-SGP roster hitter eligible there,
     pitchers split on ``RP_SV_THRESHOLD`` into SP/RP buckets. This is the
     "drop candidate" used when pricing an FA's impact on the browse page.
-
     """
     if denoms is None:
         denoms = get_sgp_denominators()
@@ -213,7 +211,7 @@ def audit_roster(
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     optimal_hitters: list[HitterAssignment] | None = None,
     optimal_pitchers: list[PitcherStarter] | None = None,
-    sgp_overrides: dict[str, float] | None = None,
+    sgp_overrides: SgpOverrides | None = None,
 ) -> list[AuditEntry]:
     """Evaluate every roster slot against the best available FA.
 

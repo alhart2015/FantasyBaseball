@@ -471,10 +471,8 @@ def main():
                         team_names,
                         config.team_name,
                         prefilled_input=raw,
-                        sgp_overrides=config.sgp_overrides,
-                        roster_slots=config.roster_slots,
+                        config=config,
                         num_teams=num_teams,
-                        scoring_mode=scoring_mode,
                     )
 
             # Advance to next pick so dashboard shows upcoming pick, not the one just made
@@ -762,10 +760,8 @@ def _handle_user_pick(
         tracker,
         current_recs=recs,
         team_names=team_names,
-        sgp_overrides=config.sgp_overrides if config else None,
-        roster_slots=roster_slots,
+        config=config,
         num_teams=num_teams,
-        scoring_mode=scoring_mode,
         full_board=full_board,
     )
     if name:
@@ -794,10 +790,8 @@ def _handle_other_pick(
     team_names=None,
     user_team_name=None,
     prefilled_input=None,
-    sgp_overrides=None,
-    roster_slots=None,
+    config=None,
     num_teams=None,
-    scoring_mode="var",
 ):
     """Handle another team's pick (or a traded pick for the user's team).
 
@@ -810,10 +804,8 @@ def _handle_other_pick(
         tracker,
         team_names=team_names,
         prefilled_input=prefilled_input,
-        sgp_overrides=sgp_overrides,
-        roster_slots=roster_slots,
+        config=config,
         num_teams=num_teams,
-        scoring_mode=scoring_mode,
         full_board=full_board,
     )
     if name:
@@ -840,10 +832,8 @@ def _get_player_input(
     team_names=None,
     current_recs=None,
     prefilled_input=None,
-    sgp_overrides=None,
-    roster_slots=None,
+    config=None,
     num_teams=None,
-    scoring_mode="var",
     full_board=None,
 ):
     """Get and fuzzy-match a player name from user input.
@@ -863,10 +853,11 @@ def _get_player_input(
     If *prefilled_input* is provided, it's used as the first input line
     instead of prompting.
 
-    *sgp_overrides*, *roster_slots*, *num_teams*, *scoring_mode*, and
-    *full_board* are only used by the digit-selection fallback (when
-    *current_recs* is None) so its regenerated recommendations match the
-    main-loop ``get_recommendations`` calls exactly. *full_board* keeps
+    *config* (league config) and *num_teams*/*full_board* are only used by
+    the digit-selection fallback (when *current_recs* is None): the
+    fallback derives sgp_overrides/roster_slots/scoring_mode from *config*
+    so it mirrors the main-loop ``get_recommendations`` calls
+    exactly. *full_board* keeps
     keepers visible to ``get_filled_positions`` (the draftable *board* has
     them removed).
     """
@@ -901,6 +892,9 @@ def _get_player_input(
                 # scoring_mode/sgp_overrides, filled from the keeper-inclusive
                 # full board) so the numbered fallback list matches what was
                 # displayed.
+                sgp_overrides = config.sgp_overrides if config else None
+                roster_slots = config.roster_slots if config else None
+                scoring_mode = config.scoring_mode if config else "var"
                 lookup_board = full_board if full_board is not None else board
                 filled = get_filled_positions(
                     tracker.user_roster_ids, lookup_board, roster_slots=roster_slots

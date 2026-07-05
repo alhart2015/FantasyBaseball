@@ -15,7 +15,7 @@ from fantasy_baseball.draft.roster_state import (
 )
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.replacement import (
     calculate_replacement_rates,
     position_aware_replacement_levels,
@@ -127,7 +127,7 @@ def _replacement_levels_for_board(
     board: pd.DataFrame,
     roster_slots: dict[str, int],
     num_teams: int | None,
-    sgp_overrides: dict[Category, float] | dict[str, float] | None = None,
+    sgp_overrides: SgpOverrides | None = None,
 ) -> dict[str, float]:
     """Position-aware empirical replacement floors for ``board``.
 
@@ -169,7 +169,7 @@ def get_recommendations(
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
     scoring_mode: str = "var",
-    sgp_overrides: dict[Category, float] | dict[str, float] | None = None,
+    sgp_overrides: SgpOverrides | None = None,
 ) -> list[Recommendation]:
     """Get top draft pick recommendations.
 

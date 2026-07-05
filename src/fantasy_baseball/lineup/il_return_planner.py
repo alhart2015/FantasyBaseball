@@ -21,7 +21,7 @@ from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_p
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
 from fantasy_baseball.models.standings import ProjectedStandings
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import Category
 
@@ -329,7 +329,7 @@ def plan_il_returns(
     fraction_remaining: float,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     max_plans: int = 5,
-    sgp_overrides: dict[str, float] | None = None,
+    sgp_overrides: SgpOverrides | None = None,
 ) -> IlReturnPlanResult:
     """Plan the roster moves to reactivate ``activating_il`` players.
 

@@ -1,4 +1,5 @@
 from fantasy_baseball.models.standings import ProjectedStandings, Standings
+from fantasy_baseball.sgp.denominators import SgpOverrides
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, INVERSE_STATS, Category
 
 FULL_CONFIDENCE_GAMES: int = 81
@@ -36,7 +37,7 @@ def _leverage_from_standings(
     user_team_name: str,
     attack_weight: float,
     defense_weight: float,
-    sgp_overrides: dict[str, float] | None = None,
+    sgp_overrides: SgpOverrides | None = None,
 ) -> dict[str, float] | None:
     """Compute normalized leverage weights via marginal roto-point impact.
 
@@ -137,7 +138,7 @@ def calculate_leverage(
     defense_weight: float = 0.4,
     season_progress: float | None = None,
     projected_standings: Standings | ProjectedStandings | None = None,
-    sgp_overrides: dict[str, float] | None = None,
+    sgp_overrides: SgpOverrides | None = None,
 ) -> dict[str, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 

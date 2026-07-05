@@ -1078,9 +1078,8 @@ class RefreshRun:
 
         # Attach pace data to each roster player (pace compares actuals vs preseason)
         from fantasy_baseball.analysis.pace import attach_pace_to_roster
-        from fantasy_baseball.sgp.denominators import get_sgp_denominators
 
-        sgp_denoms = get_sgp_denominators(self.config.sgp_overrides)
+        sgp_denoms = self._league_denoms()
         attach_pace_to_roster(
             self.roster_players,
             self.hitter_logs,
@@ -1089,10 +1088,20 @@ class RefreshRun:
             sgp_denoms,
         )
 
+    def _league_denoms(self):
+        """League-calibrated SGP denominators, resolved from config.
+
+        The refresh sibling of ``season_routes._league_denoms`` -- one
+        resolution point so every step scores on the same scale.
+        """
+        from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+        assert self.config is not None
+        return get_sgp_denominators(self.config.sgp_overrides)
+
     # --- Step 6d: Compute SGP rankings ---
     def _compute_rankings(self):
         self._progress("Computing SGP rankings...")
-        from fantasy_baseball.sgp.denominators import get_sgp_denominators
         from fantasy_baseball.sgp.rankings import (
             build_rankings_lookup,
             compute_rankings_from_game_logs,
@@ -1111,7 +1120,7 @@ class RefreshRun:
 
         # Resolve league denominators once so every ranking basis (ROS,
         # preseason, current, total) is scored on the same scale.
-        sgp_denoms = get_sgp_denominators(self.config.sgp_overrides)
+        sgp_denoms = self._league_denoms()
 
         rest_of_season_ranks = compute_sgp_rankings(
             self.hitters_proj, self.pitchers_proj, denoms=sgp_denoms
@@ -1215,7 +1224,6 @@ class RefreshRun:
 
     # --- Step 8: Compare optimal to current, find moves ---
     def _compute_moves(self):
-        from fantasy_baseball.sgp.denominators import get_sgp_denominators
         from fantasy_baseball.web.refresh_steps import compute_lineup_moves
 
         assert self.config is not None
@@ -1230,7 +1238,7 @@ class RefreshRun:
             optimal_pitchers=self.optimal_pitchers_starters,
             pitcher_bench=self.optimal_pitchers_bench,
             roster_players=self.roster_players,
-            denoms=get_sgp_denominators(self.config.sgp_overrides),
+            denoms=self._league_denoms(),
         )
 
         optimal_data = {
