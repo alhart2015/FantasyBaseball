@@ -24,7 +24,6 @@ from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
     DEFAULT_ROSTER_SLOTS,
-    Category,
     compute_starters_per_position,
 )
 from fantasy_baseball.utils.positions import can_fill_slot
@@ -139,20 +138,19 @@ def _replacement_levels_for_board(
     (a freshly built board gets fresh floors) and recomputes if the slot config
     changes, turning hundreds of redundant full-board pandas scans into one.
     """
-    # Normalize keys to Category.value strings before sorting: overrides may
-    # arrive keyed by Category enum members (a plain Enum, unorderable), and
-    # sorted() on mixed/enum keys raises TypeError.
+    # Key the cache on the RESOLVED denominators, not the raw override
+    # pairs: get_sgp_denominators normalizes enum/string keys (a plain-Enum
+    # sort would TypeError) and resolves duplicate spellings last-write-wins,
+    # so two dicts that resolve differently can never share a cache entry.
+    denoms = get_sgp_denominators(sgp_overrides)
     overrides_key = (
-        tuple(sorted((Category(k).value, v) for k, v in sgp_overrides.items()))
-        if sgp_overrides
-        else None
+        tuple(sorted((c.value, v) for c, v in denoms.items())) if sgp_overrides else None
     )
     cache_key = (num_teams, tuple(sorted(roster_slots.items())), overrides_key)
     cached = board.attrs.get("_repl_levels_cache")
     if cached is not None and cached[0] == cache_key:
         return cast(dict[str, float], cached[1])
     starters = compute_starters_per_position(roster_slots, num_teams)
-    denoms = get_sgp_denominators(sgp_overrides)
     repl_rates = calculate_replacement_rates(board, starters)
     repl_levels = position_aware_replacement_levels(denoms, repl_rates)
     board.attrs["_repl_levels_cache"] = (cache_key, repl_levels)
