@@ -1,7 +1,8 @@
 """Golden-master parity guard.
 
 Pins the pre-refactor /api/recs payload so every later phase proves the
-deltaRoto path through recommend() reproduces it byte-for-byte.  Runs with
+deltaRoto path through recommend() reproduces it (floats compared at 1e-9
+tolerance; everything else exact).  Runs with
 team_sds active (the production path) per the standing meta-lesson that
 variance-free scoring flips verdicts.
 
@@ -24,11 +25,15 @@ recs_golden_state.json
 
 recs_golden.json
     Written automatically on first run by this test; subsequent runs
-    compare against it byte-for-byte to guard the deltaRoto refactor.
+    compare against it (floats at 1e-9 tolerance) to guard the deltaRoto
+    path. Recaptured 2026-07-05 after cbf8f2b's floor caching reordered
+    float arithmetic (~1e-13 drift, no behavioral change).
 """
 
 import json
 from pathlib import Path
+
+import pytest
 
 from fantasy_baseball.web.app import create_app
 
@@ -47,8 +52,49 @@ def _get_recs() -> list[dict]:
     return resp.get_json()  # type: ignore[return-value]
 
 
+_REBASELINE_MSG = (
+    "Golden-master mismatch: the deltaRoto path changed /api/recs output.\n"
+    "If this is intentional (the refactor improved correctness), delete\n"
+    f"{GOLDEN} and re-run to capture a new baseline."
+)
+
+
+def _assert_close(got: object, want: object, path: str = "rows") -> None:
+    """Structural equality with float tolerance.
+
+    Exact for names/ids/positions and container shape/order; ``approx``
+    for numbers. The tolerance exists because refactors that merely
+    REORDER float arithmetic (e.g. cbf8f2b's cached draft-static floors)
+    shift results at the ~1e-13 level with no behavioral change --
+    byte-exact comparison pinned incidental bit patterns, not payload
+    behavior. ``abs=1e-9`` covers float dust near zero (per_category ERA
+    lands at ~1e-15), where relative tolerance is meaningless.
+    """
+    if isinstance(want, bool) or isinstance(got, bool):
+        assert got == want, f"{path}: {got!r} != {want!r}\n{_REBASELINE_MSG}"
+    elif isinstance(want, int | float) and isinstance(got, int | float):
+        assert got == pytest.approx(want, rel=1e-9, abs=1e-9), (
+            f"{path}: {got!r} != {want!r}\n{_REBASELINE_MSG}"
+        )
+    elif isinstance(want, dict):
+        assert isinstance(got, dict), f"{path}: {type(got)} != dict\n{_REBASELINE_MSG}"
+        assert got.keys() == want.keys(), (
+            f"{path}: keys {sorted(got)} != {sorted(want)}\n{_REBASELINE_MSG}"
+        )
+        for k in want:
+            _assert_close(got[k], want[k], f"{path}.{k}")
+    elif isinstance(want, list):
+        assert isinstance(got, list) and len(got) == len(want), (
+            f"{path}: list shape mismatch\n{_REBASELINE_MSG}"
+        )
+        for i, (g, w) in enumerate(zip(got, want, strict=True)):
+            _assert_close(g, w, f"{path}[{i}]")
+    else:
+        assert got == want, f"{path}: {got!r} != {want!r}\n{_REBASELINE_MSG}"
+
+
 def test_recs_match_golden() -> None:
-    """First run writes the golden; subsequent runs assert byte-for-byte equality."""
+    """First run writes the golden; later runs assert behavior-level equality."""
     rows = _get_recs()
     assert isinstance(rows, list), f"expected list, got {type(rows)}"
     assert rows, "/api/recs returned an empty list -- no candidates for the chosen team"
@@ -57,11 +103,7 @@ def test_recs_match_golden() -> None:
         GOLDEN.write_text(json.dumps(rows, indent=2, sort_keys=True, ensure_ascii=True))
 
     expected = json.loads(GOLDEN.read_text())
-    assert rows == expected, (
-        "Golden-master mismatch: the deltaRoto path changed /api/recs output.\n"
-        "If this is intentional (the refactor improved correctness), delete\n"
-        f"{GOLDEN} and re-run to capture a new baseline."
-    )
+    _assert_close(rows, expected)
 
 
 def test_recs_has_required_fields() -> None:

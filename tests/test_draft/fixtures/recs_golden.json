@@ -23,10 +23,10 @@
       "OF",
       "UTIL"
     ],
-    "value_of_picking_now": 0.34563559282393186
+    "value_of_picking_now": 0.34563559282392475
   },
   {
-    "immediate_delta": 2.6348303044798627,
+    "immediate_delta": 2.6348303044798698,
     "name": "Manny Machado",
     "per_category": {
       "AVG": 0.596471592664142,
@@ -46,7 +46,7 @@
       "IF",
       "UTIL"
     ],
-    "value_of_picking_now": 0.41784711036213906
+    "value_of_picking_now": 0.41784711036214617
   },
   {
     "immediate_delta": 2.4590279847305183,
@@ -68,7 +68,7 @@
       "OF",
       "UTIL"
     ],
-    "value_of_picking_now": 0.1980758013046895
+    "value_of_picking_now": 0.1980758013046824
   },
   {
     "immediate_delta": 2.4295160429803744,
@@ -89,10 +89,10 @@
     "positions": [
       "P"
     ],
-    "value_of_picking_now": 0.24777746337738193
+    "value_of_picking_now": 0.24777746337738904
   },
   {
-    "immediate_delta": 2.408141997248272,
+    "immediate_delta": 2.408141997248279,
     "name": "Brice Turang",
     "per_category": {
       "AVG": 0.5454951882440362,
@@ -112,10 +112,10 @@
       "IF",
       "UTIL"
     ],
-    "value_of_picking_now": -0.34563559282393186
+    "value_of_picking_now": -0.34563559282392475
   },
   {
-    "immediate_delta": 2.3738271981317283,
+    "immediate_delta": 2.373827198131721,
     "name": "Yoshinobu Yamamoto",
     "per_category": {
       "AVG": 0.0,
@@ -133,7 +133,7 @@
     "positions": [
       "P"
     ],
-    "value_of_picking_now": -0.05568884484864611
+    "value_of_picking_now": -0.05568884484865322
   },
   {
     "immediate_delta": 2.342467287557561,
@@ -159,7 +159,7 @@
     "value_of_picking_now": -0.41131030251464296
   },
   {
-    "immediate_delta": 2.320043548443259,
+    "immediate_delta": 2.320043548443266,
     "name": "Yordan Alvarez",
     "per_category": {
       "AVG": 1.2859471139914413,
@@ -178,10 +178,10 @@
       "OF",
       "UTIL"
     ],
-    "value_of_picking_now": -0.13898443628725943
+    "value_of_picking_now": -0.13898443628725232
   },
   {
-    "immediate_delta": 2.260952183425829,
+    "immediate_delta": 2.260952183425836,
     "name": "James Wood",
     "per_category": {
       "AVG": 0.10545272095774738,
@@ -200,7 +200,7 @@
       "OF",
       "UTIL"
     ],
-    "value_of_picking_now": -0.1980758013046895
+    "value_of_picking_now": -0.1980758013046824
   },
   {
     "immediate_delta": 2.2490659619803637,
