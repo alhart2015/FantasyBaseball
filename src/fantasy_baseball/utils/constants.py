@@ -85,6 +85,18 @@ ROSTER_SLOTS: dict[str, int] = DEFAULT_ROSTER_SLOTS
 
 DEFAULT_NUM_TEAMS: int = 10
 
+# League-typical full-season team volumes, shared by the SGP scale
+# (rate-stat SGP is proportional to 1/team_ip), the simulation's
+# YTD-blend fallback, and the trade evaluator's legacy fallback.
+# TEAM_IP calibrated 2026-07-05 from this league's live standings
+# (cache:standings extras.IP, all 10 teams extrapolated to season end:
+# median 1288, mean 1283, range 1010-1451). The prior 1450 matched only
+# the single highest-volume team and compressed every pitcher's
+# ERA/WHIP SGP by ~11%. Recalibrate from the same source if roster
+# slots or league streaming behavior change materially.
+DEFAULT_TEAM_AB: int = 5500
+DEFAULT_TEAM_IP: int = 1300
+
 # Backward-compatible alias.
 NUM_TEAMS: int = DEFAULT_NUM_TEAMS
 

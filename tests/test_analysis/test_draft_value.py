@@ -40,7 +40,9 @@ def test_build_preseason_board_returns_scale_and_soft_frozen():
     board, scale = dv.reproduce_draft_day_board()
     assert not board.empty
     assert set(scale.replacement_levels) >= {"C", "1B", "SS", "OF", "SP", "RP"}
-    assert scale.team_ab == 5500 and scale.team_ip == 1450
+    from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP
+
+    assert scale.team_ab == DEFAULT_TEAM_AB and scale.team_ip == DEFAULT_TEAM_IP
     assert {"era", "whip", "avg"} <= set(scale.repl_rates)
     # soft frozen cross-check: returns a drift summary, never raises
     summary = dv.frozen_drift_summary(board)

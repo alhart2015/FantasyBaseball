@@ -7,17 +7,15 @@ import pandas as pd
 from fantasy_baseball.data.db import get_blended_projections, get_positions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
-from fantasy_baseball.sgp.player_value import (
-    DEFAULT_TEAM_AB,
-    DEFAULT_TEAM_IP,
-    calculate_player_sgp,
-)
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import (
     calculate_replacement_rates,
     position_aware_replacement_levels,
 )
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
     compute_starters_per_position,
 )
 from fantasy_baseball.utils.name_utils import normalize_name

@@ -308,7 +308,7 @@ class TestYtdPlayingTime:
     """The YTD blend weight must use real accumulated AB/IP when available,
     not a league-typical full-season constant scaled by elapsed fraction.
 
-    Bug: `_TYPICAL_TEAM_IP = 1450` is too high for a 9-pitcher league, so the
+    Bug: the old fallback (1450 IP) was too high for a 9-pitcher league, so the
     actual-vs-remaining blend over-weighted YTD pace against the projection's
     regression. Real PA/IP ride along on the standings (Yahoo `extras`)."""
 
@@ -321,14 +321,14 @@ class TestYtdPlayingTime:
 
     def test_falls_back_to_typical_constants_when_absent(self):
         from fantasy_baseball.simulation import (
-            _TYPICAL_TEAM_AB,
-            _TYPICAL_TEAM_IP,
+            DEFAULT_TEAM_AB,
+            DEFAULT_TEAM_IP,
             _ytd_playing_time,
         )
 
         ab, ip = _ytd_playing_time({}, fraction_elapsed=0.3)
-        assert ab == pytest.approx(_TYPICAL_TEAM_AB * 0.3)
-        assert ip == pytest.approx(_TYPICAL_TEAM_IP * 0.3)
+        assert ab == pytest.approx(DEFAULT_TEAM_AB * 0.3)
+        assert ip == pytest.approx(DEFAULT_TEAM_IP * 0.3)
 
     def test_real_ip_flows_through_and_changes_era_blend(self):
         """Real IP that flips the YTD-vs-sim clamp must change the blended ERA."""

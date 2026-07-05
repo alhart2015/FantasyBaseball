@@ -22,6 +22,8 @@ from fantasy_baseball.sgp.rankings import rank_key_from_positions
 from fantasy_baseball.utils.constants import (
     AB_PER_PA,
     ALL_CATEGORIES,
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
     Category,
     OpportunityStat,
 )
@@ -38,12 +40,10 @@ MAX_RANK_GAP = 5
 
 # Legacy fallback when callers don't have access to the team's actual
 # AB / IP (preseason / draft / persisted cache without component context).
-# 5500 AB / 1450 IP are league-average end-of-season volumes. Use them
-# only as a last resort: mid-season in-app callers should pass real
-# team_ab / team_ip computed from team_YTD + ROS components, otherwise
-# rate-stat swap deltas are mis-weighted by 20-50%.
-_TEAM_AB = 5500
-_TEAM_IP = 1450
+# The shared league-calibrated volumes are used only as a last resort:
+# mid-season in-app callers should pass real team_ab / team_ip computed
+# from team_YTD + ROS components, otherwise rate-stat swap deltas are
+# mis-weighted by 20-50%.
 
 
 def team_baseline_volumes(
@@ -161,18 +161,18 @@ def apply_swap_delta(
             ``current_stats["AVG"]``). Used as the denominator backing
             out current hits from ``current_stats["AVG"]`` and as the
             post-swap denominator. When ``None``, falls back to
-            :data:`_TEAM_AB` -- the legacy full-season heuristic. Pass
+            :data:`DEFAULT_TEAM_AB` -- the legacy full-season heuristic. Pass
             ``None`` only when components aren't available (preseason /
             draft / persisted cache without YTD context); mid-season
             in-app callers should pass the real number.
         team_ip: the user's team's end-of-season IP total, analogous to
-            ``team_ab`` for ERA / WHIP. Falls back to :data:`_TEAM_IP`.
+            ``team_ab`` for ERA / WHIP. Falls back to :data:`DEFAULT_TEAM_IP`.
 
     Returns:
         Projected stats dict (same keys as current_stats).
     """
-    ab_baseline = float(team_ab) if team_ab is not None else _TEAM_AB
-    ip_baseline = float(team_ip) if team_ip is not None else _TEAM_IP
+    ab_baseline = float(team_ab) if team_ab is not None else DEFAULT_TEAM_AB
+    ip_baseline = float(team_ip) if team_ip is not None else DEFAULT_TEAM_IP
 
     projected = dict(current_stats)
 

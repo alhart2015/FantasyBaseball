@@ -49,6 +49,48 @@
     "value_of_picking_now": 0.41784711036214617
   },
   {
+    "immediate_delta": 2.5947754240439096,
+    "name": "Max Fried",
+    "per_category": {
+      "AVG": 0.0,
+      "ERA": 0.9430567641104552,
+      "HR": 0.0,
+      "K": 0.12396045406378242,
+      "R": 0.0,
+      "RBI": 0.0,
+      "SB": 0.0,
+      "SV": 0.0,
+      "W": 0.8180529995111998,
+      "WHIP": 0.7097052063584721
+    },
+    "player_id": "13743::pitcher",
+    "positions": [
+      "P"
+    ],
+    "value_of_picking_now": 0.21812730621235232
+  },
+  {
+    "immediate_delta": 2.5563777126225062,
+    "name": "Yoshinobu Yamamoto",
+    "per_category": {
+      "AVG": 0.0,
+      "ERA": 0.868103715361519,
+      "HR": 0.0,
+      "K": 0.13946891657971072,
+      "R": 0.0,
+      "RBI": 0.0,
+      "SB": 0.0,
+      "SV": 0.0,
+      "W": 0.614856464953248,
+      "WHIP": 0.933948615728033
+    },
+    "player_id": "33825::pitcher",
+    "positions": [
+      "P"
+    ],
+    "value_of_picking_now": -0.03839771142140336
+  },
+  {
     "immediate_delta": 2.4590279847305183,
     "name": "Wyatt Langford",
     "per_category": {
@@ -69,27 +111,6 @@
       "UTIL"
     ],
     "value_of_picking_now": 0.1980758013046824
-  },
-  {
-    "immediate_delta": 2.4295160429803744,
-    "name": "Max Fried",
-    "per_category": {
-      "AVG": 0.0,
-      "ERA": 0.8493064562866515,
-      "HR": 0.0,
-      "K": 0.12396045406378242,
-      "R": 0.0,
-      "RBI": 0.0,
-      "SB": 0.0,
-      "SV": 0.0,
-      "W": 0.8180529995111998,
-      "WHIP": 0.6381961331187451
-    },
-    "player_id": "13743::pitcher",
-    "positions": [
-      "P"
-    ],
-    "value_of_picking_now": 0.24777746337738904
   },
   {
     "immediate_delta": 2.408141997248279,
@@ -115,25 +136,46 @@
     "value_of_picking_now": -0.34563559282392475
   },
   {
-    "immediate_delta": 2.373827198131721,
-    "name": "Yoshinobu Yamamoto",
+    "immediate_delta": 2.3854506243230205,
+    "name": "Hunter Brown",
     "per_category": {
       "AVG": 0.0,
-      "ERA": 0.7801710011874983,
+      "ERA": 0.7717348835771407,
       "HR": 0.0,
-      "K": 0.13946891657971072,
+      "K": 0.41868488693261874,
       "R": 0.0,
       "RBI": 0.0,
       "SB": 0.0,
       "SV": 0.0,
       "W": 0.614856464953248,
-      "WHIP": 0.8393308154112704
+      "WHIP": 0.5801743888600166
     },
-    "player_id": "33825::pitcher",
+    "player_id": "25880::pitcher",
     "positions": [
       "P"
     ],
-    "value_of_picking_now": -0.05568884484865322
+    "value_of_picking_now": -0.20932479972088913
+  },
+  {
+    "immediate_delta": 2.3766481178315573,
+    "name": "Jacob deGrom",
+    "per_category": {
+      "AVG": 0.0,
+      "ERA": 0.7321487118828527,
+      "HR": 0.0,
+      "K": 0.23255185531101397,
+      "R": 0.0,
+      "RBI": 0.0,
+      "SB": 0.0,
+      "SV": 0.0,
+      "W": 0.2051642022779827,
+      "WHIP": 1.2067833483597123
+    },
+    "player_id": "10954::pitcher",
+    "positions": [
+      "P"
+    ],
+    "value_of_picking_now": -0.21812730621235232
   },
   {
     "immediate_delta": 2.342467287557561,
@@ -179,48 +221,5 @@
       "UTIL"
     ],
     "value_of_picking_now": -0.13898443628725232
-  },
-  {
-    "immediate_delta": 2.260952183425836,
-    "name": "James Wood",
-    "per_category": {
-      "AVG": 0.10545272095774738,
-      "ERA": -4.440892098500626e-15,
-      "HR": 0.42440979255574707,
-      "K": 0.0,
-      "R": 0.35084069652922345,
-      "RBI": 0.24437752411274438,
-      "SB": 1.1358714492703745,
-      "SV": 0.0,
-      "W": 0.0,
-      "WHIP": 0.0
-    },
-    "player_id": "29518::hitter",
-    "positions": [
-      "OF",
-      "UTIL"
-    ],
-    "value_of_picking_now": -0.1980758013046824
-  },
-  {
-    "immediate_delta": 2.2490659619803637,
-    "name": "Hunter Brown",
-    "per_category": {
-      "AVG": 0.0,
-      "ERA": 0.6941979575264572,
-      "HR": 0.0,
-      "K": 0.41868488693261874,
-      "R": 0.0,
-      "RBI": 0.0,
-      "SB": 0.0,
-      "SV": 0.0,
-      "W": 0.614856464953248,
-      "WHIP": 0.5213266525680424
-    },
-    "player_id": "25880::pitcher",
-    "positions": [
-      "P"
-    ],
-    "value_of_picking_now": -0.1804500810000107
   }
 ]
