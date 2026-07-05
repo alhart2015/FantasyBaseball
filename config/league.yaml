@@ -130,21 +130,22 @@ projections:
 # "R: 21" means ~21 runs per standings place). Keys must be exact category
 # codes; the loader validates them and rejects typos and non-positive values.
 #
-# The whole block is COMMENTED OUT, so the config loader returns {} and every
-# consumer -- the draft board + recommender, the in-season leverage / roster
-# audit / IL-return planner, the refresh pipeline, and the scripts -- uses the
-# trusted code defaults (DEFAULT_SGP_DENOMINATORS in utils/constants.py).
-# Uncomment (all ten categories or any subset) to override; anything omitted
-# keeps its code default.
+# Anything omitted keeps its code default (DEFAULT_SGP_DENOMINATORS in
+# utils/constants.py). Consumers: the draft board + recommender, in-season
+# leverage / roster audit / IL-return planner, the refresh pipeline, scripts.
 #
-# sgp_denominators:
-#   R: 21
-#   HR: 7
-#   RBI: 21
-#   SB: 12
-#   AVG: 0.0025
-#   W: 3
-#   K: 33
-#   ERA: 0.121
-#   WHIP: 0.018
-#   SV: 8
+# Adopted 2026-07-05 from the robust trimmed-adjacent-gap calibration over
+# 2023-2025 finals + 2026 extrapolated (data/historical_standings.json +
+# live standings; analysis in memory/project_sgp_denominator_calibration):
+#   AVG 0.0025 -- the one slam dunk: 6.4 SD below the generic 0.005 default,
+#     tightest CV of all ten categories, below default in 4/4 seasons. One
+#     standings place costs ~2.5 AVG points here, not 5.
+#   ERA 0.12  -- deliberate HALF-step (point estimate 0.106, only 1.6 SD):
+#     below default 4/4 seasons but n=4 is thin. NOTE: combined with the
+#     team-IP recalibration (1450->1300), ERA SGP rises ~1.39x total.
+# Everything else keeps defaults: R/RBI validated dead-on; SB's wide gaps
+# are punt-driven (2025, no punt: gap == default); W is the noisiest
+# category (CV 0.61); K/HR/WHIP/SV fail the signal-vs-noise bar.
+sgp_denominators:
+  AVG: 0.0025
+  ERA: 0.12
