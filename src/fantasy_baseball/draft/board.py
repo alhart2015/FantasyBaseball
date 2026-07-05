@@ -151,7 +151,7 @@ def rebuild_board(config_path: Path, board_path: Path) -> int:
     try:
         board = build_draft_board(
             conn=conn,
-            sgp_overrides=config.sgp_overrides or None,
+            sgp_overrides=config.sgp_overrides,
             roster_slots=config.roster_slots or None,
             num_teams=config.num_teams,
         )

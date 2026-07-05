@@ -290,7 +290,7 @@ def main():
     conn = get_connection()
     full_board = build_draft_board(
         conn=conn,
-        sgp_overrides=config.sgp_overrides or None,
+        sgp_overrides=config.sgp_overrides,
         roster_slots=config.roster_slots or None,
         num_teams=num_teams,
     )
@@ -368,7 +368,7 @@ def main():
         roster_slots=config.roster_slots,
         num_teams=num_teams,
         scoring_mode=scoring_mode,
-        sgp_overrides=config.sgp_overrides or None,
+        sgp_overrides=config.sgp_overrides,
     )
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
     vona = calculate_vona_scores(available, tracker.picks_until_next_turn)
@@ -471,6 +471,7 @@ def main():
                         team_names,
                         config.team_name,
                         prefilled_input=raw,
+                        sgp_overrides=config.sgp_overrides,
                     )
 
             # Advance to next pick so dashboard shows upcoming pick, not the one just made
@@ -494,7 +495,7 @@ def main():
                 roster_slots=config.roster_slots,
                 num_teams=num_teams,
                 scoring_mode=scoring_mode,
-                sgp_overrides=config.sgp_overrides or None,
+                sgp_overrides=config.sgp_overrides,
             )
 
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
@@ -592,7 +593,7 @@ def _handle_user_pick(
         roster_slots=roster_slots,
         num_teams=num_teams,
         scoring_mode=scoring_mode,
-        sgp_overrides=(config.sgp_overrides or None) if config else None,
+        sgp_overrides=config.sgp_overrides if config else None,
     )
 
     # --- Strategy alerts ---
@@ -758,6 +759,7 @@ def _handle_user_pick(
         tracker,
         current_recs=recs,
         team_names=team_names,
+        sgp_overrides=config.sgp_overrides if config else None,
     )
     if name:
         # If a different team was specified, this pick was traded away
@@ -778,7 +780,14 @@ def _handle_user_pick(
 
 
 def _handle_other_pick(
-    board, full_board, tracker, balance, team_names=None, user_team_name=None, prefilled_input=None
+    board,
+    full_board,
+    tracker,
+    balance,
+    team_names=None,
+    user_team_name=None,
+    prefilled_input=None,
+    sgp_overrides=None,
 ):
     """Handle another team's pick (or a traded pick for the user's team).
 
@@ -787,7 +796,11 @@ def _handle_other_pick(
     check for 'mine').
     """
     name, pid, matched_team = _get_player_input(
-        board, tracker, team_names=team_names, prefilled_input=prefilled_input
+        board,
+        tracker,
+        team_names=team_names,
+        prefilled_input=prefilled_input,
+        sgp_overrides=sgp_overrides,
     )
     if name:
         is_user = (
@@ -807,7 +820,9 @@ def _handle_other_pick(
             print(f"  -> Drafted: {name}")
 
 
-def _get_player_input(board, tracker, team_names=None, current_recs=None, prefilled_input=None):
+def _get_player_input(
+    board, tracker, team_names=None, current_recs=None, prefilled_input=None, sgp_overrides=None
+):
     """Get and fuzzy-match a player name from user input.
 
     Returns (name, player_id, team) or (None, None, None).
@@ -854,7 +869,12 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None, prefil
             if recs is None:
                 filled = get_filled_positions(tracker.user_roster_ids, board)
                 recs = get_recommendations(
-                    board, tracker.drafted_ids, tracker.user_roster, n=5, filled_positions=filled
+                    board,
+                    tracker.drafted_ids,
+                    tracker.user_roster,
+                    n=5,
+                    filled_positions=filled,
+                    sgp_overrides=sgp_overrides,
                 )
             if 0 <= idx < len(recs):
                 return recs[idx].name, _lookup_id(recs[idx].name), None

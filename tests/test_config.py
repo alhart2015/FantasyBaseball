@@ -13,7 +13,7 @@ def minimal_league_yaml(tmp_path):
     Usage: path = minimal_league_yaml(scoring_mode="var", strategy="default")
     """
 
-    def _make(*, scoring_mode: str, strategy: str) -> Path:
+    def _make(*, scoring_mode: str, strategy: str, extra: dict | None = None) -> Path:
         cfg = {
             "league": {
                 "id": 1,
@@ -45,6 +45,8 @@ def minimal_league_yaml(tmp_path):
                 "weights": {"steamer": 1.0},
             },
         }
+        if extra:
+            cfg.update(extra)
         path = tmp_path / f"league_{scoring_mode}_{strategy}.yaml"
         path.write_text(yaml.dump(cfg))
         return path
@@ -142,46 +144,34 @@ def test_load_config_sgp_overrides_default_empty(minimal_league_yaml):
     assert config.sgp_overrides == {}
 
 
-@pytest.fixture
-def sgp_overrides_yaml(tmp_path):
-    """Factory: minimal league.yaml with an arbitrary sgp_denominators block."""
-
-    def _make(overrides: dict) -> Path:
-        cfg = {
-            "league": {"id": 1, "num_teams": 10, "game_code": "mlb", "team_name": "T"},
-            "draft": {"position": 1},
-            "keepers": [],
-            "roster_slots": {"C": 1},
-            "projections": {"systems": ["steamer"], "weights": {"steamer": 1.0}},
-            "sgp_denominators": overrides,
-        }
-        path = tmp_path / "league_sgp.yaml"
-        path.write_text(yaml.dump(cfg))
-        return path
-
-    return _make
-
-
-def test_load_config_sgp_overrides_rejects_unknown_category(sgp_overrides_yaml):
-    path = sgp_overrides_yaml({"HRR": 10})
+def test_load_config_sgp_overrides_rejects_unknown_category(minimal_league_yaml):
+    path = minimal_league_yaml(
+        scoring_mode="var", strategy="default", extra={"sgp_denominators": {"HRR": 10}}
+    )
     with pytest.raises(ValueError, match="'HRR'"):
         load_config(path)
 
 
-def test_load_config_sgp_overrides_rejects_negative_value(sgp_overrides_yaml):
-    path = sgp_overrides_yaml({"HR": -3})
+def test_load_config_sgp_overrides_rejects_negative_value(minimal_league_yaml):
+    path = minimal_league_yaml(
+        scoring_mode="var", strategy="default", extra={"sgp_denominators": {"HR": -3}}
+    )
     with pytest.raises(ValueError, match=r"'HR'.*positive"):
         load_config(path)
 
 
-def test_load_config_sgp_overrides_rejects_non_numeric_value(sgp_overrides_yaml):
-    path = sgp_overrides_yaml({"HR": "ten"})
+def test_load_config_sgp_overrides_rejects_non_numeric_value(minimal_league_yaml):
+    path = minimal_league_yaml(
+        scoring_mode="var", strategy="default", extra={"sgp_denominators": {"HR": "ten"}}
+    )
     with pytest.raises(ValueError, match=r"'HR'.*positive"):
         load_config(path)
 
 
-def test_load_config_sgp_overrides_rejects_zero_value(sgp_overrides_yaml):
-    path = sgp_overrides_yaml({"AVG": 0})
+def test_load_config_sgp_overrides_rejects_zero_value(minimal_league_yaml):
+    path = minimal_league_yaml(
+        scoring_mode="var", strategy="default", extra={"sgp_denominators": {"AVG": 0}}
+    )
     with pytest.raises(ValueError, match=r"'AVG'.*positive"):
         load_config(path)
 

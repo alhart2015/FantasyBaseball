@@ -8,6 +8,7 @@ from fantasy_baseball.lineup.roster_audit import (
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 
 TEAM_NAME = "Test Team"
@@ -1422,7 +1423,9 @@ class TestSgpOverridesFlowThrough:
         default_pools = build_position_pools([speedy, slugger])
         assert [p.name for p in default_pools["OF"]] == ["Speedy", "Slugger"]
         # SB denom 100 crushes the SB contribution; Slugger takes the lead.
-        override_pools = build_position_pools([speedy, slugger], sgp_overrides={"SB": 100.0})
+        override_pools = build_position_pools(
+            [speedy, slugger], denoms=get_sgp_denominators({"SB": 100.0})
+        )
         assert [p.name for p in override_pools["OF"]] == ["Slugger", "Speedy"]
 
     def test_worst_roster_by_position_override_flips_drop_target(self):
@@ -1430,7 +1433,9 @@ class TestSgpOverridesFlowThrough:
 
         speedy, slugger = self._speed_and_power()
         assert worst_roster_by_position([speedy, slugger])["OF"] == "Slugger"
-        worst = worst_roster_by_position([speedy, slugger], sgp_overrides={"SB": 100.0})
+        worst = worst_roster_by_position(
+            [speedy, slugger], denoms=get_sgp_denominators({"SB": 100.0})
+        )
         assert worst["OF"] == "Speedy"
 
     def test_audit_roster_override_changes_player_sgp(self):

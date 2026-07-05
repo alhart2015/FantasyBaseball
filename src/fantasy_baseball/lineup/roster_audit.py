@@ -61,7 +61,6 @@ def _is_reliever(p: Player) -> bool:
 def build_position_pools(
     free_agents: list[Player],
     denoms: dict[Category, float] | None = None,
-    sgp_overrides: dict[str, float] | None = None,
 ) -> dict[str, list[Player]]:
     """Bucket FAs into per-position pools, each sorted by raw SGP desc
     and truncated to POSITION_POOL_SIZES[pos].
@@ -73,11 +72,9 @@ def build_position_pools(
       Yahoo leagues that only surface a generic "P" slot, where
       fa.positions == ["P"] for every pitcher.
 
-    ``sgp_overrides`` seeds the denominators when ``denoms`` is not
-    provided; it is ignored when the caller passes ``denoms`` directly.
     """
     if denoms is None:
-        denoms = get_sgp_denominators(sgp_overrides)
+        denoms = get_sgp_denominators()
     pools: dict[str, list[Player]] = {}
     for pos, n in POSITION_POOL_SIZES.items():
         if pos == "SP":
@@ -105,7 +102,6 @@ HITTER_SOURCE_POSITIONS: tuple[str, ...] = ("C", "1B", "2B", "3B", "SS", "OF")
 def worst_roster_by_position(
     roster: list[Player],
     denoms: dict[Category, float] | None = None,
-    sgp_overrides: dict[str, float] | None = None,
 ) -> dict[str, str]:
     """Return ``{pool_pos: worst_roster_player_name}`` — the lowest-SGP
     roster player eligible at each pool position.
@@ -115,11 +111,9 @@ def worst_roster_by_position(
     pitchers split on ``RP_SV_THRESHOLD`` into SP/RP buckets. This is the
     "drop candidate" used when pricing an FA's impact on the browse page.
 
-    ``sgp_overrides`` seeds the denominators when ``denoms`` is not
-    provided; it is ignored when the caller passes ``denoms`` directly.
     """
     if denoms is None:
-        denoms = get_sgp_denominators(sgp_overrides)
+        denoms = get_sgp_denominators()
 
     def _sgp(p: Player) -> float:
         if p.rest_of_season is None:

@@ -142,7 +142,9 @@ def _compute_worst_roster_by_position() -> dict[str, str]:
         return {}
     roster = [Player.from_dict(p) for p in roster_raw]
     config = _load_config()
-    return worst_roster_by_position(roster, sgp_overrides=config.sgp_overrides or None)
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    return worst_roster_by_position(roster, denoms=get_sgp_denominators(config.sgp_overrides))
 
 
 def _load_yahoo_league():
@@ -787,7 +789,7 @@ def register_routes(app: Flask) -> None:
             team_name=config.team_name,
             fraction_remaining=fr,
             team_sds=team_sds,
-            sgp_overrides=config.sgp_overrides or None,
+            sgp_overrides=config.sgp_overrides,
         )
         return jsonify(result.to_dict())
 

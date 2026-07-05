@@ -1020,7 +1020,7 @@ class RefreshRun:
             self.standings,
             self.config.team_name,
             projected_standings=self.projected_standings,
-            sgp_overrides=self.config.sgp_overrides or None,
+            sgp_overrides=self.config.sgp_overrides,
         )
 
     # --- Step 6: Match roster players to projections ---
@@ -1302,7 +1302,7 @@ class RefreshRun:
             team_sds=self.team_sds,
             optimal_hitters=self.optimal_hitters,
             optimal_pitchers=self.optimal_pitchers_starters,
-            sgp_overrides=self.config.sgp_overrides or None,
+            sgp_overrides=self.config.sgp_overrides,
         )
         write_cache(CacheKey.ROSTER_AUDIT, [e.to_dict() for e in audit_results])
         upgrades = sum(1 for e in audit_results if e.gap > 0)
@@ -1360,7 +1360,7 @@ class RefreshRun:
                 self.standings,
                 entry.team_name,
                 projected_standings=self.projected_standings,
-                sgp_overrides=self.config.sgp_overrides or None,
+                sgp_overrides=self.config.sgp_overrides,
             )
         write_cache(CacheKey.LEVERAGE, leverage_by_team, required=False)
 

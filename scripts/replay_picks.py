@@ -161,7 +161,7 @@ def main():
                     roster_slots=config.roster_slots,
                     num_teams=config.num_teams,
                     scoring_mode=scoring_mode,
-                    sgp_overrides=config.sgp_overrides or None,
+                    sgp_overrides=config.sgp_overrides,
                 )
 
             picked = entry["player"]
