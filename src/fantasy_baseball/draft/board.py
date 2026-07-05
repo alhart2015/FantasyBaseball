@@ -98,7 +98,9 @@ def build_board_from_frames(
         axis=1,
     )
 
-    replacement_levels = position_aware_replacement_levels(denoms, repl_rates)
+    replacement_levels = position_aware_replacement_levels(
+        denoms, repl_rates, team_ab=team_ab, team_ip=team_ip
+    )
     pool["var"] = 0.0
     pool["best_position"] = ""
     for idx, row in pool.iterrows():
