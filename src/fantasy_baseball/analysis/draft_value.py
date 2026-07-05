@@ -35,6 +35,15 @@ from fantasy_baseball.web.season_data import (
 
 logger = logging.getLogger(__name__)
 
+# Team volumes FROZEN at what the 2026 draft-day board was built with.
+# The live DEFAULT_TEAM_AB/IP constants recalibrate over time (1450 -> 1300
+# on 2026-07-05); this module's whole contract is reproducing the DRAFT-DAY
+# scale so historical par curves and per-pick values stay comparable, the
+# same reason it deliberately ignores sgp_denominators overrides. Do not
+# point these at the live defaults.
+_DRAFT_DAY_TEAM_AB = 5500
+_DRAFT_DAY_TEAM_IP = 1450
+
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FROZEN_BOARD = _REPO_ROOT / "data" / "draft_state_board.json"
 _PRESEASON_CSVS = _REPO_ROOT / "data" / "projections" / "2026"
@@ -73,6 +82,8 @@ def reproduce_draft_day_board() -> tuple[pd.DataFrame, ScaleInputs]:
         positions,
         roster_slots=config.roster_slots or None,
         num_teams=config.num_teams,
+        team_ab=_DRAFT_DAY_TEAM_AB,
+        team_ip=_DRAFT_DAY_TEAM_IP,
     )
     scale = ScaleInputs(**scale_d)
     return board, scale

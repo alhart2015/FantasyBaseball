@@ -21,6 +21,8 @@ from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
     AB_PER_PA,
     CLOSER_SV_THRESHOLD,
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
     HITTER_CORR_STATS,
     HITTER_CORRELATION,
     HITTING_COUNTING,
@@ -201,14 +203,6 @@ def simulate_season(
     return team_stats, injuries
 
 
-# Fallback full-season team totals for the actual+simulated rate-stat blend,
-# used only when a team's real accumulated AB/IP aren't supplied. Real values
-# (threaded from Yahoo standings `extras`) are preferred -- these constants are
-# a last resort and 1450 IP runs high for a 9-pitcher league.
-_TYPICAL_TEAM_AB = 5500
-_TYPICAL_TEAM_IP = 1450
-
-
 def _ytd_playing_time(
     actuals: dict[str, float],
     fraction_elapsed: float,
@@ -224,8 +218,8 @@ def _ytd_playing_time(
     """
     ab = actuals.get("AB")
     ip = actuals.get("IP")
-    actual_ab = float(ab) if ab is not None else _TYPICAL_TEAM_AB * fraction_elapsed
-    actual_ip = float(ip) if ip is not None else _TYPICAL_TEAM_IP * fraction_elapsed
+    actual_ab = float(ab) if ab is not None else DEFAULT_TEAM_AB * fraction_elapsed
+    actual_ip = float(ip) if ip is not None else DEFAULT_TEAM_IP * fraction_elapsed
     return actual_ab, actual_ip
 
 

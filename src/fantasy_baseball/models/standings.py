@@ -331,7 +331,7 @@ class ProjectedStandingsEntry:
     hits/ER/BH using the same denominators that produced the rates.
     Pre-PR-110 entries (loaded from older persisted JSON, or hand-built
     in tests) leave them at 0.0; ``apply_swap_delta`` then falls back to
-    the legacy ``_TEAM_AB`` / ``_TEAM_IP`` heuristics.
+    the legacy ``DEFAULT_TEAM_AB`` / ``DEFAULT_TEAM_IP`` heuristics.
     """
 
     team_name: str

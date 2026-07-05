@@ -11,6 +11,8 @@ from fantasy_baseball.sgp.player_value import (
     calculate_player_sgp,
 )
 from fantasy_baseball.utils.constants import (
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
     REPLACEMENT_BY_POSITION,
     STARTERS_PER_POSITION,
     Category,
@@ -163,6 +165,7 @@ def _empirical_floor_sgp(
     position: str,
     denoms: dict[Category, float],
     replacement_avg: float,
+    team_ab: int = DEFAULT_TEAM_AB,
 ) -> float:
     """SGP of a position's empirical waiver line (REPLACEMENT_BY_POSITION).
 
@@ -181,7 +184,9 @@ def _empirical_floor_sgp(
             "avg": calculate_avg(line["h"], line["ab"]),
         }
     )
-    return calculate_player_sgp(row, denoms=denoms, replacement_avg=replacement_avg)
+    return calculate_player_sgp(
+        row, denoms=denoms, replacement_avg=replacement_avg, team_ab=team_ab
+    )
 
 
 def _empirical_pitcher_floor(
@@ -189,6 +194,7 @@ def _empirical_pitcher_floor(
     denoms: dict[Category, float],
     replacement_era: float,
     replacement_whip: float,
+    team_ip: int = DEFAULT_TEAM_IP,
 ) -> float:
     """SGP of an empirical SP/RP waiver line (REPLACEMENT_BY_POSITION).
 
@@ -210,13 +216,19 @@ def _empirical_pitcher_floor(
         }
     )
     return calculate_player_sgp(
-        row, denoms=denoms, replacement_era=replacement_era, replacement_whip=replacement_whip
+        row,
+        denoms=denoms,
+        replacement_era=replacement_era,
+        replacement_whip=replacement_whip,
+        team_ip=team_ip,
     )
 
 
 def position_aware_replacement_levels(
     denoms: dict[Category, float] | None = None,
     repl_rates: dict[str, float] | None = None,
+    team_ab: int = DEFAULT_TEAM_AB,
+    team_ip: int = DEFAULT_TEAM_IP,
 ) -> dict[str, float]:
     """Empirical waiver replacement floors per position.
 
@@ -234,10 +246,14 @@ def position_aware_replacement_levels(
     replacement_whip = rates.get("whip", REPLACEMENT_WHIP)
 
     levels: dict[str, float] = {
-        pos: _empirical_floor_sgp(pos, denoms, replacement_avg)
+        pos: _empirical_floor_sgp(pos, denoms, replacement_avg, team_ab=team_ab)
         for pos in _EMPIRICAL_HITTER_POSITIONS
     }
     levels["UTIL"] = max(levels.values())
-    levels["SP"] = _empirical_pitcher_floor("SP", denoms, replacement_era, replacement_whip)
-    levels["RP"] = _empirical_pitcher_floor("RP", denoms, replacement_era, replacement_whip)
+    levels["SP"] = _empirical_pitcher_floor(
+        "SP", denoms, replacement_era, replacement_whip, team_ip=team_ip
+    )
+    levels["RP"] = _empirical_pitcher_floor(
+        "RP", denoms, replacement_era, replacement_whip, team_ip=team_ip
+    )
     return levels

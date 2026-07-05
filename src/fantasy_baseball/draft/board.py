@@ -7,17 +7,15 @@ import pandas as pd
 from fantasy_baseball.data.db import get_blended_projections, get_positions
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
-from fantasy_baseball.sgp.player_value import (
-    DEFAULT_TEAM_AB,
-    DEFAULT_TEAM_IP,
-    calculate_player_sgp,
-)
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import (
     calculate_replacement_rates,
     position_aware_replacement_levels,
 )
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
     compute_starters_per_position,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -43,6 +41,8 @@ def build_board_from_frames(
     positions: dict[str, list[str]],
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
+    team_ab: int = DEFAULT_TEAM_AB,
+    team_ip: int = DEFAULT_TEAM_IP,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Compute a ranked draft board from already-loaded projection frames + a
     positions dict.
@@ -77,7 +77,10 @@ def build_board_from_frames(
 
     # Two-pass SGP: first with defaults (for ordering), then with
     # pool-derived replacement rates (for accurate values).
-    pool["total_sgp"] = pool.apply(lambda row: calculate_player_sgp(row, denoms=denoms), axis=1)
+    pool["total_sgp"] = pool.apply(
+        lambda row: calculate_player_sgp(row, denoms=denoms, team_ab=team_ab, team_ip=team_ip),
+        axis=1,
+    )
 
     starters = compute_starters_per_position(roster_slots, num_teams)
     repl_rates = calculate_replacement_rates(pool, starters)
@@ -89,11 +92,15 @@ def build_board_from_frames(
             replacement_era=repl_rates["era"],
             replacement_whip=repl_rates["whip"],
             replacement_avg=repl_rates["avg"],
+            team_ab=team_ab,
+            team_ip=team_ip,
         ),
         axis=1,
     )
 
-    replacement_levels = position_aware_replacement_levels(denoms, repl_rates)
+    replacement_levels = position_aware_replacement_levels(
+        denoms, repl_rates, team_ab=team_ab, team_ip=team_ip
+    )
     pool["var"] = 0.0
     pool["best_position"] = ""
     for idx, row in pool.iterrows():
@@ -117,8 +124,8 @@ def build_board_from_frames(
         "denoms": denoms,
         "repl_rates": repl_rates,
         "replacement_levels": replacement_levels,
-        "team_ab": DEFAULT_TEAM_AB,
-        "team_ip": DEFAULT_TEAM_IP,
+        "team_ab": team_ab,
+        "team_ip": team_ip,
     }
     return board, scale
 
