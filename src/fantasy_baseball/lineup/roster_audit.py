@@ -61,6 +61,7 @@ def _is_reliever(p: Player) -> bool:
 def build_position_pools(
     free_agents: list[Player],
     denoms: dict[Category, float] | None = None,
+    sgp_overrides: dict[str, float] | None = None,
 ) -> dict[str, list[Player]]:
     """Bucket FAs into per-position pools, each sorted by raw SGP desc
     and truncated to POSITION_POOL_SIZES[pos].
@@ -71,9 +72,12 @@ def build_position_pools(
       goes to SP, sv >= RP_SV_THRESHOLD goes to RP. This works around
       Yahoo leagues that only surface a generic "P" slot, where
       fa.positions == ["P"] for every pitcher.
+
+    ``sgp_overrides`` seeds the denominators when ``denoms`` is not
+    provided; it is ignored when the caller passes ``denoms`` directly.
     """
     if denoms is None:
-        denoms = get_sgp_denominators()
+        denoms = get_sgp_denominators(sgp_overrides)
     pools: dict[str, list[Player]] = {}
     for pos, n in POSITION_POOL_SIZES.items():
         if pos == "SP":
@@ -101,6 +105,7 @@ HITTER_SOURCE_POSITIONS: tuple[str, ...] = ("C", "1B", "2B", "3B", "SS", "OF")
 def worst_roster_by_position(
     roster: list[Player],
     denoms: dict[Category, float] | None = None,
+    sgp_overrides: dict[str, float] | None = None,
 ) -> dict[str, str]:
     """Return ``{pool_pos: worst_roster_player_name}`` — the lowest-SGP
     roster player eligible at each pool position.
@@ -109,9 +114,12 @@ def worst_roster_by_position(
     (C/1B/2B/3B/SS/OF) pick the lowest-SGP roster hitter eligible there,
     pitchers split on ``RP_SV_THRESHOLD`` into SP/RP buckets. This is the
     "drop candidate" used when pricing an FA's impact on the browse page.
+
+    ``sgp_overrides`` seeds the denominators when ``denoms`` is not
+    provided; it is ignored when the caller passes ``denoms`` directly.
     """
     if denoms is None:
-        denoms = get_sgp_denominators()
+        denoms = get_sgp_denominators(sgp_overrides)
 
     def _sgp(p: Player) -> float:
         if p.rest_of_season is None:
@@ -211,6 +219,7 @@ def audit_roster(
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     optimal_hitters: list[HitterAssignment] | None = None,
     optimal_pitchers: list[PitcherStarter] | None = None,
+    sgp_overrides: dict[str, float] | None = None,
 ) -> list[AuditEntry]:
     """Evaluate every roster slot against the best available FA.
 
@@ -232,6 +241,10 @@ def audit_roster(
     ``team_sds`` is threaded into ``compute_delta_roto`` so within-
     uncertainty swaps produce fractional deltas instead of full ±1.0
     rank flips. ``None`` preserves exact-rank semantics.
+
+    ``sgp_overrides`` (from ``config.sgp_overrides``) replaces individual
+    SGP denominators with league-specific values; None keeps the code
+    defaults.
     """
     if not roster:
         return []
@@ -240,7 +253,7 @@ def audit_roster(
     il_players = [p for p in roster if p.is_on_il()]
     active_fas = [fa for fa in free_agents if not fa.is_on_il()]
 
-    denoms = get_sgp_denominators()
+    denoms = get_sgp_denominators(sgp_overrides)
 
     # Slot assignments come from the already-solved ERoto lineup. Compute
     # here only if the caller didn't pass them.

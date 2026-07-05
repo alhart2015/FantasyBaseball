@@ -126,6 +126,7 @@ def _replacement_levels_for_board(
     board: pd.DataFrame,
     roster_slots: dict[str, int],
     num_teams: int | None,
+    sgp_overrides: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """Position-aware empirical replacement floors for ``board``.
 
@@ -137,12 +138,13 @@ def _replacement_levels_for_board(
     (a freshly built board gets fresh floors) and recomputes if the slot config
     changes, turning hundreds of redundant full-board pandas scans into one.
     """
-    cache_key = (num_teams, tuple(sorted(roster_slots.items())))
+    overrides_key = tuple(sorted(sgp_overrides.items())) if sgp_overrides else None
+    cache_key = (num_teams, tuple(sorted(roster_slots.items())), overrides_key)
     cached = board.attrs.get("_repl_levels_cache")
     if cached is not None and cached[0] == cache_key:
         return cast(dict[str, float], cached[1])
     starters = compute_starters_per_position(roster_slots, num_teams)
-    denoms = get_sgp_denominators()
+    denoms = get_sgp_denominators(sgp_overrides)
     repl_rates = calculate_replacement_rates(board, starters)
     repl_levels = position_aware_replacement_levels(denoms, repl_rates)
     board.attrs["_repl_levels_cache"] = (cache_key, repl_levels)
@@ -159,6 +161,7 @@ def get_recommendations(
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
     scoring_mode: str = "var",
+    sgp_overrides: dict[str, float] | None = None,
 ) -> list[Recommendation]:
     """Get top draft pick recommendations.
 
@@ -173,6 +176,10 @@ def get_recommendations(
     *scoring_mode*: "var" (default) uses Value Above Replacement for
     ranking; "vona" uses Value Over Next Available, which accounts for
     talent depth at each player type (hitter/SP/closer).
+
+    *sgp_overrides*: league-specific SGP denominator overrides (from
+    ``config.sgp_overrides``) so live-VAR floors are computed on the same
+    denominators the board was built with. None keeps the code defaults.
     """
     if roster_slots is None:
         roster_slots = DEFAULT_ROSTER_SLOTS
@@ -183,7 +190,7 @@ def get_recommendations(
     # ``available`` pool, so they match the basis the board's frozen
     # ``total_sgp`` was scored on and don't drift as the draft drains. Cached
     # on the board so the per-pick call doesn't re-scan the full board.
-    repl_levels = _replacement_levels_for_board(board, roster_slots, num_teams)
+    repl_levels = _replacement_levels_for_board(board, roster_slots, num_teams, sgp_overrides)
 
     # Only recompute VAR for top candidates (by pre-computed VAR).
     # The full pool sets replacement levels accurately, but iterating

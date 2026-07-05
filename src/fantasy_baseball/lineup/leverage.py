@@ -36,6 +36,7 @@ def _leverage_from_standings(
     user_team_name: str,
     attack_weight: float,
     defense_weight: float,
+    sgp_overrides: dict[str, float] | None = None,
 ) -> dict[str, float] | None:
     """Compute normalized leverage weights via marginal roto-point impact.
 
@@ -62,7 +63,7 @@ def _leverage_from_standings(
     if user_entry is None:
         return None
 
-    sgp_denoms = get_sgp_denominators()
+    sgp_denoms = get_sgp_denominators(sgp_overrides)
 
     raw_leverage: dict[str, float] = {}
     for cat in ALL_CATEGORIES:
@@ -136,6 +137,7 @@ def calculate_leverage(
     defense_weight: float = 0.4,
     season_progress: float | None = None,
     projected_standings: Standings | ProjectedStandings | None = None,
+    sgp_overrides: dict[str, float] | None = None,
 ) -> dict[str, float]:
     """Calculate leverage weights for each stat category based on standings gaps.
 
@@ -164,6 +166,10 @@ def calculate_leverage(
     performance + ROS projections). The uniform ramp still applies to
     reflect projection uncertainty.
 
+    ``sgp_overrides`` (from ``config.sgp_overrides``) replaces individual
+    SGP denominators with league-specific values; None keeps the code
+    defaults.
+
     Weights are normalized to sum to 1.0.
     """
     if season_progress is None:
@@ -180,6 +186,7 @@ def calculate_leverage(
         user_team_name,
         attack_weight,
         defense_weight,
+        sgp_overrides,
     )
     if standings_leverage is None:
         return uniform

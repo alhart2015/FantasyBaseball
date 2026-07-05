@@ -1020,6 +1020,7 @@ class RefreshRun:
             self.standings,
             self.config.team_name,
             projected_standings=self.projected_standings,
+            sgp_overrides=self.config.sgp_overrides or None,
         )
 
     # --- Step 6: Match roster players to projections ---
@@ -1079,7 +1080,7 @@ class RefreshRun:
         from fantasy_baseball.analysis.pace import attach_pace_to_roster
         from fantasy_baseball.sgp.denominators import get_sgp_denominators
 
-        sgp_denoms = get_sgp_denominators()
+        sgp_denoms = get_sgp_denominators(self.config.sgp_overrides)
         attach_pace_to_roster(
             self.roster_players,
             self.hitter_logs,
@@ -1301,6 +1302,7 @@ class RefreshRun:
             team_sds=self.team_sds,
             optimal_hitters=self.optimal_hitters,
             optimal_pitchers=self.optimal_pitchers_starters,
+            sgp_overrides=self.config.sgp_overrides or None,
         )
         write_cache(CacheKey.ROSTER_AUDIT, [e.to_dict() for e in audit_results])
         upgrades = sum(1 for e in audit_results if e.gap > 0)
@@ -1348,6 +1350,7 @@ class RefreshRun:
     def _compute_per_team_leverage(self):
         from fantasy_baseball.lineup.leverage import calculate_leverage
 
+        assert self.config is not None
         assert self.standings is not None
 
         self._progress("Computing leverage...")
@@ -1357,6 +1360,7 @@ class RefreshRun:
                 self.standings,
                 entry.team_name,
                 projected_standings=self.projected_standings,
+                sgp_overrides=self.config.sgp_overrides or None,
             )
         write_cache(CacheKey.LEVERAGE, leverage_by_team, required=False)
 

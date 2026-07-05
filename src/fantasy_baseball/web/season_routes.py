@@ -141,7 +141,8 @@ def _compute_worst_roster_by_position() -> dict[str, str]:
     if not roster_raw:
         return {}
     roster = [Player.from_dict(p) for p in roster_raw]
-    return worst_roster_by_position(roster)
+    config = _load_config()
+    return worst_roster_by_position(roster, sgp_overrides=config.sgp_overrides or None)
 
 
 def _load_yahoo_league():
@@ -786,6 +787,7 @@ def register_routes(app: Flask) -> None:
             team_name=config.team_name,
             fraction_remaining=fr,
             team_sds=team_sds,
+            sgp_overrides=config.sgp_overrides or None,
         )
         return jsonify(result.to_dict())
 

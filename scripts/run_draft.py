@@ -290,6 +290,7 @@ def main():
     conn = get_connection()
     full_board = build_draft_board(
         conn=conn,
+        sgp_overrides=config.sgp_overrides or None,
         roster_slots=config.roster_slots or None,
         num_teams=num_teams,
     )
@@ -367,6 +368,7 @@ def main():
         roster_slots=config.roster_slots,
         num_teams=num_teams,
         scoring_mode=scoring_mode,
+        sgp_overrides=config.sgp_overrides or None,
     )
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
     vona = calculate_vona_scores(available, tracker.picks_until_next_turn)
@@ -492,6 +494,7 @@ def main():
                 roster_slots=config.roster_slots,
                 num_teams=num_teams,
                 scoring_mode=scoring_mode,
+                sgp_overrides=config.sgp_overrides or None,
             )
 
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
@@ -589,6 +592,7 @@ def _handle_user_pick(
         roster_slots=roster_slots,
         num_teams=num_teams,
         scoring_mode=scoring_mode,
+        sgp_overrides=(config.sgp_overrides or None) if config else None,
     )
 
     # --- Strategy alerts ---

@@ -329,6 +329,7 @@ def plan_il_returns(
     fraction_remaining: float,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     max_plans: int = 5,
+    sgp_overrides: dict[str, float] | None = None,
 ) -> IlReturnPlanResult:
     """Plan the roster moves to reactivate ``activating_il`` players.
 
@@ -336,6 +337,10 @@ def plan_il_returns(
     plan's deltaRoto is the cost of its forced drop relative to the pre-drop
     ideal lineup (which already includes the returning players, so the
     activation gain the standings already price is not double-counted).
+
+    ``sgp_overrides`` (from ``config.sgp_overrides``) replaces individual
+    SGP denominators with league-specific values; None keeps the code
+    defaults.
     """
     capacity = roster_capacity(roster_slots)
     activating_names = [p.name for p in activating_il]
@@ -345,7 +350,7 @@ def plan_il_returns(
 
     pool = _build_pool(roster, activating_il)
     overflow = len(pool) - capacity
-    denoms = get_sgp_denominators()
+    denoms = get_sgp_denominators(sgp_overrides)
     bn_slots = roster_slots.get("BN", 0)
 
     # Pre-drop ideal lineup -> the band baseline (returning players present here).

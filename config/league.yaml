@@ -122,3 +122,29 @@ projections:
     atc: 0.20
     the-bat-x: 0.20
     oopsy: 0.20
+
+# sgp_denominators -- league-specific SGP denominator overrides (OPTIONAL).
+#
+# Each value is ABSOLUTE stat-per-standings-place: how much of that category
+# it takes, on average, to move one place in this league's standings (e.g.
+# "R: 21" means ~21 runs per standings place). Keys must be exact category
+# codes; the loader validates them and rejects typos and non-positive values.
+#
+# The whole block is COMMENTED OUT, so the config loader returns {} and every
+# consumer -- the draft board + recommender, the in-season leverage / roster
+# audit / IL-return planner, the refresh pipeline, and the scripts -- uses the
+# trusted code defaults (DEFAULT_SGP_DENOMINATORS in utils/constants.py).
+# Uncomment (all ten categories or any subset) to override; anything omitted
+# keeps its code default.
+#
+# sgp_denominators:
+#   R: 21
+#   HR: 7
+#   RBI: 21
+#   SB: 12
+#   AVG: 0.0025
+#   W: 3
+#   K: 33
+#   ERA: 0.121
+#   WHIP: 0.018
+#   SV: 8
