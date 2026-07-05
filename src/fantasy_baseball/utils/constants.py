@@ -85,6 +85,9 @@ ROSTER_SLOTS: dict[str, int] = DEFAULT_ROSTER_SLOTS
 
 DEFAULT_NUM_TEAMS: int = 10
 
+# Backward-compatible alias.
+NUM_TEAMS: int = DEFAULT_NUM_TEAMS
+
 # League-typical full-season team volumes, shared by the SGP scale
 # (rate-stat SGP is proportional to 1/team_ip), the simulation's
 # YTD-blend fallback, and the trade evaluator's legacy fallback.
@@ -96,9 +99,6 @@ DEFAULT_NUM_TEAMS: int = 10
 # slots or league streaming behavior change materially.
 DEFAULT_TEAM_AB: int = 5500
 DEFAULT_TEAM_IP: int = 1300
-
-# Backward-compatible alias.
-NUM_TEAMS: int = DEFAULT_NUM_TEAMS
 
 
 def compute_starters_per_position(

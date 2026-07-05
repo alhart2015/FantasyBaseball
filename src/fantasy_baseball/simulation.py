@@ -203,12 +203,6 @@ def simulate_season(
     return team_stats, injuries
 
 
-# Fallback full-season team totals for the actual+simulated rate-stat blend,
-# used only when a team's real accumulated AB/IP aren't supplied. Real values
-# (threaded from Yahoo standings `extras`) are preferred -- the shared
-# league-calibrated constants are a last resort.
-
-
 def _ytd_playing_time(
     actuals: dict[str, float],
     fraction_elapsed: float,

@@ -38,13 +38,6 @@ COUNTING_CATS = ["R", "HR", "RBI", "SB", "W", "K", "SV"]
 # be up to this many spots worse-ranked than the player we receive).
 MAX_RANK_GAP = 5
 
-# Legacy fallback when callers don't have access to the team's actual
-# AB / IP (preseason / draft / persisted cache without component context).
-# The shared league-calibrated volumes are used only as a last resort:
-# mid-season in-app callers should pass real team_ab / team_ip computed
-# from team_YTD + ROS components, otherwise rate-stat swap deltas are
-# mis-weighted by 20-50%.
-
 
 def team_baseline_volumes(
     entry: ProjectedStandingsEntry | StandingsEntry,
