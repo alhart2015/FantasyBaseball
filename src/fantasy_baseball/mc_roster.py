@@ -19,6 +19,7 @@ from fantasy_baseball.scoring import (
     _real_positions,
 )
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
+from fantasy_baseball.utils.constants import Category
 
 PA_PER_GAME: float = 4.3  # shared per-game constant (Phase 3 reuses; do not duplicate)
 
@@ -65,13 +66,21 @@ def _g_ros_full(p: Player) -> float:
     return 0.0
 
 
-def build_effective_roster(roster: list[Player], league_context: LeagueContext) -> EffectiveRoster:
+def build_effective_roster(
+    roster: list[Player],
+    league_context: LeagueContext,
+    denoms: dict[Category, float] | None = None,
+) -> EffectiveRoster:
     """Turn a roster + LeagueContext into the effective active set and bench fill pool.
 
     ``active`` carries active-slot bodies + IL bodies, each with its displacement
     factor (from ERoto's ``_compute_displacement_factors``) and ``g_ros_adj``
     (= factor * g_ros_full). ``bench`` is the healthy-bench HITTER fill pool;
     healthy bench pitchers are dropped (pitcher bench-fill is deferred to Phase 5).
+
+    ``denoms`` are the resolved league SGP denominators used to score each
+    bench body's ``per_game_value`` (the fill engine's ordering key); ``None``
+    falls back to the library defaults.
 
     Factors come back name-keyed; they are re-keyed onto ``Player`` objects, with
     a guard that raises ``ValueError`` on a duplicate name within the active+IL
@@ -102,7 +111,9 @@ def build_effective_roster(roster: list[Player], league_context: LeagueContext) 
         if b.player_type != PlayerType.HITTER:
             continue  # pitcher bench-fill deferred (Phase 5); healthy bench pitchers excluded
         gf = _g_ros_full(b)
-        sgp = calculate_player_sgp(b.rest_of_season) if b.rest_of_season is not None else 0.0
+        sgp = (
+            calculate_player_sgp(b.rest_of_season, denoms) if b.rest_of_season is not None else 0.0
+        )
         per_game = (sgp / gf) if gf > 0 else 0.0
         bench_bodies.append(
             BenchBody(
@@ -121,6 +132,7 @@ def build_effective_rosters(
     eos_baseline: dict,
     team_sds: dict,
     fraction_remaining: float,
+    denoms: dict[Category, float] | None = None,
 ) -> dict[str, EffectiveRoster]:
     """Build each team's EffectiveRoster from the live Player rosters.
 
@@ -128,6 +140,8 @@ def build_effective_rosters(
     excluded, team_sds, fraction_remaining) the standings build used, so the
     MC's IL handling agrees with ERoto by construction, then delegates to
     ``build_effective_roster`` (which classifies and filters the roster).
+    ``denoms`` (resolved league SGP denominators, or ``None`` for defaults)
+    is forwarded to the bench ``per_game_value`` scoring.
     """
     out: dict[str, EffectiveRoster] = {}
     for tname, roster in team_rosters.items():
@@ -137,5 +151,5 @@ def build_effective_rosters(
             team_name=tname,
             fraction_remaining=fraction_remaining,
         )
-        out[tname] = build_effective_roster(roster, lc)
+        out[tname] = build_effective_roster(roster, lc, denoms)
     return out

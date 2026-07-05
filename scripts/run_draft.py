@@ -290,6 +290,7 @@ def main():
     conn = get_connection()
     full_board = build_draft_board(
         conn=conn,
+        sgp_overrides=config.sgp_overrides,
         roster_slots=config.roster_slots or None,
         num_teams=num_teams,
     )
@@ -367,6 +368,7 @@ def main():
         roster_slots=config.roster_slots,
         num_teams=num_teams,
         scoring_mode=scoring_mode,
+        sgp_overrides=config.sgp_overrides,
     )
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
     vona = calculate_vona_scores(available, tracker.picks_until_next_turn)
@@ -469,6 +471,8 @@ def main():
                         team_names,
                         config.team_name,
                         prefilled_input=raw,
+                        config=config,
+                        num_teams=num_teams,
                     )
 
             # Advance to next pick so dashboard shows upcoming pick, not the one just made
@@ -492,6 +496,7 @@ def main():
                 roster_slots=config.roster_slots,
                 num_teams=num_teams,
                 scoring_mode=scoring_mode,
+                sgp_overrides=config.sgp_overrides,
             )
 
             available = board[~board["player_id"].isin(tracker.drafted_ids)]
@@ -589,6 +594,7 @@ def _handle_user_pick(
         roster_slots=roster_slots,
         num_teams=num_teams,
         scoring_mode=scoring_mode,
+        sgp_overrides=config.sgp_overrides if config else None,
     )
 
     # --- Strategy alerts ---
@@ -754,6 +760,9 @@ def _handle_user_pick(
         tracker,
         current_recs=recs,
         team_names=team_names,
+        config=config,
+        num_teams=num_teams,
+        full_board=full_board,
     )
     if name:
         # If a different team was specified, this pick was traded away
@@ -774,7 +783,15 @@ def _handle_user_pick(
 
 
 def _handle_other_pick(
-    board, full_board, tracker, balance, team_names=None, user_team_name=None, prefilled_input=None
+    board,
+    full_board,
+    tracker,
+    balance,
+    team_names=None,
+    user_team_name=None,
+    prefilled_input=None,
+    config=None,
+    num_teams=None,
 ):
     """Handle another team's pick (or a traded pick for the user's team).
 
@@ -783,7 +800,13 @@ def _handle_other_pick(
     check for 'mine').
     """
     name, pid, matched_team = _get_player_input(
-        board, tracker, team_names=team_names, prefilled_input=prefilled_input
+        board,
+        tracker,
+        team_names=team_names,
+        prefilled_input=prefilled_input,
+        config=config,
+        num_teams=num_teams,
+        full_board=full_board,
     )
     if name:
         is_user = (
@@ -803,7 +826,16 @@ def _handle_other_pick(
             print(f"  -> Drafted: {name}")
 
 
-def _get_player_input(board, tracker, team_names=None, current_recs=None, prefilled_input=None):
+def _get_player_input(
+    board,
+    tracker,
+    team_names=None,
+    current_recs=None,
+    prefilled_input=None,
+    config=None,
+    num_teams=None,
+    full_board=None,
+):
     """Get and fuzzy-match a player name from user input.
 
     Returns (name, player_id, team) or (None, None, None).
@@ -820,6 +852,14 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None, prefil
 
     If *prefilled_input* is provided, it's used as the first input line
     instead of prompting.
+
+    *config* (league config) and *num_teams*/*full_board* are only used
+    by the digit-selection fallback (when *current_recs* is None): the
+    fallback derives sgp_overrides/roster_slots/scoring_mode from
+    *config* so it mirrors the main-loop ``get_recommendations`` calls
+    exactly. *full_board* keeps
+    keepers visible to ``get_filled_positions`` (the draftable *board* has
+    them removed).
     """
     available = board[~board["player_id"].isin(tracker.drafted_ids)]
     available_names = available["name"].tolist()
@@ -848,9 +888,28 @@ def _get_player_input(board, tracker, team_names=None, current_recs=None, prefil
             idx = int(raw) - 1
             recs = current_recs
             if recs is None:
-                filled = get_filled_positions(tracker.user_roster_ids, board)
+                # Mirror the main-loop call (roster_slots/num_teams/
+                # scoring_mode/sgp_overrides, filled from the keeper-inclusive
+                # full board) so the numbered fallback list matches what was
+                # displayed.
+                sgp_overrides = config.sgp_overrides if config else None
+                roster_slots = config.roster_slots if config else None
+                scoring_mode = config.scoring_mode if config else "var"
+                lookup_board = full_board if full_board is not None else board
+                filled = get_filled_positions(
+                    tracker.user_roster_ids, lookup_board, roster_slots=roster_slots
+                )
                 recs = get_recommendations(
-                    board, tracker.drafted_ids, tracker.user_roster, n=5, filled_positions=filled
+                    board,
+                    tracker.drafted_ids,
+                    tracker.user_roster,
+                    n=5,
+                    filled_positions=filled,
+                    picks_until_next=tracker.picks_until_next_turn,
+                    roster_slots=roster_slots,
+                    num_teams=num_teams,
+                    scoring_mode=scoring_mode,
+                    sgp_overrides=sgp_overrides,
                 )
             if 0 <= idx < len(recs):
                 return recs[idx].name, _lookup_id(recs[idx].name), None

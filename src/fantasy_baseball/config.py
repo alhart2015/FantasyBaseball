@@ -1,7 +1,10 @@
+import math
 from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
+
+from fantasy_baseball.utils.constants import Category
 
 
 @dataclass
@@ -15,12 +18,50 @@ class LeagueConfig:
     roster_slots: dict[str, int]
     projection_systems: list[str]
     projection_weights: dict[str, float]
+    sgp_overrides: dict[str, float] = field(default_factory=dict)
     teams: dict[int, str] = field(default_factory=dict)
     strategy: str = "no_punt_opp"
     scoring_mode: str = "var"
     season_year: int = 2026
     season_start: str = "2026-03-27"
     season_end: str = "2026-09-28"
+
+
+def _validate_sgp_overrides(raw_overrides: dict) -> dict[str, float]:
+    """Validate the ``sgp_denominators`` block from league.yaml.
+
+    Every key must be a valid Category value ("R", "HR", "AVG", ...) and
+    every value a positive number. A typo'd category silently ignored is
+    this repo's worst failure mode, so fail loudly naming the offender.
+    """
+    if not raw_overrides:
+        return {}
+    if not isinstance(raw_overrides, dict):
+        raise ValueError(
+            "sgp_denominators must be a mapping of category to positive number "
+            f"(e.g. 'HR: 10'), got {type(raw_overrides).__name__}: {raw_overrides!r}"
+        )
+    valid_keys = {c.value for c in Category}
+    validated: dict[str, float] = {}
+    for key, value in raw_overrides.items():
+        if key not in valid_keys:
+            raise ValueError(
+                f"Unknown sgp_denominators category {key!r}. "
+                f"Valid categories: {', '.join(sorted(valid_keys))}"
+            )
+        # NaN passes `value <= 0` (all NaN comparisons are False) and inf is
+        # numerically positive, so both need the explicit isfinite gate.
+        if (
+            not isinstance(value, (int, float))
+            or isinstance(value, bool)
+            or not math.isfinite(value)
+            or value <= 0
+        ):
+            raise ValueError(
+                f"sgp_denominators value for {key!r} must be a positive number, got {value!r}"
+            )
+        validated[key] = float(value)
+    return validated
 
 
 def load_config(config_path: Path) -> LeagueConfig:
@@ -53,6 +94,8 @@ def load_config(config_path: Path) -> LeagueConfig:
             f"Valid modes: {', '.join(sorted(VALID_SCORING_MODES))}"
         )
 
+    sgp_overrides = _validate_sgp_overrides(raw.get("sgp_denominators", {}))
+
     return LeagueConfig(
         league_id=league.get("id", 0),
         num_teams=league.get("num_teams", 10),
@@ -63,6 +106,7 @@ def load_config(config_path: Path) -> LeagueConfig:
         roster_slots=raw.get("roster_slots", {}),
         projection_systems=projections.get("systems", []),
         projection_weights=projections.get("weights", {}),
+        sgp_overrides=sgp_overrides,
         teams={int(k): v for k, v in draft.get("teams", {}).items()},
         strategy=strategy,
         scoring_mode=scoring_mode,

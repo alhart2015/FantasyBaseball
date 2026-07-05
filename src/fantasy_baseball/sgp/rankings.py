@@ -13,6 +13,7 @@ import pandas as pd
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
+from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -47,6 +48,7 @@ def lookup_rank(
 def compute_sgp_rankings(
     hitters: pd.DataFrame,
     pitchers: pd.DataFrame,
+    denoms: dict[Category, float] | None = None,
 ) -> dict[str, int]:
     """Rank all players by unweighted SGP within hitter/pitcher pools.
 
@@ -56,6 +58,10 @@ def compute_sgp_rankings(
 
     When two players share a name and type (e.g., two Mason Miller pitchers),
     the fg_id keys are distinct but the name key gets the better rank.
+
+    ``denoms``: league-specific SGP denominators (from
+    ``get_sgp_denominators(config.sgp_overrides)``). ``None`` keeps the
+    code defaults.
     """
     rankings = {}
 
@@ -65,7 +71,7 @@ def compute_sgp_rankings(
 
         sgp_list = []
         for _, row in df.iterrows():
-            sgp = calculate_player_sgp(row)
+            sgp = calculate_player_sgp(row, denoms=denoms)
             fg_id = str(row.get("fg_id", "")) if pd.notna(row.get("fg_id")) else None
             name_key = rank_key(row["name"], ptype)
             sgp_list.append((fg_id, name_key, sgp))
@@ -79,40 +85,6 @@ def compute_sgp_rankings(
             # name key — keep the better (lower) rank on collision
             if name_key not in rankings or rank_num < rankings[name_key]:
                 rankings[name_key] = rank_num
-
-    return rankings
-
-
-def compute_combined_sgp_rankings(
-    hitters: pd.DataFrame,
-    pitchers: pd.DataFrame,
-) -> dict[str, int]:
-    """Rank all players in a single combined pool by unweighted SGP.
-
-    Unlike ``compute_sgp_rankings`` which ranks hitters and pitchers
-    separately, this produces a single ranking across both types.
-    Useful for trade filtering where cross-type comparisons must be
-    meaningful (hitter #5 and pitcher #5 may have very different SGP).
-    """
-    rankings = {}
-    sgp_list = []
-
-    for df, ptype in [(hitters, PlayerType.HITTER), (pitchers, PlayerType.PITCHER)]:
-        if df.empty:
-            continue
-        for _, row in df.iterrows():
-            sgp = calculate_player_sgp(row)
-            fg_id = str(row.get("fg_id", "")) if pd.notna(row.get("fg_id")) else None
-            name_key = rank_key(row["name"], ptype)
-            sgp_list.append((fg_id, name_key, sgp))
-
-    sgp_list.sort(key=lambda x: x[2], reverse=True)
-
-    for rank_num, (fg_id, name_key, _sgp) in enumerate(sgp_list, start=1):
-        if fg_id:
-            rankings[fg_id] = rank_num
-        if name_key not in rankings or rank_num < rankings[name_key]:
-            rankings[name_key] = rank_num
 
     return rankings
 
@@ -146,6 +118,7 @@ def build_rankings_lookup(
 def compute_rankings_from_game_logs(
     hitter_logs: dict[str, dict[str, Any]],
     pitcher_logs: dict[str, dict[str, Any]],
+    denoms: dict[Category, float] | None = None,
 ) -> dict[str, int]:
     """Rank players by SGP of actual accumulated stats from game logs.
 
@@ -155,6 +128,7 @@ def compute_rankings_from_game_logs(
     Args:
         hitter_logs: {normalized_name: {pa, ab, h, r, hr, rbi, sb}}
         pitcher_logs: {normalized_name: {ip, k, w, sv, er, bb, h_allowed}}
+        denoms: league-specific SGP denominators; None keeps defaults.
 
     Returns {name::player_type: rank} where rank is 1-based ordinal.
     """
@@ -180,7 +154,7 @@ def compute_rankings_from_game_logs(
                 player_dict["era"] = calculate_era(er, ip, default=0.0)
                 player_dict["whip"] = calculate_whip(bb, ha, ip, default=0.0)
 
-            sgp = calculate_player_sgp(pd.Series(player_dict))
+            sgp = calculate_player_sgp(pd.Series(player_dict), denoms=denoms)
             key = f"{norm_name}::{player_type}"
             sgp_list.append((key, sgp))
 

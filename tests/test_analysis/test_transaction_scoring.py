@@ -17,6 +17,8 @@ from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import Roster, RosterEntry
 from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.models.team import Team
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.utils.constants import ALL_CATEGORIES
 from fantasy_baseball.utils.name_utils import normalize_name
 
 SEASON_START = date(2026, 3, 27)
@@ -323,6 +325,72 @@ class TestSoloAdd:
             team_sds=None,
         )
         assert result["delta_roto"] == 0.0
+
+
+# ---------------------------------------------------------------------------
+# League SGP-denominator overrides reach the drop-candidate ranking
+# ---------------------------------------------------------------------------
+
+
+class TestDenomOverridesFlowThrough:
+    """``denoms`` must reach ``_worst_at_position``'s SGP ranking.
+
+    The solo-add counterfactual drops the WORST same-position teammate,
+    ranked by ``calculate_player_sgp`` -- so a league SB-denominator
+    override must be able to flip which teammate is picked (Speedy vs
+    Slugger below), which changes the displayed delta_roto.
+    """
+
+    def _score(self, denoms):
+        hitters = _df(
+            [
+                _hitter_row("Star Added", r=50, hr=10, rbi=60, sb=10),
+                # Default denoms: Slugger (40/20 + 40/9) ranks BELOW Speedy
+                # (70/20 + 50/8) -> Slugger is the counterfactual drop.
+                # SB denom -> 10000 zeroes Speedy's SB edge -> Speedy drops.
+                _hitter_row("Speedy", r=70, hr=0, rbi=60, sb=50),
+                _hitter_row("Slugger", r=40, hr=40, rbi=60, sb=0),
+            ]
+        )
+        pitchers = _df([])
+        standings = _projected_standings({"Team A": _baseline_stats(), "Team B": _baseline_stats()})
+        league = _league_with_roster(
+            "Team A",
+            [("Speedy", [Position.OF]), ("Slugger", [Position.OF])],
+        )
+        # Fractional ERoto scoring so distinct counterfactual drops give
+        # distinct deltas (integer rank roto can mask the flip via ties).
+        team_sds = {t: {c: 5.0 for c in ALL_CATEGORIES} for t in ("Team A", "Team B")}
+        txn = {
+            "team": "Team A",
+            "type": "add",
+            "timestamp": TXN_TS,
+            "transaction_id": "a1",
+            "add_name": "Star Added",
+            "add_positions": "OF",
+            "drop_name": None,
+            "drop_positions": None,
+        }
+        return score_transaction(
+            league,
+            txn,
+            standings,
+            hitters,
+            pitchers,
+            SEASON_START,
+            SEASON_END,
+            team_sds=team_sds,
+            denoms=denoms,
+        )
+
+    def test_unset_denoms_match_default_denominators(self):
+        # Zero behavior change when no overrides are configured.
+        assert self._score(None) == self._score(get_sgp_denominators())
+
+    def test_sb_override_flips_the_drop_candidate(self):
+        default = self._score(None)
+        overridden = self._score(get_sgp_denominators({"SB": 10000.0}))
+        assert default["delta_roto"] != overridden["delta_roto"]
 
 
 # ---------------------------------------------------------------------------

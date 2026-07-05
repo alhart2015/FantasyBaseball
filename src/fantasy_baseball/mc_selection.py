@@ -96,6 +96,7 @@ def run_selection_attribution(
     seed: int,
     eos_baseline: dict | None = None,
     team_sds: dict | None = None,
+    denoms: dict[Category, float] | None = None,
 ) -> tuple[
     dict[str, dict[str, dict[str, float]]],
     dict[str, dict[str, tuple[float, float, float]]] | None,
@@ -117,7 +118,8 @@ def run_selection_attribution(
     to build per-team ``LeagueContext`` + ``EffectiveRoster``. When that context is
     absent (e.g. a slot-less synthetic test), the ``new_engine`` arm is SKIPPED and
     the result contains only the first three arms -- the diagnostic does not crash.
-    All arms share one seed.
+    All arms share one seed. ``denoms`` (resolved league SGP denominators,
+    ``None`` -> defaults) feeds the new_engine arm's bench per_game_value scoring.
 
     Returns a 2-tuple ``(arm_medians, sd_calibration | None)``. The calibration is
     computed inside this function from the raw new_engine ``batch`` (before it is
@@ -152,7 +154,7 @@ def run_selection_attribution(
     sd_calibration: dict[str, dict[str, tuple[float, float, float]]] | None = None
     if eos_baseline is not None and team_sds is not None:
         effective_rosters = build_effective_rosters(
-            team_rosters, eos_baseline, team_sds, fraction_remaining
+            team_rosters, eos_baseline, team_sds, fraction_remaining, denoms
         )
         rng = np.random.default_rng(seed)
         batch = simulate_remaining_season_batch(

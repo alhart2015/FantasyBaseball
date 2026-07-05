@@ -6,7 +6,7 @@ import pandas as pd
 
 from fantasy_baseball.data.db import get_blended_projections, get_positions
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import (
     calculate_replacement_rates,
@@ -25,13 +25,16 @@ logger = logging.getLogger(__name__)
 
 def build_draft_board(
     conn,
+    sgp_overrides: SgpOverrides | None = None,
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
 ) -> pd.DataFrame:
     """Build a ranked draft board from projections and position data in SQLite."""
     hitters, pitchers = get_blended_projections(conn)
     positions = get_positions(conn)
-    board, _scale = build_board_from_frames(hitters, pitchers, positions, roster_slots, num_teams)
+    board, _scale = build_board_from_frames(
+        hitters, pitchers, positions, roster_slots, num_teams, sgp_overrides=sgp_overrides
+    )
     return board
 
 
@@ -41,6 +44,7 @@ def build_board_from_frames(
     positions: dict[str, list[str]],
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
+    sgp_overrides: SgpOverrides | None = None,
     team_ab: int = DEFAULT_TEAM_AB,
     team_ip: int = DEFAULT_TEAM_IP,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
@@ -72,7 +76,7 @@ def build_board_from_frames(
     hitters = _attach_positions(hitters, norm_positions, default_type=PlayerType.HITTER)
     pitchers = _attach_positions(pitchers, norm_positions, default_type=PlayerType.PITCHER)
 
-    denoms = get_sgp_denominators()
+    denoms = get_sgp_denominators(sgp_overrides)
     pool = pd.concat([hitters, pitchers], ignore_index=True)
 
     # Two-pass SGP: first with defaults (for ordering), then with
@@ -147,6 +151,7 @@ def rebuild_board(config_path: Path, board_path: Path) -> int:
     try:
         board = build_draft_board(
             conn=conn,
+            sgp_overrides=config.sgp_overrides,
             roster_slots=config.roster_slots or None,
             num_teams=config.num_teams,
         )

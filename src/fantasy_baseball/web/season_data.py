@@ -452,6 +452,7 @@ def build_opponent_lineup(
     pitchers_proj: "pd.DataFrame",
     rest_of_season_hitters: "pd.DataFrame",
     rest_of_season_pitchers: "pd.DataFrame",
+    denoms: dict[Category, float] | None = None,
 ) -> dict:
     """Build a fully enriched opponent lineup (projections, pace, SGP).
 
@@ -462,6 +463,9 @@ def build_opponent_lineup(
         pitchers_proj: Blended pitcher projections (with _name_norm column).
         rest_of_season_hitters: ROS hitter projections (may be empty DataFrame).
         rest_of_season_pitchers: ROS pitcher projections (may be empty DataFrame).
+        denoms: League SGP denominators for the per-player SGP column;
+            None keeps code defaults. Must match the basis the user lineup
+            uses so the two columns stay comparable.
 
     Returns:
         Dict with "hitters" and "pitchers" lists, each entry containing
@@ -526,7 +530,7 @@ def build_opponent_lineup(
         rest_of_season_entry = rest_of_season_lookup.get(norm)
         if rest_of_season_entry and rest_of_season_entry.rest_of_season:
             ros_stats = rest_of_season_entry.rest_of_season
-            entry["sgp"] = ros_stats.compute_sgp()
+            entry["sgp"] = ros_stats.compute_sgp(denoms)
             ros_keys = (
                 ["r", "hr", "rbi", "sb", "avg"]
                 if player.player_type == PlayerType.HITTER
@@ -934,8 +938,19 @@ def coerce_basis(raw: str | None) -> str:
     return raw if raw in VALID_BASES else DEFAULT_BASIS
 
 
-def format_lineup_for_display(roster: list[dict], optimal: dict | None, basis: str = "ros") -> dict:
-    """Format roster + optimizer output for the lineup template."""
+def format_lineup_for_display(
+    roster: list[dict],
+    optimal: dict | None,
+    basis: str = "ros",
+    denoms: dict[Category, float] | None = None,
+) -> dict:
+    """Format roster + optimizer output for the lineup template.
+
+    ``denoms``: league SGP denominators for the display SGP column; None
+    keeps code defaults. Cached ``sgp`` values on the roster rows are
+    trusted as-is (they were written by the refresh pipeline on the same
+    league-config basis).
+    """
     from fantasy_baseball.analysis.pace import compute_overall_pace
     from fantasy_baseball.models.player import Player
 
@@ -973,7 +988,7 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None, basis: s
             ros_sgp = (
                 player.rest_of_season.sgp
                 if player.rest_of_season.sgp is not None
-                else player.rest_of_season.compute_sgp()
+                else player.rest_of_season.compute_sgp(denoms)
             )
 
         entry = {
@@ -1004,8 +1019,8 @@ def format_lineup_for_display(roster: list[dict], optimal: dict | None, basis: s
             player.full_season_projection, player.rest_of_season, player.player_type
         )
 
-        sgp_total = full_stats.compute_sgp() if full_stats is not None else None
-        sgp_ytd = ytd_stats.compute_sgp() if ytd_stats is not None else 0.0
+        sgp_total = full_stats.compute_sgp(denoms) if full_stats is not None else None
+        sgp_ytd = ytd_stats.compute_sgp(denoms) if ytd_stats is not None else 0.0
 
         basis_choice = {
             "ros": (ros_stats, ros_sgp, player.rank.rest_of_season),

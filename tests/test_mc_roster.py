@@ -3,10 +3,11 @@ from fantasy_baseball.models.player import HitterStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.standings import CategoryStats
 from fantasy_baseball.scoring import LeagueContext
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import ALL_CATEGORIES
 
 
-def _h(name, slot, pid, r=80, g=150, pa=600):
+def _h(name, slot, pid, r=80, g=150, pa=600, hr=20, sb=5):
     return Player(
         name=name,
         player_type=PlayerType.HITTER,
@@ -16,9 +17,9 @@ def _h(name, slot, pid, r=80, g=150, pa=600):
         rest_of_season=HitterStats.from_dict(
             {
                 "r": r,
-                "hr": 20,
+                "hr": hr,
                 "rbi": 70,
-                "sb": 5,
+                "sb": sb,
                 "h": 150,
                 "ab": 550,
                 "pa": pa,
@@ -51,6 +52,35 @@ def test_bench_body_value_and_games():
     assert bench.g_ros_full == 120  # rest_of_season.g
     assert bench.per_game_value > 0  # sgp / g_ros_full, guarded
     assert Position.OF in bench.eligible_positions
+
+
+def test_bench_per_game_value_scored_on_league_denoms():
+    # per_game_value ordinally selects which bench body backfills injured
+    # slots (mc_fill sorts on it), so it must be scored on the league's
+    # denominators: a large SB-denominator override flips the ordering of
+    # an SB-heavy vs an HR-heavy bench bat.
+    roster = [
+        _h("Starter", Position.OF, "1"),
+        _h("Speedy", Position.BN, "2", hr=0, sb=50),
+        _h("Slugger", Position.BN, "3", hr=30, sb=0),
+    ]
+
+    def _bench_order(denoms):
+        eff = build_effective_roster(roster, _ctx(), denoms)
+        ranked = sorted(eff.bench, key=lambda b: b.per_game_value, reverse=True)
+        return [b.player.name for b in ranked]
+
+    assert _bench_order(None) == ["Speedy", "Slugger"]
+    assert _bench_order(get_sgp_denominators({"SB": 10000.0})) == ["Slugger", "Speedy"]
+
+
+def test_bench_per_game_value_unchanged_without_overrides():
+    # denoms=None (current callers without config) must match the explicit
+    # no-override resolution -- zero behavior change when nothing is set.
+    roster = [_h("Starter", Position.OF, "1"), _h("BenchBat", Position.BN, "2")]
+    default = build_effective_roster(roster, _ctx())
+    explicit = build_effective_roster(roster, _ctx(), get_sgp_denominators())
+    assert [b.per_game_value for b in default.bench] == [b.per_game_value for b in explicit.bench]
 
 
 def test_missing_g_derives_from_pa():

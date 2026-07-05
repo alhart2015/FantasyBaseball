@@ -261,12 +261,15 @@ def _lookup_player(
     positions: set[str],
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
+    denoms: dict[Category, float] | None,
 ) -> tuple[dict[str, float] | None, PlayerType | None, float]:
     """Find a player's ROS stats in the projection DataFrames.
 
     Checks hitter DF if the player has hitter-eligible positions, pitcher
     DF if pitcher-eligible. Returns ``(ros_dict, player_type, sgp)`` or
-    ``(None, None, 0.0)`` when the name isn't in either DF.
+    ``(None, None, 0.0)`` when the name isn't in either DF. ``denoms``
+    are the resolved league SGP denominators used for the sgp component
+    (``None`` falls back to the library defaults).
     """
     if not name:
         return None, None, 0.0
@@ -276,13 +279,13 @@ def _lookup_player(
         matches = hitters_proj[hitters_proj["_name_norm"] == norm]
         if not matches.empty:
             h_stats = HitterStats.from_dict(matches.iloc[0].to_dict())
-            return _hitter_ros(h_stats), PlayerType.HITTER, calculate_player_sgp(h_stats)
+            return _hitter_ros(h_stats), PlayerType.HITTER, calculate_player_sgp(h_stats, denoms)
 
     if _is_pitcher(positions) and not pitchers_proj.empty:
         matches = pitchers_proj[pitchers_proj["_name_norm"] == norm]
         if not matches.empty:
             p_stats = PitcherStats.from_dict(matches.iloc[0].to_dict())
-            return _pitcher_ros(p_stats), PlayerType.PITCHER, calculate_player_sgp(p_stats)
+            return _pitcher_ros(p_stats), PlayerType.PITCHER, calculate_player_sgp(p_stats, denoms)
 
     return None, None, 0.0
 
@@ -292,12 +295,14 @@ def _worst_at_position(
     add_positions: set[str],
     hitters_proj: pd.DataFrame,
     pitchers_proj: pd.DataFrame,
+    denoms: dict[Category, float] | None,
 ) -> dict[str, float] | None:
     """ROS stats of the worst rostered player with overlapping positions.
 
-    Ranks candidates by ``calculate_player_sgp`` and picks the lowest.
-    Returns ``None`` when the roster has no same-position candidate or
-    when none of them are in the projections.
+    Ranks candidates by ``calculate_player_sgp`` (on ``denoms`` -- the
+    resolved league SGP denominators, ``None`` for library defaults) and
+    picks the lowest. Returns ``None`` when the roster has no
+    same-position candidate or when none of them are in the projections.
     """
     if roster is None or not add_positions:
         return None
@@ -313,6 +318,7 @@ def _worst_at_position(
             entry_positions,
             hitters_proj,
             pitchers_proj,
+            denoms,
         )
         if ros is None:
             continue
@@ -370,6 +376,7 @@ def score_transaction(
     *,
     partner: dict[str, Any] | None = None,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
+    denoms: dict[Category, float] | None = None,
 ) -> dict[str, float]:
     """Compute ΔRoto for a transaction.
 
@@ -402,6 +409,10 @@ def score_transaction(
             for integer rank-based roto. Required keyword — no default,
             so callers can't silently get integer roto by forgetting the
             argument.
+        denoms: resolved league SGP denominators (e.g. from
+            ``get_sgp_denominators(config.sgp_overrides)``) used to rank
+            worst-at-position drop candidates; ``None`` falls back to the
+            library defaults.
 
     Returns:
         ``{"delta_roto": float}``.
@@ -426,12 +437,14 @@ def score_transaction(
             drop_positions,
             hitters_proj,
             pitchers_proj,
+            denoms,
         )
         gains_ros, _, _ = _lookup_player(
             add_name,
             add_positions,
             hitters_proj,
             pitchers_proj,
+            denoms,
         )
         if loses_ros is None:
             loses_ros = (
@@ -454,6 +467,7 @@ def score_transaction(
             add_positions,
             hitters_proj,
             pitchers_proj,
+            denoms,
         )
         if gains_ros is None:
             return {"delta_roto": 0.0}
@@ -468,6 +482,7 @@ def score_transaction(
             add_positions,
             hitters_proj,
             pitchers_proj,
+            denoms,
         )
         if loses_ros is None:
             loses_ros = (
@@ -488,6 +503,7 @@ def score_transaction(
             drop_positions,
             hitters_proj,
             pitchers_proj,
+            denoms,
         )
         if loses_ros is None:
             return {"delta_roto": 0.0}
@@ -512,12 +528,14 @@ def score_transaction(
         drop_positions,
         hitters_proj,
         pitchers_proj,
+        denoms,
     )
     gains_ros, _, _ = _lookup_player(
         add_name,
         add_positions,
         hitters_proj,
         pitchers_proj,
+        denoms,
     )
     if loses_ros is None:
         loses_ros = (

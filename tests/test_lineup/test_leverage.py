@@ -879,3 +879,19 @@ class TestCalculateLeverageWithProjected:
         )
         for cat in leverage_old:
             assert leverage_old[cat] == pytest.approx(leverage_new[cat])
+
+
+class TestSgpOverridesFlowThrough:
+    """Prove config-sourced sgp_overrides reach the denominator math."""
+
+    def test_override_widens_sb_reach_and_raises_leverage(self):
+        standings = _make_standings()
+        default = calculate_leverage(standings, "User Team", season_progress=1.0)
+        # SB denom 100 puts every team within one denominator of the user
+        # (default 8 reaches nobody from the 25/10 gaps in the fixture), so
+        # SB leverage must jump if the override actually flows through.
+        overridden = calculate_leverage(
+            standings, "User Team", season_progress=1.0, sgp_overrides={"SB": 100.0}
+        )
+        assert overridden["SB"] > default["SB"]
+        assert overridden != default

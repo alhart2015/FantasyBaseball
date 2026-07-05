@@ -1522,6 +1522,7 @@ class _IlFakeCfg:
         "BN": 1,
         "IL": 1,
     }
+    sgp_overrides: ClassVar[dict[str, float]] = {}
 
 
 def _patch_il_config(monkeypatch) -> None:

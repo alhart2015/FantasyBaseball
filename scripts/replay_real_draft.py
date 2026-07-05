@@ -9,6 +9,14 @@ we reconstruct the exact board state (every team's actual picks so far) and run
 each mode through the same recommend() seam the dashboard/sim use.
 
   python scripts/replay_real_draft.py            # immediate vs vopn vs finalslate
+
+Valuation basis: CURRENT league calibration (sgp_denominators overrides +
+DEFAULT_TEAM_IP from utils/constants), threaded via build_board_and_context.
+Deliberate 2026-07-05 decision: these retro tools answer "what was the right
+call given the BEST calibration we now have", unlike the draft-value tab,
+which stays frozen at draft-day scale (5500 AB / 1450 IP, default denoms) to
+measure picks against draft-day expectations. The two answer different
+questions and are expected to disagree on pitcher/high-AVG grades.
 """
 
 import json

@@ -226,6 +226,7 @@ def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
         roster_slots=ctx.config.roster_slots,
         num_teams=ctx.config.num_teams,
         scoring_mode=ctx.scoring_mode,
+        sgp_overrides=ctx.config.sgp_overrides,
     )
     # Build a pid -> sv lookup so closer-family overlays can inspect SV
     # projections in var/vona mode (per_category["SV"] is empty without this).

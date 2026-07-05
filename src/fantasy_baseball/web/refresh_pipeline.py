@@ -1020,6 +1020,7 @@ class RefreshRun:
             self.standings,
             self.config.team_name,
             projected_standings=self.projected_standings,
+            sgp_overrides=self.config.sgp_overrides,
         )
 
     # --- Step 6: Match roster players to projections ---
@@ -1077,9 +1078,8 @@ class RefreshRun:
 
         # Attach pace data to each roster player (pace compares actuals vs preseason)
         from fantasy_baseball.analysis.pace import attach_pace_to_roster
-        from fantasy_baseball.sgp.denominators import get_sgp_denominators
 
-        sgp_denoms = get_sgp_denominators()
+        sgp_denoms = self._league_denoms()
         attach_pace_to_roster(
             self.roster_players,
             self.hitter_logs,
@@ -1087,6 +1087,17 @@ class RefreshRun:
             self.preseason_lookup,
             sgp_denoms,
         )
+
+    def _league_denoms(self) -> dict[Category, float]:
+        """League-calibrated SGP denominators, resolved from config.
+
+        The refresh sibling of ``season_routes._league_denoms`` -- one
+        resolution point so every step scores on the same scale.
+        """
+        from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+        assert self.config is not None
+        return get_sgp_denominators(self.config.sgp_overrides)
 
     # --- Step 6d: Compute SGP rankings ---
     def _compute_rankings(self):
@@ -1098,6 +1109,7 @@ class RefreshRun:
             lookup_rank,
         )
 
+        assert self.config is not None
         assert self.hitters_proj is not None
         assert self.pitchers_proj is not None
         assert self.preseason_hitters is not None
@@ -1106,15 +1118,27 @@ class RefreshRun:
         assert self.pitcher_logs is not None
         assert self.roster_players is not None
 
-        rest_of_season_ranks = compute_sgp_rankings(self.hitters_proj, self.pitchers_proj)
-        preseason_ranks = compute_sgp_rankings(self.preseason_hitters, self.preseason_pitchers)
-        current_ranks = compute_rankings_from_game_logs(self.hitter_logs, self.pitcher_logs)
+        # Resolve league denominators once so every ranking basis (ROS,
+        # preseason, current, total) is scored on the same scale.
+        sgp_denoms = self._league_denoms()
+
+        rest_of_season_ranks = compute_sgp_rankings(
+            self.hitters_proj, self.pitchers_proj, denoms=sgp_denoms
+        )
+        preseason_ranks = compute_sgp_rankings(
+            self.preseason_hitters, self.preseason_pitchers, denoms=sgp_denoms
+        )
+        current_ranks = compute_rankings_from_game_logs(
+            self.hitter_logs, self.pitcher_logs, denoms=sgp_denoms
+        )
 
         # Full-season (YTD + ROS) leaguewide ranking. The full-season pools are
         # already derived earlier in the pipeline; if they are absent (e.g. no
         # ROS projections), fall back to an empty ranking so rank.total is None.
         if self.full_hitters_proj is not None and self.full_pitchers_proj is not None:
-            total_ranks = compute_sgp_rankings(self.full_hitters_proj, self.full_pitchers_proj)
+            total_ranks = compute_sgp_rankings(
+                self.full_hitters_proj, self.full_pitchers_proj, denoms=sgp_denoms
+            )
         else:
             total_ranks = {}
 
@@ -1202,6 +1226,7 @@ class RefreshRun:
     def _compute_moves(self):
         from fantasy_baseball.web.refresh_steps import compute_lineup_moves
 
+        assert self.config is not None
         assert self.optimal_hitters is not None
         assert self.optimal_pitchers_starters is not None
         assert self.optimal_pitchers_bench is not None
@@ -1213,6 +1238,7 @@ class RefreshRun:
             optimal_pitchers=self.optimal_pitchers_starters,
             pitcher_bench=self.optimal_pitchers_bench,
             roster_players=self.roster_players,
+            denoms=self._league_denoms(),
         )
 
         optimal_data = {
@@ -1301,6 +1327,7 @@ class RefreshRun:
             team_sds=self.team_sds,
             optimal_hitters=self.optimal_hitters,
             optimal_pitchers=self.optimal_pitchers_starters,
+            sgp_overrides=self.config.sgp_overrides,
         )
         write_cache(CacheKey.ROSTER_AUDIT, [e.to_dict() for e in audit_results])
         upgrades = sum(1 for e in audit_results if e.gap > 0)
@@ -1348,6 +1375,7 @@ class RefreshRun:
     def _compute_per_team_leverage(self):
         from fantasy_baseball.lineup.leverage import calculate_leverage
 
+        assert self.config is not None
         assert self.standings is not None
 
         self._progress("Computing leverage...")
@@ -1357,6 +1385,7 @@ class RefreshRun:
                 self.standings,
                 entry.team_name,
                 projected_standings=self.projected_standings,
+                sgp_overrides=self.config.sgp_overrides,
             )
         write_cache(CacheKey.LEVERAGE, leverage_by_team, required=False)
 
@@ -1419,6 +1448,7 @@ class RefreshRun:
                     seed=42,
                     eos_baseline=self.eos_baseline,
                     team_sds=self.team_sds,
+                    denoms=self._league_denoms(),
                 )
                 header = f"seed=42 n_iter=1000 fraction_remaining={self.fraction_remaining:.4f}\n"
                 with open("phase0_attribution.txt", "w", encoding="ascii", errors="replace") as fh:
@@ -1444,6 +1474,7 @@ class RefreshRun:
                     self.eos_baseline,
                     self.team_sds,
                     self.fraction_remaining,
+                    denoms=self._league_denoms(),
                 )
 
             if rest_of_season_mc_rosters:
@@ -1566,6 +1597,7 @@ class RefreshRun:
             )
             season_start = date.fromisoformat(self.config.season_start)
             season_end = date.fromisoformat(self.config.season_end)
+            sgp_denoms = self._league_denoms()
 
             for txn in new_txns:
                 entry = by_id[txn["transaction_id"]]
@@ -1581,6 +1613,7 @@ class RefreshRun:
                     season_end,
                     partner=partner,
                     team_sds=self.team_sds,
+                    denoms=sgp_denoms,
                 )
                 entry.update(scores)
 

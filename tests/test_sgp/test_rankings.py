@@ -112,6 +112,26 @@ class TestComputeSgpRankings:
         rankings = compute_sgp_rankings(pd.DataFrame(), pd.DataFrame())
         assert rankings == {}
 
+    def test_denoms_override_reaches_ranking_math(self):
+        """League denominator overrides must change the ranking basis."""
+        from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+        hitters, pitchers = self._make_hitters_df(), self._make_pitchers_df()
+        default = compute_sgp_rankings(hitters, pitchers)
+        assert (
+            default[rank_key("Aaron Judge", "hitter")]
+            < default[rank_key("Marcus Semien", "hitter")]
+        )
+        # 0.1 SB per standings place makes SB dominate: Semien (12 SB)
+        # overtakes Judge (5 SB) despite Judge's power edge.
+        overridden = compute_sgp_rankings(
+            hitters, pitchers, denoms=get_sgp_denominators({"SB": 0.1})
+        )
+        assert (
+            overridden[rank_key("Marcus Semien", "hitter")]
+            < overridden[rank_key("Aaron Judge", "hitter")]
+        )
+
     def test_same_name_hitter_and_pitcher_get_separate_ranks(self):
         """Juan Soto the hitter and Juan Soto the pitcher get independent ranks."""
         hitters = pd.DataFrame(
@@ -217,6 +237,26 @@ class TestRankingsFromGameLogs:
         from fantasy_baseball.sgp.rankings import compute_rankings_from_game_logs
 
         assert compute_rankings_from_game_logs({}, {}) == {}
+
+    def test_denoms_override_reaches_game_log_ranking_math(self):
+        from fantasy_baseball.sgp.denominators import get_sgp_denominators
+        from fantasy_baseball.sgp.rankings import compute_rankings_from_game_logs
+
+        hitter_logs = {
+            "aaron judge": {"pa": 100, "ab": 80, "h": 25, "r": 15, "hr": 8, "rbi": 20, "sb": 1},
+            "juan soto": {"pa": 110, "ab": 90, "h": 30, "r": 18, "hr": 6, "rbi": 15, "sb": 3},
+        }
+        # SB-dominated denominators rank Soto first (3 SB vs Judge's 1);
+        # HR-dominated denominators rank Judge first (8 HR vs Soto's 6).
+        # Together they prove the denoms actually reach the SGP math.
+        sb_ranked = compute_rankings_from_game_logs(
+            hitter_logs, {}, denoms=get_sgp_denominators({"SB": 0.01})
+        )
+        assert sb_ranked["juan soto::hitter"] == 1
+        hr_ranked = compute_rankings_from_game_logs(
+            hitter_logs, {}, denoms=get_sgp_denominators({"HR": 0.01})
+        )
+        assert hr_ranked["aaron judge::hitter"] == 1
 
 
 class TestBuildRankingsLookup:

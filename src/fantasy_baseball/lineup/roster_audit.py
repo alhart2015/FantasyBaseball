@@ -17,7 +17,7 @@ from fantasy_baseball.lineup.optimizer import (
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
 from fantasy_baseball.models.standings import ProjectedStandings
 from fantasy_baseball.scoring import score_roto_dict
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.trades.evaluate import (
     apply_swap_delta,
@@ -211,6 +211,7 @@ def audit_roster(
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     optimal_hitters: list[HitterAssignment] | None = None,
     optimal_pitchers: list[PitcherStarter] | None = None,
+    sgp_overrides: SgpOverrides | None = None,
 ) -> list[AuditEntry]:
     """Evaluate every roster slot against the best available FA.
 
@@ -232,6 +233,10 @@ def audit_roster(
     ``team_sds`` is threaded into ``compute_delta_roto`` so within-
     uncertainty swaps produce fractional deltas instead of full ±1.0
     rank flips. ``None`` preserves exact-rank semantics.
+
+    ``sgp_overrides`` (from ``config.sgp_overrides``) replaces individual
+    SGP denominators with league-specific values; None keeps the code
+    defaults.
     """
     if not roster:
         return []
@@ -240,7 +245,7 @@ def audit_roster(
     il_players = [p for p in roster if p.is_on_il()]
     active_fas = [fa for fa in free_agents if not fa.is_on_il()]
 
-    denoms = get_sgp_denominators()
+    denoms = get_sgp_denominators(sgp_overrides)
 
     # Slot assignments come from the already-solved ERoto lineup. Compute
     # here only if the caller didn't pass them.
