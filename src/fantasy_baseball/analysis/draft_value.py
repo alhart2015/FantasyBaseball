@@ -22,6 +22,15 @@ from fantasy_baseball.data.redis_store import (
 )
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_board_from_frames
+
+# Team volumes FROZEN at what the 2026 draft-day board was built with.
+# The live DEFAULT_TEAM_AB/IP constants recalibrate over time (1450 -> 1300
+# on 2026-07-05); this module's whole contract is reproducing the DRAFT-DAY
+# scale so historical par curves and per-pick values stay comparable, the
+# same reason it deliberately ignores sgp_denominators overrides. Do not
+# point these at the live defaults.
+_DRAFT_DAY_TEAM_AB = 5500
+_DRAFT_DAY_TEAM_IP = 1450
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.rankings import rank_key
 from fantasy_baseball.sgp.var import calculate_var
@@ -73,6 +82,8 @@ def reproduce_draft_day_board() -> tuple[pd.DataFrame, ScaleInputs]:
         positions,
         roster_slots=config.roster_slots or None,
         num_teams=config.num_teams,
+        team_ab=_DRAFT_DAY_TEAM_AB,
+        team_ip=_DRAFT_DAY_TEAM_IP,
     )
     scale = ScaleInputs(**scale_d)
     return board, scale
