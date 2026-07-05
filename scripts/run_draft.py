@@ -853,10 +853,10 @@ def _get_player_input(
     If *prefilled_input* is provided, it's used as the first input line
     instead of prompting.
 
-    *config* (league config) and *num_teams*/*full_board* are only used by
-    the digit-selection fallback (when *current_recs* is None): the
-    fallback derives sgp_overrides/roster_slots/scoring_mode from *config*
-    so it mirrors the main-loop ``get_recommendations`` calls
+    *config* (league config) and *num_teams*/*full_board* are only used
+    by the digit-selection fallback (when *current_recs* is None): the
+    fallback derives sgp_overrides/roster_slots/scoring_mode from
+    *config* so it mirrors the main-loop ``get_recommendations`` calls
     exactly. *full_board* keeps
     keepers visible to ``get_filled_positions`` (the draftable *board* has
     them removed).

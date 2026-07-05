@@ -1088,7 +1088,7 @@ class RefreshRun:
             sgp_denoms,
         )
 
-    def _league_denoms(self):
+    def _league_denoms(self) -> dict[Category, float]:
         """League-calibrated SGP denominators, resolved from config.
 
         The refresh sibling of ``season_routes._league_denoms`` -- one
