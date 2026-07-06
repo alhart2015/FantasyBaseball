@@ -59,11 +59,17 @@ def compute_sgp_rankings(
     When two players share a name and type (e.g., two Mason Miller pitchers),
     the fg_id keys are distinct but the name key gets the better rank.
 
+    A single fg_id can appear in BOTH pools — a two-way player, or a
+    position player charged with mop-up innings — so the fg_id key also
+    keeps the better (lower) of its two ranks. Without this, the pitcher
+    pass overwrites a real hitter rank with a junk 1-IP line (e.g. a
+    catcher's fg_id would resolve to rank ~6000 instead of his real rank).
+
     ``denoms``: league-specific SGP denominators (from
     ``get_sgp_denominators(config.sgp_overrides)``). ``None`` keeps the
     code defaults.
     """
-    rankings = {}
+    rankings: dict[str, int] = {}
 
     for df, ptype in [(hitters, PlayerType.HITTER), (pitchers, PlayerType.PITCHER)]:
         if df.empty:
@@ -79,8 +85,9 @@ def compute_sgp_rankings(
         sgp_list.sort(key=lambda x: x[2], reverse=True)
 
         for rank_num, (fg_id, name_key, _sgp) in enumerate(sgp_list, start=1):
-            # fg_id key — always unique
-            if fg_id:
+            # fg_id key — keep the better (lower) rank on cross-pool collision
+            # (same policy as the name key below).
+            if fg_id and (fg_id not in rankings or rank_num < rankings[fg_id]):
                 rankings[fg_id] = rank_num
             # name key — keep the better (lower) rank on collision
             if name_key not in rankings or rank_num < rankings[name_key]:

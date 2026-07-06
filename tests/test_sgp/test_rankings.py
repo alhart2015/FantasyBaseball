@@ -215,6 +215,84 @@ class TestComputeSgpRankings:
         # Name key gets the better (lower) rank
         assert rankings[rank_key("Mason Miller", "pitcher")] == rankings["31757"]
 
+    def test_shared_fg_id_across_pools_keeps_better_rank(self):
+        """A two-way player (one fg_id in both pools) keeps his better rank.
+
+        Regression: the pitcher pass used to overwrite the fg_id key
+        unconditionally, so a position player's mop-up-innings line (or a
+        two-way star's pitching line) buried his real hitter rank.
+        """
+        two_way_id = "660271"
+        hitters = pd.DataFrame(
+            [
+                {
+                    "name": "Shohei Ohtani",
+                    "player_type": "hitter",
+                    "fg_id": two_way_id,
+                    "r": 130,
+                    "hr": 50,
+                    "rbi": 120,
+                    "sb": 20,
+                    "h": 175,
+                    "ab": 560,
+                    "avg": 0.313,
+                    "pa": 660,
+                },
+                {
+                    "name": "Weak Bat",
+                    "player_type": "hitter",
+                    "fg_id": "111",
+                    "r": 40,
+                    "hr": 5,
+                    "rbi": 35,
+                    "sb": 1,
+                    "h": 100,
+                    "ab": 480,
+                    "avg": 0.208,
+                    "pa": 520,
+                },
+            ]
+        )
+        pitchers = pd.DataFrame(
+            [
+                {
+                    "name": "Ace Pitcher",
+                    "player_type": "pitcher",
+                    "fg_id": "222",
+                    "w": 15,
+                    "k": 220,
+                    "sv": 0,
+                    "ip": 200,
+                    "era": 2.80,
+                    "whip": 0.95,
+                    "er": 62,
+                    "bb": 40,
+                    "h_allowed": 150,
+                },
+                {
+                    "name": "Shohei Ohtani",
+                    "player_type": "pitcher",
+                    "fg_id": two_way_id,
+                    "w": 0,
+                    "k": 1,
+                    "sv": 0,
+                    "ip": 2,
+                    "era": 4.50,
+                    "whip": 1.50,
+                    "er": 1,
+                    "bb": 1,
+                    "h_allowed": 2,
+                },
+            ]
+        )
+        rankings = compute_sgp_rankings(hitters, pitchers)
+        hitter_rank = rankings[rank_key("Shohei Ohtani", "hitter")]
+        pitcher_rank = rankings[rank_key("Shohei Ohtani", "pitcher")]
+        assert hitter_rank == 1  # elite bat leads the hitter pool
+        assert pitcher_rank > hitter_rank  # junk 1-IP line ranks low among pitchers
+        # The bare fg_id keeps the BETTER (hitter) rank, not the pitcher overwrite.
+        assert rankings[two_way_id] == hitter_rank
+
 
 class TestRankingsFromGameLogs:
     def test_ranks_from_game_log_totals(self):
