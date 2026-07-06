@@ -1,8 +1,11 @@
 """Compute ordinal SGP rankings across the full player pool.
 
-Rankings are keyed by ``fg_id`` (primary, unique) with a secondary
-``name::player_type`` index for lookups that lack fg_id.
-Use ``rank_key()`` to build name-based lookup keys.
+Rankings are keyed two ways, both namespaced by pool: ``fg_id::player_type``
+(primary) and ``name::player_type`` (fallback for lookups that lack fg_id).
+Keys are pool-relative ordinals, so a player in both pools (a two-way
+player) keeps a separate rank per pool. Build keys with ``fg_key()`` /
+``rank_key()`` and read them through ``lookup_rank()``, which selects the
+right pool by player_type -- never index the dict by a bare fg_id.
 """
 
 from collections.abc import Mapping, Sequence
@@ -62,12 +65,12 @@ def compute_sgp_rankings(
     """Rank all players by unweighted SGP within hitter/pitcher pools.
 
     Returns dict with two types of keys pointing to the ranks:
-    - fg_id::player_type (e.g., "31757::pitcher") — primary
-    - name::player_type (e.g., "mason miller::pitcher") — fallback
+    - fg_id::player_type (e.g., "31757::pitcher") -- primary
+    - name::player_type (e.g., "mason miller::pitcher") -- fallback
 
     Both keys are namespaced by pool. A single fg_id can appear in BOTH
-    pools — a two-way player, or a position player charged with mop-up
-    innings — and each pool's rank is a pool-relative ordinal (not
+    pools -- a two-way player, or a position player charged with mop-up
+    innings -- and each pool's rank is a pool-relative ordinal (not
     comparable across the differently-sized pools), so they are stored
     separately and ``lookup_rank`` selects by the caller's player_type.
     An un-namespaced fg_id key would let the pitcher pass overwrite a real
@@ -98,11 +101,14 @@ def compute_sgp_rankings(
         sgp_list.sort(key=lambda x: x[2], reverse=True)
 
         for rank_num, (fg_id, name_key, _sgp) in enumerate(sgp_list, start=1):
-            # fg_id key namespaced by pool: a player in both pools keeps a
+            # fg_id key namespaced by pool so a two-way player keeps a
             # separate rank per pool (lookup_rank picks by player_type).
+            # Written unconditionally: fg_id is unique within a pool (the
+            # blend keys on it), so there is no in-pool collision to
+            # arbitrate -- unlike the name key below, where two real
+            # players can share one normalized name and the better wins.
             if fg_id:
                 rankings[fg_key(fg_id, ptype)] = rank_num
-            # name key — keep the better (lower) rank on same-name collision
             if name_key not in rankings or rank_num < rankings[name_key]:
                 rankings[name_key] = rank_num
 
