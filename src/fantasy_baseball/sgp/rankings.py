@@ -38,7 +38,7 @@ def lookup_rank(
 ) -> dict[str, Any]:
     """Look up rank data, trying fg_id first then name::player_type fallback."""
     if fg_id:
-        result = rankings.get(str(fg_id))
+        result = rankings.get(f"{fg_id}::{player_type}")
         if result is not None:
             return result if isinstance(result, dict) else {}
     fallback = rankings.get(rank_key(name, player_type), {})
@@ -52,18 +52,22 @@ def compute_sgp_rankings(
 ) -> dict[str, int]:
     """Rank all players by unweighted SGP within hitter/pitcher pools.
 
-    Returns dict with two types of keys pointing to the same ranks:
-    - fg_id (e.g., "31757") — primary, unique per player
+    Returns dict with two types of keys pointing to the ranks:
+    - fg_id::player_type (e.g., "31757::pitcher") — primary
     - name::player_type (e.g., "mason miller::pitcher") — fallback
 
-    When two players share a name and type (e.g., two Mason Miller pitchers),
-    the fg_id keys are distinct but the name key gets the better rank.
+    Both keys are namespaced by pool. A single fg_id can appear in BOTH
+    pools — a two-way player, or a position player charged with mop-up
+    innings — and each pool's rank is a pool-relative ordinal (not
+    comparable across the differently-sized pools), so they are stored
+    separately and ``lookup_rank`` selects by the caller's player_type.
+    An un-namespaced fg_id key would let the pitcher pass overwrite a real
+    hitter rank with a junk 1-IP line (a catcher's fg_id resolving to rank
+    ~6000 instead of his real rank).
 
-    A single fg_id can appear in BOTH pools — a two-way player, or a
-    position player charged with mop-up innings — so the fg_id key also
-    keeps the better (lower) of its two ranks. Without this, the pitcher
-    pass overwrites a real hitter rank with a junk 1-IP line (e.g. a
-    catcher's fg_id would resolve to rank ~6000 instead of his real rank).
+    When two players share a name and type (e.g., two Mason Miller
+    pitchers), the fg_id keys are distinct but the name key gets the
+    better rank.
 
     ``denoms``: league-specific SGP denominators (from
     ``get_sgp_denominators(config.sgp_overrides)``). ``None`` keeps the
@@ -85,11 +89,11 @@ def compute_sgp_rankings(
         sgp_list.sort(key=lambda x: x[2], reverse=True)
 
         for rank_num, (fg_id, name_key, _sgp) in enumerate(sgp_list, start=1):
-            # fg_id key — keep the better (lower) rank on cross-pool collision
-            # (same policy as the name key below).
-            if fg_id and (fg_id not in rankings or rank_num < rankings[fg_id]):
-                rankings[fg_id] = rank_num
-            # name key — keep the better (lower) rank on collision
+            # fg_id key namespaced by pool: a player in both pools keeps a
+            # separate rank per pool (lookup_rank picks by player_type).
+            if fg_id:
+                rankings[f"{fg_id}::{ptype}"] = rank_num
+            # name key — keep the better (lower) rank on same-name collision
             if name_key not in rankings or rank_num < rankings[name_key]:
                 rankings[name_key] = rank_num
 

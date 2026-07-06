@@ -1,6 +1,11 @@
 import pandas as pd
 
-from fantasy_baseball.sgp.rankings import build_rankings_lookup, compute_sgp_rankings, rank_key
+from fantasy_baseball.sgp.rankings import (
+    build_rankings_lookup,
+    compute_sgp_rankings,
+    lookup_rank,
+    rank_key,
+)
 
 
 class TestComputeSgpRankings:
@@ -208,19 +213,21 @@ class TestComputeSgpRankings:
             ]
         )
         rankings = compute_sgp_rankings(pd.DataFrame(), pitchers)
-        # Each fg_id gets its own rank
-        assert "31757" in rankings
-        assert "sa3023658" in rankings
-        assert rankings["31757"] < rankings["sa3023658"]  # real Miller ranked higher
+        # Each fg_id gets its own (pool-namespaced) rank
+        assert "31757::pitcher" in rankings
+        assert "sa3023658::pitcher" in rankings
+        assert rankings["31757::pitcher"] < rankings["sa3023658::pitcher"]  # real Miller higher
         # Name key gets the better (lower) rank
-        assert rankings[rank_key("Mason Miller", "pitcher")] == rankings["31757"]
+        assert rankings[rank_key("Mason Miller", "pitcher")] == rankings["31757::pitcher"]
 
-    def test_shared_fg_id_across_pools_keeps_better_rank(self):
-        """A two-way player (one fg_id in both pools) keeps his better rank.
+    def test_shared_fg_id_across_pools_keeps_separate_ranks(self):
+        """A two-way player (one fg_id in both pools) keeps a rank per pool.
 
-        Regression: the pitcher pass used to overwrite the fg_id key
-        unconditionally, so a position player's mop-up-innings line (or a
-        two-way star's pitching line) buried his real hitter rank.
+        Regression: the pitcher pass used to overwrite the bare fg_id key,
+        so a position player's mop-up-innings line (or a two-way star's
+        pitching line) buried his real hitter rank. Namespacing the fg_id
+        key by pool keeps each pool-relative ordinal separate; lookup_rank
+        selects the right one by player_type.
         """
         two_way_id = "660271"
         hitters = pd.DataFrame(
@@ -290,8 +297,16 @@ class TestComputeSgpRankings:
         pitcher_rank = rankings[rank_key("Shohei Ohtani", "pitcher")]
         assert hitter_rank == 1  # elite bat leads the hitter pool
         assert pitcher_rank > hitter_rank  # junk 1-IP line ranks low among pitchers
-        # The bare fg_id keeps the BETTER (hitter) rank, not the pitcher overwrite.
-        assert rankings[two_way_id] == hitter_rank
+        # Both pool ranks survive under type-namespaced fg_id keys (no overwrite).
+        assert rankings[f"{two_way_id}::hitter"] == hitter_rank
+        assert rankings[f"{two_way_id}::pitcher"] == pitcher_rank
+
+        # Consumer path: lookup_rank resolves the pool-correct rank by type.
+        merged = build_rankings_lookup(rankings, {}, {})
+        got_hitter = lookup_rank(merged, two_way_id, "Shohei Ohtani", "hitter")
+        got_pitcher = lookup_rank(merged, two_way_id, "Shohei Ohtani", "pitcher")
+        assert got_hitter["rest_of_season"] == hitter_rank
+        assert got_pitcher["rest_of_season"] == pitcher_rank
 
 
 class TestRankingsFromGameLogs:
