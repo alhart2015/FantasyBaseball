@@ -24,6 +24,15 @@ def rank_key(name: str, player_type: str) -> str:
     return f"{normalize_name(name)}::{player_type}"
 
 
+def fg_key(fg_id: str, player_type: str) -> str:
+    """Build an fg_id-based ranking lookup key, namespaced by pool.
+
+    Keeps the writer (:func:`compute_sgp_rankings`) and reader
+    (:func:`lookup_rank`) on one format so they can't silently drift.
+    """
+    return f"{fg_id}::{player_type}"
+
+
 def rank_key_from_positions(name: str, positions: Sequence[Position | str]) -> str:
     """Build a name-based ranking lookup key, inferring player_type from positions."""
     ptype = PlayerType.PITCHER if set(positions) & PITCHER_POSITIONS else PlayerType.HITTER
@@ -38,7 +47,7 @@ def lookup_rank(
 ) -> dict[str, Any]:
     """Look up rank data, trying fg_id first then name::player_type fallback."""
     if fg_id:
-        result = rankings.get(f"{fg_id}::{player_type}")
+        result = rankings.get(fg_key(fg_id, player_type))
         if result is not None:
             return result if isinstance(result, dict) else {}
     fallback = rankings.get(rank_key(name, player_type), {})
@@ -92,7 +101,7 @@ def compute_sgp_rankings(
             # fg_id key namespaced by pool: a player in both pools keeps a
             # separate rank per pool (lookup_rank picks by player_type).
             if fg_id:
-                rankings[f"{fg_id}::{ptype}"] = rank_num
+                rankings[fg_key(fg_id, ptype)] = rank_num
             # name key — keep the better (lower) rank on same-name collision
             if name_key not in rankings or rank_num < rankings[name_key]:
                 rankings[name_key] = rank_num
