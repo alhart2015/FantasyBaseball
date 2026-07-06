@@ -1,8 +1,11 @@
 """Compute ordinal SGP rankings across the full player pool.
 
-Rankings are keyed by ``fg_id`` (primary, unique) with a secondary
-``name::player_type`` index for lookups that lack fg_id.
-Use ``rank_key()`` to build name-based lookup keys.
+Rankings are keyed two ways, both namespaced by pool: ``fg_id::player_type``
+(primary) and ``name::player_type`` (fallback for lookups that lack fg_id).
+Keys are pool-relative ordinals, so a player in both pools (a two-way
+player) keeps a separate rank per pool. Build keys with ``fg_key()`` /
+``rank_key()`` and read them through ``lookup_rank()``, which selects the
+right pool by player_type -- never index the dict by a bare fg_id.
 """
 
 from collections.abc import Mapping, Sequence
@@ -24,6 +27,15 @@ def rank_key(name: str, player_type: str) -> str:
     return f"{normalize_name(name)}::{player_type}"
 
 
+def fg_key(fg_id: str, player_type: str) -> str:
+    """Build an fg_id-based ranking lookup key, namespaced by pool.
+
+    Keeps the writer (:func:`compute_sgp_rankings`) and reader
+    (:func:`lookup_rank`) on one format so they can't silently drift.
+    """
+    return f"{fg_id}::{player_type}"
+
+
 def rank_key_from_positions(name: str, positions: Sequence[Position | str]) -> str:
     """Build a name-based ranking lookup key, inferring player_type from positions."""
     ptype = PlayerType.PITCHER if set(positions) & PITCHER_POSITIONS else PlayerType.HITTER
@@ -38,7 +50,7 @@ def lookup_rank(
 ) -> dict[str, Any]:
     """Look up rank data, trying fg_id first then name::player_type fallback."""
     if fg_id:
-        result = rankings.get(str(fg_id))
+        result = rankings.get(fg_key(fg_id, player_type))
         if result is not None:
             return result if isinstance(result, dict) else {}
     fallback = rankings.get(rank_key(name, player_type), {})
@@ -52,18 +64,28 @@ def compute_sgp_rankings(
 ) -> dict[str, int]:
     """Rank all players by unweighted SGP within hitter/pitcher pools.
 
-    Returns dict with two types of keys pointing to the same ranks:
-    - fg_id (e.g., "31757") — primary, unique per player
-    - name::player_type (e.g., "mason miller::pitcher") — fallback
+    Returns dict with two types of keys pointing to the ranks:
+    - fg_id::player_type (e.g., "31757::pitcher") -- primary
+    - name::player_type (e.g., "mason miller::pitcher") -- fallback
 
-    When two players share a name and type (e.g., two Mason Miller pitchers),
-    the fg_id keys are distinct but the name key gets the better rank.
+    Both keys are namespaced by pool. A single fg_id can appear in BOTH
+    pools -- a two-way player, or a position player charged with mop-up
+    innings -- and each pool's rank is a pool-relative ordinal (not
+    comparable across the differently-sized pools), so they are stored
+    separately and ``lookup_rank`` selects by the caller's player_type.
+    An un-namespaced fg_id key would let the pitcher pass overwrite a real
+    hitter rank with a junk 1-IP line (a catcher's fg_id resolving to rank
+    ~6000 instead of his real rank).
+
+    When two players share a name and type (e.g., two Mason Miller
+    pitchers), the fg_id keys are distinct but the name key gets the
+    better rank.
 
     ``denoms``: league-specific SGP denominators (from
     ``get_sgp_denominators(config.sgp_overrides)``). ``None`` keeps the
     code defaults.
     """
-    rankings = {}
+    rankings: dict[str, int] = {}
 
     for df, ptype in [(hitters, PlayerType.HITTER), (pitchers, PlayerType.PITCHER)]:
         if df.empty:
@@ -79,10 +101,14 @@ def compute_sgp_rankings(
         sgp_list.sort(key=lambda x: x[2], reverse=True)
 
         for rank_num, (fg_id, name_key, _sgp) in enumerate(sgp_list, start=1):
-            # fg_id key — always unique
+            # fg_id key namespaced by pool so a two-way player keeps a
+            # separate rank per pool (lookup_rank picks by player_type).
+            # Written unconditionally: fg_id is unique within a pool (the
+            # blend keys on it), so there is no in-pool collision to
+            # arbitrate -- unlike the name key below, where two real
+            # players can share one normalized name and the better wins.
             if fg_id:
-                rankings[fg_id] = rank_num
-            # name key — keep the better (lower) rank on collision
+                rankings[fg_key(fg_id, ptype)] = rank_num
             if name_key not in rankings or rank_num < rankings[name_key]:
                 rankings[name_key] = rank_num
 
