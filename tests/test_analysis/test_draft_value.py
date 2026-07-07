@@ -28,6 +28,44 @@ def test_score_var_reproduces_board_var_for_onboard_player():
     assert abs(var - float(row["var"])) < 1e-6  # same scale -> same VAR
 
 
+def test_to_date_floors_golden_and_delegates_to_replacement_helper(synthetic_scale):
+    # M10: _to_date_floors delegates to sgp.replacement.position_aware_replacement_levels
+    # with a fraction, instead of re-encoding the counting-scaling recipe + UTIL rule.
+    # Pin the pre-refactor floor values so the delegation cannot silently shift a floor
+    # (every YTD grade nets against these).
+    from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+
+    scale = synthetic_scale
+    # f=1.0 returns the board's own floors unchanged (cheap projected-side path).
+    assert dv._to_date_floors(scale, 1.0) is scale.replacement_levels
+    # f<1 golden values (captured from the pre-M10 hand-rolled implementation).
+    gold_04 = {
+        "1B": 3.498867,
+        "2B": 3.622112,
+        "3B": 3.559660,
+        "C": 2.973834,
+        "OF": 3.844582,
+        "RP": 2.909401,
+        "SP": 3.005698,
+        "SS": 3.643083,
+        "UTIL": 3.844582,
+    }
+    floors = dv._to_date_floors(scale, 0.4)
+    for pos, want in gold_04.items():
+        assert abs(floors[pos] - want) < 1e-5, (pos, floors[pos], want)
+    # UTIL mirrors the best hitter floor (rule now lives in the shared helper).
+    assert floors["UTIL"] == max(floors[p] for p in ("C", "1B", "2B", "3B", "SS", "OF"))
+    # delegation identity: the helper called directly reproduces _to_date_floors.
+    direct = position_aware_replacement_levels(
+        scale.denoms,
+        scale.repl_rates,
+        team_ab=scale.team_ab,
+        team_ip=scale.team_ip,
+        fraction=0.4,
+    )
+    assert direct == floors
+
+
 def test_score_var_fraction_half_scales_counting_not_rate():
     _, scale = dv.reproduce_draft_day_board()
     full = dv.score_var(_hitter_line(), ["OF"], "hitter", scale, fraction=1.0)
@@ -213,6 +251,81 @@ def test_convergence_ytd_equals_proj_at_f1(synthetic_scale):
         fraction=1.0,
     )
     assert abs(pv.value_proj - pv.value_ytd) < 1e-9
+
+
+def test_frozen_var_loader_and_anchor():
+    # M7: preseason_var / skill / luck / projected par curve must anchor to the frozen
+    # draft-day VAR, not the drifted rebuild. Unit-test the loader + the anchor join.
+    import pandas as pd
+
+    fv = dv._frozen_var_by_player_id()
+    assert fv, "frozen board did not load"
+    k = next(iter(fv))
+    assert isinstance(k, str) and "::" in k and isinstance(fv[k], float)
+    # missing/malformed file -> empty dict, never raises (soft contract)
+    assert dv._frozen_var_by_player_id("does_not_exist_board.json") == {}
+
+    board = pd.DataFrame(
+        {
+            "player_id": ["100::hitter", "200::pitcher", "999::hitter"],
+            "name": ["A", "B", "C"],
+            "player_type": ["hitter", "pitcher", "hitter"],
+            "var": [1.0, 2.0, 3.0],
+        }
+    )
+    frozen = {"100::hitter": 5.5, "200::pitcher": 6.5}  # 999 absent
+    out = dv._anchor_board_var_to_frozen(board, frozen)
+    got = dict(zip(out["player_id"], out["var"], strict=True))
+    assert got["100::hitter"] == 5.5  # anchored to frozen
+    assert got["200::pitcher"] == 6.5  # anchored to frozen
+    assert got["999::hitter"] == 3.0  # kept rebuilt VAR (no frozen anchor)
+    # empty frozen -> fail loud (missing/all-corrupt board), NOT a silent ship of drifted VAR
+    with pytest.raises(RuntimeError, match="no frozen VAR to anchor"):
+        dv._anchor_board_var_to_frozen(board, {})
+    # catastrophic mismatch (player_id key formats diverged) -> fail loud, NOT a silent
+    # revert to drifted rebuilt VAR for every player.
+    with pytest.raises(RuntimeError, match="key formats have likely diverged"):
+        dv._anchor_board_var_to_frozen(board, {"deadbeef::hitter": 1.0})
+
+
+def test_frozen_var_loader_skips_corrupt_rows(tmp_path):
+    # Soft contract: a non-numeric / null / id-less var row is skipped, never raises.
+    import json
+
+    p = tmp_path / "board.json"
+    p.write_text(
+        json.dumps(
+            [
+                {"player_id": "1::hitter", "var": 3.5},
+                {"player_id": "2::hitter", "var": "not_a_number"},
+                {"player_id": "3::hitter", "var": None},
+                {"player_id": None, "var": 9.9},
+                {"player_id": "4::hitter", "var": float("nan")},  # non-finite -> skipped
+                {"player_id": "5::hitter", "var": float("inf")},  # non-finite -> skipped
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert dv._frozen_var_by_player_id(p) == {"1::hitter": 3.5}
+
+
+def test_config_and_season_year_threading():
+    # M9: config threads through instead of each call re-reading league.yaml, and the
+    # preseason CSV dir is derived from config.season_year (no hardcoded 2026).
+    import dataclasses
+
+    cfg = dv.load_config(dv._CONFIG)
+    assert 0.0 <= dv.season_fraction(cfg) <= 1.0
+    picks = dv.reconstruct_draft(cfg)
+    assert len(picks) == 230
+    assert dv.validate_reconstruction(picks, config=cfg) == []
+    # default season_year resolves to a real CSV dir (board builds)
+    board, _scale = dv.reproduce_draft_day_board(cfg)
+    assert not board.empty
+    # a bogus season_year points the loader at a missing dir -> raises (proves derivation)
+    bogus = dataclasses.replace(cfg, season_year=1999)
+    with pytest.raises(FileNotFoundError):
+        dv.reproduce_draft_day_board(bogus)
 
 
 def test_run_draft_value_end_to_end_and_known_pick():
