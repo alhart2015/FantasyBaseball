@@ -1640,7 +1640,15 @@ class RefreshRun:
                 run_draft_value,
             )
 
-            players, teams = run_draft_value()
+            assert self.config is not None
+            # Thread the SAME config + season fraction the rest of the refresh uses so the
+            # draft-value grade cannot desync (it no longer re-reads league.yaml or
+            # recomputes the fraction independently). fraction_remaining is set upstream by
+            # the standings build; fall back to draft_value's own date-based fraction if not.
+            elapsed = (
+                1.0 - self.fraction_remaining if self.fraction_remaining is not None else None
+            )
+            players, teams = run_draft_value(fraction=elapsed, config=self.config)
             payload = build_draft_value_cache(players, teams)
             write_cache(CacheKey.DRAFT_VALUE, payload, required=False)
             self._progress(f"Draft value cached: {len(teams)} teams")

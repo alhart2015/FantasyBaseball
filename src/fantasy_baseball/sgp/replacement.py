@@ -166,26 +166,35 @@ def _empirical_floor_sgp(
     denoms: dict[Category, float],
     replacement_avg: float,
     team_ab: int = DEFAULT_TEAM_AB,
+    fraction: float = 1.0,
 ) -> float:
     """SGP of a position's empirical waiver line (REPLACEMENT_BY_POSITION).
 
     Built and scored through the same ``calculate_player_sgp`` path as real
-    players so the floor and player values land on one scale.
+    players so the floor and player values land on one scale. ``fraction < 1.0``
+    yields the to-date floor: the counting stats and the team AB volume scale by
+    ``fraction`` while the AVG rate is HELD. Floor SGP is not linear in ``fraction``
+    (only its counting component scales), so this is what to-date player scoring nets
+    against -- not ``full_floor * fraction``. Team AB is floored at 1 so the degenerate
+    near-f=0 scale cannot truncate the rate-SGP denominator to 0 (silent NaN).
     """
     line = REPLACEMENT_BY_POSITION[position]
     row = pd.Series(
         {
             "player_type": PlayerType.HITTER,
-            "r": line["r"],
-            "hr": line["hr"],
-            "rbi": line["rbi"],
-            "sb": line["sb"],
-            "ab": line["ab"],
+            "r": line["r"] * fraction,
+            "hr": line["hr"] * fraction,
+            "rbi": line["rbi"] * fraction,
+            "sb": line["sb"] * fraction,
+            "ab": line["ab"] * fraction,
             "avg": calculate_avg(line["h"], line["ab"]),
         }
     )
     return calculate_player_sgp(
-        row, denoms=denoms, replacement_avg=replacement_avg, team_ab=team_ab
+        row,
+        denoms=denoms,
+        replacement_avg=replacement_avg,
+        team_ab=max(1, int(team_ab * fraction)),
     )
 
 
@@ -195,22 +204,26 @@ def _empirical_pitcher_floor(
     replacement_era: float,
     replacement_whip: float,
     team_ip: int = DEFAULT_TEAM_IP,
+    fraction: float = 1.0,
 ) -> float:
     """SGP of an empirical SP/RP waiver line (REPLACEMENT_BY_POSITION).
 
     SP and RP are kept separate so a closer's saves net against the RP line's
     free SV while a starter's strikeouts net against the SP line's deep K --
-    a single unified-"P" floor cannot do both correctly.
+    a single unified-"P" floor cannot do both correctly. ``fraction < 1.0`` yields
+    the to-date floor: the counting stats and the team IP volume scale by ``fraction``
+    while the ERA/WHIP rates are HELD (see ``_empirical_floor_sgp``). Team IP is
+    floored at 1 to keep the near-f=0 scale out of a zero rate-SGP denominator.
     """
     line = REPLACEMENT_BY_POSITION[position]
     ip = line["ip"]
     row = pd.Series(
         {
             "player_type": PlayerType.PITCHER,
-            "w": line["w"],
-            "k": line["k"],
-            "sv": line["sv"],
-            "ip": ip,
+            "w": line["w"] * fraction,
+            "k": line["k"] * fraction,
+            "sv": line["sv"] * fraction,
+            "ip": ip * fraction,
             "era": calculate_era(line["er"], ip),
             "whip": calculate_whip(line["bb"], line["h_allowed"], ip),
         }
@@ -220,7 +233,7 @@ def _empirical_pitcher_floor(
         denoms=denoms,
         replacement_era=replacement_era,
         replacement_whip=replacement_whip,
-        team_ip=team_ip,
+        team_ip=max(1, int(team_ip * fraction)),
     )
 
 
@@ -229,6 +242,7 @@ def position_aware_replacement_levels(
     repl_rates: dict[str, float] | None = None,
     team_ab: int = DEFAULT_TEAM_AB,
     team_ip: int = DEFAULT_TEAM_IP,
+    fraction: float = 1.0,
 ) -> dict[str, float]:
     """Empirical waiver replacement floors per position.
 
@@ -237,6 +251,12 @@ def position_aware_replacement_levels(
     independent of the live draft pool. ``calculate_var`` routes pitchers to
     the SP/RP floor by role and hitters to their position floor; ``UTIL`` is the
     best (highest-SGP) hitter floor, used as the fallback for DH-only bats.
+
+    ``fraction < 1.0`` returns the to-date floors used by the draft-value metric's
+    YTD path: counting stats and team volumes scale by ``fraction`` while rates are
+    held (floor SGP is not linear in ``fraction``). At ``fraction == 1.0`` this is
+    the full-season board floor, so the draft-value module delegates here instead of
+    re-encoding the scaling recipe and the ``UTIL = max(hitter floors)`` rule.
     """
     if denoms is None:
         denoms = get_sgp_denominators()
@@ -246,14 +266,14 @@ def position_aware_replacement_levels(
     replacement_whip = rates.get("whip", REPLACEMENT_WHIP)
 
     levels: dict[str, float] = {
-        pos: _empirical_floor_sgp(pos, denoms, replacement_avg, team_ab=team_ab)
+        pos: _empirical_floor_sgp(pos, denoms, replacement_avg, team_ab=team_ab, fraction=fraction)
         for pos in _EMPIRICAL_HITTER_POSITIONS
     }
     levels["UTIL"] = max(levels.values())
     levels["SP"] = _empirical_pitcher_floor(
-        "SP", denoms, replacement_era, replacement_whip, team_ip=team_ip
+        "SP", denoms, replacement_era, replacement_whip, team_ip=team_ip, fraction=fraction
     )
     levels["RP"] = _empirical_pitcher_floor(
-        "RP", denoms, replacement_era, replacement_whip, team_ip=team_ip
+        "RP", denoms, replacement_era, replacement_whip, team_ip=team_ip, fraction=fraction
     )
     return levels

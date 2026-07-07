@@ -11,10 +11,13 @@ TEAM_NAMES = [f"Team {i:02d}" for i in range(1, 13)]  # 12 teams
 USER_TEAM_NAME = "Team 01"
 
 
-def _canned_draft_value():
+def _canned_draft_value(fraction=None, config=None):
     """Canned (players, teams) so the refresh test never runs the heavy
     real-data draft_value computation (which reads real repo files by
-    absolute path and would return the real league's teams)."""
+    absolute path and would return the real league's teams).
+
+    Accepts the ``fraction``/``config`` kwargs the refresh pipeline now threads
+    into ``run_draft_value`` (mirrors the real signature) and ignores them."""
     from fantasy_baseball.analysis.draft_value import PlayerValue, TeamRollup
 
     players = [

@@ -13,7 +13,7 @@ from typing import Any
 
 import pandas as pd
 
-from fantasy_baseball.config import load_config
+from fantasy_baseball.config import LeagueConfig, load_config
 from fantasy_baseball.data.cache_keys import CacheKey
 from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.data.projections import blend_projections
@@ -24,8 +24,9 @@ from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import build_board_from_frames
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.rankings import rank_key
+from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
-from fantasy_baseball.utils.constants import REPLACEMENT_BY_POSITION, Category
+from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 from fantasy_baseball.utils.time_utils import compute_fraction_remaining, local_today
@@ -46,7 +47,6 @@ _DRAFT_DAY_TEAM_IP = 1450
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _FROZEN_BOARD = _REPO_ROOT / "data" / "draft_state_board.json"
-_PRESEASON_CSVS = _REPO_ROOT / "data" / "projections" / "2026"
 _POSITIONS_JSON = _REPO_ROOT / "data" / "player_positions.json"
 _CONFIG_DIR = _REPO_ROOT / "config"
 _CONFIG = _CONFIG_DIR / "league.yaml"
@@ -63,17 +63,24 @@ class ScaleInputs:
     team_ip: int
 
 
-def reproduce_draft_day_board() -> tuple[pd.DataFrame, ScaleInputs]:
+def reproduce_draft_day_board(
+    config: LeagueConfig | None = None,
+) -> tuple[pd.DataFrame, ScaleInputs]:
     """Rebuild the preseason board from the Apr-1 projection CSVs -- pure, no DB/KV.
 
-    blend_projections is deterministic over data/projections/2026/*.csv; positions
-    come from data/player_positions.json. The board core is the shared
+    blend_projections is deterministic over data/projections/{season_year}/*.csv;
+    positions come from data/player_positions.json. The board core is the shared
     build_board_from_frames, so the scale (rates/floors/denoms/volumes) is identical
-    to the real draft board's, just computed off the preserved draft-day CSVs.
+    to the real draft board's, just computed off the preserved draft-day CSVs. Pass a
+    preloaded ``config`` to avoid re-reading league.yaml; ``None`` loads it.
     """
-    config = load_config(_CONFIG)
+    if config is None:
+        config = load_config(_CONFIG)
+    # Preseason CSV dir tracks the configured season so this does not silently read a
+    # prior year's projections after the season rolls over.
+    preseason_csvs = _REPO_ROOT / "data" / "projections" / str(config.season_year)
     hitters, pitchers, _quality = blend_projections(
-        _PRESEASON_CSVS, config.projection_systems, config.projection_weights
+        preseason_csvs, config.projection_systems, config.projection_weights
     )
     positions = load_positions_cache(_POSITIONS_JSON)
     board, scale_d = build_board_from_frames(
@@ -128,15 +135,67 @@ def frozen_drift_summary(
     }
     if diffs and over > 0.5 * len(diffs):
         logger.warning(
-            "draft-value: rebuilt board drifts from frozen draft_state_board.json "
-            "(%d/%d players > %.2f VAR, max %.2f). Expected some drift from code "
-            "churn since the freeze; investigate only if this looks systematic.",
+            "draft-value: rebuilt board VAR drifts from frozen draft_state_board.json "
+            "(%d/%d players > %.2f VAR, max %.2f). The f=1 grade anchors preseason_var and "
+            "the projected par curve to the FROZEN VAR, so this drift only affects the "
+            "rebuilt SCALE that drives the to-date (YTD) and luck sides; a large systematic "
+            "drift there is worth a look, otherwise expected from code churn since the freeze.",
             over,
             len(diffs),
             tol,
             summary["max"],
         )
     return summary
+
+
+def _frozen_var_by_player_id(frozen_path: Path | str | None = None) -> dict[str, float]:
+    """Authoritative draft-day VAR per ``player_id`` from the frozen board.
+
+    ``draft_state_board.json`` is the board the league actually drafted against; its
+    ``player_id`` (``mlbam::player_type``) matches the rebuilt board's. A missing or
+    malformed file yields an empty dict so the caller falls back to the rebuilt VAR --
+    never raises (mirrors ``frozen_drift_summary``'s soft contract).
+    """
+    frozen_path = Path(frozen_path) if frozen_path else _FROZEN_BOARD
+    try:
+        frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError) as exc:
+        logger.warning("draft-value: no frozen VAR anchor (%s): %s", frozen_path, exc)
+        return {}
+    return {
+        row["player_id"]: float(row["var"])
+        for row in frozen
+        if row.get("player_id") is not None and row.get("var") is not None
+    }
+
+
+def _anchor_board_var_to_frozen(board: pd.DataFrame, frozen_var: dict[str, float]) -> pd.DataFrame:
+    """Replace the rebuilt board's VAR with the frozen draft-day VAR (join by player_id).
+
+    The rebuilt board faithfully reproduces the draft-day SCALE (denoms/floors/volumes)
+    and per-player projected lines, but its recomputed VAR drifts from the frozen board
+    for ~100% of players (code/config churn since the freeze). Every f=1 quantity --
+    ``preseason_var``, ``skill``, ``luck``, and the projected par curve -- must be the
+    draft-day VAR the league actually drafted against, not the drifted rebuild, so anchor
+    the board's ``var`` column to the frozen values here (before ``_board_index``, so the
+    VAR tie-break also uses draft-day truth). Rows the frozen board lacks keep their
+    rebuilt VAR (logged). The rebuilt projected LINES still drive the to-date (f<1)
+    rescale, which does not read ``var`` -- that is the only thing the rebuild is kept for.
+    """
+    if not frozen_var:
+        return board
+    board = board.copy()
+    mapped = board["player_id"].map(frozen_var)
+    unmatched = int(mapped.isna().sum())
+    if unmatched:
+        logger.warning(
+            "draft-value: %d/%d board rows have no frozen VAR anchor; keeping the rebuilt "
+            "VAR for those (off-board or added since the freeze).",
+            unmatched,
+            len(board),
+        )
+    board["var"] = mapped.fillna(board["var"])
+    return board
 
 
 _COUNTING_HIT = ("r", "hr", "rbi", "sb", "ab")  # ab is volume (scales)
@@ -161,40 +220,24 @@ def _sgp(line: dict[str, Any], scale: ScaleInputs, team_ab: float, team_ip: floa
 
 
 def _to_date_floors(scale: ScaleInputs, fraction: float) -> dict[str, float]:
-    """Recompute position floors on a to-date scale (NOT scale.replacement_levels * f).
+    """Position floors on a to-date scale (NOT scale.replacement_levels * f).
 
     Floor SGP is NOT linear in f: its rate component is f-invariant while only the
-    counting component scales. So rebuild each floor from REPLACEMENT_BY_POSITION with
-    counting+volume * f, rates held, team volumes * f. At f=1 this reproduces the
-    board's position_aware_replacement_levels floors.
+    counting component scales. This is the SAME empirical-floor computation the board
+    build uses, so delegate to the shared ``position_aware_replacement_levels`` with the
+    board scale's denoms/rates/volumes and the elapsed ``fraction`` -- rather than
+    re-encoding the counting-scaling recipe and the ``UTIL = max(hitter floors)`` rule
+    here. At f=1 return the board's own floors unchanged (the cheap projected-side path).
     """
     if fraction == 1.0:
         return scale.replacement_levels
-    floors: dict[str, float] = {}
-    team_ab = scale.team_ab * fraction
-    team_ip = scale.team_ip * fraction
-    for pos, raw in REPLACEMENT_BY_POSITION.items():
-        line: dict[str, Any] = dict(raw)
-        for k in ("r", "hr", "rbi", "sb", "ab", "w", "k", "sv", "ip"):
-            if k in line:
-                line[k] = line[k] * fraction
-        is_pitcher = "ip" in raw
-        # derive rate stats the floor line implies, held constant vs f
-        if is_pitcher:
-            line["era"] = calculate_era(raw["er"], raw["ip"], default=0.0)
-            line["whip"] = calculate_whip(raw["bb"], raw["h_allowed"], raw["ip"], default=0.0)
-            line["player_type"] = (
-                "pitcher"  # StrEnum-compatible; required by calculate_player_sgp dispatch
-            )
-        else:
-            line["avg"] = calculate_avg(raw["h"], raw["ab"], default=0.0)
-            line["player_type"] = "hitter"
-        floors[pos] = _sgp(line, scale, team_ab, team_ip)
-    # UTIL floor mirrors the board: max of the hitter floors (see replacement.py).
-    hitter_floors = [floors[p] for p in ("C", "1B", "2B", "3B", "SS", "OF") if p in floors]
-    if hitter_floors:
-        floors["UTIL"] = max(hitter_floors)
-    return floors
+    return position_aware_replacement_levels(
+        scale.denoms,
+        scale.repl_rates,
+        team_ab=scale.team_ab,
+        team_ip=scale.team_ip,
+        fraction=fraction,
+    )
 
 
 def score_var(
@@ -237,12 +280,12 @@ def score_var(
     total_sgp = _sgp(scaled, scale, team_ab, team_ip)
     if floors is None:
         floors = _to_date_floors(scale, fraction)
-    # calculate_var routes the pitcher floor by ip (var.py:18 _pitcher_floor_key ->
-    # role_from_ip, 100-IP threshold) -- but a starter/reliever ROLE is a full-season
-    # property. Route by a full-season-equivalent ip so a real SP is graded vs the SP
-    # floor even mid-season (its to-date ip ~90 would otherwise route to the RP floor,
-    # and the actual and par sides could land on opposite sides of the cutoff). f in
-    # {0, 1} needs no rescale.
+    # calculate_var routes the pitcher floor by role (SP vs RP) at a mid-season IP cutoff,
+    # but a starter/reliever ROLE is a full-season property. Pass a full-season-equivalent
+    # ip as the explicit role_ip override so a real SP is graded vs the SP floor even
+    # mid-season (its to-date ip ~90 would otherwise route to the RP floor, and the actual
+    # and par sides could land on opposite sides of the cutoff). f in {0, 1} needs no
+    # rescale.
     if player_type == "pitcher" and fraction not in (0.0, 1.0):
         # par line carries its pre-scale projected ip; the actual line extrapolates its
         # accumulated ip to full-season pace (ip / f).
@@ -250,16 +293,16 @@ def score_var(
         raw_ip = 0.0 if raw_ip is None else float(raw_ip)
         routing_ip = raw_ip if scale_counting else raw_ip / fraction
     else:
-        routing_ip = scaled.get("ip", 0.0)
+        raw_ip = scaled.get("ip", 0.0)
+        routing_ip = 0.0 if raw_ip is None else float(raw_ip)
     series = pd.Series(
         {
             "total_sgp": total_sgp,
             "positions": list(positions),
             "player_type": player_type,
-            "ip": routing_ip,
         }
     )
-    return calculate_var(series, floors)
+    return calculate_var(series, floors, role_ip=routing_ip)
 
 
 @dataclass(frozen=True)
@@ -270,7 +313,7 @@ class DraftPick:
     is_keeper: bool
 
 
-def reconstruct_draft() -> list[DraftPick]:
+def reconstruct_draft(config: LeagueConfig | None = None) -> list[DraftPick]:
     """Reconstruct (team, slot) per 2026 pick from draft_order + draft_state + keepers.
 
     ``draft_order.json`` ``rounds`` is the full 23x10 snake order; rounds 1-3 (the
@@ -280,10 +323,12 @@ def reconstruct_draft() -> list[DraftPick]:
     on the absolute ``[round-1][slot-1]`` cell before the keeper-round slots are
     skipped.
     """
+    if config is None:
+        config = load_config(_CONFIG)
     order = json.loads(_DRAFT_ORDER.read_text(encoding="utf-8"))
     state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
     drafted: list[str] = state["drafted_players"]
-    keeper_defs: list[dict[str, Any]] = load_config(_CONFIG).keepers
+    keeper_defs: list[dict[str, Any]] = config.keepers
     # load_config defaults keepers to [] on a missing/misspelled section (config.py),
     # so fail fast with a clear cause rather than a misleading downstream pick-count error.
     if not keeper_defs:
@@ -318,12 +363,15 @@ def validate_reconstruction(
     picks: list[DraftPick],
     known_team: str | None = None,
     known_roster: list[str] | None = None,
+    config: LeagueConfig | None = None,
 ) -> list[str]:
     """Runtime gate: every keeper maps to its owning team, and (optionally) a known
     team's roster reconstructs as a superset. Returns a list of problems ([] == pass).
     """
     problems: list[str] = []
-    keepers = load_config(_CONFIG).keepers
+    if config is None:
+        config = load_config(_CONFIG)
+    keepers = config.keepers
     n_live = sum(1 for p in picks if not p.is_keeper)
     if n_live != 200:
         problems.append(f"non-keeper pick count {n_live} != 200")
@@ -675,17 +723,18 @@ def compute_player_value(
     )
 
 
-def season_fraction() -> float:
+def season_fraction(config: LeagueConfig | None = None) -> float:
     """League-wide elapsed fraction of the MLB season, computed purely from the date.
 
     Reads ``season_start``/``season_end`` from ``config/league.yaml`` and uses the
     user's local ``today`` (``local_today``), deriving the elapsed fraction as
     ``1 - compute_fraction_remaining(...)`` clamped to ``[0, 1]``. This is a
     date-based approximation of games played (it does NOT read any standings
-    snapshot or per-team game count); it is the single source of the to-date
-    scaling fraction ``f``.
+    snapshot or per-team game count); it is the fallback source of the to-date
+    scaling fraction ``f`` when the caller does not thread its own (RefreshRun does).
     """
-    config = load_config(_CONFIG)
+    if config is None:
+        config = load_config(_CONFIG)
     season_start = date.fromisoformat(config.season_start)
     season_end = date.fromisoformat(config.season_end)
     elapsed = 1.0 - compute_fraction_remaining(season_start, season_end, local_today())
@@ -831,34 +880,47 @@ def _assign_pick_types(
 
 def run_draft_value(
     fraction: float | None = None,
+    config: LeagueConfig | None = None,
 ) -> tuple[list[PlayerValue], list[TeamRollup]]:
     """Orchestrate the draft-value metric end-to-end against the synced KV store.
 
-    Reproduces the preseason board (+ soft frozen drift check), reconstructs the
-    draft and enforces the reconstruction gate, builds projected and to-date par
-    curves, then scores EVERY drafted pick + keeper (30 keepers + 200 drafted) by
-    full-season realized value vs par, crediting the team that drafted/kept the
-    player -- regardless of a later drop or trade. Waivers stay out (deferred to the
-    transaction analyzer). A drafted/kept player who never played is scored at
-    replacement (value == -par), so a wasted pick is penalized. Returns
+    Reproduces the preseason board (+ soft frozen drift check), anchors the f=1 VAR to
+    the frozen draft-day board, reconstructs the draft and enforces the reconstruction
+    gate, builds projected and to-date par curves, then scores EVERY drafted pick +
+    keeper (30 keepers + 200 drafted) by full-season realized value vs par, crediting
+    the team that drafted/kept the player -- regardless of a later drop or trade. Waivers
+    stay out (deferred to the transaction analyzer). A drafted/kept player who never
+    played is scored at replacement (value == -par), so a wasted pick is penalized.
+
+    ``config`` and ``fraction`` are threaded from the caller (RefreshRun) so the whole
+    refresh reads league.yaml once and shares ONE season fraction; ``None`` loads the
+    config and derives the date-based fraction as a standalone fallback. Returns
     ``(player_values, team_rollups)``.
     """
-    board, scale = reproduce_draft_day_board()
+    if config is None:
+        config = load_config(_CONFIG)
+    board, scale = reproduce_draft_day_board(config)
     frozen_drift_summary(board)  # soft: logs a warning on large drift, never raises
-    picks = reconstruct_draft()
+    # M7: anchor the f=1 VAR (preseason_var / skill / luck / projected par curve) to the
+    # frozen draft-day board; the rebuilt board's VAR drifts, and only its lines+scale
+    # are needed (for the to-date rescale). Must precede _board_index (VAR tie-break).
+    board = _anchor_board_var_to_frozen(board, _frozen_var_by_player_id())
+    picks = reconstruct_draft(config)
     # enforce the reconstruction gate against the user's known roster (spec oracle 6b)
     state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
     user_roster: list[str] = state.get("user_roster") or []
-    keepers = load_config(_CONFIG).keepers
+    keepers = config.keepers
     keeper_team = {normalize_name(k["name"]): k["team"] for k in keepers}
     user_team = next(
         (keeper_team[normalize_name(n)] for n in user_roster if normalize_name(n) in keeper_team),
         None,
     )
-    gate = validate_reconstruction(picks, known_team=user_team, known_roster=user_roster)
+    gate = validate_reconstruction(
+        picks, known_team=user_team, known_roster=user_roster, config=config
+    )
     if gate:
         raise RuntimeError(f"Draft reconstruction gate failed: {gate}")
-    f = season_fraction() if fraction is None else fraction
+    f = season_fraction(config) if fraction is None else fraction
 
     bindex = _board_index(board)
     # Assign each pick a player_type up front (two-way aware) so the par curve, the

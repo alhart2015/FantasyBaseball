@@ -96,6 +96,29 @@ def test_var_pitcher_falls_back_to_p_without_role_floors():
     assert var == pytest.approx(8.0)
 
 
+def test_var_role_ip_override_routes_full_season_role():
+    """M10: role_ip overrides the IP used for SP/RP routing. A starter graded
+    mid-season carries a partial to-date IP (would misroute to RP), so the caller
+    passes the full-season-equivalent IP to keep it on the SP floor."""
+    # to-date line: only 70 IP accumulated -> role_from_ip(70) would pick RP.
+    player = pd.Series(
+        {
+            "name": "Starter mid-season",
+            "positions": ["P"],
+            "total_sgp": 15.0,
+            "player_type": "pitcher",
+            "ip": 70.0,
+        }
+    )
+    levels = {"SP": 7.6, "RP": 6.3, "P": 6.65}
+    # Without override: routes by player["ip"]=70 -> RP floor.
+    assert calculate_var(player, levels) == pytest.approx(15.0 - 6.3)
+    # With full-season role_ip=190 -> SP floor, regardless of the to-date ip.
+    assert calculate_var(player, levels, role_ip=190.0) == pytest.approx(15.0 - 7.6)
+    var, pos = calculate_var(player, levels, return_position=True, role_ip=190.0)
+    assert var == pytest.approx(15.0 - 7.6) and pos == "P"
+
+
 def test_var_pitcher_role_from_ip_not_position_token():
     """The board defaults unmatched pitchers to ['SP'], so role must come from
     IP, not the token -- a low-IP closer mislabeled 'SP' still nets against the
