@@ -465,8 +465,9 @@ def _sample_monte_carlo():
             },
         },
         "category_risk": {
-            "R": {"median_pts": 7, "p10": 5, "p90": 9, "first_pct": 34, "top3_pct": 62},
-            "SV": {"median_pts": 4, "p10": 2, "p90": 7, "first_pct": 6, "top3_pct": 22},
+            "R": {"median_pts": 8, "p10": 6, "p90": 10, "first_pct": 82, "top3_pct": 90},
+            "HR": {"median_pts": 6, "p10": 4, "p90": 8, "first_pct": 55, "top3_pct": 65},
+            "SV": {"median_pts": 3, "p10": 1, "p90": 6, "first_pct": 12, "top3_pct": 22},
         },
     }
 
@@ -480,15 +481,30 @@ def test_format_monte_carlo_sorted_by_median():
 
 def test_format_monte_carlo_category_risk_colors():
     data = format_monte_carlo_for_display(_sample_monte_carlo(), "Hart of the Order")
-    risk = data["category_risk"]
-    # Green highlight only for strong categories (top3 >= 50); no bottom-3 red anymore.
-    sv = next(r for r in risk if r["cat"] == "SV")
-    assert sv["risk_class"] == ""  # SV top3 = 22 -> no highlight (bottom-3 red removed)
-    r_cat = next(r for r in risk if r["cat"] == "R")
-    assert r_cat["risk_class"] == "cat-top"  # R top3 = 62 -> strong
+    risk = {r["cat"]: r for r in data["category_risk"]}
+    # Both 1st % and Top-3 % cells use the same bands: green > 70, uncolored 40-70, red < 40.
+    assert risk["R"]["first_pct_class"] == "cat-top"  # 82 -> green
+    assert risk["HR"]["first_pct_class"] == ""  # 55 -> uncolored
+    assert risk["SV"]["first_pct_class"] == "cat-bottom"  # 12 -> red
+    assert risk["R"]["top3_class"] == "cat-top"  # 90 -> green
+    assert risk["HR"]["top3_class"] == ""  # 65 -> uncolored
+    assert risk["SV"]["top3_class"] == "cat-bottom"  # 22 -> red
     # display swap: category rows carry first_pct (P(1st in category)), not bot3_pct
-    assert r_cat["first_pct"] == 34
-    assert "bot3_pct" not in r_cat
+    assert risk["R"]["first_pct"] == 82
+    assert "bot3_pct" not in risk["R"]
+
+
+def test_pct_band_class_cutoffs():
+    # Pin the exact shared cutoffs: green > 70, uncolored 40-70 (inclusive), red < 40.
+    from fantasy_baseball.web.season_data import _pct_band_class
+
+    assert _pct_band_class(70.1) == "cat-top"
+    assert _pct_band_class(70) == ""  # 70 is uncolored (> 70 is strict)
+    assert _pct_band_class(55) == ""
+    assert _pct_band_class(40) == ""  # 40 is uncolored (40-70 inclusive)
+    assert _pct_band_class(39.9) == "cat-bottom"
+    assert _pct_band_class(0) == "cat-bottom"
+    assert _pct_band_class(None) == ""  # no data -> uncolored
 
 
 def test_format_monte_carlo_tolerates_pre_feature_cache():
@@ -512,7 +528,8 @@ def test_format_monte_carlo_tolerates_pre_feature_cache():
     out = format_monte_carlo_for_display(stale, "Hart of the Order")
     sv = next(r for r in out["category_risk"] if r["cat"] == "SV")
     assert sv["first_pct"] is None  # pre-first_pct cache -> None (template renders "-")
-    assert sv["risk_class"] == ""  # bottom-3 red highlight removed
+    assert sv["first_pct_class"] == ""  # None -> uncolored
+    assert sv["top3_class"] == "cat-bottom"  # SV top3 = 22 -> red band
 
 
 # --- format_lineup_for_display tests ---
