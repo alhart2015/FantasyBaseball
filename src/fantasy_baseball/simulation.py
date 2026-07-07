@@ -1220,6 +1220,61 @@ def simulate_remaining_season_batch(
     return out
 
 
+def _category_risk_stats(arr: np.ndarray, max_pts: np.ndarray) -> dict[str, float]:
+    """Per-category MC summary for the user's roto-point distribution ``arr``.
+
+    ``max_pts`` is the per-iteration best category score across ALL teams, so
+    ``first_pct = P(arr == max_pts)`` is the tie-INCLUSIVE probability the user is 1st in
+    the category: a tied lead still shares the top roto points, so it counts as 1st
+    (an outright ``>= num_teams`` threshold would silently drop ties, common in counting
+    categories like SV/SB/W/HR). ``top3_pct`` is the top-3 finish probability. Shared by
+    both MC functions so the field shape and the count-to-percentage idiom live once.
+    """
+
+    def pct(mask: np.ndarray) -> float:
+        # mask has one entry per iteration, so its mean IS the fraction of iterations.
+        return round(float(mask.mean()) * 100, 1)
+
+    return {
+        "median_pts": round(float(np.median(arr)), 1),
+        "p10": round(float(np.percentile(arr, 10)), 1),
+        "p90": round(float(np.percentile(arr, 90)), 1),
+        "first_pct": pct(arr >= max_pts),
+        "top3_pct": pct(arr >= 8),
+    }
+
+
+def _user_category_risk(
+    all_cat_pts: dict[str, dict[str, list[float]]],
+    team_names: list[str],
+    user_team_name: str,
+) -> dict[str, dict[str, float]]:
+    """Per-category risk summary for the user team (tie-inclusive 1st%).
+
+    Returns ``{}`` when the user team is absent from the rosters (e.g. a misconfigured
+    team name): there is nothing to summarize, and computing percentiles on an empty
+    array would raise. Each category's 1st% is measured against the per-iteration league
+    max, so it needs every team's per-category points (``all_cat_pts``), not just the
+    user's.
+
+    NB: this category ``first_pct`` (tie-INCLUSIVE: every team at the category max counts
+    as 1st) differs from ``team_results.first_pct`` (strict single overall-standings
+    winner, P(rank==1)). Category leaders can tie, so category 1st% summed across teams
+    may exceed 100%, whereas team 1st% sums to ~100%.
+    """
+    if user_team_name not in all_cat_pts:
+        return {}
+    user_idx = team_names.index(user_team_name)
+    category_risk: dict[str, dict[str, float]] = {}
+    for c in ALL_CATS:
+        # One (num_teams, n_iter) stack per category: the user's own row is ``arr`` and the
+        # column-wise max is the per-iteration league best -- so the user's series is
+        # materialized once, not once as arr and again inside the max stack.
+        stacked = np.array([all_cat_pts[t][c.value] for t in team_names])
+        category_risk[c.value] = _category_risk_stats(stacked[user_idx], stacked.max(axis=0))
+    return category_risk
+
+
 def run_monte_carlo(
     team_rosters: dict,
     h_slots: int,
@@ -1242,7 +1297,7 @@ def run_monte_carlo(
 
     Returns:
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
-         "category_risk": {cat: {median_pts, p10, p90, first_pct, top3_pct, bot3_pct}}}
+         "category_risk": {cat: {median_pts, p10, p90, first_pct, top3_pct}}}
     """
     # Convert Player objects to flat dicts for the simulation internals.
     # The internal simulation engine (simulate_season, _apply_variance)
@@ -1260,7 +1315,12 @@ def run_monte_carlo(
     all_totals: dict[str, list[float]] = {name: [] for name in team_names}
     mc_wins = {name: 0 for name in team_names}
     mc_top3 = {name: 0 for name in team_names}
-    user_cat_pts: dict[str, list[float]] = {c.value: [] for c in ALL_CATS}
+    # All teams' per-category points (not just the user's): the category 1st% is measured
+    # tie-inclusively against the per-iteration league max, which needs every team.
+    all_cat_pts: dict[str, dict[str, list[float]]] = {
+        name: {c.value: [] for c in ALL_CATS} for name in team_names
+    }
+    cat_pts_keys = [(c.value, f"{c.value}_pts") for c in ALL_CATS]
 
     for i in range(n_iterations):
         if progress_cb and i % 200 == 0:
@@ -1274,9 +1334,9 @@ def run_monte_carlo(
                 mc_wins[name] += 1
             if rank <= 3:
                 mc_top3[name] += 1
-            if name == user_team_name:
-                for c in ALL_CATS:
-                    user_cat_pts[c.value].append(pts.get(f"{c.value}_pts", 0))
+            team_cat_pts = all_cat_pts[name]
+            for val, pts_key in cat_pts_keys:
+                team_cat_pts[val].append(pts.get(pts_key, 0))
 
     n = n_iterations
     team_results = {}
@@ -1290,21 +1350,7 @@ def run_monte_carlo(
             "top3_pct": round(mc_top3[name] / n * 100, 1),
         }
 
-    # first_pct: P(the user is 1st in the category) == P(max roto points). The category
-    # winner gets num_teams points, so arr >= num_teams counts an outright category win.
-    num_teams = len(team_names)
-    category_risk = {}
-    for c in ALL_CATS:
-        arr = np.array(user_cat_pts[c.value])
-        category_risk[c.value] = {
-            "median_pts": round(float(np.median(arr)), 1),
-            "p10": round(float(np.percentile(arr, 10)), 1),
-            "p90": round(float(np.percentile(arr, 90)), 1),
-            "first_pct": round(float((arr >= num_teams).sum()) / n * 100, 1),
-            "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
-            "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
-        }
-
+    category_risk = _user_category_risk(all_cat_pts, team_names, user_team_name)
     return {"team_results": team_results, "category_risk": category_risk}
 
 
@@ -1344,7 +1390,7 @@ def run_ros_monte_carlo(
 
     Returns:
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
-         "category_risk": {cat: {median_pts, p10, p90, first_pct, top3_pct, bot3_pct}},
+         "category_risk": {cat: {median_pts, p10, p90, first_pct, top3_pct}},
          "distributions": compact per-team outcome curves (see build_distributions)}
         category_risk is {} when the user team is absent from the rosters.
     """
@@ -1414,29 +1460,7 @@ def run_ros_monte_carlo(
             "top3_pct": round(mc_top3[name] / n * 100, 1),
         }
 
-    category_risk = {}
-    # category_risk summarizes the user team's per-category point spread. If the
-    # user team is absent from the rosters (e.g. a misconfigured team name), there
-    # is nothing to summarize -- leave category_risk empty so the dashboard hides
-    # the table, rather than computing percentiles on empty arrays (np.percentile
-    # raises IndexError on an empty input). The user team's slice is the same
-    # per-iteration sequence the old user-only accumulator produced, so the
-    # computed values are unchanged when the team is present.
-    # first_pct: P(the user is 1st in the category) == P(max roto points). The category
-    # winner gets num_teams points, so arr >= num_teams counts an outright category win.
-    num_teams = len(team_names)
-    user_cat_pts = all_cat_pts.get(user_team_name)
-    if user_cat_pts is not None:
-        for c in ALL_CATS:
-            arr = np.array(user_cat_pts[c.value])
-            category_risk[c.value] = {
-                "median_pts": round(float(np.median(arr)), 1),
-                "p10": round(float(np.percentile(arr, 10)), 1),
-                "p90": round(float(np.percentile(arr, 90)), 1),
-                "first_pct": round(float((arr >= num_teams).sum()) / n * 100, 1),
-                "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
-                "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
-            }
+    category_risk = _user_category_risk(all_cat_pts, team_names, user_team_name)
 
     distributions = build_distributions(all_totals, batch, all_cat_pts, cats, user_team_name)
 

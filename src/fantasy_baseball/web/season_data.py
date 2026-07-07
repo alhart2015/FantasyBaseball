@@ -605,9 +605,10 @@ def format_monte_carlo_for_display(mc_data: dict, user_team_name: str) -> dict:
     Returns dict with:
       - teams: list sorted by median_pts desc, each with median_pts, p10, p90,
                first_pct, top3_pct, is_user
-      - category_risk: list of dicts with cat, median_pts, p10, p90,
-                       first_pct, top3_pct, risk_class (the red "weak category"
-                       highlight still derives from the sim's internal bot3_pct)
+      - category_risk: list of dicts with cat, median_pts, p10, p90, first_pct,
+                       top3_pct, risk_class. first_pct is None for a pre-first_pct
+                       cache (e.g. the frozen Opening Day base blob) so the template
+                       can show "-" rather than a misleading 0%.
     """
     if not mc_data or "team_results" not in mc_data:
         return {"teams": [], "category_risk": []}
@@ -629,21 +630,18 @@ def format_monte_carlo_for_display(mc_data: dict, user_team_name: str) -> dict:
 
     risk = []
     for cat, data in mc_data.get("category_risk", {}).items():
-        if data["top3_pct"] >= 50:
-            risk_class = "cat-top"
-        elif data["bot3_pct"] >= 30:
-            risk_class = "cat-bottom"
-        else:
-            risk_class = ""
+        # Green highlight for a strong category (likely top-3). The bottom-3 downside
+        # column and its red highlight were removed, so no cat-bottom class here.
+        risk_class = "cat-top" if data["top3_pct"] >= 50 else ""
         risk.append(
             {
                 "cat": cat,
                 "median_pts": data["median_pts"],
                 "p10": data["p10"],
                 "p90": data["p90"],
-                # .get: a rest_of_season MC cache written before this field existed
-                # (deploy-before-refresh window) lacks first_pct; degrade to 0.0.
-                "first_pct": data.get("first_pct", 0.0),
+                # None (not 0.0) when the cache predates first_pct -- e.g. the frozen
+                # Opening Day base blob -- so the template renders "-", not a fake 0%.
+                "first_pct": data.get("first_pct"),
                 "top3_pct": data["top3_pct"],
                 "risk_class": risk_class,
             }

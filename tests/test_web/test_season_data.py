@@ -465,22 +465,8 @@ def _sample_monte_carlo():
             },
         },
         "category_risk": {
-            "R": {
-                "median_pts": 7,
-                "p10": 5,
-                "p90": 9,
-                "first_pct": 34,
-                "top3_pct": 62,
-                "bot3_pct": 8,
-            },
-            "SV": {
-                "median_pts": 4,
-                "p10": 2,
-                "p90": 7,
-                "first_pct": 6,
-                "top3_pct": 22,
-                "bot3_pct": 38,
-            },
+            "R": {"median_pts": 7, "p10": 5, "p90": 9, "first_pct": 34, "top3_pct": 62},
+            "SV": {"median_pts": 4, "p10": 2, "p90": 7, "first_pct": 6, "top3_pct": 22},
         },
     }
 
@@ -495,18 +481,20 @@ def test_format_monte_carlo_sorted_by_median():
 def test_format_monte_carlo_category_risk_colors():
     data = format_monte_carlo_for_display(_sample_monte_carlo(), "Hart of the Order")
     risk = data["category_risk"]
+    # Green highlight only for strong categories (top3 >= 50); no bottom-3 red anymore.
     sv = next(r for r in risk if r["cat"] == "SV")
-    assert sv["risk_class"] == "cat-bottom"  # still derives from the internal bot3_pct
+    assert sv["risk_class"] == ""  # SV top3 = 22 -> no highlight (bottom-3 red removed)
     r_cat = next(r for r in risk if r["cat"] == "R")
-    assert r_cat["risk_class"] == "cat-top"
-    # display swap: category rows now carry first_pct (P(win the category)), not bot3_pct
+    assert r_cat["risk_class"] == "cat-top"  # R top3 = 62 -> strong
+    # display swap: category rows carry first_pct (P(1st in category)), not bot3_pct
     assert r_cat["first_pct"] == 34
     assert "bot3_pct" not in r_cat
 
 
 def test_format_monte_carlo_tolerates_pre_feature_cache():
-    # A rest_of_season MC cache written before first_pct existed must format without
-    # a KeyError; the new column degrades to 0.0 until the next refresh rewrites it.
+    # A cache written before first_pct existed (e.g. the frozen Opening Day base blob)
+    # must format without KeyError; first_pct comes back None so the template shows "-"
+    # rather than a misleading 0%.
     stale = {
         "team_results": {
             "Hart of the Order": {
@@ -523,8 +511,8 @@ def test_format_monte_carlo_tolerates_pre_feature_cache():
     }
     out = format_monte_carlo_for_display(stale, "Hart of the Order")
     sv = next(r for r in out["category_risk"] if r["cat"] == "SV")
-    assert sv["first_pct"] == 0.0  # degraded, not a KeyError
-    assert sv["risk_class"] == "cat-bottom"  # bot3-driven coloring still works
+    assert sv["first_pct"] is None  # pre-first_pct cache -> None (template renders "-")
+    assert sv["risk_class"] == ""  # bottom-3 red highlight removed
 
 
 # --- format_lineup_for_display tests ---
