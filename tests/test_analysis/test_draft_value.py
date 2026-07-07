@@ -279,8 +279,34 @@ def test_frozen_var_loader_and_anchor():
     assert got["100::hitter"] == 5.5  # anchored to frozen
     assert got["200::pitcher"] == 6.5  # anchored to frozen
     assert got["999::hitter"] == 3.0  # kept rebuilt VAR (no frozen anchor)
-    # empty frozen -> board returned unchanged
-    assert dv._anchor_board_var_to_frozen(board, {}).equals(board)
+    # empty frozen -> fail loud (missing/all-corrupt board), NOT a silent ship of drifted VAR
+    with pytest.raises(RuntimeError, match="no frozen VAR to anchor"):
+        dv._anchor_board_var_to_frozen(board, {})
+    # catastrophic mismatch (player_id key formats diverged) -> fail loud, NOT a silent
+    # revert to drifted rebuilt VAR for every player.
+    with pytest.raises(RuntimeError, match="key formats have likely diverged"):
+        dv._anchor_board_var_to_frozen(board, {"deadbeef::hitter": 1.0})
+
+
+def test_frozen_var_loader_skips_corrupt_rows(tmp_path):
+    # Soft contract: a non-numeric / null / id-less var row is skipped, never raises.
+    import json
+
+    p = tmp_path / "board.json"
+    p.write_text(
+        json.dumps(
+            [
+                {"player_id": "1::hitter", "var": 3.5},
+                {"player_id": "2::hitter", "var": "not_a_number"},
+                {"player_id": "3::hitter", "var": None},
+                {"player_id": None, "var": 9.9},
+                {"player_id": "4::hitter", "var": float("nan")},  # non-finite -> skipped
+                {"player_id": "5::hitter", "var": float("inf")},  # non-finite -> skipped
+            ]
+        ),
+        encoding="utf-8",
+    )
+    assert dv._frozen_var_by_player_id(p) == {"1::hitter": 3.5}
 
 
 def test_config_and_season_year_threading():

@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import math
-import statistics
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -98,7 +97,7 @@ def reproduce_draft_day_board(
 
 def frozen_drift_summary(
     board_df: pd.DataFrame,
-    frozen_path: Path | str | None = None,
+    frozen_var: dict[str, float] | None = None,
     tol: float = 0.05,
 ) -> dict[str, float]:
     """SOFT cross-check vs the frozen draft-day board. Reports drift; never raises.
@@ -106,42 +105,40 @@ def frozen_drift_summary(
     The frozen board (draft_state_board.json) was built at draft time with
     possibly-since-churned code, so exact reproduction is not expected. A large
     systematic drift is worth surfacing (wrong config/vintage) but is not a stop.
+
+    Pass ``frozen_var`` (the ``player_id -> VAR`` map from ``_frozen_var_by_player_id``)
+    to reuse a load the caller already did; ``None`` self-loads the default frozen board.
+    A missing/empty frozen board yields an empty summary (cross-check skipped, never raises).
     """
-    frozen_path = Path(frozen_path) if frozen_path else _FROZEN_BOARD
     empty: dict[str, float] = {"joined": 0, "over_tol": 0, "max": 0.0, "median": 0.0}
-    try:
-        frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError) as exc:
-        # SOFT check: a missing (deleted to force a rebuild) or malformed frozen board
-        # must not abort the whole report -- log and skip the cross-check.
-        logger.warning("draft-value: skipping frozen drift check (%s): %s", frozen_path, exc)
+    if frozen_var is None:
+        frozen_var = _frozen_var_by_player_id()
+    if not frozen_var:
         return empty
-    frozen_var = {
-        row["player_id"]: float(row["var"])
-        for row in frozen
-        if row.get("player_id") is not None and row.get("var") is not None
-    }
-    diffs = []
-    for _, row in board_df.iterrows():
-        pid = row["player_id"]
-        if pid in frozen_var:
-            diffs.append(abs(float(row["var"]) - frozen_var[pid]))
-    over = sum(1 for d in diffs if d > tol)
+    # Vectorized join (same board["player_id"].map(frozen_var) idiom the anchor uses) --
+    # no per-row iterrows. Drift = |rebuilt VAR - frozen VAR| over the matched rows.
+    mapped = board_df["player_id"].map(frozen_var)
+    matched = mapped.notna()
+    diffs = (board_df.loc[matched, "var"].astype(float) - mapped[matched]).abs()
+    joined = int(matched.sum())
+    over = int((diffs > tol).sum())
     summary: dict[str, float] = {
-        "joined": len(diffs),
+        "joined": joined,
         "over_tol": over,
-        "max": max(diffs) if diffs else 0.0,
-        "median": statistics.median(diffs) if diffs else 0.0,
+        "max": float(diffs.max()) if joined else 0.0,
+        "median": float(diffs.median()) if joined else 0.0,
     }
-    if diffs and over > 0.5 * len(diffs):
-        logger.warning(
+    if joined and over > 0.5 * joined:
+        # INFO, not WARNING: the f=1 grade now anchors preseason_var and the projected par
+        # curve to the FROZEN VAR, so rebuilt-VAR drift is EXPECTED (~100% by design) and no
+        # longer affects the shipped grades -- warning every refresh would be alarm fatigue.
+        # It still informs the rebuilt SCALE that drives the to-date (YTD) and luck sides.
+        logger.info(
             "draft-value: rebuilt board VAR drifts from frozen draft_state_board.json "
-            "(%d/%d players > %.2f VAR, max %.2f). The f=1 grade anchors preseason_var and "
-            "the projected par curve to the FROZEN VAR, so this drift only affects the "
-            "rebuilt SCALE that drives the to-date (YTD) and luck sides; a large systematic "
-            "drift there is worth a look, otherwise expected from code churn since the freeze.",
+            "(%d/%d players > %.2f VAR, max %.2f); expected -- VAR is anchored to the frozen "
+            "board, so this only reflects churn in the rebuilt scale (YTD/luck sides).",
             over,
-            len(diffs),
+            joined,
             tol,
             summary["max"],
         )
@@ -152,9 +149,13 @@ def _frozen_var_by_player_id(frozen_path: Path | str | None = None) -> dict[str,
     """Authoritative draft-day VAR per ``player_id`` from the frozen board.
 
     ``draft_state_board.json`` is the board the league actually drafted against; its
-    ``player_id`` (``mlbam::player_type``) matches the rebuilt board's. A missing or
-    malformed file yields an empty dict so the caller falls back to the rebuilt VAR --
-    never raises (mirrors ``frozen_drift_summary``'s soft contract).
+    ``player_id`` is ``fg_id::player_type`` (e.g. ``"30279::pitcher"``), the SAME key
+    ``board.py`` builds for the rebuilt board -- so the anchor join depends on that
+    fg_id key format staying in lockstep between the two boards, not on mlbam. A missing,
+    malformed, null-, non-numeric-, or non-finite-``var`` row is skipped, so a corrupt file
+    yields an empty or partial dict; this LOADER itself never raises. Whether a small/empty
+    result is safe to ignore or should fail loud is the ANCHOR's decision
+    (``_anchor_board_var_to_frozen``), not this loader's.
     """
     frozen_path = Path(frozen_path) if frozen_path else _FROZEN_BOARD
     try:
@@ -162,11 +163,19 @@ def _frozen_var_by_player_id(frozen_path: Path | str | None = None) -> dict[str,
     except (OSError, ValueError) as exc:
         logger.warning("draft-value: no frozen VAR anchor (%s): %s", frozen_path, exc)
         return {}
-    return {
-        row["player_id"]: float(row["var"])
-        for row in frozen
-        if row.get("player_id") is not None and row.get("var") is not None
-    }
+    out: dict[str, float] = {}
+    for row in frozen:
+        pid, var = row.get("player_id"), row.get("var")
+        if pid is None or var is None:
+            continue
+        try:
+            v = float(var)
+        except (TypeError, ValueError):
+            continue  # corrupt non-numeric var: skip rather than raise (soft contract)
+        if not math.isfinite(v):
+            continue  # NaN/inf var: also corrupt -- a NaN anchor would read as unmatched
+        out[pid] = v
+    return out
 
 
 def _anchor_board_var_to_frozen(board: pd.DataFrame, frozen_var: dict[str, float]) -> pd.DataFrame:
@@ -178,15 +187,37 @@ def _anchor_board_var_to_frozen(board: pd.DataFrame, frozen_var: dict[str, float
     ``preseason_var``, ``skill``, ``luck``, and the projected par curve -- must be the
     draft-day VAR the league actually drafted against, not the drifted rebuild, so anchor
     the board's ``var`` column to the frozen values here (before ``_board_index``, so the
-    VAR tie-break also uses draft-day truth). Rows the frozen board lacks keep their
-    rebuilt VAR (logged). The rebuilt projected LINES still drive the to-date (f<1)
-    rescale, which does not read ``var`` -- that is the only thing the rebuild is kept for.
+    VAR tie-break also uses draft-day truth). A few rows the frozen board lacks (post-freeze
+    additions) keep their rebuilt VAR (logged); but when the anchor CANNOT be meaningfully
+    applied -- an empty frozen board, or a near-total key-format mismatch -- this raises
+    rather than silently ship grades on the drifted rebuilt VAR (run_draft_value is wrapped
+    by the refresh's try/except, which keeps the prior good cache). The rebuilt projected
+    LINES still drive the to-date (f<1) rescale, which does not read ``var`` -- that is the
+    only thing the rebuild is kept for.
     """
     if not frozen_var:
-        return board
+        raise RuntimeError(
+            "draft-value: no frozen VAR to anchor to -- draft_state_board.json is missing, "
+            "unreadable, or has no usable rows. Refusing to ship draft grades on the drifted "
+            "rebuilt VAR (the refresh keeps the prior good cache); restore the frozen board."
+        )
     board = board.copy()
     mapped = board["player_id"].map(frozen_var)
     unmatched = int(mapped.isna().sum())
+    matched = len(board) - unmatched
+    # A near-total mismatch means the two boards' player_id key formats have diverged:
+    # board.py keys the whole board fg_id::type all-or-nothing, so one fg_id-less projection
+    # row flips it to name::type while the frozen board stays fg_id::type, dropping the join
+    # to ~0 matches. Silently keeping the drifted rebuilt VAR for everyone would defeat the
+    # anchor invisibly, so fail loud -- run_draft_value is wrapped by the refresh's
+    # try/except, which leaves the prior good draft-value cache untouched on a raise.
+    if matched < 0.5 * len(board):
+        raise RuntimeError(
+            f"draft-value: frozen VAR anchor matched only {matched}/{len(board)} board rows -- "
+            "the rebuilt and frozen board player_id key formats have likely diverged "
+            "(expected fg_id::player_type on both). Refusing to ship draft grades on the "
+            "drifted rebuilt VAR; check board.py fg_id keying vs draft_state_board.json."
+        )
     if unmatched:
         logger.warning(
             "draft-value: %d/%d board rows have no frozen VAR anchor; keeping the rebuilt "
@@ -313,7 +344,9 @@ class DraftPick:
     is_keeper: bool
 
 
-def reconstruct_draft(config: LeagueConfig | None = None) -> list[DraftPick]:
+def reconstruct_draft(
+    config: LeagueConfig | None = None, state: dict[str, Any] | None = None
+) -> list[DraftPick]:
     """Reconstruct (team, slot) per 2026 pick from draft_order + draft_state + keepers.
 
     ``draft_order.json`` ``rounds`` is the full 23x10 snake order; rounds 1-3 (the
@@ -321,12 +354,14 @@ def reconstruct_draft(config: LeagueConfig | None = None) -> list[DraftPick]:
     remaining slots. ``drafted_players[0:30]`` are the keepers in league.yaml order;
     ``drafted_players[30:230]`` are the live picks in snake order. Trades are applied
     on the absolute ``[round-1][slot-1]`` cell before the keeper-round slots are
-    skipped.
+    skipped. Pass a pre-parsed ``state`` (draft_state.json) to avoid re-reading it when
+    the caller already has it; ``None`` reads it here.
     """
     if config is None:
         config = load_config(_CONFIG)
+    if state is None:
+        state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
     order = json.loads(_DRAFT_ORDER.read_text(encoding="utf-8"))
-    state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
     drafted: list[str] = state["drafted_players"]
     keeper_defs: list[dict[str, Any]] = config.keepers
     # load_config defaults keepers to [] on a missing/misspelled section (config.py),
@@ -900,14 +935,19 @@ def run_draft_value(
     if config is None:
         config = load_config(_CONFIG)
     board, scale = reproduce_draft_day_board(config)
-    frozen_drift_summary(board)  # soft: logs a warning on large drift, never raises
+    # Load the frozen draft-day VAR once and feed both consumers (the soft drift check
+    # and the anchor) instead of reading draft_state_board.json twice.
+    frozen_var = _frozen_var_by_player_id()
+    frozen_drift_summary(board, frozen_var=frozen_var)  # soft: logs (INFO) on drift, never raises
     # M7: anchor the f=1 VAR (preseason_var / skill / luck / projected par curve) to the
     # frozen draft-day board; the rebuilt board's VAR drifts, and only its lines+scale
     # are needed (for the to-date rescale). Must precede _board_index (VAR tie-break).
-    board = _anchor_board_var_to_frozen(board, _frozen_var_by_player_id())
-    picks = reconstruct_draft(config)
-    # enforce the reconstruction gate against the user's known roster (spec oracle 6b)
+    board = _anchor_board_var_to_frozen(board, frozen_var)
+    # Read draft_state.json once and share it: reconstruct_draft needs drafted_players,
+    # the gate below needs user_roster.
     state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
+    picks = reconstruct_draft(config, state=state)
+    # enforce the reconstruction gate against the user's known roster (spec oracle 6b)
     user_roster: list[str] = state.get("user_roster") or []
     keepers = config.keepers
     keeper_team = {normalize_name(k["name"]): k["team"] for k in keepers}
@@ -920,7 +960,12 @@ def run_draft_value(
     )
     if gate:
         raise RuntimeError(f"Draft reconstruction gate failed: {gate}")
+    # Clamp to [0, 1]: season_fraction() already clamps, but a caller-threaded fraction
+    # does not -- refresh_pipeline passes 1 - fraction_remaining, which goes NEGATIVE when a
+    # refresh runs before season_start (compute_fraction_remaining clamps only its lower
+    # bound). A negative f would scale every counting stat and floor negative -> garbage VAR.
     f = season_fraction(config) if fraction is None else fraction
+    f = max(0.0, min(1.0, f))
 
     bindex = _board_index(board)
     # Assign each pick a player_type up front (two-way aware) so the par curve, the
