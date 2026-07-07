@@ -465,8 +465,22 @@ def _sample_monte_carlo():
             },
         },
         "category_risk": {
-            "R": {"median_pts": 7, "p10": 5, "p90": 9, "top3_pct": 62, "bot3_pct": 8},
-            "SV": {"median_pts": 4, "p10": 2, "p90": 7, "top3_pct": 22, "bot3_pct": 38},
+            "R": {
+                "median_pts": 7,
+                "p10": 5,
+                "p90": 9,
+                "first_pct": 34,
+                "top3_pct": 62,
+                "bot3_pct": 8,
+            },
+            "SV": {
+                "median_pts": 4,
+                "p10": 2,
+                "p90": 7,
+                "first_pct": 6,
+                "top3_pct": 22,
+                "bot3_pct": 38,
+            },
         },
     }
 
@@ -482,9 +496,35 @@ def test_format_monte_carlo_category_risk_colors():
     data = format_monte_carlo_for_display(_sample_monte_carlo(), "Hart of the Order")
     risk = data["category_risk"]
     sv = next(r for r in risk if r["cat"] == "SV")
-    assert sv["risk_class"] == "cat-bottom"
+    assert sv["risk_class"] == "cat-bottom"  # still derives from the internal bot3_pct
     r_cat = next(r for r in risk if r["cat"] == "R")
     assert r_cat["risk_class"] == "cat-top"
+    # display swap: category rows now carry first_pct (P(win the category)), not bot3_pct
+    assert r_cat["first_pct"] == 34
+    assert "bot3_pct" not in r_cat
+
+
+def test_format_monte_carlo_tolerates_pre_feature_cache():
+    # A rest_of_season MC cache written before first_pct existed must format without
+    # a KeyError; the new column degrades to 0.0 until the next refresh rewrites it.
+    stale = {
+        "team_results": {
+            "Hart of the Order": {
+                "median_pts": 68.5,
+                "p10": 58,
+                "p90": 76,
+                "first_pct": 18.3,
+                "top3_pct": 52.1,
+            }
+        },
+        "category_risk": {  # old shape: bot3_pct present, first_pct absent
+            "SV": {"median_pts": 4, "p10": 2, "p90": 7, "top3_pct": 22, "bot3_pct": 38},
+        },
+    }
+    out = format_monte_carlo_for_display(stale, "Hart of the Order")
+    sv = next(r for r in out["category_risk"] if r["cat"] == "SV")
+    assert sv["first_pct"] == 0.0  # degraded, not a KeyError
+    assert sv["risk_class"] == "cat-bottom"  # bot3-driven coloring still works
 
 
 # --- format_lineup_for_display tests ---

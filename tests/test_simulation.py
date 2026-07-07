@@ -577,10 +577,12 @@ class TestRunRosMonteCarlo:
         expected_cats = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "ERA", "WHIP", "SV"]
         for cat in expected_cats:
             assert cat in cr, f"Missing category: {cat}"
-            expected_cat_keys = {"median_pts", "p10", "p90", "top3_pct", "bot3_pct"}
+            expected_cat_keys = {"median_pts", "p10", "p90", "first_pct", "top3_pct", "bot3_pct"}
             assert set(cr[cat].keys()) == expected_cat_keys, (
                 f"{cat} keys: {set(cr[cat].keys())} != {expected_cat_keys}"
             )
+            # first_pct is P(win the category outright); a valid 0-100 percentage.
+            assert 0 <= cr[cat]["first_pct"] <= 100
 
 
 # ---------------------------------------------------------------------------

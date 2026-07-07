@@ -1242,7 +1242,7 @@ def run_monte_carlo(
 
     Returns:
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
-         "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}}}
+         "category_risk": {cat: {median_pts, p10, p90, first_pct, top3_pct, bot3_pct}}}
     """
     # Convert Player objects to flat dicts for the simulation internals.
     # The internal simulation engine (simulate_season, _apply_variance)
@@ -1290,6 +1290,9 @@ def run_monte_carlo(
             "top3_pct": round(mc_top3[name] / n * 100, 1),
         }
 
+    # first_pct: P(the user is 1st in the category) == P(max roto points). The category
+    # winner gets num_teams points, so arr >= num_teams counts an outright category win.
+    num_teams = len(team_names)
     category_risk = {}
     for c in ALL_CATS:
         arr = np.array(user_cat_pts[c.value])
@@ -1297,6 +1300,7 @@ def run_monte_carlo(
             "median_pts": round(float(np.median(arr)), 1),
             "p10": round(float(np.percentile(arr, 10)), 1),
             "p90": round(float(np.percentile(arr, 90)), 1),
+            "first_pct": round(float((arr >= num_teams).sum()) / n * 100, 1),
             "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
             "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
         }
@@ -1340,7 +1344,7 @@ def run_ros_monte_carlo(
 
     Returns:
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
-         "category_risk": {cat: {median_pts, p10, p90, top3_pct, bot3_pct}},
+         "category_risk": {cat: {median_pts, p10, p90, first_pct, top3_pct, bot3_pct}},
          "distributions": compact per-team outcome curves (see build_distributions)}
         category_risk is {} when the user team is absent from the rosters.
     """
@@ -1418,6 +1422,9 @@ def run_ros_monte_carlo(
     # raises IndexError on an empty input). The user team's slice is the same
     # per-iteration sequence the old user-only accumulator produced, so the
     # computed values are unchanged when the team is present.
+    # first_pct: P(the user is 1st in the category) == P(max roto points). The category
+    # winner gets num_teams points, so arr >= num_teams counts an outright category win.
+    num_teams = len(team_names)
     user_cat_pts = all_cat_pts.get(user_team_name)
     if user_cat_pts is not None:
         for c in ALL_CATS:
@@ -1426,6 +1433,7 @@ def run_ros_monte_carlo(
                 "median_pts": round(float(np.median(arr)), 1),
                 "p10": round(float(np.percentile(arr, 10)), 1),
                 "p90": round(float(np.percentile(arr, 90)), 1),
+                "first_pct": round(float((arr >= num_teams).sum()) / n * 100, 1),
                 "top3_pct": round(float((arr >= 8).sum()) / n * 100, 1),
                 "bot3_pct": round(float((arr <= 3).sum()) / n * 100, 1),
             }

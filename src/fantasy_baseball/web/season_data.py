@@ -606,7 +606,8 @@ def format_monte_carlo_for_display(mc_data: dict, user_team_name: str) -> dict:
       - teams: list sorted by median_pts desc, each with median_pts, p10, p90,
                first_pct, top3_pct, is_user
       - category_risk: list of dicts with cat, median_pts, p10, p90,
-                       top3_pct, bot3_pct, risk_class
+                       first_pct, top3_pct, risk_class (the red "weak category"
+                       highlight still derives from the sim's internal bot3_pct)
     """
     if not mc_data or "team_results" not in mc_data:
         return {"teams": [], "category_risk": []}
@@ -640,8 +641,10 @@ def format_monte_carlo_for_display(mc_data: dict, user_team_name: str) -> dict:
                 "median_pts": data["median_pts"],
                 "p10": data["p10"],
                 "p90": data["p90"],
+                # .get: a rest_of_season MC cache written before this field existed
+                # (deploy-before-refresh window) lacks first_pct; degrade to 0.0.
+                "first_pct": data.get("first_pct", 0.0),
                 "top3_pct": data["top3_pct"],
-                "bot3_pct": data["bot3_pct"],
                 "risk_class": risk_class,
             }
         )
