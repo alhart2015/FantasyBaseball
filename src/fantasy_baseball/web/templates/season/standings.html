@@ -186,8 +186,8 @@
                     <th>Median Pts</th>
                     <th>P10</th>
                     <th>P90</th>
-                    <th>Top 3 %</th>
                     <th>1st %</th>
+                    <th>Top 3 %</th>
                 </tr>
             </thead>
             <tbody>
@@ -197,8 +197,8 @@
                     <td>{{ row.median_pts | round(1) }}</td>
                     <td style="opacity: 0.6;">{{ row.p10 | round(1) }}</td>
                     <td style="opacity: 0.6;">{{ row.p90 | round(1) }}</td>
-                    <td class="{{ row.top3_class }}">{{ row.top3_pct | round(1) }}%</td>
                     <td class="{{ row.first_pct_class }}">{% if row.first_pct is not none %}{{ row.first_pct | round(1) }}%{% else %}-{% endif %}</td>
+                    <td class="{{ row.top3_class }}">{{ row.top3_pct | round(1) }}%</td>
                 </tr>
             {% endfor %}
             </tbody>
