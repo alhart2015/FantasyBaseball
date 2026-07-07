@@ -465,8 +465,8 @@ def _sample_monte_carlo():
             },
         },
         "category_risk": {
-            "R": {"median_pts": 7, "p10": 5, "p90": 9, "top3_pct": 62, "bot3_pct": 8},
-            "SV": {"median_pts": 4, "p10": 2, "p90": 7, "top3_pct": 22, "bot3_pct": 38},
+            "R": {"median_pts": 7, "p10": 5, "p90": 9, "first_pct": 34, "top3_pct": 62},
+            "SV": {"median_pts": 4, "p10": 2, "p90": 7, "first_pct": 6, "top3_pct": 22},
         },
     }
 
@@ -481,10 +481,38 @@ def test_format_monte_carlo_sorted_by_median():
 def test_format_monte_carlo_category_risk_colors():
     data = format_monte_carlo_for_display(_sample_monte_carlo(), "Hart of the Order")
     risk = data["category_risk"]
+    # Green highlight only for strong categories (top3 >= 50); no bottom-3 red anymore.
     sv = next(r for r in risk if r["cat"] == "SV")
-    assert sv["risk_class"] == "cat-bottom"
+    assert sv["risk_class"] == ""  # SV top3 = 22 -> no highlight (bottom-3 red removed)
     r_cat = next(r for r in risk if r["cat"] == "R")
-    assert r_cat["risk_class"] == "cat-top"
+    assert r_cat["risk_class"] == "cat-top"  # R top3 = 62 -> strong
+    # display swap: category rows carry first_pct (P(1st in category)), not bot3_pct
+    assert r_cat["first_pct"] == 34
+    assert "bot3_pct" not in r_cat
+
+
+def test_format_monte_carlo_tolerates_pre_feature_cache():
+    # A cache written before first_pct existed (e.g. the frozen Opening Day base blob)
+    # must format without KeyError; first_pct comes back None so the template shows "-"
+    # rather than a misleading 0%.
+    stale = {
+        "team_results": {
+            "Hart of the Order": {
+                "median_pts": 68.5,
+                "p10": 58,
+                "p90": 76,
+                "first_pct": 18.3,
+                "top3_pct": 52.1,
+            }
+        },
+        "category_risk": {  # old shape: bot3_pct present, first_pct absent
+            "SV": {"median_pts": 4, "p10": 2, "p90": 7, "top3_pct": 22, "bot3_pct": 38},
+        },
+    }
+    out = format_monte_carlo_for_display(stale, "Hart of the Order")
+    sv = next(r for r in out["category_risk"] if r["cat"] == "SV")
+    assert sv["first_pct"] is None  # pre-first_pct cache -> None (template renders "-")
+    assert sv["risk_class"] == ""  # bottom-3 red highlight removed
 
 
 # --- format_lineup_for_display tests ---

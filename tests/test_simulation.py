@@ -577,10 +577,25 @@ class TestRunRosMonteCarlo:
         expected_cats = ["R", "HR", "RBI", "SB", "AVG", "W", "K", "ERA", "WHIP", "SV"]
         for cat in expected_cats:
             assert cat in cr, f"Missing category: {cat}"
-            expected_cat_keys = {"median_pts", "p10", "p90", "top3_pct", "bot3_pct"}
+            expected_cat_keys = {"median_pts", "p10", "p90", "first_pct", "top3_pct"}
             assert set(cr[cat].keys()) == expected_cat_keys, (
                 f"{cat} keys: {set(cr[cat].keys())} != {expected_cat_keys}"
             )
+            # first_pct is P(the user is 1st in the category); a valid 0-100 percentage.
+            assert 0 <= cr[cat]["first_pct"] <= 100
+
+
+def test_category_risk_stats_first_pct_is_tie_inclusive():
+    # first_pct = P(user's category points == the per-iteration league max), so a TIE for
+    # the lead counts as 1st (a threshold like >= num_teams would drop tied wins).
+    from fantasy_baseball.simulation import _category_risk_stats
+
+    arr = np.array([10.0, 9.0, 5.0, 5.0])  # user's category points per iteration
+    max_pts = np.array([10.0, 10.0, 5.0, 8.0])  # best in the league that iteration
+    # user == max at i0 (outright) and i2 (tie); below max at i1, i3 -> 2/4 = 50%.
+    stats = _category_risk_stats(arr, max_pts)
+    assert stats["first_pct"] == 50.0
+    assert "bot3_pct" not in stats  # bottom-3 column removed
 
 
 # ---------------------------------------------------------------------------
