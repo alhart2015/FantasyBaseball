@@ -237,6 +237,6 @@
       buildTrends();
       return;
     }
-    charts.forEach((c) => c && c.resize());
+    charts.forEach((c) => c.resize());
   };
 })();
