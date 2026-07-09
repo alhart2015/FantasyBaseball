@@ -251,10 +251,12 @@
         }
       })
       .catch((err) => {
-        // Reset so the next Trends open retries a transient failure (Chart.js
-        // load / fetch / parse). An empty-data response is NOT an error -- it
-        // calls showError inside the .then above and leaves `loaded` set.
-        loaded = false;
+        // No retry-reset here: `showError` replaces each canvas wrapper's
+        // contents (removing the <canvas>), so a rebuild can't reuse them --
+        // a failed load stays shown until the page is reloaded, matching the
+        // original behavior. `ensureChartJs` already awaits Chart.js's load
+        // event, so the earlier Chart-not-defined ordering race is gone and
+        // there is nothing transient left worth auto-retrying.
         showError("chart-actual", "Failed to load trends: " + err.message);
         showError("chart-projected", "Failed to load trends: " + err.message);
       });
