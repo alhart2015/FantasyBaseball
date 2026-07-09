@@ -1,9 +1,10 @@
-// /trends — Chart.js line graphs for actual standings + projected ERoto.
+// Trends subpage of Standings - Chart.js line graphs for actual standings +
+// projected ERoto.
 //
-// Loads /api/trends/series once, builds two charts, and handles tab
-// switching (swap dataset.data, then chart.update()), hover-to-highlight
-// (dim non-hovered datasets), and click-to-toggle (Chart.js legend
-// default).
+// Fetches /api/trends/series once (lazily, the first time the Trends pill is
+// opened), builds two charts, and handles tab switching (swap dataset.data,
+// then chart.update()), hover-to-highlight (dim non-hovered datasets), and
+// click-to-toggle (Chart.js legend default).
 
 (function () {
   // 12-color qualitative palette; user team gets its own bold color.
@@ -186,8 +187,32 @@
   let charts = [];
   let loaded = false;
 
+  // Load Chart.js on demand, so the standings page never pays for it unless the
+  // user actually opens Trends. Injecting-then-awaiting also guarantees `Chart`
+  // exists before buildChart runs -- a bare deferred <script> could execute
+  // after this file on a fast click and throw "Chart is not defined".
+  const CHARTJS_SRC = "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js";
+  function ensureChartJs() {
+    return new Promise((resolve, reject) => {
+      if (typeof Chart !== "undefined") {
+        resolve();
+        return;
+      }
+      const tag = document.createElement("script");
+      tag.src = CHARTJS_SRC;
+      tag.addEventListener("load", () => resolve(), { once: true });
+      tag.addEventListener("error", () => {
+        // Drop the failed tag so a later retry re-injects a fresh one.
+        tag.remove();
+        reject(new Error("Chart.js failed to load"));
+      }, { once: true });
+      document.head.appendChild(tag);
+    });
+  }
+
   function buildTrends() {
-    fetch("/api/trends/series")
+    ensureChartJs()
+      .then(() => fetch("/api/trends/series"))
       .then((r) => {
         if (!r.ok) {
           throw new Error("HTTP " + r.status);
@@ -226,17 +251,21 @@
         }
       })
       .catch((err) => {
+        // Reset so the next Trends open retries a transient failure (Chart.js
+        // load / fetch / parse). An empty-data response is NOT an error -- it
+        // calls showError inside the .then above and leaves `loaded` set.
+        loaded = false;
         showError("chart-actual", "Failed to load trends: " + err.message);
         showError("chart-projected", "Failed to load trends: " + err.message);
       });
   }
 
   window.renderTrends = function () {
-    if (!loaded) {
-      loaded = true;
-      buildTrends();
+    if (loaded) {
+      charts.forEach((c) => c.resize());
       return;
     }
-    charts.forEach((c) => c.resize());
+    loaded = true;
+    buildTrends();
   };
 })();

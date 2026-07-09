@@ -77,6 +77,10 @@ def test_trends_subpage_renders_within_standings(app):
     assert "chart-projected" in body
     assert "season_trends.js" in body
     assert 'data-view="trends"' in body
+    # The trends_chart macro emits a per-category tab from `{% for cat in
+    # categories %}`; assert one renders so a dropped `categories` context var
+    # (which would silently blank every per-stat tab) fails this test.
+    assert 'data-tab="HR"' in body
 
 
 def test_trends_route_removed(app):

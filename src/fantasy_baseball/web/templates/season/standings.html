@@ -1,13 +1,5 @@
 {% extends "season/base.html" %}
 {% block title %}Standings — Season Dashboard{% endblock %}
-{% block head_extra %}
-{# Chart.js powers only the Trends subpage. `defer` keeps it off the render
-   path (nothing uses `Chart` until the Trends pill is clicked), and the
-   `standings` guard skips it on the empty no-data page where Trends is absent. #}
-{% if standings %}
-<script defer src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
-{% endif %}
-{% endblock %}
 {% block content %}
 <div class="page-standings">
 <div class="page-header">
