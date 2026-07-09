@@ -1,10 +1,36 @@
-"""Coverage for /trends and /api/trends/series."""
+"""Coverage for the Trends standings subpage and /api/trends/series."""
 
 import json
+from unittest.mock import patch
 
 import pytest
 
 from fantasy_baseball.data import redis_store
+from fantasy_baseball.web.season_data import CacheKey
+
+
+def _mock_standings():
+    """Minimal two-team standings payload so /standings renders its data
+    branch (the Trends subpage markup lives inside `{% if standings %}`)."""
+    stats = {
+        "R": 300,
+        "HR": 90,
+        "RBI": 290,
+        "SB": 50,
+        "AVG": 0.270,
+        "W": 35,
+        "K": 600,
+        "SV": 25,
+        "ERA": 3.50,
+        "WHIP": 1.18,
+    }
+    return {
+        "effective_date": "2026-04-01",
+        "teams": [
+            {"name": "Hart of the Order", "team_key": "k1", "rank": 1, "stats": stats},
+            {"name": "SkeleThor", "team_key": "k2", "rank": 2, "stats": stats},
+        ],
+    }
 
 
 @pytest.fixture
@@ -26,20 +52,37 @@ def app(monkeypatch, fake_redis):
 
 
 def _authed_client(app):
-    """Helper: every /trends test below needs to be past the login gate."""
+    """Helper: every test below needs to be past the login gate."""
     client = app.test_client()
     with client.session_transaction() as sess:
         sess["authenticated"] = True
     return client
 
 
-def test_trends_page_renders(app):
+def test_trends_subpage_renders_within_standings(app):
+    # Trends moved from its own /trends route to a subpage of /standings
+    # (a pill in the top toggle, the way Distributions is). The two Chart.js
+    # canvases and the lazy-loader script now live in the standings response.
     client = _authed_client(app)
-    resp = client.get("/trends")
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_cache,
+        patch("fantasy_baseball.web.season_routes._load_config") as mock_cfg,
+    ):
+        mock_cache.side_effect = lambda k: _mock_standings() if k == CacheKey.STANDINGS else {}
+        mock_cfg.return_value.team_name = "Hart of the Order"
+        resp = client.get("/standings")
     assert resp.status_code == 200
     body = resp.get_data(as_text=True)
     assert "chart-actual" in body
     assert "chart-projected" in body
+    assert "season_trends.js" in body
+    assert 'data-view="trends"' in body
+
+
+def test_trends_route_removed(app):
+    # The standalone page is gone; only the subpage + API remain.
+    client = _authed_client(app)
+    assert client.get("/trends").status_code == 404
 
 
 def test_api_trends_series_empty(app):

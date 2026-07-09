@@ -606,16 +606,6 @@ def register_routes(app: Flask) -> None:
             all_categories=ALL_CATEGORIES,
         )
 
-    @app.route("/trends")
-    def trends():
-        meta = read_meta()
-        return render_template(
-            "season/trends.html",
-            meta=meta,
-            active_page="trends",
-            categories=[c.value for c in ALL_CATEGORIES],
-        )
-
     @app.route("/streaks")
     def streaks():
         meta = read_meta()

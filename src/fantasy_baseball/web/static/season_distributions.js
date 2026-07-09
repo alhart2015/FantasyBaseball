@@ -219,7 +219,9 @@
   window.renderDistributions = render;
 
   function setActivePill(groupSelector, stateKey, dataAttr, el) {
-    document.querySelectorAll(groupSelector + " .pill").forEach(function (p) {
+    // Toggles are `.tab-strip` <button> elements (matching the Trends view);
+    // select plain buttons rather than the old `.pill` class.
+    document.querySelectorAll(groupSelector + " button").forEach(function (p) {
       p.classList.remove("active");
     });
     el.classList.add("active");

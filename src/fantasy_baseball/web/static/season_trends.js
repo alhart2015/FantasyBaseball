@@ -178,7 +178,15 @@
     }
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
+  // Trends is a subpage of Standings, hidden (display:none) until its pill is
+  // clicked. Chart.js sizes to a zero-size canvas while hidden, so we build
+  // lazily on the FIRST show (charts init at the correct size) and merely
+  // resize on later shows (in case the window changed while hidden). The
+  // standings top-toggle calls window.renderTrends() when the tab opens.
+  let charts = [];
+  let loaded = false;
+
+  function buildTrends() {
     fetch("/api/trends/series")
       .then((r) => {
         if (!r.ok) {
@@ -201,6 +209,7 @@
             "chart-actual", data.actual.dates, actualDatasets
           );
           wireTabs('.tab-strip[data-target="actual"]', actualChart, "actual");
+          charts.push(actualChart);
         }
 
         if (!data.projected || !data.projected.dates || data.projected.dates.length === 0) {
@@ -213,11 +222,21 @@
             "chart-projected", data.projected.dates, projectedDatasets
           );
           wireTabs('.tab-strip[data-target="projected"]', projectedChart, "projected");
+          charts.push(projectedChart);
         }
       })
       .catch((err) => {
         showError("chart-actual", "Failed to load trends: " + err.message);
         showError("chart-projected", "Failed to load trends: " + err.message);
       });
-  });
+  }
+
+  window.renderTrends = function () {
+    if (!loaded) {
+      loaded = true;
+      buildTrends();
+      return;
+    }
+    charts.forEach((c) => c && c.resize());
+  };
 })();

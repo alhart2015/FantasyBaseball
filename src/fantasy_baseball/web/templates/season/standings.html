@@ -1,5 +1,8 @@
 {% extends "season/base.html" %}
 {% block title %}Standings — Season Dashboard{% endblock %}
+{% block head_extra %}
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js"></script>
+{% endblock %}
 {% block content %}
 <div class="page-standings">
 <div class="page-header">
@@ -22,6 +25,7 @@
     <button class="pill" data-view="projected" onclick="toggleTopView(this)">Projected</button>
     <button class="pill" data-view="montecarlo" onclick="toggleTopView(this)">Monte Carlo</button>
     <button class="pill" data-view="distributions" onclick="toggleTopView(this)">Distributions</button>
+    <button class="pill" data-view="trends" onclick="toggleTopView(this)">Trends</button>
 </div>
 
 {# ── Current (actual standings, unchanged) ── #}
@@ -233,17 +237,17 @@
 
 {# -- Distributions (ridgeline of per-team MC outcome spreads) -- #}
 <div id="view-distributions" style="display: none;">
-    <div class="pill-group" id="dist-metric-toggle">
-        <button class="pill active" data-distmetric="overall" onclick="distSetMetric(this)">Overall</button>
+    <nav class="tab-strip" id="dist-metric-toggle">
+        <button type="button" class="active" data-distmetric="overall" onclick="distSetMetric(this)">Overall</button>
         {% for cat in all_categories %}
-        <button class="pill" data-distmetric="{{ cat.value }}" onclick="distSetMetric(this)">{{ cat.value }}</button>
+        <button type="button" data-distmetric="{{ cat.value }}" onclick="distSetMetric(this)">{{ cat.value }}</button>
         {% endfor %}
-    </div>
+    </nav>
 
-    <div class="pill-group" id="dist-mode-toggle" style="display: none;">
-        <button class="pill active" data-distmode="totals" onclick="distSetMode(this)">Totals</button>
-        <button class="pill" data-distmode="points" onclick="distSetMode(this)">Points</button>
-    </div>
+    <nav class="tab-strip" id="dist-mode-toggle" style="display: none;">
+        <button type="button" class="active" data-distmode="totals" onclick="distSetMode(this)">Totals</button>
+        <button type="button" data-distmode="points" onclick="distSetMode(this)">Points</button>
+    </nav>
 
     <div class="dist-wrapper"><canvas id="distributions-canvas"></canvas></div>
     <p id="dist-empty" class="placeholder-text" style="display: none;">
@@ -251,6 +255,35 @@
     </p>
 
     <script type="application/json" id="distributions-data">{{ distributions | tojson }}</script>
+</div>
+
+{# -- Trends (roto + per-stat movement across the season) -- #}
+<div id="view-trends" style="display: none;">
+    <p style="color: var(--ink-soft); margin-top: 0; font-family: 'Outfit', sans-serif;">
+      Roto and per-stat movement across the season. Click a team in the legend to hide it; hover a line to focus it.
+    </p>
+
+    <section class="trends-section">
+      <h2>Actual Standings</h2>
+      <nav class="tab-strip" data-target="actual">
+        <button type="button" class="active" data-tab="roto">Roto Points</button>
+        {% for cat in categories %}
+        <button type="button" data-tab="{{ cat }}">{{ cat }}</button>
+        {% endfor %}
+      </nav>
+      <div class="chart-wrapper"><canvas id="chart-actual"></canvas></div>
+    </section>
+
+    <section class="trends-section">
+      <h2>Projected ERoto</h2>
+      <nav class="tab-strip" data-target="projected">
+        <button type="button" class="active" data-tab="roto">Roto Points</button>
+        {% for cat in categories %}
+        <button type="button" data-tab="{{ cat }}">{{ cat }}</button>
+        {% endfor %}
+      </nav>
+      <div class="chart-wrapper"><canvas id="chart-projected"></canvas></div>
+    </section>
 </div>
 
 <dialog id="breakdown-modal">
@@ -344,7 +377,11 @@ function toggleTopView(el) {
     document.getElementById('view-projected').style.display = v === 'projected' ? '' : 'none';
     document.getElementById('view-montecarlo').style.display = v === 'montecarlo' ? '' : 'none';
     document.getElementById('view-distributions').style.display = v === 'distributions' ? '' : 'none';
+    document.getElementById('view-trends').style.display = v === 'trends' ? '' : 'none';
     if (v === 'distributions' && window.renderDistributions) window.renderDistributions();
+    // Trends charts are built lazily on first show and resized on later shows,
+    // because Chart.js reads a zero-size canvas while the view is display:none.
+    if (v === 'trends' && window.renderTrends) window.renderTrends();
 }
 
 /* ── Current standings sub-toggle ── */
@@ -672,20 +709,27 @@ document.addEventListener('DOMContentLoaded', () => {
     font-weight: 600;
     font-style: normal;
 }
-.dist-wrapper { position: relative; width: 100%; height: 520px; margin-top: 0.75rem; }
+/* Card treatment mirrors the trends `.chart-wrapper` (surface + line border +
+   rounded) so Distributions and Trends read as matching sibling views. No
+   padding here: the ridgeline canvas is sized from `wrap.clientWidth`/dynamic
+   height in season_distributions.js, and internal padding would desync the
+   backing store from the displayed box (see the sizing note in that file). */
+.dist-wrapper {
+    position: relative;
+    width: 100%;
+    height: 520px;
+    margin-top: 12px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+}
 /* Canvas fills the wrapper so its layout size is the responsive container width
    x fixed height; the backing store is sized from the wrapper in JS. */
 .dist-wrapper canvas { display: block; width: 100%; height: 100%; }
-#dist-metric-toggle {
-    display: grid;
-    grid-template-columns: repeat(6, max-content);
-    column-gap: 6px;
-    row-gap: 4px;
-    border-bottom: none;
-}
 </style>
 
 <script src="{{ url_for('static', filename='season_distributions.js') }}"></script>
+<script src="{{ url_for('static', filename='season_trends.js') }}"></script>
 
 {% endif %}
 </div>

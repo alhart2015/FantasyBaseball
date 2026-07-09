@@ -3642,3 +3642,24 @@ td[style*="--neg"] {
   border-color: var(--amber);
   font-weight: 600;
 }
+
+/* Trends charts -- promoted from trends.html when Trends became a Standings
+   subpage. Shared by the Trends and (visually) Distributions views. */
+.trends-section { margin-bottom: 32px; }
+.trends-section h2 {
+  margin: 0 0 8px;
+  font-family: 'Newsreader', serif;
+  font-weight: 400;
+  font-style: italic;
+  font-size: 28px;
+  letter-spacing: -0.018em;
+  color: var(--ink);
+}
+.chart-wrapper {
+  position: relative;
+  height: 360px;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 12px;
+}
