@@ -70,7 +70,21 @@ def blend(year, kind, cols):
     return pd.concat(frames).groupby("MLBAMID", as_index=False).mean()
 
 
+def _derive_so(pa):
+    """Reconstruct SO for actuals files that ship K/9 instead of raw SO (2025 is a
+    rate/advanced export). IP is baseball thirds-notation (195.1 == 195 1/3), so
+    convert before dividing -- the naive K/9*IP/9 misrounds ~9% of pitchers."""
+    if "SO" not in pa.columns and {"K/9", "IP"}.issubset(pa.columns):
+        ip = pa["IP"].to_numpy(dtype=float)
+        ip_true = np.floor(ip) + (ip - np.floor(ip)) * 10.0 / 3.0
+        pa = pa.copy()
+        pa["SO"] = np.round(pa["K/9"].to_numpy(dtype=float) * ip_true / 9.0)
+    return pa
+
+
 def build_year(year):
+    """Return (hitter_merged, pitcher_merged_or_None, pitcher_cats). Pitcher cats are
+    per-year: 2025 actuals lack raw SO (derived above), so admit whatever is present."""
     # Hitters
     hp = blend(year, "hitters", ["PA", "R", "HR", "RBI", "SB"])
     ha = _read(STATS / f"hitters-{year}.csv")
@@ -79,16 +93,18 @@ def build_year(year):
     hm = hp.merge(
         ha[["MLBAMID", "R", "HR", "RBI", "SB"]], on="MLBAMID", how="left", suffixes=("_p", "_a")
     )
-    # Pitchers -- only years whose actuals carry raw counting cols (2025 is a
-    # rate/advanced file with no W/SO/SV).
-    pa = _read(STATS / f"pitchers-{year}.csv")
-    if not {"W", "SO", "SV"}.issubset(pa.columns):
-        return hm, None
-    pp = blend(year, "pitchers", ["IP", "W", "SO", "SV"])
+    # Pitchers -- per-year category set from whichever actual cols are present.
+    # W and SV are in every actuals file; SO is derived for rate-only years (2025).
+    pa = _derive_so(_read(STATS / f"pitchers-{year}.csv"))
+    p_cats = [(acol, key) for acol, key in P_CATS if acol in pa.columns]
+    if not p_cats:
+        return hm, None, []
+    acols = [acol for acol, _ in p_cats]
+    pp = blend(year, "pitchers", ["IP", *acols])
     pa["MLBAMID"] = pa["MLBAMID"].astype(int)
     pp = pp[pp["IP"] >= P_IP_MIN]
-    pm = pp.merge(pa[["MLBAMID", "W", "SO", "SV"]], on="MLBAMID", how="left", suffixes=("_p", "_a"))
-    return hm, pm
+    pm = pp.merge(pa[["MLBAMID", *acols]], on="MLBAMID", how="left", suffixes=("_p", "_a"))
+    return hm, pm, p_cats
 
 
 def cv_pt(vol, is_hitter):
@@ -123,12 +139,12 @@ def team_z(pool, cats, vol_col, is_hitter, dnp_zero):
 def run(dnp_zero):
     zs = {acol: [] for acol, _ in H_CATS + P_CATS}
     for year in YEARS:
-        hm, pm = build_year(year)
+        hm, pm, p_cats = build_year(year)
         for _ in range(N_TEAMS):
             for acol, v in team_z(hm, H_CATS, "PA", True, dnp_zero).items():
                 zs[acol].append(v)
             if pm is not None:
-                for acol, v in team_z(pm, P_CATS, "IP", False, dnp_zero).items():
+                for acol, v in team_z(pm, p_cats, "IP", False, dnp_zero).items():
                     zs[acol].append(v)
     return zs
 
