@@ -219,9 +219,10 @@
   window.renderDistributions = render;
 
   function setActivePill(groupSelector, stateKey, dataAttr, el) {
-    // Toggles are `.tab-strip` <button> elements (matching the Trends view);
-    // select plain buttons rather than the old `.pill` class.
-    document.querySelectorAll(groupSelector + " button").forEach(function (p) {
+    // Toggles are `.tab-strip` <button> elements (matching the Trends view).
+    // Select by the identifying data attribute so a future non-toggle button in
+    // the group doesn't get its active state clobbered.
+    document.querySelectorAll(groupSelector + " [data-" + dataAttr + "]").forEach(function (p) {
       p.classList.remove("active");
     });
     el.classList.add("active");

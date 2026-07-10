@@ -3656,11 +3656,26 @@ td[style*="--neg"] {
   letter-spacing: -0.018em;
   color: var(--ink);
 }
-.chart-wrapper {
+/* Shared card chrome for the Trends and Distributions chart surfaces so the two
+   sibling views read the same and a theme edit touches one place. Each adds only
+   its differing box metrics below. */
+.chart-wrapper,
+.dist-wrapper {
   position: relative;
-  height: 360px;
   background: var(--surface);
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+.chart-wrapper {
+  height: 360px;
   padding: 12px;
 }
+/* No padding on .dist-wrapper: the ridgeline canvas is sized from
+   `wrap.clientWidth`/dynamic height in season_distributions.js, and internal
+   padding would desync the backing store from the displayed box. */
+.dist-wrapper {
+  width: 100%;
+  height: 520px;
+  margin-top: 12px;
+}
+.dist-wrapper canvas { display: block; width: 100%; height: 100%; }

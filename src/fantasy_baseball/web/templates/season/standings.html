@@ -365,11 +365,9 @@ function toggleTopView(el) {
     document.querySelectorAll('#standings-top-toggle .pill').forEach(p => p.classList.remove('active'));
     el.classList.add('active');
     const v = el.dataset.view;
-    document.getElementById('view-current').style.display = v === 'current' ? '' : 'none';
-    document.getElementById('view-projected').style.display = v === 'projected' ? '' : 'none';
-    document.getElementById('view-montecarlo').style.display = v === 'montecarlo' ? '' : 'none';
-    document.getElementById('view-distributions').style.display = v === 'distributions' ? '' : 'none';
-    document.getElementById('view-trends').style.display = v === 'trends' ? '' : 'none';
+    ['current', 'projected', 'montecarlo', 'distributions', 'trends'].forEach(function (view) {
+        document.getElementById('view-' + view).style.display = v === view ? '' : 'none';
+    });
     if (v === 'distributions' && window.renderDistributions) window.renderDistributions();
     // Trends charts are built lazily on first show and resized on later shows,
     // because Chart.js reads a zero-size canvas while the view is display:none.
@@ -701,23 +699,8 @@ document.addEventListener('DOMContentLoaded', () => {
     font-weight: 600;
     font-style: normal;
 }
-/* Card treatment mirrors the trends `.chart-wrapper` (surface + line border +
-   rounded) so Distributions and Trends read as matching sibling views. No
-   padding here: the ridgeline canvas is sized from `wrap.clientWidth`/dynamic
-   height in season_distributions.js, and internal padding would desync the
-   backing store from the displayed box (see the sizing note in that file). */
-.dist-wrapper {
-    position: relative;
-    width: 100%;
-    height: 520px;
-    margin-top: 12px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 8px;
-}
-/* Canvas fills the wrapper so its layout size is the responsive container width
-   x fixed height; the backing store is sized from the wrapper in JS. */
-.dist-wrapper canvas { display: block; width: 100%; height: 100%; }
+/* .dist-wrapper card + canvas styles live in season.css next to .chart-wrapper
+   (its Trends sibling) so the shared card chrome is defined once. */
 </style>
 
 <script src="{{ url_for('static', filename='season_distributions.js') }}"></script>
