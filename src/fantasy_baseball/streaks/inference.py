@@ -28,7 +28,7 @@ import logging
 from collections.abc import Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
-from typing import Literal
+from typing import Literal, cast
 
 import duckdb
 import numpy as np
@@ -337,19 +337,19 @@ _VALID_COLD_METHODS: frozenset[str] = frozenset({"empirical", "poisson_p10", "po
 def _narrow_category(value: str) -> StreakCategory:
     if value not in _VALID_REPORT_CATEGORIES:
         raise RuntimeError(f"unexpected category {value!r} in model_fits")
-    return value  # type: ignore[return-value]
+    return cast(StreakCategory, value)
 
 
 def _narrow_direction(value: str) -> StreakDirection:
     if value not in _VALID_DIRECTIONS:
         raise RuntimeError(f"unexpected direction {value!r} in model_fits")
-    return value  # type: ignore[return-value]
+    return cast(StreakDirection, value)
 
 
 def _narrow_cold_method(value: str) -> ColdMethod:
     if value not in _VALID_COLD_METHODS:
         raise RuntimeError(f"unexpected cold_method {value!r} in model_fits")
-    return value  # type: ignore[return-value]
+    return cast(ColdMethod, value)
 
 
 def load_models_from_fits(

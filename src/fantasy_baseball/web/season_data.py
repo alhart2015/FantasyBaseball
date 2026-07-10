@@ -374,9 +374,12 @@ def format_standings_for_display(
         roto_cat_pts = roto[name]  # CategoryPoints
         score_roto_total = float(roto_cat_pts.total)
 
-        if has_yahoo_totals:
-            # yahoo_points_for is guaranteed non-None by has_yahoo_totals check.
-            team_total = float(entry.yahoo_points_for)  # type: ignore[arg-type]
+        # has_yahoo_totals guarantees yahoo_points_for is non-None here; the
+        # is-not-None narrowing satisfies mypy and the fallback is unreachable
+        # when has_yahoo_totals is True.
+        yahoo_pf = entry.yahoo_points_for
+        if has_yahoo_totals and yahoo_pf is not None:
+            team_total = float(yahoo_pf)
         else:
             team_total = score_roto_total
 
@@ -1363,9 +1366,12 @@ def build_trends_series(client, *, user_team: str) -> dict:
                     for cat in categories:
                         teams[name]["stats"][cat].append(None)
                     continue
-                if yahoo_authoritative:
-                    # yahoo_authoritative guarantees yahoo_points_for is non-None.
-                    teams[name]["roto_points"].append(float(row.yahoo_points_for))  # type: ignore[arg-type]
+                # yahoo_authoritative guarantees yahoo_points_for is non-None
+                # here; the is-not-None narrowing satisfies mypy and the
+                # fallback is unreachable when yahoo_authoritative is True.
+                row_pf = row.yahoo_points_for
+                if yahoo_authoritative and row_pf is not None:
+                    teams[name]["roto_points"].append(float(row_pf))
                 else:
                     teams[name]["roto_points"].append(float(roto[name].total))
                 stats_dict = row.stats.to_dict()

@@ -7,7 +7,7 @@ import os
 import threading
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
@@ -904,11 +904,15 @@ def register_routes(app: Flask) -> None:
             team_sds=team_sds,
         )
 
+        # The search functions return list[OpponentGroup] with typed
+        # TradeCandidate rows; below we decorate each candidate in place with
+        # response-only keys (send_key/receive_key/band) that aren't part of
+        # the core TradeCandidate contract, so keep the local loosely typed.
         results: list[Any]
         if mode == "away":
-            results = search_trades_away(**kwargs)
+            results = cast(list[Any], search_trades_away(**kwargs))
         else:
-            results = search_trades_for(**kwargs)
+            results = cast(list[Any], search_trades_for(**kwargs))
 
         # Decorate each candidate with canonical name::player_type keys
         # so client code (Compare button) can build /players?compare=...

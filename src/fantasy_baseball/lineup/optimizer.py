@@ -2,7 +2,7 @@ import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from itertools import combinations
-from typing import Any
+from typing import Any, cast
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -90,7 +90,9 @@ def _feasible_assignment(
         if cost[r][c] > 0.5:
             return None
         assignments[r] = slot_positions[c]
-    return assignments  # type: ignore[return-value]
+    # linear_sum_assignment returns one column per row, so every index in
+    # ``assignments`` was overwritten above; the ``None`` seeds are all gone.
+    return cast(list[Position], assignments)
 
 
 @dataclass
@@ -502,7 +504,10 @@ def optimize_pitcher_lineup(
         if best is None or total > best[0]:
             best = (total, list(subset), bench)
 
-    best_total, active_subset, bench = best  # type: ignore[misc]
+    # ``pitchers`` is non-empty and ``k >= 1`` (guarded at function top), so
+    # ``combinations`` yields at least one subset and ``best`` is always set.
+    assert best is not None
+    best_total, active_subset, bench = best
 
     # Active hitters on this roster -- identical in before/after, so they
     # cancel in the marginal but anchor the band at the correct full-team

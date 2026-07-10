@@ -9,7 +9,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, TypedDict, cast
 
-from fantasy_baseball.models.player import HitterStats, Player
+from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.standings import (
     CategoryStats,
     ProjectedStandings,
@@ -73,11 +74,34 @@ def team_baseline_volumes(
     return (ab if ab > 0.0 else None, ip if ip > 0.0 else None)
 
 
+class TradeCandidate(TypedDict):
+    """One proposed one-for-one swap, as built by the trade-search functions.
+
+    ``*_cat_deltas`` use uppercase category-code string keys (e.g. ``"HR"``,
+    ``"ERA"``) so Flask/JS consumers can index by the category code; they come
+    straight from :func:`compute_trade_impact`'s ``hart_cat_deltas`` /
+    ``opp_cat_deltas``.
+    """
+
+    send: str
+    send_positions: list[Position]
+    send_rank: int
+    send_player_type: PlayerType
+    receive: str
+    receive_positions: list[Position]
+    receive_rank: int
+    receive_player_type: PlayerType
+    hart_delta: float
+    opp_delta: float
+    hart_cat_deltas: dict[str, float]
+    opp_cat_deltas: dict[str, float]
+
+
 class OpponentGroup(TypedDict):
     """One opponent's trade-candidate group, as returned by search_trades_away."""
 
     opponent: str
-    candidates: list[dict[str, Any]]
+    candidates: list[TradeCandidate]
 
 
 def compute_roto_points_by_cat(
@@ -530,7 +554,7 @@ def search_trades_away(
     if send_rank is None:
         return []
 
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    grouped: dict[str, list[TradeCandidate]] = {}
 
     for opp_name, opp_roster in opp_rosters.items():
         for opp_player in opp_roster:
@@ -608,7 +632,7 @@ def search_trades_for(
     projected_standings: ProjectedStandings | None = None,
     *,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[OpponentGroup]:
     """Find trade offers the user can make to acquire a specific opponent player.
 
     Searches the user's roster for players they could send that pass
@@ -654,7 +678,7 @@ def search_trades_for(
 
     opp_roster = opp_rosters[target_opp]
 
-    candidates = []
+    candidates: list[TradeCandidate] = []
     for hart_player in hart_roster:
         send_rank = rankings.get(rank_key_from_positions(hart_player.name, hart_player.positions))
         if send_rank is None:
