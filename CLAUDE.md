@@ -2,7 +2,7 @@
 
 Guidance for Claude Code working in this repository. Subsystem-specific rules live in the nearest `CLAUDE.md` in the tree — Claude Code auto-loads them when you touch files in that directory.
 
-**These `CLAUDE.md` files are for durable instructions, not documentation.** Conventions, how-to, where-to-work, do/don't rules — yes. Point-in-time status, catalogs, port-status tables, architecture write-ups, "currently X" state — no. This file is auto-loaded every session with no timestamp, so status written here rots silently and misleads future sessions (a wrong answer that looks current is worse than none). Put status in code/docstrings, tests, git history, or `TODO.md` instead. If you feel the urge to document something here, that urge is the signal it belongs somewhere else.
+**These `CLAUDE.md` files are for durable instructions, not documentation.** Conventions, how-to, where-to-work, do/don't rules — yes. Point-in-time status, catalogs, port-status tables, architecture write-ups, "currently X" state — no. This file is auto-loaded every session with no timestamp, so status written here rots silently and misleads future sessions (a wrong answer that looks current is worse than none). Put status in code/docstrings, tests, git history, or GitHub Issues instead. If you feel the urge to document something here, that urge is the signal it belongs somewhere else.
 
 ## Correctness over speed
 
