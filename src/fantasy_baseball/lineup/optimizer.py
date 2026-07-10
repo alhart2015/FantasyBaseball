@@ -2,7 +2,7 @@ import dataclasses
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from itertools import combinations
-from typing import Any, cast
+from typing import Any
 
 import numpy as np
 from scipy.optimize import linear_sum_assignment
@@ -85,14 +85,14 @@ def _feasible_assignment(
             if can_fill_slot(p.positions, slot.value):
                 cost[i][j] = 0.0
     row_idx, col_idx = linear_sum_assignment(cost)
-    assignments: list[Position | None] = [None] * n_players
+    matched: dict[int, Position] = {}
     for r, c in zip(row_idx, col_idx, strict=False):
         if cost[r][c] > 0.5:
             return None
-        assignments[r] = slot_positions[c]
-    # linear_sum_assignment returns one column per row, so every index in
-    # ``assignments`` was overwritten above; the ``None`` seeds are all gone.
-    return cast(list[Position], assignments)
+        matched[r] = slot_positions[c]
+    # linear_sum_assignment returns one column per row, so every row index is
+    # present in ``matched``; rebuild the subset-parallel list in order.
+    return [matched[i] for i in range(n_players)]
 
 
 @dataclass

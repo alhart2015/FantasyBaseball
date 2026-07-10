@@ -7,7 +7,7 @@ import os
 import threading
 from datetime import date
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, TypedDict
 
 from flask import Flask, jsonify, redirect, render_template, request, session, url_for
 
@@ -23,6 +23,7 @@ from fantasy_baseball.models.standings import (
     StandingsEntry,
 )
 from fantasy_baseball.scoring import team_sds_from_json
+from fantasy_baseball.trades.evaluate import TradeCandidate
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS, Category
 from fantasy_baseball.web.season_data import (
     CacheKey,
@@ -34,6 +35,43 @@ from fantasy_baseball.web.season_data import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class TradeCandidateResponse(TradeCandidate):
+    """A :class:`TradeCandidate` plus the response-only keys the trade-search
+    route adds before serializing.
+
+    ``send_key`` / ``receive_key`` are canonical ``name::player_type`` ids the
+    Compare button uses; ``band`` is the closed-form one-for-one analytic band
+    (``None`` when projected standings are unavailable or the computation fails).
+    """
+
+    send_key: str
+    receive_key: str
+    band: dict[str, Any] | None
+
+
+class OpponentGroupResponse(TypedDict):
+    """One opponent's group of decorated trade candidates, as the route emits it."""
+
+    opponent: str
+    candidates: list[TradeCandidateResponse]
+
+
+def _decorate_candidate(cand: TradeCandidate) -> TradeCandidateResponse:
+    """Widen a core :class:`TradeCandidate` into a response row.
+
+    Adds the canonical ``name::player_type`` ids the Compare button uses to
+    build ``/players?compare=...`` URLs. Fail loudly on missing ``player_type``
+    rather than defaulting -- CLAUDE.md: never key on bare names. ``band`` is
+    seeded ``None`` and filled by the analytic pass in the route.
+    """
+    return TradeCandidateResponse(
+        **cand,
+        send_key=f"{cand['send']}::{cand['send_player_type']}",
+        receive_key=f"{cand['receive']}::{cand['receive_player_type']}",
+        band=None,
+    )
 
 
 def _standings_from_cache(raw: dict) -> Standings:
@@ -904,29 +942,21 @@ def register_routes(app: Flask) -> None:
             team_sds=team_sds,
         )
 
-        # The search functions return list[OpponentGroup] with typed
-        # TradeCandidate rows; below we decorate each candidate in place with
-        # response-only keys (send_key/receive_key/band) that aren't part of
-        # the core TradeCandidate contract, so keep the local loosely typed.
-        results: list[Any]
-        if mode == "away":
-            results = cast(list[Any], search_trades_away(**kwargs))
-        else:
-            results = cast(list[Any], search_trades_for(**kwargs))
+        raw_groups = search_trades_away(**kwargs) if mode == "away" else search_trades_for(**kwargs)
 
-        # Decorate each candidate with canonical name::player_type keys
-        # so client code (Compare button) can build /players?compare=...
-        # URLs without re-deriving the player_type lookup. Fail loudly on
-        # missing player_type -- defaulting would silently miscategorize
-        # pitcher trades as hitter trades (CLAUDE.md: never key on bare names).
-        for group in results:
-            for cand in group.get("candidates", []):
-                cand["send_key"] = f"{cand['send']}::{cand['send_player_type']}"
-                cand["receive_key"] = f"{cand['receive']}::{cand['receive_player_type']}"
+        # Widen each core TradeCandidate into a response row (see
+        # _decorate_candidate); band is seeded None and filled below.
+        results: list[OpponentGroupResponse] = [
+            {
+                "opponent": group["opponent"],
+                "candidates": [_decorate_candidate(cand) for cand in group["candidates"]],
+            }
+            for group in raw_groups
+        ]
 
-        # Decorate each candidate with the analytic band (cheap: closed-form).
-        # band is None when projected_standings is unavailable or an error occurs;
-        # never 500 the search.
+        # Fill each candidate's analytic band (cheap: closed-form). Left as the
+        # seeded None when projected_standings is unavailable or the computation
+        # raises -- never 500 the search.
         if projected_standings is not None:
             from fantasy_baseball.lineup.delta_roto import compute_one_for_one_band
 
@@ -934,17 +964,12 @@ def register_routes(app: Flask) -> None:
             fr = 1.0 if fr is None else float(fr)
 
             for group in results:
-                opp_name = group.get("opponent", "")
-                opp_roster_for_group = opp_rosters.get(opp_name, [])
+                opp_roster_for_group = opp_rosters.get(group["opponent"], [])
                 opp_by_key = {f"{p.name}::{p.player_type}": p for p in opp_roster_for_group}
-                for cand in group.get("candidates", []):
+                for cand in group["candidates"]:
                     try:
-                        receive_key = cand.get("receive_key") or (
-                            f"{cand['receive']}::{cand['receive_player_type']}"
-                        )
-                        receive_player = opp_by_key.get(receive_key)
+                        receive_player = opp_by_key.get(cand["receive_key"])
                         if receive_player is None:
-                            cand["band"] = None
                             continue
                         field_stats = projected_standings.field_stats(config.team_name)
                         band = compute_one_for_one_band(
@@ -959,11 +984,8 @@ def register_routes(app: Flask) -> None:
                         )
                         cand["band"] = band.to_dict()
                     except Exception:
-                        cand["band"] = None
-        else:
-            for group in results:
-                for cand in group.get("candidates", []):
-                    cand["band"] = None
+                        # band stays at its seeded None -- never 500 the search
+                        continue
 
         return jsonify(results)
 
