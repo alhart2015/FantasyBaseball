@@ -5,7 +5,7 @@ classify it relative to the player's expectation:
 
 - Sparse cats (HR, SB): expectation = projected_rate * next_window_PA. The
   outcome direction is "above" if next_window_count > expected, "below"
-  otherwise (ties break to "above" as the natural fantasy interpretation).
+  otherwise (an exact tie counts as "below", matching the strict `>` test).
 - Dense cats (R, RBI, AVG): expectation = empirical median of windows in the
   same (category, window_days, pt_bucket) cell. Direction same as above.
 

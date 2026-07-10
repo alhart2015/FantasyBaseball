@@ -893,14 +893,19 @@ def _score_one(
             cutoffs=model.dense_quintile_cutoffs,
         )
     else:
-        strength = (
-            _sparse_streak_strength(
-                value=int(window[category]),
-                window_pa=int(window["pa"]),
-                season_rate=season_rate,
-            )
-            or 0.0
+        sparse_strength = _sparse_streak_strength(
+            value=int(window[category]),
+            window_pa=int(window["pa"]),
+            season_rate=season_rate,
         )
+        if sparse_strength is None:
+            # Expected events this window is zero (e.g. a zero-rate SB season):
+            # training dropped these rows to the _zna bucket, so we cannot predict
+            # this window either. Return the unscoreable `base` result (probability
+            # = None, like the model-missing guards above) rather than fabricating a
+            # 0.0 strength and scoring a row the model can't predict.
+            return base
+        strength = sparse_strength
 
     feature_row = _build_feature_row(
         window=window,

@@ -20,12 +20,11 @@ from fantasy_baseball.data.redis_store import (
     get_game_log_totals,
 )
 from fantasy_baseball.data.yahoo_players import load_positions_cache
-from fantasy_baseball.draft.board import build_board_from_frames
+from fantasy_baseball.draft.board import ScaleInputs, build_board_from_frames
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.rankings import rank_key
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
-from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 from fantasy_baseball.utils.time_utils import compute_fraction_remaining, local_today
@@ -53,15 +52,6 @@ _DRAFT_ORDER = _CONFIG_DIR / "draft_order.json"
 _DRAFT_STATE = _REPO_ROOT / "data" / "draft_state.json"
 
 
-@dataclass(frozen=True)
-class ScaleInputs:
-    denoms: dict[Category, float]
-    repl_rates: dict[str, Any]
-    replacement_levels: dict[str, Any]
-    team_ab: int
-    team_ip: int
-
-
 def reproduce_draft_day_board(
     config: LeagueConfig | None = None,
 ) -> tuple[pd.DataFrame, ScaleInputs]:
@@ -82,7 +72,7 @@ def reproduce_draft_day_board(
         preseason_csvs, config.projection_systems, config.projection_weights
     )
     positions = load_positions_cache(_POSITIONS_JSON)
-    board, scale_d = build_board_from_frames(
+    board, scale = build_board_from_frames(
         hitters,
         pitchers,
         positions,
@@ -91,7 +81,6 @@ def reproduce_draft_day_board(
         team_ab=_DRAFT_DAY_TEAM_AB,
         team_ip=_DRAFT_DAY_TEAM_IP,
     )
-    scale = ScaleInputs(**scale_d)
     return board, scale
 
 
@@ -431,7 +420,22 @@ def _board_index(board: pd.DataFrame) -> dict[str, Any]:
     for _, row in board.iterrows():
         key = rank_key(row["name"], row["player_type"])
         cur = idx.get(key)
-        if cur is None or float(row["var"]) > float(cur["var"]):
+        if cur is None:
+            idx[key] = row
+            continue
+        # Same normalized-name + type collision -- distinct namesakes, e.g. the two
+        # active 2026 Max Muncys. Keep the higher-VAR row and warn (mirrors the
+        # namesake-collision convention in _insert_by_name); silently dropping one
+        # would grade a drafted player as the other. Long-term fix: carry per-pick
+        # Yahoo/mlbam ids through reconstruction.
+        cur_var, new_var = float(cur["var"]), float(row["var"])
+        logger.warning(
+            "Board namesake collision on %s: keeping VAR=%.2f, dropping VAR=%.2f",
+            key,
+            max(cur_var, new_var),
+            min(cur_var, new_var),
+        )
+        if new_var > cur_var:
             idx[key] = row
     return idx
 
@@ -900,6 +904,16 @@ def _assign_pick_types(
                 ptype = "hitter"
             elif "pitcher only" in note:
                 ptype = "pitcher"
+            elif len(avail_types) > 1:
+                # Two-way keeper (board carries both types) with no recognized
+                # disambiguating note. Refuse to guess: a reworded or missing note
+                # must fail loud, not silently fall through to _resolve_type and flip
+                # the type, corrupting the par curve. Long-term fix: a structured
+                # keeper player_type field in league.yaml validated at config load.
+                raise ValueError(
+                    f"Two-way keeper {p.player_name!r} needs a 'batter only' or "
+                    f"'pitcher only' league.yaml note to disambiguate; got {note!r}"
+                )
             else:
                 ptype = _resolve_type(avail_types)
         else:  # drafted

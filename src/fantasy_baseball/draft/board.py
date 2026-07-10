@@ -1,4 +1,5 @@
 import logging
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
@@ -16,11 +17,24 @@ from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     DEFAULT_TEAM_AB,
     DEFAULT_TEAM_IP,
+    Category,
     compute_starters_per_position,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class ScaleInputs:
+    """Pool-derived scale a board was built on, so realized/estimate VAR can be
+    scored on the SAME scale as the board. Returned by build_board_from_frames."""
+
+    denoms: dict[Category, float]
+    repl_rates: dict[str, Any]
+    replacement_levels: dict[str, Any]
+    team_ab: int
+    team_ip: int
 
 
 def build_draft_board(
@@ -47,7 +61,7 @@ def build_board_from_frames(
     sgp_overrides: SgpOverrides | None = None,
     team_ab: int = DEFAULT_TEAM_AB,
     team_ip: int = DEFAULT_TEAM_IP,
-) -> tuple[pd.DataFrame, dict[str, Any]]:
+) -> tuple[pd.DataFrame, ScaleInputs]:
     """Compute a ranked draft board from already-loaded projection frames + a
     positions dict.
 
@@ -124,13 +138,13 @@ def build_board_from_frames(
 
     board = pool.sort_values("var", ascending=False).reset_index(drop=True)
     _validate_top_adp_players(board, hitters, pitchers)
-    scale = {
-        "denoms": denoms,
-        "repl_rates": repl_rates,
-        "replacement_levels": replacement_levels,
-        "team_ab": team_ab,
-        "team_ip": team_ip,
-    }
+    scale = ScaleInputs(
+        denoms=denoms,
+        repl_rates=repl_rates,
+        replacement_levels=replacement_levels,
+        team_ab=team_ab,
+        team_ip=team_ip,
+    )
     return board, scale
 
 
