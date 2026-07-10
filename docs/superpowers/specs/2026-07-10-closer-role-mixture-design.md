@@ -42,10 +42,9 @@ the analytic ERoto path and the Monte Carlo sampler.
 
 **Out of scope:** the **mean bias** (a projection-quality problem; #235). This design is
 **mean-neutral** -- it changes only variance and leaves *each path's existing SV mean
-exactly as today*. Also out of scope: the pre-existing in-season divergence between ERoto
-(full-season variance) and the MC (variance scaled by `fraction_remaining`) for the
-*within/performance* term across all counting stats -- this design does not try to reconcile
-that; it only requires the *new* role-switch variance to scale consistently (see In-season).
+exactly as today*. In-season scaling is handled by existing machinery in both paths
+(`build_team_sds` in ERoto, the copula + `X'` in the MC), so `sv_role_variance` is
+full-season and this design adds no new in-season plumbing (see In-season).
 
 ## Design decisions (resolved during brainstorming + spec review)
 
@@ -114,15 +113,28 @@ spread flows through `between`, never through inflating `r`. (This retracts the 
 
 ### In-season (`fraction_remaining`)
 
-The `between` (role-switch) term is scaled by `fraction_remaining` so it vanishes as the
-season settles (a held role stops being a coin flip). This is the ONLY in-season behavior
-this design adds, and the same `fraction_remaining` **scaling rule** is applied in both paths
-(each on its own `mu0`). The success guard is a property test (Testing #4): `between -> 0` as
-`fraction_remaining -> 0`, and the added-variance **scaling** (the ratio of the `between`
-term to its full-season value) matches across paths -- NOT the absolute added variance, which
-differs because the two paths feed different `mu0` (per Testing #3). This is NOT a cross-path
-ERoto-vs-MC absolute-SD test at `frac < 1` -- that would trip the pre-existing within-term
-divergence (ERoto raw, MC frac-scaled) that predates this work and is out of scope (Scope).
+The role-switch (`between`) variance must vanish as the season settles (a held role stops
+being a coin flip). `sv_role_variance` is defined **full-season** -- exactly mirroring the
+`cv_pt` playing-time term it replaces, which was also full-season -- and the
+`fraction_remaining` scaling is applied **externally and uniformly** by machinery that
+already exists in both paths:
+
+- **ERoto:** `build_team_sds` multiplies each category's team SD by `sd_scale =
+  sqrt(fraction_remaining)` (`scoring.py:1389`), i.e. scales the whole SV variance (within AND
+  between) by `frac`. Unchanged by this design; the full-season `sv_role_variance` slots in as
+  the per-player term exactly where the `cv_pt` term was, and inherits the same external
+  scaling.
+- **MC:** the copula scales the within term by `frac` (`_negbin_copula_counts`,
+  `var_target = frac*var_full`), and the role multiplier `X' = 1 + sqrt(frac)*(X - 1)` scales
+  the between term by `frac`.
+
+So both paths scale within+between by `frac` uniformly and consistently -- there is **no**
+ERoto/MC in-season divergence to reconcile (an earlier draft wrongly claimed a within-term
+divergence; ERoto's external `build_team_sds` handles it). Consequently **`sv_role_variance`
+takes NO `fraction_remaining` parameter** -- only the MC's `role_multiplier_draw` does, for the
+`X'` shrink. The success guard (Testing #4) is a property test on `role_multiplier_draw`:
+`Var(X') = frac*Var(X)` and `E[X'] = 1`.
+
 At `frac = 1`, cross-path *math* consistency is guarded by the shared-`mu0` invariant
 (Testing #1) and each path's own SD+mean **stability** by Testing #3 -- not cross-path
 absolute equality (the paths' `mu0` differ).
@@ -130,16 +142,17 @@ absolute equality (the paths' `mu0` differ).
 ## Integration seams
 
 New module `src/fantasy_baseball/sgp/closer_mixture.py` -- single source of truth: the smooth
-curves `q(s), a_m(s), a_s(s)`, the closed-form `sv_role_variance(mu0, fraction_remaining)`
+curves `q(s), a_m(s), a_s(s)`, the closed-form full-season `sv_role_variance(s)`
 (per-component `within + between`), and the per-draw multiplier the sampler uses. All three
 SV call sites route through it.
 
 ### A. ERoto analytic (`scoring.py`: `player_category_variance`)
 
 The SV variance term (`scoring.py:1283`, currently `negbin_perf_variance('sv', v) +
-v*v*cv_pt_sq`) becomes `closer_mixture.sv_role_variance(v, frac)` (the full per-component
-`within + between`). W/K keep their `negbin_perf_variance + cv_pt` term. `fraction_remaining`
-must be threaded into `player_category_variance` (today it uses raw cv_pt). **The mean path
+v*v*cv_pt_sq`) becomes `closer_mixture.sv_role_variance(v)` (the full-season per-component
+`within + between`, keyed on the raw projected SV `v`). W/K keep their `negbin_perf_variance +
+cv_pt` term. **No `fraction_remaining` threading** -- ERoto's in-season scaling continues to
+flow through the existing external `build_team_sds` `sqrt(frac)` (see In-season). **The mean path
 (`project_team_stats`) is untouched.**
 
 ### B. Monte Carlo (`simulation.py`: `_apply_variance_batch`, ~781-817)
@@ -232,7 +245,8 @@ milestone rather than treat it as a remote contingency.
 
 1. **Wire SV variance to the mixture.** The backtest re-derives SV variance inline
    (`negbin_perf_variance(key, proj) + proj**2 * cvp**2`, line 117); branch SV to
-   `closer_mixture.sv_role_variance(proj, frac)`. Required for the gate to be measurable.
+   `closer_mixture.sv_role_variance(proj)`. Required for the gate to be measurable. (The
+   backtest is full-season, so no frac enters here regardless.)
 2. **Admit 2025 for SV.** `build_year` returns `(hm, None)` unless `{"W","SO","SV"}` are all
    present (line 85), AND line 90 selects `pa[["MLBAMID","W","SO","SV"]]` (a hard `SO`
    reference that KeyErrors on 2025), AND `P_CATS` (line 44) drives per-year `team_z`. So
@@ -256,14 +270,13 @@ milestone rather than treat it as a remote contingency.
 
 ## Testing
 
-1. **Unit / mixture-math invariant (shared `mu0`)** -- at a common `mu0`, the closed-form
-   `sv_role_variance(mu0, frac)` matches a brute-force sample of the generative process
+1. **Unit / mixture-math invariant (shared `mu0`)** -- at a common `mu0`, the full-season
+   closed-form `sv_role_variance(mu0)` matches a brute-force sample of the generative process
    `NegBin(mu0*X, r)` over the role draw, to a tolerance **tight enough to catch the
    `between/r` cross-term** (~2.4% for a 30-SV closer). This is THE check that ERoto and the MC
    use identical mixture math (both consume `closer_mixture`), independent of each path's `mu0`.
-   Also: mean-1 `E[X] == 1`; `between -> 0` as `fraction_remaining -> 0`; `a_m, a_s >= 0` over
-   the fitted `s` range. (Do NOT assert cross-`s` monotonicity -- the vault curve is
-   legitimately non-monotone at low `s`.)
+   Also: mean-1 `E[X] == 1`; `a_m, a_s >= 0` over the fitted `s` range. (Do NOT assert cross-`s`
+   monotonicity -- the vault curve is legitimately non-monotone at low `s`.)
 2. **Integration (target)** -- backtest SV `SD(z)` in `[0.8, 1.25]`; R/HR/RBI/SB unchanged;
    W/SO stay in `[0.8, 1.25]`; SV raw bias unchanged (standardized `mean z` shrinks, expected).
 3. **Per-path stability (frac = 1), REQUIRED** -- each path's SV **mean** AND **SD** change only
@@ -276,9 +289,10 @@ milestone rather than treat it as a remote contingency.
    removing it. Cross-path *math* consistency is guaranteed structurally instead: both paths
    compute SV variance through the same `closer_mixture` module (Testing #1), so they cannot
    diverge in the mixture formula. Per-path tolerance accommodates the `max(0,.)` clamp gap.
-4. **In-season property (frac in {0.25,0.5,0.75})** -- the mixture's *added* (`between`) SV
-   variance scales to 0 with `fraction_remaining` and is applied identically in both paths.
-   (Scoped to the added term, NOT full SD parity -- see In-season / Scope.)
+4. **In-season property (frac in {0.25,0.5,0.75})** -- `role_multiplier_draw` satisfies
+   `E[X'] = 1` and `Var(X') = frac*Var(X)` (the MC between-scaling). ERoto's between scaling is
+   delivered by the existing external `build_team_sds` `sqrt(frac)` and is not re-implemented,
+   so nothing new to test on that side. (Scoped to the MC's added term -- see In-season.)
 5. **Valuation regression (guard)** -- SGP/VAR/VONA SV values do not move.
 6. **MC re-baseline** -- deterministic-seed MC tests re-pinned for the added Bernoulli.
 
@@ -304,13 +318,18 @@ milestone rather than treat it as a remote contingency.
 
 - `src/fantasy_baseball/sgp/closer_mixture.py` (new).
 - `src/fantasy_baseball/utils/constants.py` -- `SV_ROLE_MIXTURE`.
-- `src/fantasy_baseball/scoring.py` -- SV term in `player_category_variance` (+ thread
-  `fraction_remaining`); mean path untouched.
+- `src/fantasy_baseball/scoring.py` -- SV term in `player_category_variance` (full-season
+  `sv_role_variance(v)`, no frac threading); mean path untouched.
 - `src/fantasy_baseball/simulation.py` -- SV role draw + out-of-`scales` SV mean/variance in
   `_apply_variance_batch`; backfill and `r` unchanged.
 - `scripts/calibrate_closer_mixture.py` (new) -- constrained continuous calibration, 2022-2025.
 - `scripts/backtest_sd_calibration.py` -- SV wired to mixture; per-year cat set to admit 2025
   SV; optional 2025 SO derivation.
+- **Call-site audit (CLAUDE.md "fix all call sites"):** `player_category_variance` /
+  `project_team_sds` are also consumed by `lineup/delta_roto.py` (SV swap-band widths). Its SV
+  term switches to the mixture automatically; confirm the wider swap bands are intended and that
+  its own `fraction_remaining * total` scaling still composes correctly (it does -- it scales the
+  full team variance uniformly, same as `build_team_sds`).
 - Tests under `tests/`.
 
 ## Out-of-scope / related issues

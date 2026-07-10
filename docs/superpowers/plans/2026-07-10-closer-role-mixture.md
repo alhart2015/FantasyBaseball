@@ -4,7 +4,7 @@
 
 **Goal:** Fix the ~2.2x under-dispersion of team saves (SV) variance in the SD-calibration backtest by replacing the SV playing-time (`cv_pt`) variance term with an explicit bimodal role-switch mixture, in both the analytic ERoto path and the Monte Carlo sampler.
 
-**Architecture:** A single source-of-truth module `sgp/closer_mixture.py` owns (a) smooth parameter curves over projected SV, (b) a closed-form per-component `sv_role_variance(mu0, frac)`, and (c) the per-draw mean-1 multiplier the MC uses. ERoto and the MC both consume it. The mixture is **mean-neutral** (a mean-1 multiplier on each path's existing SV mean) and **in-season-aware** (the role-switch/`between` term scales with `fraction_remaining`). Calibration is a continuous mixture-regression on 2022-2025 realized-vs-projected data.
+**Architecture:** A single source-of-truth module `sgp/closer_mixture.py` owns (a) smooth parameter curves over projected SV, (b) a **full-season** closed-form `sv_role_variance(s)`, and (c) a per-draw mean-1 multiplier `role_multiplier_draw` the MC uses. ERoto and the MC both consume it. The mixture is **mean-neutral** (a mean-1 multiplier on each path's existing SV mean) and **in-season-aware** via existing external machinery (ERoto's `build_team_sds` `sqrt(frac)`; the MC copula + the `X'` shrink) -- `sv_role_variance` itself is full-season. Calibration is a continuous mixture-regression on 2022-2025 realized-vs-projected data.
 
 **Tech Stack:** Python, numpy, scipy (existing), pytest. No new dependencies.
 
@@ -12,50 +12,47 @@
 
 ## Global Constraints
 
-- **ASCII-only** in all source, log, and format strings (Windows cp1252 stdout). Use `sigma`, `->`, `--`, straight quotes.
-- **Numeric defaults:** never `x or default` for numeric values; use `x if x is not None else default`.
-- **Within-dispersion `r` is FIXED at `STAT_DISPERSION['sv'] = 37.757`** for BOTH mixture components. Never fit or loosen it. All excess spread flows through the `between` term.
-- **Mean-neutral:** the mixture must not change either path's SV mean. `E[X] = 1` by construction; the MC keeps its `eff_mean` haircut and `+8*frac_missed` backfill.
-- **Single source of truth:** all three SV-variance call sites (`scoring.py`, `simulation.py`, `backtest_sd_calibration.py`) route through `closer_mixture`. None re-derives SV dispersion locally.
-- **Reference variance identity (verified):** `within + between = negbin_perf_variance(mu0) + between*(1 + 1/r)`, where `within = q*nb_var(mu0*a_m) + (1-q)*nb_var(mu0*a_s)`, `between = mu0^2*q*(1-q)*(a_m-a_s)^2`, `nb_var(m) = m + m^2/r`. Evaluating `within` at the single mean `mu0` is WRONG (omits `between/r`, ~2.4% for a 30-SV closer).
-- **End-of-effort checks (repo rule):** `pytest -v`, `ruff check .`, `ruff format --check .`, `vulture`, and `mypy` if any touched file is under `[tool.mypy].files`. Show command output; never claim "checks pass" without it.
+- **ASCII-only** in all source, log, format strings. Use `sigma`, `->`, `--`, straight quotes.
+- **Numeric defaults:** never `x or default`; use `x if x is not None else default`.
+- **Within-dispersion `r` FIXED at `STAT_DISPERSION['sv'] = 37.757`** for BOTH components. Never fit or loosen. All excess spread flows through the `between` term.
+- **Mean-neutral:** `E[X] = 1` by construction; the MC keeps its `eff_mean` haircut and `+8*frac_missed` backfill.
+- **`sv_role_variance` is FULL-SEASON (no `fraction_remaining` parameter).** In-season scaling is external and uniform: ERoto via `build_team_sds` (`scoring.py:1389`, `sd_scale = sqrt(frac)`); the MC via the copula (within) + `role_multiplier_draw`'s `X'` shrink (between). Do NOT thread `frac` into `player_category_variance` / `sv_role_variance` -- that double-scales (`build_team_sds` already scales).
+- **Curves keyed on projected SV `s`** (NOT the MC haircut mean `base*eff_mean`). In ERoto/backtest `s == mu0`; the MC passes raw `base['sv']` to the curve and `base*eff_mean` only as the NegBin mean.
+- **Single source of truth:** all SV-variance sites route through `closer_mixture`.
+- **Reference variance identity (verified):** `within + between = negbin_perf_variance(s) + between*(1 + 1/r)`, `within = q*nb_var(s*a_m) + (1-q)*nb_var(s*a_s)`, `between = s^2*q*(1-q)*(a_m-a_s)^2`, `nb_var(m) = m + m^2/r`. Evaluating `within` at the single mean `s` is WRONG (omits `between/r`, ~2.4% for a 30-SV closer).
+- **End-of-effort checks:** `pytest -v`, `ruff check .`, `ruff format --check .`, `vulture`, `mypy` (if a touched file is under `[tool.mypy].files`). Show output.
 
 ## File Structure
 
-- **Create** `src/fantasy_baseball/sgp/closer_mixture.py` -- curves `q(s), a_s(s), a_m(s)`; `sv_role_variance(mu0, fraction_remaining)`; `role_multiplier_draw(mu0_array, s_array, rng, fraction_remaining)`. One responsibility: the SV role-switch mixture math.
-- **Modify** `src/fantasy_baseball/utils/constants.py` -- add `SV_ROLE_MIXTURE` (fitted curve coefficients).
-- **Modify** `src/fantasy_baseball/scoring.py` -- SV branch in `player_category_variance` (line ~1283); thread `fraction_remaining`. Mean path (`project_team_stats`) untouched.
-- **Modify** `src/fantasy_baseball/simulation.py` -- SV role draw in `_apply_variance_batch` (~781-817): SV mean/variance handled outside the shared `scales`; `r` and backfill unchanged.
-- **Create** `scripts/calibrate_closer_mixture.py` -- continuous mixture-regression calibration, 2022-2025.
-- **Modify** `scripts/backtest_sd_calibration.py` -- wire SV to `sv_role_variance`; per-year category set to admit 2025 SV; optional 2025 SO derivation.
-- **Create** tests under `tests/test_sgp/test_closer_mixture.py` and additions to `tests/test_scoring.py`, `tests/test_integration/`.
+- **Create** `src/fantasy_baseball/sgp/closer_mixture.py`
+- **Modify** `src/fantasy_baseball/utils/constants.py` -- `SV_ROLE_MIXTURE`
+- **Modify** `src/fantasy_baseball/scoring.py` -- SV branch in `player_category_variance` (~1283). Mean path untouched.
+- **Modify** `src/fantasy_baseball/simulation.py` -- SV role draw in `_apply_variance_batch` (~781-817)
+- **Create** `scripts/calibrate_closer_mixture.py`
+- **Modify** `scripts/backtest_sd_calibration.py` -- per-year cat set to admit 2025 SV; SV wired to mixture
+- **Verify (call-site audit)** `src/fantasy_baseball/lineup/delta_roto.py` (~346-352) -- consumes `player_category_variance`/`project_team_sds`; SV term switches to the mixture. Confirm intended.
+- **Create/extend tests** under `tests/test_sgp/`, `tests/test_scoring.py`, `tests/test_integration/`
 
-## Milestone structure (important)
+## Milestone structure
 
-The spec's feasibility section flags that a **two-component** mixture may not reach the gate at the closer end (needs ~45% job-turnover). The plan is therefore gated:
-
-- **Phase A (Tasks 1-3):** build the closed-form module + constant scaffold with a *provisional* hand-set curve, TDD'd against the math identity. No calibration yet.
-- **Phase B (Tasks 4-5):** calibration script + backtest wiring. **Task 5 is the DECISION GATE:** run the wired backtest; if SV `SD(z)` in `[0.8,1.25]`, proceed with two components; if not, escalate to three components (Task 5b) before wiring the seams.
-- **Phase C (Tasks 6-9):** ERoto seam, MC seam, parity + regression tests, full end-of-effort verification.
-
-Do NOT wire the ERoto/MC seams (Phase C) until Task 5's gate is green, so the production paths are only ever fed a calibration that actually works.
+- **Phase A (Tasks 1-3):** `closer_mixture` module (closed form + draw) with provisional curves, TDD'd against the math identity.
+- **Phase B (Tasks 4-6):** backtest 2025-admission plumbing (Task 4) -> calibration (Task 5) -> wire backtest + **DECISION GATE** (Task 6). Task 6 decides two vs three components empirically.
+- **Phase C (Tasks 7-10):** ERoto seam, MC seam, parity/regression tests, verification. **Do NOT start Phase C until Task 6's gate is green.**
 
 ---
 
-### Task 1: `closer_mixture` closed-form variance (provisional curves)
+### Task 1: `closer_mixture` full-season closed-form variance
 
 **Files:**
 - Create: `src/fantasy_baseball/sgp/closer_mixture.py`
 - Test: `tests/test_sgp/test_closer_mixture.py`
 
-**Interfaces:**
-- Consumes: `STAT_DISPERSION['sv']` (=37.757) from `utils.constants`.
-- Produces:
-  - `sv_role_variance(mu0: float | np.ndarray, fraction_remaining: float = 1.0) -> float | np.ndarray`
-  - `_components(s: float | np.ndarray) -> tuple[q, a_m, a_s]` (internal; reads `SV_ROLE_MIXTURE` once it exists -- for Task 1 use a provisional module-level curve so the math is testable before calibration).
-  - `nb_var(m) = m + m*m/r` helper (or reuse `dispersion.negbin_variance_from_r(m, r)`).
+**Interfaces produced:**
+- `nb_var(m) -> np.ndarray` = `m + m*m/r`
+- `sv_role_variance(s: float | np.ndarray) -> float | np.ndarray` -- full-season `within + between`, keyed and meaned on projected SV `s`.
+- `_components(s) -> (q, a_m, a_s)` -- provisional module-level curve until Task 2.
 
-- [ ] **Step 1: Write the failing test -- closed form equals the generative process at a shared mu0**
+- [ ] **Step 1: Write the failing test -- closed form equals the generative process; naive form is wrong**
 
 ```python
 # tests/test_sgp/test_closer_mixture.py
@@ -63,32 +60,28 @@ import numpy as np
 from fantasy_baseball.sgp import closer_mixture as cm
 from fantasy_baseball.utils.constants import STAT_DISPERSION
 
-def _brute_force_var(mu0, q, a_m, a_s, r, n=2_000_000, seed=0):
+def _brute_force_var(s, q, a_m, a_s, r, n=2_000_000, seed=0):
     rng = np.random.default_rng(seed)
     mult = np.where(rng.random(n) < q, a_m, a_s)
-    m = mu0 * mult
+    m = s * mult
     lam = rng.gamma(r, m / r)          # NegBin(mean=m, disp=r) via gamma-poisson
-    sv = rng.poisson(lam)
-    return sv.var()
+    return rng.poisson(lam).var()
 
-def test_closed_form_matches_generative_at_shared_mu0():
+def test_closed_form_matches_generative():
     r = STAT_DISPERSION["sv"]
-    mu0, q, a_m, a_s = 30.0, 0.55, 1.0 / 0.55, 0.0   # closer: a_s->0, mean-1 => a_m=1/q
-    within = q * cm.nb_var(mu0 * a_m) + (1 - q) * cm.nb_var(mu0 * a_s)
-    between = mu0**2 * q * (1 - q) * (a_m - a_s) ** 2
+    s, q, a_m, a_s = 30.0, 0.55, 1.0 / 0.55, 0.0   # a_s=0 => a_m=1/q (mean-1)
+    within = q * cm.nb_var(s * a_m) + (1 - q) * cm.nb_var(s * a_s)
+    between = s**2 * q * (1 - q) * (a_m - a_s) ** 2
     closed = within + between
-    brute = _brute_force_var(mu0, q, a_m, a_s, r)
-    # tolerance tight enough to catch the ~2.4% between/r cross-term (well under it)
-    assert abs(closed - brute) / brute < 0.01
-    # and prove the naive single-mu0 form is WRONG (misses ~2.4%)
-    naive = cm.nb_var(mu0) + between
-    assert (closed - naive) / closed > 0.02
+    assert abs(closed - _brute_force_var(s, q, a_m, a_s, r)) / closed < 0.01
+    naive = cm.nb_var(s) + between                 # WRONG single-mean form
+    assert (closed - naive) / closed > 0.02        # closed keeps the ~2.4% between/r cross-term
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 2: Run to verify it fails**
 
-Run: `pytest tests/test_sgp/test_closer_mixture.py::test_closed_form_matches_generative_at_shared_mu0 -v`
-Expected: FAIL (`AttributeError: module ... has no attribute 'nb_var'`).
+Run: `pytest tests/test_sgp/test_closer_mixture.py::test_closed_form_matches_generative -v`
+Expected: FAIL -- `ModuleNotFoundError: No module named 'fantasy_baseball.sgp.closer_mixture'` (the module does not exist yet; the import line raises before any `cm.*` reference).
 
 - [ ] **Step 3: Write minimal implementation**
 
@@ -97,11 +90,18 @@ Expected: FAIL (`AttributeError: module ... has no attribute 'nb_var'`).
 """Bimodal role-switch mixture for saves (SV) variance. Single source of truth
 for the SV dispersion shared by ERoto (scoring.py) and the MC (simulation.py).
 
-The mixture is a mean-1 multiplier X on a pitcher's current SV mean mu0:
+X is a mean-1 multiplier on a pitcher's SV mean:
   X = a_m w.p. q(s), else a_s w.p. 1-q(s);  q*a_m + (1-q)*a_s = 1  (E[X]=1).
-Variance (law of total variance over role AND NegBin), r fixed at STAT_DISPERSION['sv']:
-  within  = q*nb_var(mu0*a_m) + (1-q)*nb_var(mu0*a_s)
-  between = mu0^2 * q*(1-q) * (a_m - a_s)^2       (role-switch; scaled by fraction_remaining)
+FULL-SEASON variance (law of total variance over role AND NegBin), r fixed:
+  within  = q*nb_var(s*a_m) + (1-q)*nb_var(s*a_s)
+  between = s^2 * q*(1-q) * (a_m - a_s)^2
+In-season scaling is applied EXTERNALLY (ERoto: build_team_sds sqrt(frac); MC:
+copula for within + role_multiplier_draw's X' for between) -- NOT here.
+
+Known limitations (see spec): SV pulled out of the shared MC `scales` loses its
+playing-time co-movement with W/K/ER; the role Bernoulli is independent of the
+copula so job-loss does not co-move with high ER; handcuffed closers' anti-
+correlation is not modeled. All second-order; do not touch the marginal target.
 """
 from __future__ import annotations
 
@@ -111,12 +111,9 @@ from fantasy_baseball.utils.constants import STAT_DISPERSION
 
 _R = STAT_DISPERSION["sv"]
 
-# PROVISIONAL curves (replaced by SV_ROLE_MIXTURE after Task 4 calibration).
-# Closer end: high job retention, a_s->0. Vault end: small 1-q, large a_s.
 def _components(s):
     s = np.asarray(s, dtype=float)
-    # placeholder logistic q(s) and a_s(s); overwritten by calibration.
-    q = 0.55 + 0.0 * s
+    q = np.full(s.shape, 0.55)          # provisional; replaced in Task 2
     a_s = np.zeros_like(s)
     a_m = (1.0 - (1.0 - q) * a_s) / q
     return q, a_m, a_s
@@ -125,39 +122,29 @@ def nb_var(m):
     m = np.asarray(m, dtype=float)
     return m + m * m / _R
 
-def sv_role_variance(mu0, fraction_remaining: float = 1.0):
-    mu0 = np.asarray(mu0, dtype=float)
-    q, a_m, a_s = _components(mu0)   # keyed on projected SV == mu0 pre-haircut; see note
-    within = q * nb_var(mu0 * a_m) + (1.0 - q) * nb_var(mu0 * a_s)
-    between = mu0**2 * q * (1.0 - q) * (a_m - a_s) ** 2
-    out = within + fraction_remaining * between
+def sv_role_variance(s):
+    s = np.asarray(s, dtype=float)
+    q, a_m, a_s = _components(s)
+    within = q * nb_var(s * a_m) + (1.0 - q) * nb_var(s * a_s)
+    between = s**2 * q * (1.0 - q) * (a_m - a_s) ** 2
+    out = within + between
     return float(out) if out.ndim == 0 else out
 ```
 
-Note for the implementer: the curve is keyed on **projected SV** `s`. In ERoto `mu0` is the raw projection so `s == mu0`; in the MC `mu0 = base*eff_mean` but the curve must still be keyed on the raw projected SV `s` (pass `s` separately in Task 7). For Task 1 the provisional curve is `s`-flat, so this distinction does not yet bite; Task 7 threads `s` explicitly.
+- [ ] **Step 4: Run to verify it passes**
 
-- [ ] **Step 4: Run test to verify it passes**
+Run: `pytest tests/test_sgp/test_closer_mixture.py::test_closed_form_matches_generative -v`  -- Expected: PASS.
 
-Run: `pytest tests/test_sgp/test_closer_mixture.py::test_closed_form_matches_generative_at_shared_mu0 -v`
-Expected: PASS.
-
-- [ ] **Step 5: Add the invariant unit tests (mean-1, between->0, non-negativity)**
+- [ ] **Step 5: Add invariant tests (mean-1, non-negativity, vectorized)**
 
 ```python
-def test_mean_one_and_frac_scaling():
-    # provisional q=0.55, a_s=0 => a_m=1/0.55; E[X]=1
-    q, a_m, a_s = 0.55, 1/0.55, 0.0
-    assert abs(q*a_m + (1-q)*a_s - 1.0) < 1e-9
-    mu0 = 25.0
-    v_full = cm.sv_role_variance(mu0, 1.0)
-    v_zero = cm.sv_role_variance(mu0, 0.0)
-    within = q*cm.nb_var(mu0*a_m) + (1-q)*cm.nb_var(mu0*a_s)
-    assert abs(v_zero - within) < 1e-6            # between -> 0 at frac=0
-    assert v_full > v_zero                         # between adds at frac=1
+def test_variance_nonnegative_and_vectorized():
+    v = cm.sv_role_variance(np.array([0.0, 1.0, 8.0, 22.0, 40.0]))
+    assert v.shape == (5,) and np.all(v >= 0)
 
-def test_variance_nonnegative_vectorized():
-    v = cm.sv_role_variance(np.array([0.0, 1.0, 8.0, 22.0, 40.0]), 1.0)
-    assert np.all(v >= 0)
+def test_provisional_components_mean_one():
+    q, a_m, a_s = cm._components(np.array([5.0, 30.0]))
+    assert np.allclose(q * a_m + (1 - q) * a_s, 1.0)
 ```
 
 - [ ] **Step 6: Run all Task-1 tests and commit**
@@ -165,47 +152,54 @@ def test_variance_nonnegative_vectorized():
 Run: `pytest tests/test_sgp/test_closer_mixture.py -v`  (Expected: PASS)
 ```bash
 git add src/fantasy_baseball/sgp/closer_mixture.py tests/test_sgp/test_closer_mixture.py
-git commit -m "feat(sgp): closer role-mixture closed-form SV variance (provisional curves) (#193)"
+git commit -m "feat(sgp): full-season closer role-mixture SV variance (provisional curves) (#193)"
 ```
 
 ---
 
-### Task 2: `SV_ROLE_MIXTURE` constant scaffold + module wiring
+### Task 2: `SV_ROLE_MIXTURE` constant + curve wiring
 
-**Files:**
-- Modify: `src/fantasy_baseball/utils/constants.py`
-- Modify: `src/fantasy_baseball/sgp/closer_mixture.py`
-- Test: `tests/test_sgp/test_closer_mixture.py`
+**Files:** Modify `constants.py`, `closer_mixture.py`; Test `tests/test_sgp/test_closer_mixture.py`
 
-**Interfaces:**
-- Produces: `SV_ROLE_MIXTURE: dict` (curve coefficients). `closer_mixture._components` reads it instead of the hard-coded provisional values.
+**Interfaces produced:** `SV_ROLE_MIXTURE: dict` (curve coefficients); `_components` reads it.
 
-- [ ] **Step 1: Write the failing test** -- `_components` reads coefficients from the constant and honors the mean-1 constraint across `s`.
+- [ ] **Step 1: Write the failing test -- `_components` actually reflects the constant's values**
+
+The test must FAIL against Task 1's hard-coded `q=0.55`, so it pins behavior to the constant by asserting a value the provisional curve does NOT produce (a non-0.55 `q` at some `s`, driven by the coefficients).
 
 ```python
-def test_components_read_constant_and_are_mean_one():
-    for s in [0.5, 3.0, 12.0, 20.0, 35.0]:
-        q, a_m, a_s = cm._components(s)
-        assert 0.0 <= q <= 1.0
-        assert a_m >= 0 and a_s >= 0
-        assert abs(q * a_m + (1 - q) * a_s - 1.0) < 1e-9
+def test_components_reflect_constant():
+    import fantasy_baseball.sgp.closer_mixture as cm
+    from fantasy_baseball.utils import constants
+    # A distinctive logistic that gives q(0)=~0.5 and q(40) clearly != 0.55:
+    saved = constants.SV_ROLE_MIXTURE
+    constants.SV_ROLE_MIXTURE = {"q_logit": [0.0, 0.1], "a_s_curve": [0.0, 0.0]}
+    try:
+        q0, _, _ = cm._components(0.0)
+        q40, _, _ = cm._components(40.0)
+        assert abs(float(q0) - 0.5) < 1e-6            # sigmoid(0)=0.5
+        assert float(q40) > 0.95                        # sigmoid(4)=0.982 -- proves it reads coeffs
+        # mean-1 still holds everywhere
+        q, a_m, a_s = cm._components(np.array([0.0, 40.0]))
+        assert np.allclose(q * a_m + (1 - q) * a_s, 1.0)
+    finally:
+        constants.SV_ROLE_MIXTURE = saved
 ```
 
-- [ ] **Step 2: Run -> FAIL** (mean-1 not guaranteed / constant missing).
-Run: `pytest tests/test_sgp/test_closer_mixture.py::test_components_read_constant_and_are_mean_one -v`
+- [ ] **Step 2: Run -> FAIL** (`_components` ignores the constant; `q40` is 0.55).
+Run: `pytest tests/test_sgp/test_closer_mixture.py::test_components_reflect_constant -v`
 
-- [ ] **Step 3: Add the scaffold constant** (a documented, valid-but-provisional shape; the real values land in Task 4).
+- [ ] **Step 3: Add the scaffold constant**
 
 ```python
-# constants.py -- provisional; regenerated by scripts/calibrate_closer_mixture.py
-# q(s) logistic; a_s(s) surprise multiplier: large at low s (vault), ~0 at high s (job loss).
+# constants.py -- provisional; regenerated by scripts/calibrate_closer_mixture.py (Task 5)
 SV_ROLE_MIXTURE: dict[str, list[float]] = {
-    "q_logit": [0.2, 0.05],      # q(s) = sigmoid(b0 + b1*s)   (provisional)
-    "a_s_curve": [0.0, 0.0],     # a_s(s) placeholder           (provisional)
+    "q_logit": [0.2, 0.05],    # q(s) = sigmoid(b0 + b1*s)
+    "a_s_curve": [0.0, 0.0],   # a_s(s) = max(0, c0 + c1*s) (provisional: 0 everywhere)
 }
 ```
 
-- [ ] **Step 4: Rewrite `_components` to consume the constant with mean-1 by construction**
+- [ ] **Step 4: Rewrite `_components` to read the constant (mean-1 + feasibility by construction)**
 
 ```python
 from fantasy_baseball.utils.constants import STAT_DISPERSION, SV_ROLE_MIXTURE
@@ -213,59 +207,60 @@ from fantasy_baseball.utils.constants import STAT_DISPERSION, SV_ROLE_MIXTURE
 def _components(s):
     s = np.asarray(s, dtype=float)
     b0, b1 = SV_ROLE_MIXTURE["q_logit"]
-    q = 1.0 / (1.0 + np.exp(-(b0 + b1 * s)))
-    q = np.clip(q, 1e-3, 1 - 1e-3)
-    a_s = _a_s_curve(s, SV_ROLE_MIXTURE["a_s_curve"])   # >= 0 by construction
-    a_m = (1.0 - (1.0 - q) * a_s) / q
-    a_m = np.maximum(a_m, 0.0)                           # feasibility guard (a_m,a_s >= 0)
+    q = np.clip(1.0 / (1.0 + np.exp(-(b0 + b1 * s))), 1e-3, 1 - 1e-3)
+    c0, c1 = SV_ROLE_MIXTURE["a_s_curve"]
+    a_s = np.maximum(0.0, c0 + c1 * s)                       # a_s >= 0
+    a_m = np.maximum(0.0, (1.0 - (1.0 - q) * a_s) / q)       # mean-1 derived, a_m >= 0 guard
     return q, a_m, a_s
 ```
 
-with a small `_a_s_curve(s, coeffs)` returning a non-negative surprise multiplier (e.g. `np.maximum(0, c0 + c1*s)` clamped; the exact functional form is fixed in Task 4). For the scaffold, `a_s = 0` everywhere is valid (degenerate to unimodal) and keeps tests green until calibration.
+Note: reads `SV_ROLE_MIXTURE` via the `constants` module object each call (so the test's monkeypatch and Task 5's regenerated values both take effect). Do NOT bind the dict at import time.
 
 - [ ] **Step 5: Run -> PASS, then commit**
+
 Run: `pytest tests/test_sgp/test_closer_mixture.py -v`
 ```bash
 git add src/fantasy_baseball/utils/constants.py src/fantasy_baseball/sgp/closer_mixture.py tests/test_sgp/test_closer_mixture.py
-git commit -m "feat(constants): SV_ROLE_MIXTURE scaffold + mean-1 component construction (#193)"
+git commit -m "feat(constants): SV_ROLE_MIXTURE curves + mean-1 component construction (#193)"
 ```
 
 ---
 
-### Task 3: `role_multiplier_draw` for the MC (per-draw, in-season)
+### Task 3: `role_multiplier_draw` -- 2-D per-(iter,player) draw for the MC
 
-**Files:**
-- Modify: `src/fantasy_baseball/sgp/closer_mixture.py`
-- Test: `tests/test_sgp/test_closer_mixture.py`
+**Files:** Modify `closer_mixture.py`; Test `tests/test_sgp/test_closer_mixture.py`
 
-**Interfaces:**
-- Produces: `role_multiplier_draw(s, rng, size, fraction_remaining) -> np.ndarray` returning `X' = 1 + sqrt(frac)*(X-1)` where `X in {a_m, a_s}` w.p. `{q, 1-q}` -- so `E[X']=1`, `Var(X')=frac*Var(X)`, `X' >= 0`.
+**Interfaces produced:**
+`role_multiplier_draw(s: np.ndarray, rng: np.random.Generator, fraction_remaining: float = 1.0) -> np.ndarray`
+Returns `X'` the SAME SHAPE as `s`. `s` is the RAW projected SV, broadcast by the caller to the shape it wants sampled (the MC passes 2-D `(n_iter, n_players)` so the role varies per iteration -- THIS is where the between-variance comes from). `X' = 1 + sqrt(frac)*(X-1)`, `X in {a_m,a_s}` w.p. `{q,1-q}`. There is NO `size` parameter; the shape of `s` IS the draw shape.
 
-- [ ] **Step 1: Write the failing test** (mean 1, variance scales by frac, non-negative)
+- [ ] **Step 1: Write the failing test -- correct moments AND non-zero cross-iteration variance on a 2-D input**
 
 ```python
-def test_role_multiplier_draw_moments():
+def test_role_multiplier_draw_2d_moments():
     rng = np.random.default_rng(1)
-    s = np.full(50_000, 30.0)
+    # 2-D input: 40k iters x 1 player at s=30 (closer). Between-variance lives ACROSS rows.
+    s2d = np.full((40_000, 1), 30.0)
     for frac in (1.0, 0.5, 0.25):
-        x = cm.role_multiplier_draw(s, rng, fraction_remaining=frac)
-        assert abs(x.mean() - 1.0) < 0.02            # E[X']=1 in-season
-        assert np.all(x >= 0)                        # no negative multiplier
-    x1 = cm.role_multiplier_draw(np.full(200_000, 30.0), np.random.default_rng(2), fraction_remaining=1.0)
-    xh = cm.role_multiplier_draw(np.full(200_000, 30.0), np.random.default_rng(2), fraction_remaining=0.5)
-    assert abs(xh.var() / x1.var() - 0.5) < 0.05     # Var scales ~ frac
+        x = cm.role_multiplier_draw(s2d, rng, fraction_remaining=frac)
+        assert x.shape == s2d.shape
+        assert abs(x.mean() - 1.0) < 0.02          # E[X']=1
+        assert np.all(x >= 0)
+    x1 = cm.role_multiplier_draw(np.full((200_000, 1), 30.0), np.random.default_rng(2), 1.0)
+    xh = cm.role_multiplier_draw(np.full((200_000, 1), 30.0), np.random.default_rng(2), 0.5)
+    assert x1.var() > 0.1                            # NON-ZERO between-variance (guards the F1 bug)
+    assert abs(xh.var() / x1.var() - 0.5) < 0.05    # Var scales ~ frac
 ```
 
-- [ ] **Step 2: Run -> FAIL.**  Run: `pytest tests/test_sgp/test_closer_mixture.py::test_role_multiplier_draw_moments -v`
+- [ ] **Step 2: Run -> FAIL.**  Run: `pytest tests/test_sgp/test_closer_mixture.py::test_role_multiplier_draw_2d_moments -v`
 
 - [ ] **Step 3: Implement**
 
 ```python
 def role_multiplier_draw(s, rng, fraction_remaining: float = 1.0):
     s = np.asarray(s, dtype=float)
-    q, a_m, a_s = _components(s)
-    pick_m = rng.random(s.shape) < q
-    x = np.where(pick_m, a_m, a_s)
+    q, a_m, a_s = _components(s)                 # same shape as s
+    x = np.where(rng.random(s.shape) < q, a_m, a_s)
     x_prime = 1.0 + np.sqrt(fraction_remaining) * (x - 1.0)   # E=1, Var=frac*Var(X), >=0
     return np.maximum(x_prime, 0.0)
 ```
@@ -273,29 +268,50 @@ def role_multiplier_draw(s, rng, fraction_remaining: float = 1.0):
 - [ ] **Step 4: Run -> PASS. Commit.**
 ```bash
 git add src/fantasy_baseball/sgp/closer_mixture.py tests/test_sgp/test_closer_mixture.py
-git commit -m "feat(sgp): in-season mean-1 role multiplier draw for the MC (#193)"
+git commit -m "feat(sgp): 2-D per-(iter,player) mean-1 role multiplier draw (#193)"
 ```
 
 ---
 
-### Task 4: Calibration script (DISCOVERY -- fits the real curves)
+### Task 4: Backtest 2025-admission plumbing (per-year category set)
 
-**Files:**
-- Create: `scripts/calibrate_closer_mixture.py`
+**Files:** Modify `scripts/backtest_sd_calibration.py`
 
-This is a discovery/spike task: the exact functional forms of `q(s)` and `a_s(s)` are determined by the data, not prescribed. Deliverable = fitted `SV_ROLE_MIXTURE` coefficients pasted into `constants.py`, plus a printed fit report.
+Pure data plumbing, no mixture dependency -- do it BEFORE calibration so Task 5 can read 2025. Today `build_year` returns `(hm, None)` unless `{"W","SO","SV"}` all present (line 85) and hard-selects `pa[["MLBAMID","W","SO","SV"]]` (line 90); `P_CATS` (line 44) is a module global used in `run()` (zs init/print) and `team_z`. 2025 actuals lack `SO`.
 
-**Acceptance criteria (not fabricated code):**
-- Reads 2022-2025 `(projected s, realized SV)` pairs using the same steamer+zips blend and `data/stats` actuals as `backtest_sd_calibration.py` (reuse its `blend`/`build_year` helpers; import, do not re-implement -- CLAUDE.md reuse rule).
-- 2025 actuals: `SV` and `W` used directly; `SO` (only if the optional W/SO inclusion is wanted) reconstructed with the thirds fix: `ip_true = floor(IP) + (IP-floor(IP))*10/3; SO = round(K/9*ip_true/9)`.
-- Fits `q(s)` (logistic) and `a_s(s)` (non-negative low-order curve) by maximum likelihood of realized SV under `NegBin(s*X, r=37.757)` with `X` the two-point mean-1 mixture, `a_m` derived from the mean-1 constraint, and an explicit `a_m, a_s >= 0` feasibility guard.
-- `r` fixed at 37.757 (NOT fit).
-- Prints per-`s`-decile fitted `(q, a_m, a_s)` and the effective sample support at the vault tail (spec calls this out).
-- Emits the `SV_ROLE_MIXTURE` dict literal to paste into `constants.py`.
+- [ ] **Step 1: Make `build_year` return per-year pitcher categories.** Change it to return `(hm, pm, p_cats)` where `p_cats` lists only the pitcher `(actual_col, key)` pairs present that year: always `[("W","w"),("SV","sv")]`; add `("SO","k")` when `SO` is present OR reconstructable. Select columns dynamically (`["MLBAMID"] + [c for c in ("W","SO","SV") if c in pa.columns]`) instead of the hard 4-col select at line 90.
+- [ ] **Step 2: Reconstruct 2025 SO (optional W/SO completeness)** with the thirds fix, so 2025 can carry SO too:
+```python
+ip = pa["IP"].to_numpy(float)
+ip_true = np.floor(ip) + (ip - np.floor(ip)) * 10.0 / 3.0
+pa["SO"] = np.round(pa["K/9"].to_numpy(float) * ip_true / 9.0)
+```
+(Guard: only when `SO` absent but `K/9` and `IP` present.)
+- [ ] **Step 3: Thread `p_cats` through `run()`** -- accumulate `zs` over the union of per-year cats; in the per-year loop pass that year's `p_cats` to `team_z` instead of the global `P_CATS`.
+- [ ] **Step 4: Run and verify 2025 now contributes.** Run: `python scripts/backtest_sd_calibration.py`. Confirm the SV `n` count rises vs the pre-change 2022-2024-only baseline (more team-seasons), and W/SO/SV verdicts still print.
+- [ ] **Step 5: Commit**
+```bash
+git add scripts/backtest_sd_calibration.py
+git commit -m "feat(backtest): per-year category set admits 2025 SV (and derived SO) (#193)"
+```
 
-- [ ] **Step 1:** Write the calibration script per the acceptance criteria. Reuse `backtest_sd_calibration.blend` and `build_year`.
-- [ ] **Step 2:** Run it: `python scripts/calibrate_closer_mixture.py`. Inspect the fit report (curves monotone-sane; `a_s` large at low `s`, ~0 at high `s`; `a_m,a_s>=0`).
-- [ ] **Step 3:** Paste the emitted coefficients into `SV_ROLE_MIXTURE` in `constants.py`. Re-run `pytest tests/test_sgp/test_closer_mixture.py -v` (all invariant tests still pass with real curves).
+---
+
+### Task 5: Calibration script (DISCOVERY -- fits the real curves)
+
+**Files:** Create `scripts/calibrate_closer_mixture.py`
+
+Discovery task: the functional forms of `q(s)`, `a_s(s)` are fit from data. Deliverable = fitted `SV_ROLE_MIXTURE` coefficients in `constants.py` + a printed fit report.
+
+**Acceptance criteria:**
+- Reads 2022-2025 `(projected s, realized SV)` pairs. Reuse `backtest_sd_calibration.blend` and the now-2025-aware `build_year` (Task 4) -- import, do not re-implement (CLAUDE.md reuse rule). Confirm 2025 rows are present in the fitted sample.
+- Fits `q(s)` (logistic, `q_logit` coeffs) and `a_s(s)` (non-negative low-order, `a_s_curve` coeffs) by maximum likelihood of realized SV under `NegBin(s*X, r=37.757)`, `X` the two-point mean-1 mixture, `a_m` derived from the constraint, with an `a_m,a_s >= 0` feasibility guard. `r` FIXED (not fit).
+- Prints per-`s`-decile fitted `(q, a_m, a_s)` and the effective sample support of the vault tail (low `s`, rare high-SV events -- spec flags weak identifiability there).
+- Emits the `SV_ROLE_MIXTURE` dict literal.
+
+- [ ] **Step 1:** Write the script per the acceptance criteria.
+- [ ] **Step 2:** Run: `python scripts/calibrate_closer_mixture.py`; inspect the report (a_s large at low s, ~0 at high s; a_m,a_s>=0; 2025 present).
+- [ ] **Step 3:** Paste coefficients into `SV_ROLE_MIXTURE`. Re-run `pytest tests/test_sgp/test_closer_mixture.py -v` (invariants hold with real curves).
 - [ ] **Step 4: Commit**
 ```bash
 git add scripts/calibrate_closer_mixture.py src/fantasy_baseball/utils/constants.py
@@ -304,70 +320,50 @@ git commit -m "feat(calibrate): fit SV role-mixture curves from 2022-2025 (#193)
 
 ---
 
-### Task 5: Wire the backtest + DECISION GATE (two vs three component)
+### Task 6: Wire backtest SV variance + DECISION GATE
 
-**Files:**
-- Modify: `scripts/backtest_sd_calibration.py` (line 44 `P_CATS`, line 85 gate, line 90 column-select, line 117 inline SV var)
+**Files:** Modify `scripts/backtest_sd_calibration.py` (inline SV var, line ~117)
 
-**Interfaces:**
-- Consumes: `closer_mixture.sv_role_variance`.
-
-- [ ] **Step 1: Branch SV variance to the mixture.** In `team_z` (line ~117), for the `sv` key use `closer_mixture.sv_role_variance(proj, fraction_remaining=1.0)` per player summed over the team; W/K keep `negbin_perf_variance(key, proj) + proj**2 * cvp**2`. (Backtest is full-season, so `frac=1`.)
-
-- [ ] **Step 2: Admit 2025 for SV via a per-year category set.** `build_year` currently returns `(hm, None)` unless `{"W","SO","SV"}` present (line 85) and hard-selects `["MLBAMID","W","SO","SV"]` (line 90). Change to: include SV (and W, both present in 2025) always; drop SO from the 2025 column-select and from that year's `P_CATS` when the actuals lack it. (If the optional 2025 SO derivation is implemented, add SO instead of dropping it.)
-
-- [ ] **Step 3: Run the backtest.**
-Run: `python scripts/backtest_sd_calibration.py`
-Record SV `SD(z)` (both MATCHED-ONLY and DNP=0), and confirm R/HR/RBI/SB unchanged and W/SO still in `[0.8,1.25]`.
-
-- [ ] **Step 4: DECISION GATE.**
-  - **If SV `SD(z)` in `[0.8, 1.25]`** (both variants): two components suffice. Skip Task 5b. Commit and proceed to Task 6.
-  - **If SV `SD(z)` out of band:** escalate -- do Task 5b before the seams. Do NOT loosen `r` or tune curves to the gate.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 1: Branch SV to the mixture.** In `team_z`, for the `sv` key use `closer_mixture.sv_role_variance(proj)` summed over the team; W/K keep `negbin_perf_variance(key, proj) + proj**2 * cvp**2`. (Backtest is full-season; `sv_role_variance` is full-season -- no frac.)
+- [ ] **Step 2: Run the backtest.** Run: `python scripts/backtest_sd_calibration.py`. Record SV `SD(z)` (MATCHED-ONLY and DNP=0); confirm R/HR/RBI/SB unchanged, W/SO in `[0.8,1.25]`.
+- [ ] **Step 3: DECISION GATE.**
+  - **SV `SD(z)` in `[0.8, 1.25]`** (both variants) -> two components suffice; skip Task 6b; commit; proceed to Task 7.
+  - **Out of band** -> Task 6b (three components). Do NOT loosen `r` or tune curves to the gate.
+- [ ] **Step 4: Commit**
 ```bash
 git add scripts/backtest_sd_calibration.py
-git commit -m "feat(backtest): wire SV variance to role mixture; admit 2025 SV (#193)"
+git commit -m "feat(backtest): wire SV variance to role mixture; decision gate (#193)"
 ```
 
 ---
 
-### Task 5b (CONDITIONAL): three-component escalation
+### Task 6b (CONDITIONAL): three-component escalation
 
-Only if Task 5's gate missed. Extend `closer_mixture` to a three-point `X` (hold / job-share / lose, plus the vault path folded into the low-`s` curve), re-derive the closed-form `within`/`between` for three components (same law-of-total-variance structure, `r=37.757` all components), update `role_multiplier_draw`, re-run Task 4 calibration and Task 5 backtest until the gate is green. Update `tests/test_sgp/test_closer_mixture.py` for the three-point identity. Commit as `feat(sgp): three-component role mixture (#193)`.
+Only if Task 6's gate missed. Extend `closer_mixture` to a three-point `X` (hold / job-share / lose, with the vault path in the low-`s` curve): re-derive the closed-form per-component `within`/`between` (same law-of-total-variance, `r=37.757` all components), extend `role_multiplier_draw` to a 3-way `rng.choice`-style draw preserving `E[X]=1` and 2-D shape, add a third coefficient block to `SV_ROLE_MIXTURE`, re-run Task 5 calibration and Task 6 backtest until green. Update `test_closer_mixture.py` for the 3-point identity. Commit `feat(sgp): three-component role mixture (#193)`.
 
 ---
 
-### Task 6: ERoto seam (`scoring.py`)
+### Task 7: ERoto seam (`scoring.py`)
 
-**Files:**
-- Modify: `src/fantasy_baseball/scoring.py` (`player_category_variance`, SV term ~line 1283; thread `fraction_remaining`)
-- Test: `tests/test_scoring.py`
+**Files:** Modify `scoring.py` (`player_category_variance`, SV term ~1283); Test `tests/test_scoring.py`
 
-**Interfaces:**
-- Consumes: `closer_mixture.sv_role_variance(v, fraction_remaining)`.
-
-- [ ] **Step 1: Write the failing test** -- ERoto SV variance now equals the mixture, and W/K are unchanged.
+- [ ] **Step 1: Write the failing test**
 
 ```python
-# tests/test_scoring.py
 def test_sv_variance_uses_role_mixture():
     from fantasy_baseball.sgp import closer_mixture as cm
     from fantasy_baseball.scoring import player_category_variance
-    from fantasy_baseball.models.player import PlayerType
     from fantasy_baseball.utils.constants import Category
-    player = _pitcher_fixture(sv=30, w=4, k=70, ip=65)   # existing helper / dict
-    out = player_category_variance(player)                # frac defaults to 1.0
-    assert abs(out[Category.SV] - cm.sv_role_variance(30, 1.0)) < 1e-6
+    player = _pitcher_fixture(sv=30, w=4, k=70, ip=65)     # existing test helper / dict
+    out = player_category_variance(player)
+    assert abs(out[Category.SV] - cm.sv_role_variance(30)) < 1e-6
 ```
 
 - [ ] **Step 2: Run -> FAIL.**  Run: `pytest tests/test_scoring.py::test_sv_variance_uses_role_mixture -v`
-
-- [ ] **Step 3: Implement.** Split SV out of the `w/k/sv` loop: keep `w`,`k` on `negbin_perf_variance + v*v*cv_pt_sq`; set `result[Category.SV] = closer_mixture.sv_role_variance(_stat(player,"sv"), fraction_remaining)`. Add a `fraction_remaining: float = 1.0` parameter to `player_category_variance` and thread it from `project_team_sds` (default 1.0 preserves current callers). Leave `project_team_stats` (mean path) untouched.
-
-- [ ] **Step 4: Run -> PASS.** Also run `pytest tests/test_scoring.py -v` to confirm no regression on W/K/hitter categories.
-
-- [ ] **Step 5: Commit**
+- [ ] **Step 3: Implement.** Pull SV out of the shared `w/k/sv` loop: keep `w`,`k` on `negbin_perf_variance + v*v*cv_pt_sq`; set `result[Category.SV] = closer_mixture.sv_role_variance(_stat(player, "sv"))`. **No signature change** to `player_category_variance` / `project_team_sds` -- `sv_role_variance` is full-season and ERoto in-season scaling stays in `build_team_sds`. Leave `project_team_stats` (mean path) untouched.
+- [ ] **Step 4: Run -> PASS**, plus `pytest tests/test_scoring.py -v` (W/K/hitters unregressed).
+- [ ] **Step 5: Verify the `delta_roto` call site.** Read `lineup/delta_roto.py:346-352`: its SV term now flows through the mixture (wider swap bands, intended). Run its tests: `pytest tests/test_lineup/ -k delta -v`. If a test pins old SV-variance-derived band widths, update the expectation to match the mixture (a real behavior change, not a test bug) and note it in the commit.
+- [ ] **Step 6: Commit**
 ```bash
 git add src/fantasy_baseball/scoring.py tests/test_scoring.py
 git commit -m "feat(scoring): route ERoto SV variance through role mixture (#193)"
@@ -375,73 +371,83 @@ git commit -m "feat(scoring): route ERoto SV variance through role mixture (#193
 
 ---
 
-### Task 7: MC seam (`simulation.py`)
+### Task 8: MC seam (`simulation.py`)
 
-**Files:**
-- Modify: `src/fantasy_baseball/simulation.py` (`_apply_variance_batch`, ~781-817)
-- Test: `tests/test_integration/test_lineup_integration.py` (or nearest MC test)
+**Files:** Modify `simulation.py` (`_apply_variance_batch`, ~781-817); Test `tests/test_integration/test_monte_carlo_integration.py`
 
-**Interfaces:**
-- Consumes: `closer_mixture.role_multiplier_draw`.
-
-- [ ] **Step 1: Write the failing test** -- an injured-closer team's simulated SV variance widens vs the pre-change baseline while its SV mean is stable (per-path stability).
+- [ ] **Step 1: Write the failing test** -- SV variance widens vs a mixture-disabled baseline while SV mean is stable (real assertions, NOT a stub).
 
 ```python
 def test_mc_sv_variance_widens_mean_stable():
-    # build a small pitcher set incl. a 30-SV closer; run _apply_variance_batch
-    # with a fixed seed at frac=1; compare SV column mean (stable within tol)
-    # and variance (strictly greater) vs a baseline run with the mixture disabled.
-    ...
+    import numpy as np
+    from fantasy_baseball.simulation import _apply_variance_batch
+    from fantasy_baseball.models.player import PlayerType
+    players = [_pitcher_dict(name=f"C{i}", sv=32, w=4, k=70, ip=65,
+                             positions=["RP"]) for i in range(6)]
+    def run(disable_mixture):
+        rng = np.random.default_rng(7)
+        # helper flag or monkeypatch closer_mixture.role_multiplier_draw to return ones
+        return _apply_variance_batch(players, PlayerType.PITCHER, rng, n_iter=3000,
+                                     fraction_remaining=1.0, suppress_repl=True,
+                                     _disable_sv_mixture=disable_mixture)
+    base = run(True)["sv"]      # (n_iter, n_players)
+    mix = run(False)["sv"]
+    # per-player SV variance strictly larger with the mixture (between-component added)
+    assert mix.var(axis=0).mean() > 1.5 * base.var(axis=0).mean()
+    # mean stable within tolerance (mean-neutral)
+    assert abs(mix.mean() - base.mean()) / base.mean() < 0.03
 ```
 
-- [ ] **Step 2: Run -> FAIL.**
+(If a `_disable_sv_mixture` kwarg is undesirable, the test may `monkeypatch` `closer_mixture.role_multiplier_draw` to return `np.ones_like(s)` for the baseline run -- either is acceptable; pick one and keep it.)
 
-- [ ] **Step 3: Implement the SV-specific path.** For the `sv` column only:
-  - `mu0 = base['sv'][None,:] * eff_mean[None,:]` (the mean location of `scales`, NOT the `z_pt*eff_sd` spread).
-  - `X = closer_mixture.role_multiplier_draw(base['sv'], rng, fraction_remaining)` per (iter, player).
-  - Feed `mu_mat[:,:,sv_idx] = mu0 * X` and keep `r_mat[:,:,sv_idx]` at `STAT_DISPERSION['sv']` (unchanged line 795).
-  - Leave the shared `frac_missed` and the `+8*frac_missed` backfill (811-814) untouched -- SV keeps the shared backfill (mean-neutral).
-  - Key the curve on the RAW projected SV `base['sv']`, not `mu0`.
-
+- [ ] **Step 2: Run -> FAIL.**  Run: `pytest tests/test_integration/test_monte_carlo_integration.py::test_mc_sv_variance_widens_mean_stable -v`
+- [ ] **Step 3: Implement the SV-specific path.** After `scales`/`mu_mat` are built, for the `sv` column index (`PITCHER_IDX["sv"]`):
+```python
+sv_idx = idx_map["sv"]
+s2d = np.broadcast_to(base["sv"][None, :], (n_iter, n_players))     # RAW projected SV
+x = closer_mixture.role_multiplier_draw(s2d, rng, fraction_remaining)  # (n_iter, n_players)
+mu_mat[:, :, sv_idx] = base["sv"][None, :] * eff_mean[None, :] * x   # mean rides eff_mean (NOT scales spread)
+# r_mat[:, :, sv_idx] stays STAT_DISPERSION['sv']=37.757 (line 795, unchanged)
+```
+Leave the shared `frac_missed` and the `+8*frac_missed` backfill (811-814) untouched (mean-neutral). SV stays in the copula draw so its within co-moves with er/bb/h. Add the optional `_disable_sv_mixture` kwarg (default False) only if the test uses it.
 - [ ] **Step 4: Run -> PASS.**
-
 - [ ] **Step 5: Commit**
 ```bash
-git add src/fantasy_baseball/simulation.py tests/test_integration/test_lineup_integration.py
+git add src/fantasy_baseball/simulation.py tests/test_integration/test_monte_carlo_integration.py
 git commit -m "feat(simulation): SV role-switch mixture in the MC sampler (#193)"
 ```
 
 ---
 
-### Task 8: Parity + regression tests
+### Task 9: Parity + regression tests
 
-**Files:**
-- Test: `tests/test_integration/test_closer_mixture_parity.py` (new)
+**Files:** Test `tests/test_integration/test_closer_mixture_parity.py` (new)
 
-- [ ] **Step 1: Full-season per-path stability + shared-mu0 invariant (Testing #1, #3).** Assert (a) `sv_role_variance` closed form matches a generative brute-force at a shared `mu0` within the 2.4%-catching tolerance (already in Task 1 -- re-assert at the integration level); (b) each path's SV **mean** and **SD** move only by the intended mixture delta vs a mixture-disabled baseline; NOT cross-path absolute equality (paths feed different `mu0`).
-- [ ] **Step 2: In-season property (Testing #4).** The mixture's `between` contribution scales toward 0 as `fraction_remaining -> 0` and the SCALING (ratio to full-season) matches across paths.
-- [ ] **Step 3: Valuation regression (Testing #5).** SGP/VAR/VONA SV values for a set of pitchers are unchanged (the mean pipeline is untouched).
-- [ ] **Step 4: MC re-baseline (Testing #6).** Update deterministic-seed MC test expectations for the added Bernoulli draw; document that "only SV changes" is distributional.
-- [ ] **Step 5: Run all, commit.**
+- [ ] **Step 1: Shared-`mu0` invariant (Testing #1).** Re-assert at integration level: `sv_role_variance(mu0)` matches a generative brute-force `NegBin(mu0*X, r)` within the 2.4%-catching tolerance (already unit-tested in Task 1; re-assert here as the cross-path math guard).
+- [ ] **Step 2: Per-path stability (Testing #3).** Each path's SV **mean** and **SD** move only by the intended mixture delta vs a mixture-disabled baseline -- NOT cross-path absolute equality (paths feed different `mu0`).
+- [ ] **Step 3: In-season property (Testing #4).** `role_multiplier_draw` moments: `E[X']=1`, `Var(X') = frac*Var(X)` at `frac in {0.25,0.5,0.75}` (covered in Task 3; re-assert at integration level). No ERoto-side in-season test (external `build_team_sds`, unchanged).
+- [ ] **Step 4: Valuation regression (Testing #5).** SGP/VAR/VONA SV values for a set of pitchers are unchanged (mean pipeline untouched).
+- [ ] **Step 5: MC re-baseline (Testing #6).** Re-pin deterministic-seed MC test expectations for the added Bernoulli draw; document "only SV changes" is distributional (the extra RNG shifts the shared stream).
+- [ ] **Step 6: Run all, commit.**
 ```bash
-git add tests/test_integration/test_closer_mixture_parity.py tests/  # + any re-baselined fixtures
-git commit -m "test(sim): parity, valuation-regression, and MC re-baseline for role mixture (#193)"
+git add tests/test_integration/test_closer_mixture_parity.py tests/
+git commit -m "test(sim): parity, valuation-regression, MC re-baseline for role mixture (#193)"
 ```
 
 ---
 
-### Task 9: Full end-of-effort verification
+### Task 10: Full end-of-effort verification
 
-- [ ] **Step 1:** `pytest -v` (or `pytest -n auto`) -- all pass. Fix any failure (code, not tests).
+- [ ] **Step 1:** `pytest -v` (or `-n auto`) -- all pass; fix code (not tests) on failure.
 - [ ] **Step 2:** `ruff check .` -- zero violations.
 - [ ] **Step 3:** `ruff format --check .` -- no drift (`ruff format .` to fix).
 - [ ] **Step 4:** `vulture` -- no NEW dead-code findings.
 - [ ] **Step 5:** `mypy` -- if any touched file is under `[tool.mypy].files`.
-- [ ] **Step 6:** Re-run `python scripts/backtest_sd_calibration.py` and paste the final SV `SD(z)` line into the PR body. Confirm R/HR/RBI/SB unchanged and W/SO/SV in `[0.8,1.25]`.
-- [ ] **Step 7: Commit** any fixups; the branch is ready for PR.
+- [ ] **Step 6:** Re-run `python scripts/backtest_sd_calibration.py`; paste the final SV `SD(z)` line into the PR body; confirm R/HR/RBI/SB unchanged, W/SO/SV in `[0.8,1.25]`.
+- [ ] **Step 7: Commit** any fixups; branch ready for PR.
 
 ---
 
 ## Spec-coverage self-check
 
-- Bimodal mixture, mean-1, continuous curves, r-fixed -> Tasks 1-4. In-season scaling -> Tasks 1/3. ERoto seam -> Task 6. MC seam -> Task 7. Calibration (constrained, thirds-SO) -> Task 4. Backtest wiring + 2025 admit + per-year cats -> Task 5. Feasibility gate + 3-component escalation -> Task 5/5b. Tests #1-#6 -> Tasks 1,3,8. Known limitations -> documented in `closer_mixture.py` docstring (add in Task 1). #235/#236 -> untouched (out of scope).
+Bimodal mixture / mean-1 / continuous curves / r-fixed -> Tasks 1-5. Full-season `sv_role_variance` + external in-season scaling (F3) -> Global Constraints, Tasks 1/7/8. ERoto seam -> Task 7. MC 2-D role draw (F1) -> Tasks 3/8. Calibration reads 2025 (F4 ordering) -> Tasks 4-5. Backtest wiring + 2025 admit + per-year cats -> Tasks 4/6. Decision gate + 3-component -> Tasks 6/6b. `delta_roto` call site (F6) -> Task 7 Step 5 + Files. Tests #1-#6 -> Tasks 1,3,9. Real MC test (F2) -> Task 8 Step 1. Known limitations -> `closer_mixture.py` docstring (Task 1). #235/#236 -> untouched.
