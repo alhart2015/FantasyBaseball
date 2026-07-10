@@ -18,6 +18,8 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.draft import recs_integration
 from fantasy_baseball.draft.recommend import RecommendContext
 from fantasy_baseball.draft.recs_integration import RecInputs
+from fantasy_baseball.draft.roster_state import reset_scarcity_cache
+from fantasy_baseball.draft.state import reset_version_state
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _STATE_PATH = _FIXTURES / "recs_golden_state.json"
@@ -25,6 +27,21 @@ _BOARD_PATH = _FIXTURES / "recs_golden_state_board.json"
 _LEAGUE_YAML_PATH = Path(__file__).parents[2] / "config" / "league.yaml"
 
 _TEAM_NAME = "Hart of the Order"
+
+
+@pytest.fixture(autouse=True)
+def _reset_draft_module_state():
+    """Reset draft module-level mutable state before each test so results
+    don't depend on execution order (issue #223).
+
+    ``draft/state.py`` (version counter + delta baseline) and the scarcity
+    cache in ``draft/roster_state.py`` both persist for the life of the
+    process; clear them so a test's outcome can't hinge on what ran before it.
+    """
+    reset_scarcity_cache()
+    reset_version_state()
+    yield
+
 
 # Module-scoped singletons shared across both fixture factories.
 _STATE: dict[str, Any] = json.loads(_STATE_PATH.read_text())

@@ -5,8 +5,6 @@ import pytest
 
 from fantasy_baseball.draft.roster_state import (
     RosterState,
-    _scarcity_cache,
-    _scarcity_cache_counters,
     _scarcity_cache_stats,
     _scarcity_order_cached,
 )
@@ -26,12 +24,11 @@ def test_scarcity_cache_invalidates_on_board_content_change():
     - miss on first call (populate),
     - hit on same-content repeat call,
     - miss when content changes (even if Python reuses the same id()).
-    """
-    # Reset cache state so the assertions are independent of test ordering.
-    _scarcity_cache.clear()
-    _scarcity_cache_counters["hits"] = 0
-    _scarcity_cache_counters["misses"] = 0
 
+    Cache/counter state is reset before each test by the autouse
+    ``_reset_draft_module_state`` fixture, so these counts start from zero
+    regardless of test order.
+    """
     rows_a = [
         {"name": "A", "positions": ["C"], "var": 5.0, "total_sgp": 5.0, "player_type": "hitter"},
         {"name": "B", "positions": ["SS"], "var": 4.0, "total_sgp": 4.0, "player_type": "hitter"},
