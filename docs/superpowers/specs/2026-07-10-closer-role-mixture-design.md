@@ -128,9 +128,13 @@ already exists in both paths:
   `var_target = frac*var_full`), and the role multiplier `X' = 1 + sqrt(frac)*(X - 1)` scales
   the between term by `frac`.
 
-So both paths scale within+between by `frac` uniformly and consistently -- there is **no**
-ERoto/MC in-season divergence to reconcile (an earlier draft wrongly claimed a within-term
-divergence; ERoto's external `build_team_sds` handles it). Consequently **`sv_role_variance`
+So both paths scale within+between by `frac` **to first order** consistently -- ERoto's
+external `build_team_sds` handles it, and an earlier draft's claim of a first-order within-term
+divergence was wrong. (Second-order caveat: because the MC's `X'` is already `sqrt(frac)`-shrunk
+and `nb_var` is nonlinear, the copula's additional `frac` leaves the `between/r` cross-term
+riding `frac^2` in the MC vs `frac` in ERoto -- a `(frac - frac^2)` slice of the ~2.4%
+cross-term, i.e. sub-1% of SV variance at mid-season, the same magnitude as the listed
+limitations. Not reconciled; not worth reconciling.) Consequently **`sv_role_variance`
 takes NO `fraction_remaining` parameter** -- only the MC's `role_multiplier_draw` does, for the
 `X'` shrink. The success guard (Testing #4) is a property test on `role_multiplier_draw`:
 `Var(X') = frac*Var(X)` and `E[X'] = 1`.
@@ -326,10 +330,13 @@ milestone rather than treat it as a remote contingency.
 - `scripts/backtest_sd_calibration.py` -- SV wired to mixture; per-year cat set to admit 2025
   SV; optional 2025 SO derivation.
 - **Call-site audit (CLAUDE.md "fix all call sites"):** `player_category_variance` /
-  `project_team_sds` are also consumed by `lineup/delta_roto.py` (SV swap-band widths). Its SV
-  term switches to the mixture automatically; confirm the wider swap bands are intended and that
-  its own `fraction_remaining * total` scaling still composes correctly (it does -- it scales the
-  full team variance uniformly, same as `build_team_sds`).
+  `project_team_sds` / `build_team_sds` feed the wider SV SD to every consumer (single source of
+  truth; no code changes, but confirm each behavior change is intended): `lineup/delta_roto.py`
+  (SV swap-band widths; its `fraction_remaining * total` composes correctly -- uniform variance
+  scaling like `build_team_sds`), `models/standings.py:480` (user-facing analytic
+  **ProjectedStandings** -- SV odds become less certain; verify on the live dashboard),
+  `web/refresh_pipeline.py`, `draft/finalslate.py`, `draft/recs_integration.py`. Test-side,
+  `tests/test_lineup/test_stash_value.py` also exercises `project_team_sds`.
 - Tests under `tests/`.
 
 ## Out-of-scope / related issues

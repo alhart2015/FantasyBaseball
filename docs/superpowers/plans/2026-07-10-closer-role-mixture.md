@@ -202,19 +202,23 @@ SV_ROLE_MIXTURE: dict[str, list[float]] = {
 - [ ] **Step 4: Rewrite `_components` to read the constant (mean-1 + feasibility by construction)**
 
 ```python
-from fantasy_baseball.utils.constants import STAT_DISPERSION, SV_ROLE_MIXTURE
+from fantasy_baseball.utils import constants          # module import -- NOT `from ... import SV_ROLE_MIXTURE`
 
 def _components(s):
     s = np.asarray(s, dtype=float)
-    b0, b1 = SV_ROLE_MIXTURE["q_logit"]
+    b0, b1 = constants.SV_ROLE_MIXTURE["q_logit"]     # read via module each call
     q = np.clip(1.0 / (1.0 + np.exp(-(b0 + b1 * s))), 1e-3, 1 - 1e-3)
-    c0, c1 = SV_ROLE_MIXTURE["a_s_curve"]
+    c0, c1 = constants.SV_ROLE_MIXTURE["a_s_curve"]
     a_s = np.maximum(0.0, c0 + c1 * s)                       # a_s >= 0
     a_m = np.maximum(0.0, (1.0 - (1.0 - q) * a_s) / q)       # mean-1 derived, a_m >= 0 guard
     return q, a_m, a_s
 ```
 
-Note: reads `SV_ROLE_MIXTURE` via the `constants` module object each call (so the test's monkeypatch and Task 5's regenerated values both take effect). Do NOT bind the dict at import time.
+CRITICAL: read `constants.SV_ROLE_MIXTURE` (module-qualified) each call, NOT a top-level
+`from ...constants import SV_ROLE_MIXTURE` bare name -- a bare import binds the original dict
+object into `closer_mixture`, so the Step-1 test's `constants.SV_ROLE_MIXTURE = {...}` rebind
+would be invisible and the test would not go red->green. Keep `_R = STAT_DISPERSION["sv"]` from
+the Task-1 import (STAT_DISPERSION is never monkeypatched, and Task 5 does not change `r`).
 
 - [ ] **Step 5: Run -> PASS, then commit**
 
@@ -362,7 +366,11 @@ def test_sv_variance_uses_role_mixture():
 - [ ] **Step 2: Run -> FAIL.**  Run: `pytest tests/test_scoring.py::test_sv_variance_uses_role_mixture -v`
 - [ ] **Step 3: Implement.** Pull SV out of the shared `w/k/sv` loop: keep `w`,`k` on `negbin_perf_variance + v*v*cv_pt_sq`; set `result[Category.SV] = closer_mixture.sv_role_variance(_stat(player, "sv"))`. **No signature change** to `player_category_variance` / `project_team_sds` -- `sv_role_variance` is full-season and ERoto in-season scaling stays in `build_team_sds`. Leave `project_team_stats` (mean path) untouched.
 - [ ] **Step 4: Run -> PASS**, plus `pytest tests/test_scoring.py -v` (W/K/hitters unregressed).
-- [ ] **Step 5: Verify the `delta_roto` call site.** Read `lineup/delta_roto.py:346-352`: its SV term now flows through the mixture (wider swap bands, intended). Run its tests: `pytest tests/test_lineup/ -k delta -v`. If a test pins old SV-variance-derived band widths, update the expectation to match the mixture (a real behavior change, not a test bug) and note it in the commit.
+- [ ] **Step 5: Audit ALL `player_category_variance` / `project_team_sds` / `build_team_sds` call sites (CLAUDE.md "fix all call sites").** The wider SV SD propagates single-source-of-truth to every consumer -- no code changes needed, but confirm the behavior change (SV category outcomes become less certain) is intended on each:
+  - `lineup/delta_roto.py:346-352` -- SV swap-band widths widen. Its `fraction_remaining * total` (line 352) scales the summed variance uniformly, composing correctly with the full-season mixture.
+  - `models/standings.py:480` -- analytic **ProjectedStandings** (user-facing season dashboard): SV standings odds become less certain. This is the intended fix propagating; confirm it reads sane on the live dashboard during verification.
+  - `web/refresh_pipeline.py` (~319/953/975/978), `draft/finalslate.py:250`, `draft/recs_integration.py:323` -- inherit the wider SV SD; no change required.
+  Run the affected tests: `pytest tests/test_lineup/ -k "delta or stash" tests/test_scoring.py -v` (note `tests/test_lineup/test_stash_value.py` also exercises `project_team_sds`). If any test pins old SV-variance-derived widths/odds, update the expectation to the mixture value (a real behavior change, not a test bug) and note it in the commit.
 - [ ] **Step 6: Commit**
 ```bash
 git add src/fantasy_baseball/scoring.py tests/test_scoring.py
@@ -378,27 +386,33 @@ git commit -m "feat(scoring): route ERoto SV variance through role mixture (#193
 - [ ] **Step 1: Write the failing test** -- SV variance widens vs a mixture-disabled baseline while SV mean is stable (real assertions, NOT a stub).
 
 ```python
-def test_mc_sv_variance_widens_mean_stable():
+def test_mc_sv_variance_widens_mean_stable(monkeypatch):
     import numpy as np
-    from fantasy_baseball.simulation import _apply_variance_batch
+    from fantasy_baseball import simulation
+    from fantasy_baseball.sgp import closer_mixture
     from fantasy_baseball.models.player import PlayerType
     players = [_pitcher_dict(name=f"C{i}", sv=32, w=4, k=70, ip=65,
                              positions=["RP"]) for i in range(6)]
-    def run(disable_mixture):
+    def run():
         rng = np.random.default_rng(7)
-        # helper flag or monkeypatch closer_mixture.role_multiplier_draw to return ones
-        return _apply_variance_batch(players, PlayerType.PITCHER, rng, n_iter=3000,
-                                     fraction_remaining=1.0, suppress_repl=True,
-                                     _disable_sv_mixture=disable_mixture)
-    base = run(True)["sv"]      # (n_iter, n_players)
-    mix = run(False)["sv"]
+        vb = simulation._apply_variance_batch(players, PlayerType.PITCHER, rng, n_iter=3000,
+                                              fraction_remaining=1.0, suppress_repl=True)
+        return vb.counts["sv"]     # VarianceBatch dataclass: .counts is {col: (n_iter, n_players)}
+    mix = run()
+    # baseline = mixture disabled by returning an all-ones multiplier (no between-component)
+    monkeypatch.setattr(closer_mixture, "role_multiplier_draw",
+                        lambda s, rng, fraction_remaining=1.0: np.ones(np.asarray(s).shape))
+    base = run()
     # per-player SV variance strictly larger with the mixture (between-component added)
     assert mix.var(axis=0).mean() > 1.5 * base.var(axis=0).mean()
     # mean stable within tolerance (mean-neutral)
     assert abs(mix.mean() - base.mean()) / base.mean() < 0.03
 ```
 
-(If a `_disable_sv_mixture` kwarg is undesirable, the test may `monkeypatch` `closer_mixture.role_multiplier_draw` to return `np.ones_like(s)` for the baseline run -- either is acceptable; pick one and keep it.)
+Baseline via `monkeypatch` of `role_multiplier_draw` to all-ones (NOT a `_disable_sv_mixture`
+kwarg on the production `_apply_variance_batch` signature -- keep test flags out of prod). With
+ones, `mu0*X = base*eff_mean`, so both runs share the same SV mean and the mean-neutral
+assertion holds exactly.
 
 - [ ] **Step 2: Run -> FAIL.**  Run: `pytest tests/test_integration/test_monte_carlo_integration.py::test_mc_sv_variance_widens_mean_stable -v`
 - [ ] **Step 3: Implement the SV-specific path.** After `scales`/`mu_mat` are built, for the `sv` column index (`PITCHER_IDX["sv"]`):
@@ -409,7 +423,7 @@ x = closer_mixture.role_multiplier_draw(s2d, rng, fraction_remaining)  # (n_iter
 mu_mat[:, :, sv_idx] = base["sv"][None, :] * eff_mean[None, :] * x   # mean rides eff_mean (NOT scales spread)
 # r_mat[:, :, sv_idx] stays STAT_DISPERSION['sv']=37.757 (line 795, unchanged)
 ```
-Leave the shared `frac_missed` and the `+8*frac_missed` backfill (811-814) untouched (mean-neutral). SV stays in the copula draw so its within co-moves with er/bb/h. Add the optional `_disable_sv_mixture` kwarg (default False) only if the test uses it.
+Leave the shared `frac_missed` and the `+8*frac_missed` backfill (811-814) untouched (mean-neutral). SV stays in the copula draw so its within co-moves with er/bb/h. No production test-flag kwarg -- the test disables the mixture by monkeypatching `role_multiplier_draw` to all-ones.
 - [ ] **Step 4: Run -> PASS.**
 - [ ] **Step 5: Commit**
 ```bash
