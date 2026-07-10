@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.closer_mixture import sv_role_variance
 from fantasy_baseball.utils.dispersion import negbin_perf_variance
 from fantasy_baseball.utils.playing_time import playing_time_params
 
@@ -127,10 +128,13 @@ def team_z(pool, cats, vol_col, is_hitter, dnp_zero):
         if len(proj) == 0:
             out[acol] = np.nan
             continue
-        cvp = np.array([cv_pt(v, is_hitter) for v in t[vol_col].to_numpy(dtype=float)])
-        if not dnp_zero:
-            cvp = cvp[mask]
-        var = np.sum(negbin_perf_variance(key, proj) + proj**2 * cvp**2)
+        if key == "sv":
+            var = float(np.sum(sv_role_variance(proj)))  # role-switch mixture (full-season)
+        else:
+            cvp = np.array([cv_pt(v, is_hitter) for v in t[vol_col].to_numpy(dtype=float)])
+            if not dnp_zero:
+                cvp = cvp[mask]
+            var = np.sum(negbin_perf_variance(key, proj) + proj**2 * cvp**2)
         sd = np.sqrt(var)
         out[acol] = (act.sum() - proj.sum()) / sd if sd > 0 else np.nan
     return out
