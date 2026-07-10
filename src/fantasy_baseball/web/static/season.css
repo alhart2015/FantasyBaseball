@@ -3613,7 +3613,8 @@ td[style*="--neg"] {
     .page-stash .stash-table td { padding: 7px 4px; font-size: 11.5px; }
 }
 
-/* Tab strip -- shared by /trends and /transactions. Promoted from trends.html. */
+/* Tab strip -- shared by the Standings Trends/Distributions subpages and
+   /transactions. Promoted from the old trends.html into season.css. */
 .tab-strip {
   display: flex;
   gap: 4px;
@@ -3642,3 +3643,39 @@ td[style*="--neg"] {
   border-color: var(--amber);
   font-weight: 600;
 }
+
+/* Trends charts -- promoted from trends.html when Trends became a Standings
+   subpage. Shared by the Trends and (visually) Distributions views. */
+.trends-section { margin-bottom: 32px; }
+.trends-section h2 {
+  margin: 0 0 8px;
+  font-family: 'Newsreader', serif;
+  font-weight: 400;
+  font-style: italic;
+  font-size: 28px;
+  letter-spacing: -0.018em;
+  color: var(--ink);
+}
+/* Shared card chrome for the Trends and Distributions chart surfaces so the two
+   sibling views read the same and a theme edit touches one place. Each adds only
+   its differing box metrics below. */
+.chart-wrapper,
+.dist-wrapper {
+  position: relative;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+.chart-wrapper {
+  height: 360px;
+  padding: 12px;
+}
+/* No padding on .dist-wrapper: the ridgeline canvas is sized from
+   `wrap.clientWidth`/dynamic height in season_distributions.js, and internal
+   padding would desync the backing store from the displayed box. */
+.dist-wrapper {
+  width: 100%;
+  height: 520px;
+  margin-top: 12px;
+}
+.dist-wrapper canvas { display: block; width: 100%; height: 100%; }

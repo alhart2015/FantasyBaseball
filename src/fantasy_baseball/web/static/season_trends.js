@@ -1,9 +1,10 @@
-// /trends — Chart.js line graphs for actual standings + projected ERoto.
+// Trends subpage of Standings - Chart.js line graphs for actual standings +
+// projected ERoto.
 //
-// Loads /api/trends/series once, builds two charts, and handles tab
-// switching (swap dataset.data, then chart.update()), hover-to-highlight
-// (dim non-hovered datasets), and click-to-toggle (Chart.js legend
-// default).
+// Fetches /api/trends/series once (lazily, the first time the Trends pill is
+// opened), builds two charts, and handles tab switching (swap dataset.data,
+// then chart.update()), hover-to-highlight (dim non-hovered datasets), and
+// click-to-toggle (Chart.js legend default).
 
 (function () {
   // 12-color qualitative palette; user team gets its own bold color.
@@ -178,8 +179,40 @@
     }
   }
 
-  document.addEventListener("DOMContentLoaded", () => {
-    fetch("/api/trends/series")
+  // Trends is a subpage of Standings, hidden (display:none) until its pill is
+  // clicked. Chart.js sizes to a zero-size canvas while hidden, so we build
+  // lazily on the FIRST show (charts init at the correct size) and merely
+  // resize on later shows (in case the window changed while hidden). The
+  // standings top-toggle calls window.renderTrends() when the tab opens.
+  let charts = [];
+  let loaded = false;
+
+  // Load Chart.js on demand, so the standings page never pays for it unless the
+  // user actually opens Trends. Injecting-then-awaiting also guarantees `Chart`
+  // exists before buildChart runs -- a bare deferred <script> could execute
+  // after this file on a fast click and throw "Chart is not defined".
+  const CHARTJS_SRC = "https://cdn.jsdelivr.net/npm/chart.js@4.4.4/dist/chart.umd.min.js";
+  function ensureChartJs() {
+    return new Promise((resolve, reject) => {
+      if (typeof Chart !== "undefined") {
+        resolve();
+        return;
+      }
+      const tag = document.createElement("script");
+      tag.src = CHARTJS_SRC;
+      tag.addEventListener("load", () => resolve(), { once: true });
+      tag.addEventListener("error", () => {
+        // Drop the failed tag so a later retry re-injects a fresh one.
+        tag.remove();
+        reject(new Error("Chart.js failed to load"));
+      }, { once: true });
+      document.head.appendChild(tag);
+    });
+  }
+
+  function buildTrends() {
+    ensureChartJs()
+      .then(() => fetch("/api/trends/series"))
       .then((r) => {
         if (!r.ok) {
           throw new Error("HTTP " + r.status);
@@ -201,6 +234,7 @@
             "chart-actual", data.actual.dates, actualDatasets
           );
           wireTabs('.tab-strip[data-target="actual"]', actualChart, "actual");
+          charts.push(actualChart);
         }
 
         if (!data.projected || !data.projected.dates || data.projected.dates.length === 0) {
@@ -213,11 +247,27 @@
             "chart-projected", data.projected.dates, projectedDatasets
           );
           wireTabs('.tab-strip[data-target="projected"]', projectedChart, "projected");
+          charts.push(projectedChart);
         }
       })
       .catch((err) => {
+        // No retry-reset here: `showError` replaces each canvas wrapper's
+        // contents (removing the <canvas>), so a rebuild can't reuse them --
+        // a failed load stays shown until the page is reloaded, matching the
+        // original behavior. `ensureChartJs` already awaits Chart.js's load
+        // event, so the earlier Chart-not-defined ordering race is gone and
+        // there is nothing transient left worth auto-retrying.
         showError("chart-actual", "Failed to load trends: " + err.message);
         showError("chart-projected", "Failed to load trends: " + err.message);
       });
-  });
+  }
+
+  window.renderTrends = function () {
+    if (loaded) {
+      charts.forEach((c) => c.resize());
+      return;
+    }
+    loaded = true;
+    buildTrends();
+  };
 })();
