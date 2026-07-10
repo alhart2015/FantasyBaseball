@@ -9,7 +9,8 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any, TypedDict, cast
 
-from fantasy_baseball.models.player import HitterStats, Player
+from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.standings import (
     CategoryStats,
     ProjectedStandings,
@@ -73,11 +74,34 @@ def team_baseline_volumes(
     return (ab if ab > 0.0 else None, ip if ip > 0.0 else None)
 
 
+class TradeCandidate(TypedDict):
+    """One proposed one-for-one swap, as built by the trade-search functions.
+
+    ``*_cat_deltas`` use uppercase category-code string keys (e.g. ``"HR"``,
+    ``"ERA"``) so Flask/JS consumers can index by the category code; they come
+    straight from :func:`compute_trade_impact`'s ``hart_cat_deltas`` /
+    ``opp_cat_deltas``.
+    """
+
+    send: str
+    send_positions: list[Position]
+    send_rank: int
+    send_player_type: PlayerType
+    receive: str
+    receive_positions: list[Position]
+    receive_rank: int
+    receive_player_type: PlayerType
+    hart_delta: float
+    opp_delta: float
+    hart_cat_deltas: dict[str, float]
+    opp_cat_deltas: dict[str, float]
+
+
 class OpponentGroup(TypedDict):
     """One opponent's trade-candidate group, as returned by search_trades_away."""
 
     opponent: str
-    candidates: list[dict[str, Any]]
+    candidates: list[TradeCandidate]
 
 
 def compute_roto_points_by_cat(
@@ -482,6 +506,34 @@ def _can_roster_without(add: Player, roster_slots: dict[str, int]) -> bool:
     return False
 
 
+def _make_trade_candidate(
+    send_player: Player,
+    receive_player: Player,
+    send_rank: int,
+    receive_rank: int,
+    impact: dict[str, Any],
+) -> TradeCandidate:
+    """Build one :class:`TradeCandidate` row from a send/receive pair and impact.
+
+    Shared by both search functions so the row shape lives in exactly one place.
+    ``impact`` is a :func:`compute_trade_impact` result.
+    """
+    return {
+        "send": send_player.name,
+        "send_positions": send_player.positions,
+        "send_rank": send_rank,
+        "send_player_type": send_player.player_type,
+        "receive": receive_player.name,
+        "receive_positions": receive_player.positions,
+        "receive_rank": receive_rank,
+        "receive_player_type": receive_player.player_type,
+        "hart_delta": impact["hart_delta"],
+        "opp_delta": impact["opp_delta"],
+        "hart_cat_deltas": impact["hart_cat_deltas"],
+        "opp_cat_deltas": impact["opp_cat_deltas"],
+    }
+
+
 def search_trades_away(
     player_name: str,
     hart_name: str,
@@ -530,7 +582,7 @@ def search_trades_away(
     if send_rank is None:
         return []
 
-    grouped: dict[str, list[dict[str, Any]]] = {}
+    grouped: dict[str, list[TradeCandidate]] = {}
 
     for opp_name, opp_roster in opp_rosters.items():
         for opp_player in opp_roster:
@@ -568,20 +620,7 @@ def search_trades_away(
                 continue
 
             grouped.setdefault(opp_name, []).append(
-                {
-                    "send": hart_player.name,
-                    "send_positions": hart_player.positions,
-                    "send_rank": send_rank,
-                    "send_player_type": hart_player.player_type,
-                    "receive": opp_player.name,
-                    "receive_positions": opp_player.positions,
-                    "receive_rank": receive_rank,
-                    "receive_player_type": opp_player.player_type,
-                    "hart_delta": impact["hart_delta"],
-                    "opp_delta": impact["opp_delta"],
-                    "hart_cat_deltas": impact["hart_cat_deltas"],
-                    "opp_cat_deltas": impact["opp_cat_deltas"],
-                }
+                _make_trade_candidate(hart_player, opp_player, send_rank, receive_rank, impact)
             )
 
     # Sort candidates within each group by hart_delta descending
@@ -608,7 +647,7 @@ def search_trades_for(
     projected_standings: ProjectedStandings | None = None,
     *,
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
-) -> list[dict[str, Any]]:
+) -> list[OpponentGroup]:
     """Find trade offers the user can make to acquire a specific opponent player.
 
     Searches the user's roster for players they could send that pass
@@ -654,7 +693,7 @@ def search_trades_for(
 
     opp_roster = opp_rosters[target_opp]
 
-    candidates = []
+    candidates: list[TradeCandidate] = []
     for hart_player in hart_roster:
         send_rank = rankings.get(rank_key_from_positions(hart_player.name, hart_player.positions))
         if send_rank is None:
@@ -688,20 +727,7 @@ def search_trades_for(
             continue
 
         candidates.append(
-            {
-                "send": hart_player.name,
-                "send_positions": hart_player.positions,
-                "send_rank": send_rank,
-                "send_player_type": hart_player.player_type,
-                "receive": target_player.name,
-                "receive_positions": target_player.positions,
-                "receive_rank": receive_rank,
-                "receive_player_type": target_player.player_type,
-                "hart_delta": impact["hart_delta"],
-                "opp_delta": impact["opp_delta"],
-                "hart_cat_deltas": impact["hart_cat_deltas"],
-                "opp_cat_deltas": impact["opp_cat_deltas"],
-            }
+            _make_trade_candidate(hart_player, target_player, send_rank, receive_rank, impact)
         )
 
     candidates.sort(key=lambda c: -c["hart_delta"])

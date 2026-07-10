@@ -85,12 +85,14 @@ def _feasible_assignment(
             if can_fill_slot(p.positions, slot.value):
                 cost[i][j] = 0.0
     row_idx, col_idx = linear_sum_assignment(cost)
-    assignments: list[Position | None] = [None] * n_players
+    matched: dict[int, Position] = {}
     for r, c in zip(row_idx, col_idx, strict=False):
         if cost[r][c] > 0.5:
             return None
-        assignments[r] = slot_positions[c]
-    return assignments  # type: ignore[return-value]
+        matched[r] = slot_positions[c]
+    # linear_sum_assignment returns one column per row, so every row index is
+    # present in ``matched``; rebuild the subset-parallel list in order.
+    return [matched[i] for i in range(n_players)]
 
 
 @dataclass
@@ -502,7 +504,10 @@ def optimize_pitcher_lineup(
         if best is None or total > best[0]:
             best = (total, list(subset), bench)
 
-    best_total, active_subset, bench = best  # type: ignore[misc]
+    # ``pitchers`` is non-empty and ``k >= 1`` (guarded at function top), so
+    # ``combinations`` yields at least one subset and ``best`` is always set.
+    assert best is not None
+    best_total, active_subset, bench = best
 
     # Active hitters on this roster -- identical in before/after, so they
     # cancel in the marginal but anchor the band at the correct full-team

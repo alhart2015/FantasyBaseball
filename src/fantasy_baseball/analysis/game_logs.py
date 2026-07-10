@@ -14,10 +14,9 @@ logger = logging.getLogger(__name__)
 MLB_API_BASE = "https://statsapi.mlb.com/api/v1"
 
 
-class HitterGameLog(TypedDict):
-    """One game's worth of hitter stats parsed from the MLB Stats API."""
+class HitterStatBlock(TypedDict):
+    """Hitter counting stats extracted from an MLB stat block (no date)."""
 
-    date: str
     pa: int
     ab: int
     h: int
@@ -27,14 +26,13 @@ class HitterGameLog(TypedDict):
     sb: int
 
 
-class PitcherGameLog(TypedDict):
-    """One game's worth of pitcher stats parsed from the MLB Stats API.
+class PitcherStatBlock(TypedDict):
+    """Pitcher counting stats extracted from an MLB stat block (no date).
 
     ``ip`` is a float because the API returns values like ``"6.1"`` meaning
-    6⅓ innings; we convert the fractional part into thirds.
+    6 and 1/3 innings; we convert the fractional part into thirds.
     """
 
-    date: str
     ip: float
     k: int
     er: int
@@ -46,12 +44,24 @@ class PitcherGameLog(TypedDict):
     g: int
 
 
+class HitterGameLog(HitterStatBlock):
+    """One game's worth of hitter stats parsed from the MLB Stats API."""
+
+    date: str
+
+
+class PitcherGameLog(PitcherStatBlock):
+    """One game's worth of pitcher stats parsed from the MLB Stats API."""
+
+    date: str
+
+
 # Union of the two game log shapes, for code paths that don't know the
 # player type statically (e.g. fetch_player_game_log dispatching on `group`).
 GameLog = HitterGameLog | PitcherGameLog
 
 
-def hitter_stats_from_statblock(stat: dict[str, Any]) -> dict[str, int]:
+def hitter_stats_from_statblock(stat: dict[str, Any]) -> HitterStatBlock:
     """Extract hitter counting stats from an MLB stat block.
 
     Shared by the gameLog parser (``split["stat"]``) and the box-score
@@ -68,7 +78,7 @@ def hitter_stats_from_statblock(stat: dict[str, Any]) -> dict[str, int]:
     }
 
 
-def pitcher_stats_from_statblock(stat: dict[str, Any]) -> dict[str, float | int]:
+def pitcher_stats_from_statblock(stat: dict[str, Any]) -> PitcherStatBlock:
     """Extract pitcher counting stats from an MLB stat block.
 
     Shared by the gameLog parser and the box-score parser. ``inningsPitched``
@@ -95,12 +105,12 @@ def pitcher_stats_from_statblock(stat: dict[str, Any]) -> dict[str, float | int]
 
 def parse_hitter_game_log(split: dict[str, Any]) -> HitterGameLog:
     """Parse a single hitter game log entry from the MLB API."""
-    return {"date": split["date"], **hitter_stats_from_statblock(split["stat"])}  # type: ignore[typeddict-item]
+    return HitterGameLog(date=split["date"], **hitter_stats_from_statblock(split["stat"]))
 
 
 def parse_pitcher_game_log(split: dict[str, Any]) -> PitcherGameLog:
     """Parse a single pitcher game log entry from the MLB API."""
-    return {"date": split["date"], **pitcher_stats_from_statblock(split["stat"])}  # type: ignore[typeddict-item]
+    return PitcherGameLog(date=split["date"], **pitcher_stats_from_statblock(split["stat"]))
 
 
 def fetch_player_game_log(mlbam_id: int, season: int, group: str = "hitting") -> list[GameLog]:
