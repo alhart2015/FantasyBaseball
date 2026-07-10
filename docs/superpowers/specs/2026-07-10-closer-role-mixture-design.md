@@ -2,7 +2,7 @@
 
 **Issue:** #193 -- Saves variance vs realized: re-validate under the unified NegBin model
 **Date:** 2026-07-10
-**Status:** Design approved, in spec-review hardening (iteration 4)
+**Status:** Design approved, spec-review hardened
 
 ## Problem
 
@@ -116,12 +116,16 @@ spread flows through `between`, never through inflating `r`. (This retracts the 
 
 The `between` (role-switch) term is scaled by `fraction_remaining` so it vanishes as the
 season settles (a held role stops being a coin flip). This is the ONLY in-season behavior
-this design adds, and it must be applied **identically in both paths**. The success guard is
-a property test (Testing #4): `between -> 0` as `fraction_remaining -> 0`, and the mixture's
-*added* variance matches between the analytic and MC paths at partial seasons. It is NOT a
-full ERoto-vs-MC SD-parity test at `frac < 1` -- that would trip the pre-existing
-within-term divergence (ERoto raw, MC frac-scaled) that predates this work and is out of
-scope (Scope). Full SD+mean parity is asserted at `frac = 1` (Testing #3).
+this design adds, and the same `fraction_remaining` **scaling rule** is applied in both paths
+(each on its own `mu0`). The success guard is a property test (Testing #4): `between -> 0` as
+`fraction_remaining -> 0`, and the added-variance **scaling** (the ratio of the `between`
+term to its full-season value) matches across paths -- NOT the absolute added variance, which
+differs because the two paths feed different `mu0` (per Testing #3). This is NOT a cross-path
+ERoto-vs-MC absolute-SD test at `frac < 1` -- that would trip the pre-existing within-term
+divergence (ERoto raw, MC frac-scaled) that predates this work and is out of scope (Scope).
+At `frac = 1`, cross-path *math* consistency is guarded by the shared-`mu0` invariant
+(Testing #1) and each path's own SD+mean **stability** by Testing #3 -- not cross-path
+absolute equality (the paths' `mu0` differ).
 
 ## Integration seams
 
