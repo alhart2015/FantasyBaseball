@@ -901,8 +901,9 @@ def _score_one(
         if sparse_strength is None:
             # Expected events this window is zero (e.g. a zero-rate SB season):
             # training dropped these rows to the _zna bucket, so we cannot predict
-            # this window either. Fall back to the base rate rather than fabricating
-            # a 0.0 strength and scoring an unscoreable row.
+            # this window either. Return the unscoreable `base` result (probability
+            # = None, like the model-missing guards above) rather than fabricating a
+            # 0.0 strength and scoring a row the model can't predict.
             return base
         strength = sparse_strength
 
