@@ -33,18 +33,24 @@ _R: float = cast(float, STAT_DISPERSION["sv"])
 
 
 def _components(s: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(q, a_m, a_s) for projected SV ``s``. Mean-1 by construction: a_m is derived
-    from ``q*a_m + (1-q)*a_s = 1``, with an ``a_m, a_s >= 0`` feasibility guard.
+    """(q, a_m, a_s) for projected SV ``s``, mean-1 and non-negative by construction.
+
+    Parameterized by two logistic curves: the modal probability ``q(s)`` and the
+    surprise component's share ``f(s)`` of the unit mean. Then ``a_s = f/(1-q)`` and
+    ``a_m = (1-f)/q`` -- so ``q*a_m + (1-q)*a_s == 1`` exactly and both multipliers are
+    >= 0 for any ``q, f`` in (0,1). (A direct ``a_s(s)`` curve could force a negative
+    ``a_m`` at low ``s`` where the rare vault multiplier is large.)
 
     Reads ``constants.SV_ROLE_MIXTURE`` module-qualified each call so the calibration
     (Task 5) regeneration and test monkeypatches both take effect.
     """
     s = np.asarray(s, dtype=float)
     b0, b1 = constants.SV_ROLE_MIXTURE["q_logit"]
+    g0, g1 = constants.SV_ROLE_MIXTURE["f_logit"]
     q = np.clip(1.0 / (1.0 + np.exp(-(b0 + b1 * s))), 1e-3, 1 - 1e-3)
-    c0, c1 = constants.SV_ROLE_MIXTURE["a_s_curve"]
-    a_s = np.maximum(0.0, c0 + c1 * s)
-    a_m = np.maximum(0.0, (1.0 - (1.0 - q) * a_s) / q)
+    f = np.clip(1.0 / (1.0 + np.exp(-(g0 + g1 * s))), 1e-9, 1 - 1e-6)
+    a_s = f / (1.0 - q)
+    a_m = (1.0 - f) / q
     return q, a_m, a_s
 
 

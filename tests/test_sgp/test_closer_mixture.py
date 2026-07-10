@@ -41,7 +41,7 @@ def test_provisional_components_mean_one():
 def test_components_reflect_constant(monkeypatch):
     """_components must read constants.SV_ROLE_MIXTURE live (not an import-bound copy)."""
     monkeypatch.setattr(
-        cm.constants, "SV_ROLE_MIXTURE", {"q_logit": [0.0, 0.1], "a_s_curve": [0.0, 0.0]}
+        cm.constants, "SV_ROLE_MIXTURE", {"q_logit": [0.0, 0.1], "f_logit": [-2.0, 0.0]}
     )
     q0, _, _ = cm._components(0.0)
     q40, _, _ = cm._components(40.0)
@@ -61,5 +61,9 @@ def test_role_multiplier_draw_2d_moments():
         assert np.all(x >= 0)
     x1 = cm.role_multiplier_draw(np.full((200_000, 1), 30.0), np.random.default_rng(2), 1.0)
     xh = cm.role_multiplier_draw(np.full((200_000, 1), 30.0), np.random.default_rng(2), 0.5)
-    assert x1.var() > 0.1  # NON-ZERO between-variance (guards the 1-D no-op bug)
+    q, a_m, a_s = cm._components(np.asarray(30.0))
+    theo = float(q * (1 - q) * (a_m - a_s) ** 2)  # Var(X) at s=30
+    assert theo > 1e-3  # scaffold is non-degenerate
+    # the 2-D draw reproduces Var(X); a 1-D broadcast (the F1 bug) would give ~0
+    assert abs(x1.var() - theo) / theo < 0.1
     assert abs(xh.var() / x1.var() - 0.5) < 0.05  # Var scales ~ frac
