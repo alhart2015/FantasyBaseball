@@ -147,9 +147,13 @@ stat (line 794) and also drives `frac_missed = 1 - scales` (804) and thus the ba
    `cv_pt` spread -- i.e. `base['sv'] * eff_mean` (the `eff_mean` location of `scales`, not
    the `z_pt*eff_sd` spread). This is the mean we preserve.
 2. Draw the role state per (iter, pitcher): `X` from the mixture (`E[X]=1`).
-3. Draw `SV ~ NegBin(mu0 * X, r=37.757)` with the `fraction_remaining` variance scaling the
-   copula already applies to within-stat variance; apply the `frac` scaling to `between` via
-   the mixture (Testing #4 guards consistency).
+3. Draw `SV ~ NegBin(mu0 * X, r=37.757)`. The `between` (role-switch) term is scaled by
+   `fraction_remaining` by **shrinking the multiplier's two-point support toward its mean of
+   1**: draw from `X' = 1 + sqrt(frac)*(X - 1)`, so `Var(X') = frac*Var(X)` and thus
+   `between` scales by `frac` -- matching ERoto's `between*frac`. The within-component uses
+   the copula's existing `fraction_remaining` variance scaling; do NOT additionally frac-scale
+   `X`'s within contribution (that would double-scale within). Testing #4 guards that the
+   added-variance scaling matches across paths.
 4. **Keep the injury backfill unchanged.** Backfill uses the *shared* `frac_missed` (from W/K
    playing time), not an SV-specific one, so it is untouched by step 1 -- mean-neutral (the
    `+8*frac_missed` term is part of the current mean we preserve).
@@ -211,7 +215,12 @@ SV** (vault-ins) and ~56% to projected >= 15 (job losers) -- so both ends must c
 **three-component** mixture (hold / job-share / lose, plus the vault path) -- decided as the
 first plan milestone via the wired backtest, never by tuning `r` or the curves to the gate.
 The 44/56 split and the `q`-feasibility figures are design-analysis inputs (not reproducible
-from committed artifacts); the wired backtest is the authoritative check.
+from committed artifacts); the wired backtest is the authoritative check. Note the design's own
+numbers make three-component escalation a **live likelihood**: `q ~= 0.55` (45% job-turnover)
+for a projected-30 closer is high -- established closers turn over well below that, so the
+calibrated `q(s)` at the closer end may land nearer 0.7-0.85 (~2.1x, a gate-miss), leaning on
+the vault-in end to make up the aggregate. The plan should budget for the three-component
+milestone rather than treat it as a remote contingency.
 
 ## Backtest changes (`scripts/backtest_sd_calibration.py`)
 
@@ -230,8 +239,11 @@ from committed artifacts); the wired backtest is the authoritative check.
 
 **Success criterion.**
 - **R/HR/RBI/SB** (hitters): `SD(z)` unchanged (2025 hitters already included).
-- **W, SO**: if #3 applied, gain a 2025 sample -- `SD(z)` shifts but must stay in `[0.8,1.25]`
-  (record before/after). If #3 skipped, unchanged.
+- **W**: present directly in the 2025 actuals, so it gains a 2025 sample as soon as edit #2
+  admits 2025 pitchers (independent of the SO derivation) -- `SD(z)` shifts but must stay in
+  `[0.8,1.25]` (record before/after).
+- **SO**: gains 2025 only if edit #3 (thirds-corrected derivation) is applied; else unchanged.
+  When added, must stay in `[0.8,1.25]`.
 - **SV**: `SD(z)` into `[0.8, 1.25]`. The **raw** bias `sum(actual)-sum(projected)` is
   unchanged (mean-neutral); the *standardized* `mean z` **shrinks** as the SD grows (e.g.
   +0.80 -> ~+0.4) -- this is expected, not a regression, and `mean z` is not a tuning target.
@@ -244,10 +256,15 @@ from committed artifacts); the wired backtest is the authoritative check.
    cross-`s` monotonicity -- the vault curve is legitimately non-monotone at low `s`.)
 2. **Integration (target)** -- backtest SV `SD(z)` in `[0.8, 1.25]`; R/HR/RBI/SB unchanged;
    W/SO stay in `[0.8, 1.25]`; SV raw bias unchanged (standardized `mean z` shrinks, expected).
-3. **Full-season parity (frac = 1), REQUIRED** -- analytic ERoto SV **mean** == MC SV mean AND
-   analytic SV **SD** == MC SV SD, within MC tolerance. Also assert each path's SV mean is
-   unchanged from a pre-change baseline (guards the `mu0` decomposition; tolerance accommodates
-   the `max(0,.)` clamp gap).
+3. **Full-season parity (frac = 1), REQUIRED** -- analytic ERoto SV **SD** == MC SV **SD**
+   within MC tolerance (the unification property this design must preserve). For the **mean**,
+   assert **per-path stability**, NOT cross-path equality: each path's SV mean must be
+   unchanged from its OWN pre-change baseline. The two paths already differ on SV mean today --
+   ERoto's is the raw projection sum (`project_team_stats`, no haircut) while the MC's is
+   `base*eff_mean + 8*E[frac_missed]` (haircut + backfill), a ~2 SV/closer gap that predates
+   this work -- and mean-neutrality *preserves* that difference rather than removing it, so a
+   cross-path mean-equality assertion would fail for reasons unrelated to this design. Per-path
+   tolerance accommodates the `max(0,.)` clamp gap.
 4. **In-season property (frac in {0.25,0.5,0.75})** -- the mixture's *added* (`between`) SV
    variance scales to 0 with `fraction_remaining` and is applied identically in both paths.
    (Scoped to the added term, NOT full SD parity -- see In-season / Scope.)
@@ -261,9 +278,12 @@ from committed artifacts); the wired backtest is the authoritative check.
 - **Handcuff anti-correlation.** Independent per-pitcher role draws overstate team SV variance
   for an owner who handcuffs both closers of one MLB bullpen (anti-correlated saves). The
   mixture is calibrated on the backtest's independent random rosters; not modeled.
-- **Within-component correlation losses** (both second-order, don't touch the marginal target):
+- **Within-component correlation losses** (all second-order, don't touch the marginal target):
   SV pulled out of the shared `scales` loses its playing-time co-movement with W/K/ER; the role
-  Bernoulli is independent of the copula, so job-loss doesn't co-move with high ER.
+  Bernoulli is independent of the copula, so job-loss doesn't co-move with high ER; and because
+  SV's own mean no longer rides `scales` while its `+8*frac_missed` backfill still does, the
+  intra-iteration anti-correlation between a closer's own SV dropping and his backfill firing is
+  lost (tiny vs the `between` term).
 - **Skew / mean-variance separability.** Realized SV is floored at 0 and right-skewed. `SD(z)`
   is mean-centered so the variance target is measurable independent of the mean bias; if the
   fix still leaves `SD(z)` out of band, that is the signal (Integration test) to revisit
