@@ -34,9 +34,6 @@ from fantasy_baseball.web.season_data import (
 
 logger = logging.getLogger(__name__)
 
-# ScaleInputs lives in draft.board (the module that produces it) so
-# build_board_from_frames can return it typed instead of an untyped dict.
-
 # Team volumes FROZEN at what the 2026 draft-day board was built with.
 # The live DEFAULT_TEAM_AB/IP constants recalibrate over time (1450 -> 1300
 # on 2026-07-05); this module's whole contract is reproducing the DRAFT-DAY
@@ -427,17 +424,19 @@ def _board_index(board: pd.DataFrame) -> dict[str, Any]:
             idx[key] = row
             continue
         # Same normalized-name + type collision -- distinct namesakes, e.g. the two
-        # active 2026 Max Muncys. We keep the higher-VAR row, but that silently grades
-        # one player as the other, so surface it rather than dropping it silently.
-        # Long-term fix: carry per-pick Yahoo/mlbam ids through reconstruction.
-        kept, dropped = (row, cur) if float(row["var"]) > float(cur["var"]) else (cur, row)
+        # active 2026 Max Muncys. Keep the higher-VAR row and warn (mirrors the
+        # namesake-collision convention in _insert_by_name); silently dropping one
+        # would grade a drafted player as the other. Long-term fix: carry per-pick
+        # Yahoo/mlbam ids through reconstruction.
+        cur_var, new_var = float(cur["var"]), float(row["var"])
         logger.warning(
             "Board namesake collision on %s: keeping VAR=%.2f, dropping VAR=%.2f",
             key,
-            float(kept["var"]),
-            float(dropped["var"]),
+            max(cur_var, new_var),
+            min(cur_var, new_var),
         )
-        idx[key] = kept
+        if new_var > cur_var:
+            idx[key] = row
     return idx
 
 
