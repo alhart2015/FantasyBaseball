@@ -893,14 +893,18 @@ def _score_one(
             cutoffs=model.dense_quintile_cutoffs,
         )
     else:
-        strength = (
-            _sparse_streak_strength(
-                value=int(window[category]),
-                window_pa=int(window["pa"]),
-                season_rate=season_rate,
-            )
-            or 0.0
+        sparse_strength = _sparse_streak_strength(
+            value=int(window[category]),
+            window_pa=int(window["pa"]),
+            season_rate=season_rate,
         )
+        if sparse_strength is None:
+            # Expected events this window is zero (e.g. a zero-rate SB season):
+            # training dropped these rows to the _zna bucket, so we cannot predict
+            # this window either. Fall back to the base rate rather than fabricating
+            # a 0.0 strength and scoring an unscoreable row.
+            return base
+        strength = sparse_strength
 
     feature_row = _build_feature_row(
         window=window,
