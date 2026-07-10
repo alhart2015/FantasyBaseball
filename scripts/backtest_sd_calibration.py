@@ -149,29 +149,35 @@ def run(dnp_zero):
     return zs
 
 
-print(
-    f"Synthetic teams: {N_TEAMS}/yr x {len(YEARS)} yrs; hitters PA>={H_PA_MIN}, pitchers IP>={P_IP_MIN}"
-)
-print(
-    "z = (actual_team_total - projected) / eroto_SD.  SD(z)=1 -> calibrated; "
-    ">1 -> ERoto too TIGHT by that factor.\n"
-)
-for label, dnp in [
-    ("MATCHED-ONLY (excludes DNP/bust tail -> lower bound on variance)", False),
-    ("DNP=0 (rostered-but-absent counted as zero -> includes bust tail)", True),
-]:
-    zs = run(dnp)
-    print(f"== {label} ==")
-    print(f"  {'cat':>5}{'mean z':>9}{'SD(z)':>8}{'n':>7}   verdict")
-    all_z = []
-    for acol, _ in H_CATS + P_CATS:
-        arr = np.array([z for z in zs[acol] if z == z])
-        all_z.extend(arr.tolist())
-        sd = arr.std()
-        v = "calibrated" if 0.8 <= sd <= 1.25 else ("TOO TIGHT" if sd > 1.25 else "too wide")
-        print(f"  {acol:>5}{arr.mean():>9.2f}{sd:>8.2f}{len(arr):>7}   {v} ({sd:.1f}x)")
-    a = np.array(all_z)
+def main():
     print(
-        f"  POOLED  mean={a.mean():.2f}  SD(z)={a.std():.2f}  -> ERoto SD is "
-        f"{'~calibrated' if 0.8 <= a.std() <= 1.25 else f'{a.std():.1f}x too tight'}\n"
+        f"Synthetic teams: {N_TEAMS}/yr x {len(YEARS)} yrs; "
+        f"hitters PA>={H_PA_MIN}, pitchers IP>={P_IP_MIN}"
     )
+    print(
+        "z = (actual_team_total - projected) / eroto_SD.  SD(z)=1 -> calibrated; "
+        ">1 -> ERoto too TIGHT by that factor.\n"
+    )
+    for label, dnp in [
+        ("MATCHED-ONLY (excludes DNP/bust tail -> lower bound on variance)", False),
+        ("DNP=0 (rostered-but-absent counted as zero -> includes bust tail)", True),
+    ]:
+        zs = run(dnp)
+        print(f"== {label} ==")
+        print(f"  {'cat':>5}{'mean z':>9}{'SD(z)':>8}{'n':>7}   verdict")
+        all_z = []
+        for acol, _ in H_CATS + P_CATS:
+            arr = np.array([z for z in zs[acol] if z == z])
+            all_z.extend(arr.tolist())
+            sd = arr.std()
+            v = "calibrated" if 0.8 <= sd <= 1.25 else ("TOO TIGHT" if sd > 1.25 else "too wide")
+            print(f"  {acol:>5}{arr.mean():>9.2f}{sd:>8.2f}{len(arr):>7}   {v} ({sd:.1f}x)")
+        a = np.array(all_z)
+        print(
+            f"  POOLED  mean={a.mean():.2f}  SD(z)={a.std():.2f}  -> ERoto SD is "
+            f"{'~calibrated' if 0.8 <= a.std() <= 1.25 else f'{a.std():.1f}x too tight'}\n"
+        )
+
+
+if __name__ == "__main__":
+    main()
