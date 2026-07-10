@@ -103,7 +103,8 @@ Var(SV) = within + between
 
 **Both components use the same within-dispersion `r = 37.757`.** Evaluating `within` at the
 single mean `mu0` (as a prior draft did) is WRONG -- it omits the `between/r` cross-term
-(verified: ~2.4% of the total for a 30-SV closer, a systematic gap the parity test detects).
+(verified: ~2.4% of the total for a 30-SV closer, a systematic gap the shared-`mu0` unit test
+(#1) detects).
 The reference identity is `within + between = negbin_perf_variance(mu0) + between*(1 + 1/r)`;
 `closer_mixture.sv_role_variance` implements the per-component form so it is bit-consistent
 with what the MC generates. `r` is **fixed** at 37.757 (not fit): the modal/hold component IS
@@ -250,21 +251,26 @@ milestone rather than treat it as a remote contingency.
 
 ## Testing
 
-1. **Unit** -- `sv_role_variance` matches a brute-force sample of the generative process
-   (NegBin(mu0*X, r) over the role draw); mean-1 check `E[X] == 1`; `between -> 0` as
-   `fraction_remaining -> 0`; `a_m, a_s >= 0` over the fitted `s` range. (Do NOT assert
-   cross-`s` monotonicity -- the vault curve is legitimately non-monotone at low `s`.)
+1. **Unit / mixture-math invariant (shared `mu0`)** -- at a common `mu0`, the closed-form
+   `sv_role_variance(mu0, frac)` matches a brute-force sample of the generative process
+   `NegBin(mu0*X, r)` over the role draw, to a tolerance **tight enough to catch the
+   `between/r` cross-term** (~2.4% for a 30-SV closer). This is THE check that ERoto and the MC
+   use identical mixture math (both consume `closer_mixture`), independent of each path's `mu0`.
+   Also: mean-1 `E[X] == 1`; `between -> 0` as `fraction_remaining -> 0`; `a_m, a_s >= 0` over
+   the fitted `s` range. (Do NOT assert cross-`s` monotonicity -- the vault curve is
+   legitimately non-monotone at low `s`.)
 2. **Integration (target)** -- backtest SV `SD(z)` in `[0.8, 1.25]`; R/HR/RBI/SB unchanged;
    W/SO stay in `[0.8, 1.25]`; SV raw bias unchanged (standardized `mean z` shrinks, expected).
-3. **Full-season parity (frac = 1), REQUIRED** -- analytic ERoto SV **SD** == MC SV **SD**
-   within MC tolerance (the unification property this design must preserve). For the **mean**,
-   assert **per-path stability**, NOT cross-path equality: each path's SV mean must be
-   unchanged from its OWN pre-change baseline. The two paths already differ on SV mean today --
-   ERoto's is the raw projection sum (`project_team_stats`, no haircut) while the MC's is
-   `base*eff_mean + 8*E[frac_missed]` (haircut + backfill), a ~2 SV/closer gap that predates
-   this work -- and mean-neutrality *preserves* that difference rather than removing it, so a
-   cross-path mean-equality assertion would fail for reasons unrelated to this design. Per-path
-   tolerance accommodates the `max(0,.)` clamp gap.
+3. **Per-path stability (frac = 1), REQUIRED** -- each path's SV **mean** AND **SD** change only
+   by the intended mixture contribution vs that path's OWN pre-change baseline. NOT cross-path
+   absolute equality, for either moment: the two paths feed the mixture different `mu0` -- ERoto
+   the raw ROS projection `v` (`project_team_stats`/`player_category_variance`, no haircut), the
+   MC `base*eff_mean` (haircut) plus the `+8*E[frac_missed]` backfill. That is a pre-existing
+   ~2 SV/closer mean gap and a corresponding ~8-10% SD gap (variance scales with `mu0^2`); the
+   old cv_pt term had the same asymmetry, and this design inherits and preserves it rather than
+   removing it. Cross-path *math* consistency is guaranteed structurally instead: both paths
+   compute SV variance through the same `closer_mixture` module (Testing #1), so they cannot
+   diverge in the mixture formula. Per-path tolerance accommodates the `max(0,.)` clamp gap.
 4. **In-season property (frac in {0.25,0.5,0.75})** -- the mixture's *added* (`between`) SV
    variance scales to 0 with `fraction_remaining` and is applied identically in both paths.
    (Scoped to the added term, NOT full SD parity -- see In-season / Scope.)
