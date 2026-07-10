@@ -8,7 +8,8 @@ build/
 venv/
 
 # Config secrets
-config/oauth.json
+config/oauth.json*
+!config/oauth.json.example
 .env
 
 # IDE

@@ -129,6 +129,18 @@ def _scarcity_cache_stats() -> dict[str, int]:
     return dict(_scarcity_cache_counters)
 
 
+def reset_scarcity_cache() -> None:
+    """Clear the module-level scarcity cache and its hit/miss counters.
+
+    The cache and counters persist for the life of the process, so without a
+    reset (e.g. from an autouse test fixture) assertions on hit/miss counts
+    become dependent on test execution order.
+    """
+    _scarcity_cache.clear()
+    _scarcity_cache_counters["hits"] = 0
+    _scarcity_cache_counters["misses"] = 0
+
+
 def _scarcity_order_cached(
     board: pd.DataFrame,
     roster_slots: dict[str, int],

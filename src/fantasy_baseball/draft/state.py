@@ -108,6 +108,21 @@ def get_current_version() -> int:
         return _current_version
 
 
+def reset_version_state() -> None:
+    """Reset the module-level version counter and delta baseline.
+
+    ``_current_version`` and ``_previous_state`` persist for the life of the
+    process, so tests that call :func:`write_state` otherwise see version
+    numbers and delta baselines that depend on how many writes earlier tests
+    performed. Call this (e.g. from an autouse fixture) to keep tests
+    order-independent.
+    """
+    global _current_version, _previous_state
+    with _version_lock:
+        _current_version = 0
+        _previous_state = None
+
+
 # ---------------------------------------------------------------------------
 # Board serialization (heavy, sent once)
 # ---------------------------------------------------------------------------
