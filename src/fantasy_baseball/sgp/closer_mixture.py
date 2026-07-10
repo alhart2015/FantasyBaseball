@@ -1,14 +1,21 @@
-"""Bimodal role-switch mixture for saves (SV) variance. Single source of truth
-for the SV dispersion shared by ERoto (scoring.py) and the MC (simulation.py).
+"""Bimodal/multimodal role-switch mixture for saves (SV) variance. Single source of
+truth for the SV dispersion shared by ERoto (scoring.py) and the MC (simulation.py).
 
-X is a mean-1 multiplier on a pitcher's SV mean:
-  X = a_m w.p. q(s), else a_s w.p. 1-q(s);  q*a_m + (1-q)*a_s = 1  (E[X]=1).
+X is a mean-1 multiplier on a pitcher's SV mean, a K-component mixture keyed on
+projected SV ``s``:
+  X = a_k  with prob p_k(s);   sum_k p_k = 1,   sum_k p_k a_k = 1  (E[X]=1).
+Parameterized by two K-way softmaxes over ``s`` -- the component probabilities p(s)
+and their shares w(s) of the unit mean -- with a_k = w_k / p_k. Then
+``sum p_k a_k = sum w_k = 1`` exactly and every a_k >= 0, for any softmax outputs.
+(A direct multiplier curve could force a negative multiplier at low ``s`` where the
+rare vault component is large.)
+
 FULL-SEASON variance (law of total variance over role AND NegBin), r fixed at
 STAT_DISPERSION['sv']:
-  within  = q*nb_var(s*a_m) + (1-q)*nb_var(s*a_s)
-  between = s^2 * q*(1-q) * (a_m - a_s)^2
+  within  = sum_k p_k * nb_var(s*a_k)
+  between = s^2 * (sum_k p_k a_k^2 - 1) = s^2 * (sum_k w_k^2/p_k - 1)
 so within + between == negbin_perf_variance(s) + between*(1 + 1/r) (the between/r
-cross-term the naive single-mean form omits, ~2.4% for a 30-SV closer).
+cross-term the naive single-mean form omits).
 
 In-season scaling is applied EXTERNALLY and uniformly -- ERoto via build_team_sds
 (sd_scale = sqrt(frac)), the MC via the copula (within) plus role_multiplier_draw's
@@ -16,8 +23,8 @@ X' shrink (between) -- so sv_role_variance is FULL-SEASON and takes no frac para
 
 Known limitations (second-order, do not touch the marginal SV variance target):
 SV pulled out of the shared MC ``scales`` loses its playing-time co-movement with
-W/K/ER; the role Bernoulli is independent of the copula so job-loss does not
-co-move with high ER; handcuffed closers' save anti-correlation is not modeled.
+W/K/ER; the role draw is independent of the copula so job-loss does not co-move with
+high ER; handcuffed closers' save anti-correlation is not modeled.
 """
 
 from __future__ import annotations
@@ -32,26 +39,30 @@ from fantasy_baseball.utils.constants import STAT_DISPERSION
 _R: float = cast(float, STAT_DISPERSION["sv"])
 
 
-def _components(s: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """(q, a_m, a_s) for projected SV ``s``, mean-1 and non-negative by construction.
+def _softmax_curves(s: np.ndarray, logit_curves: list[list[float]]) -> np.ndarray:
+    """K-way softmax over ``s``. ``logit_curves`` holds K-1 free ``[b0, b1]`` logit
+    lines; a zero logit is appended for the reference component. Returns shape
+    ``(*s.shape, K)``."""
+    logits = [b0 + b1 * s for b0, b1 in logit_curves]
+    logits.append(np.zeros_like(s))
+    stacked = np.stack(logits, axis=-1)
+    stacked = stacked - stacked.max(axis=-1, keepdims=True)
+    e = np.exp(stacked)
+    return np.asarray(e / e.sum(axis=-1, keepdims=True), dtype=float)
 
-    Parameterized by two logistic curves: the modal probability ``q(s)`` and the
-    surprise component's share ``f(s)`` of the unit mean. Then ``a_s = f/(1-q)`` and
-    ``a_m = (1-f)/q`` -- so ``q*a_m + (1-q)*a_s == 1`` exactly and both multipliers are
-    >= 0 for any ``q, f`` in (0,1). (A direct ``a_s(s)`` curve could force a negative
-    ``a_m`` at low ``s`` where the rare vault multiplier is large.)
+
+def _components(s: Any) -> tuple[np.ndarray, np.ndarray]:
+    """(p, a) each shape ``(*s.shape, K)`` -- component probabilities and multipliers,
+    mean-1 (``sum p*a = 1``) and non-negative by construction.
 
     Reads ``constants.SV_ROLE_MIXTURE`` module-qualified each call so the calibration
     (Task 5) regeneration and test monkeypatches both take effect.
     """
     s = np.asarray(s, dtype=float)
-    b0, b1 = constants.SV_ROLE_MIXTURE["q_logit"]
-    g0, g1 = constants.SV_ROLE_MIXTURE["f_logit"]
-    q = np.clip(1.0 / (1.0 + np.exp(-(b0 + b1 * s))), 1e-3, 1 - 1e-3)
-    f = np.clip(1.0 / (1.0 + np.exp(-(g0 + g1 * s))), 1e-9, 1 - 1e-6)
-    a_s = f / (1.0 - q)
-    a_m = (1.0 - f) / q
-    return q, a_m, a_s
+    p = _softmax_curves(s, constants.SV_ROLE_MIXTURE["p_logits"])
+    w = _softmax_curves(s, constants.SV_ROLE_MIXTURE["w_logits"])
+    a = w / p
+    return p, a
 
 
 def nb_var(m: Any) -> np.ndarray:
@@ -67,9 +78,11 @@ def sv_role_variance(s: Any) -> Any:
     externally (see module docstring); this is the full-season term.
     """
     s = np.asarray(s, dtype=float)
-    q, a_m, a_s = _components(s)
-    within = q * nb_var(s * a_m) + (1.0 - q) * nb_var(s * a_s)
-    between = s**2 * q * (1.0 - q) * (a_m - a_s) ** 2
+    p, a = _components(s)
+    mu = s[..., None] * a
+    within = np.sum(p * nb_var(mu), axis=-1)
+    ex2 = np.sum(p * a * a, axis=-1)
+    between = s**2 * (ex2 - 1.0)
     out = np.asarray(within + between, dtype=float)
     return float(out) if out.ndim == 0 else out
 
@@ -85,7 +98,9 @@ def role_multiplier_draw(
     ``Var(X') = frac*Var(X)``, ``X' >= 0``.
     """
     s = np.asarray(s, dtype=float)
-    q, a_m, a_s = _components(s)
-    x = np.where(rng.random(s.shape) < q, a_m, a_s)
+    p, a = _components(s)
+    cum = np.cumsum(p, axis=-1)
+    idx = (rng.random(s.shape)[..., None] < cum).argmax(axis=-1)
+    x = np.take_along_axis(a, idx[..., None], axis=-1)[..., 0]
     x_prime = 1.0 + np.sqrt(fraction_remaining) * (x - 1.0)
     return np.asarray(np.maximum(x_prime, 0.0), dtype=float)

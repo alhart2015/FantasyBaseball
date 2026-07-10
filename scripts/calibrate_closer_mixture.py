@@ -1,10 +1,10 @@
 """Calibrate the closer role-switch mixture curves (SV variance) from realized data.
 
-Fits two logistic curves -- the modal probability q(s) and the surprise mean-share
-f(s) -- by maximum likelihood of realized SV under the mean-1 mixture
-  SV ~ q * NegBin(s*a_m, r) + (1-q) * NegBin(s*a_s, r),  a_s=f/(1-q), a_m=(1-f)/q,
-with r fixed at STAT_DISPERSION['sv']. Reuses backtest_sd_calibration.build_year so
-the fit population matches the backtest (projected IP >= P_IP_MIN, 2022-2025).
+Fits a K-component mean-1 mixture by maximum likelihood of realized SV:
+  SV ~ sum_k p_k(s) * NegBin(s*a_k(s), r),  a_k = w_k/p_k,
+with p(s) and w(s) each a K-way softmax over K-1 free logit lines in s, and r fixed
+at STAT_DISPERSION['sv']. Reuses backtest_sd_calibration.build_year so the fit
+population matches the backtest (projected IP >= P_IP_MIN, 2022-2025).
 
 Read-only. Emits the SV_ROLE_MIXTURE dict literal to paste into constants.py, then
 validate with `python scripts/backtest_sd_calibration.py` (the authoritative gate).
@@ -16,6 +16,7 @@ from pathlib import Path
 
 import numpy as np
 from scipy.optimize import minimize
+from scipy.special import logsumexp
 from scipy.stats import nbinom
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -27,6 +28,7 @@ from fantasy_baseball.utils.constants import STAT_DISPERSION
 
 R = float(STAT_DISPERSION["sv"])
 EPS = 1e-9
+K = 3  # components
 
 
 def load_pairs():
@@ -44,23 +46,34 @@ def load_pairs():
     return np.concatenate(s_all), np.concatenate(y_all)
 
 
+def _softmax(curves, s):
+    logits = [b0 + b1 * s for b0, b1 in curves]
+    logits.append(np.zeros_like(s))
+    a = np.stack(logits, axis=-1)
+    a = a - a.max(axis=-1, keepdims=True)
+    e = np.exp(a)
+    return e / e.sum(axis=-1, keepdims=True)
+
+
+def _unpack(params):
+    n = K - 1
+    p_curves = [[params[2 * i], params[2 * i + 1]] for i in range(n)]
+    w_curves = [[params[2 * (n + i)], params[2 * (n + i) + 1]] for i in range(n)]
+    return p_curves, w_curves
+
+
 def components(params, s):
-    b0, b1, g0, g1 = params
-    q = np.clip(1.0 / (1.0 + np.exp(-(b0 + b1 * s))), 1e-3, 1 - 1e-3)
-    f = np.clip(1.0 / (1.0 + np.exp(-(g0 + g1 * s))), 1e-9, 1 - 1e-6)
-    a_s = f / (1.0 - q)
-    a_m = (1.0 - f) / q
-    return q, a_m, a_s
+    p_curves, w_curves = _unpack(params)
+    p = _softmax(p_curves, s)
+    w = _softmax(w_curves, s)
+    return p, w / p
 
 
 def nll(params, s, y):
-    q, a_m, a_s = components(params, s)
-    mu_m = np.maximum(s * a_m, EPS)
-    mu_s = np.maximum(s * a_s, EPS)
-    lp_m = nbinom.logpmf(y, R, R / (R + mu_m))
-    lp_s = nbinom.logpmf(y, R, R / (R + mu_s))
-    ll = np.logaddexp(np.log(q) + lp_m, np.log(1.0 - q) + lp_s)
-    return -float(np.sum(ll))
+    p, a = components(params, s)
+    mu = np.maximum(s[:, None] * a, EPS)
+    lp = nbinom.logpmf(y[:, None], R, R / (R + mu))
+    return -float(np.sum(logsumexp(np.log(p) + lp, axis=1)))
 
 
 def main():
@@ -69,39 +82,37 @@ def main():
         f"pitchers: {len(s)}  proj SV {s.min():.1f}-{s.max():.1f}  "
         f"realized 0-{y.max():.0f}  (mean proj {s.mean():.2f} vs realized {y.mean():.2f})"
     )
+    rng = np.random.default_rng(0)
     best = None
-    for x0 in [
-        np.array([0.2, 0.05, 1.0, -0.1]),
-        np.array([3.0, -0.05, 0.5, -0.05]),
-        np.array([1.0, 0.0, 0.0, -0.1]),
-    ]:
+    starts = [np.zeros(4 * (K - 1))] + [rng.normal(0, 1.0, 4 * (K - 1)) for _ in range(24)]
+    for x0 in starts:
         res = minimize(
             nll,
             x0,
             args=(s, y),
             method="Nelder-Mead",
-            options={"maxiter": 40000, "xatol": 1e-7, "fatol": 1e-7},
+            options={"maxiter": 60000, "maxfev": 60000, "xatol": 1e-7, "fatol": 1e-7},
         )
         if best is None or res.fun < best.fun:
             best = res
-    b0, b1, g0, g1 = best.x
     print(f"fit nll={best.fun:.1f} success={best.success}")
-    print(f"\n{'s':>6}{'n':>6}{'q':>8}{'a_m':>8}{'a_s':>8}{'model_mu':>10}{'real_mu':>9}")
+
+    print(f"\n{'s':>6}{'n':>6}   " + "  ".join(f"p{k} a{k}" for k in range(K)) + "   real_mu")
     edges = np.quantile(s, np.linspace(0, 1, 11))
-    for lo, hi in itertools.pairwise(edges):
-        m = (s >= lo) & ((s < hi) if hi < edges[-1] else (s <= hi))
-        if m.sum() == 0:
+    # also force a closer bucket so the thin high-s tail is visible
+    for lo, hi in [*itertools.pairwise(edges), (edges[-1] * 0.0 + 10.0, 100.0)]:
+        m = (s >= lo) & (s < hi)
+        if m.sum() < 5:
             continue
         sm = float(s[m].mean())
-        q, a_m, a_s = components(best.x, np.array([sm]))
-        model_mu = sm * (q[0] * a_m[0] + (1 - q[0]) * a_s[0])
-        print(
-            f"{sm:6.1f}{int(m.sum()):6d}{q[0]:8.3f}{a_m[0]:8.3f}{a_s[0]:8.3f}"
-            f"{model_mu:10.2f}{y[m].mean():9.2f}"
-        )
-    print("\nSV_ROLE_MIXTURE: dict[str, list[float]] = {")
-    print(f'    "q_logit": [{b0:.4f}, {b1:.4f}],')
-    print(f'    "f_logit": [{g0:.4f}, {g1:.4f}],')
+        p, a = components(best.x, np.array([sm]))
+        cells = "  ".join(f"{p[0, k]:.2f} {a[0, k]:.2f}" for k in range(K))
+        print(f"{sm:6.1f}{int(m.sum()):6d}   {cells}   {y[m].mean():.2f}")
+
+    p_curves, w_curves = _unpack(best.x)
+    print("\nSV_ROLE_MIXTURE: dict[str, list[list[float]]] = {")
+    print(f'    "p_logits": {[[round(float(b), 4) for b in c] for c in p_curves]},')
+    print(f'    "w_logits": {[[round(float(b), 4) for b in c] for c in w_curves]},')
     print("}")
 
 
