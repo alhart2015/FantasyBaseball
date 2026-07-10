@@ -92,8 +92,8 @@ parameterization covers both regimes -- there is no hard closer/non-closer switc
 ### Variance -- MUST match the MC's generative process (invariant, not just a formula)
 
 The MC samples `SV ~ NegBin(mu0 * X, r)`. The analytic ERoto variance must equal the **full**
-law of total variance over BOTH the role state and the NegBin, or the required SD-parity test
-(#3) fails. With `nb_var(m) = m + m^2/r`:
+law of total variance over BOTH the role state and the NegBin, or the shared-`mu0` invariant test
+(#1) fails. With `nb_var(m) = m + m^2/r`:
 
 ```
 within  = q * nb_var(mu0*a_m) + (1-q) * nb_var(mu0*a_s)     # per COMPONENT, not at mu0
@@ -176,7 +176,8 @@ stat (line 794) and also drives `frac_missed = 1 - scales` (804) and thus the ba
   (closers: `eff_mean~0.9`, negligible) downward shift. The mean-parity test (#3) uses a
   tolerance that accommodates this; the plan should confirm it is within tolerance, not zero.
 
-Guards: the **mean-parity AND SD-parity tests (#3)** catch any error in this mechanism.
+Guards: the **shared-`mu0` invariant (#1)** catches mixture-math errors and the **per-path
+mean+SD stability test (#3)** catches any error in this mechanism.
 
 ## Calibration
 
