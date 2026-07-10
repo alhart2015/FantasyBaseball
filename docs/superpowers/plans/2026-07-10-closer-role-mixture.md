@@ -370,7 +370,7 @@ def test_sv_variance_uses_role_mixture():
   - `lineup/delta_roto.py:346-352` -- SV swap-band widths widen. Its `fraction_remaining * total` (line 352) scales the summed variance uniformly, composing correctly with the full-season mixture.
   - `models/standings.py:480` -- analytic **ProjectedStandings** (user-facing season dashboard): SV standings odds become less certain. This is the intended fix propagating; confirm it reads sane on the live dashboard during verification.
   - `web/refresh_pipeline.py` (~319/953/975/978), `draft/finalslate.py:250`, `draft/recs_integration.py:323` -- inherit the wider SV SD; no change required.
-  Run the affected tests: `pytest tests/test_lineup/ -k "delta or stash" tests/test_scoring.py -v` (note `tests/test_lineup/test_stash_value.py` also exercises `project_team_sds`). If any test pins old SV-variance-derived widths/odds, update the expectation to the mixture value (a real behavior change, not a test bug) and note it in the commit.
+  Run the affected tests: `pytest tests/test_lineup/ -k "delta or stash" -v` then `pytest tests/test_scoring.py -v` (two separate commands -- a trailing positional after `-k` would be filtered by it). Note `tests/test_lineup/test_stash_value.py` calls `build_team_sds` (which wraps `project_team_sds`). If any test pins old SV-variance-derived widths/odds, update the expectation to the mixture value (a real behavior change, not a test bug) and note it in the commit.
 - [ ] **Step 6: Commit**
 ```bash
 git add src/fantasy_baseball/scoring.py tests/test_scoring.py
