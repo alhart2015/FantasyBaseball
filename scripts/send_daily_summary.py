@@ -16,9 +16,6 @@ from pathlib import Path
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROJECT_ROOT / "src"))
 
-# Read Upstash, not local SQLite (must precede KV-touching imports).
-os.environ["RENDER"] = "true"
-
 from fantasy_baseball.config import LeagueConfig, load_config
 from fantasy_baseball.data.cache_keys import CacheKey
 from fantasy_baseball.summary.assemble import build_daily_summary, refresh_is_fresh
@@ -93,6 +90,13 @@ def run_summary(
 
 
 def main() -> int:
+    # Read Upstash, not local SQLite. Set at runtime (not module scope) so that
+    # importing this module has no global side effect -- a module-level mutation
+    # would leak RENDER=true into other tests sharing an xdist worker process and
+    # silently flip their get_kv() to remote. No import above touches KV at import
+    # time; get_kv() is only called at runtime, downstream of here.
+    os.environ["RENDER"] = "true"
+
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
