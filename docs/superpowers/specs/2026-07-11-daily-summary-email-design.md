@@ -99,8 +99,9 @@ Each builder is a pure function `(inputs) -> SectionModel`. A section with no
 data (no games last night, no injuries, first-run standings baseline, absent
 `PROBABLE_STARTERS`) yields an empty list / sentinel, and `render` omits that
 block. `section_errors` records builders that *raised* (distinct from
-legitimately empty) so `render` can note them and the empty-summary guard can
-tell a failure from a quiet night.
+legitimately empty) so `render` can surface "section X failed to build" in the
+email. (The decision to send at all is a separate up-front cache-liveness check
+on `META`, not a function of `section_errors` -- see Error handling.)
 
 ### Data access details (the three under-specified sections)
 
@@ -112,7 +113,10 @@ keyed by Yahoo `player_id` / `name::player_type`. So `build_last_night` must, pe
 rostered player: (1) determine the player's group from its Yahoo positions
 (hitter vs pitcher; a two-way player like Ohtani reads BOTH groups), (2) resolve
 Yahoo name -> MLBAM via a crosswalk, (3) read that player's game log for the
-correct group, (4) filter to yesterday's MLB `officialDate`.
+correct group, (4) filter to yesterday's MLB `officialDate`. MLBAM is a
+person-level id, so a two-way player resolves to the same id in either type
+namespace; `build_last_night` uses that one id to read both the hitting and
+pitching logs -- no second crosswalk lookup is needed.
 
 The crosswalk needs care to avoid wrong-ID matches. The existing
 `build_name_to_mlbam_map` (defined in `streaks/reports/sunday.py`, called from
@@ -201,6 +205,14 @@ against a stored baseline.
   it), it renders "standings not yet refreshed today" rather than a misleading
   "no movement." Both operands are the same quantity (a refresh timestamp), so
   the comparison is well-defined.
+  - **Known limitation (safe direction).** `META.last_refresh` is written as the
+    *final* step of a successful refresh, whereas `STANDINGS` is written earlier;
+    if a refresh fails partway (after the STANDINGS write but before META), the
+    standings are fresh but `last_refresh` is stale, and the guard will render
+    "not yet refreshed" and skip a real delta. This errs toward silence, never
+    toward wrong movement, and is acceptable for v1. The timestamp is
+    minute-granularity; since consecutive snapshots are ~24h apart, a same-minute
+    collision is not a practical concern.
 - The snapshot is written back **only after a successful send** (see error
   handling), so a failed run does not corrupt the next delta baseline. If the
   snapshot write itself fails after a successful send, the run exits non-zero and
@@ -261,16 +273,22 @@ day boundary matches the data, not a separately-configured tz that could drift.
   Render cron surfaces it.
 - The standings snapshot is written **only after a successful send**; a failed
   send does not advance the delta baseline.
-- **Empty-summary guard, precisely defined.** The guard is evaluated against an
-  explicit allowlist of the **KV-sourced builders** -- `build_streaks`,
-  `build_standings_delta`, `build_lineup_moves`, `build_probables`. The script
-  skips sending (and exits non-zero) only when *every builder in that allowlist*
-  raised, indicating a total cache miss. `build_injuries` (Yahoo-sourced) and
-  `build_last_night` (KV + on-disk crosswalk) are excluded from the guard, since
-  their failure signals a Yahoo/crosswalk problem, not an empty KV -- they merely
-  contribute empty sections + a `section_errors` note. A legitimately quiet night
-  (KV read fine, but no games / no injuries / no moves) still sends an email that
-  says so; it is not suppressed.
+- **Cache-liveness precondition (replaces the earlier "all builders raised"
+  guard).** The total-cache-miss condition is detected **directly, up front**, not
+  inferred from builder exceptions -- because the builders are deliberately
+  designed to degrade to an empty section rather than raise (`build_probables` on
+  a `required=False` miss, `build_standings_delta` on first-run/stale), an
+  "every builder raised" test can never fire on a real miss. Instead, before
+  assembling, the orchestrator reads `CacheKey.META`. `META` is written only as
+  the final step of a successful refresh, so its **presence certifies the KV
+  holds real, complete data**. If `META` is absent or unreadable, the script
+  treats it as a total cache miss: it skips sending, logs loudly, and exits
+  non-zero. If `META` is present, assembly proceeds and the email is sent even if
+  individual sections are empty. This cleanly separates "the KV is down/empty"
+  (one precondition check) from "a builder degraded to empty" (`section_errors`
+  annotation) -- the two are no longer conflated.
+- A legitimately quiet night (`META` present, but no games / no injuries / no
+  moves) still sends an email that says so; it is not suppressed.
 
 ### Testing
 
@@ -294,9 +312,9 @@ day boundary matches the data, not a separately-configured tz that could drift.
 - `send.py`: Resend client mocked -- assert payload shape; never hit the network.
 - Snapshot round-trip: first run establishes baseline, second run computes a
   correct delta; a failed send does not advance the baseline.
-- Empty-summary guard: all KV-allowlist builders raised suppresses send
-  (non-zero exit); a Yahoo/crosswalk-only failure does NOT suppress; quiet-night
-  still sends.
+- Cache-liveness precondition: absent `META` suppresses send (non-zero exit);
+  present `META` with all-empty sections (quiet night) still sends; a
+  Yahoo/crosswalk-only failure with `META` present still sends.
 
 ## Out of scope (v1)
 
@@ -320,5 +338,7 @@ day boundary matches the data, not a separately-configured tz that could drift.
 - Read Upstash (not local SQLite) for live season state: set `RENDER=true`
   before the first cache read / pipeline import.
 - Reuse existing functions (`fetch_injuries`, streak `Report`, `LINEUP_OPTIMAL`
-  moves, `score_roto`, `build_name_to_mlbam_map`, `LOCAL_TZ`/`local_today`)
-  rather than recomputing.
+  moves, `score_roto`, `LOCAL_TZ`/`local_today`) rather than recomputing.
+  `build_name_to_mlbam_map` is **extended/parameterized**, not reused as-is: its
+  discovery is hitter-only and it keys by bare normalized name, both of which this
+  feature changes (type-keyed, hitter+pitcher CSVs -- see Data access).
