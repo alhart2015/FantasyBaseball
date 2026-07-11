@@ -53,4 +53,3 @@ def test_delta_computes_rank_and_category_movement():
     assert mine.rank_prev == 2
     assert mine.rank_now == 1
     assert mine.points_now - mine.points_prev == 2.0
-    assert delta.rate_cat_caveat is True

@@ -9,7 +9,7 @@ logs. No builder imports the streaks/dashboard module (it pulls in duckdb).
 from __future__ import annotations
 
 from datetime import date
-from typing import TYPE_CHECKING, Any, cast
+from typing import Any, cast
 
 from fantasy_baseball.data.redis_store import get_player_game_log
 from fantasy_baseball.summary.crosswalk import player_group
@@ -18,11 +18,11 @@ from fantasy_baseball.summary.models import (
     LineupMove,
     PlayerLine,
     ProbableMatchup,
+    StandingsDelta,
     StreakItem,
+    TeamDelta,
 )
-
-if TYPE_CHECKING:
-    from fantasy_baseball.summary.models import StandingsDelta
+from fantasy_baseball.utils.name_utils import normalize_name
 
 _HITTER_FIELDS = ("pa", "ab", "h", "hr", "r", "rbi", "sb")
 _PITCHER_FIELDS = ("ip", "k", "er", "bb", "w", "sv", "h_allowed")
@@ -52,7 +52,7 @@ def build_last_night(
 
         # A two-way player resolves under whichever type namespace matches; the
         # same person-level MLBAM id serves both game-log groups.
-        norm = _normalize(name)
+        norm = normalize_name(name)
         mlbam: int | None = None
         for group in groups:
             key = (norm, "pitcher" if group == "pitching" else "hitter")
@@ -187,7 +187,6 @@ def build_standings_delta(
     """
     from fantasy_baseball.models.standings import Standings
     from fantasy_baseball.scoring import score_roto
-    from fantasy_baseball.summary.models import StandingsDelta, TeamDelta
 
     if current_raw is None or snapshot_payload is None:
         return StandingsDelta(is_first_run=True, user_team_name=user_team_name)
@@ -225,14 +224,7 @@ def build_standings_delta(
         is_first_run=False,
         user_team_name=user_team_name,
         teams=teams,
-        rate_cat_caveat=True,
     )
-
-
-def _normalize(name: str) -> str:
-    from fantasy_baseball.utils.name_utils import normalize_name
-
-    return normalize_name(name)
 
 
 def _num(value: Any) -> float:

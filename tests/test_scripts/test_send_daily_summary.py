@@ -24,7 +24,7 @@ def test_run_summary_stale_refresh_skips_send(monkeypatch, patched):
     stale = ({"last_refresh": "9:00 AM"}, {"_written_at": "2026-07-09T12:00:00+00:00"})
     monkeypatch.setattr(mod, "read_cache_with_meta", lambda key: stale)
     rc = mod.run_summary(
-        _cfg(), _root(), api_key="k", league=object(), team_key="t", today=date(2026, 7, 11)
+        _cfg(), _root(), api_key="k", resolve_team=lambda: (object(), "t"), today=date(2026, 7, 11)
     )
     assert rc != 0
     assert sent == {}  # never sent
@@ -34,7 +34,7 @@ def test_run_summary_missing_meta_skips_send(monkeypatch, patched):
     mod, sent, _written = patched
     monkeypatch.setattr(mod, "read_cache_with_meta", lambda key: (None, {}))
     rc = mod.run_summary(
-        _cfg(), _root(), api_key="k", league=object(), team_key="t", today=date(2026, 7, 11)
+        _cfg(), _root(), api_key="k", resolve_team=lambda: (object(), "t"), today=date(2026, 7, 11)
     )
     assert rc != 0
     assert sent == {}
@@ -60,7 +60,7 @@ def test_run_summary_fresh_sends_and_writes_snapshot(monkeypatch, patched):
     mod, sent, written = patched
     monkeypatch.setattr(mod, "build_daily_summary", lambda *a, **k: _fresh_summary())
     rc = mod.run_summary(
-        _cfg(), _root(), api_key="k", league=object(), team_key="t", today=date(2026, 7, 11)
+        _cfg(), _root(), api_key="k", resolve_team=lambda: (object(), "t"), today=date(2026, 7, 11)
     )
     assert rc == 0
     assert sent["subject"]
@@ -76,7 +76,7 @@ def test_run_summary_failed_send_does_not_advance_snapshot(monkeypatch, patched)
 
     monkeypatch.setattr(mod, "send_email", _boom)
     rc = mod.run_summary(
-        _cfg(), _root(), api_key="k", league=object(), team_key="t", today=date(2026, 7, 11)
+        _cfg(), _root(), api_key="k", resolve_team=lambda: (object(), "t"), today=date(2026, 7, 11)
     )
     assert rc != 0
     assert written == {}  # snapshot NOT advanced on failed send

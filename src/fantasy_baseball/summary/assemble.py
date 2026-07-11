@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from fantasy_baseball.config import LeagueConfig
 from fantasy_baseball.data.cache_keys import CacheKey
@@ -29,7 +29,6 @@ from fantasy_baseball.summary.crosswalk import build_typed_name_to_mlbam
 from fantasy_baseball.summary.models import DailySummary, StandingsDelta
 from fantasy_baseball.utils.time_utils import LOCAL_TZ, local_today
 from fantasy_baseball.web.season_data import (
-    read_cache,
     read_cache_dict,
     read_cache_list,
 )
@@ -111,8 +110,8 @@ def build_daily_summary(
     standings_delta = _guard(
         "build_standings_delta",
         lambda: build_standings_delta(
-            cast("dict[str, Any] | None", read_cache(CacheKey.STANDINGS)),
-            cast("dict[str, Any] | None", read_cache(CacheKey.STANDINGS_SNAPSHOT)),
+            read_cache_dict(CacheKey.STANDINGS),
+            read_cache_dict(CacheKey.STANDINGS_SNAPSHOT),
             config.team_name,
         ),
         StandingsDelta(is_first_run=True, user_team_name=config.team_name),

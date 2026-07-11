@@ -38,7 +38,6 @@ def test_build_daily_summary_isolates_a_failing_builder(monkeypatch):
     monkeypatch.setattr(asm, "fetch_roster", lambda league, tk: [])
     monkeypatch.setattr(asm, "fetch_injuries", lambda league, tk: [])
     monkeypatch.setattr(asm, "build_typed_name_to_mlbam", lambda root, *, season: {})
-    monkeypatch.setattr(asm, "read_cache", lambda key: None)
     monkeypatch.setattr(asm, "read_cache_dict", lambda key: None)
     monkeypatch.setattr(asm, "read_cache_list", lambda key: None)
 

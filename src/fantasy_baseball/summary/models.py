@@ -43,7 +43,6 @@ class StandingsDelta:
     is_first_run: bool
     user_team_name: str
     teams: list[TeamDelta] = field(default_factory=list)
-    rate_cat_caveat: bool = False
 
 
 @dataclass(frozen=True)

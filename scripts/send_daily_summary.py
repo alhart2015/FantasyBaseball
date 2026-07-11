@@ -11,8 +11,10 @@ from __future__ import annotations
 import logging
 import os
 import sys
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from typing import Any
 
 _PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(_PROJECT_ROOT / "src"))
@@ -45,11 +47,15 @@ def run_summary(
     projections_root: Path,
     *,
     api_key: str,
-    league: object,
-    team_key: str,
+    resolve_team: Callable[[], tuple[Any, str]],
     today: date | None = None,
 ) -> int:
-    """Freshness-gate, assemble, render, send, snapshot. Returns an exit code."""
+    """Freshness-gate, assemble, render, send, snapshot. Returns an exit code.
+
+    ``resolve_team`` yields ``(league, team_key)`` and is only invoked once the
+    freshness gate passes -- so a stale morning skips the (expensive) Yahoo auth
+    entirely instead of authenticating and then throwing the work away.
+    """
     today = today or local_today()
 
     # Two-part gate in one check: liveness (META present) + freshness (written
@@ -67,6 +73,7 @@ def run_summary(
         )
         return 1
 
+    league, team_key = resolve_team()
     summary = build_daily_summary(
         config, projections_root, today=today, league=league, team_key=team_key
     )
@@ -107,22 +114,24 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
-    from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
-    from fantasy_baseball.lineup.yahoo_roster import fetch_teams, find_user_team_key
-
     config = load_config(_PROJECT_ROOT / "config" / "league.yaml")
     api_key = os.environ.get("RESEND_API_KEY", "")
     if not api_key:
         logger.error("RESEND_API_KEY not set")
         return 2
 
-    session = get_yahoo_session()
-    league = get_league(session, config.league_id, config.game_code)
-    teams = fetch_teams(league)
-    team_key = find_user_team_key(teams, config.team_name)
+    def resolve_team() -> tuple[Any, str]:
+        # Yahoo auth is deferred behind the freshness gate (run only if fresh).
+        from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
+        from fantasy_baseball.lineup.yahoo_roster import fetch_teams, find_user_team_key
+
+        session = get_yahoo_session()
+        league = get_league(session, config.league_id, config.game_code)
+        teams = fetch_teams(league)
+        return league, find_user_team_key(teams, config.team_name)
 
     projections_root = _PROJECT_ROOT / "data" / "projections"
-    return run_summary(config, projections_root, api_key=api_key, league=league, team_key=team_key)
+    return run_summary(config, projections_root, api_key=api_key, resolve_team=resolve_team)
 
 
 if __name__ == "__main__":

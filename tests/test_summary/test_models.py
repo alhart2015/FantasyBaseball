@@ -31,7 +31,6 @@ def test_daily_summary_is_constructible_and_frozen():
                     category_points_delta={"HR": 1.0, "SB": -1.0},
                 )
             ],
-            rate_cat_caveat=True,
         ),
         lineup_moves=[
             LineupMove(player="X", action="start", from_slot="BN", to_slot="OF", roto_delta=0.3)
