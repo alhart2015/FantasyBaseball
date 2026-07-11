@@ -50,6 +50,9 @@ rng = np.random.default_rng(11)
 
 H_CATS = [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]
 P_CATS = [("W", "w"), ("SO", "k"), ("SV", "sv")]  # actual col, STAT_DISPERSION key
+# SV is measured on the save-relevant pool (see SV_POOL_MIN_PROJ); W/K on the full pool.
+WK_CATS = [(a, k) for a, k in P_CATS if a != "SV"]
+SV_CATS = [(a, k) for a, k in P_CATS if a == "SV"]
 
 
 def _read(path):
@@ -135,18 +138,14 @@ def run(dnp_zero):
     zs = {acol: [] for acol, _ in H_CATS + P_CATS}
     for year in YEARS:
         hm, pm = build_year(year)
-        # SV is measured on the save-relevant pool (see SV_POOL_MIN_PROJ); W/K/hitters
-        # on the full pool.
-        wk_cats = [(a, k) for a, k in P_CATS if a != "SV"]
-        sv_cats = [(a, k) for a, k in P_CATS if a == "SV"]
         sv_pool = pm[pm["SV_p"] >= SV_POOL_MIN_PROJ]
         for _ in range(N_TEAMS):
             for acol, v in team_z(hm, H_CATS, "PA", True, dnp_zero).items():
                 zs[acol].append(v)
-            for acol, v in team_z(pm, wk_cats, "IP", False, dnp_zero).items():
+            for acol, v in team_z(pm, WK_CATS, "IP", False, dnp_zero).items():
                 zs[acol].append(v)
             if len(sv_pool) >= N_P:
-                for acol, v in team_z(sv_pool, sv_cats, "IP", False, dnp_zero).items():
+                for acol, v in team_z(sv_pool, SV_CATS, "IP", False, dnp_zero).items():
                     zs[acol].append(v)
     return zs
 
