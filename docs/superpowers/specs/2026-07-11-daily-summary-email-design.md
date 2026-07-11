@@ -170,11 +170,12 @@ against a stored baseline.
 
 - New cache key `STANDINGS_SNAPSHOT` holding `{last_refresh, standings}` --
   `standings` is the full `Standings.to_json()` payload, and `last_refresh` is
-  the `META.last_refresh` timestamp that was current when the snapshot was taken
-  (see staleness guard). It must be added to the `CacheKey` StrEnum and routed
-  through `redis_key()` like every other key; it is written/read by the summary
-  job itself and lives **outside** the refresh's write set (and outside
-  `kv_sync`'s enumerated keys).
+  the `META.last_refresh` value current when the snapshot was taken (kept for
+  traceability/debugging; the send/skip decision is the up-front freshness gate,
+  not this field). It must be added to the `CacheKey` StrEnum and routed through
+  `redis_key()` like every other key; it is written/read by the summary job
+  itself and lives **outside** the refresh's write set (and outside `kv_sync`'s
+  enumerated keys).
 - `Standings.to_json()` stores per-team `rank`, `yahoo_points_for` (total roto
   points), and raw `CategoryStats` totals -- but **not** per-category place
   points. Therefore:
@@ -194,25 +195,17 @@ against a stored baseline.
 - Delta basis = **the last summary run** (not a fixed calendar day): "since you
   last looked" semantics, robust to a missed/failed run (the next email spans a
   longer window).
-- **Staleness guard.** The delta is only meaningful if `STANDINGS` was refreshed
-  since the last snapshot. The guard keys on **`META.last_refresh`**, NOT on
-  `Standings.effective_date` -- `effective_date` is the next lineup-lock Tuesday
-  and is *constant across a whole scoring week* (Wed-Sun would all share one
-  value), so using it would false-positive and suppress real overnight movement
-  4-5 days a week. `build_standings_delta` compares the current `META.last_refresh`
-  against the `last_refresh` stored in the prior snapshot; if they are equal (the
-  morning refresh has not run since the last email, or the summary fired before
-  it), it renders "standings not yet refreshed today" rather than a misleading
-  "no movement." Both operands are the same quantity (a refresh timestamp), so
-  the comparison is well-defined.
-  - **Known limitation (safe direction).** `META.last_refresh` is written as the
-    *final* step of a successful refresh, whereas `STANDINGS` is written earlier;
-    if a refresh fails partway (after the STANDINGS write but before META), the
-    standings are fresh but `last_refresh` is stale, and the guard will render
-    "not yet refreshed" and skip a real delta. This errs toward silence, never
-    toward wrong movement, and is acceptable for v1. The timestamp is
-    minute-granularity; since consecutive snapshots are ~24h apart, a same-minute
-    collision is not a practical concern.
+- **Freshness is not this section's job.** Whether today's refresh actually ran
+  is enforced once, up front, by the whole-email freshness gate (see Error
+  handling) -- the email is not assembled at all unless `META.last_refresh` is
+  from today. So `build_standings_delta` does not need its own staleness branch:
+  by the time it runs, the current `STANDINGS` is known-fresh, and it simply
+  diffs current vs. the prior snapshot (rank + total points directly, per-category
+  by recompute). The one within-section edge it still owns is the **first run**
+  (no prior snapshot): render "baseline established -- deltas start next run."
+  (`Standings.effective_date` is deliberately NOT used for freshness anywhere --
+  it is the next lineup-lock Tuesday, constant Wed-Sun across a scoring week, so
+  it cannot detect a day's movement.)
 - The snapshot is written back **only after a successful send** (see error
   handling), so a failed run does not corrupt the next delta baseline. If the
   snapshot write itself fails after a successful send, the run exits non-zero and
@@ -233,9 +226,10 @@ pipeline / first cache read (mirroring `scripts/refresh_remote.py:30-43`), then
 fetches live injuries from Yahoo.
 
 Ordering note: the summary depends on the morning refresh having run. Scheduling
-"shortly after" is a timing convention, not a guarantee; the standings staleness
-guard above is what actually protects correctness if the refresh is late or
-failed.
+"shortly after" is a timing convention, not a guarantee; the whole-email
+freshness gate (Error handling) is what actually protects correctness -- if the
+refresh is late or failed, `META.last_refresh` is not from today and the job
+skips the email and exits non-zero rather than mailing stale data.
 
 ### Config & secrets
 
@@ -273,21 +267,36 @@ day boundary matches the data, not a separately-configured tz that could drift.
   Render cron surfaces it.
 - The standings snapshot is written **only after a successful send**; a failed
   send does not advance the delta baseline.
-- **Cache-liveness precondition (replaces the earlier "all builders raised"
-  guard).** The total-cache-miss condition is detected **directly, up front**, not
-  inferred from builder exceptions -- because the builders are deliberately
-  designed to degrade to an empty section rather than raise (`build_probables` on
-  a `required=False` miss, `build_standings_delta` on first-run/stale), an
-  "every builder raised" test can never fire on a real miss. Instead, before
-  assembling, the orchestrator reads `CacheKey.META`. `META` is written only as
-  the final step of a successful refresh, so its **presence certifies the KV
-  holds real, complete data**. If `META` is absent or unreadable, the script
-  treats it as a total cache miss: it skips sending, logs loudly, and exits
-  non-zero. If `META` is present, assembly proceeds and the email is sent even if
-  individual sections are empty. This cleanly separates "the KV is down/empty"
-  (one precondition check) from "a builder degraded to empty" (`section_errors`
-  annotation) -- the two are no longer conflated.
-- A legitimately quiet night (`META` present, but no games / no injuries / no
+- **Whole-email freshness gate (replaces the earlier "all builders raised"
+  guard).** The send/skip decision is made **directly, up front**, not inferred
+  from builder exceptions -- the builders deliberately degrade to an empty
+  section rather than raise (`build_probables` on a `required=False` miss,
+  `build_standings_delta` on first run), so an "every builder raised" test can
+  never fire on a real cache miss. Instead, before assembling, the orchestrator
+  reads `CacheKey.META` and applies a two-part check:
+  - **Liveness:** if `META` is absent or unreadable, the KV was never populated
+    (or Upstash is down) -- skip send, log loudly, exit non-zero.
+  - **Freshness:** if `META` is present but `META.last_refresh` is **not from
+    today** (compared in `LOCAL_TZ` via `local_today()`), today's morning refresh
+    has not completed. Because `META` is overwritten in place and never deleted,
+    presence alone only proves *some* past refresh succeeded -- yesterday's `META`
+    persists. Sending on stale KV would render plausible-but-wrong sections (most
+    dangerously `build_last_night` showing a false "no games last night" because
+    yesterday's game logs are filtered to today's `officialDate`). So a
+    not-from-today `last_refresh` also skips send, logs loudly, and exits non-zero
+    -- surfacing "the refresh didn't run" to the cron rather than mailing stale
+    data. This one gate protects **all six sections** at once.
+
+  Only when `META` is present AND fresh does assembly proceed and the email
+  send. This cleanly separates the send decision (one up-front check on `META`)
+  from per-builder degradation (`section_errors` annotation); the two are never
+  conflated.
+- **Known limitation (safe direction).** `META.last_refresh` is written as the
+  *final* refresh step, after `STANDINGS`. If a refresh crashes after the
+  STANDINGS write but before `META`, the KV is partly fresh but `last_refresh`
+  stays stale, so the freshness gate skips the whole email. This errs toward
+  silence, never toward mailing wrong data, and is acceptable for v1.
+- A legitimately quiet night (`META` fresh, but no games / no injuries / no
   moves) still sends an email that says so; it is not suppressed.
 
 ### Testing
@@ -302,19 +311,19 @@ day boundary matches the data, not a separately-configured tz that could drift.
 - `build_last_night`: group derivation (hitter vs pitcher vs two-way reads both);
   unmatched player lands in `unmatched`, not silently dropped.
 - `build_standings_delta`: rank/total-points diff; per-category recomputation
-  from raw totals; rate-cat caveat behavior; staleness guard fires when
-  `META.last_refresh` is unchanged AND correctly does NOT fire mid-scoring-week
-  when only `effective_date` is unchanged but `last_refresh` advanced; first-run
-  baseline path.
+  from raw totals; rate-cat caveat behavior; first-run baseline path (no prior
+  snapshot renders "baseline established").
 - `render_html` / `render_text`: snapshot test on a fully-populated
   `DailySummary`, one with empty sections (blocks omitted), and one with
   `section_errors` set (failure note rendered).
 - `send.py`: Resend client mocked -- assert payload shape; never hit the network.
 - Snapshot round-trip: first run establishes baseline, second run computes a
   correct delta; a failed send does not advance the baseline.
-- Cache-liveness precondition: absent `META` suppresses send (non-zero exit);
-  present `META` with all-empty sections (quiet night) still sends; a
-  Yahoo/crosswalk-only failure with `META` present still sends.
+- Whole-email freshness gate: absent `META` suppresses send (non-zero exit);
+  present-but-stale `META` (`last_refresh` not from today) suppresses send
+  (non-zero exit); present + fresh `META` with all-empty sections (quiet night)
+  still sends; present + fresh `META` with a Yahoo/crosswalk-only failure still
+  sends.
 
 ## Out of scope (v1)
 
