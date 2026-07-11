@@ -1279,9 +1279,13 @@ def player_category_variance(player) -> dict[Category | str, float]:
             v = _stat(player, stat_key)
             result[cat] = float(negbin_perf_variance(stat_key, v)) + v * v * cv_pt_sq
         # SV: the bimodal closer role-switch mixture replaces the cv_pt term (which
-        # cannot represent hold-the-job vs lose-it). Full-season; in-season scaling
-        # rides the same external build_team_sds sqrt(frac) as every category.
-        result[Category.SV] = float(sv_role_variance(_stat(player, "sv")))
+        # cannot represent hold-the-job vs lose-it). The role curve is keyed on the
+        # FULL-SEASON projected SV it was calibrated on (as W/K's cv_pt uses
+        # _full_season_volume); the variance is priced on the ROS mean. In-season SD
+        # scaling rides the same external build_team_sds sqrt(frac) as every category.
+        result[Category.SV] = float(
+            sv_role_variance(_stat(player, "sv"), _stat(player, "sv", "full_season_projection"))
+        )
         result["er_var"] = float(negbin_perf_variance("er", _stat(player, "er")))
         result["bb_var"] = float(negbin_perf_variance("bb", _stat(player, "bb")))
         result["ha_var"] = float(negbin_perf_variance("h_allowed", _stat(player, "h_allowed")))

@@ -74,18 +74,23 @@ def nb_var(m: Any) -> np.ndarray:
     return negbin_variance_from_r(m, _R)
 
 
-def sv_role_variance(s: Any) -> Any:
-    """Full-season SV variance ``within + between`` keyed and meaned on projected SV ``s``.
+def sv_role_variance(mu: Any, s_curve: Any = None) -> Any:
+    """SV variance ``within + between``. The role structure (component probabilities and
+    multipliers) is keyed on ``s_curve`` -- the **full-season** projected SV the curves
+    were calibrated on -- while the variance scales with ``mu``, the projection whose mean
+    it prices (ROS in-season, == full-season preseason). When ``s_curve`` is None it
+    defaults to ``mu`` (preseason, where ROS == full-season).
 
-    Returns a float for scalar ``s``, else an ndarray. In-season scaling is applied
-    externally (see module docstring); this is the full-season term.
+    Keying the curve on the ROS projection would misread a mid-season locked closer (ROS
+    ~18) as a fringe/committee arm. Returns a float for scalar input, else an ndarray. In
+    -season SD scaling is applied externally (see module docstring).
     """
-    s = np.asarray(s, dtype=float)
-    p, a = _components(s)
-    mu = s[..., None] * a
-    within = np.sum(p * nb_var(mu), axis=-1)
+    mu = np.asarray(mu, dtype=float)
+    s_curve = mu if s_curve is None else np.asarray(s_curve, dtype=float)
+    p, a = _components(s_curve)
+    within = np.sum(p * nb_var(mu[..., None] * a), axis=-1)
     ex2 = np.sum(p * a * a, axis=-1)
-    between = s**2 * (ex2 - 1.0)
+    between = mu**2 * (ex2 - 1.0)
     out = np.asarray(within + between, dtype=float)
     return float(out) if out.ndim == 0 else out
 
