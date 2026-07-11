@@ -223,3 +223,32 @@ def test_load_config_roster_slots(sample_config):
 def test_load_config_missing_file():
     with pytest.raises(FileNotFoundError):
         load_config(Path("/nonexistent/league.yaml"))
+
+
+def test_load_config_reads_summary_block(tmp_path):
+    from fantasy_baseball.config import load_config
+
+    cfg_text = """
+league:
+  id: 12345
+  num_teams: 10
+  team_name: "My Team"
+summary:
+  recipients:
+    - "me@example.com"
+  from_address: "digest@example.com"
+"""
+    p = tmp_path / "league.yaml"
+    p.write_text(cfg_text, encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.summary["recipients"] == ["me@example.com"]
+    assert cfg.summary["from_address"] == "digest@example.com"
+
+
+def test_load_config_summary_defaults_empty(tmp_path):
+    from fantasy_baseball.config import load_config
+
+    p = tmp_path / "league.yaml"
+    p.write_text("league:\n  id: 1\n  num_teams: 10\n  team_name: T\n", encoding="utf-8")
+    cfg = load_config(p)
+    assert cfg.summary == {}

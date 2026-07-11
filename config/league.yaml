@@ -151,3 +151,8 @@ projections:
 sgp_denominators:
   AVG: 0.0025
   ERA: 0.12
+
+summary:
+  recipients:
+    - "you@example.com"
+  from_address: "digest@yourdomain.com"
