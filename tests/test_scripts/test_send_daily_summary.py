@@ -2,22 +2,27 @@ from datetime import date
 
 import pytest
 
+# Noon UTC on 2026-07-11 = 08:00 ET -> local date 2026-07-11 (fresh vs the
+# date(2026, 7, 11) the tests pass as "today").
+_FRESH_ENVELOPE = ({"last_refresh": "9:00 AM"}, {"_written_at": "2026-07-11T12:00:00+00:00"})
+
 
 @pytest.fixture
 def patched(monkeypatch):
     import scripts.send_daily_summary as mod
 
     sent = {}
-    monkeypatch.setattr(mod, "read_meta", lambda: {"last_refresh": "2026-07-11 08:00"})
+    monkeypatch.setattr(mod, "read_cache_with_meta", lambda key: _FRESH_ENVELOPE)
     monkeypatch.setattr(mod, "send_email", lambda **kw: sent.update(kw) or "msg_1")
     written = {}
-    monkeypatch.setattr(mod, "_write_snapshot", lambda meta: written.update({"done": True}))
+    monkeypatch.setattr(mod, "_write_snapshot", lambda wa: written.update({"done": True}))
     return mod, sent, written
 
 
 def test_run_summary_stale_refresh_skips_send(monkeypatch, patched):
     mod, sent, _written = patched
-    monkeypatch.setattr(mod, "read_meta", lambda: {"last_refresh": "2026-07-09 08:00"})
+    stale = ({"last_refresh": "9:00 AM"}, {"_written_at": "2026-07-09T12:00:00+00:00"})
+    monkeypatch.setattr(mod, "read_cache_with_meta", lambda key: stale)
     rc = mod.run_summary(
         _cfg(), _root(), api_key="k", league=object(), team_key="t", today=date(2026, 7, 11)
     )
@@ -27,7 +32,7 @@ def test_run_summary_stale_refresh_skips_send(monkeypatch, patched):
 
 def test_run_summary_missing_meta_skips_send(monkeypatch, patched):
     mod, sent, _written = patched
-    monkeypatch.setattr(mod, "read_meta", lambda: {})
+    monkeypatch.setattr(mod, "read_cache_with_meta", lambda key: (None, {}))
     rc = mod.run_summary(
         _cfg(), _root(), api_key="k", league=object(), team_key="t", today=date(2026, 7, 11)
     )

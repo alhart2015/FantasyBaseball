@@ -27,7 +27,7 @@ from fantasy_baseball.summary.builders import (
 )
 from fantasy_baseball.summary.crosswalk import build_typed_name_to_mlbam
 from fantasy_baseball.summary.models import DailySummary, StandingsDelta
-from fantasy_baseball.utils.time_utils import local_today
+from fantasy_baseball.utils.time_utils import LOCAL_TZ, local_today
 from fantasy_baseball.web.season_data import (
     read_cache,
     read_cache_dict,
@@ -40,16 +40,25 @@ logger = logging.getLogger(__name__)
 # function) so tests can monkeypatch them, and so ruff sees them used.
 
 
-def refresh_is_fresh(meta: dict[str, Any], today: date) -> bool:
-    """True iff META.last_refresh is from ``today`` (local calendar date)."""
-    raw = meta.get("last_refresh")
-    if not raw:
+def refresh_is_fresh(written_at: str | None, today: date) -> bool:
+    """True iff the META cache entry was written on ``today`` (local date).
+
+    Keys on the cache provenance timestamp ``_meta._written_at`` (an ISO-8601
+    UTC string that ``write_cache`` stamps on EVERY write), NOT on the free-text
+    ``last_refresh`` payload field -- production writes that field in an
+    inconsistent, sometimes date-less form (e.g. ``"9:00 AM"``), so it cannot be
+    parsed into a reliable date. ``_written_at`` is machine-written and always
+    present, so it is the robust freshness signal. The UTC timestamp is converted
+    to ``LOCAL_TZ`` before the date comparison so a post-midnight-UTC refresh does
+    not read as "tomorrow."
+    """
+    if not written_at:
         return False
     try:
-        parsed = datetime.strptime(str(raw), "%Y-%m-%d %H:%M").date()
-    except ValueError:
+        parsed = datetime.fromisoformat(written_at)
+    except (ValueError, TypeError):
         return False
-    return parsed == today
+    return parsed.astimezone(LOCAL_TZ).date() == today
 
 
 def build_daily_summary(

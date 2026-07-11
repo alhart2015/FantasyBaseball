@@ -1,8 +1,9 @@
 """Send the daily summary email. Run as a Render cron after the morning refresh.
 
-Freshness gate: only sends if META.last_refresh is from today (else exits
-non-zero so the cron surfaces "the refresh didn't run"). Writes the standings
-snapshot only after a successful send.
+Freshness gate: only sends if the META cache entry was written today (keyed on
+the provenance ``_written_at`` timestamp, not the free-text ``last_refresh``
+payload) -- else exits non-zero so the cron surfaces "the refresh didn't run".
+Writes the standings snapshot only after a successful send.
 """
 
 from __future__ import annotations
@@ -22,12 +23,12 @@ from fantasy_baseball.summary.assemble import build_daily_summary, refresh_is_fr
 from fantasy_baseball.summary.render import render_html, render_text, subject_line
 from fantasy_baseball.summary.send import send_email
 from fantasy_baseball.utils.time_utils import local_today
-from fantasy_baseball.web.season_data import read_cache, read_meta, write_cache
+from fantasy_baseball.web.season_data import read_cache, read_cache_with_meta, write_cache
 
 logger = logging.getLogger(__name__)
 
 
-def _write_snapshot(meta: dict) -> None:
+def _write_snapshot(written_at: str | None) -> None:
     """Persist the post-send standings snapshot for tomorrow's delta baseline."""
     standings = read_cache(CacheKey.STANDINGS)
     if standings is None:
@@ -35,7 +36,7 @@ def _write_snapshot(meta: dict) -> None:
         return
     write_cache(
         CacheKey.STANDINGS_SNAPSHOT,
-        {"last_refresh": meta.get("last_refresh"), "standings": standings},
+        {"written_at": written_at, "standings": standings},
     )
 
 
@@ -51,11 +52,17 @@ def run_summary(
     """Freshness-gate, assemble, render, send, snapshot. Returns an exit code."""
     today = today or local_today()
 
-    meta = read_meta()
-    if not refresh_is_fresh(meta, today):
+    # Two-part gate in one check: liveness (META present) + freshness (written
+    # today). read_cache_with_meta returns (None, {}) on a total miss, so an
+    # absent META has no _written_at and fails refresh_is_fresh -- both the
+    # "KV empty" and "refresh didn't run today" cases skip the send.
+    meta_data, envelope = read_cache_with_meta(CacheKey.META)
+    written_at = envelope.get("_written_at") if isinstance(envelope, dict) else None
+    if meta_data is None or not refresh_is_fresh(written_at, today):
         logger.error(
-            "refresh not fresh (last_refresh=%r, today=%s); skipping send",
-            meta.get("last_refresh"),
+            "refresh not fresh (meta_present=%s, written_at=%r, today=%s); skipping send",
+            meta_data is not None,
+            written_at,
             today,
         )
         return 1
@@ -84,7 +91,7 @@ def run_summary(
 
     # Snapshot is written ONLY after a successful send, so a failed run never
     # corrupts tomorrow's delta baseline.
-    _write_snapshot(meta)
+    _write_snapshot(written_at)
     logger.info("daily summary sent to %s", recipients)
     return 0
 
