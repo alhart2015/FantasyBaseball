@@ -171,6 +171,17 @@ STAT_DISPERSION: dict[str, float | list[tuple[float, float]]] = {
     "h_allowed": 81.291,
 }
 
+# Closer role-switch mixture curves (SV variance). A K-component mixture keyed on
+# projected SV s: component probabilities p(s) and unit-mean shares w(s), each a K-way
+# softmax over K-1 free [b0, b1] logit lines (a zero logit is appended). Then
+# a_k = w_k/p_k -- mean-1 (sum p*a == 1) and non-negative by construction.
+# 3 components, MLE-fit on 2022-2025; (re)generate with scripts/calibrate_closer_mixture.py.
+# See src/fantasy_baseball/sgp/closer_mixture.py and the design spec.
+SV_ROLE_MIXTURE: dict[str, list[list[float]]] = {
+    "p_logits": [[1.1551, -0.0708], [-2.0943, 0.1456]],
+    "w_logits": [[-0.7243, -0.0487], [-0.8134, 0.122]],
+}
+
 # Playing-time model: realized PA/IP relative to projection, calibrated from
 # 2022-2025 Steamer+ZiPS vs actuals on the rosterable population (volume floor
 # at the >=90%-MLB-appearance knee for hitters/SP; MLB-appearance required for

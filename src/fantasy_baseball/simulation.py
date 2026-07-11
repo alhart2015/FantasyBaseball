@@ -17,6 +17,7 @@ from fantasy_baseball.mc_fill import ActiveSample, BenchSample, allocate_bench_f
 from fantasy_baseball.mc_roster import ActiveBody, BenchBody, EffectiveRoster
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
+from fantasy_baseball.sgp import closer_mixture
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
     AB_PER_PA,
@@ -423,6 +424,18 @@ def _full_season_pt_volume(player: Any, is_hitter: bool) -> float:
     return _projected_volume(player.to_flat_dict(), is_hitter)
 
 
+def _full_season_sv(player: Any) -> float:
+    """Full-season projected SV to key the ROS-direct closer role mixture. The role curve
+    is calibrated on full-season SV; the ROS flat dict carries the shrunken ROS save count,
+    which mid-season would read a locked closer as a fringe arm. Falls back to the ROS SV
+    when ``full_season_projection`` is unset (preseason). Unlike volume, ``sv == 0`` is a
+    valid value (a non-closer), so it is not treated as a missing-data fallback."""
+    fs = player.full_season_projection
+    if fs is not None:
+        return safe_float(getattr(fs, "sv", 0.0))
+    return safe_float(player.to_flat_dict().get("sv", 0.0))
+
+
 def _playing_time_scales(
     players: list,
     player_type: str,
@@ -599,6 +612,39 @@ def _negbin_copula_counts(
     return out
 
 
+def _eff_means(players: list, player_type: str, fraction_remaining: float) -> np.ndarray:
+    """Per-player mean playing-time scale (eff_mean), the location of the realized-PT
+    scale distribution. The SV role mixture rides this (not the per-draw ``scales``,
+    whose cv_pt spread the mixture replaces)."""
+    is_hitter = player_type == PlayerType.HITTER
+    out = np.empty(len(players))
+    for i, p in enumerate(players):
+        vol = _projected_volume(p, is_hitter)
+        mean_scale, cv_pt = playing_time_params(player_type, vol)
+        out[i], _ = playing_time_moments(mean_scale, cv_pt, fraction_remaining)
+    return out
+
+
+def _sv_role_mu(
+    base_sv: np.ndarray,
+    sv_curve: np.ndarray,
+    eff_mean: np.ndarray,
+    rng: np.random.Generator,
+    fraction_remaining: float,
+    n_iter: int | None = None,
+) -> np.ndarray:
+    """SV NegBin mean for the closer role-switch mixture: ``base_sv * eff_mean * X'``,
+    where ``X'`` is the mean-1 per-draw role multiplier (mean-neutral; the between-
+    component supplies the hold/lose/vault variance). The role is drawn from the curve
+    keyed on ``sv_curve`` (FULL-SEASON projected SV, what the curves were calibrated on),
+    while the mean rides ``base_sv`` (ROS in-season). ``n_iter`` None -> ``(n_players,)``
+    for the scalar path; an int -> ``(n_iter, n_players)`` for the batch path. Shared by
+    both MC paths so their SV distribution -- and thus the active-slot pitcher selection
+    SV feeds -- stay identical."""
+    x = closer_mixture.role_multiplier_draw(sv_curve, rng, fraction_remaining, n_iter=n_iter)
+    return np.asarray(base_sv * eff_mean * x, dtype=float)
+
+
 def _apply_variance(
     players: list,
     player_type: str,
@@ -648,6 +694,14 @@ def _apply_variance(
         mu_mat[:, j] = np.array([safe_float(p.get(col)) for p in players]) * scales
         r_mat[:, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_mat[:, j])
 
+    # SV: closer role-switch mixture replaces the cv_pt spread (see _sv_role_mu and the
+    # batch path). Mean rides eff_mean * a mean-1 role draw; r stays STAT_DISPERSION.
+    if not is_hitter and "sv" in idx_map:
+        base_sv = np.array([safe_float(p.get("sv")) for p in players])
+        eff_mean = _eff_means(players, player_type, fraction_remaining)
+        # scalar path is not ROS-direct: curve keyed on the same projection as the mean.
+        mu_mat[:, idx_map["sv"]] = _sv_role_mu(base_sv, base_sv, eff_mean, rng, fraction_remaining)
+
     # One flattened copula draw over all (player, stat) cells -- collapses the
     # per-stat scipy ppf calls (heavy fixed overhead) into a single nbinom +
     # single poisson call. C-order ravel keeps mu/r/z cells aligned.
@@ -664,7 +718,10 @@ def _apply_variance(
         repl = _replacement_line(p, is_hitter)
         row: dict[str, Any] = {}
         for col in counting_cols:
-            repl_contrib = repl.get(col, 0) * frac_missed
+            # SV is exempt from the injury backfill: the role mixture's lose-job component
+            # already models the save downside, so adding replacement SV would double-count
+            # and over-disperse the category vs the calibrated sv_role_variance.
+            repl_contrib = 0.0 if col == "sv" else repl.get(col, 0) * frac_missed
             if col in idx_map:
                 row[col] = counts[i, idx_map[col]] + repl_contrib
             else:
@@ -713,6 +770,7 @@ def _apply_variance_batch(
     pt_mean_fraction: float | None = None,
     suppress_repl: bool = False,
     pt_volumes: np.ndarray | None = None,
+    sv_curve: np.ndarray | None = None,
 ) -> VarianceBatch:
     """Vectorized ``_apply_variance`` over ``n_iter`` iterations at once.
 
@@ -745,6 +803,11 @@ def _apply_variance_batch(
       full-season volume; the flat dict on that path carries ROS volume, which
       would misclassify a full-timer as a part-timer. ``None`` (default) keeps the
       legacy per-player ``_projected_volume`` lookup -> byte-identical.
+    - ``sv_curve``: per-player FULL-SEASON projected SV used to key the closer role
+      mixture (which the calibration fit on full-season SV). Same ROS-vs-full-season
+      reason as ``pt_volumes``: the flat dict carries ROS SV, which mid-season would
+      read a locked closer as a fringe arm. ``None`` (default) keys the mixture on the
+      per-player ``base["sv"]`` -> byte-identical (preseason, where ROS == full-season).
     """
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
@@ -794,6 +857,18 @@ def _apply_variance_batch(
         mu_mat[:, :, j] = base[col][None, :] * scales
         r_mat[:, :, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_mat[:, :, j])
 
+    # SV: the closer role-switch mixture replaces the cv_pt playing-time spread (which
+    # cannot represent hold-the-job vs lose-it). SV's mean rides eff_mean (NOT the
+    # z_pt*eff_sd wiggle) times a mean-1 role multiplier drawn per (iter, player) -- the
+    # between-component (hold/lose/vault) variance. r stays STAT_DISPERSION['sv'] (scalar,
+    # already set above); SV stays in the copula so its within-draw still correlates with
+    # er/bb/h; the injury backfill (shared frac_missed) is untouched (mean-neutral).
+    if not is_hitter and "sv" in idx_map:
+        sv_curve_arr = base["sv"] if sv_curve is None else np.asarray(sv_curve, dtype=float)
+        mu_mat[:, :, idx_map["sv"]] = _sv_role_mu(
+            base["sv"], sv_curve_arr, eff_mean, rng, fraction_remaining, n_iter=n_iter
+        )
+
     # One flattened copula draw over every (iter, player, stat) cell. C-order
     # ravel keeps mu/r/z aligned, same as the scalar path's per-team draw.
     all_z = rng.multivariate_normal(np.zeros(n_corr), corr_matrix, size=(n_iter, n_players))
@@ -805,7 +880,10 @@ def _apply_variance_batch(
     repl_lines = [_replacement_line(p, is_hitter) for p in players]
     out: dict[str, np.ndarray] = {}
     for col in counting_cols:
-        if suppress_repl:
+        # SV is exempt from the injury backfill (see the scalar path): the role mixture's
+        # lose-job component already models the save downside; adding replacement SV would
+        # double-count and over-disperse vs the calibrated sv_role_variance.
+        if suppress_repl or col == "sv":
             repl_contrib: float | np.ndarray = 0.0
         else:
             repl_line = np.array([rl.get(col, 0) for rl in repl_lines], dtype=float)
@@ -1016,6 +1094,7 @@ def _simulate_team_pitchers_ros_direct(
     pt_volumes = np.array(
         [_full_season_pt_volume(b.player, is_hitter=False) for b in active_p_bodies]
     )
+    sv_curve = np.array([_full_season_sv(b.player) for b in active_p_bodies])
     vb = _apply_variance_batch(
         active_flats,
         PlayerType.PITCHER,
@@ -1025,6 +1104,7 @@ def _simulate_team_pitchers_ros_direct(
         pt_mean_fraction=0,  # eff_mean=1: NO haircut -> mean == projection == ERoto
         suppress_repl=True,
         pt_volumes=pt_volumes,
+        sv_curve=sv_curve,
     )
     factors = np.array([b.factor for b in active_p_bodies])  # (n_active,)
     realized = {col: vb.counts[col] * factors[None, :] for col in PITCHING_COUNTING}

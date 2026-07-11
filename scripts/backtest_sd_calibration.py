@@ -29,6 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "src"))
 
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.closer_mixture import sv_role_variance
 from fantasy_baseball.utils.dispersion import negbin_perf_variance
 from fantasy_baseball.utils.playing_time import playing_time_params
 
@@ -38,6 +39,13 @@ STATS = ROOT / "data" / "stats"
 N_TEAMS = 500
 H_PA_MIN, P_IP_MIN = 450, 60
 N_H, N_P = 13, 9
+# Saves come only from save-relevant pitchers. A random 9-pitcher team is dominated by
+# projected-~0-SV arms whose occasional fluke saves the multiplicative mixture (mu = s *
+# a_k) structurally cannot produce from s ~= 0 -- a known unmodeled phenomenon (a small
+# projection-independent save-hazard floor would capture it; deferred). Including them
+# makes the full-pool z-score look under-dispersed by an artifact of the measurement, not
+# a closer-variance failure, so measure the SV category on the save-relevant pool.
+SV_POOL_MIN_PROJ = 5.0
 rng = np.random.default_rng(11)
 
 H_CATS = [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]
@@ -70,7 +78,21 @@ def blend(year, kind, cols):
     return pd.concat(frames).groupby("MLBAMID", as_index=False).mean()
 
 
+def _derive_so(pa):
+    """Reconstruct SO for actuals files that ship K/9 instead of raw SO (2025 is a
+    rate/advanced export). IP is baseball thirds-notation (195.1 == 195 1/3), so
+    convert before dividing -- the naive K/9*IP/9 misrounds ~9% of pitchers."""
+    if "SO" not in pa.columns and {"K/9", "IP"}.issubset(pa.columns):
+        ip = pa["IP"].to_numpy(dtype=float)
+        ip_true = np.floor(ip) + (ip - np.floor(ip)) * 10.0 / 3.0
+        pa = pa.copy()
+        pa["SO"] = np.round(pa["K/9"].to_numpy(dtype=float) * ip_true / 9.0)
+    return pa
+
+
 def build_year(year):
+    """Return (hitter_merged, pitcher_merged_or_None, pitcher_cats). Pitcher cats are
+    per-year: 2025 actuals lack raw SO (derived above), so admit whatever is present."""
     # Hitters
     hp = blend(year, "hitters", ["PA", "R", "HR", "RBI", "SB"])
     ha = _read(STATS / f"hitters-{year}.csv")
@@ -79,16 +101,18 @@ def build_year(year):
     hm = hp.merge(
         ha[["MLBAMID", "R", "HR", "RBI", "SB"]], on="MLBAMID", how="left", suffixes=("_p", "_a")
     )
-    # Pitchers -- only years whose actuals carry raw counting cols (2025 is a
-    # rate/advanced file with no W/SO/SV).
-    pa = _read(STATS / f"pitchers-{year}.csv")
-    if not {"W", "SO", "SV"}.issubset(pa.columns):
-        return hm, None
-    pp = blend(year, "pitchers", ["IP", "W", "SO", "SV"])
+    # Pitchers -- per-year category set from whichever actual cols are present.
+    # W and SV are in every actuals file; SO is derived for rate-only years (2025).
+    pa = _derive_so(_read(STATS / f"pitchers-{year}.csv"))
+    p_cats = [(acol, key) for acol, key in P_CATS if acol in pa.columns]
+    if not p_cats:
+        return hm, None, []
+    acols = [acol for acol, _ in p_cats]
+    pp = blend(year, "pitchers", ["IP", *acols])
     pa["MLBAMID"] = pa["MLBAMID"].astype(int)
     pp = pp[pp["IP"] >= P_IP_MIN]
-    pm = pp.merge(pa[["MLBAMID", "W", "SO", "SV"]], on="MLBAMID", how="left", suffixes=("_p", "_a"))
-    return hm, pm
+    pm = pp.merge(pa[["MLBAMID", *acols]], on="MLBAMID", how="left", suffixes=("_p", "_a"))
+    return hm, pm, p_cats
 
 
 def cv_pt(vol, is_hitter):
@@ -111,10 +135,13 @@ def team_z(pool, cats, vol_col, is_hitter, dnp_zero):
         if len(proj) == 0:
             out[acol] = np.nan
             continue
-        cvp = np.array([cv_pt(v, is_hitter) for v in t[vol_col].to_numpy(dtype=float)])
-        if not dnp_zero:
-            cvp = cvp[mask]
-        var = np.sum(negbin_perf_variance(key, proj) + proj**2 * cvp**2)
+        if key == "sv":
+            var = float(np.sum(sv_role_variance(proj)))  # role-switch mixture (full-season)
+        else:
+            cvp = np.array([cv_pt(v, is_hitter) for v in t[vol_col].to_numpy(dtype=float)])
+            if not dnp_zero:
+                cvp = cvp[mask]
+            var = np.sum(negbin_perf_variance(key, proj) + proj**2 * cvp**2)
         sd = np.sqrt(var)
         out[acol] = (act.sum() - proj.sum()) / sd if sd > 0 else np.nan
     return out
@@ -123,39 +150,53 @@ def team_z(pool, cats, vol_col, is_hitter, dnp_zero):
 def run(dnp_zero):
     zs = {acol: [] for acol, _ in H_CATS + P_CATS}
     for year in YEARS:
-        hm, pm = build_year(year)
+        hm, pm, p_cats = build_year(year)
+        # SV is measured on the save-relevant pool (see SV_POOL_MIN_PROJ); W/K/hitters
+        # on the full pool.
+        wk_cats = [(a, k) for a, k in p_cats if a != "SV"]
+        sv_cats = [(a, k) for a, k in p_cats if a == "SV"]
+        sv_pool = pm[pm["SV_p"] >= SV_POOL_MIN_PROJ] if pm is not None else None
         for _ in range(N_TEAMS):
             for acol, v in team_z(hm, H_CATS, "PA", True, dnp_zero).items():
                 zs[acol].append(v)
             if pm is not None:
-                for acol, v in team_z(pm, P_CATS, "IP", False, dnp_zero).items():
+                for acol, v in team_z(pm, wk_cats, "IP", False, dnp_zero).items():
                     zs[acol].append(v)
+                if sv_cats and sv_pool is not None and len(sv_pool) >= N_P:
+                    for acol, v in team_z(sv_pool, sv_cats, "IP", False, dnp_zero).items():
+                        zs[acol].append(v)
     return zs
 
 
-print(
-    f"Synthetic teams: {N_TEAMS}/yr x {len(YEARS)} yrs; hitters PA>={H_PA_MIN}, pitchers IP>={P_IP_MIN}"
-)
-print(
-    "z = (actual_team_total - projected) / eroto_SD.  SD(z)=1 -> calibrated; "
-    ">1 -> ERoto too TIGHT by that factor.\n"
-)
-for label, dnp in [
-    ("MATCHED-ONLY (excludes DNP/bust tail -> lower bound on variance)", False),
-    ("DNP=0 (rostered-but-absent counted as zero -> includes bust tail)", True),
-]:
-    zs = run(dnp)
-    print(f"== {label} ==")
-    print(f"  {'cat':>5}{'mean z':>9}{'SD(z)':>8}{'n':>7}   verdict")
-    all_z = []
-    for acol, _ in H_CATS + P_CATS:
-        arr = np.array([z for z in zs[acol] if z == z])
-        all_z.extend(arr.tolist())
-        sd = arr.std()
-        v = "calibrated" if 0.8 <= sd <= 1.25 else ("TOO TIGHT" if sd > 1.25 else "too wide")
-        print(f"  {acol:>5}{arr.mean():>9.2f}{sd:>8.2f}{len(arr):>7}   {v} ({sd:.1f}x)")
-    a = np.array(all_z)
+def main():
     print(
-        f"  POOLED  mean={a.mean():.2f}  SD(z)={a.std():.2f}  -> ERoto SD is "
-        f"{'~calibrated' if 0.8 <= a.std() <= 1.25 else f'{a.std():.1f}x too tight'}\n"
+        f"Synthetic teams: {N_TEAMS}/yr x {len(YEARS)} yrs; "
+        f"hitters PA>={H_PA_MIN}, pitchers IP>={P_IP_MIN}"
     )
+    print(
+        "z = (actual_team_total - projected) / eroto_SD.  SD(z)=1 -> calibrated; "
+        ">1 -> ERoto too TIGHT by that factor.\n"
+    )
+    for label, dnp in [
+        ("MATCHED-ONLY (excludes DNP/bust tail -> lower bound on variance)", False),
+        ("DNP=0 (rostered-but-absent counted as zero -> includes bust tail)", True),
+    ]:
+        zs = run(dnp)
+        print(f"== {label} ==")
+        print(f"  {'cat':>5}{'mean z':>9}{'SD(z)':>8}{'n':>7}   verdict")
+        all_z = []
+        for acol, _ in H_CATS + P_CATS:
+            arr = np.array([z for z in zs[acol] if z == z])
+            all_z.extend(arr.tolist())
+            sd = arr.std()
+            v = "calibrated" if 0.8 <= sd <= 1.25 else ("TOO TIGHT" if sd > 1.25 else "too wide")
+            print(f"  {acol:>5}{arr.mean():>9.2f}{sd:>8.2f}{len(arr):>7}   {v} ({sd:.1f}x)")
+        a = np.array(all_z)
+        print(
+            f"  POOLED  mean={a.mean():.2f}  SD(z)={a.std():.2f}  -> ERoto SD is "
+            f"{'~calibrated' if 0.8 <= a.std() <= 1.25 else f'{a.std():.1f}x too tight'}\n"
+        )
+
+
+if __name__ == "__main__":
+    main()

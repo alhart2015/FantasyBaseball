@@ -452,6 +452,19 @@ class TestPlayerCategoryVariance:
         assert var[Category.R] == pytest.approx(float(negbin_perf_variance("r", 80)))
         assert var[Category.HR] == pytest.approx(float(negbin_perf_variance("hr", 20)))
 
+    def test_sv_variance_uses_role_mixture(self):
+        """SV routes through the closer role-switch mixture (not the cv_pt term);
+        W/K keep the negbin+cv_pt formula."""
+        from fantasy_baseball.sgp.closer_mixture import sv_role_variance
+
+        p = _make_pitcher("Closer", w=4, k=70, sv=30, ip=65, er=22, bb=18, h_allowed=45)
+        var = player_category_variance(p)
+        assert var[Category.SV] == pytest.approx(float(sv_role_variance(30)))
+        # a 30-SV closer's mixture variance is far wider than the old cv_pt term
+        assert var[Category.SV] > float(negbin_perf_variance("sv", 30))
+        # W is unchanged: negbin + a non-negative cv_pt term (0 here, no full-season proj)
+        assert var[Category.W] >= float(negbin_perf_variance("w", 4))
+
     def test_pitcher_variance_sums_to_team_sd(self):
         """Two identical pitchers: team variance == 2 * single-player variance."""
         p1 = _make_pitcher("P1", w=12, k=180, sv=5, ip=180, er=60, bb=40, h_allowed=150)
