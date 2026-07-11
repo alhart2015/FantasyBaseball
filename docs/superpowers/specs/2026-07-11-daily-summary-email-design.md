@@ -96,9 +96,11 @@ class DailySummary:
 ```
 
 Each builder is a pure function `(inputs) -> SectionModel`. A section with no
-data (no games last night, no injuries, first-run standings baseline, absent
-`PROBABLE_STARTERS`) yields an empty list / sentinel, and `render` omits that
-block. `section_errors` records builders that *raised* (distinct from
+data (no games last night, no injuries, absent `PROBABLE_STARTERS`) yields an
+empty list / sentinel, and `render` omits that block. (The one exception is the
+first-run standings baseline, which renders an explicit "baseline established"
+message rather than being omitted -- see Standings snapshot.) `section_errors`
+records builders that *raised* (distinct from
 legitimately empty) so `render` can surface "section X failed to build" in the
 email. (The decision to send at all is a separate up-front cache-liveness check
 on `META`, not a function of `section_errors` -- see Error handling.)
@@ -194,7 +196,9 @@ against a stored baseline.
     only at the total-points level via `yahoo_points_for`, which IS stored).
 - Delta basis = **the last summary run** (not a fixed calendar day): "since you
   last looked" semantics, robust to a missed/failed run (the next email spans a
-  longer window).
+  longer window). A second run on the same day (no refresh in between) simply
+  shows zero standings movement and still sends; it overwrites the snapshot with
+  an identical one -- harmless.
 - **Freshness is not this section's job.** Whether today's refresh actually ran
   is enforced once, up front, by the whole-email freshness gate (see Error
   handling) -- the email is not assembled at all unless `META.last_refresh` is
