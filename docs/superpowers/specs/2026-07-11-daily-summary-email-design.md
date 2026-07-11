@@ -105,17 +105,35 @@ tell a failure from a quiet night.
 ### Data access details (the three under-specified sections)
 
 **Last night's results.** Game logs are stored per-player-per-game keyed by
-**MLBAM integer id** (`data/mlb_game_logs.py::get_player_game_log`), while
-rosters are keyed by Yahoo `player_id` / `name::player_type`. So `build_last_night`
-must, per rostered player: (1) resolve Yahoo name -> MLBAM via a crosswalk, (2)
-read that player's game log, (3) filter to yesterday's MLB `officialDate`. The
-existing `build_name_to_mlbam_map` (`streaks/pipeline.py:233`) is built from
-**hitter** projection CSVs only; this feature must extend it to build from BOTH
-hitter and pitcher projection CSVs (`{system}-hitters.csv` /
-`{system}-pitchers.csv`, both carry `MLBAMID`) so pitcher lines resolve too.
-Unresolved players are **not silently dropped**: they go into
-`DailySummary.unmatched` and `render` lists them ("N players unmatched") so a
-crosswalk gap is visible, not invisible.
+**MLBAM id** (a string in the KV) and split by group (`"hitting"` / `"pitching"`);
+`get_player_game_log(client, season, mlbam_id, group)` is defined in
+`data/redis_store.py` (re-exported via `data/mlb_game_logs.py`). Rosters are
+keyed by Yahoo `player_id` / `name::player_type`. So `build_last_night` must, per
+rostered player: (1) determine the player's group from its Yahoo positions
+(hitter vs pitcher; a two-way player like Ohtani reads BOTH groups), (2) resolve
+Yahoo name -> MLBAM via a crosswalk, (3) read that player's game log for the
+correct group, (4) filter to yesterday's MLB `officialDate`.
+
+The crosswalk needs care to avoid wrong-ID matches. The existing
+`build_name_to_mlbam_map` (defined in `streaks/reports/sunday.py`, called from
+`streaks/pipeline.py`) sources files via `discover_projection_files`, which is
+**deliberately hitter-only** (it filters `"hitters" in name and "pitchers" not in
+name`, `streaks/data/projections.py`). Extending to pitchers therefore requires
+*parameterizing* that discovery (not just calling the map builder), and -- more
+importantly -- the map keys on bare `normalize_name` with **first-write-wins**,
+which would let a same-name hitter and pitcher (e.g. "Will Smith") collide and
+return the WRONG player's MLBAM id. Per the repo convention (IDs are
+`name::player_type`), the crosswalk must be keyed by **normalized-name +
+player_type**, and `build_last_night` resolves each rostered player within its
+own type namespace (hitter names against hitter CSVs, pitcher names against
+pitcher CSVs). This eliminates cross-type collisions; the player's group is
+already known from step (1).
+
+A wrong-ID collision is invisible (it yields a plausible but wrong box line),
+which is exactly why the type-keyed crosswalk matters -- `unmatched` only catches
+*misses*, not *mis-matches*. Unresolved players are **not silently dropped**:
+they go into `DailySummary.unmatched` and `render` lists them ("N players
+unmatched") so a crosswalk gap is visible.
 
 **Injuries.** `fetch_injuries(league, team_key)` issues a raw Yahoo API call, so
 `assemble` must build the Yahoo `league` handle (via the same
@@ -146,10 +164,12 @@ section is explicitly hitters-only.
 The KV holds only *current* `standings`, so overnight movement requires diffing
 against a stored baseline.
 
-- New cache key `STANDINGS_SNAPSHOT` holding `{date, standings}` (full
-  `Standings.to_json()` payload). It must be added to the `CacheKey` StrEnum and
-  routed through `redis_key()` like every other key; it is written/read by the
-  summary job itself and lives **outside** the refresh's write set (and outside
+- New cache key `STANDINGS_SNAPSHOT` holding `{last_refresh, standings}` --
+  `standings` is the full `Standings.to_json()` payload, and `last_refresh` is
+  the `META.last_refresh` timestamp that was current when the snapshot was taken
+  (see staleness guard). It must be added to the `CacheKey` StrEnum and routed
+  through `redis_key()` like every other key; it is written/read by the summary
+  job itself and lives **outside** the refresh's write set (and outside
   `kv_sync`'s enumerated keys).
 - `Standings.to_json()` stores per-team `rank`, `yahoo_points_for` (total roto
   points), and raw `CategoryStats` totals -- but **not** per-category place
@@ -157,18 +177,30 @@ against a stored baseline.
   - **Rank** and **total roto points** diff directly between snapshots.
   - **Per-category movement** (who gained the SB point overnight) requires
     re-scoring category rankings from the stored raw totals for *both* the prior
-    snapshot and current standings via the existing `score_roto` machinery. All
-    inputs are present in `to_json`, so this is feasible; it is computation, not
-    a field lookup, and `build_standings_delta` owns it.
+    snapshot and current standings via the existing `score_roto` machinery (which
+    `season_data.py` already calls on a reconstructed `Standings` with no
+    `team_sds`). All inputs are present in `to_json`, so this is feasible; it is
+    computation, not a field lookup, and `build_standings_delta` owns it.
+  - **Rate-category caveat.** For AVG/ERA/WHIP, the averaged-rank recompute can
+    differ from Yahoo's authoritative per-category points by up to +/-0.5 per tie
+    (per `StandingsEntry`'s own docstring), because the snapshot stores the
+    reported rate, not Yahoo's category points. Per-category movement is reliable
+    for the counting cats; rate-cat movement is rendered with a caveat (or shown
+    only at the total-points level via `yahoo_points_for`, which IS stored).
 - Delta basis = **the last summary run** (not a fixed calendar day): "since you
   last looked" semantics, robust to a missed/failed run (the next email spans a
   longer window).
 - **Staleness guard.** The delta is only meaningful if `STANDINGS` was refreshed
-  since the last snapshot. `build_standings_delta` compares the current
-  standings' `effective_date` (and/or the `META` refresh timestamp) against the
-  stored snapshot's date; if they match (the morning refresh has not run, or the
-  summary fired before it), it renders "standings not yet refreshed today"
-  rather than a misleading "no movement."
+  since the last snapshot. The guard keys on **`META.last_refresh`**, NOT on
+  `Standings.effective_date` -- `effective_date` is the next lineup-lock Tuesday
+  and is *constant across a whole scoring week* (Wed-Sun would all share one
+  value), so using it would false-positive and suppress real overnight movement
+  4-5 days a week. `build_standings_delta` compares the current `META.last_refresh`
+  against the `last_refresh` stored in the prior snapshot; if they are equal (the
+  morning refresh has not run since the last email, or the summary fired before
+  it), it renders "standings not yet refreshed today" rather than a misleading
+  "no movement." Both operands are the same quantity (a refresh timestamp), so
+  the comparison is well-defined.
 - The snapshot is written back **only after a successful send** (see error
   handling), so a failed run does not corrupt the next delta baseline. If the
   snapshot write itself fails after a successful send, the run exits non-zero and
@@ -229,11 +261,16 @@ day boundary matches the data, not a separately-configured tz that could drift.
   Render cron surfaces it.
 - The standings snapshot is written **only after a successful send**; a failed
   send does not advance the delta baseline.
-- **Empty-summary guard, precisely defined.** The script skips sending only when
-  assemble could not read the KV at all -- i.e. every KV-sourced builder raised
-  (total cache miss), tracked via `section_errors` -- and exits non-zero. A
-  legitimately quiet night (KV read fine, but no games / no injuries / no moves)
-  still sends an email that says so; it is not suppressed.
+- **Empty-summary guard, precisely defined.** The guard is evaluated against an
+  explicit allowlist of the **KV-sourced builders** -- `build_streaks`,
+  `build_standings_delta`, `build_lineup_moves`, `build_probables`. The script
+  skips sending (and exits non-zero) only when *every builder in that allowlist*
+  raised, indicating a total cache miss. `build_injuries` (Yahoo-sourced) and
+  `build_last_night` (KV + on-disk crosswalk) are excluded from the guard, since
+  their failure signals a Yahoo/crosswalk problem, not an empty KV -- they merely
+  contribute empty sections + a `section_errors` note. A legitimately quiet night
+  (KV read fine, but no games / no injuries / no moves) still sends an email that
+  says so; it is not suppressed.
 
 ### Testing
 
@@ -241,18 +278,25 @@ day boundary matches the data, not a separately-configured tz that could drift.
   night, first-run standings baseline, injured player with a note, unresolved
   (unmatched) player, absent `PROBABLE_STARTERS`.
 - Crosswalk extension: a pitcher name resolves to its MLBAM id from a pitcher
-  projection CSV fixture (guards the hitter-only regression).
+  projection CSV fixture (guards the hitter-only regression); a same-name
+  hitter+pitcher pair (e.g. "Will Smith") resolves to the CORRECT id for each
+  type (guards the cross-type collision, keyed by name+player_type).
+- `build_last_night`: group derivation (hitter vs pitcher vs two-way reads both);
+  unmatched player lands in `unmatched`, not silently dropped.
 - `build_standings_delta`: rank/total-points diff; per-category recomputation
-  from raw totals; staleness guard fires when `effective_date` is unchanged;
-  first-run baseline path.
+  from raw totals; rate-cat caveat behavior; staleness guard fires when
+  `META.last_refresh` is unchanged AND correctly does NOT fire mid-scoring-week
+  when only `effective_date` is unchanged but `last_refresh` advanced; first-run
+  baseline path.
 - `render_html` / `render_text`: snapshot test on a fully-populated
   `DailySummary`, one with empty sections (blocks omitted), and one with
   `section_errors` set (failure note rendered).
 - `send.py`: Resend client mocked -- assert payload shape; never hit the network.
 - Snapshot round-trip: first run establishes baseline, second run computes a
   correct delta; a failed send does not advance the baseline.
-- Empty-summary guard: all-builders-raised suppresses send (non-zero exit);
-  quiet-night still sends.
+- Empty-summary guard: all KV-allowlist builders raised suppresses send
+  (non-zero exit); a Yahoo/crosswalk-only failure does NOT suppress; quiet-night
+  still sends.
 
 ## Out of scope (v1)
 
