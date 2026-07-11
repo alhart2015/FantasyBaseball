@@ -39,6 +39,11 @@ STATS = ROOT / "data" / "stats"
 N_TEAMS = 500
 H_PA_MIN, P_IP_MIN = 450, 60
 N_H, N_P = 13, 9
+# Saves come only from save-relevant pitchers; a random 9-pitcher team is dominated
+# by projected-~0-SV arms whose rare fluke saves the model (correctly) assigns ~0
+# variance, inflating the team-SV spread with noise the model is not meant to
+# predict. Measure the SV category on the closer/committee pool instead.
+SV_POOL_MIN_PROJ = 5.0
 rng = np.random.default_rng(11)
 
 H_CATS = [("R", "r"), ("HR", "hr"), ("RBI", "rbi"), ("SB", "sb")]
@@ -144,12 +149,20 @@ def run(dnp_zero):
     zs = {acol: [] for acol, _ in H_CATS + P_CATS}
     for year in YEARS:
         hm, pm, p_cats = build_year(year)
+        # SV is measured on the save-relevant pool (see SV_POOL_MIN_PROJ); W/K/hitters
+        # on the full pool.
+        wk_cats = [(a, k) for a, k in p_cats if a != "SV"]
+        sv_cats = [(a, k) for a, k in p_cats if a == "SV"]
+        sv_pool = pm[pm["SV_p"] >= SV_POOL_MIN_PROJ] if pm is not None else None
         for _ in range(N_TEAMS):
             for acol, v in team_z(hm, H_CATS, "PA", True, dnp_zero).items():
                 zs[acol].append(v)
             if pm is not None:
-                for acol, v in team_z(pm, p_cats, "IP", False, dnp_zero).items():
+                for acol, v in team_z(pm, wk_cats, "IP", False, dnp_zero).items():
                     zs[acol].append(v)
+                if sv_cats and sv_pool is not None and len(sv_pool) >= N_P:
+                    for acol, v in team_z(sv_pool, sv_cats, "IP", False, dnp_zero).items():
+                        zs[acol].append(v)
     return zs
 
 
