@@ -28,6 +28,24 @@ def test_crosswalk_skips_rows_missing_mlbamid(tmp_path):
     assert ("no id", "hitter") not in xmap
 
 
+def test_crosswalk_drops_same_type_same_name_collision(tmp_path):
+    # Two DIFFERENT pitchers who normalize to "luis garcia" cannot be told apart
+    # by name, so the key is dropped (not first-write-won) to avoid emitting the
+    # wrong player's line. A same-id repeat (same person across systems) is kept.
+    season_dir = tmp_path / "2026"
+    _write_csv(
+        season_dir / "steamer-pitchers.csv",
+        [{"Name": "Luis Garcia", "MLBAMID": 111}, {"Name": "Luis Garcia", "MLBAMID": 222}],
+    )
+    _write_csv(season_dir / "steamer-hitters.csv", [{"Name": "Solo Guy", "MLBAMID": 333}])
+    _write_csv(season_dir / "atc-hitters.csv", [{"Name": "Solo Guy", "MLBAMID": 333}])
+
+    xmap = build_typed_name_to_mlbam(tmp_path, season=2026)
+
+    assert ("luis garcia", "pitcher") not in xmap  # ambiguous -> dropped
+    assert xmap[("solo guy", "hitter")] == 333  # same id across systems -> kept
+
+
 def test_crosswalk_skips_a_csv_missing_required_columns(tmp_path):
     # A malformed pitcher CSV (no MLBAMID column) must not crash the whole map;
     # the good hitter file still resolves.

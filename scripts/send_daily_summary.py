@@ -30,6 +30,24 @@ from fantasy_baseball.web.season_data import read_cache, read_cache_with_meta, w
 logger = logging.getLogger(__name__)
 
 
+def _require_team_key(teams: dict[str, Any], target: str) -> str:
+    """Return the team_key whose name exactly matches ``target``, else raise.
+
+    Unlike ``find_user_team_key`` (which falls back to the first team so the
+    interactive dashboard stays usable), this refuses to guess: an unattended
+    email must never silently build another manager's roster when
+    ``config.team_name`` drifts out of sync with Yahoo. Raising aborts the run
+    with a loud, non-zero exit instead of mailing a stranger's data.
+    """
+    for key, team in teams.items():
+        if team.name == target:
+            return key
+    raise ValueError(
+        f"configured team_name {target!r} not found in league teams "
+        f"{sorted(t.name for t in teams.values())}"
+    )
+
+
 def _write_snapshot(written_at: str | None) -> None:
     """Persist the post-send standings snapshot for tomorrow's delta baseline."""
     standings = read_cache(CacheKey.STANDINGS)
@@ -123,12 +141,12 @@ def main() -> int:
     def resolve_team() -> tuple[Any, str]:
         # Yahoo auth is deferred behind the freshness gate (run only if fresh).
         from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
-        from fantasy_baseball.lineup.yahoo_roster import fetch_teams, find_user_team_key
+        from fantasy_baseball.lineup.yahoo_roster import fetch_teams
 
         session = get_yahoo_session()
         league = get_league(session, config.league_id, config.game_code)
         teams = fetch_teams(league)
-        return league, find_user_team_key(teams, config.team_name)
+        return league, _require_team_key(teams, config.team_name)
 
     projections_root = _PROJECT_ROOT / "data" / "projections"
     return run_summary(config, projections_root, api_key=api_key, resolve_team=resolve_team)

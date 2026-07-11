@@ -96,3 +96,13 @@ def _root():
     from pathlib import Path
 
     return Path(".")
+
+
+def test_require_team_key_matches_and_refuses_unknown():
+    import scripts.send_daily_summary as mod
+    from fantasy_baseball.models.team import Team
+
+    teams = {"k.1": Team(name="Mine", team_key="k.1"), "k.2": Team(name="Other", team_key="k.2")}
+    assert mod._require_team_key(teams, "Mine") == "k.1"
+    with pytest.raises(ValueError):
+        mod._require_team_key(teams, "Renamed Away")

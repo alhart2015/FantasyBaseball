@@ -47,10 +47,17 @@ def build_typed_name_to_mlbam(projections_root: Path, *, season: int) -> dict[tu
     """Build a ``{(normalized_name, player_type): mlbam_id}`` map.
 
     ``player_type`` is ``"hitter"`` (from ``*-hitters.csv``) or ``"pitcher"``
-    (from ``*-pitchers.csv``). First-write-wins within each type namespace.
+    (from ``*-pitchers.csv``). Same-name, same-type collisions (two distinct
+    MLBAM ids under one ``(normalized_name, player_type)`` -- e.g. two pitchers
+    who both normalize to "luis garcia") are **dropped**, not first-write-won:
+    a bare name cannot disambiguate them, so resolving to an arbitrary id would
+    emit the wrong player's box-score line. A dropped key leaves the rostered
+    player unresolved, and ``build_last_night`` surfaces it in ``unmatched``
+    rather than showing a plausible-but-wrong line.
     """
     season_dir = projections_root / str(season)
     result: dict[tuple[str, str], int] = {}
+    ambiguous: set[tuple[str, str]] = set()
     for path in sorted(season_dir.glob("*.csv")):
         name = path.name
         if "hitters" in name and "pitchers" not in name:
@@ -60,7 +67,13 @@ def build_typed_name_to_mlbam(projections_root: Path, *, season: int) -> dict[tu
         else:
             continue
         for norm_name, mlbam in _read_name_id(path):
-            result.setdefault((norm_name, player_type), mlbam)
+            key = (norm_name, player_type)
+            if key in result and result[key] != mlbam:
+                ambiguous.add(key)  # two distinct people share this name+type
+            else:
+                result.setdefault(key, mlbam)
+    for key in ambiguous:
+        del result[key]
     return result
 
 

@@ -5,10 +5,10 @@ def _standings_json(effective_date, teams):
     return {"effective_date": effective_date, "teams": teams}
 
 
-def _team(name, rank, stats, yahoo_points=None):
+def _team(name, rank, stats, yahoo_points=None, team_key=None):
     return {
         "name": name,
-        "team_key": f"k.{name}",
+        "team_key": team_key or f"k.{name}",
         "rank": rank,
         "yahoo_points_for": yahoo_points,
         "stats": stats,
@@ -43,13 +43,41 @@ def test_delta_computes_rank_and_category_movement():
     current = _standings_json(
         "2026-07-14", [_team("My Team", 1, _STATS_HIGH), _team("Rival", 2, _STATS_LOW)]
     )
-    snapshot = {"last_refresh": "2026-07-10 08:00", "standings": prior}
+    snapshot = {"written_at": "2026-07-10T12:00:00+00:00", "standings": prior}
 
     delta = build_standings_delta(current, snapshot, "My Team")
 
     assert delta.is_first_run is False
     assert delta.user_team_name == "My Team"
     mine = next(t for t in delta.teams if t.name == "My Team")
+    assert mine.rank_prev == 2
+    assert mine.rank_now == 1
+    assert mine.points_now - mine.points_prev == 2.0
+
+
+def test_delta_joins_on_team_key_across_a_rename():
+    # Same team (team_key "k.me") is renamed between the snapshot and today.
+    # Joining on team_key (not the mutable name) keeps the team in the delta;
+    # a name-join would drop it (prior name != current name).
+    prior = _standings_json(
+        "2026-07-14",
+        [
+            _team("Old Name", 2, _STATS_LOW, team_key="k.me"),
+            _team("Rival", 1, _STATS_HIGH, team_key="k.rival"),
+        ],
+    )
+    current = _standings_json(
+        "2026-07-14",
+        [
+            _team("New Name", 1, _STATS_HIGH, team_key="k.me"),
+            _team("Rival", 2, _STATS_LOW, team_key="k.rival"),
+        ],
+    )
+    snapshot = {"written_at": "2026-07-10T12:00:00+00:00", "standings": prior}
+
+    delta = build_standings_delta(current, snapshot, "New Name")
+
+    mine = next(t for t in delta.teams if t.name == "New Name")
     assert mine.rank_prev == 2
     assert mine.rank_now == 1
     assert mine.points_now - mine.points_prev == 2.0
