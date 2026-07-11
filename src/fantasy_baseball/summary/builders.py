@@ -13,7 +13,7 @@ from typing import Any
 
 from fantasy_baseball.data.redis_store import get_player_game_log
 from fantasy_baseball.summary.crosswalk import player_group
-from fantasy_baseball.summary.models import PlayerLine
+from fantasy_baseball.summary.models import PlayerLine, StreakItem
 
 _HITTER_FIELDS = ("pa", "ab", "h", "hr", "r", "rbi", "sb")
 _PITCHER_FIELDS = ("ip", "k", "er", "bb", "w", "sv", "h_allowed")
@@ -66,6 +66,34 @@ def build_last_night(
                 lines.append(PlayerLine(name=name, group=group, stats=stats))
 
     return lines, unmatched
+
+
+def build_streaks(streak_payload: dict[str, Any] | None) -> list[StreakItem]:
+    """Hot/cold hitter streaks from the serialized STREAK_SCORES report.
+
+    Reads the serialized dict directly (no duckdb import). Hitters-only,
+    single-window -- matches the underlying report; emits one item per category
+    labelled "hot" or "cold".
+    """
+    if not streak_payload:
+        return []
+    items: list[StreakItem] = []
+    for row in streak_payload.get("roster_rows", []):
+        name = row.get("name", "")
+        for category, score in (row.get("scores") or {}).items():
+            label = score.get("label")
+            if label not in ("hot", "cold"):
+                continue
+            prob = score.get("probability")
+            items.append(
+                StreakItem(
+                    name=name,
+                    category=str(category),
+                    label=str(label),
+                    probability=float(prob) if prob is not None else 0.0,
+                )
+            )
+    return items
 
 
 def _normalize(name: str) -> str:
