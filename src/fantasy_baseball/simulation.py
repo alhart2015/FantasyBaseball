@@ -17,6 +17,7 @@ from fantasy_baseball.mc_fill import ActiveSample, BenchSample, allocate_bench_f
 from fantasy_baseball.mc_roster import ActiveBody, BenchBody, EffectiveRoster
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
+from fantasy_baseball.sgp import closer_mixture
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
     AB_PER_PA,
@@ -793,6 +794,18 @@ def _apply_variance_batch(
     for col, j in idx_map.items():
         mu_mat[:, :, j] = base[col][None, :] * scales
         r_mat[:, :, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_mat[:, :, j])
+
+    # SV: the closer role-switch mixture replaces the cv_pt playing-time spread (which
+    # cannot represent hold-the-job vs lose-it). SV's mean rides eff_mean (NOT the
+    # z_pt*eff_sd wiggle) times a mean-1 role multiplier drawn per (iter, player) -- the
+    # between-component (hold/lose/vault) variance. r stays STAT_DISPERSION['sv'] (scalar,
+    # already set above); SV stays in the copula so its within-draw still correlates with
+    # er/bb/h; the injury backfill (shared frac_missed) is untouched (mean-neutral).
+    if not is_hitter and "sv" in idx_map:
+        sv_idx = idx_map["sv"]
+        s2d = np.broadcast_to(base["sv"][None, :], (n_iter, n_players))
+        x = closer_mixture.role_multiplier_draw(s2d, rng, fraction_remaining)
+        mu_mat[:, :, sv_idx] = base["sv"][None, :] * eff_mean[None, :] * x
 
     # One flattened copula draw over every (iter, player, stat) cell. C-order
     # ravel keeps mu/r/z aligned, same as the scalar path's per-team draw.

@@ -981,3 +981,48 @@ def test_effective_rosters_routes_pitchers_and_no_fallback_regression():
     # ROS-direct seats ONLY the weak active SP; top-k seats the strong bench SP.
     # The K mean must differ materially between the two paths.
     assert with_eff["Me"]["K"].mean() < without["Me"]["K"].mean()
+
+
+def _closers():
+    """Six identical fringe closers (RP, 16 SV) for the SV role-mixture seam -- the
+    fringe tier carries the most role uncertainty (hold/committee/lose), so the
+    between-component widening is largest and clearest."""
+    return [
+        {
+            "name": f"C{i}",
+            "player_type": "pitcher",
+            "w": 4,
+            "k": 70,
+            "sv": 16,
+            "ip": 65,
+            "er": 22,
+            "bb": 18,
+            "h_allowed": 45,
+            "positions": ["RP"],
+        }
+        for i in range(6)
+    ]
+
+
+def test_sv_role_mixture_widens_variance_mean_stable(monkeypatch):
+    """The SV role-switch mixture adds between-component variance (hold/lose/vault)
+    while preserving the per-pitcher SV mean (mean-neutral). Baseline = mixture
+    disabled by returning an all-ones multiplier."""
+    from fantasy_baseball.sgp import closer_mixture
+
+    def run():
+        return _apply_variance_batch(
+            _closers(), "pitcher", np.random.default_rng(7), 1.0, 4000, suppress_repl=True
+        ).counts["sv"]
+
+    mix = run()
+    monkeypatch.setattr(
+        closer_mixture,
+        "role_multiplier_draw",
+        lambda s, rng, fraction_remaining=1.0: np.ones(np.asarray(s).shape),
+    )
+    base = run()
+    # between-component strictly widens per-pitcher SV variance
+    assert mix.var(axis=0).mean() > 1.5 * base.var(axis=0).mean()
+    # mean-neutral: per-pitcher SV mean unchanged within tolerance
+    assert abs(mix.mean() - base.mean()) / base.mean() < 0.03
