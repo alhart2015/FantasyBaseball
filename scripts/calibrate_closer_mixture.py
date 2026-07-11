@@ -36,9 +36,7 @@ def load_pairs():
     """(projected SV, realized SV) for the backtest pitcher population, 2022-2025."""
     s_all, y_all = [], []
     for year in bt.YEARS:
-        _, pm, p_cats = bt.build_year(year)
-        if pm is None or not any(acol == "SV" for acol, _ in p_cats):
-            continue
+        _, pm = bt.build_year(year)
         s = pm["SV_p"].to_numpy(dtype=float)
         y = pm["SV_a"].to_numpy(dtype=float)
         m = ~np.isnan(y)
