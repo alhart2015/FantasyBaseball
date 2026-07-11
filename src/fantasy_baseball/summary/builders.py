@@ -9,7 +9,7 @@ logs. No builder imports the streaks/dashboard module (it pulls in duckdb).
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from fantasy_baseball.data.redis_store import get_player_game_log
 from fantasy_baseball.summary.crosswalk import player_group
@@ -20,6 +20,9 @@ from fantasy_baseball.summary.models import (
     ProbableMatchup,
     StreakItem,
 )
+
+if TYPE_CHECKING:
+    from fantasy_baseball.summary.models import StandingsDelta
 
 _HITTER_FIELDS = ("pa", "ab", "h", "hr", "r", "rbi", "sb")
 _PITCHER_FIELDS = ("ip", "k", "er", "bb", "w", "sv", "h_allowed")
@@ -169,6 +172,61 @@ def build_probables(probable_rows: list[dict[str, Any]] | None) -> list[Probable
             )
         )
     return out
+
+
+def build_standings_delta(
+    current_raw: dict[str, Any] | None,
+    snapshot_payload: dict[str, Any] | None,
+    user_team_name: str,
+) -> StandingsDelta:
+    """Overnight roto movement vs. the prior snapshot.
+
+    Reconstructs both standings and re-scores per-category roto points (the
+    stored payload holds raw totals, not place points). Freshness is enforced
+    up-front by the orchestrator; this function assumes current is fresh.
+    """
+    from fantasy_baseball.models.standings import Standings
+    from fantasy_baseball.scoring import score_roto
+    from fantasy_baseball.summary.models import StandingsDelta, TeamDelta
+
+    if current_raw is None or snapshot_payload is None:
+        return StandingsDelta(is_first_run=True, user_team_name=user_team_name)
+
+    current = Standings.from_json(current_raw)
+    prior = Standings.from_json(snapshot_payload["standings"])
+
+    cur_roto = score_roto(cast("Any", current))
+    prev_roto = score_roto(cast("Any", prior))
+    cur_rank = {e.team_name: e.rank for e in current.entries}
+    prev_rank = {e.team_name: e.rank for e in prior.entries}
+
+    teams: list[TeamDelta] = []
+    for name, cur_points in cur_roto.items():
+        prev_points = prev_roto.get(name)
+        if prev_points is None:
+            continue
+        cat_delta = {
+            str(getattr(cat, "value", cat)): cur_points.values[cat]
+            - prev_points.values.get(cat, 0.0)
+            for cat in cur_points.values
+        }
+        teams.append(
+            TeamDelta(
+                name=name,
+                rank_prev=prev_rank.get(name, cur_rank.get(name, 0)),
+                rank_now=cur_rank.get(name, 0),
+                points_prev=prev_points.total,
+                points_now=cur_points.total,
+                category_points_delta=cat_delta,
+            )
+        )
+
+    return StandingsDelta(
+        is_first_run=False,
+        user_team_name=user_team_name,
+        teams=teams,
+        rate_cat_caveat=True,
+    )
 
 
 def _normalize(name: str) -> str:
