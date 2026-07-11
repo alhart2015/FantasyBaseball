@@ -35,6 +35,7 @@ import numpy as np
 
 from fantasy_baseball.utils import constants
 from fantasy_baseball.utils.constants import STAT_DISPERSION
+from fantasy_baseball.utils.dispersion import negbin_variance_from_r
 
 _R: float = cast(float, STAT_DISPERSION["sv"])
 
@@ -66,9 +67,11 @@ def _components(s: Any) -> tuple[np.ndarray, np.ndarray]:
 
 
 def nb_var(m: Any) -> np.ndarray:
-    """Per-element NegBin performance variance ``m + m^2/r`` at the fixed SV ``r``."""
-    m = np.asarray(m, dtype=float)
-    return np.asarray(m + m * m / _R, dtype=float)
+    """Per-element NegBin performance variance ``m + m^2/r`` at the fixed SV ``r``.
+
+    Delegates to the shared ``negbin_variance_from_r`` (single source of truth for the
+    NegBin variance formula, also used by the MC's ``_negbin_copula_counts``)."""
+    return negbin_variance_from_r(m, _R)
 
 
 def sv_role_variance(s: Any) -> Any:
@@ -88,19 +91,26 @@ def sv_role_variance(s: Any) -> Any:
 
 
 def role_multiplier_draw(
-    s: Any, rng: np.random.Generator, fraction_remaining: float = 1.0
+    s: Any,
+    rng: np.random.Generator,
+    fraction_remaining: float = 1.0,
+    n_iter: int | None = None,
 ) -> np.ndarray:
-    """Per-draw mean-1 SV multiplier ``X'`` the same shape as ``s`` (the raw projected SV).
+    """Per-draw mean-1 SV multiplier ``X'`` keyed on the raw projected SV ``s`` (1-D).
 
-    The caller broadcasts ``s`` to the shape it wants sampled -- the MC passes 2-D
-    ``(n_iter, n_players)`` so the role varies per iteration (the source of the
-    between-component variance). ``X' = 1 + sqrt(frac)*(X - 1)`` gives ``E[X']=1``,
-    ``Var(X') = frac*Var(X)``, ``X' >= 0``.
+    Returns shape ``s.shape`` when ``n_iter`` is None (scalar MC path), else
+    ``(n_iter, *s.shape)`` -- the role drawn independently per iteration (the source of
+    the between-component variance). Components depend only on ``s``, so they are computed
+    once; only the uniform draw and the categorical index take the full shape.
+    ``X' = 1 + sqrt(frac)*(X - 1)`` gives ``E[X']=1``, ``Var(X') = frac*Var(X)``, ``X' >= 0``.
     """
     s = np.asarray(s, dtype=float)
-    p, a = _components(s)
+    p, a = _components(s)  # (*s.shape, K), computed once on the unique projections
     cum = np.cumsum(p, axis=-1)
-    idx = (rng.random(s.shape)[..., None] < cum).argmax(axis=-1)
-    x = np.take_along_axis(a, idx[..., None], axis=-1)[..., 0]
+    shape = s.shape if n_iter is None else (n_iter, *s.shape)
+    idx = (rng.random(shape)[..., None] < cum).argmax(axis=-1)
+    x = np.take_along_axis(np.broadcast_to(a, (*idx.shape, a.shape[-1])), idx[..., None], -1)[
+        ..., 0
+    ]
     x_prime = 1.0 + np.sqrt(fraction_remaining) * (x - 1.0)
     return np.asarray(np.maximum(x_prime, 0.0), dtype=float)

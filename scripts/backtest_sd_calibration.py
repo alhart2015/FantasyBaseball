@@ -39,10 +39,12 @@ STATS = ROOT / "data" / "stats"
 N_TEAMS = 500
 H_PA_MIN, P_IP_MIN = 450, 60
 N_H, N_P = 13, 9
-# Saves come only from save-relevant pitchers; a random 9-pitcher team is dominated
-# by projected-~0-SV arms whose rare fluke saves the model (correctly) assigns ~0
-# variance, inflating the team-SV spread with noise the model is not meant to
-# predict. Measure the SV category on the closer/committee pool instead.
+# Saves come only from save-relevant pitchers. A random 9-pitcher team is dominated by
+# projected-~0-SV arms whose occasional fluke saves the multiplicative mixture (mu = s *
+# a_k) structurally cannot produce from s ~= 0 -- a known unmodeled phenomenon (a small
+# projection-independent save-hazard floor would capture it; deferred). Including them
+# makes the full-pool z-score look under-dispersed by an artifact of the measurement, not
+# a closer-variance failure, so measure the SV category on the save-relevant pool.
 SV_POOL_MIN_PROJ = 5.0
 rng = np.random.default_rng(11)
 

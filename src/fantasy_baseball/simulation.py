@@ -618,17 +618,15 @@ def _sv_role_mu(
     eff_mean: np.ndarray,
     rng: np.random.Generator,
     fraction_remaining: float,
-    draw_shape: tuple[int, ...],
+    n_iter: int | None = None,
 ) -> np.ndarray:
     """SV NegBin mean for the closer role-switch mixture: ``base_sv * eff_mean * X'``,
     where ``X'`` is the mean-1 per-draw role multiplier (mean-neutral; the between-
-    component supplies the hold/lose/vault variance). ``draw_shape`` is ``(n_players,)``
-    for the scalar path or ``(n_iter, n_players)`` for the batch path. Shared by both MC
-    paths so their SV distribution -- and thus the active-slot pitcher selection SV
-    feeds -- stay identical."""
-    x = closer_mixture.role_multiplier_draw(
-        np.broadcast_to(base_sv, draw_shape), rng, fraction_remaining
-    )
+    component supplies the hold/lose/vault variance). ``n_iter`` None -> ``(n_players,)``
+    for the scalar path; an int -> ``(n_iter, n_players)`` for the batch path. Shared by
+    both MC paths so their SV distribution -- and thus the active-slot pitcher selection
+    SV feeds -- stay identical."""
+    x = closer_mixture.role_multiplier_draw(base_sv, rng, fraction_remaining, n_iter=n_iter)
     return np.asarray(base_sv * eff_mean * x, dtype=float)
 
 
@@ -686,7 +684,7 @@ def _apply_variance(
     if not is_hitter and "sv" in idx_map:
         base_sv = np.array([safe_float(p.get("sv")) for p in players])
         eff_mean = _eff_means(players, player_type, fraction_remaining)
-        mu_mat[:, idx_map["sv"]] = _sv_role_mu(base_sv, eff_mean, rng, fraction_remaining, (n,))
+        mu_mat[:, idx_map["sv"]] = _sv_role_mu(base_sv, eff_mean, rng, fraction_remaining)
 
     # One flattened copula draw over all (player, stat) cells -- collapses the
     # per-stat scipy ppf calls (heavy fixed overhead) into a single nbinom +
@@ -842,7 +840,7 @@ def _apply_variance_batch(
     # er/bb/h; the injury backfill (shared frac_missed) is untouched (mean-neutral).
     if not is_hitter and "sv" in idx_map:
         mu_mat[:, :, idx_map["sv"]] = _sv_role_mu(
-            base["sv"], eff_mean, rng, fraction_remaining, (n_iter, n_players)
+            base["sv"], eff_mean, rng, fraction_remaining, n_iter=n_iter
         )
 
     # One flattened copula draw over every (iter, player, stat) cell. C-order

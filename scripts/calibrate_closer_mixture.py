@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import backtest_sd_calibration as bt
 
+from fantasy_baseball.sgp.closer_mixture import _softmax_curves
 from fantasy_baseball.utils.constants import STAT_DISPERSION
 
 R = float(STAT_DISPERSION["sv"])
@@ -46,15 +47,6 @@ def load_pairs():
     return np.concatenate(s_all), np.concatenate(y_all)
 
 
-def _softmax(curves, s):
-    logits = [b0 + b1 * s for b0, b1 in curves]
-    logits.append(np.zeros_like(s))
-    a = np.stack(logits, axis=-1)
-    a = a - a.max(axis=-1, keepdims=True)
-    e = np.exp(a)
-    return e / e.sum(axis=-1, keepdims=True)
-
-
 def _unpack(params):
     n = K - 1
     p_curves = [[params[2 * i], params[2 * i + 1]] for i in range(n)]
@@ -64,8 +56,9 @@ def _unpack(params):
 
 def components(params, s):
     p_curves, w_curves = _unpack(params)
-    p = _softmax(p_curves, s)
-    w = _softmax(w_curves, s)
+    # same softmax the deployed mixture uses (keeps the fit and production single-sourced)
+    p = _softmax_curves(s, p_curves)
+    w = _softmax_curves(s, w_curves)
     return p, w / p
 
 
@@ -100,7 +93,7 @@ def main():
     print(f"\n{'s':>6}{'n':>6}   " + "  ".join(f"p{k} a{k}" for k in range(K)) + "   real_mu")
     edges = np.quantile(s, np.linspace(0, 1, 11))
     # also force a closer bucket so the thin high-s tail is visible
-    for lo, hi in [*itertools.pairwise(edges), (edges[-1] * 0.0 + 10.0, 100.0)]:
+    for lo, hi in [*itertools.pairwise(edges), (10.0, 100.0)]:
         m = (s >= lo) & (s < hi)
         if m.sum() < 5:
             continue

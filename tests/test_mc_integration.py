@@ -1019,7 +1019,9 @@ def test_sv_role_mixture_widens_variance_mean_stable(monkeypatch):
     monkeypatch.setattr(
         closer_mixture,
         "role_multiplier_draw",
-        lambda s, rng, fraction_remaining=1.0: np.ones(np.asarray(s).shape),
+        lambda s, rng, fraction_remaining=1.0, n_iter=None: np.ones(
+            (n_iter, *np.asarray(s).shape) if n_iter else np.asarray(s).shape
+        ),
     )
     base = run()
     # between-component strictly widens per-pitcher SV variance

@@ -60,14 +60,14 @@ def test_components_reflect_constant(monkeypatch):
 
 def test_role_multiplier_draw_2d_moments():
     rng = np.random.default_rng(1)
-    s2d = np.full((40_000, 1), 30.0)  # 2-D: between-variance lives ACROSS rows
+    s1d = np.full(1, 30.0)  # one player; n_iter draws the role independently per iteration
     for frac in (1.0, 0.5, 0.25):
-        x = cm.role_multiplier_draw(s2d, rng, fraction_remaining=frac)
-        assert x.shape == s2d.shape
+        x = cm.role_multiplier_draw(s1d, rng, fraction_remaining=frac, n_iter=40_000)
+        assert x.shape == (40_000, 1)
         assert abs(x.mean() - 1.0) < 0.02  # E[X']=1
         assert np.all(x >= 0)
-    x1 = cm.role_multiplier_draw(np.full((200_000, 1), 30.0), np.random.default_rng(2), 1.0)
-    xh = cm.role_multiplier_draw(np.full((200_000, 1), 30.0), np.random.default_rng(2), 0.5)
+    x1 = cm.role_multiplier_draw(s1d, np.random.default_rng(2), 1.0, n_iter=200_000)
+    xh = cm.role_multiplier_draw(s1d, np.random.default_rng(2), 0.5, n_iter=200_000)
     p, a = cm._components(np.asarray(30.0))
     theo = float(np.sum(p * a * a) - 1.0)  # Var(X) at s=30
     assert theo > 1e-3  # scaffold is non-degenerate
