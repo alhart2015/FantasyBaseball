@@ -388,6 +388,17 @@ def test_crosswalk_skips_rows_missing_mlbamid(tmp_path):
     assert ("no id", "hitter") not in xmap
 
 
+def test_crosswalk_skips_a_csv_missing_required_columns(tmp_path):
+    # A malformed pitcher CSV (no MLBAMID column) must not crash the whole map;
+    # the good hitter file still resolves.
+    season_dir = tmp_path / "2026"
+    _write_csv(season_dir / "steamer-hitters.csv", [{"Name": "Good Hitter", "MLBAMID": 555}])
+    _write_csv(season_dir / "steamer-pitchers.csv", [{"Name": "Bad Row", "WrongCol": 1}])
+    xmap = build_typed_name_to_mlbam(tmp_path, season=2026)
+    assert xmap[("good hitter", "hitter")] == 555
+    assert ("bad row", "pitcher") not in xmap
+
+
 def test_player_group_classification():
     assert player_group(["1B", "OF"]) == ["hitting"]
     assert player_group(["SP"]) == ["pitching"]
@@ -427,8 +438,17 @@ _PITCHER_POSITIONS = {"SP", "RP", "P"}
 
 
 def _read_name_id(path: Path) -> list[tuple[str, int]]:
-    """Return (normalized_name, mlbam_id) pairs from one projection CSV."""
-    df = pd.read_csv(path, encoding="utf-8-sig", usecols=["Name", "MLBAMID"])
+    """Return (normalized_name, mlbam_id) pairs from one projection CSV.
+
+    A CSV missing the ``Name``/``MLBAMID`` columns (a ``usecols`` mismatch ->
+    ValueError) or an unreadable file is skipped, not fatal -- mirrors the
+    guard in ``streaks.build_name_to_mlbam_map`` so one bad projection file
+    cannot wipe out the whole crosswalk.
+    """
+    try:
+        df = pd.read_csv(path, encoding="utf-8-sig", usecols=["Name", "MLBAMID"])
+    except (ValueError, FileNotFoundError):
+        return []
     out: list[tuple[str, int]] = []
     for name, raw_id in zip(df["Name"], df["MLBAMID"], strict=True):
         if pd.isna(raw_id) or str(raw_id).strip() == "":
@@ -986,21 +1006,33 @@ def _team(name, rank, stats, yahoo_points=None):
             "yahoo_points_for": yahoo_points, "stats": stats, "extras": {}}
 
 
-# Two teams, two counting categories, so rank-based roto points are unambiguous.
-_STATS_A = {"HR": 100.0, "SB": 50.0}
-_STATS_B = {"HR": 80.0, "SB": 60.0}
+# Two teams. HIGH strictly beats LOW in BOTH set categories (HR and SB), so the
+# team holding HIGH leads both and the team holding LOW trails both. The 8 unset
+# categories default to 0.0 for both teams -> tie -> equal points -> they cancel
+# in the delta. That makes the movement below unambiguous.
+_STATS_HIGH = {"HR": 100.0, "SB": 60.0}
+_STATS_LOW = {"HR": 80.0, "SB": 50.0}
 
 
 def test_first_run_yields_baseline():
-    current = _standings_json("2026-07-14", [_team("My Team", 1, _STATS_A), _team("Rival", 2, _STATS_B)])
+    current = _standings_json(
+        "2026-07-14", [_team("My Team", 1, _STATS_HIGH), _team("Rival", 2, _STATS_LOW)]
+    )
     delta = build_standings_delta(current, None, "My Team")
     assert delta.is_first_run is True
     assert delta.teams == []
 
 
 def test_delta_computes_rank_and_category_movement():
-    prior = _standings_json("2026-07-14", [_team("My Team", 2, _STATS_B), _team("Rival", 1, _STATS_A)])
-    current = _standings_json("2026-07-14", [_team("My Team", 1, _STATS_A), _team("Rival", 2, _STATS_B)])
+    # Prior: My Team holds LOW (trails both cats). Current: My Team holds HIGH
+    # (leads both cats). Trailing both -> leading both is +1 point per category
+    # in each of HR and SB = +2.0 total.
+    prior = _standings_json(
+        "2026-07-14", [_team("My Team", 2, _STATS_LOW), _team("Rival", 1, _STATS_HIGH)]
+    )
+    current = _standings_json(
+        "2026-07-14", [_team("My Team", 1, _STATS_HIGH), _team("Rival", 2, _STATS_LOW)]
+    )
     snapshot = {"last_refresh": "2026-07-10 08:00", "standings": prior}
 
     delta = build_standings_delta(current, snapshot, "My Team")
@@ -1010,7 +1042,6 @@ def test_delta_computes_rank_and_category_movement():
     mine = next(t for t in delta.teams if t.name == "My Team")
     assert mine.rank_prev == 2
     assert mine.rank_now == 1
-    # My Team went from trailing both cats to leading both -> +2 total roto points.
     assert mine.points_now - mine.points_prev == 2.0
     assert delta.rate_cat_caveat is True
 ```
@@ -1130,6 +1161,41 @@ def test_refresh_is_fresh_false_when_stale():
 def test_refresh_is_fresh_false_when_meta_empty_or_malformed():
     assert refresh_is_fresh({}, date(2026, 7, 11)) is False
     assert refresh_is_fresh({"last_refresh": "garbage"}, date(2026, 7, 11)) is False
+
+
+def test_build_daily_summary_isolates_a_failing_builder(monkeypatch):
+    """One raising builder degrades to an empty section + a section_errors note;
+    the rest of the summary still assembles (spec error-isolation requirement)."""
+    from datetime import date
+    from pathlib import Path
+
+    import fantasy_baseball.summary.assemble as asm
+    from fantasy_baseball.config import LeagueConfig
+
+    # Stub every external read so only build_streaks raises.
+    monkeypatch.setattr(asm, "get_kv", lambda: object())
+    monkeypatch.setattr(asm, "fetch_roster", lambda league, tk: [])
+    monkeypatch.setattr(asm, "fetch_injuries", lambda league, tk: [])
+    monkeypatch.setattr(asm, "build_typed_name_to_mlbam", lambda root, *, season: {})
+    monkeypatch.setattr(asm, "read_cache", lambda key: None)
+    monkeypatch.setattr(asm, "read_cache_dict", lambda key: None)
+    monkeypatch.setattr(asm, "read_cache_list", lambda key: None)
+
+    def _boom(_payload):
+        raise RuntimeError("streaks exploded")
+
+    monkeypatch.setattr(asm, "build_streaks", _boom)
+
+    cfg = LeagueConfig.__new__(LeagueConfig)
+    cfg.team_name = "My Team"
+    cfg.season_year = 2026
+
+    summary = asm.build_daily_summary(
+        cfg, Path("."), today=date(2026, 7, 11), league=object(), team_key="t"
+    )
+    assert "build_streaks" in summary.section_errors
+    assert summary.streaks == []  # degraded to empty, not fatal
+    assert summary.as_of == date(2026, 7, 10)
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
@@ -1160,6 +1226,7 @@ from typing import Any
 from fantasy_baseball.config import LeagueConfig
 from fantasy_baseball.data.cache_keys import CacheKey
 from fantasy_baseball.data.kv_store import get_kv
+from fantasy_baseball.lineup.yahoo_roster import fetch_injuries, fetch_roster
 from fantasy_baseball.summary.builders import (
     build_injuries,
     build_last_night,
@@ -1175,10 +1242,12 @@ from fantasy_baseball.web.season_data import (
     read_cache,
     read_cache_dict,
     read_cache_list,
-    read_meta,
 )
 
 logger = logging.getLogger(__name__)
+
+# fetch_injuries / fetch_roster are module-level (not imported inside the
+# function) so tests can monkeypatch them, and so ruff sees them used.
 
 
 def refresh_is_fresh(meta: dict[str, Any], today: date) -> bool:
@@ -1215,8 +1284,6 @@ def build_daily_summary(
             logger.exception("summary builder %s failed", name)
             section_errors.append(name)
             return fallback
-
-    from fantasy_baseball.lineup.yahoo_roster import fetch_injuries, fetch_roster
 
     xmap = _guard("crosswalk", lambda: build_typed_name_to_mlbam(projections_root, season=season), {})
     roster = _guard("roster", lambda: fetch_roster(league, team_key), [])
@@ -1653,19 +1720,37 @@ def test_run_summary_missing_meta_skips_send(monkeypatch, patched):
     assert sent == {}
 
 
-def test_run_summary_fresh_sends_and_writes_snapshot(monkeypatch, patched):
-    mod, sent, written = patched
+def _fresh_summary():
     from fantasy_baseball.summary.models import DailySummary, StandingsDelta
 
-    monkeypatch.setattr(mod, "build_daily_summary", lambda *a, **k: DailySummary(
+    return DailySummary(
         as_of=date(2026, 7, 10), last_night=[], unmatched=[], streaks=[],
         standings_delta=StandingsDelta(is_first_run=True, user_team_name="T"),
-        lineup_moves=[], injuries=[], probables=[], section_errors=[]))
+        lineup_moves=[], injuries=[], probables=[], section_errors=[])
+
+
+def test_run_summary_fresh_sends_and_writes_snapshot(monkeypatch, patched):
+    mod, sent, written = patched
+    monkeypatch.setattr(mod, "build_daily_summary", lambda *a, **k: _fresh_summary())
     rc = mod.run_summary(_cfg(), _root(), api_key="k", league=object(), team_key="t",
                          today=date(2026, 7, 11))
     assert rc == 0
     assert sent["subject"]
     assert written.get("done") is True
+
+
+def test_run_summary_failed_send_does_not_advance_snapshot(monkeypatch, patched):
+    mod, sent, written = patched
+    monkeypatch.setattr(mod, "build_daily_summary", lambda *a, **k: _fresh_summary())
+
+    def _boom(**kw):
+        raise RuntimeError("resend down")
+
+    monkeypatch.setattr(mod, "send_email", _boom)
+    rc = mod.run_summary(_cfg(), _root(), api_key="k", league=object(), team_key="t",
+                         today=date(2026, 7, 11))
+    assert rc != 0
+    assert written == {}  # snapshot NOT advanced on failed send
 
 
 def _cfg():
@@ -1765,14 +1850,21 @@ def run_summary(
         logger.error("summary.recipients / summary.from_address not configured")
         return 2
 
-    send_email(
-        api_key=api_key,
-        from_address=from_address,
-        recipients=recipients,
-        subject=subject_line(summary),
-        html=render_html(summary),
-        text=render_text(summary),
-    )
+    try:
+        send_email(
+            api_key=api_key,
+            from_address=from_address,
+            recipients=recipients,
+            subject=subject_line(summary),
+            html=render_html(summary),
+            text=render_text(summary),
+        )
+    except Exception:  # noqa: BLE001 - log loudly, do NOT advance the snapshot baseline
+        logger.exception("send failed; not advancing standings snapshot")
+        return 3
+
+    # Snapshot is written ONLY after a successful send, so a failed run never
+    # corrupts tomorrow's delta baseline.
     _write_snapshot(meta)
     logger.info("daily summary sent to %s", recipients)
     return 0
@@ -1780,7 +1872,7 @@ def run_summary(
 
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
     from fantasy_baseball.lineup.yahoo_roster import fetch_teams, find_user_team_key
