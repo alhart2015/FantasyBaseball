@@ -199,17 +199,16 @@ def build_standings_delta(
     # Join current and prior on the STABLE team_key, not the mutable display
     # name: a team renamed between the snapshot and today would otherwise miss
     # its prior row and silently vanish from the delta (score_roto keys by name).
-    cur_key_of = {e.team_name: e.team_key for e in current.entries}
-    prev_name_of = {e.team_key: e.team_name for e in prior.entries}
-    cur_rank = {e.team_key: e.rank for e in current.entries}
+    prev_points_by_key = {
+        e.team_key: prev_roto[e.team_name] for e in prior.entries if e.team_name in prev_roto
+    }
     prev_rank = {e.team_key: e.rank for e in prior.entries}
 
     teams: list[TeamDelta] = []
-    for name, cur_points in cur_roto.items():
-        key = cur_key_of.get(name)
-        prev_name = prev_name_of.get(key) if key is not None else None
-        prev_points = prev_roto.get(prev_name) if prev_name is not None else None
-        if key is None or prev_points is None:
+    for e in current.entries:
+        cur_points = cur_roto.get(e.team_name)
+        prev_points = prev_points_by_key.get(e.team_key)
+        if cur_points is None or prev_points is None:
             continue
         cat_delta = {
             str(getattr(cat, "value", cat)): cur_points.values[cat]
@@ -218,9 +217,9 @@ def build_standings_delta(
         }
         teams.append(
             TeamDelta(
-                name=name,
-                rank_prev=prev_rank.get(key, cur_rank.get(key, 0)),
-                rank_now=cur_rank.get(key, 0),
+                name=e.team_name,
+                rank_prev=prev_rank.get(e.team_key, e.rank),
+                rank_now=e.rank,
                 points_prev=prev_points.total,
                 points_now=cur_points.total,
                 category_points_delta=cat_delta,
