@@ -13,7 +13,13 @@ from typing import Any
 
 from fantasy_baseball.data.redis_store import get_player_game_log
 from fantasy_baseball.summary.crosswalk import player_group
-from fantasy_baseball.summary.models import PlayerLine, StreakItem
+from fantasy_baseball.summary.models import (
+    InjuryItem,
+    LineupMove,
+    PlayerLine,
+    ProbableMatchup,
+    StreakItem,
+)
 
 _HITTER_FIELDS = ("pa", "ab", "h", "hr", "r", "rbi", "sb")
 _PITCHER_FIELDS = ("ip", "k", "er", "bb", "w", "sv", "h_allowed")
@@ -94,6 +100,75 @@ def build_streaks(streak_payload: dict[str, Any] | None) -> list[StreakItem]:
                 )
             )
     return items
+
+
+def build_lineup_moves(optimal_payload: dict[str, Any] | None) -> list[LineupMove]:
+    """Flatten LINEUP_OPTIMAL["moves"] into start/sit LineupMove rows."""
+    if not optimal_payload:
+        return []
+    moves = optimal_payload.get("moves") or {}
+    out: list[LineupMove] = []
+
+    def _start(row: dict[str, Any]) -> LineupMove:
+        rd = row.get("roto_delta")
+        return LineupMove(
+            player=row.get("player", ""),
+            action="start",
+            from_slot=row.get("from", ""),
+            to_slot=row.get("to", ""),
+            roto_delta=float(rd) if rd is not None else 0.0,
+        )
+
+    def _sit(row: dict[str, Any]) -> LineupMove:
+        return LineupMove(
+            player=row.get("player", ""),
+            action="sit",
+            from_slot=row.get("from", ""),
+            to_slot=row.get("to", ""),
+            roto_delta=0.0,
+        )
+
+    for swap in moves.get("swaps", []):
+        if swap.get("start"):
+            out.append(_start(swap["start"]))
+        if swap.get("bench"):
+            out.append(_sit(swap["bench"]))
+    for row in moves.get("unpaired_starts", []):
+        out.append(_start(row))
+    for row in moves.get("unpaired_benches", []):
+        out.append(_sit(row))
+    return out
+
+
+def build_injuries(injury_rows: list[dict[str, Any]]) -> list[InjuryItem]:
+    """Map fetch_injuries rows to InjuryItem (injury_note carries the news)."""
+    return [
+        InjuryItem(
+            name=row.get("name", ""),
+            status=row.get("status", ""),
+            note=row.get("injury_note", "") or "",
+        )
+        for row in injury_rows
+    ]
+
+
+def build_probables(probable_rows: list[dict[str, Any]] | None) -> list[ProbableMatchup]:
+    """Map PROBABLE_STARTERS rollup rows to ProbableMatchup. Absent -> []."""
+    if not probable_rows:
+        return []
+    out: list[ProbableMatchup] = []
+    for row in probable_rows:
+        starts = row.get("starts")
+        out.append(
+            ProbableMatchup(
+                pitcher=row.get("pitcher", ""),
+                starts=int(starts) if starts is not None else 0,
+                days=row.get("days", ""),
+                opponents=row.get("opponents", ""),
+                quality=row.get("matchup_quality", ""),
+            )
+        )
+    return out
 
 
 def _normalize(name: str) -> str:
