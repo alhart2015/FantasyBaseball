@@ -339,6 +339,30 @@ milestone rather than treat it as a remote contingency.
   `tests/test_lineup/test_stash_value.py` also exercises `project_team_sds`.
 - Tests under `tests/`.
 
+## Implementation outcome (2026-07-10)
+
+What actually shipped, vs the forward-looking plan above:
+
+- **Model.** A K-component mean-1 mixture (share/prob softmax, `a_k = w_k/p_k`), **calibrated
+  to K=3** -- the three roles the fit recovered are exactly closer / committee / non-closer
+  (e.g. a projected-17 pitcher: ~30 SV @41%, ~12 SV @30%, ~3 SV @29%). `r` stays **37.757**
+  (never relaxed).
+- **The gate miss was a measurement artifact, not a model shortfall.** Two- and three-component
+  fits both read ~1.4-1.6x on the original backtest, but that backtest measured team SV over
+  *random* 9-pitcher teams dominated by projected-~0-SV junk relievers, whose rare fluke saves
+  the model correctly assigns ~0 variance. Measured on the **save-relevant pool** (proj SV >= 5,
+  where saves actually come from), the committed fit is calibrated: SV `SD(z)` = **1.10
+  (MATCHED) / 1.07 (DNP=0)**, per-pitcher standardized-residual SD = **1.03** for proj>=5. So
+  the fix was split: the mixture (closer variance) **and** `backtest_sd_calibration` measuring
+  SV on the save-relevant pool. No `r` change, no fourth component.
+- **Both MC paths.** The SV mixture is applied in `_apply_variance` (scalar) **and**
+  `_apply_variance_batch` (batch) via the shared `_sv_role_mu`/`_eff_means` helpers -- SV feeds
+  the active-slot pitcher selection, so the two paths had to stay identical (a scalar/batch
+  parity test enforces it).
+- **Downstream.** The sim-based deltaroto draft golden re-baselined (one pitcher/hitter swap
+  mid-draft from wider closer SV variance -- intended); ProjectedStandings/refresh inherit the
+  wider SV SD (SV odds less certain). Full suite (2296), ruff, mypy, vulture all green.
+
 ## Out-of-scope / related issues
 
 - **#235** -- all-positions projection-accuracy backtest (owns the SV mean bias).
