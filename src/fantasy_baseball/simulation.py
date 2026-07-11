@@ -600,6 +600,38 @@ def _negbin_copula_counts(
     return out
 
 
+def _eff_means(players: list, player_type: str, fraction_remaining: float) -> np.ndarray:
+    """Per-player mean playing-time scale (eff_mean), the location of the realized-PT
+    scale distribution. The SV role mixture rides this (not the per-draw ``scales``,
+    whose cv_pt spread the mixture replaces)."""
+    is_hitter = player_type == PlayerType.HITTER
+    out = np.empty(len(players))
+    for i, p in enumerate(players):
+        vol = _projected_volume(p, is_hitter)
+        mean_scale, cv_pt = playing_time_params(player_type, vol)
+        out[i], _ = playing_time_moments(mean_scale, cv_pt, fraction_remaining)
+    return out
+
+
+def _sv_role_mu(
+    base_sv: np.ndarray,
+    eff_mean: np.ndarray,
+    rng: np.random.Generator,
+    fraction_remaining: float,
+    draw_shape: tuple[int, ...],
+) -> np.ndarray:
+    """SV NegBin mean for the closer role-switch mixture: ``base_sv * eff_mean * X'``,
+    where ``X'`` is the mean-1 per-draw role multiplier (mean-neutral; the between-
+    component supplies the hold/lose/vault variance). ``draw_shape`` is ``(n_players,)``
+    for the scalar path or ``(n_iter, n_players)`` for the batch path. Shared by both MC
+    paths so their SV distribution -- and thus the active-slot pitcher selection SV
+    feeds -- stay identical."""
+    x = closer_mixture.role_multiplier_draw(
+        np.broadcast_to(base_sv, draw_shape), rng, fraction_remaining
+    )
+    return np.asarray(base_sv * eff_mean * x, dtype=float)
+
+
 def _apply_variance(
     players: list,
     player_type: str,
@@ -648,6 +680,13 @@ def _apply_variance(
     for col, j in idx_map.items():
         mu_mat[:, j] = np.array([safe_float(p.get(col)) for p in players]) * scales
         r_mat[:, j] = resolve_dispersion_r(STAT_DISPERSION[col], mu_mat[:, j])
+
+    # SV: closer role-switch mixture replaces the cv_pt spread (see _sv_role_mu and the
+    # batch path). Mean rides eff_mean * a mean-1 role draw; r stays STAT_DISPERSION.
+    if not is_hitter and "sv" in idx_map:
+        base_sv = np.array([safe_float(p.get("sv")) for p in players])
+        eff_mean = _eff_means(players, player_type, fraction_remaining)
+        mu_mat[:, idx_map["sv"]] = _sv_role_mu(base_sv, eff_mean, rng, fraction_remaining, (n,))
 
     # One flattened copula draw over all (player, stat) cells -- collapses the
     # per-stat scipy ppf calls (heavy fixed overhead) into a single nbinom +
@@ -802,10 +841,9 @@ def _apply_variance_batch(
     # already set above); SV stays in the copula so its within-draw still correlates with
     # er/bb/h; the injury backfill (shared frac_missed) is untouched (mean-neutral).
     if not is_hitter and "sv" in idx_map:
-        sv_idx = idx_map["sv"]
-        s2d = np.broadcast_to(base["sv"][None, :], (n_iter, n_players))
-        x = closer_mixture.role_multiplier_draw(s2d, rng, fraction_remaining)
-        mu_mat[:, :, sv_idx] = base["sv"][None, :] * eff_mean[None, :] * x
+        mu_mat[:, :, idx_map["sv"]] = _sv_role_mu(
+            base["sv"], eff_mean, rng, fraction_remaining, (n_iter, n_players)
+        )
 
     # One flattened copula draw over every (iter, player, stat) cell. C-order
     # ravel keeps mu/r/z aligned, same as the scalar path's per-team draw.
