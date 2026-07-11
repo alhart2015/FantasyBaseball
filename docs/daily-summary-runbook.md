@@ -13,9 +13,14 @@ Entry point: `scripts/send_daily_summary.py` (function `main`).
    so all `get_kv()` reads hit Upstash (the source of truth for live state), not
    the local SQLite cache. This is set inside `main()` -- not at module import
    time -- so importing the module has no global side effect.
-2. Freshness gate: read `META.last_refresh`. If it is missing or not from today,
-   log an error and exit non-zero WITHOUT sending (a stale/absent refresh means
-   the numbers would be wrong).
+2. Freshness gate: read the `META` cache entry's provenance `_written_at`
+   timestamp (set by `write_cache` on every write, converted to local time). If
+   `META` is absent, or `_written_at` is not from today, log an error and exit
+   non-zero WITHOUT sending (a stale/absent refresh means the numbers would be
+   wrong). Note: the gate deliberately does NOT parse the free-text
+   `META.last_refresh` payload field -- production writes it in an inconsistent,
+   sometimes date-less form (e.g. `"9:00 AM"`), so `_written_at` is the reliable
+   signal.
 3. Assemble the summary from cached KV data, render HTML + text, and send via
    Resend.
 4. Write the standings snapshot (`STANDINGS_SNAPSHOT`) ONLY after a successful
@@ -71,7 +76,7 @@ to set `RENDER` on the cron -- but setting it does no harm.
 The script exits non-zero on any failure, so the Render cron marks the run
 failed and surfaces it:
 
-- Exit 1: refresh not fresh -- `META.last_refresh` is missing or not from today
+- Exit 1: refresh not fresh -- `META` is missing or its `_written_at` is not from today
   (the morning refresh did not run / has not finished). Nothing is sent.
 - Exit 2: configuration missing -- `RESEND_API_KEY` unset, or
   `summary.recipients` / `summary.from_address` not configured. Nothing is sent.
