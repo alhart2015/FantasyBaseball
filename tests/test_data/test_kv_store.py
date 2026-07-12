@@ -83,14 +83,41 @@ def test_get_kv_on_render_requires_creds(monkeypatch):
 
 def test_build_explicit_upstash_kv_works_off_render(monkeypatch):
     """The scripts-only escape hatch should NOT be gated on RENDER — it
-    exists precisely to let local scripts cross the boundary."""
+    exists precisely to let local scripts cross the boundary.
+
+    Under pytest the builder now fails closed (see
+    ``test_build_explicit_upstash_kv_refuses_real_client_under_pytest``), so
+    this test opts in explicitly. It uses FAKE creds, so no client can reach
+    production even though the guard is lifted."""
     monkeypatch.delenv("RENDER", raising=False)
     monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
     monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake")
+    monkeypatch.setenv("FANTASY_ALLOW_UPSTASH_IN_TESTS", "1")
     kv = build_explicit_upstash_kv()
     from fantasy_baseball.data.kv_store import UpstashKVStore
 
     assert isinstance(kv, UpstashKVStore)
+
+
+def test_build_explicit_upstash_kv_refuses_real_client_under_pytest(monkeypatch):
+    """Fail-closed prod guard. Even with creds present, the builder must
+    refuse to construct a real Upstash client under pytest unless a test
+    explicitly opts in. This is the regression guard for the incident where a
+    test's ros_projections fixture was written to production Upstash (leaked
+    ``RENDER=true`` under ``pytest -n auto``), clobbering the live key.
+
+    Fake creds are set so the guard -- not the missing-creds check -- is what
+    fires, making the assertion deterministic on machines without a ``.env``."""
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake")
+    monkeypatch.delenv("FANTASY_ALLOW_UPSTASH_IN_TESTS", raising=False)
+    with pytest.raises(RuntimeError, match="under pytest"):
+        build_explicit_upstash_kv()
+    # And get_kv() routed to remote (leaked RENDER) must not slip past it either.
+    monkeypatch.setenv("RENDER", "true")
+    kv_store._reset_singleton()
+    with pytest.raises(RuntimeError, match="under pytest"):
+        kv_store.get_kv()
 
 
 def test_load_dotenv_strips_wrapping_quotes(monkeypatch, tmp_path):

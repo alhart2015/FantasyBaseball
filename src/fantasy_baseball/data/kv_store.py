@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
@@ -38,6 +39,18 @@ _DEFAULT_LOCAL_DB = _PROJECT_ROOT / "data" / "local.db"
 def is_remote() -> bool:
     """True when running on Render (``RENDER=true``)."""
     return os.environ.get("RENDER") == "true"
+
+
+def _running_under_pytest() -> bool:
+    """True during a pytest session; prod never imports pytest.
+
+    Reliable test-vs-prod signal used to fail closed on real Upstash-client
+    construction. A test must NEVER build a client pointed at production: a
+    leaked ``RENDER=true`` under ``pytest -n auto`` once let a fixture write
+    clobber the live ``cache:ros_projections`` key with 6 synthetic players,
+    which silently broke every projected view until the ROS fetch re-ran.
+    """
+    return "pytest" in sys.modules
 
 
 def _is_live(expires_at: float | None) -> bool:
@@ -340,6 +353,18 @@ def _build_upstash_kv() -> UpstashKVStore:
             "UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN must be set to build "
             "an Upstash client (on Render they're service env vars; locally they "
             "live in .env)."
+        )
+    # Fail closed: never let a test construct a client pointed at production.
+    # This is the second, independent layer under the conftest cred-strip -- it
+    # holds even if a test explicitly puts real creds in the environment. A test
+    # that genuinely needs to exercise the builder must opt in AND use fake creds.
+    if _running_under_pytest() and os.environ.get("FANTASY_ALLOW_UPSTASH_IN_TESTS") != "1":
+        raise RuntimeError(
+            "Refusing to build a real Upstash client under pytest. A test writing "
+            "to production Upstash once clobbered cache:ros_projections with fixture "
+            "data; this fail-closed guard prevents recurrence. A test that must "
+            "exercise the builder should set FANTASY_ALLOW_UPSTASH_IN_TESTS=1 and "
+            "use FAKE creds."
         )
     from upstash_redis import Redis
 
