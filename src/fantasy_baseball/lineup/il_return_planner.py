@@ -256,7 +256,10 @@ def _make_plan(
     # (hitter + pitcher) sharing a name, and dropping one row must not drop the
     # other. ``drops`` stays bare-name for display and the SGP tie-break lookup.
     drop_keys = {p.player_key for p in dropset}
-    drop_names = sorted(p.name for p in dropset)
+    # Dedup names (a two-way dropset holds two rows sharing one name) so
+    # ``drops`` and the SGP tie-break don't double-count -- matches the pre-#190
+    # set semantics now that the internal filtering keys on player_key.
+    drop_names = sorted({p.name for p in dropset})
     survivors = [p for p in pool if p.player_key not in drop_keys]
     dropped_hitter = any(p.player_type != PlayerType.PITCHER for p in dropset)
     dropped_pitcher = any(p.player_type == PlayerType.PITCHER for p in dropset)

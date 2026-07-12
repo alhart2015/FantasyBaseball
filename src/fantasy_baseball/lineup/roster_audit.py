@@ -101,14 +101,18 @@ HITTER_SOURCE_POSITIONS: tuple[str, ...] = ("C", "1B", "2B", "3B", "SS", "OF")
 def worst_roster_by_position(
     roster: list[Player],
     denoms: dict[Category, float] | None = None,
-) -> dict[str, str]:
-    """Return ``{pool_pos: worst_roster_player_name}`` — the lowest-SGP
-    roster player eligible at each pool position.
+) -> dict[str, Player]:
+    """Return ``{pool_pos: worst_roster_player}`` — the lowest-SGP roster
+    player eligible at each pool position.
 
     Buckets mirror :func:`build_position_pools`: hitter source positions
     (C/1B/2B/3B/SS/OF) pick the lowest-SGP roster hitter eligible there,
     pitchers split on ``RP_SV_THRESHOLD`` into SP/RP buckets. This is the
     "drop candidate" used when pricing an FA's impact on the browse page.
+
+    Returns the ``Player`` (not the bare name) so callers can key on
+    ``player_key`` and disambiguate a two-way player's hitter and pitcher
+    rows without re-inferring the type from the bucket.
     """
     if denoms is None:
         denoms = get_sgp_denominators()
@@ -118,18 +122,18 @@ def worst_roster_by_position(
             return 0.0
         return calculate_player_sgp(p.rest_of_season, denoms)
 
-    result: dict[str, str] = {}
+    result: dict[str, Player] = {}
     for pos in HITTER_SOURCE_POSITIONS:
         eligible = [p for p in roster if p.player_type == PlayerType.HITTER and pos in p.positions]
         if eligible:
-            result[pos] = min(eligible, key=_sgp).name
+            result[pos] = min(eligible, key=_sgp)
 
     sps = [p for p in roster if _is_starter(p)]
     rps = [p for p in roster if _is_reliever(p)]
     if sps:
-        result["SP"] = min(sps, key=_sgp).name
+        result["SP"] = min(sps, key=_sgp)
     if rps:
-        result["RP"] = min(rps, key=_sgp).name
+        result["RP"] = min(rps, key=_sgp)
     return result
 
 
@@ -330,7 +334,10 @@ def audit_roster(
         scored: list[dict[str, Any]] = []
 
         for fa in candidates:
-            new_roster = [p for p in active_roster if p.name != player.name] + [fa]
+            # Key on player_key, matching the band call below: dropping a two-way
+            # player's pitcher row must leave his hitter row on new_roster, else
+            # the feasibility gate wrongly excludes a legitimate drop candidate.
+            new_roster = [p for p in active_roster if p.player_key != player.player_key] + [fa]
             new_pitchers = [p for p in new_roster if p.player_type == PlayerType.PITCHER]
 
             # Cross-type feasibility: pool structure already blocks most cross-type

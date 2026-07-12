@@ -88,6 +88,25 @@ def _field() -> dict[str, CategoryStats]:
     return field
 
 
+def _me_standings(
+    roster: list[Player],
+    field: dict[str, CategoryStats] | None = None,
+) -> tuple[ProjectedStandings, dict[str, dict[Category, float]]]:
+    """ProjectedStandings + team_sds anchored on ``roster`` as team "Me" vs ``field``.
+
+    The single builder for the module's test standings; ``_build_swap`` and the
+    two-way regression tests both delegate here so the scaffolding lives once.
+    """
+    if field is None:
+        field = _field()
+    entries = [ProjectedStandingsEntry(team_name="Me", stats=project_team_stats(roster))]
+    entries += [ProjectedStandingsEntry(team_name=t, stats=cs) for t, cs in field.items()]
+    projected = ProjectedStandings(effective_date=date(2026, 4, 1), entries=entries)
+    rosters = {"Me": roster, **{t: [] for t in field}}
+    team_sds = build_team_sds(rosters, sd_scale=FRACTION_REMAINING**0.5)
+    return projected, team_sds
+
+
 @dataclass
 class _Swap:
     """A before/after roster swap with the kwargs both APIs need."""
@@ -138,13 +157,7 @@ def _build_swap(
     after = [p for p in before if p.player_key != drop_key] + [add_player]
     if field is None:
         field = _field()
-    me_stats = project_team_stats(before)
-    entries = [ProjectedStandingsEntry(team_name="Me", stats=me_stats)]
-    entries += [ProjectedStandingsEntry(team_name=t, stats=cs) for t, cs in field.items()]
-    projected = ProjectedStandings(effective_date=date(2026, 4, 1), entries=entries)
-
-    rosters = {"Me": before, **{t: [] for t in field}}
-    team_sds = build_team_sds(rosters, sd_scale=FRACTION_REMAINING**0.5)
+    projected, team_sds = _me_standings(before, field)
 
     band_kwargs = dict(
         before_players=before,
@@ -180,12 +193,7 @@ def identity_swap() -> _Swap:
     add_player = _hitter("H12")
     after = [p for p in before if p.name != "H12"] + [add_player]
     field = _field()
-    me_stats = project_team_stats(before)
-    entries = [ProjectedStandingsEntry(team_name="Me", stats=me_stats)]
-    entries += [ProjectedStandingsEntry(team_name=t, stats=cs) for t, cs in field.items()]
-    projected = ProjectedStandings(effective_date=date(2026, 4, 1), entries=entries)
-    rosters = {"Me": before, **{t: [] for t in field}}
-    team_sds = build_team_sds(rosters, sd_scale=FRACTION_REMAINING**0.5)
+    projected, team_sds = _me_standings(before, field)
     band_kwargs = dict(
         before_players=before,
         after_players=after,
@@ -560,19 +568,6 @@ def test_swap_sets_distinguishes_two_way_players_by_type() -> None:
     assert outs[0] is bat
 
 
-def _two_way_standings(
-    roster: list[Player],
-) -> tuple[ProjectedStandings, dict[str, dict[Category, float]]]:
-    """Standings + team_sds anchored on ``roster`` as team "Me" vs ``_field``."""
-    field = _field()
-    entries = [ProjectedStandingsEntry(team_name="Me", stats=project_team_stats(roster))]
-    entries += [ProjectedStandingsEntry(team_name=t, stats=cs) for t, cs in field.items()]
-    projected = ProjectedStandings(effective_date=date(2026, 4, 1), entries=entries)
-    rosters = {"Me": roster, **{t: [] for t in field}}
-    team_sds = build_team_sds(rosters, sd_scale=FRACTION_REMAINING**0.5)
-    return projected, team_sds
-
-
 def test_one_for_one_band_two_way_drops_only_the_keyed_row() -> None:
     """Dropping a two-way player's hitter row must leave the pitcher row on
     the after-roster. Pre-#190 the band filtered on bare name and removed
@@ -586,7 +581,7 @@ def test_one_for_one_band_two_way_drops_only_the_keyed_row() -> None:
         *[_pitcher(f"P{i}") for i in range(8)],
     ]
     add = _hitter("Bench Bat", hr=12, r=45, rbi=42, sb=3)
-    projected, team_sds = _two_way_standings(active)
+    projected, team_sds = _me_standings(active)
 
     kwargs = dict(
         field_stats=_field(),
@@ -622,7 +617,7 @@ def test_compute_delta_roto_resolves_two_way_drop_by_key() -> None:
         *[_pitcher(f"P{i}") for i in range(8)],
     ]
     add = _hitter("New Bat", hr=20, r=60, rbi=55, sb=8)
-    projected, team_sds = _two_way_standings(roster)
+    projected, team_sds = _me_standings(roster)
     kwargs = dict(
         add_player=add,
         user_roster=roster,
