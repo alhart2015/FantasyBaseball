@@ -170,7 +170,7 @@ def candidates_for_player(
     result: list[Player] = []
     for pos in source_positions:
         for fa in pools.get(pos, []):
-            key = fa.yahoo_id or f"{fa.name}::{fa.player_type.value}"
+            key = fa.yahoo_id or fa.player_key
             if key in seen:
                 continue
             seen.add(key)
@@ -374,7 +374,7 @@ def audit_roster(
             sgp_gap = round(fa_sgp.get(fa.name, 0.0) - player_sgp.get(player.name, 0.0), 2)
 
             band = compute_one_for_one_band(
-                player.name,
+                player.player_key,
                 fa,
                 active_roster,
                 field_stats,

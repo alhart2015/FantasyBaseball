@@ -134,7 +134,8 @@ def _build_swap(
     before-roster projection so ``compute_delta_roto`` and the band see
     the same standings.
     """
-    after = [p for p in before if p.name != drop_name] + [add_player]
+    drop_key = next(p for p in before if p.name == drop_name).player_key
+    after = [p for p in before if p.player_key != drop_key] + [add_player]
     if field is None:
         field = _field()
     me_stats = project_team_stats(before)
@@ -155,7 +156,7 @@ def _build_swap(
         team_sds=team_sds,
     )
     point_kwargs = dict(
-        drop_name=drop_name,
+        drop_key=drop_key,
         add_player=add_player,
         user_roster=before,
         projected_standings=projected,
@@ -195,7 +196,7 @@ def identity_swap() -> _Swap:
         team_sds=team_sds,
     )
     point_kwargs = dict(
-        drop_name="H12",
+        drop_key="H12::hitter",
         add_player=add_player,
         user_roster=before,
         projected_standings=projected,
@@ -234,7 +235,7 @@ def test_one_for_one_band_mean_matches_ev(sample_swap: _Swap) -> None:
     bk = sample_swap.band_kwargs
     pk = sample_swap.point_kwargs
     band = compute_one_for_one_band(
-        drop_name=pk["drop_name"],
+        drop_key=pk["drop_key"],
         add_player=pk["add_player"],
         active_players=pk["user_roster"],
         field_stats=bk["field_stats"],
@@ -557,3 +558,88 @@ def test_swap_sets_distinguishes_two_way_players_by_type() -> None:
     assert [p.name for p in ins] == ["Someone Else"]
     assert len(outs) == 1
     assert outs[0] is bat
+
+
+def _two_way_standings(
+    roster: list[Player],
+) -> tuple[ProjectedStandings, dict[str, dict[Category, float]]]:
+    """Standings + team_sds anchored on ``roster`` as team "Me" vs ``_field``."""
+    field = _field()
+    entries = [ProjectedStandingsEntry(team_name="Me", stats=project_team_stats(roster))]
+    entries += [ProjectedStandingsEntry(team_name=t, stats=cs) for t, cs in field.items()]
+    projected = ProjectedStandings(effective_date=date(2026, 4, 1), entries=entries)
+    rosters = {"Me": roster, **{t: [] for t in field}}
+    team_sds = build_team_sds(rosters, sd_scale=FRACTION_REMAINING**0.5)
+    return projected, team_sds
+
+
+def test_one_for_one_band_two_way_drops_only_the_keyed_row() -> None:
+    """Dropping a two-way player's hitter row must leave the pitcher row on
+    the after-roster. Pre-#190 the band filtered on bare name and removed
+    BOTH rows, so the band saw the arm leave too."""
+    bat = _hitter("Shohei Ohtani", hr=45, r=105, rbi=110, sb=18)
+    arm = _pitcher("Shohei Ohtani", w=15, k=210, er=48, bb=40, h_allowed=120)
+    active = [
+        bat,
+        arm,
+        *[_hitter(f"H{i}") for i in range(11)],
+        *[_pitcher(f"P{i}") for i in range(8)],
+    ]
+    add = _hitter("Bench Bat", hr=12, r=45, rbi=42, sb=3)
+    projected, team_sds = _two_way_standings(active)
+
+    kwargs = dict(
+        field_stats=_field(),
+        team_name="Me",
+        fraction_remaining=FRACTION_REMAINING,
+        projected_standings=projected,
+        team_sds=team_sds,
+    )
+    band = compute_one_for_one_band(
+        drop_key=bat.player_key, add_player=add, active_players=active, **kwargs
+    )
+    # Reference after-roster that removes ONLY the hitter row (arm retained).
+    after = [p for p in active if p.player_key != bat.player_key] + [add]
+    assert arm.player_key in {p.player_key for p in after}
+    expected = compute_delta_roto_band(active, after, **kwargs)
+    assert band.mean == pytest.approx(expected.mean, abs=1e-9)
+    assert band.sd == pytest.approx(expected.sd, abs=1e-9)
+
+
+def test_compute_delta_roto_resolves_two_way_drop_by_key() -> None:
+    """compute_delta_roto must resolve the dropped row by player_key, not the
+    first name match. With the pitcher row listed first, pre-#190 name lookup
+    would have dropped the arm even when the bat was intended -- and the two
+    same-name keys would have produced identical deltas."""
+    bat = _hitter("Shohei Ohtani", hr=45, r=105, rbi=110, sb=18)
+    arm = _pitcher("Shohei Ohtani", w=15, k=210, er=48, bb=40, h_allowed=120)
+    # Full roster so the pitching line is mid-pack (not saturated), and the
+    # pitcher row is listed first to expose first-match-by-name resolution.
+    roster = [
+        arm,
+        bat,
+        *[_hitter(f"H{i}") for i in range(11)],
+        *[_pitcher(f"P{i}") for i in range(8)],
+    ]
+    add = _hitter("New Bat", hr=20, r=60, rbi=55, sb=8)
+    projected, team_sds = _two_way_standings(roster)
+    kwargs = dict(
+        add_player=add,
+        user_roster=roster,
+        projected_standings=projected,
+        team_name="Me",
+        team_sds=team_sds,
+    )
+
+    drop_bat = compute_delta_roto(drop_key=bat.player_key, **kwargs)
+    drop_arm = compute_delta_roto(drop_key=arm.player_key, **kwargs)
+
+    # Same name, different keys -> distinct rows resolved -> distinct deltas.
+    # (Bare-name resolution would return the same first match for both.)
+    assert drop_bat.total != pytest.approx(drop_arm.total)
+    # Dropping the hitter and adding a hitter leaves the pitching line intact,
+    # so every pitching category delta is exactly zero (the bat was resolved).
+    for cat in ("W", "K", "SV", "ERA", "WHIP"):
+        assert drop_bat.categories[cat].roto_delta == pytest.approx(0.0, abs=1e-9)
+    # Dropping the arm instead does move the pitching line.
+    assert any(abs(drop_arm.categories[cat].roto_delta) > 1e-6 for cat in ("W", "K", "ERA", "WHIP"))

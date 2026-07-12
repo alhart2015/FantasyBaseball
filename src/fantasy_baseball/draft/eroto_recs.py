@@ -71,7 +71,7 @@ def immediate_delta(
 ) -> DeltaBreakdown:
     """ERoto delta from swapping ``replacement`` out for ``candidate``."""
     result: DeltaRotoResult = compute_delta_roto(
-        drop_name=replacement.name,
+        drop_key=replacement.player_key,
         add_player=candidate,
         user_roster=[replacement],
         projected_standings=projected_standings,
@@ -421,4 +421,4 @@ def _candidate_id(player: Player) -> str:
     """
     if player.yahoo_id:
         return player.yahoo_id
-    return f"{player.name}::{player.player_type.value}"
+    return player.player_key

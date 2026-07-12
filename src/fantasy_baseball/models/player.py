@@ -207,6 +207,22 @@ class Player:
     pace: dict[str, Any] | None = None
 
     # ------------------------------------------------------------------
+    # Identity
+    # ------------------------------------------------------------------
+
+    @property
+    def player_key(self) -> str:
+        """Canonical identity ``name::player_type`` (e.g. ``"Shohei Ohtani::hitter"``).
+
+        Disambiguates a two-way player, who is rostered as two separate rows --
+        a hitter and a pitcher -- that share a name. Keying on ``name`` alone
+        moves both rows together; every roster/lineup/swap layer must key on
+        this instead. Single source of truth for the ``name::player_type`` id
+        that used to be hand-rolled across the codebase.
+        """
+        return f"{self.name}::{self.player_type}"
+
+    # ------------------------------------------------------------------
     # Constructor
     # ------------------------------------------------------------------
 

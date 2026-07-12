@@ -20,7 +20,6 @@ from fantasy_baseball.trades.multi_trade import (
     _can_roster_after,
     build_waiver_pool,
     evaluate_multi_trade,
-    player_key,
 )
 from fantasy_baseball.utils.constants import ALL_CATEGORIES as ALL_CATEGORIES_LOCAL
 
@@ -254,7 +253,7 @@ def test_evaluate_2_for_2_legal_returns_delta():
         send=["Me0::hitter", "Me1::hitter"],
         receive=["Riv0::hitter", "Riv1::hitter"],
         my_active_ids={
-            player_key(p)
+            p.player_key
             for p in me_roster
             if p.selected_position not in ("BN", "IL") and p.name not in ("Me0", "Me1")
         }
@@ -331,7 +330,7 @@ def test_2_for_3_with_drop_is_legal_and_scores():
         my_drops=["MeBN0::hitter"],
         opp_drops=[],
         my_active_ids={
-            player_key(p)
+            p.player_key
             for p in me
             if p.selected_position not in ("BN", "IL") and p.name not in ("Me0", "Me1")
         }
@@ -361,7 +360,7 @@ def test_2_for_3_drop_on_both_sides_is_legal():
         my_drops=["MeBN0::hitter"],
         opp_drops=["RivBN0::hitter"],
         my_active_ids={
-            player_key(p)
+            p.player_key
             for p in me
             if p.selected_position not in ("BN", "IL") and p.name not in ("Me0", "Me1")
         }
@@ -392,7 +391,7 @@ def test_2_for_2_plus_drop_plus_waiver_add_is_legal():
         my_drops=["MeBN0::hitter"],
         my_adds=["Waiver1::hitter"],
         my_active_ids={
-            player_key(p)
+            p.player_key
             for p in me
             if p.selected_position not in ("BN", "IL") and p.name not in ("Me0", "Me1")
         }
@@ -416,7 +415,7 @@ def test_2_for_2_plus_drop_plus_waiver_add_is_legal():
 def test_received_player_marked_bench_does_not_contribute():
     me, riv, standings = _build_league()
     active_set_all = {
-        player_key(p)
+        p.player_key
         for p in me
         if p.selected_position not in ("BN", "IL") and p.name not in ("Me0", "Me1")
     } | {"Riv0::hitter", "Riv1::hitter"}
@@ -473,7 +472,7 @@ def test_il_players_excluded_from_size_count():
         send=["Me0::hitter"],
         receive=["Riv0::hitter"],
         my_active_ids={
-            player_key(p) for p in me if p.selected_position not in ("BN", "IL") and p.name != "Me0"
+            p.player_key for p in me if p.selected_position not in ("BN", "IL") and p.name != "Me0"
         }
         | {"Riv0::hitter"},
     )
@@ -550,11 +549,11 @@ def _build_min_legal_proposal_fixture():
         ],
     )
 
-    swap_send = player_key(hart_roster[0])
-    swap_receive = player_key(opp_roster[0])
+    swap_send = hart_roster[0].player_key
+    swap_receive = opp_roster[0].player_key
 
     # New active set: M0 leaves (replaced by R0), so M0 not in active; R0 added at slot 0.
-    new_active = {player_key(p) for p in hart_roster[:21]}
+    new_active = {p.player_key for p in hart_roster[:21]}
     new_active.discard(swap_send)
     new_active.add(swap_receive)
 

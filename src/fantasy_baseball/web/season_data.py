@@ -1141,7 +1141,7 @@ def compute_comparison_standings(
 
     field_stats = projected_standings.field_stats(user_team_name)
     band = compute_one_for_one_band(
-        roster_player_name,
+        dropped.player_key,
         other_player,
         user_roster,
         field_stats,

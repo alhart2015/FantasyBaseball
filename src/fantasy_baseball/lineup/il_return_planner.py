@@ -184,7 +184,7 @@ def _build_moves(
     pool: list[Player],
     hitter_assignments,
     pitcher_starters,
-    dropped_names: set[str],
+    dropped_keys: set[str],
 ) -> list[Move]:
     """Build the transaction list for one plan.
 
@@ -192,29 +192,31 @@ def _build_moves(
     IL player reads as ``IL`` and Webb as ``BN``); ``to_slot`` is the
     assigned active slot, ``BN``, or ``DROP``. Only players whose slot
     changes get a move. Sorted by name for deterministic output.
-    """
-    orig_slot = {p.name: _slot_value(p) for p in roster}
-    type_by_name = {p.name: p.player_type.value for p in pool}
 
-    active_slot: dict[str, str] = {a.name: a.slot.value for a in hitter_assignments}
+    Keyed on :attr:`Player.player_key` so a two-way player's hitter and pitcher
+    rows resolve their slots independently (bare name would collide).
+    """
+    orig_slot = {p.player_key: _slot_value(p) for p in roster}
+
+    active_slot: dict[str, str] = {a.player.player_key: a.slot.value for a in hitter_assignments}
     for s in pitcher_starters:
-        active_slot[s.name] = "P"
+        active_slot[s.player.player_key] = "P"
 
     moves: list[Move] = []
     for p in pool:
-        name = p.name
-        frm = orig_slot.get(name, "BN")
-        if name in dropped_names:
+        key = p.player_key
+        frm = orig_slot.get(key, "BN")
+        if key in dropped_keys:
             to = "DROP"
-        elif name in active_slot:
-            to = active_slot[name]
+        elif key in active_slot:
+            to = active_slot[key]
         else:
             to = "BN"
         if frm != to:
             moves.append(
                 Move(
-                    name=name,
-                    player_type=type_by_name.get(name, ""),
+                    name=p.name,
+                    player_type=p.player_type.value,
                     from_slot=frm,
                     to_slot=to,
                 )
@@ -250,8 +252,12 @@ def _make_plan(
     the pre-drop baseline (the lineup there is identical). Feasibility:
     the benched survivors must fit in the BN slots.
     """
-    drop_names = {p.name for p in dropset}
-    survivors = [p for p in pool if p.name not in drop_names]
+    # Key survivors/actives/moves on player_key: a two-way player is two rows
+    # (hitter + pitcher) sharing a name, and dropping one row must not drop the
+    # other. ``drops`` stays bare-name for display and the SGP tie-break lookup.
+    drop_keys = {p.player_key for p in dropset}
+    drop_names = sorted(p.name for p in dropset)
+    survivors = [p for p in pool if p.player_key not in drop_keys]
     dropped_hitter = any(p.player_type != PlayerType.PITCHER for p in dropset)
     dropped_pitcher = any(p.player_type == PlayerType.PITCHER for p in dropset)
 
@@ -285,8 +291,8 @@ def _make_plan(
     else:
         ps = base_ps
 
-    active_names = {a.name for a in h_assign} | {s.name for s in ps}
-    benched = [p for p in survivors if p.name not in active_names]
+    active_keys = {a.player.player_key for a in h_assign} | {s.player.player_key for s in ps}
+    benched = [p for p in survivors if p.player_key not in active_keys]
     if len(benched) > bn_slots:
         return None  # infeasible: can't bench everyone left over
 
@@ -307,12 +313,12 @@ def _make_plan(
             team_sds=team_sds,
         )
     except KeyError as exc:
-        logger.warning("IL plan band failed for drop %s: %s", sorted(drop_names), exc)
+        logger.warning("IL plan band failed for drop %s: %s", drop_names, exc)
         return None
 
-    moves = _build_moves(roster, pool, h_assign, ps, drop_names)
+    moves = _build_moves(roster, pool, h_assign, ps, drop_keys)
     return MovePlan(
-        drops=sorted(drop_names),
+        drops=drop_names,
         moves=moves,
         delta_roto=band.mean,
         band=band.to_dict(),

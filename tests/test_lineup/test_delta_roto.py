@@ -94,7 +94,7 @@ class TestComputeDeltaRoto:
         ]
 
         result = compute_delta_roto(
-            drop_name="Hitter A",
+            drop_key="Hitter A::hitter",
             add_player=add_player,
             user_roster=roster,
             projected_standings=_projected(standings),
@@ -202,7 +202,7 @@ class TestComputeDeltaRoto:
         team_sds["User"][Category.SB] = 10.0
         team_sds["Rival"][Category.SB] = 10.0
         result = compute_delta_roto(
-            drop_name="Drop",
+            drop_key="Drop::hitter",
             add_player=add_hitter,
             user_roster=roster,
             projected_standings=_projected(projected_standings),
@@ -265,7 +265,7 @@ class TestComputeDeltaRoto:
         drop_hitter = _make_hitter("Drop", r=0, hr=0, rbi=0, sb=20, h=0, ab=100)
         add_hitter = _make_hitter("Add", r=0, hr=0, rbi=0, sb=10, h=0, ab=100)
         result = compute_delta_roto(
-            drop_name="Drop",
+            drop_key="Drop::hitter",
             add_player=add_hitter,
             user_roster=[drop_hitter],
             projected_standings=_projected(projected_standings),
@@ -311,7 +311,7 @@ class TestComputeDeltaRoto:
         drop_hitter = _make_hitter("Drop", r=10, hr=5, rbi=15, sb=5, h=20, ab=80)
         add_hitter = _make_hitter("Add", r=20, hr=8, rbi=25, sb=3, h=25, ab=80)
         result = compute_delta_roto(
-            drop_name="Drop",
+            drop_key="Drop::hitter",
             add_player=add_hitter,
             user_roster=[drop_hitter],
             projected_standings=_projected(projected_standings),

@@ -84,7 +84,7 @@ def score_swap(
 
 
 def compute_delta_roto(
-    drop_name: str,
+    drop_key: str,
     add_player: Player,
     user_roster: list[Player],
     projected_standings: ProjectedStandings,
@@ -101,7 +101,9 @@ def compute_delta_roto(
     silently fall back to integer roto by forgetting the argument.
 
     Args:
-        drop_name: roster player to drop.
+        drop_key: :attr:`Player.player_key` (``name::player_type``) of the
+            roster player to drop. Keyed rather than bare-named so a two-way
+            player's hitter and pitcher rows resolve independently.
         add_player: Player to add.
         user_roster: current roster (used to resolve the dropped player's ROS).
         projected_standings: end-of-season stats for all teams.
@@ -110,14 +112,14 @@ def compute_delta_roto(
             for rank-based. Required keyword -- no default.
 
     Raises:
-        ValueError: if drop_name is not found on the roster.
+        ValueError: if drop_key is not found on the roster.
     """
     from fantasy_baseball.scoring import score_roto_dict
-    from fantasy_baseball.trades.evaluate import build_swap_standings, find_player_by_name
+    from fantasy_baseball.trades.evaluate import build_swap_standings
 
-    dropped = find_player_by_name(drop_name, user_roster)
+    dropped = next((p for p in user_roster if p.player_key == drop_key), None)
     if dropped is None:
-        raise ValueError(f"Player '{drop_name}' not found on roster")
+        raise ValueError(f"Player key '{drop_key}' not found on roster")
 
     all_before, all_after = build_swap_standings(
         dropped, add_player, projected_standings, team_name
@@ -205,13 +207,8 @@ def _swap_sets(
     if before_players is after_players:
         # Identity split (the legacy anchor rebuilding its own row).
         return [], []
-    # Function-local like this module's other trades.* imports:
-    # multi_trade imports delta_roto lazily, so a top-level import here
-    # would half-close an import cycle.
-    from fantasy_baseball.trades.multi_trade import player_key
-
-    before_keyed = [(player_key(p), p) for p in before_players]
-    after_keyed = [(player_key(p), p) for p in after_players]
+    before_keyed = [(p.player_key, p) for p in before_players]
+    after_keyed = [(p.player_key, p) for p in after_players]
     before_keys = {k for k, _ in before_keyed}
     after_keys = {k for k, _ in after_keyed}
     in_players = [p for k, p in after_keyed if k not in before_keys]
@@ -556,7 +553,7 @@ def compute_delta_roto_band(
 
 
 def compute_one_for_one_band(
-    drop_name: str,
+    drop_key: str,
     add_player: Player,
     active_players: list[Player],
     field_stats: Mapping[str, CategoryStats],
@@ -566,14 +563,18 @@ def compute_one_for_one_band(
     projected_standings: ProjectedStandings,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
 ) -> DeltaRotoBand:
-    """Band for a one-for-one swap: drop ``drop_name``, add ``add_player``.
+    """Band for a one-for-one swap: drop ``drop_key``, add ``add_player``.
+
+    ``drop_key`` is the dropped player's :attr:`Player.player_key`
+    (``name::player_type``), so a two-way player's hitter and pitcher rows are
+    swapped independently rather than both leaving on a bare-name match.
 
     Thin wrapper that builds the before/after rosters and delegates to
     :func:`compute_delta_roto_band`. The band's ``mean`` equals
-    ``compute_delta_roto(drop_name, add_player, ...).total``.
+    ``compute_delta_roto(drop_key, add_player, ...).total``.
     """
     before = list(active_players)
-    after = [p for p in active_players if p.name != drop_name] + [add_player]
+    after = [p for p in active_players if p.player_key != drop_key] + [add_player]
     return compute_delta_roto_band(
         before,
         after,

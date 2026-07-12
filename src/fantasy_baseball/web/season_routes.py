@@ -473,14 +473,12 @@ def _optimize_one_side(
     default to 1.0 mid-season would under-displace the worst active arm and
     make the trade-builder zones disagree with the dashboard.
     """
-    from fantasy_baseball.trades.multi_trade import player_key
-
     out: dict[str, str] = {}
 
     # IL passthrough.
     for p in roster:
         if p.selected_position in il_slots:
-            out[player_key(p)] = "IL"
+            out[p.player_key] = "IL"
 
     hitters = [
         p
@@ -522,20 +520,20 @@ def _optimize_one_side(
             slot_label = f"{base}{slot_counters[base]}"
         else:
             slot_label = base
-        out[player_key(a.player)] = slot_label
-        assigned_hitter_keys.add(player_key(a.player))
+        out[a.player.player_key] = slot_label
+        assigned_hitter_keys.add(a.player.player_key)
     for p in hitters:
-        if player_key(p) not in assigned_hitter_keys:
-            out[player_key(p)] = "BN"
+        if p.player_key not in assigned_hitter_keys:
+            out[p.player_key] = "BN"
 
     n_pslots = roster_slots.get("P", 9)
     for i, starter in enumerate(pitcher_starters[:n_pslots]):
         # `starter` is a PitcherStarter dataclass — has a .player attribute.
         target = starter.player if hasattr(starter, "player") else starter
         slot = f"P{i + 1}" if n_pslots > 1 else "P"
-        out[player_key(target)] = slot
+        out[target.player_key] = slot
     for p in pitcher_bench:
-        out[player_key(p)] = "BN"
+        out[p.player_key] = "BN"
 
     return out
 
@@ -965,7 +963,7 @@ def register_routes(app: Flask) -> None:
 
             for group in results:
                 opp_roster_for_group = opp_rosters.get(group["opponent"], [])
-                opp_by_key = {f"{p.name}::{p.player_type}": p for p in opp_roster_for_group}
+                opp_by_key = {p.player_key: p for p in opp_roster_for_group}
                 for cand in group["candidates"]:
                     try:
                         receive_player = opp_by_key.get(cand["receive_key"])
@@ -973,7 +971,7 @@ def register_routes(app: Flask) -> None:
                             continue
                         field_stats = projected_standings.field_stats(config.team_name)
                         band = compute_one_for_one_band(
-                            drop_name=cand["send"],
+                            drop_key=cand["send_key"],
                             add_player=receive_player,
                             active_players=hart_roster,
                             field_stats=field_stats,
@@ -1150,7 +1148,6 @@ def register_routes(app: Flask) -> None:
             TradeProposal,
             _can_roster_after,
             build_waiver_pool,
-            player_key,
         )
 
         data = request.get_json(silent=True) or {}
@@ -1202,8 +1199,8 @@ def register_routes(app: Flask) -> None:
         )
 
         # Resolve key lists into Player objects for the post-trade rosters.
-        my_idx = {player_key(p): p for p in hart_roster}
-        opp_idx = {player_key(p): p for p in opp_rosters[opponent]}
+        my_idx = {p.player_key: p for p in hart_roster}
+        opp_idx = {p.player_key: p for p in opp_rosters[opponent]}
         try:
             sent = [my_idx[k] for k in proposal.send]
             received = [opp_idx[k] for k in proposal.receive]
@@ -1213,18 +1210,18 @@ def register_routes(app: Flask) -> None:
         except KeyError as exc:
             return jsonify({"ok": False, "reason": f"Unknown player key: {exc}"})
 
-        sent_keys = {player_key(p) for p in sent}
-        received_keys = {player_key(p) for p in received}
-        my_drop_keys = {player_key(p) for p in my_drops_p}
-        opp_drop_keys = {player_key(p) for p in opp_drops_p}
+        sent_keys = {p.player_key for p in sent}
+        received_keys = {p.player_key for p in received}
+        my_drop_keys = {p.player_key for p in my_drops_p}
+        opp_drop_keys = {p.player_key for p in opp_drops_p}
 
         hart_post = (
-            [p for p in hart_roster if player_key(p) not in (sent_keys | my_drop_keys)]
+            [p for p in hart_roster if p.player_key not in (sent_keys | my_drop_keys)]
             + received
             + my_adds_p
         )
         opp_post = [
-            p for p in opp_rosters[opponent] if player_key(p) not in (received_keys | opp_drop_keys)
+            p for p in opp_rosters[opponent] if p.player_key not in (received_keys | opp_drop_keys)
         ] + sent
 
         # Legality check: size-only check using _can_roster_after, mirroring
@@ -1872,9 +1869,14 @@ def register_routes(app: Flask) -> None:
             drop_name = worst_by_pos.get(target_pos)
             if not drop_name:
                 continue
+            # worst_by_pos is keyed by pool position, so the bucket fixes the
+            # drop's player_type (SP/RP -> pitcher, else hitter). Rebuild the
+            # canonical player_key that a two-way name would leave ambiguous.
+            drop_type = PlayerType.PITCHER if target_pos in ("SP", "RP") else PlayerType.HITTER
+            drop_key = f"{drop_name}::{drop_type}"
             try:
                 dr = compute_delta_roto(
-                    drop_name=drop_name,
+                    drop_key=drop_key,
                     add_player=fa_player,
                     user_roster=user_roster,
                     projected_standings=projected_standings,

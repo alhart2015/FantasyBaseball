@@ -285,7 +285,7 @@ class TestBuildMoves:
             pool=pool,
             hitter_assignments=[],
             pitcher_starters=pitcher_starters,
-            dropped_names={"Scrub"},
+            dropped_keys={scrub.player_key},
         )
         by_name = {m.name: m for m in moves}
         # Webb activates from BN -> P

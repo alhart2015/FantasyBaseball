@@ -97,17 +97,12 @@ class MultiTradeResult:
     opp_band: dict[str, float | str] | None = None
 
 
-def player_key(player: Player) -> str:
-    """Canonical player identifier: ``name::player_type`` (hitter|pitcher)."""
-    return f"{player.name}::{player.player_type}"
-
-
 def _non_il_size(roster: list[Player]) -> int:
     return sum(1 for p in roster if p.selected_position not in IL_SLOTS)
 
 
 def _index_roster(roster: list[Player]) -> dict[str, Player]:
-    return {player_key(p): p for p in roster}
+    return {p.player_key: p for p in roster}
 
 
 def _resolve_keys(keys: list[str], index: dict[str, Player]) -> list[Player]:
@@ -119,7 +114,7 @@ def _resolve_keys(keys: list[str], index: dict[str, Player]) -> list[Player]:
 
 def _current_active_set(roster: list[Player]) -> set[str]:
     """Keys of roster players not currently on BN, IL, IL+, DL, or DL+."""
-    return {player_key(p) for p in roster if p.selected_position not in BENCH_SLOTS}
+    return {p.player_key for p in roster if p.selected_position not in BENCH_SLOTS}
 
 
 def evaluate_multi_trade(
@@ -208,8 +203,8 @@ def evaluate_multi_trade(
     # an active set when they want a meaningful delta.
     all_mine_by_key = {
         **my_idx,
-        **{player_key(p): p for p in received},
-        **{player_key(p): p for p in my_adds},
+        **{p.player_key: p for p in received},
+        **{p.player_key: p for p in my_adds},
     }
     before_mine = _current_active_set(hart_roster)
     after_mine = set(proposal.my_active_ids)
@@ -223,7 +218,7 @@ def evaluate_multi_trade(
     # otherwise fall back to the roster-level computation (today's behavior).
     all_opp_by_key = {
         **opp_idx,
-        **{player_key(p): p for p in sent},
+        **{p.player_key: p for p in sent},
     }
     before_opp = _current_active_set(opp_rosters[proposal.opponent])
 
@@ -238,8 +233,8 @@ def evaluate_multi_trade(
         # vacate active slots and sent slides in. Bench-only drops are
         # treated as no-ops on opp's stat line (consistent with the band's
         # view, since bench players never contribute to projected_standings).
-        received_keys = {player_key(p) for p in received}
-        sent_keys = {player_key(p) for p in sent}
+        received_keys = {p.player_key for p in received}
+        sent_keys = {p.player_key for p in sent}
         opp_drop_keys = set(proposal.opp_drops)
         after_opp = (before_opp - received_keys - opp_drop_keys) | sent_keys
         opp_leaving = [all_opp_by_key[k] for k in before_opp - after_opp if k in all_opp_by_key]
@@ -399,7 +394,7 @@ def _can_roster_after(
     """Size-only legality check for a multi-player proposal.
 
     ``roster`` is the current roster including IL players.
-    ``removals`` is a list of ``player_key()`` strings for players leaving
+    ``removals`` is a list of :attr:`Player.player_key` strings for players leaving
     (traded away or dropped).  ``additions`` is a list of Player objects
     coming in (traded in or picked up from waivers).
 
@@ -434,11 +429,11 @@ def build_waiver_pool(
     [{...}], "pitchers": [{...}]}``. Each entry is in the format accepted
     by :meth:`Player.from_dict`.
 
-    Returned dict is keyed by :func:`player_key` (``"name::player_type"``).
+    Returned dict is keyed by :attr:`Player.player_key` (``"name::player_type"``).
     """
-    rostered = {player_key(p) for p in hart_roster}
+    rostered = {p.player_key for p in hart_roster}
     for roster in opp_rosters.values():
-        rostered |= {player_key(p) for p in roster}
+        rostered |= {p.player_key for p in roster}
 
     pool: dict[str, Player] = {}
     for bucket, player_type in (("hitters", "hitter"), ("pitchers", "pitcher")):
@@ -446,7 +441,7 @@ def build_waiver_pool(
             payload = dict(d)
             payload.setdefault("player_type", player_type)
             player = Player.from_dict(payload)
-            key = player_key(player)
+            key = player.player_key
             if key in rostered:
                 continue
             pool[key] = player
