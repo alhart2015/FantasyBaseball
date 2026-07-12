@@ -77,9 +77,12 @@ def test_apply_labels_classifies_hot_above_p90_cold_below_p10() -> None:
     conn = get_connection(":memory:")
     _seed_population(conn)
     apply_labels(conn, season_set="2025")
+    # Sample a 'high'-bucket threshold: hot is gated to the high PT bucket
+    # (issue #173), so p90 only produces hot labels there.
     threshold = conn.execute(
         "SELECT category, window_days, pt_bucket, p10, p90 "
-        "FROM thresholds WHERE season_set = '2025' AND category = 'r' LIMIT 1"
+        "FROM thresholds WHERE season_set = '2025' AND category = 'r' "
+        "AND pt_bucket = 'high' LIMIT 1"
     ).fetchone()
     cat, win, bucket, p10, p90 = threshold
     sample = conn.execute(
@@ -100,6 +103,35 @@ def test_apply_labels_classifies_hot_above_p90_cold_below_p10() -> None:
             assert label == "cold", f"r={r_val} <= p10={p10} but label={label}"
         else:
             assert label == "neutral"
+
+
+def test_hot_only_fires_in_high_pt_bucket() -> None:
+    """Issue #173: a window below the 'high' PT bucket (20+ PA) must never be
+    labeled hot, even when its count clears p90 -- otherwise a player who
+    homers once then sits reads as hot. Cold/neutral are unaffected."""
+    conn = get_connection(":memory:")
+    _seed_population_with_projections(conn)
+    apply_labels(conn, season_set="2025")
+
+    def _count(where: str) -> int:
+        return conn.execute(
+            f"""
+            SELECT COUNT(*) FROM hitter_streak_labels l
+            JOIN hitter_windows w
+              ON w.player_id = l.player_id AND w.window_end = l.window_end
+             AND w.window_days = l.window_days
+            WHERE {where}
+            """
+        ).fetchone()[0]
+
+    # Sub-high windows exist in the fixture (3-day windows are ~12 PA = mid),
+    # so the gate has something to act on -- the ==0 below isn't vacuous.
+    assert _count("l.category = 'r' AND w.pt_bucket <> 'high'") > 0
+    # No hot label (any category, any cold_method) sits on a non-high window.
+    # Pre-#173 these mid windows were hot (r=0 >= p90=0); the gate suppresses them.
+    assert _count("l.label = 'hot' AND w.pt_bucket <> 'high'") == 0
+    # Hot still fires in the high bucket (the gate suppresses, doesn't erase).
+    assert _count("l.label = 'hot' AND w.pt_bucket = 'high'") > 0
 
 
 def test_apply_labels_is_idempotent() -> None:

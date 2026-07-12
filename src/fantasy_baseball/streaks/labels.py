@@ -14,6 +14,9 @@ distinguishing them:
   still compute hot via the dense path; we omit them from sparse rows
   rather than fabricating a baseline).
 
+Hot (both paths) is gated to the high PT bucket (20+ PA) -- see
+`HOT_MIN_PT_BUCKET`. Cold is not gated.
+
 Idempotent: full-wipe of `hitter_streak_labels` on each call (labels are
 tied to the latest threshold + projection-rate calibration; no scoped
 delete is meaningful).
@@ -34,6 +37,15 @@ logger = logging.getLogger(__name__)
 
 DENSE_CATEGORIES: tuple[StreakCategory, ...] = ("r", "rbi", "avg")
 SPARSE_CATEGORIES: tuple[StreakCategory, ...] = ("hr", "sb")
+
+# A "hot" label only means something when the window reflects a real workload.
+# The sub-"high" PT buckets (5-19 PA) collapse the sparse-cat empirical p90 to 1,
+# so a single HR or SB reads as hot -- e.g. a player who homers once then sits
+# (issue #173). Restrict "hot" to the high (20+ PA) bucket, where the p90 is a
+# genuine top-decile count. Cold is unaffected: sparse cold is skill-relative
+# Poisson (self-guards at low PA via a ~0 expectation) and dense cold is left as
+# is. "high" is the top bucket in ``windows.PT_BUCKETS``.
+HOT_MIN_PT_BUCKET = "high"
 POISSON_PERCENTILES: tuple[tuple[str, float], ...] = (
     ("poisson_p10", 0.10),
     ("poisson_p20", 0.20),
@@ -74,7 +86,7 @@ def _apply_dense_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) -> 
                 'empirical' AS cold_method,
                 CASE
                     WHEN w.{category} IS NULL THEN 'neutral'
-                    WHEN w.{category} >= t.p90 THEN 'hot'
+                    WHEN w.pt_bucket = '{HOT_MIN_PT_BUCKET}' AND w.{category} >= t.p90 THEN 'hot'
                     WHEN w.{category} <= t.p10 THEN 'cold'
                     ELSE 'neutral'
                 END AS label
@@ -163,7 +175,10 @@ def _apply_sparse_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) ->
         ].rename(columns={"p90": "_hot_p90"})
         merged = df.merge(cat_thresholds, on=["window_days", "pt_bucket"], how="left")
         hot_p90 = merged["_hot_p90"].to_numpy(dtype=float)
-        is_hot = (~np.isnan(hot_p90)) & (counts >= hot_p90)
+        # Hot only in the high PT bucket (issue #173): sub-high buckets have p90=1,
+        # so a lone HR/SB would otherwise read as hot.
+        is_high = merged["pt_bucket"].to_numpy() == HOT_MIN_PT_BUCKET
+        is_hot = is_high & (~np.isnan(hot_p90)) & (counts >= hot_p90)
 
         for cold_method, percentile in POISSON_PERCENTILES:
             # Poisson.ppf returns the smallest k such that P(X <= k) >= percentile.
