@@ -70,13 +70,12 @@ def test_get_kv_cached(monkeypatch, tmp_path):
 def test_get_kv_on_render_requires_creds(monkeypatch):
     """On Render without creds, raise — misconfiguration should be loud.
 
-    We also stub ``_load_dotenv_if_present`` because the repo's .env
-    holds real creds for local development; without this stub the
-    dotenv loader would repopulate the env after we cleared it."""
+    No need to stub ``_load_dotenv_if_present``: ``_build_upstash_kv`` skips
+    it under pytest, so the repo's real .env can't repopulate the creds we
+    just cleared."""
     monkeypatch.setenv("RENDER", "true")
     monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
     monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
-    monkeypatch.setattr(kv_store, "_load_dotenv_if_present", lambda: None)
     with pytest.raises(RuntimeError, match="UPSTASH_REDIS_REST_URL"):
         get_kv()
 
@@ -92,7 +91,7 @@ def test_build_explicit_upstash_kv_works_off_render(monkeypatch):
     monkeypatch.delenv("RENDER", raising=False)
     monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
     monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake")
-    monkeypatch.setenv("FANTASY_ALLOW_UPSTASH_IN_TESTS", "1")
+    monkeypatch.setattr(kv_store, "_ALLOW_UPSTASH_CLIENT_IN_TESTS", True)
     kv = build_explicit_upstash_kv()
     from fantasy_baseball.data.kv_store import UpstashKVStore
 
@@ -107,10 +106,12 @@ def test_build_explicit_upstash_kv_refuses_real_client_under_pytest(monkeypatch)
     ``RENDER=true`` under ``pytest -n auto``), clobbering the live key.
 
     Fake creds are set so the guard -- not the missing-creds check -- is what
-    fires, making the assertion deterministic on machines without a ``.env``."""
+    fires, making the assertion deterministic on machines without a ``.env``.
+    The opt-in defaults off, so no setup is needed to exercise the refusal --
+    and an ambient env var cannot flip it on, which is the point."""
     monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
     monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake")
-    monkeypatch.delenv("FANTASY_ALLOW_UPSTASH_IN_TESTS", raising=False)
+    assert kv_store._ALLOW_UPSTASH_CLIENT_IN_TESTS is False
     with pytest.raises(RuntimeError, match="under pytest"):
         build_explicit_upstash_kv()
     # And get_kv() routed to remote (leaked RENDER) must not slip past it either.

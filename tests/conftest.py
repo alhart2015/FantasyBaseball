@@ -34,13 +34,14 @@ def _isolate_kv_from_prod(monkeypatch):
     because either one alone has a hole:
 
     1. **Strip ambient Upstash creds.** The repo ``.env`` holds REAL prod
-       creds. Alone this is NOT enough: ``_build_upstash_kv`` calls
-       ``_load_dotenv_if_present``, which ``setdefault``s those creds right
-       back from ``.env``. So a code path that builds an Upstash client
-       re-hydrates the creds and can still write PROD -- the documented
-       "streak flake" that clobbered remote STREAK_SCORES (team_name="t"),
-       and the META/standings clobber (last_refresh="9:00 AM") from a leaked
-       ``RENDER=true``.
+       creds, and an ambient/exported ``UPSTASH_*`` would let a code path that
+       builds an Upstash client write PROD -- the documented "streak flake"
+       that clobbered remote STREAK_SCORES (team_name="t"), and the
+       META/standings clobber (last_refresh="9:00 AM") from a leaked
+       ``RENDER=true``. (The other re-hydration route -- ``_build_upstash_kv``
+       -> ``_load_dotenv_if_present`` reloading ``.env`` -- is now closed at
+       the source: that call is skipped under pytest, and the builder refuses
+       to construct a real client anyway.)
     2. **Neutralize the RENDER gate.** ``is_remote()``/``get_kv()`` choose the
        backend purely on ``RENDER``. Deleting it forces the local SQLite store
        regardless of creds, and regardless of a module that sets
