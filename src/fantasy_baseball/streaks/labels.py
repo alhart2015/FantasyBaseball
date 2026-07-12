@@ -31,7 +31,7 @@ import numpy as np
 import pandas as pd
 from scipy.stats import poisson
 
-from fantasy_baseball.streaks.models import StreakCategory
+from fantasy_baseball.streaks.models import PtBucket, StreakCategory
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ SPARSE_CATEGORIES: tuple[StreakCategory, ...] = ("hr", "sb")
 # genuine top-decile count. Cold is unaffected: sparse cold is skill-relative
 # Poisson (self-guards at low PA via a ~0 expectation) and dense cold is left as
 # is. "high" is the top bucket in ``windows.PT_BUCKETS``.
-HOT_MIN_PT_BUCKET = "high"
+HOT_MIN_PT_BUCKET: PtBucket = "high"
 POISSON_PERCENTILES: tuple[tuple[str, float], ...] = (
     ("poisson_p10", 0.10),
     ("poisson_p20", 0.20),
