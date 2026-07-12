@@ -132,6 +132,11 @@ def test_hot_only_fires_in_high_pt_bucket() -> None:
     assert _count("l.label = 'hot' AND w.pt_bucket <> 'high'") == 0
     # Hot still fires in the high bucket (the gate suppresses, doesn't erase).
     assert _count("l.label = 'hot' AND w.pt_bucket = 'high'") > 0
+    # A would-be-hot sub-high window (r=0 clears the degenerate p90=p10=0) must be
+    # NEUTRAL, never cold -- a high count is not a cold streak. Guards against the
+    # hot gate spilling would-be-hot windows into the cold branch.
+    assert _count("l.category = 'r' AND l.label = 'cold' AND w.pt_bucket <> 'high'") == 0
+    assert _count("l.category = 'r' AND l.label = 'neutral' AND w.pt_bucket <> 'high'") > 0
 
 
 def test_apply_labels_is_idempotent() -> None:
