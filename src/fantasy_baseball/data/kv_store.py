@@ -8,15 +8,15 @@ Two backends, selected by ``RENDER=true``:
   dashboards and tests.
 
 ``get_kv()`` is the single entry point for application code and cannot
-reach Upstash off-Render: the ``RENDER`` gate is hard. Scripts that
-need to cross the local→remote boundary (``scripts/refresh_remote.py``,
-``data/kv_sync``) call ``build_explicit_upstash_kv()`` — the function
-is named for exactly the audit trail we want.
+reach Upstash off-Render: the ``RENDER`` gate is hard. Scripts that need
+to cross the local->remote boundary call ``build_explicit_upstash_kv()``
+(see its docstring for the authoritative caller list) -- the function is
+named for exactly the audit trail we want.
 
 The schema mirrors the subset of Redis the app actually uses:
 ``get/set/keys/mget`` for strings and ``hget/hset/hkeys/hgetall`` for
 hashes. If the app ever needs sorted sets, pipelines, or pub/sub the
-abstraction has to grow — today it doesn't.
+abstraction has to grow -- today it doesn't.
 """
 
 from __future__ import annotations
