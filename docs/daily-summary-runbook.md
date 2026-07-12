@@ -7,6 +7,33 @@ Render cron job that runs shortly after the morning data refresh.
 
 Entry point: `scripts/send_daily_summary.py` (function `main`).
 
+## Setup checklist (do this to turn it on)
+
+The feature is merged but dormant until these are done. Details for each step
+are in the sections below.
+
+1. **Resend** -- create an account, verify a sender domain, and generate an API
+   key. The `from_address` you use must be on the verified domain.
+2. **`config/league.yaml`** -- set the `summary` block (already scaffolded):
+   ```yaml
+   summary:
+     recipients:
+       - "you@example.com"          # who gets the email (add leaguemates later)
+     from_address: "digest@your-verified-domain.com"
+   ```
+3. **Render cron job** -- create one running `python scripts/send_daily_summary.py`,
+   scheduled ~15 min after your morning refresh cron (see "Render cron job").
+4. **Env vars on the cron** -- `RESEND_API_KEY`, `YAHOO_OAUTH_JSON`,
+   `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN` (see "Required
+   environment variables").
+5. **Smoke test first** -- run the manual local test (bottom of this doc) pointed
+   at your own address before wiring the cron.
+
+Note on the first run: the standings / eRoto / Monte Carlo sections show current
+values with `--` in the overnight-change column until a second run exists to diff
+against (the snapshot is written after each successful send). Deltas populate
+from day two.
+
 ## How it works
 
 1. Flip to remote mode: `main()` sets `os.environ["RENDER"] = "true"` at runtime
