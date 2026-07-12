@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from enum import StrEnum
+from functools import cached_property
 from typing import Any
 
 from fantasy_baseball.models.positions import IL_SLOTS, Position
@@ -12,6 +13,17 @@ from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calc
 class PlayerType(StrEnum):
     HITTER = "hitter"
     PITCHER = "pitcher"
+
+
+def make_player_key(name: str, player_type: PlayerType | str) -> str:
+    """Canonical ``name::player_type`` id (e.g. ``"Shohei Ohtani::hitter"``).
+
+    The single definition of the key format so boundary sites that hold a
+    ``(name, player_type)`` pair but no ``Player`` -- e.g. trade-candidate dict
+    rows whose ``send_key`` feeds the deltaRoto band lookup -- build byte-for-byte
+    the same key :attr:`Player.player_key` produces, with no drift risk.
+    """
+    return f"{name}::{player_type}"
 
 
 @dataclass
@@ -205,6 +217,27 @@ class Player:
     selected_position: Position | None = None
     status: str = ""
     pace: dict[str, Any] | None = None
+
+    # ------------------------------------------------------------------
+    # Identity
+    # ------------------------------------------------------------------
+
+    @cached_property
+    def player_key(self) -> str:
+        """Canonical identity ``name::player_type`` (e.g. ``"Shohei Ohtani::hitter"``).
+
+        Disambiguates a two-way player, who is rostered as two separate rows --
+        a hitter and a pitcher -- that share a name. Keying on ``name`` alone
+        moves both rows together; every roster/lineup/swap layer must key on
+        this instead. Single source of truth for the ``name::player_type`` id
+        that used to be hand-rolled across the codebase.
+
+        Cached because the optimizer accesses it thousands of times over the
+        same stable ``full_roster`` objects per solve; ``name``/``player_type``
+        are never mutated in place (edits go through ``dataclasses.replace``,
+        which builds a fresh instance with an empty cache).
+        """
+        return make_player_key(self.name, self.player_type)
 
     # ------------------------------------------------------------------
     # Constructor

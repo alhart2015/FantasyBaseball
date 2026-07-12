@@ -112,4 +112,4 @@ def _pid(b: BenchBody) -> str:
     """Player-id for the deterministic tie-break (ascending). Falls back to the
     name::player_type id when yahoo_id is absent (never bare name)."""
     yid = b.player.yahoo_id
-    return str(yid) if yid is not None else f"{b.player.name}::{b.player.player_type}"
+    return str(yid) if yid is not None else b.player.player_key

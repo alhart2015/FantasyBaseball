@@ -6,6 +6,7 @@ from fantasy_baseball.lineup.optimizer import (
     HitterAssignment,
     PitcherStarter,
     _TeamContext,
+    apply_lineup_to_roster,
     optimize_hitter_lineup,
     optimize_pitcher_lineup,
     team_roto_total,
@@ -849,3 +850,25 @@ class TestTeamRotoTotalUsesUserYtdComponents:
         )
         assert [a.name for a in legacy] == [a.name for a in explicit_none]
         assert legacy[0].roto_delta == pytest.approx(explicit_none[0].roto_delta)
+
+
+def test_apply_lineup_to_roster_two_way_rows_get_independent_slots():
+    """A two-way player is two rows (hitter + pitcher) sharing a name; keying
+    on player_key lets each row take its own slot. Bare-name keying (pre-#190)
+    collapsed the two active_slots entries into one, forcing both rows into a
+    single slot."""
+    bat = _hitter("Shohei Ohtani", ["OF"])
+    arm = _pitcher("Shohei Ohtani", ["P"])
+    other = _hitter("Someone Else", ["1B"])
+    roster = [bat, arm, other]
+
+    result = apply_lineup_to_roster(
+        roster,
+        active_slots={bat.player_key: Position.OF, arm.player_key: Position.P},
+        bench_keys={other.player_key},
+    )
+
+    by_key = {p.player_key: p for p in result}
+    assert by_key[bat.player_key].selected_position == Position.OF
+    assert by_key[arm.player_key].selected_position == Position.P
+    assert by_key[other.player_key].selected_position == Position.BN

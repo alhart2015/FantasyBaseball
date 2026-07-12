@@ -1179,7 +1179,7 @@ class TestWorstRosterByPosition:
             _hitter("Weak", ["OF"], r=40, hr=5, rbi=40, sb=2, avg=0.230, ab=300, h=69),
         ]
         worst = worst_roster_by_position(roster)
-        assert worst["OF"] == "Weak"
+        assert worst["OF"].name == "Weak"
 
     def test_multi_position_player_ranked_at_every_position(self):
         from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
@@ -1189,8 +1189,8 @@ class TestWorstRosterByPosition:
             _hitter("SSOnly", ["SS"], r=100, hr=30, rbi=100, sb=20, avg=0.290, ab=500, h=145),
         ]
         worst = worst_roster_by_position(roster)
-        assert worst["2B"] == "Dual"  # only 2B-eligible player
-        assert worst["SS"] == "Dual"  # lower SGP than SSOnly
+        assert worst["2B"].name == "Dual"  # only 2B-eligible player
+        assert worst["SS"].name == "Dual"  # lower SGP than SSOnly
 
     def test_pitchers_bucket_by_saves_threshold(self):
         from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
@@ -1202,15 +1202,16 @@ class TestWorstRosterByPosition:
             _pitcher("WeakSP", ["P"], ip=120, sv=0, k=90, w=5, era=4.80),
         ]
         worst = worst_roster_by_position(roster)
-        assert worst["RP"] == "WeakCloser"
-        assert worst["SP"] == "WeakSP"
+        assert worst["RP"].name == "WeakCloser"
+        assert worst["SP"].name == "WeakSP"
 
     def test_positions_with_no_eligible_player_are_absent(self):
         from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
 
         roster = [_hitter("OFGuy", ["OF"], r=50, hr=10, rbi=50, sb=5, avg=0.250, ab=400, h=100)]
         worst = worst_roster_by_position(roster)
-        assert worst == {"OF": "OFGuy"}  # no C/1B/2B/3B/SS/SP/RP keys
+        assert list(worst.keys()) == ["OF"]  # no C/1B/2B/3B/SS/SP/RP keys
+        assert worst["OF"].name == "OFGuy"
 
 
 class TestFATargetPositions:
@@ -1432,11 +1433,11 @@ class TestSgpOverridesFlowThrough:
         from fantasy_baseball.lineup.roster_audit import worst_roster_by_position
 
         speedy, slugger = self._speed_and_power()
-        assert worst_roster_by_position([speedy, slugger])["OF"] == "Slugger"
+        assert worst_roster_by_position([speedy, slugger])["OF"].name == "Slugger"
         worst = worst_roster_by_position(
             [speedy, slugger], denoms=get_sgp_denominators({"SB": 100.0})
         )
-        assert worst["OF"] == "Speedy"
+        assert worst["OF"].name == "Speedy"
 
     def test_audit_roster_override_changes_player_sgp(self):
         roster = [

@@ -132,20 +132,26 @@ class _TeamContext:
 def apply_lineup_to_roster(
     full_roster: list[Player],
     active_slots: dict[str, Position],
-    bench_names: set[str],
+    bench_keys: set[str],
 ) -> list[Player]:
     """Return a copy of ``full_roster`` with selected_position overridden.
 
-    - Names in ``active_slots`` -> selected_position set to the mapped Position.
-    - Names in ``bench_names`` -> selected_position set to Position.BN.
+    ``active_slots`` and ``bench_keys`` are keyed on :attr:`Player.player_key`
+    (``name::player_type``), NOT bare name -- a two-way player is rostered as a
+    hitter row and a pitcher row that share a name, and keying on name alone
+    would move both rows together (and, when both sides assign the same name,
+    silently overwrite one slot with the other).
+
+    - Keys in ``active_slots`` -> selected_position set to the mapped Position.
+    - Keys in ``bench_keys`` -> selected_position set to Position.BN.
     - All other players (IL, opposite type) unchanged.
     """
     result: list[Player] = []
     for p in full_roster:
-        if p.name in bench_names:
+        if p.player_key in bench_keys:
             result.append(dataclasses.replace(p, selected_position=Position.BN))
-        elif p.name in active_slots:
-            result.append(dataclasses.replace(p, selected_position=active_slots[p.name]))
+        elif p.player_key in active_slots:
+            result.append(dataclasses.replace(p, selected_position=active_slots[p.player_key]))
         else:
             result.append(p)
     return result
@@ -189,15 +195,15 @@ def _score_hitter_subset(
 ) -> float:
     hypothetical = apply_lineup_to_roster(
         ctx.full_roster,
-        active_slots={p.name: slot for p, slot in zip(subset, assignment, strict=False)},
-        bench_names={h.name for h in bench},
+        active_slots={p.player_key: slot for p, slot in zip(subset, assignment, strict=False)},
+        bench_keys={h.player_key for h in bench},
     )
     return team_roto_total(hypothetical, ctx)
 
 
 def _pitcher_active_slots(subset: list[Player]) -> dict[str, Position]:
     return {
-        p.name: next((pos for pos in p.positions if pos in PITCHER_ELIGIBLE), Position.P)
+        p.player_key: next((pos for pos in p.positions if pos in PITCHER_ELIGIBLE), Position.P)
         for p in subset
     }
 
@@ -214,7 +220,7 @@ def _score_pitcher_subset(
     (same hitters, IL pitchers, ``league_context``), so the total is a pure
     function of *which* pitchers are active: benched pitchers contribute
     nothing and the IL/hitter halves are constant. The optional ``memo``
-    caches results keyed on the active-pitcher name set, so the per-starter
+    caches results keyed on the active-pitcher key set, so the per-starter
     ``roto_delta`` loop -- which re-scores subsets the selection loop already
     scored, with heavy overlap across starters -- does not re-run the
     expensive IL pair-swap pool model
@@ -223,13 +229,13 @@ def _score_pitcher_subset(
     """
     key: frozenset[str] | None = None
     if memo is not None:
-        key = frozenset(p.name for p in subset)
+        key = frozenset(p.player_key for p in subset)
         if key in memo:
             return memo[key]
     hypothetical = apply_lineup_to_roster(
         ctx.full_roster,
         _pitcher_active_slots(subset),
-        {p.name for p in bench},
+        {p.player_key for p in bench},
     )
     total = team_roto_total(hypothetical, ctx)
     if memo is not None and key is not None:
@@ -591,12 +597,12 @@ def combined_team_roto(
     team_YTD + ROS scale of the opponent rows. See
     :func:`optimize_hitter_lineup`.
     """
-    active_slots: dict[str, Position] = {a.name: a.slot for a in hitter_lineup}
+    active_slots: dict[str, Position] = {a.player.player_key: a.slot for a in hitter_lineup}
     active_slots.update(_pitcher_active_slots([s.player for s in pitcher_starters]))
-    bench_names = {h.name for h in hitters} - {a.name for a in hitter_lineup} | {
-        p.name for p in pitcher_bench
+    bench_keys = {h.player_key for h in hitters} - {a.player.player_key for a in hitter_lineup} | {
+        p.player_key for p in pitcher_bench
     }
-    hypothetical = apply_lineup_to_roster(roster, active_slots, bench_names)
+    hypothetical = apply_lineup_to_roster(roster, active_slots, bench_keys)
     user_ytd = _resolve_user_ytd_components(actual_standings, team_name)
     ctx = _TeamContext(
         roster,
