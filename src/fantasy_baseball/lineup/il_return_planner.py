@@ -120,13 +120,16 @@ def _build_pool(roster: list[Player], activating_il: list[Player]) -> list[Playe
     Activating players get their IL signals cleared. Unchecked IL players
     stay parked and are excluded.
     """
-    activating_names = {p.name for p in activating_il}
+    # Key on player_key, matching _make_plan/_build_moves: a two-way player is
+    # two rows sharing a name, so activating his pitcher row must not clear the
+    # IL signals on (or dedup away) his separate hitter row.
+    activating_keys = {p.player_key for p in activating_il}
     counted = [p for p in roster if _counts_against_cap(p)]
-    counted_names = {p.name for p in counted}
-    extra = [p for p in activating_il if p.name not in counted_names]
+    counted_keys = {p.player_key for p in counted}
+    extra = [p for p in activating_il if p.player_key not in counted_keys]
     pool: list[Player] = []
     for p in counted + extra:
-        pool.append(_activate(p) if p.name in activating_names else p)
+        pool.append(_activate(p) if p.player_key in activating_keys else p)
     return pool
 
 
@@ -256,9 +259,9 @@ def _make_plan(
     # (hitter + pitcher) sharing a name, and dropping one row must not drop the
     # other. ``drops`` stays bare-name for display and the SGP tie-break lookup.
     drop_keys = {p.player_key for p in dropset}
-    # Dedup names (a two-way dropset holds two rows sharing one name) so
-    # ``drops`` and the SGP tie-break don't double-count -- matches the pre-#190
-    # set semantics now that the internal filtering keys on player_key.
+    # Dedup names (a two-way dropset holds two rows sharing one name) so the
+    # ``drops`` display list doesn't render one name twice -- matches the
+    # pre-#190 set semantics now that the internal filtering keys on player_key.
     drop_names = sorted({p.name for p in dropset})
     survivors = [p for p in pool if p.player_key not in drop_keys]
     dropped_hitter = any(p.player_type != PlayerType.PITCHER for p in dropset)
@@ -399,7 +402,10 @@ def plan_il_returns(
     if overflow >= 3:
         droppable = sorted(pool, key=lambda p: _sgp(p, denoms))[:12]
 
-    scored: list[MovePlan] = []
+    # Pair each plan with the total SGP of the bodies it drops, computed from
+    # the dropset itself (exact for a two-way player's two rows -- a bare-name
+    # lookup keyed on the deduped display names would collide and undercount).
+    scored: list[tuple[MovePlan, float]] = []
     for dropset in combinations(droppable, overflow):
         plan = _make_plan(
             roster,
@@ -417,7 +423,7 @@ def plan_il_returns(
             band_reference,
         )
         if plan is not None:
-            scored.append(plan)
+            scored.append((plan, sum(_sgp(p, denoms) for p in dropset)))
 
     if not scored:
         return IlReturnPlanResult(
@@ -429,15 +435,10 @@ def plan_il_returns(
         )
 
     # Rank by deltaRoto; tie-break by dropping the lower-SGP body.
-    name_to_player = {p.name: p for p in pool}
-
-    def _dropped_sgp(plan: MovePlan) -> float:
-        return sum(_sgp(name_to_player[n], denoms) for n in plan.drops if n in name_to_player)
-
-    scored.sort(key=lambda p: (p.delta_roto, -_dropped_sgp(p)), reverse=True)
+    scored.sort(key=lambda item: (item[0].delta_roto, -item[1]), reverse=True)
     return IlReturnPlanResult(
         activating=activating_names,
         capacity=capacity,
         overflow=overflow,
-        plans=scored[:max_plans],
+        plans=[plan for plan, _ in scored[:max_plans]],
     )

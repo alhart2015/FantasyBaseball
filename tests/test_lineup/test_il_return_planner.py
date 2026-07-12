@@ -242,6 +242,31 @@ class TestBuildPool:
         active_p = next(p for p in pool if p.name == "Active")
         assert active_p.selected_position == Position.P
 
+    def test_two_way_activation_does_not_touch_the_other_row(self):
+        """A two-way player is two rows sharing a name; activating his pitcher
+        row from IL must not clear the IL signals on -- or dedup away -- his
+        active hitter row. Pre-#190 _build_pool keyed on bare name and did both
+        (the pitcher row was excluded and the hitter row wrongly activated)."""
+        bat = _hitter("Two Way", ["OF"], slot="OF")
+        arm = _pitcher("Two Way", slot="IL", status="IL15")
+        other = _pitcher("Other", slot="P")
+        roster = [bat, arm, other]
+
+        pool = _build_pool(roster, activating_il=[arm])
+
+        # Both rows survive -- the pitcher row was not deduped away by name.
+        assert {p.player_key for p in pool} == {
+            bat.player_key,
+            arm.player_key,
+            other.player_key,
+        }
+        # The hitter row keeps its active slot (NOT activated).
+        bat_p = next(p for p in pool if p.player_key == bat.player_key)
+        assert bat_p.selected_position == Position.OF
+        # The pitcher row is the one activated (IL signals cleared).
+        arm_p = next(p for p in pool if p.player_key == arm.player_key)
+        assert arm_p.status == "" and arm_p.selected_position is None
+
 
 class TestSolveLineup:
     def test_solver_returns_active_and_bench(self):
