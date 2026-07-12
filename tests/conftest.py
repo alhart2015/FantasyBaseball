@@ -29,26 +29,36 @@ class _KVFakeRedis(fakeredis.FakeRedis):
 
 
 @pytest.fixture(autouse=True)
-def _strip_ambient_upstash_creds(monkeypatch):
-    """Fail-closed default: no test reaches PROD Upstash via ambient creds.
+def _isolate_kv_from_prod(monkeypatch):
+    """Fail-closed default: no test can reach PROD Upstash. Two layers,
+    because either one alone has a hole:
 
-    The repo ``.env`` holds REAL prod Upstash creds. The first time any
-    test builds an Upstash client, ``kv_store._load_dotenv_if_present``
-    ``setdefault``s those creds into ``os.environ`` for the rest of the
-    process. After that, any later test whose code path reaches
-    ``_push_streak_scores_to_remote`` (whose guard reads ``os.environ``
-    directly) or otherwise builds an Upstash client would write to PROD
-    -- the documented "streak flake" that clobbered remote STREAK_SCORES
-    with a fixture payload (team_name="t").
+    1. **Strip ambient Upstash creds.** The repo ``.env`` holds REAL prod
+       creds. Alone this is NOT enough: ``_build_upstash_kv`` calls
+       ``_load_dotenv_if_present``, which ``setdefault``s those creds right
+       back from ``.env``. So a code path that builds an Upstash client
+       re-hydrates the creds and can still write PROD -- the documented
+       "streak flake" that clobbered remote STREAK_SCORES (team_name="t"),
+       and the META/standings clobber (last_refresh="9:00 AM") from a leaked
+       ``RENDER=true``.
+    2. **Neutralize the RENDER gate.** ``is_remote()``/``get_kv()`` choose the
+       backend purely on ``RENDER``. Deleting it forces the local SQLite store
+       regardless of creds, and regardless of a module that sets
+       ``RENDER=true`` at import time landing in an xdist worker. Resetting the
+       cached singleton discards any backend a prior leak already built as
+       Upstash so the next ``get_kv()`` rebuilds local.
 
-    Stripping the two creds at the start of EVERY test makes those guards
-    short-circuit by default. This runs before any explicitly-requested
-    fixture of the same scope, so tests that legitimately build an
-    Upstash client set their own FAKE creds via ``monkeypatch.setenv``
-    and are unaffected (their setenv lands after this delenv).
+    Runs before any explicitly-requested fixture of the same scope, so a test
+    that legitimately exercises the remote path sets its own FAKE creds /
+    ``RENDER`` afterward (its setenv lands after these delenvs) and is
+    unaffected.
     """
+    from fantasy_baseball.data import kv_store
+
     monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
     monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
+    monkeypatch.delenv("RENDER", raising=False)
+    kv_store._reset_singleton()
 
 
 @pytest.fixture
