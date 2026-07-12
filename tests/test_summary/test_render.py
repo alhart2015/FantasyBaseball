@@ -32,6 +32,33 @@ def _summary(**overrides):
     return DailySummary(**base)
 
 
+def test_render_projections_panel_html_and_text():
+    from fantasy_baseball.summary.models import CategoryEroto, ProjectionDelta
+
+    pd = ProjectionDelta(
+        is_first_run=False,
+        eroto=[CategoryEroto("HR", 8.2, 7.9), CategoryEroto("SB", 6.0, 6.5)],
+        eroto_total_now=72.3,
+        eroto_total_prev=70.1,
+        champ_pct_now=18.4,
+        champ_pct_prev=17.2,
+    )
+    summary = _summary(projections=pd)
+    html = render_html(summary)
+    assert "18.4%" in html
+    assert "Projected finish" in html
+    assert "HR" in html
+    text = render_text(summary)
+    assert "Championship 18.4%" in text
+    assert "HR eRoto 8.2" in text
+
+
+def test_render_omits_projections_when_empty():
+    # Default ProjectionDelta() has no content -> no panel.
+    html = render_html(_summary())
+    assert "Projected finish" not in html
+
+
 def test_render_html_includes_populated_sections():
     html = render_html(_summary())
     assert "Aaron Judge" in html

@@ -22,11 +22,12 @@ from fantasy_baseball.summary.builders import (
     build_last_night,
     build_lineup_moves,
     build_probables,
+    build_projection_delta,
     build_standings_delta,
     build_streaks,
 )
 from fantasy_baseball.summary.crosswalk import build_typed_name_to_mlbam
-from fantasy_baseball.summary.models import DailySummary, StandingsDelta
+from fantasy_baseball.summary.models import DailySummary, ProjectionDelta, StandingsDelta
 from fantasy_baseball.utils.time_utils import LOCAL_TZ, local_today
 from fantasy_baseball.web.season_data import (
     read_cache_dict,
@@ -107,14 +108,27 @@ def build_daily_summary(
     probables = _guard(
         "build_probables", lambda: build_probables(read_cache_list(CacheKey.PROBABLE_STARTERS)), []
     )
+    # The snapshot holds the prior standings, projections, and MC results for
+    # the overnight diffs (read once, shared by both delta builders). Stays None
+    # when absent so build_standings_delta's first-run guard fires.
+    snapshot = read_cache_dict(CacheKey.STANDINGS_SNAPSHOT)
     standings_delta = _guard(
         "build_standings_delta",
         lambda: build_standings_delta(
-            read_cache_dict(CacheKey.STANDINGS),
-            read_cache_dict(CacheKey.STANDINGS_SNAPSHOT),
-            config.team_name,
+            read_cache_dict(CacheKey.STANDINGS), snapshot, config.team_name
         ),
         StandingsDelta(is_first_run=True, user_team_name=config.team_name),
+    )
+    projections = _guard(
+        "build_projection_delta",
+        lambda: build_projection_delta(
+            read_cache_dict(CacheKey.PROJECTIONS),
+            (snapshot or {}).get("projections"),
+            read_cache_dict(CacheKey.MONTE_CARLO),
+            (snapshot or {}).get("mc"),
+            config.team_name,
+        ),
+        ProjectionDelta(),
     )
 
     return DailySummary(
@@ -127,4 +141,5 @@ def build_daily_summary(
         injuries=injuries,
         probables=probables,
         section_errors=section_errors,
+        projections=projections,
     )

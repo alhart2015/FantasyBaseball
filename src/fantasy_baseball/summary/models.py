@@ -46,6 +46,38 @@ class StandingsDelta:
 
 
 @dataclass(frozen=True)
+class CategoryEroto:
+    """One category's expected-roto (Gaussian) points for the user's team on the
+    PROJECTED end-of-season standings, with the prior-snapshot value for the
+    overnight delta (``prev`` is None on the first run)."""
+
+    category: str  # "R", "HR", ... "ERA", "WHIP"
+    now: float
+    prev: float | None
+
+
+@dataclass(frozen=True)
+class ProjectionDelta:
+    """Projected-finish movement for the user's team: per-category expected roto
+    (eRoto) and Monte Carlo championship odds, each with its overnight change.
+
+    All fields default to an empty/first-run state so a summary with no cached
+    projections is still constructible; ``render`` omits the panel via
+    ``has_content``."""
+
+    is_first_run: bool = True
+    eroto: list[CategoryEroto] = field(default_factory=list)
+    eroto_total_now: float = 0.0
+    eroto_total_prev: float | None = None
+    champ_pct_now: float | None = None  # MC first_pct (championship odds)
+    champ_pct_prev: float | None = None
+
+    @property
+    def has_content(self) -> bool:
+        return bool(self.eroto) or self.champ_pct_now is not None
+
+
+@dataclass(frozen=True)
 class LineupMove:
     player: str
     action: str  # "start", "sit", "swap"
@@ -81,3 +113,4 @@ class DailySummary:
     injuries: list[InjuryItem]
     probables: list[ProbableMatchup]
     section_errors: list[str]
+    projections: ProjectionDelta = field(default_factory=ProjectionDelta)

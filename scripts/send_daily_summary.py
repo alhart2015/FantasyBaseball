@@ -49,15 +49,32 @@ def _require_team_key(teams: dict[str, Any], target: str) -> str:
 
 
 def _write_snapshot(written_at: str | None) -> None:
-    """Persist the post-send standings snapshot for tomorrow's delta baseline."""
+    """Persist the post-send snapshot for tomorrow's overnight deltas.
+
+    Carries the actual standings, plus the projected standings + team SDs (for
+    the eRoto-by-category diff) and the Monte Carlo team_results (for the
+    championship-odds diff) -- trimmed to just what the deltas need (the MC
+    distributions/base blobs are dropped)."""
     standings = read_cache(CacheKey.STANDINGS)
     if standings is None:
         logger.warning("no STANDINGS to snapshot; skipping snapshot write")
         return
-    write_cache(
-        CacheKey.STANDINGS_SNAPSHOT,
-        {"written_at": written_at, "standings": standings},
-    )
+    payload: dict[str, Any] = {"written_at": written_at, "standings": standings}
+
+    proj = read_cache(CacheKey.PROJECTIONS)
+    if isinstance(proj, dict) and proj.get("projected_standings") and proj.get("team_sds"):
+        payload["projections"] = {
+            "projected_standings": proj["projected_standings"],
+            "team_sds": proj["team_sds"],
+        }
+
+    mc = read_cache(CacheKey.MONTE_CARLO)
+    if isinstance(mc, dict):
+        team_results = (mc.get("rest_of_season") or {}).get("team_results")
+        if team_results:
+            payload["mc"] = {"rest_of_season": {"team_results": team_results}}
+
+    write_cache(CacheKey.STANDINGS_SNAPSHOT, payload)
 
 
 def run_summary(

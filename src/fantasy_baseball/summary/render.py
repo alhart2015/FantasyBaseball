@@ -66,6 +66,26 @@ def _sections(summary: DailySummary) -> list[tuple[str, list[str]]]:
                 )
             )
 
+    pd = summary.projections
+    if pd.has_content:
+        lines = []
+        if pd.champ_pct_now is not None:
+            cp = f"Championship {pd.champ_pct_now:.1f}%"
+            if pd.champ_pct_prev is not None:
+                cp += f" ({pd.champ_pct_now - pd.champ_pct_prev:+.1f})"
+            lines.append(cp)
+        for e in pd.eroto:
+            s = f"{e.category} eRoto {e.now:.1f}"
+            if e.prev is not None:
+                s += f" ({e.now - e.prev:+.1f})"
+            lines.append(s)
+        if pd.eroto:
+            t = f"Total eRoto {pd.eroto_total_now:.1f}"
+            if pd.eroto_total_prev is not None:
+                t += f" ({pd.eroto_total_now - pd.eroto_total_prev:+.1f})"
+            lines.append(t)
+        out.append(("Projected finish (end of season)", lines))
+
     if summary.lineup_moves:
         out.append(
             (
@@ -305,6 +325,73 @@ def _standings_block(sd) -> str:  # StandingsDelta -> a full <tr> (hero) or ""
     )
 
 
+def _signed(delta: float, decimals: int, up_good: bool = True) -> str:
+    thresh = 0.5 * 10 ** (-decimals)
+    if abs(delta) < thresh:
+        return f'<span style="color:{_MUTED}">&middot;</span>'
+    color = _GAIN if (delta > 0) == up_good else _HOT
+    return f'<span style="color:{color}">{delta:+.{decimals}f}</span>'
+
+
+def _delta_cell(now: float, prev: float | None, decimals: int) -> str:
+    if prev is None:
+        return f'<span style="color:{_MUTED}">&mdash;</span>'
+    return _signed(now - prev, decimals)
+
+
+def _projection_block(pd) -> str:  # ProjectionDelta -> a full <tr> or ""
+    if not pd.has_content:
+        return ""
+    parts = []
+    if pd.champ_pct_now is not None:
+        delta = (
+            f' <span style="font:600 13px {_NUM}">('
+            f"{_signed(pd.champ_pct_now - pd.champ_pct_prev, 1)})</span>"
+            if pd.champ_pct_prev is not None
+            else ""
+        )
+        parts.append(
+            f'<div style="margin-bottom:12px;font:14px/1.5 {_SANS};color:{_TEXT}">'
+            f'<span style="color:{_MUTED}">Championship odds</span>&nbsp;'
+            f'<b style="font:700 16px {_NUM}">{pd.champ_pct_now:.1f}%</b>{delta}</div>'
+        )
+    if pd.eroto:
+        head = (
+            f'<tr><td style="padding:0 10px 5px;font:600 10px/1 {_SANS};letter-spacing:.1em;'
+            f'text-transform:uppercase;color:{_MUTED}">Cat</td>'
+            f'<td align="right" style="padding:0 10px 5px;font:600 10px/1 {_SANS};'
+            f'letter-spacing:.1em;text-transform:uppercase;color:{_MUTED}">eRoto</td>'
+            f'<td align="right" style="padding:0 10px 5px;font:600 10px/1 {_SANS};'
+            f'letter-spacing:.1em;text-transform:uppercase;color:{_MUTED}">O/N</td></tr>'
+        )
+        rows = []
+        for i, e in enumerate(pd.eroto):
+            bg = _ROW if i % 2 else "#ffffff"
+            rows.append(
+                f'<tr><td style="padding:5px 10px;background:{bg};font:600 12px/1.3 {_SANS};'
+                f'color:{_TEXT}">{_esc(e.category)}</td>'
+                f'<td align="right" style="padding:5px 10px;background:{bg};font:13px/1.3 {_NUM};'
+                f'color:{_TEXT}">{e.now:.1f}</td>'
+                f'<td align="right" style="padding:5px 10px;background:{bg};font:13px/1.3 {_NUM};'
+                f'white-space:nowrap">{_delta_cell(e.now, e.prev, 1)}</td></tr>'
+            )
+        rows.append(
+            f'<tr><td style="padding:7px 10px;border-top:2px solid {_HAIR};'
+            f'font:700 12px {_SANS};color:{_TEXT}">Total</td>'
+            f'<td align="right" style="padding:7px 10px;border-top:2px solid {_HAIR};'
+            f'font:700 13px {_NUM};color:{_TEXT}">{pd.eroto_total_now:.1f}</td>'
+            f'<td align="right" style="padding:7px 10px;border-top:2px solid {_HAIR};'
+            f'font:700 13px {_NUM};white-space:nowrap">'
+            f"{_delta_cell(pd.eroto_total_now, pd.eroto_total_prev, 1)}</td></tr>"
+        )
+        parts.append(
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            f'style="border-collapse:collapse;border:1px solid {_HAIR};border-radius:6px">'
+            f"{head}{''.join(rows)}</table>"
+        )
+    return _section("Projected finish &middot; end of season", "".join(parts))
+
+
 def _notes(summary: DailySummary) -> str:
     items = []
     if summary.unmatched:
@@ -338,6 +425,7 @@ def render_html(summary: DailySummary) -> str:
         f"{_esc(date_str)}</div>"
         f'<div style="height:3px;width:52px;background:{_GOLD};margin-top:14px"></div></td></tr>',
         _standings_block(sd),
+        _projection_block(summary.projections),
     ]
     if summary.last_night:
         body_rows.append(_section("Last night", _boxscore(summary.last_night)))
