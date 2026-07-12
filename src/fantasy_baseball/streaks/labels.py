@@ -168,6 +168,9 @@ def _apply_sparse_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) ->
     cm_blocks: list[np.ndarray] = []
     label_blocks: list[np.ndarray] = []
 
+    # pt_bucket is category-independent, so hot-eligibility is loop-invariant.
+    is_high = df["pt_bucket"].to_numpy() == HOT_ELIGIBLE_PT_BUCKET
+
     for category in SPARSE_CATEGORIES:
         rate_col = f"{category}_per_pa"
         count_col = category
@@ -186,7 +189,6 @@ def _apply_sparse_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) ->
         # in the high PT bucket (issue #173): sub-high buckets have p90=1, so a
         # lone HR/SB would otherwise read as hot.
         would_be_hot = (~np.isnan(hot_p90)) & (counts >= hot_p90)
-        is_high = merged["pt_bucket"].to_numpy() == HOT_ELIGIBLE_PT_BUCKET
         is_hot = is_high & would_be_hot
 
         for cold_method, percentile in POISSON_PERCENTILES:
@@ -199,7 +201,9 @@ def _apply_sparse_labels(conn: duckdb.DuckDBPyConnection, *, season_set: str) ->
             # streak). Pre-#173 the where-precedence gave hot this exclusion for
             # free; the gate makes it explicit.
             is_cold = (counts < k) & ~would_be_hot
-            # Build label: hot wins ties (a window in both buckets is hot).
+            # is_hot and is_cold are disjoint by construction (hot requires
+            # would_be_hot, cold excludes it), so the np.where ordering is
+            # incidental -- no window is ever both.
             labels = np.where(is_hot, "hot", np.where(is_cold, "cold", "neutral"))
             pid_blocks.append(pid_arr)
             end_blocks.append(end_arr)
