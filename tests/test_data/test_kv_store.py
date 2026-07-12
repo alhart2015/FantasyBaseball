@@ -70,27 +70,55 @@ def test_get_kv_cached(monkeypatch, tmp_path):
 def test_get_kv_on_render_requires_creds(monkeypatch):
     """On Render without creds, raise — misconfiguration should be loud.
 
-    We also stub ``_load_dotenv_if_present`` because the repo's .env
-    holds real creds for local development; without this stub the
-    dotenv loader would repopulate the env after we cleared it."""
+    No need to stub ``_load_dotenv_if_present``: ``_build_upstash_kv`` skips
+    it under pytest, so the repo's real .env can't repopulate the creds we
+    just cleared."""
     monkeypatch.setenv("RENDER", "true")
     monkeypatch.delenv("UPSTASH_REDIS_REST_URL", raising=False)
     monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
-    monkeypatch.setattr(kv_store, "_load_dotenv_if_present", lambda: None)
     with pytest.raises(RuntimeError, match="UPSTASH_REDIS_REST_URL"):
         get_kv()
 
 
 def test_build_explicit_upstash_kv_works_off_render(monkeypatch):
     """The scripts-only escape hatch should NOT be gated on RENDER — it
-    exists precisely to let local scripts cross the boundary."""
+    exists precisely to let local scripts cross the boundary.
+
+    Under pytest the builder now fails closed (see
+    ``test_build_explicit_upstash_kv_refuses_real_client_under_pytest``), so
+    this test opts in explicitly. It uses FAKE creds, so no client can reach
+    production even though the guard is lifted."""
     monkeypatch.delenv("RENDER", raising=False)
     monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
     monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake")
+    monkeypatch.setattr(kv_store, "_ALLOW_UPSTASH_CLIENT_IN_TESTS", True)
     kv = build_explicit_upstash_kv()
     from fantasy_baseball.data.kv_store import UpstashKVStore
 
     assert isinstance(kv, UpstashKVStore)
+
+
+def test_build_explicit_upstash_kv_refuses_real_client_under_pytest(monkeypatch):
+    """Fail-closed prod guard. Even with creds present, the builder must
+    refuse to construct a real Upstash client under pytest unless a test
+    explicitly opts in. This is the regression guard for the incident where a
+    test's ros_projections fixture was written to production Upstash (leaked
+    ``RENDER=true`` under ``pytest -n auto``), clobbering the live key.
+
+    Fake creds are set so the guard -- not the missing-creds check -- is what
+    fires, making the assertion deterministic on machines without a ``.env``.
+    The opt-in defaults off, so no setup is needed to exercise the refusal --
+    and an ambient env var cannot flip it on, which is the point."""
+    monkeypatch.setenv("UPSTASH_REDIS_REST_URL", "https://fake.upstash.io")
+    monkeypatch.setenv("UPSTASH_REDIS_REST_TOKEN", "fake")
+    assert kv_store._ALLOW_UPSTASH_CLIENT_IN_TESTS is False
+    with pytest.raises(RuntimeError, match="under pytest"):
+        build_explicit_upstash_kv()
+    # And get_kv() routed to remote (leaked RENDER) must not slip past it either.
+    monkeypatch.setenv("RENDER", "true")
+    kv_store._reset_singleton()
+    with pytest.raises(RuntimeError, match="under pytest"):
+        kv_store.get_kv()
 
 
 def test_load_dotenv_strips_wrapping_quotes(monkeypatch, tmp_path):

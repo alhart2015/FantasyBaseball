@@ -8,21 +8,22 @@ Two backends, selected by ``RENDER=true``:
   dashboards and tests.
 
 ``get_kv()`` is the single entry point for application code and cannot
-reach Upstash off-Render: the ``RENDER`` gate is hard. Scripts that
-need to cross the local→remote boundary (``scripts/refresh_remote.py``,
-``data/kv_sync``) call ``build_explicit_upstash_kv()`` — the function
-is named for exactly the audit trail we want.
+reach Upstash off-Render: the ``RENDER`` gate is hard. Scripts that need
+to cross the local->remote boundary call ``build_explicit_upstash_kv()``
+(see its docstring for the authoritative caller list) -- the function is
+named for exactly the audit trail we want.
 
 The schema mirrors the subset of Redis the app actually uses:
 ``get/set/keys/mget`` for strings and ``hget/hset/hkeys/hgetall`` for
 hashes. If the app ever needs sorted sets, pipelines, or pub/sub the
-abstraction has to grow — today it doesn't.
+abstraction has to grow -- today it doesn't.
 """
 
 from __future__ import annotations
 
 import os
 import sqlite3
+import sys
 import threading
 import time
 from pathlib import Path
@@ -34,10 +35,24 @@ if TYPE_CHECKING:
 _PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _DEFAULT_LOCAL_DB = _PROJECT_ROOT / "data" / "local.db"
 
+# Fail-closed opt-in for the pytest guard in `_build_upstash_kv`. A module
+# attribute, not an env var. See that guard for why.
+_ALLOW_UPSTASH_CLIENT_IN_TESTS = False
+
 
 def is_remote() -> bool:
     """True when running on Render (``RENDER=true``)."""
     return os.environ.get("RENDER") == "true"
+
+
+def _running_under_pytest() -> bool:
+    """True during a pytest session; prod never imports pytest.
+
+    True from interpreter start through collection, fixture setup, and the
+    call phase -- unlike ``PYTEST_CURRENT_TEST``, which is unset during the
+    import-time collection when the leak this guards against actually fires.
+    """
+    return "pytest" in sys.modules
 
 
 def _is_live(expires_at: float | None) -> bool:
@@ -332,7 +347,13 @@ def get_kv() -> KVStore:
 
 
 def _build_upstash_kv() -> UpstashKVStore:
-    _load_dotenv_if_present()
+    # Under pytest, never read the real repo .env. `_load_dotenv_if_present`
+    # setdefaults real prod creds into os.environ, which would (a) let an
+    # opted-in test that forgot fake creds build a client against production
+    # and (b) leave real creds lingering in the environment after the guard
+    # below raises. A test must supply its own (fake) creds explicitly.
+    if not _running_under_pytest():
+        _load_dotenv_if_present()
     url = os.environ.get("UPSTASH_REDIS_REST_URL")
     token = os.environ.get("UPSTASH_REDIS_REST_TOKEN")
     if not (url and token):
@@ -340,6 +361,22 @@ def _build_upstash_kv() -> UpstashKVStore:
             "UPSTASH_REDIS_REST_URL / UPSTASH_REDIS_REST_TOKEN must be set to build "
             "an Upstash client (on Render they're service env vars; locally they "
             "live in .env)."
+        )
+    # Fail closed: never let a test construct a client pointed at production.
+    # This is the second, independent layer under the conftest cred-strip -- it
+    # holds even if a test explicitly puts real creds in the environment. The
+    # opt-in is a module attribute, NOT an env var, deliberately: an env-var
+    # escape hatch could be flipped on from an ambient shell/CI value, silently
+    # disabling the guard suite-wide. A module attribute defaults off in every
+    # fresh process and can only be lifted by an in-process monkeypatch (which
+    # auto-restores).
+    if _running_under_pytest() and not _ALLOW_UPSTASH_CLIENT_IN_TESTS:
+        raise RuntimeError(
+            "Refusing to build a real Upstash client under pytest. A test writing "
+            "to production Upstash once clobbered cache:ros_projections with fixture "
+            "data; this fail-closed guard prevents recurrence. A test that must "
+            "exercise the builder should monkeypatch "
+            "kv_store._ALLOW_UPSTASH_CLIENT_IN_TESTS = True and use FAKE creds."
         )
     from upstash_redis import Redis
 
