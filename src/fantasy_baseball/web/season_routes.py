@@ -790,7 +790,7 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/il-return-plan")
     def api_il_return_plan():
-        from fantasy_baseball.lineup.il_return_planner import plan_il_returns
+        from fantasy_baseball.lineup.il_return_planner import plan_il_returns_scenarios
         from fantasy_baseball.models.player import Player
 
         activate_param = request.args.get("activate", "")
@@ -817,7 +817,7 @@ def register_routes(app: Flask) -> None:
         else:
             activating = il_players
 
-        result = plan_il_returns(
+        scenarios = plan_il_returns_scenarios(
             roster,
             activating,
             config.roster_slots,
@@ -827,7 +827,7 @@ def register_routes(app: Flask) -> None:
             team_sds=team_sds,
             sgp_overrides=config.sgp_overrides,
         )
-        return jsonify(result.to_dict())
+        return jsonify(scenarios.to_dict())
 
     @app.route("/waivers-trades")
     def waivers_trades():

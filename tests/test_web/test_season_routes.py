@@ -1593,11 +1593,119 @@ def test_il_return_plan_route_returns_plan_shape(client, monkeypatch):
     resp = client.get("/api/il-return-plan")  # no activate -> activate all IL
     assert resp.status_code == 200
     data = resp.get_json()
-    assert set(data.keys()) >= {"activating", "capacity", "overflow", "plans"}
-    assert isinstance(data["plans"], list)
-    assert isinstance(data["capacity"], int)
+    # Route now returns the two-scenario envelope; the plan shape lives under as_projected.
+    assert set(data.keys()) >= {"as_projected", "if_healthy", "adjusted", "tops_differ"}
+    ap = data["as_projected"]
+    assert set(ap.keys()) >= {"activating", "capacity", "overflow", "plans"}
+    assert isinstance(ap["plans"], list)
+    assert isinstance(ap["capacity"], int)
     # The IL-slot player is the one activated.
-    assert data["activating"] == ["IL Guy"]
+    assert ap["activating"] == ["IL Guy"]
+
+
+def test_il_return_plan_returns_scenario_envelope(client):
+    from unittest.mock import patch
+
+    from fantasy_baseball.lineup.il_return_planner import (
+        IlReturnPlanResult,
+        IlReturnScenarios,
+    )
+
+    scenarios = IlReturnScenarios(
+        as_projected=IlReturnPlanResult(activating=["Cruz"], capacity=23, overflow=1, plans=[]),
+        if_healthy=IlReturnPlanResult(activating=["Cruz"], capacity=23, overflow=1, plans=[]),
+        adjusted=[
+            {
+                "name": "Cruz",
+                "player_type": "hitter",
+                "vol_unit": "PA",
+                "vol_projected": 175.0,
+                "vol_healthy": 223.0,
+            }
+        ],
+        tops_differ=True,
+    )
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_list",
+            return_value=[
+                {
+                    "name": "Cruz",
+                    "player_type": "hitter",
+                    "player_id": 11370,
+                    "status": "IL10",
+                    "selected_position": "IL",
+                    "positions": ["OF"],
+                }
+            ],
+        ),
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value={
+                "projected_standings": {"teams": []},
+                "team_sds": None,
+                "fraction_remaining": 0.41,
+            },
+        ),
+        patch("fantasy_baseball.web.season_routes._projected_from_cache", return_value=object()),
+        patch("fantasy_baseball.web.season_routes._team_sds_from_cache", return_value=None),
+        patch(
+            "fantasy_baseball.lineup.il_return_planner.plan_il_returns_scenarios",
+            return_value=scenarios,
+        ),
+    ):
+        resp = client.get("/api/il-return-plan?activate=11370")
+    assert resp.status_code == 200
+    body = resp.get_json()
+    assert set(body) == {"as_projected", "if_healthy", "adjusted", "tops_differ"}
+    assert body["tops_differ"] is True
+    assert body["adjusted"][0]["vol_unit"] == "PA"
+
+
+def test_il_return_plan_if_healthy_null_when_no_adjustment(client):
+    from unittest.mock import patch
+
+    from fantasy_baseball.lineup.il_return_planner import (
+        IlReturnPlanResult,
+        IlReturnScenarios,
+    )
+
+    scenarios = IlReturnScenarios(
+        as_projected=IlReturnPlanResult(activating=["Buxton"], capacity=23, overflow=0, plans=[]),
+        if_healthy=None,
+    )
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_list",
+            return_value=[
+                {
+                    "name": "Buxton",
+                    "player_type": "hitter",
+                    "player_id": 9590,
+                    "status": "IL10",
+                    "selected_position": "BN",
+                    "positions": ["OF"],
+                }
+            ],
+        ),
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value={
+                "projected_standings": {"teams": []},
+                "team_sds": None,
+                "fraction_remaining": 0.41,
+            },
+        ),
+        patch("fantasy_baseball.web.season_routes._projected_from_cache", return_value=object()),
+        patch("fantasy_baseball.web.season_routes._team_sds_from_cache", return_value=None),
+        patch(
+            "fantasy_baseball.lineup.il_return_planner.plan_il_returns_scenarios",
+            return_value=scenarios,
+        ),
+    ):
+        resp = client.get("/api/il-return-plan?activate=9590")
+    assert resp.status_code == 200
+    assert resp.get_json()["if_healthy"] is None
 
 
 def test_stash_route_renders_ranked_board(client, kv_isolation):
