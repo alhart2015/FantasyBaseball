@@ -195,16 +195,14 @@ function toggleAuditDetail(id) {
       .then(render)
       .catch(function (e) { out.innerHTML = '<p>Error: ' + e + '</p>'; });
   }
-  function render(res) {
-    var out = document.getElementById('il-plan-results');
-    if (res.error) { out.innerHTML = '<p>' + res.error + '</p>'; return; }
-    if (res.warning) { out.innerHTML = '<p>' + res.warning + '</p>'; return; }
-    if (!res.plans || !res.plans.length) {
-      out.innerHTML = '<p>No legal plans found.</p>'; return;
+  function renderPlans(result) {
+    if (result.warning) { return '<p>' + result.warning + '</p>'; }
+    if (!result.plans || !result.plans.length) {
+      return '<p>No legal plans found.</p>';
     }
-    var html = '<p style="color:var(--text-secondary)">Roster cap ' + res.capacity +
-      '; must drop ' + res.overflow + '.</p>';
-    res.plans.forEach(function (p) {
+    var html = '<p style="color:var(--text-secondary)">Roster cap ' + result.capacity +
+      '; must drop ' + result.overflow + '.</p>';
+    result.plans.forEach(function (p) {
       var b = p.band;
       var sign = b.mean >= 0 ? '+' : '';
       html += '<div class="il-plan" style="border:1px solid var(--border);border-radius:6px;padding:0.75rem;margin-bottom:0.75rem">';
@@ -218,6 +216,39 @@ function toggleAuditDetail(id) {
       });
       html += '</ul></div>';
     });
+    return html;
+  }
+  function adjustedNames(res) {
+    return (res.adjusted || []).map(function (a) { return a.name; }).join(', ');
+  }
+  function volLabel(res) {
+    return (res.adjusted || []).map(function (a) {
+      return a.name + ' ' + Math.round(a.vol_projected) + ' -> ' +
+        Math.round(a.vol_healthy) + ' ' + a.vol_unit;
+    }).join('; ');
+  }
+  function render(res) {
+    var out = document.getElementById('il-plan-results');
+    if (res.error) { out.innerHTML = '<p>' + res.error + '</p>'; return; }
+    // Single-list fallback: no volume-suppressed returnee to bracket.
+    if (!res.if_healthy) {
+      out.innerHTML = renderPlans(res.as_projected);
+      return;
+    }
+    var names = adjustedNames(res);
+    var headline = res.tops_differ
+      ? '<p><strong>The call depends on ' + names + "'s return.</strong> " +
+        'Compare the two columns below.</p>'
+      : '<p><strong>Robust:</strong> same top plan whether ' + names +
+        ' return healthy or stay limited.</p>';
+    var html = headline +
+      '<p style="color:var(--text-secondary)">Volume: ' + volLabel(res) + '</p>' +
+      '<div style="display:flex;gap:1rem;flex-wrap:wrap">' +
+      '<div style="flex:1;min-width:16rem">' +
+        '<h3>As projected (limited)</h3>' + renderPlans(res.as_projected) + '</div>' +
+      '<div style="flex:1;min-width:16rem">' +
+        '<h3>If healthy</h3>' + renderPlans(res.if_healthy) + '</div>' +
+      '</div>';
     out.innerHTML = html;
   }
 })();

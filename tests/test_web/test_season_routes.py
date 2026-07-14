@@ -1708,6 +1708,29 @@ def test_il_return_plan_if_healthy_null_when_no_adjustment(client):
     assert resp.get_json()["if_healthy"] is None
 
 
+def test_roster_audit_page_renders_il_returns_scenario_js(client):
+    from unittest.mock import patch
+
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None),
+        patch("fantasy_baseball.web.season_routes.read_cache_list", return_value=None),
+    ):
+        resp = client.get("/roster-audit")
+    assert resp.status_code == 200
+    html = resp.get_data(as_text=True)
+    # The dual-scenario client logic is present (static JS is served
+    # unconditionally, outside the {% if audit %} guard).
+    assert "if_healthy" in html
+    assert "renderPlans" in html
+    # Both column labels and both headline branches are present, so a deletion
+    # of the labels or either headline branch fails CI (the runtime rendering is
+    # JS and is verified manually in Step 5).
+    assert "As projected" in html
+    assert "If healthy" in html
+    assert "depends on" in html  # tops_differ == true branch
+    assert "Robust:" in html  # tops_differ == false branch
+
+
 def test_stash_route_renders_ranked_board(client, kv_isolation):
     from fantasy_baseball.data.cache_keys import CacheKey
     from fantasy_baseball.web import season_data
