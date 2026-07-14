@@ -218,11 +218,18 @@ function toggleAuditDetail(id) {
     });
     return html;
   }
-  function adjustedNames(res) {
-    return (res.adjusted || []).map(function (a) { return a.name; }).join(', ');
+  function adjustedNames(adjusted) {
+    // Dedup by name: a two-way returnee contributes two rows (hitter + pitcher)
+    // sharing a display name, and the headline names the distinct returnees.
+    var seen = {};
+    var names = [];
+    adjusted.forEach(function (a) {
+      if (!seen[a.name]) { seen[a.name] = true; names.push(a.name); }
+    });
+    return names.join(', ');
   }
-  function volLabel(res) {
-    return (res.adjusted || []).map(function (a) {
+  function volLabel(adjusted) {
+    return adjusted.map(function (a) {
       return a.name + ' ' + Math.round(a.vol_projected) + ' -> ' +
         Math.round(a.vol_healthy) + ' ' + a.vol_unit;
     }).join('; ');
@@ -235,14 +242,24 @@ function toggleAuditDetail(id) {
       out.innerHTML = renderPlans(res.as_projected);
       return;
     }
-    var names = adjustedNames(res);
-    var headline = res.tops_differ
-      ? '<p><strong>The call depends on ' + names + "'s return.</strong> " +
-        'Compare the two columns below.</p>'
-      : '<p><strong>Robust:</strong> same top plan whether ' + names +
+    var adjusted = res.adjusted || [];
+    var names = adjustedNames(adjusted);
+    var ap = res.as_projected.plans, ih = res.if_healthy.plans;
+    var bothHavePlans = ap && ap.length && ih && ih.length;
+    var headline;
+    if (!bothHavePlans) {
+      // One or both scenarios have no legal plan (a warning); the columns speak
+      // for themselves -- do not assert a "robust" or "differs" verdict.
+      headline = '<p style="color:var(--text-secondary)">Compare the two scenarios below.</p>';
+    } else if (res.tops_differ) {
+      headline = '<p><strong>The call depends on ' + names + "'s return.</strong> " +
+        'Compare the two columns below.</p>';
+    } else {
+      headline = '<p><strong>Robust:</strong> same top plan whether ' + names +
         ' return healthy or stay limited.</p>';
+    }
     var html = headline +
-      '<p style="color:var(--text-secondary)">Volume: ' + volLabel(res) + '</p>' +
+      '<p style="color:var(--text-secondary)">Volume: ' + volLabel(adjusted) + '</p>' +
       '<div style="display:flex;gap:1rem;flex-wrap:wrap">' +
       '<div style="flex:1;min-width:16rem">' +
         '<h3>As projected (limited)</h3>' + renderPlans(res.as_projected) + '</div>' +

@@ -711,25 +711,46 @@ class TestPlanIlReturnsScenarios:
         assert res.tops_differ is False
 
     def test_tops_differ_compares_top_drop_sets_order_independent(self):
-        a = IlReturnPlanResult(
-            activating=["Cruz"],
-            capacity=13,
-            overflow=1,
-            plans=[MovePlan(drops=["Cruz"], moves=[], delta_roto=0.3, band={})],
-        )
-        b = IlReturnPlanResult(
-            activating=["Cruz"],
-            capacity=13,
-            overflow=1,
-            plans=[MovePlan(drops=["Scrub"], moves=[], delta_roto=0.1, band={})],
-        )
-        same = IlReturnPlanResult(
-            activating=["Cruz"],
-            capacity=13,
-            overflow=1,
-            plans=[MovePlan(drops=["Cruz"], moves=[], delta_roto=0.1, band={})],
-        )
+        def _result(drop_name, drop_type="hitter"):
+            return IlReturnPlanResult(
+                activating=["Cruz"],
+                capacity=13,
+                overflow=1,
+                plans=[
+                    MovePlan(
+                        drops=[drop_name],
+                        moves=[Move(drop_name, drop_type, "IL", "DROP")],
+                        delta_roto=0.1,
+                        band={},
+                    )
+                ],
+            )
+
+        a = _result("Cruz")
+        b = _result("Scrub")
+        same = _result("Cruz")
         empty = IlReturnPlanResult(activating=["Cruz"], capacity=13, overflow=1, plans=[])
         assert _tops_differ(a, b) is True
-        assert _tops_differ(a, same) is False  # same top drop set
+        assert _tops_differ(a, same) is False  # same dropped body
         assert _tops_differ(a, empty) is False  # no top plan to compare
+
+    def test_tops_differ_distinguishes_two_way_rows_sharing_a_name(self):
+        # A two-way player's hitter and pitcher rows share a display name; the
+        # comparison keys on (name, player_type) so dropping different rows is
+        # NOT read as "same top plan". A bare-name compare would collapse it.
+        def _drop(player_type):
+            return IlReturnPlanResult(
+                activating=["Ohtani"],
+                capacity=13,
+                overflow=1,
+                plans=[
+                    MovePlan(
+                        drops=["Ohtani"],
+                        moves=[Move("Ohtani", player_type, "IL", "DROP")],
+                        delta_roto=0.1,
+                        band={},
+                    )
+                ],
+            )
+
+        assert _tops_differ(_drop("hitter"), _drop("pitcher")) is True

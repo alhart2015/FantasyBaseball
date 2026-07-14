@@ -33,8 +33,8 @@ def healthy_rest_of_season(player: Player, fraction_remaining: float) -> Player 
     healthy remaining volume, or ``None`` when no adjustment applies.
 
     Healthy remaining volume = the player's pre-injury (``preseason``)
-    full-season pace prorated to the games left: ``preseason.pa * fraction_
-    remaining`` (hitters) / ``preseason.ip * fraction_remaining`` (pitchers).
+    full-season pace prorated to the games left (``preseason.pa`` for hitters,
+    ``preseason.ip`` for pitchers, times the clamped ``fraction_remaining``).
     The current ROS counting stats are multiplied by ``healthy_vol /
     current_vol``, preserving rates (avg/era/whip are left untouched, so they
     stay correct since their components scale together). Games (``g``, and
@@ -51,18 +51,26 @@ def healthy_rest_of_season(player: Player, fraction_remaining: float) -> Player 
     if ros is None or pre is None:
         return None
 
-    if player.player_type == PlayerType.PITCHER:
+    # Clamp to [0, 1] like pitcher_swap.swap_window_ip: compute_fraction_remaining
+    # can exceed 1.0 before opening day, and a healthy remainder is never more than
+    # a full healthy season.
+    fr = min(1.0, max(0.0, fraction_remaining))
+    is_pitcher = player.player_type == PlayerType.PITCHER
+    if is_pitcher:
         current_vol = ros.ip
-        healthy_vol = pre.ip * fraction_remaining
+        healthy_vol = pre.ip * fr
     else:
         current_vol = ros.pa
-        healthy_vol = pre.pa * fraction_remaining
+        healthy_vol = pre.pa * fr
 
-    if current_vol <= 0 or healthy_vol <= current_vol:
+    # Positive-form guard (not the <= negation) so a NaN volume -- which a cached
+    # projection can carry, and which makes every <= comparison False -- also
+    # returns None instead of scaling every stat to NaN. Only inflates.
+    if not (current_vol > 0 and healthy_vol > current_vol):
         return None
 
     scale = healthy_vol / current_vol
-    if player.player_type == PlayerType.PITCHER:
+    if is_pitcher:
         new_ros = dataclasses.replace(
             ros,
             ip=ros.ip * scale,
@@ -535,12 +543,25 @@ class IlReturnScenarios:
         }
 
 
+def _top_dropped_bodies(result: IlReturnPlanResult) -> set[tuple[str, str]]:
+    """The ``(name, player_type)`` of each body the top plan drops.
+
+    Keyed on ``(name, player_type)`` -- player_key-equivalent -- rather than
+    bare name, so a two-way player's hitter and pitcher rows (which share a
+    name) and two distinct same-named MLB players stay distinct. Reads the
+    ``DROP`` moves rather than ``MovePlan.drops`` because ``drops`` is a
+    name-only display list that collapses those cases.
+    """
+    return {(m.name, m.player_type) for m in result.plans[0].moves if m.to_slot == "DROP"}
+
+
 def _tops_differ(a: IlReturnPlanResult, b: IlReturnPlanResult) -> bool:
-    """True when both scenarios have a top plan (plans[0]) and their drop sets
-    differ, compared order-independently (drops are name-sorted)."""
+    """True when both scenarios have a top plan (plans[0]) and their dropped
+    bodies differ, compared order-independently and keyed on
+    ``(name, player_type)`` so same-named / two-way rows do not collapse."""
     if not a.plans or not b.plans:
         return False
-    return set(a.plans[0].drops) != set(b.plans[0].drops)
+    return _top_dropped_bodies(a) != _top_dropped_bodies(b)
 
 
 def plan_il_returns_scenarios(
@@ -602,10 +623,12 @@ def plan_il_returns_scenarios(
 
     # Swap the healthy ROS into both the roster copy and the activating list,
     # keyed on player_key so an IL-slot returnee (sourced from activating_il in
-    # _build_pool) carries the healthy line.
+    # _build_pool) carries the healthy line. Derive the activating list from
+    # activating_il directly (not by filtering the roster copy) so an activating
+    # player absent from ``roster`` -- which plan_il_returns still accepts via
+    # _build_pool's ``extra`` path -- keeps the same activation set in both runs.
     healthy_roster = [healthy_by_key.get(p.player_key, p) for p in roster]
-    activating_keys = {p.player_key for p in activating_il}
-    healthy_activating = [p for p in healthy_roster if p.player_key in activating_keys]
+    healthy_activating = [healthy_by_key.get(p.player_key, p) for p in activating_il]
 
     if_healthy = plan_il_returns(
         healthy_roster,
