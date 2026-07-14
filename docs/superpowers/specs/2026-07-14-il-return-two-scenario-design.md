@@ -73,10 +73,21 @@ healthy_rest_of_season(player, fraction_remaining) -> Player | None
   the games left. `fraction_remaining` is already threaded through the planner
   and route.
 - **Scale factor:** `healthy_vol / current_vol`, applied to the **current** ROS
-  counting stats (hitters: `pa, ab, h, r, hr, rbi, sb`; pitchers:
-  `ip, w, k, sv, er, bb, h_allowed`). Rates (`avg`, `era`, `whip`) are preserved
-  because their components scale together — the current talent/form read is kept,
-  only volume is restored.
+  line. The transform touches exactly these fields (full `HitterStats` /
+  `PitcherStats` field sets, so nothing is left implicit):
+  - **Hitters — scale by the factor:** `pa, ab, h, r, hr, rbi, sb, g`.
+    **Preserve unchanged:** `avg` (rate — its components `h`/`ab` scale together,
+    so `avg` stays correct).
+  - **Pitchers — scale by the factor:** `ip, w, k, sv, er, bb, h_allowed, g, gs`.
+    **Preserve unchanged:** `era, whip` (rates).
+  - **Both — clear the cached `sgp` field to `None`** so any downstream read
+    recomputes it from the scaled line rather than reusing the stale injury-volume
+    SGP. (The planner already recomputes via `calculate_player_sgp(ros, denoms)`;
+    clearing `sgp` guards any path that trusts the cached value.)
+  Games (`g`, and pitcher `gs`) scale with volume deliberately: leaving them at
+  the injury value while `pa`/`ip` inflate would produce an internally
+  inconsistent stat line. Only volume is restored; the current talent/form read
+  (rates) is kept.
 - **Only ever inflates.** Returns `None` when:
   - `preseason` is absent, or
   - the relevant `current_vol` is falsy/zero, or
@@ -104,8 +115,12 @@ plan_il_returns_scenarios(roster, activating_il, roster_slots, *, ...same kwargs
   falls back to the single-list view).
 - Returns a small result object exposing both `IlReturnPlanResult`s, the list of
   adjusted players with their projected-vs-healthy volume, and a `tops_differ`
-  boolean (true when both scenarios have a top plan and the top plans' drop sets
-  differ).
+  boolean. **Top plan** = the highest-ranked plan, `plans[0]`, of each scenario.
+  `tops_differ` is `true` only when **both** scenarios have a top plan and those
+  two top plans' drop sets differ, compared as **order-independent sets** of
+  dropped player names (the planner sorts `drops` by name, so an order-sensitive
+  compare would be a latent bug). When either scenario has no plans (empty or a
+  warning), `tops_differ` is `false` (nothing to compare).
 
 `plan_il_returns` itself is **not modified** — this preserves its existing test
 coverage and keeps the band/ranking code untouched. The healthy scenario is a
@@ -118,17 +133,25 @@ roster transform applied above it.
   {
     "as_projected": <IlReturnPlanResult dict>,
     "if_healthy":   <IlReturnPlanResult dict | null>,
-    "adjusted":     [{"name", "player_type", "pa_projected", "pa_healthy"}...],
+    "adjusted":     [{"name", "player_type",
+                      "vol_unit": "PA" | "IP",
+                      "vol_projected": <float>, "vol_healthy": <float>}...],
     "tops_differ":  <bool>
   }
   ```
-  (For pitchers, `pa_*` carry IP; the field name is generic volume — see edge
-  cases.)
+  Volume fields are **unit-generic**: `vol_unit` is `"PA"` for hitters and `"IP"`
+  for pitchers, and `vol_projected` / `vol_healthy` carry that unit's value. The
+  template labels each number with `vol_unit` (e.g. "175 PA -> 223 PA",
+  "43 IP -> 59 IP"). There are no PA-named fields, so a pitcher returnee is
+  represented correctly.
 - Template (`roster_audit.html` IL Returns section): when `if_healthy` is
   non-null, render two ranked lists side by side, each headed by its assumption
-  and the returning player(s)' volume under it, with a one-line headline driven
-  by `tops_differ` ("robust — do X" vs "the call depends on <player>'s return").
-  When `if_healthy` is null, render today's single list unchanged.
+  and the returning player(s)' volume (value + `vol_unit`) under it, with a
+  one-line headline driven by `tops_differ`. The headline names **every** adjusted
+  returnee (the `adjusted[].name` set): `tops_differ == false` -> "robust — same
+  top plan whether <names> return healthy or stay limited"; `tops_differ == true`
+  -> "the call depends on <names>' return." When `if_healthy` is null, render
+  today's single list unchanged.
 
 ## Data flow
 
@@ -176,12 +199,15 @@ Unit tests for the new pure function and wrapper (no live cache, synthetic
 `Player`s and `ProjectedStandings`, mirroring `tests/test_lineup/test_il_return_planner.py`):
 
 - `healthy_rest_of_season`:
-  - Hitter: scales counting stats by `preseason.pa * fraction_remaining /
-    ros.pa`, preserves `avg`, returns a new object (original untouched).
-  - Pitcher: scales IP + pitcher counting stats, preserves `era`/`whip`.
+  - Hitter: scales `pa, ab, h, r, hr, rbi, sb, g` by `preseason.pa *
+    fraction_remaining / ros.pa`, preserves `avg`, clears cached `sgp` to `None`,
+    returns a new object (original untouched).
+  - Pitcher: scales `ip, w, k, sv, er, bb, h_allowed, g, gs` by the IP-based
+    factor, preserves `era`/`whip`, clears cached `sgp`.
   - Returns `None` when preseason absent, when `current_vol` is 0, and when
     `healthy_vol <= current_vol`.
-  - Only inflates (never returns a smaller volume).
+  - Only inflates (never returns a smaller volume); `g`/`gs` scale with volume
+    (not left at the injury value).
 - `plan_il_returns_scenarios`:
   - When a suppressed returnee is activated, `if_healthy` is non-null and the
     healthy roster's returnee has the inflated ROS.
@@ -191,9 +217,20 @@ Unit tests for the new pure function and wrapper (no live cache, synthetic
     flip: projected -> drop the returnee; healthy -> keep the returnee).
   - `as_projected` reproduces the existing `plan_il_returns` result exactly
     (regression guard that the wrapper doesn't perturb the as-is path).
+  - `adjusted` carries one entry per adjusted returnee with `vol_unit` +
+    `vol_projected`/`vol_healthy` matching the player type (PA for hitters,
+    IP for pitchers).
 - Route test (`tests/test_web/test_season_routes.py` style): the JSON envelope
   carries `as_projected`, `if_healthy`, `adjusted`, `tops_differ`, with
   `if_healthy` null when no adjustment applies.
+- Template verification (rendering/smoke test in the `tests/test_web/` style used
+  for the existing roster-audit template): render the IL Returns section with a
+  context where (a) `if_healthy` is null -> exactly one ranked list, no
+  scenario headers; and (b) `if_healthy` is non-null with `tops_differ` true ->
+  two labeled lists ("as projected" / "if healthy") plus the "depends on ...
+  return" headline; and true vs false `tops_differ` selects the differ vs robust
+  headline text. This guards the single-list fallback branch and the headline
+  logic, not just the JSON contract.
 
 ## Phasing
 
