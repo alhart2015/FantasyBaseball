@@ -107,10 +107,21 @@ plan_il_returns_scenarios(roster, activating_il, roster_slots, *, ...same kwargs
 
 - Computes, for each activating player, its `healthy_rest_of_season(...)`.
 - Runs the **existing** `plan_il_returns` twice, unchanged:
-  - `as_projected`: on the roster exactly as-is.
+  - `as_projected`: on the roster and `activating_il` exactly as-is.
   - `if_healthy`: on a roster where each *adjusted* activating player's
     `rest_of_season` is swapped to its healthy version (players with a `None`
-    adjustment, and all non-activating players, are untouched).
+    adjustment, and all non-activating players, are untouched) **AND** on an
+    `activating_il` list carrying those same healthy player objects.
+- **The healthy swap must reach both the roster copy AND the `activating_il`
+  list.** This is load-bearing: `il_return_planner._build_pool` sources a returnee
+  who sits in a *true IL slot* (the primary case — e.g. Cruz) from the passed
+  `activating_il` list, not from the roster's counted bodies (`extra = [p for p in
+  activating_il if p.player_key not in counted_keys]`). If only the roster copy is
+  swapped, `_build_pool` pulls the original injury-volume object from
+  `activating_il` and the healthy scenario becomes a silent no-op (`if_healthy` ==
+  `as_projected`, `tops_differ` always false). Concretely: build the healthy
+  roster first, then re-derive the healthy `activating_il` from it by `player_key`
+  (so both the roster body and the activating body are the same healthy object).
 - If **no** activating player was adjusted, `if_healthy` is `None` (the caller
   falls back to the single-list view).
 - Returns a small result object exposing both `IlReturnPlanResult`s, the list of
@@ -156,12 +167,14 @@ roster transform applied above it.
 ## Data flow
 
 ```
-roster (cache) --+--> plan_il_returns(roster as-is) ----------> as_projected
+roster (cache) --+--> plan_il_returns(roster, activating_il  as-is) --> as_projected
                  |
                  +--> for each activating player:
                  |       healthy_rest_of_season(p, fraction_remaining)
                  |       -> swap into a roster copy (if not None)
-                 +--> plan_il_returns(healthy roster) ---------> if_healthy
+                 |    then re-derive healthy activating_il from that roster copy
+                 +--> plan_il_returns(healthy_roster, healthy_activating_il) -->
+                 |                                                    if_healthy
                                                                 (null if no adj.)
 ```
 
@@ -211,6 +224,10 @@ Unit tests for the new pure function and wrapper (no live cache, synthetic
 - `plan_il_returns_scenarios`:
   - When a suppressed returnee is activated, `if_healthy` is non-null and the
     healthy roster's returnee has the inflated ROS.
+  - **Returnee in a true IL slot** (not a BN+IL-status body): the healthy
+    scenario actually takes effect — `if_healthy` differs from `as_projected`
+    (regression guard for the `_build_pool` `extra`-path swap; a wrapper that
+    swapped only the roster copy would make these identical).
   - When no returnee is adjusted, `if_healthy` is `None`.
   - `tops_differ` is true in a constructed case where the healthy scenario's top
     drop set differs from the projected scenario's (mirrors the verified Cruz
