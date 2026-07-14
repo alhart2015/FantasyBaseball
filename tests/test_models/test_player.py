@@ -197,6 +197,27 @@ class TestPlayer:
         assert isinstance(p.rest_of_season, PitcherStats)
         assert p.rest_of_season.k == 200
 
+    def test_from_dict_coerces_int_player_id_to_str(self):
+        """Yahoo IDs arrive as ints in the cache but ``yahoo_id`` is ``str``.
+
+        Regression: an int leaked through and never matched string IDs (e.g.
+        IL-return checkbox values), which surfaced as "No legal plans found."
+        for every player. See season_routes.api_il_return_plan.
+        """
+        from fantasy_baseball.models.player import Player
+
+        p = Player.from_dict({"name": "Oneil Cruz", "player_type": "hitter", "player_id": 11370})
+        assert p.yahoo_id == "11370"
+        assert isinstance(p.yahoo_id, str)
+        # Matches a checkbox value (a string) as the route compares it.
+        assert p.yahoo_id in {"11370"}
+
+    def test_from_dict_missing_player_id_stays_none(self):
+        from fantasy_baseball.models.player import Player
+
+        p = Player.from_dict({"name": "No Id", "player_type": "hitter"})
+        assert p.yahoo_id is None
+
     def test_to_dict_roundtrip(self):
         from fantasy_baseball.models.player import Player
 
