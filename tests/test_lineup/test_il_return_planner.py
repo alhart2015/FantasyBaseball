@@ -1,3 +1,5 @@
+import pytest
+
 from fantasy_baseball.lineup.il_return_planner import (
     IlReturnPlanResult,
     Move,
@@ -7,6 +9,7 @@ from fantasy_baseball.lineup.il_return_planner import (
     _build_pool,
     _counts_against_cap,
     _solve_lineup,
+    healthy_rest_of_season,
     plan_il_returns,
     roster_capacity,
 )
@@ -504,3 +507,113 @@ class TestPlanIlReturns:
         assert by_name["Trout"].player_type == "hitter"
         # The drop is rendered as a DROP move.
         assert by_name["OF2"].to_slot == "DROP"
+
+
+class TestHealthyRestOfSeason:
+    def _cruz(self):
+        # Injury-reduced ROS (175 PA) + healthy preseason (543 PA).
+        ros = HitterStats(
+            pa=175.0,
+            ab=154.0,
+            h=37.7,
+            r=25.0,
+            hr=8.0,
+            rbi=23.0,
+            sb=10.0,
+            g=40.0,
+            avg=0.245,
+            sgp=4.52,
+        )
+        pre = HitterStats(
+            pa=543.0, ab=478.0, h=114.0, r=74.0, hr=23.0, rbi=68.0, sb=28.0, g=127.0, avg=0.239
+        )
+        return Player(
+            name="Cruz",
+            player_type=PlayerType.HITTER,
+            positions=[Position.OF],
+            rest_of_season=ros,
+            preseason=pre,
+        )
+
+    def test_hitter_scales_volume_preserves_rate_and_clears_sgp(self):
+        p = self._cruz()
+        out = healthy_rest_of_season(p, fraction_remaining=0.41)
+        assert out is not None
+        scale = (543.0 * 0.41) / 175.0
+        assert out.rest_of_season.pa == pytest.approx(543.0 * 0.41)
+        assert out.rest_of_season.hr == pytest.approx(8.0 * scale)
+        assert out.rest_of_season.sb == pytest.approx(10.0 * scale)
+        assert out.rest_of_season.g == pytest.approx(40.0 * scale)
+        assert out.rest_of_season.avg == pytest.approx(0.245)  # rate preserved
+        assert out.rest_of_season.sgp is None  # cached SGP cleared
+        # Original object untouched (transform returns a copy).
+        assert p.rest_of_season.pa == 175.0
+        assert p.rest_of_season.sgp == 4.52
+
+    def test_pitcher_scales_ip_and_gs_preserves_rate(self):
+        ros = PitcherStats(
+            ip=43.0,
+            w=3.0,
+            k=53.0,
+            sv=0.0,
+            er=17.0,
+            bb=15.0,
+            h_allowed=40.0,
+            g=9.0,
+            gs=9.0,
+            era=3.49,
+            whip=1.22,
+            sgp=3.48,
+        )
+        pre = PitcherStats(
+            ip=150.0,
+            w=10.0,
+            k=180.0,
+            sv=0.0,
+            er=60.0,
+            bb=45.0,
+            h_allowed=130.0,
+            g=28.0,
+            gs=28.0,
+            era=3.60,
+            whip=1.17,
+        )
+        p = Player(
+            name="Snell",
+            player_type=PlayerType.PITCHER,
+            positions=[Position.P],
+            rest_of_season=ros,
+            preseason=pre,
+        )
+        out = healthy_rest_of_season(p, fraction_remaining=0.41)
+        assert out is not None
+        scale = (150.0 * 0.41) / 43.0
+        assert out.rest_of_season.ip == pytest.approx(150.0 * 0.41)
+        assert out.rest_of_season.k == pytest.approx(53.0 * scale)
+        assert out.rest_of_season.gs == pytest.approx(9.0 * scale)
+        assert out.rest_of_season.era == pytest.approx(3.49)  # rate preserved
+        assert out.rest_of_season.whip == pytest.approx(1.22)
+        assert out.rest_of_season.sgp is None
+
+    def test_none_when_no_preseason(self):
+        p = self._cruz()
+        p.preseason = None
+        assert healthy_rest_of_season(p, 0.41) is None
+
+    def test_none_when_current_volume_zero(self):
+        p = self._cruz()
+        p.rest_of_season = HitterStats(
+            pa=0.0, ab=0.0, h=0.0, r=0.0, hr=0.0, rbi=0.0, sb=0.0, g=0.0, avg=0.0
+        )
+        assert healthy_rest_of_season(p, 0.41) is None
+
+    def test_none_when_not_volume_suppressed(self):
+        # preseason.pa * fr = 500 * 0.41 = 205 <= current 300 -> no adjustment.
+        p = self._cruz()
+        p.rest_of_season = HitterStats(
+            pa=300.0, ab=270.0, h=75.0, r=45.0, hr=12.0, rbi=40.0, sb=6.0, g=70.0, avg=0.278
+        )
+        p.preseason = HitterStats(
+            pa=500.0, ab=450.0, h=125.0, r=70.0, hr=20.0, rbi=65.0, sb=10.0, g=150.0, avg=0.278
+        )
+        assert healthy_rest_of_season(p, 0.41) is None

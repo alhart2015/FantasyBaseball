@@ -28,6 +28,70 @@ from fantasy_baseball.utils.constants import Category
 logger = logging.getLogger(__name__)
 
 
+def healthy_rest_of_season(player: Player, fraction_remaining: float) -> Player | None:
+    """Return a copy of ``player`` with ROS counting stats scaled up to a
+    healthy remaining volume, or ``None`` when no adjustment applies.
+
+    Healthy remaining volume = the player's pre-injury (``preseason``)
+    full-season pace prorated to the games left: ``preseason.pa * fraction_
+    remaining`` (hitters) / ``preseason.ip * fraction_remaining`` (pitchers).
+    The current ROS counting stats are multiplied by ``healthy_vol /
+    current_vol``, preserving rates (avg/era/whip are left untouched, so they
+    stay correct since their components scale together). Games (``g``, and
+    pitcher ``gs``) scale with volume. The cached ``sgp`` is cleared so any
+    downstream read recomputes from the scaled line.
+
+    Returns ``None`` (no healthy/limited difference to show) when preseason is
+    absent, the current volume is zero, or the healthy volume would not exceed
+    the current volume (the player is not volume-suppressed). The transform
+    only ever inflates.
+    """
+    ros = player.rest_of_season
+    pre = player.preseason
+    if ros is None or pre is None:
+        return None
+
+    if player.player_type == PlayerType.PITCHER:
+        current_vol = ros.ip
+        healthy_vol = pre.ip * fraction_remaining
+    else:
+        current_vol = ros.pa
+        healthy_vol = pre.pa * fraction_remaining
+
+    if current_vol <= 0 or healthy_vol <= current_vol:
+        return None
+
+    scale = healthy_vol / current_vol
+    if player.player_type == PlayerType.PITCHER:
+        new_ros = dataclasses.replace(
+            ros,
+            ip=ros.ip * scale,
+            w=ros.w * scale,
+            k=ros.k * scale,
+            sv=ros.sv * scale,
+            er=ros.er * scale,
+            bb=ros.bb * scale,
+            h_allowed=ros.h_allowed * scale,
+            g=ros.g * scale,
+            gs=ros.gs * scale,
+            sgp=None,
+        )
+    else:
+        new_ros = dataclasses.replace(
+            ros,
+            pa=ros.pa * scale,
+            ab=ros.ab * scale,
+            h=ros.h * scale,
+            r=ros.r * scale,
+            hr=ros.hr * scale,
+            rbi=ros.rbi * scale,
+            sb=ros.sb * scale,
+            g=ros.g * scale,
+            sgp=None,
+        )
+    return dataclasses.replace(player, rest_of_season=new_ros)
+
+
 @dataclass
 class Move:
     """A single roster transaction for one player."""
