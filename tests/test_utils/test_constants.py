@@ -4,14 +4,14 @@ import pytest
 
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
+    DEFAULT_NUM_TEAMS,
+    DEFAULT_ROSTER_SLOTS,
     DEFAULT_SGP_DENOMINATORS,
     HITTING_CATEGORIES,
     IF_ELIGIBLE,
     INVERSE_STATS,
-    NUM_TEAMS,
     PITCHING_CATEGORIES,
     RATE_STATS,
-    ROSTER_SLOTS,
     STARTER_IP_THRESHOLD,
     STARTERS_PER_POSITION,
     Category,
@@ -58,7 +58,7 @@ def test_inverse_stats_subset_of_rate():
 
 
 def test_roster_slots_total():
-    assert sum(ROSTER_SLOTS.values()) == 25
+    assert sum(DEFAULT_ROSTER_SLOTS.values()) == 25
 
 
 def test_starters_per_position_total():
@@ -76,7 +76,7 @@ def test_if_eligible_positions():
 
 
 def test_num_teams():
-    assert NUM_TEAMS == 10
+    assert DEFAULT_NUM_TEAMS == 10
 
 
 def test_category_members_are_not_strings():
