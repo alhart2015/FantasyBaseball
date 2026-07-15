@@ -1,3 +1,5 @@
+import pytest
+
 from fantasy_baseball.lineup.il_return_planner import (
     IlReturnPlanResult,
     Move,
@@ -7,7 +9,10 @@ from fantasy_baseball.lineup.il_return_planner import (
     _build_pool,
     _counts_against_cap,
     _solve_lineup,
+    _tops_differ,
+    healthy_rest_of_season,
     plan_il_returns,
+    plan_il_returns_scenarios,
     roster_capacity,
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
@@ -504,3 +509,248 @@ class TestPlanIlReturns:
         assert by_name["Trout"].player_type == "hitter"
         # The drop is rendered as a DROP move.
         assert by_name["OF2"].to_slot == "DROP"
+
+
+class TestHealthyRestOfSeason:
+    def _cruz(self):
+        # Injury-reduced ROS (175 PA) + healthy preseason (543 PA).
+        ros = HitterStats(
+            pa=175.0,
+            ab=154.0,
+            h=37.7,
+            r=25.0,
+            hr=8.0,
+            rbi=23.0,
+            sb=10.0,
+            g=40.0,
+            avg=0.245,
+            sgp=4.52,
+        )
+        pre = HitterStats(
+            pa=543.0, ab=478.0, h=114.0, r=74.0, hr=23.0, rbi=68.0, sb=28.0, g=127.0, avg=0.239
+        )
+        return Player(
+            name="Cruz",
+            player_type=PlayerType.HITTER,
+            positions=[Position.OF],
+            rest_of_season=ros,
+            preseason=pre,
+        )
+
+    def test_hitter_scales_volume_preserves_rate_and_clears_sgp(self):
+        p = self._cruz()
+        out = healthy_rest_of_season(p, fraction_remaining=0.41)
+        assert out is not None
+        scale = (543.0 * 0.41) / 175.0
+        assert out.rest_of_season.pa == pytest.approx(543.0 * 0.41)
+        assert out.rest_of_season.hr == pytest.approx(8.0 * scale)
+        assert out.rest_of_season.sb == pytest.approx(10.0 * scale)
+        assert out.rest_of_season.g == pytest.approx(40.0 * scale)
+        assert out.rest_of_season.avg == pytest.approx(0.245)  # rate preserved
+        assert out.rest_of_season.sgp is None  # cached SGP cleared
+        # Original object untouched (transform returns a copy).
+        assert p.rest_of_season.pa == 175.0
+        assert p.rest_of_season.sgp == 4.52
+
+    def test_pitcher_scales_ip_and_gs_preserves_rate(self):
+        ros = PitcherStats(
+            ip=43.0,
+            w=3.0,
+            k=53.0,
+            sv=0.0,
+            er=17.0,
+            bb=15.0,
+            h_allowed=40.0,
+            g=9.0,
+            gs=9.0,
+            era=3.49,
+            whip=1.22,
+            sgp=3.48,
+        )
+        pre = PitcherStats(
+            ip=150.0,
+            w=10.0,
+            k=180.0,
+            sv=0.0,
+            er=60.0,
+            bb=45.0,
+            h_allowed=130.0,
+            g=28.0,
+            gs=28.0,
+            era=3.60,
+            whip=1.17,
+        )
+        p = Player(
+            name="Snell",
+            player_type=PlayerType.PITCHER,
+            positions=[Position.P],
+            rest_of_season=ros,
+            preseason=pre,
+        )
+        out = healthy_rest_of_season(p, fraction_remaining=0.41)
+        assert out is not None
+        scale = (150.0 * 0.41) / 43.0
+        assert out.rest_of_season.ip == pytest.approx(150.0 * 0.41)
+        assert out.rest_of_season.k == pytest.approx(53.0 * scale)
+        assert out.rest_of_season.gs == pytest.approx(9.0 * scale)
+        assert out.rest_of_season.era == pytest.approx(3.49)  # rate preserved
+        assert out.rest_of_season.whip == pytest.approx(1.22)
+        assert out.rest_of_season.sgp is None
+
+    def test_none_when_no_preseason(self):
+        p = self._cruz()
+        p.preseason = None
+        assert healthy_rest_of_season(p, 0.41) is None
+
+    def test_none_when_current_volume_zero(self):
+        p = self._cruz()
+        p.rest_of_season = HitterStats(
+            pa=0.0, ab=0.0, h=0.0, r=0.0, hr=0.0, rbi=0.0, sb=0.0, g=0.0, avg=0.0
+        )
+        assert healthy_rest_of_season(p, 0.41) is None
+
+    def test_none_when_not_volume_suppressed(self):
+        # preseason.pa * fr = 500 * 0.41 = 205 <= current 300 -> no adjustment.
+        p = self._cruz()
+        p.rest_of_season = HitterStats(
+            pa=300.0, ab=270.0, h=75.0, r=45.0, hr=12.0, rbi=40.0, sb=6.0, g=70.0, avg=0.278
+        )
+        p.preseason = HitterStats(
+            pa=500.0, ab=450.0, h=125.0, r=70.0, hr=20.0, rbi=65.0, sb=10.0, g=150.0, avg=0.278
+        )
+        assert healthy_rest_of_season(p, 0.41) is None
+
+
+class TestPlanIlReturnsScenarios:
+    def _roster_with_il_hitter(self):
+        """9 regular hitters (fill the 9 active hitter slots) + a BN hitter +
+        3 pitchers + an IL-slot returnee with a healthy preseason. Counted
+        bodies = 9 + 1 BN + 3 P = 13 = SMALL_SLOTS capacity, so activating the
+        IL-slot returnee brings the pool to 14 and forces exactly one drop
+        (overflow 1)."""
+        hitters = _full_hitters()  # 9 counted, fill the 9 hitter active slots
+        bn1 = _hitter(
+            "BN1", ["OF"], slot="BN", r=40, hr=6, rbi=35, sb=2, avg=0.240, ab=300, h=72
+        )  # 13th counted body
+        sp1 = _good_pitcher("SP1", k=160, era=3.4, whip=1.15)
+        sp2 = _good_pitcher("SP2", k=155, era=3.5, whip=1.18)
+        sp1.selected_position = Position.P
+        sp2.selected_position = Position.P
+        scrub = _pitcher("Scrub", slot="P")  # weak counted pitcher
+        # IL-slot returnee: injury ROS (~177 PA, ab*1.15), healthy preseason (543 PA).
+        cruz = _hitter(
+            "Cruz", ["OF"], slot="IL", r=25, hr=8, rbi=23, sb=10, avg=0.245, ab=154, h=37
+        )
+        cruz.status = "IL10"
+        cruz.preseason = HitterStats(
+            pa=543.0, ab=478.0, h=114.0, r=74.0, hr=23.0, rbi=68.0, sb=28.0, g=127.0, avg=0.239
+        )
+        return [*hitters, bn1, sp1, sp2, scrub, cruz]
+
+    def _call(self, roster, activating):
+        return plan_il_returns_scenarios(
+            roster,
+            activating,
+            SMALL_SLOTS,
+            projected_standings=_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=0.41,
+            team_sds=None,
+        )
+
+    def test_suppressed_il_slot_returnee_produces_healthy_scenario(self):
+        roster = self._roster_with_il_hitter()
+        cruz = next(p for p in roster if p.name == "Cruz")
+        res = self._call(roster, [cruz])
+
+        assert res.as_projected.overflow == 1  # IL-slot returnee forces one drop
+        assert res.if_healthy is not None
+        assert len(res.adjusted) == 1
+        adj = res.adjusted[0]
+        assert adj["name"] == "Cruz"
+        assert adj["vol_unit"] == "PA"
+        cruz_pa = cruz.rest_of_season.pa  # _hitter sets pa = int(ab * 1.15) = 177
+        assert adj["vol_projected"] == pytest.approx(round(cruz_pa, 1))
+        assert adj["vol_healthy"] > adj["vol_projected"]
+        # Healthy volume is preseason.pa prorated: 543 * 0.41 ~= 222.6 PA.
+        assert adj["vol_healthy"] == pytest.approx(round(543.0 * 0.41, 1))
+
+    def test_healthy_swap_reaches_the_activating_list_not_just_roster(self):
+        # Regression: an IL-slot returnee enters _build_pool via the passed
+        # activating_il list, so the healthy swap must reach it too. If it only
+        # reached the roster copy, if_healthy would equal as_projected exactly.
+        roster = self._roster_with_il_hitter()
+        cruz = next(p for p in roster if p.name == "Cruz")
+        res = self._call(roster, [cruz])
+        assert res.if_healthy is not None
+        assert res.if_healthy.to_dict() != res.as_projected.to_dict()
+
+    def test_as_projected_reproduces_plan_il_returns_exactly(self):
+        roster = self._roster_with_il_hitter()
+        cruz = next(p for p in roster if p.name == "Cruz")
+        res = self._call(roster, [cruz])
+        direct = plan_il_returns(
+            roster,
+            [cruz],
+            SMALL_SLOTS,
+            projected_standings=_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=0.41,
+            team_sds=None,
+        )
+        assert res.as_projected.to_dict() == direct.to_dict()
+
+    def test_no_adjustment_yields_null_if_healthy(self):
+        # Returnee without preseason -> no healthy scenario, single-list fallback.
+        roster = self._roster_with_il_hitter()
+        cruz = next(p for p in roster if p.name == "Cruz")
+        cruz.preseason = None
+        res = self._call(roster, [cruz])
+        assert res.if_healthy is None
+        assert res.adjusted == []
+        assert res.tops_differ is False
+
+    def test_tops_differ_compares_top_drop_sets_order_independent(self):
+        def _result(drop_name, drop_type="hitter"):
+            return IlReturnPlanResult(
+                activating=["Cruz"],
+                capacity=13,
+                overflow=1,
+                plans=[
+                    MovePlan(
+                        drops=[drop_name],
+                        moves=[Move(drop_name, drop_type, "IL", "DROP")],
+                        delta_roto=0.1,
+                        band={},
+                    )
+                ],
+            )
+
+        a = _result("Cruz")
+        b = _result("Scrub")
+        same = _result("Cruz")
+        empty = IlReturnPlanResult(activating=["Cruz"], capacity=13, overflow=1, plans=[])
+        assert _tops_differ(a, b) is True
+        assert _tops_differ(a, same) is False  # same dropped body
+        assert _tops_differ(a, empty) is False  # no top plan to compare
+
+    def test_tops_differ_distinguishes_two_way_rows_sharing_a_name(self):
+        # A two-way player's hitter and pitcher rows share a display name; the
+        # comparison keys on (name, player_type) so dropping different rows is
+        # NOT read as "same top plan". A bare-name compare would collapse it.
+        def _drop(player_type):
+            return IlReturnPlanResult(
+                activating=["Ohtani"],
+                capacity=13,
+                overflow=1,
+                plans=[
+                    MovePlan(
+                        drops=["Ohtani"],
+                        moves=[Move("Ohtani", player_type, "IL", "DROP")],
+                        delta_roto=0.1,
+                        band={},
+                    )
+                ],
+            )
+
+        assert _tops_differ(_drop("hitter"), _drop("pitcher")) is True

@@ -281,6 +281,13 @@ class Player:
         else:
             parsed_slot = Position.parse(raw_slot)
 
+        # Yahoo IDs arrive as ints from the API/cache but are identifiers, not
+        # numbers. Coerce to str so ``yahoo_id: str | None`` holds -- otherwise
+        # an int leaks into comparisons against string IDs (e.g. checkbox values
+        # from a request), which silently never match.
+        raw_yahoo_id = d.get("player_id")  # cache format uses "player_id"
+        yahoo_id = None if raw_yahoo_id is None else str(raw_yahoo_id)
+
         return cls(
             name=name,
             player_type=player_type,
@@ -288,7 +295,7 @@ class Player:
             team=d.get("team", ""),
             fg_id=d.get("fg_id"),
             mlbam_id=d.get("mlbam_id"),
-            yahoo_id=d.get("player_id"),  # cache format uses "player_id"
+            yahoo_id=yahoo_id,
             rest_of_season=ros,
             full_season_projection=full_season_projection,
             preseason=preseason,

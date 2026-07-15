@@ -28,6 +28,78 @@ from fantasy_baseball.utils.constants import Category
 logger = logging.getLogger(__name__)
 
 
+def healthy_rest_of_season(player: Player, fraction_remaining: float) -> Player | None:
+    """Return a copy of ``player`` with ROS counting stats scaled up to a
+    healthy remaining volume, or ``None`` when no adjustment applies.
+
+    Healthy remaining volume = the player's pre-injury (``preseason``)
+    full-season pace prorated to the games left (``preseason.pa`` for hitters,
+    ``preseason.ip`` for pitchers, times the clamped ``fraction_remaining``).
+    The current ROS counting stats are multiplied by ``healthy_vol /
+    current_vol``, preserving rates (avg/era/whip are left untouched, so they
+    stay correct since their components scale together). Games (``g``, and
+    pitcher ``gs``) scale with volume. The cached ``sgp`` is cleared so any
+    downstream read recomputes from the scaled line.
+
+    Returns ``None`` (no healthy/limited difference to show) when preseason is
+    absent, the current volume is zero, or the healthy volume would not exceed
+    the current volume (the player is not volume-suppressed). The transform
+    only ever inflates.
+    """
+    ros = player.rest_of_season
+    pre = player.preseason
+    if ros is None or pre is None:
+        return None
+
+    # Clamp to [0, 1] like pitcher_swap.swap_window_ip: compute_fraction_remaining
+    # can exceed 1.0 before opening day, and a healthy remainder is never more than
+    # a full healthy season.
+    fr = min(1.0, max(0.0, fraction_remaining))
+    is_pitcher = player.player_type == PlayerType.PITCHER
+    if is_pitcher:
+        current_vol = ros.ip
+        healthy_vol = pre.ip * fr
+    else:
+        current_vol = ros.pa
+        healthy_vol = pre.pa * fr
+
+    # Positive-form guard (not the <= negation) so a NaN volume -- which a cached
+    # projection can carry, and which makes every <= comparison False -- also
+    # returns None instead of scaling every stat to NaN. Only inflates.
+    if not (current_vol > 0 and healthy_vol > current_vol):
+        return None
+
+    scale = healthy_vol / current_vol
+    if is_pitcher:
+        new_ros = dataclasses.replace(
+            ros,
+            ip=ros.ip * scale,
+            w=ros.w * scale,
+            k=ros.k * scale,
+            sv=ros.sv * scale,
+            er=ros.er * scale,
+            bb=ros.bb * scale,
+            h_allowed=ros.h_allowed * scale,
+            g=ros.g * scale,
+            gs=ros.gs * scale,
+            sgp=None,
+        )
+    else:
+        new_ros = dataclasses.replace(
+            ros,
+            pa=ros.pa * scale,
+            ab=ros.ab * scale,
+            h=ros.h * scale,
+            r=ros.r * scale,
+            hr=ros.hr * scale,
+            rbi=ros.rbi * scale,
+            sb=ros.sb * scale,
+            g=ros.g * scale,
+            sgp=None,
+        )
+    return dataclasses.replace(player, rest_of_season=new_ros)
+
+
 @dataclass
 class Move:
     """A single roster transaction for one player."""
@@ -441,4 +513,138 @@ def plan_il_returns(
         capacity=capacity,
         overflow=overflow,
         plans=[plan for plan, _ in scored[:max_plans]],
+    )
+
+
+@dataclass
+class IlReturnScenarios:
+    """The IL-return decision under both ROS volume assumptions.
+
+    ``as_projected`` is the plan set on the roster as-is (injury-reduced
+    volume). ``if_healthy`` is the plan set with each volume-suppressed
+    returnee restored to a healthy remaining volume, or ``None`` when no
+    returnee was adjusted (the caller then shows a single list). ``adjusted``
+    lists the returnees that were restored with their projected-vs-healthy
+    volume. ``tops_differ`` is True when both scenarios have a top plan and
+    those top plans drop different players.
+    """
+
+    as_projected: IlReturnPlanResult
+    if_healthy: IlReturnPlanResult | None
+    adjusted: list[dict[str, Any]] = field(default_factory=list)
+    tops_differ: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "as_projected": self.as_projected.to_dict(),
+            "if_healthy": self.if_healthy.to_dict() if self.if_healthy is not None else None,
+            "adjusted": list(self.adjusted),
+            "tops_differ": self.tops_differ,
+        }
+
+
+def _top_dropped_bodies(result: IlReturnPlanResult) -> set[tuple[str, str]]:
+    """The ``(name, player_type)`` of each body the top plan drops.
+
+    Keyed on ``(name, player_type)`` -- player_key-equivalent -- rather than
+    bare name, so a two-way player's hitter and pitcher rows (which share a
+    name) and two distinct same-named MLB players stay distinct. Reads the
+    ``DROP`` moves rather than ``MovePlan.drops`` because ``drops`` is a
+    name-only display list that collapses those cases.
+    """
+    return {(m.name, m.player_type) for m in result.plans[0].moves if m.to_slot == "DROP"}
+
+
+def _tops_differ(a: IlReturnPlanResult, b: IlReturnPlanResult) -> bool:
+    """True when both scenarios have a top plan (plans[0]) and their dropped
+    bodies differ, compared order-independently and keyed on
+    ``(name, player_type)`` so same-named / two-way rows do not collapse."""
+    if not a.plans or not b.plans:
+        return False
+    return _top_dropped_bodies(a) != _top_dropped_bodies(b)
+
+
+def plan_il_returns_scenarios(
+    roster: list[Player],
+    activating_il: list[Player],
+    roster_slots: dict[str, int],
+    *,
+    projected_standings: ProjectedStandings,
+    team_name: str,
+    fraction_remaining: float,
+    team_sds: Mapping[str, Mapping[Category, float]] | None = None,
+    max_plans: int = 5,
+    sgp_overrides: SgpOverrides | None = None,
+) -> IlReturnScenarios:
+    """Plan IL returns under both the projected (injury) volume and a healthy
+    remaining volume, for the ``adjusted`` returnees.
+
+    Runs the unmodified :func:`plan_il_returns` twice. The healthy run applies
+    :func:`healthy_rest_of_season` to each suppressed returnee in BOTH the
+    roster copy and the ``activating_il`` list -- an IL-slot returnee enters
+    ``_build_pool`` via the activating list (``extra`` path), so a roster-only
+    swap would be a silent no-op. Returns ``if_healthy=None`` when no returnee
+    is volume-suppressed.
+    """
+    as_projected = plan_il_returns(
+        roster,
+        activating_il,
+        roster_slots,
+        projected_standings=projected_standings,
+        team_name=team_name,
+        fraction_remaining=fraction_remaining,
+        team_sds=team_sds,
+        max_plans=max_plans,
+        sgp_overrides=sgp_overrides,
+    )
+
+    healthy_by_key: dict[str, Player] = {}
+    adjusted: list[dict[str, Any]] = []
+    for p in activating_il:
+        healthy = healthy_rest_of_season(p, fraction_remaining)
+        if healthy is None:
+            continue
+        healthy_by_key[p.player_key] = healthy
+        is_pitcher = p.player_type == PlayerType.PITCHER
+        cur = p.rest_of_season
+        new = healthy.rest_of_season
+        adjusted.append(
+            {
+                "name": p.name,
+                "player_type": p.player_type.value,
+                "vol_unit": "IP" if is_pitcher else "PA",
+                "vol_projected": round(cur.ip if is_pitcher else cur.pa, 1),
+                "vol_healthy": round(new.ip if is_pitcher else new.pa, 1),
+            }
+        )
+
+    if not healthy_by_key:
+        return IlReturnScenarios(as_projected=as_projected, if_healthy=None)
+
+    # Swap the healthy ROS into both the roster copy and the activating list,
+    # keyed on player_key so an IL-slot returnee (sourced from activating_il in
+    # _build_pool) carries the healthy line. Derive the activating list from
+    # activating_il directly (not by filtering the roster copy) so an activating
+    # player absent from ``roster`` -- which plan_il_returns still accepts via
+    # _build_pool's ``extra`` path -- keeps the same activation set in both runs.
+    healthy_roster = [healthy_by_key.get(p.player_key, p) for p in roster]
+    healthy_activating = [healthy_by_key.get(p.player_key, p) for p in activating_il]
+
+    if_healthy = plan_il_returns(
+        healthy_roster,
+        healthy_activating,
+        roster_slots,
+        projected_standings=projected_standings,
+        team_name=team_name,
+        fraction_remaining=fraction_remaining,
+        team_sds=team_sds,
+        max_plans=max_plans,
+        sgp_overrides=sgp_overrides,
+    )
+
+    return IlReturnScenarios(
+        as_projected=as_projected,
+        if_healthy=if_healthy,
+        adjusted=adjusted,
+        tops_differ=_tops_differ(as_projected, if_healthy),
     )
