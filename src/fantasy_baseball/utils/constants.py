@@ -80,13 +80,7 @@ DEFAULT_ROSTER_SLOTS: dict[str, int] = {
     "IL": 2,
 }
 
-# Backward-compatible alias so existing imports keep working.
-ROSTER_SLOTS: dict[str, int] = DEFAULT_ROSTER_SLOTS
-
 DEFAULT_NUM_TEAMS: int = 10
-
-# Backward-compatible alias.
-NUM_TEAMS: int = DEFAULT_NUM_TEAMS
 
 # League-typical full-season team volumes, shared by the SGP scale
 # (rate-stat SGP is proportional to 1/team_ip), the simulation's
@@ -118,7 +112,9 @@ def compute_starters_per_position(
     }
 
 
-# Default value kept for backward compatibility.
+# Module-level default derived from the league-default roster slots and size.
+# Consumed by sgp/replacement.py; callers with a non-default league pass their
+# own via compute_starters_per_position(...).
 STARTERS_PER_POSITION: dict[str, int] = compute_starters_per_position()
 
 IF_ELIGIBLE: set[str] = {"1B", "2B", "3B", "SS"}
