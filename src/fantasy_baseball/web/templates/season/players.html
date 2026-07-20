@@ -58,10 +58,12 @@
 </div>
 <div id="player-count"></div>
 
+<div class="table-scroll" tabindex="0" role="region" aria-label="Player browser">
 <table class="data-table" id="browse-table" style="display:none">
     <thead><tr id="table-head"></tr></thead>
     <tbody id="table-body"></tbody>
 </table>
+</div>
 
 <div id="empty-msg">Select a position or search by name.</div>
 
@@ -86,19 +88,29 @@
         </div>
         <div id="standings-subtitle" style="font-size:12px; color:var(--text-secondary); margin-bottom:12px;"></div>
         <div style="display:flex; gap:16px; flex-wrap:wrap;">
-            <div style="flex:1; min-width:300px;">
+            {# min() so the 300px side-by-side floor can still collapse on a
+               phone -- a hard 300px pins the column wider than the content box
+               below ~330px and scrolls the page sideways. #}
+            <div style="flex:1; min-width:min(300px, 100%);">
                 <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px; text-transform:uppercase; letter-spacing:1px;">Current Team</div>
+                <div class="table-scroll" tabindex="0" role="region" aria-label="Current team projected standings">
                 <table class="data-table" id="standings-before">
                     <thead><tr id="standings-before-head"></tr></thead>
                     <tbody id="standings-before-body"></tbody>
                 </table>
+                </div>
             </div>
-            <div style="flex:1; min-width:300px;">
+            {# min() so the 300px side-by-side floor can still collapse on a
+               phone -- a hard 300px pins the column wider than the content box
+               below ~330px and scrolls the page sideways. #}
+            <div style="flex:1; min-width:min(300px, 100%);">
                 <div id="standings-after-label" style="font-size:12px; color:var(--text-secondary); margin-bottom:6px; text-transform:uppercase; letter-spacing:1px;"></div>
+                <div class="table-scroll" tabindex="0" role="region" aria-label="Projected standings with the compared player">
                 <table class="data-table" id="standings-after">
                     <thead><tr id="standings-after-head"></tr></thead>
                     <tbody id="standings-after-body"></tbody>
                 </table>
+                </div>
             </div>
         </div>
     </div>

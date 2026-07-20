@@ -141,6 +141,7 @@
     {% endif %}
 </div>
 
+<div class="table-scroll" tabindex="0" role="region" aria-label="Hitters">
 <table class="data-table">
     <thead>
         <tr>
@@ -165,12 +166,14 @@
     {% endwith %}
     </tbody>
 </table>
+</div>
 
 {# Pitchers section #}
 <div class="section-header" style="margin-top: 24px;">
     <h3>Pitchers</h3>
 </div>
 
+<div class="table-scroll" tabindex="0" role="region" aria-label="Pitchers">
 <table class="data-table">
     <thead>
         <tr>
@@ -193,6 +196,7 @@
     {% endwith %}
     </tbody>
 </table>
+</div>
 
 {# Probable starters section #}
 {% if starters %}

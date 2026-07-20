@@ -446,6 +446,11 @@ td[style*="--neg"] {
 
 .move-row {
     display: flex;
+    /* Same reason as .pill-group: a move line that outgrows its container
+       would otherwise scroll .content sideways. The dRoto chip carries
+       margin-left: auto, so it stays right-aligned on whichever line it
+       lands on. */
+    flex-wrap: wrap;
     align-items: center;
     gap: 8px;
     font-size: 12px;
