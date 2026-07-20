@@ -24,6 +24,14 @@
 #empty-msg {
     margin-top: 20px;
 }
+/* The two standings columns of the comparison panel. min() rather than a flat
+   300px: a hard floor pins each column wider than the content box below ~330px
+   and scrolls the page sideways, so the side-by-side minimum has to be able to
+   collapse on a phone. */
+.compare-col {
+    flex: 1;
+    min-width: min(300px, 100%);
+}
 </style>
 
 <div class="page-players">
@@ -58,8 +66,12 @@
 </div>
 <div id="player-count"></div>
 
-<div class="table-scroll" tabindex="0" role="region" aria-label="Player browser">
-<table class="data-table" id="browse-table" style="display:none">
+{# display:none lives on the WRAPPER, not the table: the wrapper is focusable,
+   so leaving it visible around a hidden table puts an empty 0px-tall region in
+   the tab order whenever no position is selected. #}
+<div class="table-scroll" tabindex="0" role="region" aria-label="Player browser"
+     id="browse-table-scroll" style="display:none">
+<table class="data-table" id="browse-table">
     <thead><tr id="table-head"></tr></thead>
     <tbody id="table-body"></tbody>
 </table>
@@ -88,10 +100,7 @@
         </div>
         <div id="standings-subtitle" style="font-size:12px; color:var(--text-secondary); margin-bottom:12px;"></div>
         <div style="display:flex; gap:16px; flex-wrap:wrap;">
-            {# min() so the 300px side-by-side floor can still collapse on a
-               phone -- a hard 300px pins the column wider than the content box
-               below ~330px and scrolls the page sideways. #}
-            <div style="flex:1; min-width:min(300px, 100%);">
+            <div class="compare-col">
                 <div style="font-size:12px; color:var(--text-secondary); margin-bottom:6px; text-transform:uppercase; letter-spacing:1px;">Current Team</div>
                 <div class="table-scroll" tabindex="0" role="region" aria-label="Current team projected standings">
                 <table class="data-table" id="standings-before">
@@ -100,10 +109,7 @@
                 </table>
                 </div>
             </div>
-            {# min() so the 300px side-by-side floor can still collapse on a
-               phone -- a hard 300px pins the column wider than the content box
-               below ~330px and scrolls the page sideways. #}
-            <div style="flex:1; min-width:min(300px, 100%);">
+            <div class="compare-col">
                 <div id="standings-after-label" style="font-size:12px; color:var(--text-secondary); margin-bottom:6px; text-transform:uppercase; letter-spacing:1px;"></div>
                 <div class="table-scroll" tabindex="0" role="region" aria-label="Projected standings with the compared player">
                 <table class="data-table" id="standings-after">
@@ -140,13 +146,18 @@ let selectedPlayers = []; // array of player objects, max 2
 const posFilter = document.getElementById('pos-filter');
 const faOnly = document.getElementById('fa-only');
 const nameFilter = document.getElementById('name-filter');
-const tableEl = document.getElementById('browse-table');
+// The browse table is shown, hidden and anchored against by its .table-scroll
+// wrapper rather than the <table> itself: the wrapper is focusable, so hiding
+// only the table would leave an empty region in the tab order, and inserting a
+// sibling after the table would drop it inside the horizontal scroller.
+const browseWrapEl = document.getElementById('browse-table-scroll');
 const headEl = document.getElementById('table-head');
 const bodyEl = document.getElementById('table-body');
 const countEl = document.getElementById('player-count');
 const emptyEl = document.getElementById('empty-msg');
 
-// "Load more FAs" button (created lazily, lives below the table).
+// "Load more FAs" button (created lazily, lives below the table's wrapper --
+// inside it, the button would scroll sideways along with the columns).
 const loadMoreEl = document.createElement('div');
 loadMoreEl.id = 'load-more-wrap';
 loadMoreEl.style.cssText = 'text-align:center; margin:16px 0; display:none;';
@@ -154,7 +165,7 @@ loadMoreEl.innerHTML =
     '<button id="load-more-btn" style="padding:6px 18px; background:none; ' +
     'border:1px solid var(--panel-border); color:var(--text-secondary); ' +
     'border-radius:4px; cursor:pointer; font-size:13px;">Load more FAs</button>';
-tableEl.parentNode.insertBefore(loadMoreEl, tableEl.nextSibling);
+browseWrapEl.parentNode.insertBefore(loadMoreEl, browseWrapEl.nextSibling);
 
 document.getElementById('load-more-btn').addEventListener('click', loadMoreFAs);
 
@@ -179,7 +190,7 @@ function loadPosition(pos) {
     loadInFlight = true;
     emptyEl.textContent = 'Loading...';
     emptyEl.style.display = '';
-    tableEl.style.display = 'none';
+    browseWrapEl.style.display = 'none';
     loadMoreEl.style.display = 'none';
     fetchBrowse(pos, 0).then(data => {
         if (reqId !== loadSeq) return;
@@ -229,7 +240,7 @@ function runNameSearch(q) {
     loadInFlight = true;
     emptyEl.textContent = 'Searching...';
     emptyEl.style.display = '';
-    tableEl.style.display = 'none';
+    browseWrapEl.style.display = 'none';
     loadMoreEl.style.display = 'none';
     fetch('/api/players/find?q=' + encodeURIComponent(q))
         .then(r => r.json())
@@ -332,7 +343,7 @@ function deltaRotoCell(p) {
 
 function render() {
     if (loadMode === 'empty') {
-        tableEl.style.display = 'none';
+        browseWrapEl.style.display = 'none';
         loadMoreEl.style.display = 'none';
         emptyEl.style.display = '';
         emptyEl.textContent = 'Select a position or search by name.';
@@ -490,7 +501,7 @@ function render() {
         });
     });
 
-    tableEl.style.display = '';
+    browseWrapEl.style.display = '';
     emptyEl.style.display = 'none';
     loadMoreEl.style.display = (loadMode === 'position' && hasMoreFa) ? '' : 'none';
     countEl.textContent = filtered.length + ' player' + (filtered.length !== 1 ? 's' : '');

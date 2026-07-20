@@ -444,20 +444,24 @@ td[style*="--neg"] {
 
 .moves-banner h4 { color: var(--gold-deep); font-size: 10.5px; font-weight: 700; letter-spacing: 0.16em; text-transform: uppercase; margin-bottom: 10px; }
 
+/* Wraps for the same reason as .pill-group: a move line that outgrows its
+   container would otherwise scroll .content sideways. The dRoto chip carries
+   margin-left: auto, so it stays right-aligned on whichever line it lands on.
+   row-gap is tightened to 4px so a wrapped line still reads as one move --
+   at the 8px column gap its two halves would sit further apart than adjacent
+   move rows do (margin-bottom: 6px). */
 .move-row {
     display: flex;
-    /* Same reason as .pill-group: a move line that outgrows its container
-       would otherwise scroll .content sideways. The dRoto chip carries
-       margin-left: auto, so it stays right-aligned on whichever line it
-       lands on. */
     flex-wrap: wrap;
     align-items: center;
-    gap: 8px;
+    gap: 4px 8px;   /* row column */
     font-size: 12px;
     margin-bottom: 6px;
 }
 
-.swap-row { gap: 10px; }
+/* column-gap, not the gap shorthand: the shorthand would also reset the 4px
+   row-gap .move-row sets for its wrapped lines. */
+.swap-row { column-gap: 10px; }
 .swap-side { display: inline-flex; align-items: baseline; gap: 6px; }
 .swap-arrow { color: var(--text-secondary); font-size: 14px; }
 .slot-arrow { color: var(--text-secondary); font-size: 11px; letter-spacing: 0.04em; }
