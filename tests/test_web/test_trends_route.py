@@ -77,10 +77,22 @@ def test_trends_subpage_renders_within_standings(app):
     assert "chart-projected" in body
     assert "season_trends.js" in body
     assert 'data-view="trends"' in body
-    # The trends_chart macro emits a per-category tab from `{% for cat in
-    # categories %}`; assert one renders so a dropped `categories` context var
-    # (which would silently blank every per-stat tab) fails this test.
-    assert 'data-tab="HR"' in body
+    # The trends_chart macro emits per-category tabs from two loops --
+    # `hitting_categories` then `pitching_categories`. Assert one tab from EACH:
+    # Jinja's default Undefined iterates to empty, so dropping or misspelling
+    # either context var silently blanks half the tabs with no error anywhere.
+    assert 'data-tab="HR"' in body  # hitting_categories
+    assert 'data-tab="WHIP"' in body  # pitching_categories
+    # Second render site: the Distributions strip is its own inline nav, not the
+    # trends_chart macro, so it reads the same two vars through separate markup
+    # and a typo in one site is caught only by that site's pair.
+    assert 'data-distmetric="SB"' in body  # hitting_categories
+    assert 'data-distmetric="SV"' in body  # pitching_categories
+    # The seam itself: without this span both strips still render every tab, so
+    # the assertions above stay green while the split silently degrades to
+    # wrapping wherever the width runs out. One per strip, Trends macro twice.
+    # Matched on the bare class name so adding a second class doesn't zero it.
+    assert body.count("tab-strip-break") == 3
 
 
 def test_trends_route_removed(app):

@@ -32,6 +32,9 @@
         <button class="pill" data-sub="stats" onclick="toggleCurrentSub(this)">Stat Totals</button>
     </div>
 
+    {# tabindex+role: a scroll container is only keyboard-operable if it can
+       take focus, and these tables hold no focusable cells of their own. #}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Standings">
     <table class="data-table" id="standings-table">
         <thead>
             <tr>
@@ -65,6 +68,7 @@
         {% endfor %}
         </tbody>
     </table>
+    </div>
 </div>
 
 {# ── Projected (Preseason / Current ERoto) ── #}
@@ -75,7 +79,8 @@
     </div>
 
     {# Macro: ERoto table with optional ± error bounds on stat totals #}
-    {% macro eroto_table(data, cell_class) %}
+    {% macro eroto_table(data, cell_class, label) %}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ label }}">
     <table class="data-table">
         <thead>
             <tr>
@@ -110,6 +115,7 @@
         {% endfor %}
         </tbody>
     </table>
+    </div>
     {% endmacro %}
 
     {# Preseason ERoto #}
@@ -119,7 +125,7 @@
             <button class="pill active" data-mode="points" onclick="toggleProjMode(this, '.proj-preseason-cell')">ERoto Points</button>
             <button class="pill" data-mode="stats" onclick="toggleProjMode(this, '.proj-preseason-cell')">Stat Totals</button>
         </div>
-        {{ eroto_table(preseason, "proj-preseason-cell") }}
+        {{ eroto_table(preseason, "proj-preseason-cell", "Preseason projected standings") }}
         {% else %}
         <p class="placeholder-text">No preseason projected standings data available.</p>
         {% endif %}
@@ -132,7 +138,7 @@
             <button class="pill active" data-mode="points" onclick="toggleProjMode(this, '.proj-current-cell')">ERoto Points</button>
             <button class="pill" data-mode="stats" onclick="toggleProjMode(this, '.proj-current-cell')">Stat Totals</button>
         </div>
-        {{ eroto_table(current_projected, "proj-current-cell") }}
+        {{ eroto_table(current_projected, "proj-current-cell", "Current projected standings") }}
         {% else %}
         <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/rest_of_season/YYYY-MM-DD/.</p>
         {% endif %}
@@ -149,7 +155,8 @@
         <button class="pill" data-mctab="preseason" onclick="toggleMcTab(this)">Opening Day</button>
     </div>
 
-    {% macro mc_team_table(mc_data) %}
+    {% macro mc_team_table(mc_data, label) %}
+    <div class="table-scroll" tabindex="0" role="region" aria-label="{{ label }}">
     <table class="data-table">
         <thead>
             <tr>
@@ -174,12 +181,14 @@
         {% endfor %}
         </tbody>
     </table>
+    </div>
     {% endmacro %}
 
-    {% macro cat_risk_table(mc_data) %}
+    {% macro cat_risk_table(mc_data, label) %}
     {% if mc_data.category_risk %}
     <div class="card" style="margin-top: 1.5rem;">
         <h3 style="color: var(--warning); margin-bottom: 12px;">Category Risk — Your Team</h3>
+        <div class="table-scroll" tabindex="0" role="region" aria-label="{{ label }}">
         <table class="data-table">
             <thead>
                 <tr>
@@ -204,6 +213,7 @@
             {% endfor %}
             </tbody>
         </table>
+        </div>
     </div>
     {% endif %}
     {% endmacro %}
@@ -215,8 +225,8 @@
             Frozen at Opening Day rosters ({{ baseline_meta.roster_date }}).
         </p>
         {% endif %}
-        {{ mc_team_table(mc) }}
-        {{ cat_risk_table(mc) }}
+        {{ mc_team_table(mc, "Opening Day Monte Carlo outcomes") }}
+        {{ cat_risk_table(mc, "Opening Day category risk") }}
         {% else %}
         <p class="placeholder-text">No Opening Day baseline available. Run <code>scripts/freeze_preseason_baseline.py</code>.</p>
         {% endif %}
@@ -224,8 +234,8 @@
 
     <div id="mc-current">
         {% if rest_of_season_mc %}
-        {{ mc_team_table(rest_of_season_mc) }}
-        {{ cat_risk_table(rest_of_season_mc) }}
+        {{ mc_team_table(rest_of_season_mc, "Current Monte Carlo outcomes") }}
+        {{ cat_risk_table(rest_of_season_mc, "Current category risk") }}
         {% else %}
         <p class="placeholder-text">No ROS projections loaded. Download ROS projections from FanGraphs and place them in data/projections/&lt;year&gt;/rest_of_season/YYYY-MM-DD/.</p>
         {% endif %}
@@ -234,9 +244,15 @@
 
 {# -- Distributions (ridgeline of per-team MC outcome spreads) -- #}
 <div id="view-distributions" style="display: none;">
+    {# Overall + hitting, then a forced line break, then pitching. The break is
+       inert above 900px (see .tab-strip-break) so wide screens keep one row. #}
     <nav class="tab-strip" id="dist-metric-toggle">
         <button type="button" class="active" data-distmetric="overall" onclick="distSetMetric(this)">Overall</button>
-        {% for cat in all_categories %}
+        {% for cat in hitting_categories %}
+        <button type="button" data-distmetric="{{ cat.value }}" onclick="distSetMetric(this)">{{ cat.value }}</button>
+        {% endfor %}
+        <span class="tab-strip-break" aria-hidden="true"></span>
+        {% for cat in pitching_categories %}
         <button type="button" data-distmetric="{{ cat.value }}" onclick="distSetMetric(this)">{{ cat.value }}</button>
         {% endfor %}
     </nav>
@@ -260,10 +276,16 @@
 {% macro trends_chart(title, target) %}
     <section class="trends-section">
       <h2>{{ title }}</h2>
+      {# Roto Points + hitting, forced break, then pitching -- same split as the
+         Distributions strip above. #}
       <nav class="tab-strip" data-target="{{ target }}">
         <button type="button" class="active" data-tab="roto">Roto Points</button>
-        {% for cat in categories %}
-        <button type="button" data-tab="{{ cat }}">{{ cat }}</button>
+        {% for cat in hitting_categories %}
+        <button type="button" data-tab="{{ cat.value }}">{{ cat.value }}</button>
+        {% endfor %}
+        <span class="tab-strip-break" aria-hidden="true"></span>
+        {% for cat in pitching_categories %}
+        <button type="button" data-tab="{{ cat.value }}">{{ cat.value }}</button>
         {% endfor %}
       </nav>
       <div class="chart-wrapper"><canvas id="chart-{{ target }}"></canvas></div>
@@ -285,10 +307,12 @@
                 onclick="document.getElementById('breakdown-modal').close()">×</button>
     </div>
     <p class="breakdown-modal-total" id="breakdown-modal-total"></p>
+    <div class="table-scroll" tabindex="0" role="region" aria-label="Stat breakdown">
     <table class="data-table breakdown-modal-table" id="breakdown-modal-table">
         <thead id="breakdown-modal-thead"></thead>
         <tbody id="breakdown-modal-tbody"></tbody>
     </table>
+    </div>
 </dialog>
 
 <script>
@@ -659,7 +683,11 @@ document.addEventListener('DOMContentLoaded', () => {
 /* Layout-only rules for the breakdown modal. Theming lives in season.css. */
 .proj-current-cell.mode-stats { cursor: pointer; }
 #breakdown-modal {
-    max-width: 560px;
+    /* The rate categories widen this table well past the counting ones (WHIP
+       renders 6 columns to R's 4), and a bare 560px cap lets the dialog grow
+       past a phone viewport. Clamp to the viewport, then let the table scroll
+       inside via .table-scroll. */
+    max-width: min(560px, calc(100vw - 32px));
 }
 .breakdown-modal-head {
     display: flex;
