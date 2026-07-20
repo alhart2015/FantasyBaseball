@@ -304,8 +304,13 @@ body {
     font-style: italic;
 }
 
+/* Wraps rather than overflows: a pill row that outgrows its container makes
+   .content scroll sideways (see its comment above). A page background like
+   .page-standings's paper only spans the .content box, so anything scrolled
+   past that edge sits on bare --bg instead. */
 .pill-group {
     display: flex;
+    flex-wrap: wrap;
     gap: 6px;
     margin-bottom: 16px;
 }
@@ -541,6 +546,15 @@ td[style*="--neg"] {
 .il-active-row { background: var(--trail-soft); }
 
 ::-webkit-scrollbar { width: 6px; }
+/* `width` sizes vertical bars only; `height` sizes horizontal ones. Deliberately
+   scoped to .table-scroll rather than set globally. Both bars are the only way
+   to reach off-screen columns, so this is not "one matters, one doesn't" -- the
+   difference is proximity: a wrapper's bar sits directly under its own table, a
+   page-level bar is a distant chrome element already easy to miss, and thinning
+   it to 6px on the pages that have no wrapper yet would make it harder to grab
+   for no gain. Inside a wrapper, 6px keeps the editorial look a 15px UA bar
+   under every table would wreck. WebKit/Blink only -- Firefox keeps its own. */
+.table-scroll::-webkit-scrollbar { height: 6px; }
 ::-webkit-scrollbar-track { background: var(--paper-tint); }
 ::-webkit-scrollbar-thumb { background: var(--rule-strong); border-radius: 3px; }
 ::-webkit-scrollbar-thumb:hover { background: var(--gold); }
@@ -1052,6 +1066,79 @@ td[style*="--neg"] {
     .page-standings .page-header h2 { font-size: 44px; }
     .page-standings .data-table th  { font-size: 9.5px; padding: 8px 4px 6px; }
     .page-standings .data-table td  { padding: 8px 4px; font-size: 12px; }
+}
+
+/* The editorial tabs space themselves with pill padding plus a :first-child
+   padding-left reset that pulls the first tab flush with the rule. That aligns
+   only the FIRST row -- once the group wraps, every later row's text starts one
+   padding-left (18px) further in.
+
+   Fix: give every tab symmetric padding (undoing the reset) so all rows start
+   at the same offset, then shift the whole group out by that one padding so
+   that offset lands back on the page's left edge. The group's own rule would
+   travel with it and undercut the masthead, so it is redrawn by ::after at the
+   original edge.
+
+   Three simpler shapes were measured and rejected, each breaking something the
+   next one fixed: gap-based spacing (`padding: 0` + column-gap) aligns the rows
+   but shrinks each tab to its glyphs, leaving dead untappable gutter between
+   them; `padding-left` restored on only the first tab keeps the hit area but
+   pushes this row 18px right of the sub-toggle directly beneath it, reading as
+   a broken stagger; and moving all 36px to `padding-right` fixes both of those
+   but drags each tap boundary onto the NEXT label's first glyph -- measured,
+   aiming 6px left of a label activated the previous tab for all five. Symmetric
+   padding is what keeps every boundary in the gutter where users expect it.
+
+   The group wraps in TWO disjoint viewport ranges, because available width is
+   not monotonic in viewport width. At 769px and up the 220px sidebar is
+   present, so the tabs get viewport - 220 sidebar - 64 .content padding + 64
+   .page-standings negative margin - 96 its padding = viewport - 316; at 768px
+   and below the sidebar goes horizontal and the narrow-viewport paddings apply,
+   giving viewport - 40 -- a jump of ~276px at the breakpoint. So the group
+   wraps, unwraps, then wraps again as the viewport narrows.
+
+   The -18px shift and the +18px first-tab padding cancel, so on a row that was
+   never going to wrap this is a visual no-op: tab positions, the flush edge,
+   the rule's colour and position, and the 2px active underline all match the
+   above-900px state (checked by sampling painted pixels at 320/390/620/768/880
+   against a 1000/1400px baseline, not just by reading geometry). That is why one plain
+   max-width covers both of the disjoint ranges the group actually wraps in
+   (<=~620px, and ~769-880px where the 220px sidebar squeezes it) without
+   needing a compound query pinned to measured boundaries: over-applying costs
+   nothing, so the exact number is not load-bearing.
+
+   Scoped to #standings-top-toggle because it is the only group here that
+   wraps: the five sub-toggles hold two pills each and stay on one row down to
+   320px, so they never need it. */
+@media (max-width: 900px) {
+    .page-standings #standings-top-toggle {
+        margin-left: -18px;
+        border-bottom: none;   /* redrawn below at the original left edge */
+        /* Replaces the 1px the dropped border contributed to the box, so the
+           group keeps its exact height and nothing below it shifts up. */
+        padding-bottom: 1px;
+        position: relative;
+        /* Confines the z-index below to this group. Without a stacking context
+           the negative layer sinks behind .page-standings's opaque paper
+           background and the rule disappears entirely (measured). */
+        isolation: isolate;
+    }
+    .page-standings #standings-top-toggle::after {
+        content: "";
+        position: absolute;
+        left: 18px;
+        right: 0;
+        bottom: 0;
+        border-bottom: 1px solid var(--rule);
+        /* A positioned descendant paints ABOVE in-flow siblings, so without
+           this the rule covers the top half of the active tab's 2px gold
+           border-bottom -- which overlaps it by design via margin-bottom: -1px
+           -- leaving a 1px indicator. Sink it to where the real border was. */
+        z-index: -1;
+    }
+    .page-standings #standings-top-toggle .pill:first-child {
+        padding-left: 18px;
+    }
 }
 
 /* =====================================================================
@@ -2883,6 +2970,15 @@ td[style*="--neg"] {
     transition: color 0.15s, border-color 0.15s;
     cursor: pointer;
 }
+/* Deliberately NOT given the wrapped-row alignment fix that the identical
+   .page-standings tab block needs: these three filters measure ~270px against
+   >=284px of content down to a 320px viewport, so the group never wraps and the
+   fix would only add 18px of trailing width and shift the active underline
+   right for nothing. If a fourth filter lands here, revisit -- and note that
+   the override needs HIGHER specificity than this rule, not merely a later
+   position: a `.page-logs .log-filters .pill` override is (0,3,0) and loses to
+   this (0,4,0) at any document order. That is why the standings copy reaches
+   for an id. */
 .page-logs .log-filters .pill:first-child { padding-left: 0; }
 .page-logs .log-filters .pill:hover { color: var(--ink); }
 .page-logs .log-filters .pill.active {
@@ -3642,6 +3738,47 @@ td[style*="--neg"] {
   color: var(--bg);
   border-color: var(--amber);
   font-weight: 600;
+}
+/* Forced flex-line break inside a category strip. The templates emit one of
+   these between the hitting and pitching groups; above the breakpoint it is
+   inert so the strip stays a single row, and below it the strip splits into a
+   totals+hitting row and a pitching row. Without it the strip still wraps, but
+   at whatever arbitrary point the width runs out -- orphaning WHIP and SV.
+   900px, not the file's usual 768px, for the same sidebar-squeeze reason as the
+   .page-standings pill block (search "TWO disjoint viewport ranges"). Measured headroom just
+   above the breakpoint is ~46px on 543px of buttons at 905px -- enough, but if
+   the Outfit webfont ever stops loading, the wider fallback could eat it and
+   reintroduce a ragged wrap in the 901-949 band. Raise this if that happens.
+
+   The hitting/pitching rows end up 8px apart, not the strip's 4px, because
+   this zero-height line takes a gap above AND below it. That is inherent to
+   the technique -- negative margins on a flex item do not shrink the gap
+   between flex lines (measured: margin-block/-top/-bottom all leave it at
+   8px). Left as is: the extra 4px reads as the semantic seam it is. */
+.tab-strip-break { display: none; flex-basis: 100%; }
+@media (max-width: 900px) {
+  .tab-strip-break { display: block; }
+}
+
+/* Confines a wide table's horizontal scroll to the table itself. Without this
+   the scroll lands on .content (search "implicit horizontal scroll container")
+   and the table slides out from under whatever page background sits inside it.
+
+   Complements the shrink-the-type rules in the per-page 768px blocks (which
+   still run): shrinking reduces how far you must scroll but has a legibility
+   floor, scrolling does not. It has to be a wrapper rather than a rule on
+   .data-table because browsers do not reliably make `display: table` boxes
+   scroll containers.
+
+   overflow-y is pinned to hidden rather than left to compute: at auto, the
+   3px translateY in .page-standings's row-enter animation overflows
+   the wrapper vertically and flickers a scrollbar for the ~0.67s the staggered
+   rows are still animating. */
+.table-scroll {
+  overflow-x: auto;
+  overflow-y: hidden;
+  overscroll-behavior-x: contain;  /* don't chain a swipe past the last column
+                                      into .content / the back-nav gesture */
 }
 
 /* Trends charts -- promoted from trends.html when Trends became a Standings

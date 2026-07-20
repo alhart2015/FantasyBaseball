@@ -24,7 +24,13 @@ from fantasy_baseball.models.standings import (
 )
 from fantasy_baseball.scoring import team_sds_from_json
 from fantasy_baseball.trades.evaluate import TradeCandidate
-from fantasy_baseball.utils.constants import ALL_CATEGORIES, RATE_STATS, Category
+from fantasy_baseball.utils.constants import (
+    ALL_CATEGORIES,
+    HITTING_CATEGORIES,
+    PITCHING_CATEGORIES,
+    RATE_STATS,
+    Category,
+)
 from fantasy_baseball.web.season_data import (
     CacheKey,
     coerce_basis,
@@ -637,8 +643,14 @@ def register_routes(app: Flask) -> None:
             baseline_meta=baseline_meta,
             rest_of_season_mc=rest_of_season_mc_data,
             distributions=distributions,
-            categories=[c.value for c in ALL_CATEGORIES],
             all_categories=ALL_CATEGORIES,
+            # Split for the Distributions/Trends category strips, which render
+            # a hitting row and a pitching row so the wrap point is the
+            # hitting/pitching seam rather than wherever the width runs out.
+            # Category objects, matching all_categories -- one shape in the
+            # template, so every category loop unwraps with .value.
+            hitting_categories=HITTING_CATEGORIES,
+            pitching_categories=PITCHING_CATEGORIES,
         )
 
     @app.route("/streaks")
@@ -768,8 +780,6 @@ def register_routes(app: Flask) -> None:
             meta=meta,
             active_page="roster_audit",
             audit=audit_raw or [],
-            categories=[c.value for c in ALL_CATEGORIES],
-            all_categories=ALL_CATEGORIES,
         )
 
     @app.route("/stash")
@@ -1924,7 +1934,6 @@ def register_routes(app: Flask) -> None:
             spoe_data=spoe_data,
             snapshot_date=meta.get("last_refresh", latest),
             categories=[c.value for c in ALL_CATEGORIES],
-            all_categories=ALL_CATEGORIES,
             rate_stats={c.value for c in RATE_STATS},
         )
 
