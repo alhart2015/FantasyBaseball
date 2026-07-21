@@ -52,6 +52,9 @@ PITCHER_MIN_RATES = 10  # IP threshold for rate stats to be colored
 Z_BRIGHT = 2.0  # >= this: stat-hot-2 / stat-cold-2 (bright green/red)
 Z_LIGHT = 1.0  # >= this: stat-hot-1 / stat-cold-1 (light green/red)
 
+# Minimum qualified players in a pool before percentile bucketing is meaningful.
+MIN_POOL_SIZE = 6
+
 # Minimum absolute difference (actual vs expected) for counting stats to be
 # colored.  Prevents e.g. 1 RBI vs 0.2 expected from showing bright green.
 COUNTING_MIN_ABS_DIFF = 1.0
@@ -422,4 +425,67 @@ def compute_sgp_deviation(
         "sgp_dev": round(actual_sgp - expected_sgp, 3),
         "actual_sgp": round(actual_sgp, 3),
         "expected_sgp": round(expected_sgp, 3),
+    }
+
+
+def compute_pace_cutpoints(devs: list[float]) -> list[float] | None:
+    """Return [q16, q33, q66, q83] nearest-rank cutpoints for a pool of
+    SGP deviations, or None when the pool is smaller than MIN_POOL_SIZE.
+
+    Nearest-rank index = round(q * (n - 1)) over the ascending-sorted list.
+    """
+    if len(devs) < MIN_POOL_SIZE:
+        return None
+    ordered = sorted(devs)
+    n = len(ordered)
+    return [ordered[round(q * (n - 1))] for q in (1 / 6, 1 / 3, 2 / 3, 5 / 6)]
+
+
+def build_pace_deviation_payload(
+    players: list[Any],
+    hitter_logs: dict[str, dict[str, Any]],
+    pitcher_logs: dict[str, dict[str, Any]],
+    preseason_lookup: dict[str, Any],
+    denoms: dict[Category, float],
+) -> dict[str, Any]:
+    """Compute the leaguewide SGP-deviation map + per-type cutpoints.
+
+    Iterates rostered ``players``, builds each one's YTD actuals (from the
+    game logs) and preseason projection (from ``preseason_lookup``), calls
+    :func:`compute_sgp_deviation`, keys the result by
+    ``normalize_name(name)::player_type``, and derives hitter/pitcher
+    cutpoints over the players with a defined ``sgp_dev``.
+    """
+    deviations: dict[str, dict[str, Any]] = {}
+    hitter_devs: list[float] = []
+    pitcher_devs: list[float] = []
+
+    for player in players:
+        norm = normalize_name(player.name)
+        if player.player_type == PlayerType.HITTER:
+            actuals = hitter_logs.get(norm, {})
+            proj_keys = HITTER_PROJ_KEYS
+        else:
+            actuals = pitcher_logs.get(norm, {})
+            proj_keys = PITCHER_PROJ_KEYS
+        pre = preseason_lookup.get(norm)
+        if pre is not None and pre.rest_of_season is not None:
+            projected = {k: getattr(pre.rest_of_season, k, 0) for k in proj_keys}
+        else:
+            projected = {}
+
+        summary = compute_sgp_deviation(actuals, projected, player.player_type, denoms)
+        deviations[f"{norm}::{player.player_type.value}"] = summary
+        if summary["sgp_dev"] is not None:
+            if player.player_type == PlayerType.HITTER:
+                hitter_devs.append(summary["sgp_dev"])
+            else:
+                pitcher_devs.append(summary["sgp_dev"])
+
+    return {
+        "deviations": deviations,
+        "cutpoints": {
+            "hitter": compute_pace_cutpoints(hitter_devs),
+            "pitcher": compute_pace_cutpoints(pitcher_devs),
+        },
     }
