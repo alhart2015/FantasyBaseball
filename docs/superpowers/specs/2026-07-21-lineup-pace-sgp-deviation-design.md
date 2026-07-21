@@ -139,46 +139,64 @@ red, middle 1/3 neutral, and mirrored greens).
 
 ### Architecture
 
-Three pure units plus wiring; the color is applied at display time from
-pipeline-cached inputs so the user roster and opponent lineups use an identical
-metric basis.
+Three pure units plus wiring. The metric is computed once, leaguewide, in the
+refresh pipeline; the color is applied at display time as a **pure cache lookup**
+so the user roster and opponent lineups use an identical, consistent metric basis
+(never a display-time recompute).
 
 1. **`compute_sgp_deviation(actual_stats, projected_stats, player_type, denoms)`
    -> `{sgp_dev, actual_sgp, expected_sgp}`** (new, in `pace.py`). Pure function
    implementing the metric above (including gates). Returns `sgp_dev=None` when
-   undefined. Shared by the display path and the leaguewide pass so there is one
-   implementation.
+   undefined. It takes the **raw** actual/projected stat dicts (the same
+   lowercase-key shapes `compute_player_pace` receives: `actual_stats` with
+   `pa`/`ab`/`ip`/counting/`h`/`er`/etc., `projected_stats` with the projected
+   counting + rate keys and `pa`/`ip`) and computes the prorated `expected`
+   internally -- it does NOT consume a pre-built `pace` dict. The proration
+   (`expected = proj * actual_opp / proj_opp`) is the same rule
+   `compute_player_pace` uses; factor it into a small shared helper so the two
+   functions cannot drift, rather than duplicating it. **This function is called
+   only from the pipeline pass in unit 2, never from the display path.**
 
-2. **Pipeline step (new): compute leaguewide deviations + cutpoints.** Reusing
-   the game logs (`hitter_logs` / `pitcher_logs`) and the **preseason**
-   projections already loaded for `_compute_rankings` / `attach_pace_to_roster`,
-   compute `compute_sgp_deviation` for **every rostered player** (user + every
-   opponent), keyed by `(normalized_name, player_type)`. Cache two things under a
+2. **Pipeline step (new): compute leaguewide deviations + cutpoints.** Placed
+   after opponent rosters are hydrated and the game logs + projections are loaded
+   (alongside / just after `_compute_rankings`, which already has these inputs).
+   Reusing the game logs (`hitter_logs` / `pitcher_logs`) and the **preseason**
+   projections (the same `preseason_lookup` / preseason frames used by
+   `_compute_rankings` and `attach_pace_to_roster`), call `compute_sgp_deviation`
+   for **every rostered player** (user + every opponent). Cache two things under a
    new `CacheKey.PACE_DEVIATIONS` payload:
-   - `deviations`: `{ "name::type": {sgp_dev, actual_sgp, expected_sgp} }` for
-     all rostered players (so both the user and opponent display paths look up a
-     precomputed value rather than recomputing -- guaranteeing one consistent
-     preseason basis).
+   - `deviations`: `{ "<normalized_name>::<player_type>": {sgp_dev, actual_sgp,
+     expected_sgp} }` for all rostered players (keyed by the same
+     normalized-name form the game-log and preseason lookups use, so the display
+     path resolves by `(normalize_name(player.name), player_type)`). Both the
+     user and opponent display paths look up a precomputed value rather than
+     recomputing -- guaranteeing one consistent preseason basis.
    - `cutpoints`: `{ "hitter": [q16, q33, q66, q83], "pitcher": [...] }`.
 
-   The reference population for cutpoints excludes undefined-`sgp_dev` players.
+   The reference population for cutpoints is the rostered players with a defined
+   `sgp_dev` (undefined ones are excluded from the pools and rendered neutral).
 
 3. **`compute_overall_pace(sgp_summary, cutpoints_for_type)` ->
    `{color_class, sgp_dev, actual_sgp, expected_sgp}`** (reshaped in `pace.py`).
-   Pure bucketing of one player's `sgp_dev` against its pool cutpoints. Neutral
-   when `sgp_dev` is None, cutpoints missing, or the pool was too small.
+   Pure bucketing of one player's cached `sgp_dev` against its pool cutpoints.
+   Neutral when `sgp_dev` is None, cutpoints missing, or the pool was too small.
 
 4. **Wiring (`season_data.py`):** the three existing `compute_overall_pace` call
    sites (user lineup; opponent-lineup matched and unmatched) read
    `CacheKey.PACE_DEVIATIONS`, look up the player's summary by
-   `(normalized_name, player_type)`, and bucket against the cutpoints for the
-   player's type. The opponent path no longer computes its overall color from a
-   ROS-basis pace dict; it uses the same preseason-basis leaguewide map, fixing a
-   latent basis inconsistency (user pace compared to preseason, opponent pace
-   compared to ROS).
+   `(normalize_name(player.name), player_type)`, and bucket against the cutpoints
+   for the player's type. The opponent overall color no longer derives from a
+   ROS-basis pace dict; it uses the same preseason-basis leaguewide map, so every
+   player's **overall** color -- user and opponent alike -- is scored on one
+   consistent basis and the percentile is comparable across the whole pool.
 
-The per-category `pace` dict (cell colors) is still computed per player exactly
-as today; only the overall Slot color changes source.
+**Scope of the basis change:** only the **overall** Slot color is unified onto
+the leaguewide preseason basis. The per-category `pace` cell colors are unchanged
+(non-goal) and keep computing their own per-cell z-scores exactly as today -- the
+user roster's cells against preseason, the opponent cells against ROS. This means
+an opponent row's per-category cells (ROS basis) and its overall color (preseason
+basis) use different bases; that pre-existing per-cell inconsistency is
+deliberately left out of scope here and is not "fixed" by this change.
 
 ### Display
 
@@ -243,10 +261,18 @@ The tooltip is shown only when `sgp_dev` is not None; the Slot cell uses
 
 ## Phasing
 
-1. **Metric (pure).** Add `compute_sgp_deviation` + unit tests. No wiring yet.
+The existing avg-z overall coloring stays live and unchanged through Phases 1-2;
+the swap to the new metric happens atomically in Phase 3. The app is in a
+working, shippable state after every phase.
+
+1. **Metric (pure).** Add the shared proration helper + `compute_sgp_deviation`
+   + unit tests. No wiring yet; old coloring untouched.
 2. **Leaguewide pass + cache.** New `CacheKey.PACE_DEVIATIONS`, the pipeline step
-   computing deviations + cutpoints, cutpoint helper + tests.
+   computing deviations + cutpoints, cutpoint helper + tests. The payload is
+   written but not yet consumed; old coloring still live.
 3. **Coloring + wiring.** Reshape `compute_overall_pace`; wire the three
    `season_data` call sites to the cached map; rewrite/adjust the affected tests.
-4. **Display.** Update both tbody templates' tooltip; verify end-to-end that the
-   Slot color and tooltip render.
+   This is the atomic behavior swap.
+4. **Display.** Update both tbody templates' tooltip; verify end-to-end (drive
+   the lineup page via the `verify` / `run` skill and confirm the Slot color and
+   tooltip render for a colored and a neutral player).
