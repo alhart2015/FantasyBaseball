@@ -10,7 +10,7 @@ History: recency blending used to run over roster players and overwrite
 their ROS stats with reliability-weighted rates from game logs. That
 produced two sources of truth (blended for the user team, raw for
 opponents) and caused the Arozarena/Suarez bug on the player
-comparison page. It has been removed — pace highlighting is now the
+comparison page. It has been removed - pace highlighting is now the
 only legitimate use of in-season game logs for display.
 """
 
@@ -455,14 +455,14 @@ def build_pace_deviation_payload(
     players: list[Any],
     hitter_logs: dict[str, dict[str, Any]],
     pitcher_logs: dict[str, dict[str, Any]],
-    preseason_lookup: dict[str, Any],
     denoms: dict[Category, float],
 ) -> dict[str, Any]:
     """Compute the leaguewide SGP-deviation map + per-type cutpoints.
 
     Iterates rostered ``players``, builds each one's YTD actuals (from the
-    game logs) and preseason projection (from ``preseason_lookup``), calls
-    :func:`compute_sgp_deviation`, keys the result by
+    game logs) and preseason projection (from the player's own
+    ``.preseason``, attached by hydration to both the user roster and every
+    opponent roster), calls :func:`compute_sgp_deviation`, keys the result by
     ``normalize_name(name)::player_type``, and derives hitter/pitcher
     cutpoints over the players with a defined ``sgp_dev``.
     """
@@ -478,9 +478,9 @@ def build_pace_deviation_payload(
         else:
             actuals = pitcher_logs.get(norm, {})
             proj_keys = PITCHER_PROJ_KEYS
-        pre = preseason_lookup.get(norm)
-        if pre is not None and pre.rest_of_season is not None:
-            projected = {k: getattr(pre.rest_of_season, k, 0) for k in proj_keys}
+        pre = player.preseason
+        if pre is not None:
+            projected = {k: getattr(pre, k, 0) for k in proj_keys}
         else:
             projected = {}
 

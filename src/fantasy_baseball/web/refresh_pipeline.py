@@ -1096,7 +1096,6 @@ class RefreshRun:
         assert self.opp_rosters is not None
         assert self.hitter_logs is not None
         assert self.pitcher_logs is not None
-        assert self.preseason_lookup is not None
 
         self._progress("Computing leaguewide pace deviations...")
         all_rostered = list(self.roster_players)
@@ -1107,7 +1106,6 @@ class RefreshRun:
             all_rostered,
             self.hitter_logs,
             self.pitcher_logs,
-            self.preseason_lookup,
             self._league_denoms(),
         )
         write_cache(CacheKey.PACE_DEVIATIONS, payload, required=False)
