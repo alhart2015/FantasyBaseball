@@ -692,11 +692,9 @@ Expected: PASS (11 tests)
 
 - [ ] **Step 5: Wire the user-lineup call site (`format_lineup_for_display`)**
 
-In `src/fantasy_baseball/web/season_data.py`, inside `format_lineup_for_display`, add the imports (top of the function, next to the existing `compute_overall_pace` import) and read the cache once before the `for p in roster:` loop:
+In `src/fantasy_baseball/web/season_data.py`, inside `format_lineup_for_display`, add ONLY the `normalize_name` import (the function already imports `compute_overall_pace` and `Player` at its top - do not re-add those or ruff will flag a redundant import), and read the cache once before the `for p in roster:` loop:
 
 ```python
-    from fantasy_baseball.analysis.pace import compute_overall_pace
-    from fantasy_baseball.models.player import Player
     from fantasy_baseball.utils.name_utils import normalize_name
 
     pace_dev = read_cache_dict(CacheKey.PACE_DEVIATIONS) or {}
@@ -828,6 +826,9 @@ Use the `run` skill (or `python scripts/run_season_dashboard.py --no-sync`) to l
 - The Slot cell shows green/red/neutral colors (not all-neutral).
 - Hovering a colored player shows "SGP pace <signed number>" and "Delivered / expected".
 - A gated/undefined player (e.g. a just-added bench player) shows neutral with no tooltip.
+- Open an opponent lineup (the opponent view uses the same `overall_pace` shape,
+  whose `avg_z` field was removed) and confirm its Slot cells still color and
+  tooltip correctly - no console errors, no all-neutral column.
 
 If the local cache predates this change (no `PACE_DEVIATIONS` key), run a refresh first (`python scripts/refresh_remote.py`, or trigger the dashboard refresh) so the pipeline writes the new payload, then reload.
 
