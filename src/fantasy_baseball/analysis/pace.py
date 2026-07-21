@@ -18,6 +18,11 @@ import math
 from typing import Any
 
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.player_value import (
+    REPLACEMENT_AVG,
+    REPLACEMENT_ERA,
+    REPLACEMENT_WHIP,
+)
 from fantasy_baseball.utils.constants import (
     DEFAULT_TEAM_AB,
     DEFAULT_TEAM_IP,
@@ -25,11 +30,6 @@ from fantasy_baseball.utils.constants import (
     INVERSE_STATS,
     PITCHER_PROJ_KEYS,
     Category,
-)
-from fantasy_baseball.sgp.player_value import (
-    REPLACEMENT_AVG,
-    REPLACEMENT_ERA,
-    REPLACEMENT_WHIP,
 )
 from fantasy_baseball.utils.dispersion import negbin_perf_cv
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -382,9 +382,7 @@ def compute_sgp_deviation(
             actual_ab = actual_stats.get("ab", 0) or 0
             denom = denoms.get(Category.AVG)
             if denom and actual_ab > 0:
-                actual_avg = calculate_avg(
-                    actual_stats.get("h", 0) or 0, actual_ab, default=0.0
-                )
+                actual_avg = calculate_avg(actual_stats.get("h", 0) or 0, actual_ab, default=0.0)
                 proj_avg = projected_stats.get("avg", 0.0) or 0.0
                 scale = actual_ab / (denom * DEFAULT_TEAM_AB)
                 actual_sgp += (actual_avg - REPLACEMENT_AVG) * scale
@@ -398,9 +396,7 @@ def compute_sgp_deviation(
                     (
                         Category.ERA,
                         REPLACEMENT_ERA,
-                        calculate_era(
-                            actual_stats.get("er", 0) or 0, actual_ip, default=0.0
-                        ),
+                        calculate_era(actual_stats.get("er", 0) or 0, actual_ip, default=0.0),
                         projected_stats.get("era", 0.0) or 0.0,
                     ),
                     (
