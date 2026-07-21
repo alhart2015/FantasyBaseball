@@ -36,6 +36,7 @@ class CacheKey(StrEnum):
     STASH = "stash"
     DRAFT_VALUE = "draft_value"
     STANDINGS_SNAPSHOT = "standings_snapshot"
+    PACE_DEVIATIONS = "pace_deviations"
 
 
 def redis_key(key: CacheKey) -> str:
