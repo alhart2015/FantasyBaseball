@@ -640,7 +640,12 @@ class TestApiOpponentLineup:
                         "is_bench": False,
                         "is_il": False,
                         "pace": {},
-                        "overall_pace": {"avg_z": None, "color_class": "stat-neutral"},
+                        "overall_pace": {
+                            "sgp_dev": None,
+                            "actual_sgp": None,
+                            "expected_sgp": None,
+                            "color_class": "stat-neutral",
+                        },
                         "rank": {"rest_of_season": 42, "preseason": 50, "current": None},
                         "status": "",
                     }

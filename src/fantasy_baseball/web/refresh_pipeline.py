@@ -509,6 +509,7 @@ class RefreshRun:
         self._compute_leverage()
         self._match_roster_to_projections()
         self._compute_pace()
+        self._compute_pace_deviations()
         self._compute_rankings()
         self._optimize_lineup()
         self._compute_moves()
@@ -1086,6 +1087,34 @@ class RefreshRun:
             self.pitcher_logs,
             self.preseason_lookup,
             sgp_denoms,
+        )
+
+    def _compute_pace_deviations(self):
+        from fantasy_baseball.analysis.pace import build_pace_deviation_payload
+
+        assert self.roster_players is not None
+        assert self.opp_rosters is not None
+        assert self.hitter_logs is not None
+        assert self.pitcher_logs is not None
+
+        self._progress("Computing leaguewide pace deviations...")
+        all_rostered = list(self.roster_players)
+        for roster in self.opp_rosters.values():
+            all_rostered.extend(roster)
+
+        payload = build_pace_deviation_payload(
+            all_rostered,
+            self.hitter_logs,
+            self.pitcher_logs,
+            self._league_denoms(),
+        )
+        write_cache(CacheKey.PACE_DEVIATIONS, payload, required=False)
+        h = payload["cutpoints"]["hitter"]
+        p = payload["cutpoints"]["pitcher"]
+        self._progress(
+            f"Pace deviations: {len(payload['deviations'])} players, "
+            f"hitter cutpoints {'set' if h else 'n/a'}, "
+            f"pitcher cutpoints {'set' if p else 'n/a'}"
         )
 
     def _league_denoms(self) -> dict[Category, float]:

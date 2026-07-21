@@ -231,6 +231,17 @@ def read_cache_list(key: CacheKey) -> list[Any] | None:
     return payload if isinstance(payload, list) else None
 
 
+def load_pace_deviations() -> tuple[dict, dict]:
+    """Return ``(deviations, cutpoints)`` from the ``PACE_DEVIATIONS`` cache.
+
+    Both default to empty dicts when the cache is missing/cold so callers
+    render neutral pace without special-casing. Shared by the lineup and
+    opponent-lineup display paths so the payload shape lives in one place.
+    """
+    pace_dev = read_cache_dict(CacheKey.PACE_DEVIATIONS) or {}
+    return pace_dev.get("deviations", {}), pace_dev.get("cutpoints", {})
+
+
 def write_cache_to(
     client: KVStore, key: CacheKey, data: dict | list, extra_meta: dict | None = None
 ) -> None:
@@ -475,7 +486,11 @@ def build_opponent_lineup(
         projection stats, pace data, and per-player ROS-based SGP (matching the
         user lineup; falls back to 0.0 when no ROS projection matches).
     """
-    from fantasy_baseball.analysis.pace import compute_overall_pace, compute_player_pace
+    from fantasy_baseball.analysis.pace import (
+        compute_overall_pace,
+        compute_player_pace,
+        pace_dev_key,
+    )
     from fantasy_baseball.data.projections import match_roster_to_projections
     from fantasy_baseball.models.player import RankInfo
     from fantasy_baseball.sgp.rankings import lookup_rank
@@ -507,6 +522,8 @@ def build_opponent_lineup(
 
     # Rankings (populated during refresh; absent on cold cache).
     rankings = read_cache_dict(CacheKey.RANKINGS) or {}
+
+    deviations, cutpoints = load_pace_deviations()
 
     # Build enriched entries
     matched_names = set()
@@ -558,7 +575,10 @@ def build_opponent_lineup(
             for k in proj_keys
         }
         entry["pace"] = compute_player_pace(actuals, projected, ptype)
-        entry["overall_pace"] = compute_overall_pace(entry["pace"])
+        entry["overall_pace"] = compute_overall_pace(
+            deviations.get(pace_dev_key(player.name, player.player_type.value)),
+            cutpoints.get(player.player_type.value),
+        )
 
         enriched.append(entry)
 
@@ -569,7 +589,7 @@ def build_opponent_lineup(
             entry["sgp"] = 0.0
             entry["delta_roto"] = None
             entry["pace"] = {}
-            entry["overall_pace"] = compute_overall_pace(entry["pace"])
+            entry["overall_pace"] = compute_overall_pace(None, None)
             entry["display_stats"] = {}
             enriched.append(entry)
 
@@ -970,11 +990,13 @@ def format_lineup_for_display(
     trusted as-is (they were written by the refresh pipeline on the same
     league-config basis).
     """
-    from fantasy_baseball.analysis.pace import compute_overall_pace
+    from fantasy_baseball.analysis.pace import compute_overall_pace, pace_dev_key
     from fantasy_baseball.models.player import Player
 
     # Normalize basis once before the loop; unknown values fall back to ROS.
     basis = coerce_basis(basis)
+
+    deviations, cutpoints = load_pace_deviations()
 
     hitters = []
     pitchers = []
@@ -1023,7 +1045,10 @@ def format_lineup_for_display(
             "is_bench": pos in BENCH_SLOTS,
             "is_il": "IL" in player.status or pos == "IL",
             "pace": player.pace or {},
-            "overall_pace": compute_overall_pace(player.pace),
+            "overall_pace": compute_overall_pace(
+                deviations.get(pace_dev_key(player.name, player.player_type.value)),
+                cutpoints.get(player.player_type.value),
+            ),
             "rank": player.rank.to_dict(),
             "preseason": player.preseason.to_dict() if player.preseason else None,
         }

@@ -10,7 +10,7 @@ History: recency blending used to run over roster players and overwrite
 their ROS stats with reliability-weighted rates from game logs. That
 produced two sources of truth (blended for the user team, raw for
 opponents) and caused the Arozarena/Suarez bug on the player
-comparison page. It has been removed — pace highlighting is now the
+comparison page. It has been removed - pace highlighting is now the
 only legitimate use of in-season game logs for display.
 """
 
@@ -18,7 +18,17 @@ import math
 from typing import Any
 
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.player_value import (
+    REPLACEMENT_AVG,
+    REPLACEMENT_ERA,
+    REPLACEMENT_WHIP,
+    calculate_counting_sgp,
+    calculate_hitting_rate_sgp,
+    calculate_pitching_rate_sgp,
+)
 from fantasy_baseball.utils.constants import (
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
     HITTER_PROJ_KEYS,
     INVERSE_STATS,
     PITCHER_PROJ_KEYS,
@@ -45,6 +55,9 @@ PITCHER_MIN_RATES = 10  # IP threshold for rate stats to be colored
 Z_BRIGHT = 2.0  # >= this: stat-hot-2 / stat-cold-2 (bright green/red)
 Z_LIGHT = 1.0  # >= this: stat-hot-1 / stat-cold-1 (light green/red)
 
+# Minimum qualified players in a pool before percentile bucketing is meaningful.
+MIN_POOL_SIZE = 6
+
 # Minimum absolute difference (actual vs expected) for counting stats to be
 # colored.  Prevents e.g. 1 RBI vs 0.2 expected from showing bright green.
 COUNTING_MIN_ABS_DIFF = 1.0
@@ -61,6 +74,17 @@ def _z_to_color(z: float) -> str:
     if z < -Z_LIGHT:
         return "stat-cold-1"
     return "stat-neutral"
+
+
+def _prorated_expected(proj: float, actual_opp: float, proj_opp: float) -> float:
+    """Projected counting stat scaled to actual playing time so far.
+
+    Returns 0.0 when the projection has no opportunity (proj_opp <= 0) or
+    projects zero of the stat, matching the guard compute_player_pace uses.
+    """
+    if proj_opp > 0 and proj > 0:
+        return proj * (actual_opp / proj_opp)
+    return 0.0
 
 
 def compute_player_pace(
@@ -137,10 +161,7 @@ def compute_player_pace(
         actual = actual_stats.get(stat, 0) or 0
         proj = projected_stats.get(stat, 0) or 0
 
-        if proj_opp > 0 and proj > 0:
-            expected = proj * (actual_opp / proj_opp)
-        else:
-            expected = 0.0
+        expected = _prorated_expected(proj, actual_opp, proj_opp)
 
         if expected > 0 and counting_colored:
             ratio = actual / expected
@@ -289,27 +310,213 @@ def attach_pace_to_roster(
         )
 
 
-def compute_overall_pace(pace: dict[str, Any] | None) -> dict[str, Any]:
-    """Average per-category z-scores into an overall pace summary.
+def compute_overall_pace(
+    sgp_summary: dict[str, Any] | None,
+    cutpoints: list[float] | None,
+) -> dict[str, Any]:
+    """Bucket a player's cached SGP deviation against its pool cutpoints.
 
-    Args:
-        pace: Dict from compute_player_pace() with UPPERCASE keys.
-              Each value may contain a 'z_score' float.
-
-    Returns:
-        {"avg_z": float | None, "color_class": str}
+    ``sgp_summary`` is one entry from the ``PACE_DEVIATIONS`` deviations map
+    ({"sgp_dev", "actual_sgp", "expected_sgp"}); ``cutpoints`` is
+    ``[q16, q33, q66, q83]`` for the player's type (or None). Renders neutral
+    when the deviation is undefined, cutpoints are missing, or the pool was
+    too small (cutpoints None). The tooltip values pass through unchanged.
     """
-    if not pace:
-        return {"avg_z": None, "color_class": "stat-neutral"}
+    summary = sgp_summary if sgp_summary is not None else {}
+    dev = summary.get("sgp_dev")
+    result = {
+        "color_class": "stat-neutral",
+        "sgp_dev": dev,
+        "actual_sgp": summary.get("actual_sgp"),
+        "expected_sgp": summary.get("expected_sgp"),
+    }
+    if dev is None or not cutpoints:
+        return result
 
-    z_scores = [
-        entry["z_score"]
-        for entry in pace.values()
-        if isinstance(entry, dict) and entry.get("z_score") is not None
-    ]
+    q16, q33, q66, q83 = cutpoints
+    if dev >= q83:
+        result["color_class"] = "stat-hot-2"
+    elif dev >= q66:
+        result["color_class"] = "stat-hot-1"
+    elif dev >= q33:
+        result["color_class"] = "stat-neutral"
+    elif dev >= q16:
+        result["color_class"] = "stat-cold-1"
+    else:
+        result["color_class"] = "stat-cold-2"
+    return result
 
-    if not z_scores:
-        return {"avg_z": None, "color_class": "stat-neutral"}
 
-    avg_z = round(sum(z_scores) / len(z_scores), 1)
-    return {"avg_z": avg_z, "color_class": _z_to_color(avg_z)}
+def compute_sgp_deviation(
+    actual_stats: dict[str, Any],
+    projected_stats: dict[str, Any],
+    player_type: str,
+    denoms: dict[Category, float],
+) -> dict[str, Any]:
+    """SGP delivered vs preseason-expected, prorated to actual playing time.
+
+    Returns {"sgp_dev", "actual_sgp", "expected_sgp"} in roto-point (SGP)
+    units. ``sgp_dev`` is None when the player has no games above the counting
+    gate or no projection. Per-category value comes from ``sgp.player_value``'s
+    ``calculate_*_sgp`` helpers (counting, hitting-rate, pitching-rate), scored
+    over the player's actual playing time so the metric is rate-fair. The
+    replacement baseline cancels in the delta but is kept in the returned
+    ``actual_sgp`` / ``expected_sgp`` so the tooltip reads as value-over-
+    replacement. Sample-size gates mirror ``compute_player_pace``.
+    """
+    none_result = {"sgp_dev": None, "actual_sgp": None, "expected_sgp": None}
+    if not projected_stats:
+        return none_result
+
+    if player_type == PlayerType.HITTER:
+        opp_key, counting = "pa", HITTER_COUNTING
+        min_counting, min_rates = HITTER_MIN_COUNTING, HITTER_MIN_RATES
+    else:
+        opp_key, counting = "ip", PITCHER_COUNTING
+        min_counting, min_rates = PITCHER_MIN_COUNTING, PITCHER_MIN_RATES
+
+    actual_opp = actual_stats.get(opp_key, 0) or 0
+    proj_opp = projected_stats.get(opp_key, 0) or 0
+    # A degenerate preseason line (0 or NaN projected PA/IP -- the phantom-
+    # projection trap in this codebase) has no basis for an "expected" value;
+    # crediting full actuals against ~0 expected would inflate sgp_dev and
+    # pollute the leaguewide cutpoints, so exclude the player. ``not proj_opp > 0``
+    # rejects 0, negatives, and NaN (NaN > 0 is False).
+    if actual_opp < min_counting or not proj_opp > 0:
+        return none_result
+
+    actual_sgp = 0.0
+    expected_sgp = 0.0
+
+    for stat in counting:
+        denom = denoms.get(Category(stat.upper()))
+        if not denom:
+            continue
+        actual = actual_stats.get(stat, 0) or 0
+        expected = _prorated_expected(projected_stats.get(stat, 0) or 0, actual_opp, proj_opp)
+        actual_sgp += calculate_counting_sgp(actual, denom)
+        expected_sgp += calculate_counting_sgp(expected, denom)
+
+    if actual_opp >= min_rates:
+        if player_type == PlayerType.HITTER:
+            actual_ab = actual_stats.get("ab", 0) or 0
+            proj_avg = projected_stats.get("avg", 0.0) or 0.0
+            denom = denoms.get(Category.AVG)
+            # proj_avg > 0 mirrors compute_player_pace: a 0/None/NaN projected
+            # rate has no valid baseline and would be scored against .000.
+            if denom and actual_ab > 0 and proj_avg > 0:
+                actual_avg = calculate_avg(actual_stats.get("h", 0) or 0, actual_ab, default=0.0)
+                actual_sgp += calculate_hitting_rate_sgp(
+                    actual_avg, actual_ab, REPLACEMENT_AVG, denom, DEFAULT_TEAM_AB
+                )
+                expected_sgp += calculate_hitting_rate_sgp(
+                    proj_avg, actual_ab, REPLACEMENT_AVG, denom, DEFAULT_TEAM_AB
+                )
+        else:
+            actual_ip = actual_stats.get("ip", 0) or 0
+            if actual_ip > 0:
+                era_denom = denoms.get(Category.ERA)
+                proj_era = projected_stats.get("era", 0.0) or 0.0
+                if era_denom and proj_era > 0:
+                    actual_era = calculate_era(
+                        actual_stats.get("er", 0) or 0, actual_ip, default=0.0
+                    )
+                    actual_sgp += calculate_pitching_rate_sgp(
+                        actual_era, actual_ip, REPLACEMENT_ERA, era_denom, DEFAULT_TEAM_IP, 9
+                    )
+                    expected_sgp += calculate_pitching_rate_sgp(
+                        proj_era, actual_ip, REPLACEMENT_ERA, era_denom, DEFAULT_TEAM_IP, 9
+                    )
+                whip_denom = denoms.get(Category.WHIP)
+                proj_whip = projected_stats.get("whip", 0.0) or 0.0
+                if whip_denom and proj_whip > 0:
+                    actual_whip = calculate_whip(
+                        actual_stats.get("bb", 0) or 0,
+                        actual_stats.get("h_allowed", 0) or 0,
+                        actual_ip,
+                        default=0.0,
+                    )
+                    actual_sgp += calculate_pitching_rate_sgp(
+                        actual_whip, actual_ip, REPLACEMENT_WHIP, whip_denom, DEFAULT_TEAM_IP, 1
+                    )
+                    expected_sgp += calculate_pitching_rate_sgp(
+                        proj_whip, actual_ip, REPLACEMENT_WHIP, whip_denom, DEFAULT_TEAM_IP, 1
+                    )
+
+    sgp_dev = actual_sgp - expected_sgp
+    if math.isnan(sgp_dev):
+        # Belt-and-suspenders: a NaN would sort incorrectly into the leaguewide
+        # cutpoints and paint the player bright red. The projection guards above
+        # should prevent it; exclude defensively if one slips through.
+        return none_result
+    return {
+        "sgp_dev": round(sgp_dev, 3),
+        "actual_sgp": round(actual_sgp, 3),
+        "expected_sgp": round(expected_sgp, 3),
+    }
+
+
+def compute_pace_cutpoints(devs: list[float]) -> list[float] | None:
+    """Return [q16, q33, q66, q83] nearest-rank cutpoints for a pool of
+    SGP deviations, or None when the pool is smaller than MIN_POOL_SIZE.
+
+    Nearest-rank index = round(q * (n - 1)) over the ascending-sorted list.
+    """
+    if len(devs) < MIN_POOL_SIZE:
+        return None
+    ordered = sorted(devs)
+    n = len(ordered)
+    return [ordered[round(q * (n - 1))] for q in (1 / 6, 1 / 3, 2 / 3, 5 / 6)]
+
+
+def pace_dev_key(name: str, player_type: str) -> str:
+    """Key for the ``PACE_DEVIATIONS`` deviations map.
+
+    ``normalize_name(name)::player_type`` -- the same normalized-name
+    convention the game-log and ranking lookups use, so the pipeline writer
+    and the two display readers share one format and cannot drift.
+    """
+    return f"{normalize_name(name)}::{player_type}"
+
+
+def build_pace_deviation_payload(
+    players: list[Any],
+    hitter_logs: dict[str, dict[str, Any]],
+    pitcher_logs: dict[str, dict[str, Any]],
+    denoms: dict[Category, float],
+) -> dict[str, Any]:
+    """Compute the leaguewide SGP-deviation map + per-type cutpoints.
+
+    Iterates rostered ``players``, builds each one's YTD actuals (from the
+    game logs) and preseason projection (from the player's own
+    ``.preseason``, attached by hydration to both the user roster and every
+    opponent roster), calls :func:`compute_sgp_deviation`, keys the result by
+    :func:`pace_dev_key`, and derives hitter/pitcher cutpoints over the
+    players with a defined ``sgp_dev``.
+    """
+    deviations: dict[str, dict[str, Any]] = {}
+    devs: dict[str, list[float]] = {"hitter": [], "pitcher": []}
+
+    for player in players:
+        norm = normalize_name(player.name)
+        if player.player_type == PlayerType.HITTER:
+            actuals = hitter_logs.get(norm, {})
+            proj_keys = HITTER_PROJ_KEYS
+        else:
+            actuals = pitcher_logs.get(norm, {})
+            proj_keys = PITCHER_PROJ_KEYS
+        pre = player.preseason
+        if pre is not None:
+            projected = {k: getattr(pre, k, 0) for k in proj_keys}
+        else:
+            projected = {}
+
+        summary = compute_sgp_deviation(actuals, projected, player.player_type, denoms)
+        deviations[pace_dev_key(player.name, player.player_type.value)] = summary
+        if summary["sgp_dev"] is not None:
+            devs[player.player_type.value].append(summary["sgp_dev"])
+
+    return {
+        "deviations": deviations,
+        "cutpoints": {t: compute_pace_cutpoints(d) for t, d in devs.items()},
+    }
