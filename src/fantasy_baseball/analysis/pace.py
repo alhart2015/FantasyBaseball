@@ -19,10 +19,17 @@ from typing import Any
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.constants import (
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
     HITTER_PROJ_KEYS,
     INVERSE_STATS,
     PITCHER_PROJ_KEYS,
     Category,
+)
+from fantasy_baseball.sgp.player_value import (
+    REPLACEMENT_AVG,
+    REPLACEMENT_ERA,
+    REPLACEMENT_WHIP,
 )
 from fantasy_baseball.utils.dispersion import negbin_perf_cv
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -61,6 +68,17 @@ def _z_to_color(z: float) -> str:
     if z < -Z_LIGHT:
         return "stat-cold-1"
     return "stat-neutral"
+
+
+def _prorated_expected(proj: float, actual_opp: float, proj_opp: float) -> float:
+    """Projected counting stat scaled to actual playing time so far.
+
+    Returns 0.0 when the projection has no opportunity (proj_opp <= 0) or
+    projects zero of the stat, matching the guard compute_player_pace uses.
+    """
+    if proj_opp > 0 and proj > 0:
+        return proj * (actual_opp / proj_opp)
+    return 0.0
 
 
 def compute_player_pace(
@@ -137,10 +155,7 @@ def compute_player_pace(
         actual = actual_stats.get(stat, 0) or 0
         proj = projected_stats.get(stat, 0) or 0
 
-        if proj_opp > 0 and proj > 0:
-            expected = proj * (actual_opp / proj_opp)
-        else:
-            expected = 0.0
+        expected = _prorated_expected(proj, actual_opp, proj_opp)
 
         if expected > 0 and counting_colored:
             ratio = actual / expected
@@ -313,3 +328,102 @@ def compute_overall_pace(pace: dict[str, Any] | None) -> dict[str, Any]:
 
     avg_z = round(sum(z_scores) / len(z_scores), 1)
     return {"avg_z": avg_z, "color_class": _z_to_color(avg_z)}
+
+
+def compute_sgp_deviation(
+    actual_stats: dict[str, Any],
+    projected_stats: dict[str, Any],
+    player_type: str,
+    denoms: dict[Category, float],
+) -> dict[str, Any]:
+    """SGP delivered vs preseason-expected, prorated to actual playing time.
+
+    Returns {"sgp_dev", "actual_sgp", "expected_sgp"} in roto-point (SGP)
+    units. ``sgp_dev`` is None when the player has no games above the counting
+    gate or no projection. Counting categories use ``stat / denom``; rate
+    categories (AVG, ERA/WHIP) use the same marginal-value-over-actual-volume
+    formulas as ``sgp.player_value`` (the innings divisor cancels for ERA/WHIP).
+    The replacement baseline cancels in the delta but is kept in the returned
+    ``actual_sgp`` / ``expected_sgp`` so the tooltip reads as value-over-
+    replacement. Sample-size gates mirror ``compute_player_pace``.
+    """
+    none_result = {"sgp_dev": None, "actual_sgp": None, "expected_sgp": None}
+    if not projected_stats:
+        return none_result
+
+    if player_type == PlayerType.HITTER:
+        opp_key, counting = "pa", HITTER_COUNTING
+        min_counting, min_rates = HITTER_MIN_COUNTING, HITTER_MIN_RATES
+    else:
+        opp_key, counting = "ip", PITCHER_COUNTING
+        min_counting, min_rates = PITCHER_MIN_COUNTING, PITCHER_MIN_RATES
+
+    actual_opp = actual_stats.get(opp_key, 0) or 0
+    proj_opp = projected_stats.get(opp_key, 0) or 0
+    if actual_opp < min_counting:
+        return none_result
+
+    actual_sgp = 0.0
+    expected_sgp = 0.0
+
+    for stat in counting:
+        cat = Category(stat.upper())
+        denom = denoms.get(cat)
+        if not denom:
+            continue
+        actual = actual_stats.get(stat, 0) or 0
+        proj = projected_stats.get(stat, 0) or 0
+        expected = _prorated_expected(proj, actual_opp, proj_opp)
+        actual_sgp += actual / denom
+        expected_sgp += expected / denom
+
+    if actual_opp >= min_rates:
+        if player_type == PlayerType.HITTER:
+            actual_ab = actual_stats.get("ab", 0) or 0
+            denom = denoms.get(Category.AVG)
+            if denom and actual_ab > 0:
+                actual_avg = calculate_avg(
+                    actual_stats.get("h", 0) or 0, actual_ab, default=0.0
+                )
+                proj_avg = projected_stats.get("avg", 0.0) or 0.0
+                scale = actual_ab / (denom * DEFAULT_TEAM_AB)
+                actual_sgp += (actual_avg - REPLACEMENT_AVG) * scale
+                expected_sgp += (proj_avg - REPLACEMENT_AVG) * scale
+        else:
+            actual_ip = actual_stats.get("ip", 0) or 0
+            if actual_ip > 0:
+                # divisor cancels between marginal and one_sgp, so ERA and WHIP
+                # share the form (repl - rate) * ip / (denom * team_ip).
+                for cat, repl, actual_rate, proj_rate in (
+                    (
+                        Category.ERA,
+                        REPLACEMENT_ERA,
+                        calculate_era(
+                            actual_stats.get("er", 0) or 0, actual_ip, default=0.0
+                        ),
+                        projected_stats.get("era", 0.0) or 0.0,
+                    ),
+                    (
+                        Category.WHIP,
+                        REPLACEMENT_WHIP,
+                        calculate_whip(
+                            actual_stats.get("bb", 0) or 0,
+                            actual_stats.get("h_allowed", 0) or 0,
+                            actual_ip,
+                            default=0.0,
+                        ),
+                        projected_stats.get("whip", 0.0) or 0.0,
+                    ),
+                ):
+                    denom = denoms.get(cat)
+                    if not denom:
+                        continue
+                    scale = actual_ip / (denom * DEFAULT_TEAM_IP)
+                    actual_sgp += (repl - actual_rate) * scale
+                    expected_sgp += (repl - proj_rate) * scale
+
+    return {
+        "sgp_dev": round(actual_sgp - expected_sgp, 3),
+        "actual_sgp": round(actual_sgp, 3),
+        "expected_sgp": round(expected_sgp, 3),
+    }
