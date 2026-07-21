@@ -1,3 +1,5 @@
+import math
+
 import pytest
 
 from fantasy_baseball.analysis.pace import compute_sgp_deviation
@@ -71,3 +73,45 @@ def test_pitcher_underperforming_negative_dev():
     out = compute_sgp_deviation(actual, projected, "pitcher", DENOMS)
     # actual ERA 6.30 > 3.50, actual WHIP 1.70 > 1.10, K/W behind pace
     assert out["sgp_dev"] < 0
+
+
+def test_zero_projected_pa_returns_none():
+    # Phantom projection: 0 projected PA has no basis for "expected" -> excluded
+    # (else full actuals credit against ~0 expected inflates sgp_dev).
+    actual = {"pa": 100, "ab": 90, "h": 27, "r": 25, "hr": 8, "rbi": 30, "sb": 6}
+    projected = {"pa": 0, "ab": 0, "avg": 0.0, "r": 0, "hr": 0, "rbi": 0, "sb": 0}
+    out = compute_sgp_deviation(actual, projected, "hitter", DENOMS)
+    assert out["sgp_dev"] is None
+
+
+def test_nan_projected_pa_returns_none():
+    actual = {"pa": 100, "ab": 90, "h": 27, "r": 25, "hr": 8, "rbi": 30, "sb": 6}
+    projected = {
+        "pa": float("nan"),
+        "ab": 90,
+        "avg": 0.280,
+        "r": 100,
+        "hr": 30,
+        "rbi": 100,
+        "sb": 20,
+    }
+    out = compute_sgp_deviation(actual, projected, "hitter", DENOMS)
+    assert out["sgp_dev"] is None
+
+
+def test_zero_projected_avg_skips_rate_term():
+    # Valid projected PA but 0 projected AVG -> AVG term skipped (not scored
+    # against a .000 baseline); sgp_dev is the counting-only delta.
+    actual = {"pa": 100, "ab": 90, "h": 27, "r": 25, "hr": 8, "rbi": 30, "sb": 6}
+    projected = {"pa": 500, "ab": 450, "avg": 0.0, "r": 100, "hr": 30, "rbi": 100, "sb": 20}
+    out = compute_sgp_deviation(actual, projected, "hitter", DENOMS)
+    assert out["sgp_dev"] == pytest.approx(2.3, abs=0.005)  # counting only, no AVG
+
+
+def test_zero_projected_era_skips_rate_term():
+    # 0 projected ERA -> ERA term skipped; result stays finite/defined.
+    actual = {"ip": 50, "k": 60, "w": 5, "sv": 0, "er": 15, "bb": 12, "h_allowed": 38}
+    projected = {"ip": 180, "k": 200, "w": 12, "sv": 0, "era": 0.0, "whip": 1.10}
+    out = compute_sgp_deviation(actual, projected, "pitcher", DENOMS)
+    assert out["sgp_dev"] is not None
+    assert not math.isnan(out["sgp_dev"])

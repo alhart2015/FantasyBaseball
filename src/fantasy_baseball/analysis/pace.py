@@ -22,6 +22,9 @@ from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_AVG,
     REPLACEMENT_ERA,
     REPLACEMENT_WHIP,
+    calculate_counting_sgp,
+    calculate_hitting_rate_sgp,
+    calculate_pitching_rate_sgp,
 )
 from fantasy_baseball.utils.constants import (
     DEFAULT_TEAM_AB,
@@ -319,12 +322,13 @@ def compute_overall_pace(
     when the deviation is undefined, cutpoints are missing, or the pool was
     too small (cutpoints None). The tooltip values pass through unchanged.
     """
-    dev = sgp_summary.get("sgp_dev") if sgp_summary else None
+    summary = sgp_summary if sgp_summary is not None else {}
+    dev = summary.get("sgp_dev")
     result = {
         "color_class": "stat-neutral",
         "sgp_dev": dev,
-        "actual_sgp": sgp_summary.get("actual_sgp") if sgp_summary else None,
-        "expected_sgp": sgp_summary.get("expected_sgp") if sgp_summary else None,
+        "actual_sgp": summary.get("actual_sgp"),
+        "expected_sgp": summary.get("expected_sgp"),
     }
     if dev is None or not cutpoints:
         return result
@@ -353,10 +357,10 @@ def compute_sgp_deviation(
 
     Returns {"sgp_dev", "actual_sgp", "expected_sgp"} in roto-point (SGP)
     units. ``sgp_dev`` is None when the player has no games above the counting
-    gate or no projection. Counting categories use ``stat / denom``; rate
-    categories (AVG, ERA/WHIP) use the same marginal-value-over-actual-volume
-    formulas as ``sgp.player_value`` (the innings divisor cancels for ERA/WHIP).
-    The replacement baseline cancels in the delta but is kept in the returned
+    gate or no projection. Per-category value comes from ``sgp.player_value``'s
+    ``calculate_*_sgp`` helpers (counting, hitting-rate, pitching-rate), scored
+    over the player's actual playing time so the metric is rate-fair. The
+    replacement baseline cancels in the delta but is kept in the returned
     ``actual_sgp`` / ``expected_sgp`` so the tooltip reads as value-over-
     replacement. Sample-size gates mirror ``compute_player_pace``.
     """
@@ -373,66 +377,80 @@ def compute_sgp_deviation(
 
     actual_opp = actual_stats.get(opp_key, 0) or 0
     proj_opp = projected_stats.get(opp_key, 0) or 0
-    if actual_opp < min_counting:
+    # A degenerate preseason line (0 or NaN projected PA/IP -- the phantom-
+    # projection trap in this codebase) has no basis for an "expected" value;
+    # crediting full actuals against ~0 expected would inflate sgp_dev and
+    # pollute the leaguewide cutpoints, so exclude the player. ``not proj_opp > 0``
+    # rejects 0, negatives, and NaN (NaN > 0 is False).
+    if actual_opp < min_counting or not proj_opp > 0:
         return none_result
 
     actual_sgp = 0.0
     expected_sgp = 0.0
 
     for stat in counting:
-        cat = Category(stat.upper())
-        denom = denoms.get(cat)
+        denom = denoms.get(Category(stat.upper()))
         if not denom:
             continue
         actual = actual_stats.get(stat, 0) or 0
-        proj = projected_stats.get(stat, 0) or 0
-        expected = _prorated_expected(proj, actual_opp, proj_opp)
-        actual_sgp += actual / denom
-        expected_sgp += expected / denom
+        expected = _prorated_expected(projected_stats.get(stat, 0) or 0, actual_opp, proj_opp)
+        actual_sgp += calculate_counting_sgp(actual, denom)
+        expected_sgp += calculate_counting_sgp(expected, denom)
 
     if actual_opp >= min_rates:
         if player_type == PlayerType.HITTER:
             actual_ab = actual_stats.get("ab", 0) or 0
+            proj_avg = projected_stats.get("avg", 0.0) or 0.0
             denom = denoms.get(Category.AVG)
-            if denom and actual_ab > 0:
+            # proj_avg > 0 mirrors compute_player_pace: a 0/None/NaN projected
+            # rate has no valid baseline and would be scored against .000.
+            if denom and actual_ab > 0 and proj_avg > 0:
                 actual_avg = calculate_avg(actual_stats.get("h", 0) or 0, actual_ab, default=0.0)
-                proj_avg = projected_stats.get("avg", 0.0) or 0.0
-                scale = actual_ab / (denom * DEFAULT_TEAM_AB)
-                actual_sgp += (actual_avg - REPLACEMENT_AVG) * scale
-                expected_sgp += (proj_avg - REPLACEMENT_AVG) * scale
+                actual_sgp += calculate_hitting_rate_sgp(
+                    actual_avg, actual_ab, REPLACEMENT_AVG, denom, DEFAULT_TEAM_AB
+                )
+                expected_sgp += calculate_hitting_rate_sgp(
+                    proj_avg, actual_ab, REPLACEMENT_AVG, denom, DEFAULT_TEAM_AB
+                )
         else:
             actual_ip = actual_stats.get("ip", 0) or 0
             if actual_ip > 0:
-                # divisor cancels between marginal and one_sgp, so ERA and WHIP
-                # share the form (repl - rate) * ip / (denom * team_ip).
-                for cat, repl, actual_rate, proj_rate in (
-                    (
-                        Category.ERA,
-                        REPLACEMENT_ERA,
-                        calculate_era(actual_stats.get("er", 0) or 0, actual_ip, default=0.0),
-                        projected_stats.get("era", 0.0) or 0.0,
-                    ),
-                    (
-                        Category.WHIP,
-                        REPLACEMENT_WHIP,
-                        calculate_whip(
-                            actual_stats.get("bb", 0) or 0,
-                            actual_stats.get("h_allowed", 0) or 0,
-                            actual_ip,
-                            default=0.0,
-                        ),
-                        projected_stats.get("whip", 0.0) or 0.0,
-                    ),
-                ):
-                    denom = denoms.get(cat)
-                    if not denom:
-                        continue
-                    scale = actual_ip / (denom * DEFAULT_TEAM_IP)
-                    actual_sgp += (repl - actual_rate) * scale
-                    expected_sgp += (repl - proj_rate) * scale
+                era_denom = denoms.get(Category.ERA)
+                proj_era = projected_stats.get("era", 0.0) or 0.0
+                if era_denom and proj_era > 0:
+                    actual_era = calculate_era(
+                        actual_stats.get("er", 0) or 0, actual_ip, default=0.0
+                    )
+                    actual_sgp += calculate_pitching_rate_sgp(
+                        actual_era, actual_ip, REPLACEMENT_ERA, era_denom, DEFAULT_TEAM_IP, 9
+                    )
+                    expected_sgp += calculate_pitching_rate_sgp(
+                        proj_era, actual_ip, REPLACEMENT_ERA, era_denom, DEFAULT_TEAM_IP, 9
+                    )
+                whip_denom = denoms.get(Category.WHIP)
+                proj_whip = projected_stats.get("whip", 0.0) or 0.0
+                if whip_denom and proj_whip > 0:
+                    actual_whip = calculate_whip(
+                        actual_stats.get("bb", 0) or 0,
+                        actual_stats.get("h_allowed", 0) or 0,
+                        actual_ip,
+                        default=0.0,
+                    )
+                    actual_sgp += calculate_pitching_rate_sgp(
+                        actual_whip, actual_ip, REPLACEMENT_WHIP, whip_denom, DEFAULT_TEAM_IP, 1
+                    )
+                    expected_sgp += calculate_pitching_rate_sgp(
+                        proj_whip, actual_ip, REPLACEMENT_WHIP, whip_denom, DEFAULT_TEAM_IP, 1
+                    )
 
+    sgp_dev = actual_sgp - expected_sgp
+    if math.isnan(sgp_dev):
+        # Belt-and-suspenders: a NaN would sort incorrectly into the leaguewide
+        # cutpoints and paint the player bright red. The projection guards above
+        # should prevent it; exclude defensively if one slips through.
+        return none_result
     return {
-        "sgp_dev": round(actual_sgp - expected_sgp, 3),
+        "sgp_dev": round(sgp_dev, 3),
         "actual_sgp": round(actual_sgp, 3),
         "expected_sgp": round(expected_sgp, 3),
     }
@@ -451,6 +469,16 @@ def compute_pace_cutpoints(devs: list[float]) -> list[float] | None:
     return [ordered[round(q * (n - 1))] for q in (1 / 6, 1 / 3, 2 / 3, 5 / 6)]
 
 
+def pace_dev_key(name: str, player_type: str) -> str:
+    """Key for the ``PACE_DEVIATIONS`` deviations map.
+
+    ``normalize_name(name)::player_type`` -- the same normalized-name
+    convention the game-log and ranking lookups use, so the pipeline writer
+    and the two display readers share one format and cannot drift.
+    """
+    return f"{normalize_name(name)}::{player_type}"
+
+
 def build_pace_deviation_payload(
     players: list[Any],
     hitter_logs: dict[str, dict[str, Any]],
@@ -463,12 +491,11 @@ def build_pace_deviation_payload(
     game logs) and preseason projection (from the player's own
     ``.preseason``, attached by hydration to both the user roster and every
     opponent roster), calls :func:`compute_sgp_deviation`, keys the result by
-    ``normalize_name(name)::player_type``, and derives hitter/pitcher
-    cutpoints over the players with a defined ``sgp_dev``.
+    :func:`pace_dev_key`, and derives hitter/pitcher cutpoints over the
+    players with a defined ``sgp_dev``.
     """
     deviations: dict[str, dict[str, Any]] = {}
-    hitter_devs: list[float] = []
-    pitcher_devs: list[float] = []
+    devs: dict[str, list[float]] = {"hitter": [], "pitcher": []}
 
     for player in players:
         norm = normalize_name(player.name)
@@ -485,17 +512,11 @@ def build_pace_deviation_payload(
             projected = {}
 
         summary = compute_sgp_deviation(actuals, projected, player.player_type, denoms)
-        deviations[f"{norm}::{player.player_type.value}"] = summary
+        deviations[pace_dev_key(player.name, player.player_type.value)] = summary
         if summary["sgp_dev"] is not None:
-            if player.player_type == PlayerType.HITTER:
-                hitter_devs.append(summary["sgp_dev"])
-            else:
-                pitcher_devs.append(summary["sgp_dev"])
+            devs[player.player_type.value].append(summary["sgp_dev"])
 
     return {
         "deviations": deviations,
-        "cutpoints": {
-            "hitter": compute_pace_cutpoints(hitter_devs),
-            "pitcher": compute_pace_cutpoints(pitcher_devs),
-        },
+        "cutpoints": {t: compute_pace_cutpoints(d) for t, d in devs.items()},
     }
