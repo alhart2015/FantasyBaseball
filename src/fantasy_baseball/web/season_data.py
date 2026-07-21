@@ -508,6 +508,10 @@ def build_opponent_lineup(
     # Rankings (populated during refresh; absent on cold cache).
     rankings = read_cache_dict(CacheKey.RANKINGS) or {}
 
+    pace_dev = read_cache_dict(CacheKey.PACE_DEVIATIONS) or {}
+    deviations = pace_dev.get("deviations", {})
+    cutpoints = pace_dev.get("cutpoints", {})
+
     # Build enriched entries
     matched_names = set()
     enriched = []
@@ -558,7 +562,10 @@ def build_opponent_lineup(
             for k in proj_keys
         }
         entry["pace"] = compute_player_pace(actuals, projected, ptype)
-        entry["overall_pace"] = compute_overall_pace(entry["pace"])
+        entry["overall_pace"] = compute_overall_pace(
+            deviations.get(f"{norm}::{player.player_type.value}"),
+            cutpoints.get(player.player_type.value),
+        )
 
         enriched.append(entry)
 
@@ -569,7 +576,7 @@ def build_opponent_lineup(
             entry["sgp"] = 0.0
             entry["delta_roto"] = None
             entry["pace"] = {}
-            entry["overall_pace"] = compute_overall_pace(entry["pace"])
+            entry["overall_pace"] = compute_overall_pace(None, None)
             entry["display_stats"] = {}
             enriched.append(entry)
 
@@ -972,9 +979,14 @@ def format_lineup_for_display(
     """
     from fantasy_baseball.analysis.pace import compute_overall_pace
     from fantasy_baseball.models.player import Player
+    from fantasy_baseball.utils.name_utils import normalize_name
 
     # Normalize basis once before the loop; unknown values fall back to ROS.
     basis = coerce_basis(basis)
+
+    pace_dev = read_cache_dict(CacheKey.PACE_DEVIATIONS) or {}
+    deviations = pace_dev.get("deviations", {})
+    cutpoints = pace_dev.get("cutpoints", {})
 
     hitters = []
     pitchers = []
@@ -1023,7 +1035,10 @@ def format_lineup_for_display(
             "is_bench": pos in BENCH_SLOTS,
             "is_il": "IL" in player.status or pos == "IL",
             "pace": player.pace or {},
-            "overall_pace": compute_overall_pace(player.pace),
+            "overall_pace": compute_overall_pace(
+                deviations.get(f"{normalize_name(player.name)}::{player.player_type.value}"),
+                cutpoints.get(player.player_type.value),
+            ),
             "rank": player.rank.to_dict(),
             "preseason": player.preseason.to_dict() if player.preseason else None,
         }

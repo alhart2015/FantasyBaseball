@@ -307,30 +307,40 @@ def attach_pace_to_roster(
         )
 
 
-def compute_overall_pace(pace: dict[str, Any] | None) -> dict[str, Any]:
-    """Average per-category z-scores into an overall pace summary.
+def compute_overall_pace(
+    sgp_summary: dict[str, Any] | None,
+    cutpoints: list[float] | None,
+) -> dict[str, Any]:
+    """Bucket a player's cached SGP deviation against its pool cutpoints.
 
-    Args:
-        pace: Dict from compute_player_pace() with UPPERCASE keys.
-              Each value may contain a 'z_score' float.
-
-    Returns:
-        {"avg_z": float | None, "color_class": str}
+    ``sgp_summary`` is one entry from the ``PACE_DEVIATIONS`` deviations map
+    ({"sgp_dev", "actual_sgp", "expected_sgp"}); ``cutpoints`` is
+    ``[q16, q33, q66, q83]`` for the player's type (or None). Renders neutral
+    when the deviation is undefined, cutpoints are missing, or the pool was
+    too small (cutpoints None). The tooltip values pass through unchanged.
     """
-    if not pace:
-        return {"avg_z": None, "color_class": "stat-neutral"}
+    dev = sgp_summary.get("sgp_dev") if sgp_summary else None
+    result = {
+        "color_class": "stat-neutral",
+        "sgp_dev": dev,
+        "actual_sgp": sgp_summary.get("actual_sgp") if sgp_summary else None,
+        "expected_sgp": sgp_summary.get("expected_sgp") if sgp_summary else None,
+    }
+    if dev is None or not cutpoints:
+        return result
 
-    z_scores = [
-        entry["z_score"]
-        for entry in pace.values()
-        if isinstance(entry, dict) and entry.get("z_score") is not None
-    ]
-
-    if not z_scores:
-        return {"avg_z": None, "color_class": "stat-neutral"}
-
-    avg_z = round(sum(z_scores) / len(z_scores), 1)
-    return {"avg_z": avg_z, "color_class": _z_to_color(avg_z)}
+    q16, q33, q66, q83 = cutpoints
+    if dev >= q83:
+        result["color_class"] = "stat-hot-2"
+    elif dev >= q66:
+        result["color_class"] = "stat-hot-1"
+    elif dev >= q33:
+        result["color_class"] = "stat-neutral"
+    elif dev >= q16:
+        result["color_class"] = "stat-cold-1"
+    else:
+        result["color_class"] = "stat-cold-2"
+    return result
 
 
 def compute_sgp_deviation(

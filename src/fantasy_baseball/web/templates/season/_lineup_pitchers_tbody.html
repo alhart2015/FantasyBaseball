@@ -33,10 +33,11 @@
     <tr class="{% if p.is_bench %}bench-row{% endif %}{% if p.is_il and not p.is_bench %} il-active-row{% endif %}">
         <td class="stat-cell {{ p.overall_pace.color_class if p.overall_pace else 'stat-neutral' }}">
             {{ p.selected_position }}
-            {% if p.overall_pace and p.overall_pace.avg_z is not none %}
+            {% if p.overall_pace and p.overall_pace.sgp_dev is not none %}
             <div class="tooltip">
-                <div style="font-weight: 600; margin-bottom: 6px;">{{ p.name }} — Overall Pace</div>
-                <div class="tooltip-row"><span class="tooltip-label">Avg z-score</span><span class="tooltip-val">{{ '%+.1f'|format(p.overall_pace.avg_z) }}</span></div>
+                <div style="font-weight: 600; margin-bottom: 6px;">{{ p.name }} - Overall Pace</div>
+                <div class="tooltip-row"><span class="tooltip-label">SGP pace</span><span class="tooltip-val">{{ '%+.1f'|format(p.overall_pace.sgp_dev) }}</span></div>
+                <div class="tooltip-row"><span class="tooltip-label">Delivered / expected</span><span class="tooltip-val">{{ '%.1f'|format(p.overall_pace.actual_sgp) }} / {{ '%.1f'|format(p.overall_pace.expected_sgp) }}</span></div>
             </div>
             {% endif %}
         </td>
