@@ -522,7 +522,11 @@ def _replacement_line(p: dict, is_hitter: bool) -> dict:
     - Pitchers route to SP or RP by their ``SP``/``RP`` position eligibility (the
       authoritative signal, present on the flat dict and used by transactions.py),
       falling back to projected IP >= ``STARTER_IP_THRESHOLD`` when neither is
-      listed. ``SP`` wins for swingmen eligible at both.
+      listed. ``SP`` wins for swingmen eligible at both. Stored roster blobs carry
+      only the generic slot ``P`` (no SP/RP), so that IP fallback usually decides
+      the role -- and ``STARTER_IP_THRESHOLD`` is a FULL-SEASON bar, so callers MUST
+      pass a full-season line (e.g. ``to_flat_dict_full_season``); a rest-of-season
+      IP misroutes every starter to RP (issue #251).
     """
     if not is_hitter:
         pos_set = {_pos_label(pos) for pos in (p.get("positions") or [])}

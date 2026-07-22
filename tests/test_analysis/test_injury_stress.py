@@ -3,6 +3,7 @@ import math
 from fantasy_baseball.analysis.injury_stress import (
     HealthProbs,
     McInputs,
+    _replacement_ros,
     health_probabilities,
     substitute_replacement,
     win_pct,
@@ -175,16 +176,15 @@ def test_counterfactual_pitcher_has_cost_and_no_raw_hole():
 
 
 def test_replacement_ros_routes_starter_by_full_season_ip():
-    # Regression for issue #251. Production roster blobs carry only the generic
-    # slot position Position.P (never SP/RP eligibility), so _replacement_line's
-    # position routing can't fire and falls back to role_from_ip. Mid-season a
-    # real starter's REST-OF-SEASON IP (~73) sits below STARTER_IP_THRESHOLD (100)
-    # even though his FULL-SEASON IP (~180) is well above it. The replacement role
-    # must be decided on full-season IP -> SP, not the shrunken ROS IP -> RP: an SP
-    # wrongly handed the K-rich, save-bearing RP line grades out as an UPGRADE
-    # (negative single-loss injury exposure -- Woo/Luzardo/Webb/Gray in the report).
-    from fantasy_baseball.analysis.injury_stress import _replacement_ros
-
+    # Regression for issue #251. Production roster blobs carry only the generic slot
+    # position Position.P (never SP/RP eligibility), so _replacement_line's position
+    # routing can't fire and falls back to role_from_ip. Mid-season a real starter's
+    # REST-OF-SEASON IP (~73) sits below STARTER_IP_THRESHOLD (100) even though his
+    # FULL-SEASON IP (~180) clears it. Role must be decided on full-season IP -> SP,
+    # not the shrunken ROS IP -> RP: an SP wrongly handed the K-rich, save-bearing RP
+    # line grades an injury as an UPGRADE (negative single-loss exposure). (Injured /
+    # role-changed pitchers whose season-IP TOTAL misrepresents their usage are a
+    # deferred residual needing an innings-per-appearance signal -- issue #253.)
     starter = Player(
         name="RealStarter",
         player_type=PlayerType.PITCHER,
