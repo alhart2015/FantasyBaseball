@@ -14,7 +14,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from fantasy_baseball.analysis.injury_stress import (  # noqa: E402
+from fantasy_baseball.analysis.injury_stress import (
     PAIR_TOP_K,
     SIGNIFICANT_TIME_THRESHOLD,
     load_mc_inputs_from_upstash,
