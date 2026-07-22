@@ -121,7 +121,7 @@ Change the scale line (currently `scales = np.maximum(0.0, eff_mean[None, :] + z
         # Availability-off: pin every draw to eff_mean (zero playing-time spread)
         # while STILL consuming `us`/`z_pt` above, so the rng stream stays aligned
         # with the baseline run (common random numbers) -- only the transform differs.
-        pt_spread = 0.0 if availability_variance_off else z_pt * eff_sd[None, :]
+        pt_spread = np.zeros_like(z_pt) if availability_variance_off else z_pt * eff_sd[None, :]
         scales = np.maximum(0.0, eff_mean[None, :] + pt_spread)
 ```
 
