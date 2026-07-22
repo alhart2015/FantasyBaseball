@@ -176,3 +176,22 @@ def test_win_pct_is_deterministic():
     inp = _synth_inputs()
     me = inp.team_rosters["Me"]
     assert win_pct(inp, me, n_iter=200) == win_pct(inp, me, n_iter=200)
+
+
+# ---------------------------------------------------------------------------
+# Stress-test orchestration
+# ---------------------------------------------------------------------------
+
+
+def test_run_stress_test_ranks_and_flags():
+    from fantasy_baseball.analysis.injury_stress import run_stress_test
+
+    inp = _synth_inputs()
+    res = run_stress_test(inp, n_iter=300, pair_top_k=4)
+    names = [e.name for e in res.singles]
+    assert names.index("Star") < names.index("Weak")  # the star outranks the weak bat
+    assert res.singles == sorted(res.singles, key=lambda e: e.win_pct_cost, reverse=True)
+    assert 0.0 <= res.health.p_all_healthy <= 1.0
+    # pairs are top-K choose 2 and ranked by joint cost
+    assert len(res.pairs) == 6  # C(4, 2)
+    assert res.pairs == sorted(res.pairs, key=lambda e: e.joint_cost, reverse=True)

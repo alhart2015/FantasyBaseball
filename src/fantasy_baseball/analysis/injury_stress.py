@@ -8,6 +8,7 @@ docs/superpowers/specs/2026-07-22-injury-stress-test-design.md.
 from __future__ import annotations
 
 import dataclasses
+import itertools
 from dataclasses import dataclass
 
 import numpy as np
@@ -15,6 +16,7 @@ import numpy as np
 from fantasy_baseball.mc_roster import build_effective_rosters
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.standings import CategoryStats
+from fantasy_baseball.scoring import _classify_roster
 from fantasy_baseball.simulation import (
     _full_season_pt_volume,
     _replacement_line,
@@ -201,3 +203,82 @@ def win_pct(
         availability_variance_off=availability_variance_off,
     )
     return float(mc["team_results"][inputs.user_team_name]["first_pct"])
+
+
+@dataclass(frozen=True)
+class PlayerExposure:
+    name: str
+    player_type: str
+    win_pct_cost: float
+
+
+@dataclass(frozen=True)
+class PairExposure:
+    name_a: str
+    name_b: str
+    joint_cost: float
+    super_additive: float
+
+
+@dataclass(frozen=True)
+class StressResult:
+    baseline_win_pct: float
+    availability_off_win_pct: float
+    projected_margin: float
+    health: HealthProbs
+    singles: list[PlayerExposure]
+    pairs: list[PairExposure]
+    threshold: float
+    n_iter: int
+    seed: int
+
+
+def run_stress_test(
+    inputs: McInputs,
+    *,
+    threshold: float = SIGNIFICANT_TIME_THRESHOLD,
+    pair_top_k: int = PAIR_TOP_K,
+    n_iter: int = DEFAULT_N_ITER,
+    seed: int = SEED,
+) -> StressResult:
+    """Headline win% (baseline + availability-variance-off), per-player health
+    probabilities, and ranked single/pair replacement-level counterfactuals for
+    the user's active roster. Every `win_pct` call shares `seed` (common random
+    numbers) so counterfactual deltas isolate the roster swap, not MC noise."""
+    me = inputs.team_rosters[inputs.user_team_name]
+    base = win_pct(inputs, me, n_iter=n_iter, seed=seed)
+    avail_off = win_pct(inputs, me, availability_variance_off=True, n_iter=n_iter, seed=seed)
+
+    active, _il, _bench = _classify_roster(me)
+    health = health_probabilities(active, inputs.fraction_remaining, threshold=threshold, seed=seed)
+
+    singles: list[PlayerExposure] = []
+    for p in active:
+        wp = win_pct(inputs, substitute_replacement(me, [p.name]), n_iter=n_iter, seed=seed)
+        singles.append(PlayerExposure(p.name, p.player_type.value, base - wp))
+    singles.sort(key=lambda e: e.win_pct_cost, reverse=True)
+
+    cost_by_name = {e.name: e.win_pct_cost for e in singles}
+    top = singles[:pair_top_k]
+    pairs: list[PairExposure] = []
+    for a, b in itertools.combinations(top, 2):
+        wp = win_pct(inputs, substitute_replacement(me, [a.name, b.name]), n_iter=n_iter, seed=seed)
+        joint = base - wp
+        pairs.append(
+            PairExposure(
+                a.name, b.name, joint, joint - (cost_by_name[a.name] + cost_by_name[b.name])
+            )
+        )
+    pairs.sort(key=lambda e: e.joint_cost, reverse=True)
+
+    return StressResult(
+        baseline_win_pct=base,
+        availability_off_win_pct=avail_off,
+        projected_margin=inputs.projected_margin,
+        health=health,
+        singles=singles,
+        pairs=pairs,
+        threshold=threshold,
+        n_iter=n_iter,
+        seed=seed,
+    )
