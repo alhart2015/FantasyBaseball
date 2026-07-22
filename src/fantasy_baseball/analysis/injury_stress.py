@@ -7,13 +7,26 @@ docs/superpowers/specs/2026-07-22-injury-stress-test-design.md.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 import numpy as np
 
-from fantasy_baseball.models.player import Player, PlayerType
-from fantasy_baseball.simulation import _full_season_pt_volume
-from fantasy_baseball.utils.constants import QUANTILE_LEVELS
+from fantasy_baseball.mc_roster import build_effective_rosters
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
+from fantasy_baseball.models.standings import CategoryStats
+from fantasy_baseball.simulation import (
+    _full_season_pt_volume,
+    _replacement_line,
+    run_ros_monte_carlo,
+)
+from fantasy_baseball.utils.constants import (
+    AB_PER_PA,
+    HITTING_COUNTING,
+    PITCHING_COUNTING,
+    QUANTILE_LEVELS,
+    Category,
+)
 from fantasy_baseball.utils.playing_time import (
     playing_time_moments,
     playing_time_params,
@@ -80,3 +93,111 @@ def health_probabilities(
         per_player=per_player,
         threshold=threshold,
     )
+
+
+@dataclass(frozen=True)
+class McInputs:
+    team_rosters: dict[str, list[Player]]
+    actual_standings: dict[str, dict[str, float]]
+    fraction_remaining: float
+    h_slots: int
+    p_slots: int
+    eos_baseline: dict[str, CategoryStats]
+    team_sds: dict[str, dict[Category, float]]
+    denoms: dict[Category, float]
+    user_team_name: str
+    projected_margin: float
+
+
+def _replacement_ros(player: Player) -> HitterStats | PitcherStats:
+    """Replacement-level ROS stats object at `player`'s slot, scaled to his ROS
+    playing-time volume (AB for hitters, IP for pitchers). Returns a NEW stats
+    object; `player.rest_of_season` is not mutated."""
+    is_hitter = player.player_type == PlayerType.HITTER
+    ros = player.rest_of_season
+    repl = _replacement_line(player.to_flat_dict(), is_hitter)
+    if isinstance(ros, HitterStats):
+        x_ab = float(ros.ab) if ros.ab else 0.0
+        factor = (x_ab / repl["ab"]) if repl.get("ab") else 0.0
+        s = {c: repl[c] * factor for c in HITTING_COUNTING}
+        avg = (s["h"] / s["ab"]) if s["ab"] else 0.0
+        return dataclasses.replace(
+            ros,
+            r=s["r"],
+            hr=s["hr"],
+            rbi=s["rbi"],
+            sb=s["sb"],
+            h=s["h"],
+            ab=s["ab"],
+            pa=(s["ab"] / AB_PER_PA),
+            avg=avg,
+            sgp=None,
+        )
+    if isinstance(ros, PitcherStats):
+        x_ip = float(ros.ip) if ros.ip else 0.0
+        factor = (x_ip / repl["ip"]) if repl.get("ip") else 0.0
+        s = {c: repl[c] * factor for c in PITCHING_COUNTING}
+        era = (s["er"] * 9.0 / s["ip"]) if s["ip"] else 0.0
+        whip = ((s["bb"] + s["h_allowed"]) / s["ip"]) if s["ip"] else 0.0
+        return dataclasses.replace(
+            ros,
+            w=s["w"],
+            k=s["k"],
+            sv=s["sv"],
+            ip=s["ip"],
+            er=s["er"],
+            bb=s["bb"],
+            h_allowed=s["h_allowed"],
+            era=era,
+            whip=whip,
+            sgp=None,
+        )
+    raise ValueError(f"{player.name!r} has no rest_of_season line to substitute a replacement into")
+
+
+def substitute_replacement(user_players: list[Player], target_names: list[str]) -> list[Player]:
+    """Clone `user_players`, replacing each named player's ROS line with a
+    position-matched replacement-level line (see `_replacement_ros`). Non-targets
+    are shared unchanged (same object)."""
+    targets = set(target_names)
+    out: list[Player] = []
+    for p in user_players:
+        if p.name in targets:
+            out.append(dataclasses.replace(p, rest_of_season=_replacement_ros(p)))
+        else:
+            out.append(p)
+    return out
+
+
+def win_pct(
+    inputs: McInputs,
+    user_players: list[Player],
+    *,
+    availability_variance_off: bool = False,
+    n_iter: int = DEFAULT_N_ITER,
+    seed: int = SEED,
+) -> float:
+    """User's P(finish 1st) for a given user roster. Rebuilds effective_rosters
+    (fixed eos_baseline/team_sds/fraction_remaining) so the substitution takes
+    effect in the ROS-direct path, then runs the ROS MC."""
+    team_rosters = {**inputs.team_rosters, inputs.user_team_name: user_players}
+    eff = build_effective_rosters(
+        team_rosters,
+        inputs.eos_baseline,
+        inputs.team_sds,
+        inputs.fraction_remaining,
+        denoms=inputs.denoms,
+    )
+    mc = run_ros_monte_carlo(
+        team_rosters=team_rosters,
+        actual_standings=inputs.actual_standings,
+        fraction_remaining=inputs.fraction_remaining,
+        h_slots=inputs.h_slots,
+        p_slots=inputs.p_slots,
+        user_team_name=inputs.user_team_name,
+        n_iterations=n_iter,
+        seed=seed,
+        effective_rosters=eff,
+        availability_variance_off=availability_variance_off,
+    )
+    return float(mc["team_results"][inputs.user_team_name]["first_pct"])
