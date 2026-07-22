@@ -21,6 +21,7 @@ from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, Pl
 from fantasy_baseball.models.standings import CategoryStats, Standings, build_eos_baseline
 from fantasy_baseball.scoring import _classify_roster, build_team_sds, score_roto_dict
 from fantasy_baseball.simulation import (
+    _flatten_full_season,
     _full_season_pt_volume,
     _replacement_line,
     run_ros_monte_carlo,
@@ -210,7 +211,17 @@ def _replacement_ros(player: Player) -> HitterStats | PitcherStats:
     object; `player.rest_of_season` is not mutated."""
     is_hitter = player.player_type == PlayerType.HITTER
     ros = player.rest_of_season
-    repl = _replacement_line(player.to_flat_dict(), is_hitter)
+    # Route the replacement ROLE on the FULL-SEASON line, not the ROS line. When a
+    # pitcher lacks SP/RP eligibility, _replacement_line falls back to role_from_ip
+    # (STARTER_IP_THRESHOLD -- a full-season 100-IP bar). Stored roster blobs only
+    # ever carry the generic slot position "P", so that IP fallback ALWAYS decides
+    # the role. Feeding it the shrunken ROS IP (~70 mid-season) misclassifies every
+    # starter as an RP and hands him the K-rich, save-bearing RP line -- an UPGRADE
+    # that flips a good starter's injury exposure negative (issue #251). The
+    # full-season flat dict carries the real ~180 IP, so role_from_ip picks SP.
+    # (Hitters are unaffected: their routing reads positions only, identical on both
+    # flat dicts.) The counting line is still SCALED to the ROS volume below.
+    repl = _replacement_line(_flatten_full_season(player), is_hitter)
     if isinstance(ros, HitterStats):
         x_ab = float(ros.ab) if ros.ab else 0.0
         factor = (x_ab / repl["ab"]) if repl.get("ab") else 0.0
