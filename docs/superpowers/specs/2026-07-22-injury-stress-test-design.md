@@ -156,15 +156,25 @@ From standalone playing-time sampling of the active roster (reusing
 - P(exactly one does)
 - P(two or more)
 
-"Significant time" = a sampled `frac_missed` (= `max(0, 1 - scale)`) of at least a
-threshold fraction of the player's **ROS projection** (the projected line already
-prices in expected missed time, so this measures shortfall relative to that
-projection, not relative to a hypothetical full-health season). Default threshold:
-**0.20** (roughly a 4-week IL stint at mid-season), exposed as a tunable module
-constant. The threshold is aligned in spirit with the sim's existing
-`_NOTABLE_PT_LOSS = 0.15` notable-injury flag; 0.20 is chosen as a slightly stricter
-"real injury, not a routine day off" bar. Reported for the default and can be re-run
-at another threshold.
+"Significant time" is measured as a shortfall below the player's **own expected
+remaining playing time** (`eff_mean`), NOT below the raw projection. This matters:
+the MC's hitter playing-time model centers on a systematic `mean_scale` haircut
+(~0.75-0.94 -- projection optimism that the engine restores via bench-fill), so a
+raw `frac_missed = 1 - scale` would exceed any reasonable threshold for nearly every
+hitter from the haircut alone, not from injury. Measuring the downside tail relative
+to `eff_mean` isolates the injury/availability shortfall from that baseline haircut.
+
+Concretely, per active player the sampler mirrors the MC's own moments (reusing
+`playing_time.playing_time_params` / `playing_time_shape` / `playing_time_moments`
+and `simulation._full_season_pt_volume` for the curve's full-season volume basis):
+`eff_mean` uses the MC's mean horizon (`pt_mean_fraction=1.0` for hitters ->
+`eff_mean = mean_scale`; `=0.0` for pitchers -> `eff_mean = 1.0`) and `eff_sd` uses
+the variance horizon (`fraction_remaining`). A draw yields
+`scale = max(0, eff_mean + z(u) * eff_sd)`, and the player "loses significant time"
+when `scale <= eff_mean * (1 - threshold)` (i.e. realized playing time at least
+`threshold` below expected). Default threshold: **0.20** (roughly a 4-week IL stint
+at mid-season), exposed as a tunable module constant. Reported for the default and
+can be re-run at another threshold.
 
 ### 3. Who are you most exposed to? (single-player counterfactuals)
 
@@ -227,7 +237,10 @@ silently building an optimization. The analytic deltaRoto pre-rank
 
 - **Health sampler** (`test`): deterministic seed + a hand-built two-player roster
   with known band params -> assert P(all healthy), P(1), P(2+) match a computed
-  expectation; assert they sum to 1.
+  expectation; assert they sum to 1. Also assert the eff_mean-relative definition: a
+  hitter whose only shortfall is the systematic `mean_scale` haircut (realized ==
+  `eff_mean`) is NOT counted as losing significant time (guards the haircut-vs-injury
+  bug this section fixes).
 - **Counterfactual delta** (substitution mechanism): substituting a player who is
   already replacement-level yields ~0 win% change; substituting a high-value player
   yields a positive, larger change. Monotonicity: a strictly-more-valuable player is
