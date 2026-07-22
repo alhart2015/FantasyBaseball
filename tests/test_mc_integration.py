@@ -244,6 +244,66 @@ def test_apply_variance_batch_pt_volumes_default_is_byte_identical():
     np.testing.assert_array_equal(omitted.frac_missed, none_passed.frac_missed)
 
 
+def test_availability_variance_off_pins_scales_to_eff_mean():
+    import numpy as np
+
+    from fantasy_baseball.simulation import _apply_variance_batch
+
+    rng = np.random.default_rng(777)
+    vb = _apply_variance_batch(_players(), "hitter", rng, 0.4, 200, availability_variance_off=True)
+    # frac_missed = 1 - scale; with availability off, scale is pinned to eff_mean
+    # per player, so every iteration is identical -> zero spread down each column.
+    assert np.allclose(vb.frac_missed.std(axis=0), 0.0)
+    assert np.allclose(vb.scales.std(axis=0), 0.0)
+
+
+def test_availability_variance_off_default_is_byte_identical():
+    import numpy as np
+
+    from fantasy_baseball.simulation import _apply_variance_batch
+
+    a = _apply_variance_batch(_players(), "hitter", np.random.default_rng(5), 0.4, 8)
+    b = _apply_variance_batch(
+        _players(),
+        "hitter",
+        np.random.default_rng(5),
+        0.4,
+        8,
+        availability_variance_off=False,
+    )
+    for col in a.counts:
+        assert np.array_equal(a.counts[col], b.counts[col])
+
+
+def test_availability_off_pins_sv_role_reduces_sv_spread():
+    import numpy as np
+
+    from fantasy_baseball.simulation import _apply_variance_batch
+
+    closers = [
+        {
+            "name": "CL",
+            "player_type": "pitcher",
+            "w": 3,
+            "k": 80,
+            "sv": 35,
+            "ip": 65,
+            "er": 22,
+            "bb": 24,
+            "h_allowed": 50,
+            "positions": ["RP"],
+        }
+    ]
+    base = _apply_variance_batch(closers, "pitcher", np.random.default_rng(9), 0.5, 400)
+    off = _apply_variance_batch(
+        closers, "pitcher", np.random.default_rng(9), 0.5, 400, availability_variance_off=True
+    )
+    # Availability-off pins the SV role multiplier to its mean (removes the role-switch
+    # between-component variance); the NegBin performance variance stays, so SV spread
+    # drops but is not zero.
+    assert off.counts["sv"].std() < base.counts["sv"].std()
+
+
 # ---------------------------------------------------------------------------
 # Phase 4b: ROS-direct hitter integration.
 # ---------------------------------------------------------------------------
@@ -867,6 +927,34 @@ def test_run_ros_monte_carlo_accepts_effective_rosters():
     )
     assert "team_results" in result
     assert np.isfinite(result["team_results"]["Me"]["median_pts"])
+
+
+def test_run_ros_mc_availability_off_threads_through():
+    """availability_variance_off threads all the way from run_ros_monte_carlo
+    down through simulate_remaining_season_batch, the ROS-direct hitter/pitcher
+    helpers, and _sample_hitter_bodies to every _apply_variance_batch call."""
+    rosters = _mixed_rosters()
+    actuals = {t: {} for t in rosters}
+    eff = {t: _eff_roster(players, team=t) for t, players in rosters.items()}
+    kw = dict(
+        team_rosters=rosters,
+        actual_standings=actuals,
+        fraction_remaining=0.4,
+        h_slots=13,
+        p_slots=9,
+        user_team_name="Me",
+        n_iterations=60,
+        seed=42,
+        effective_rosters=eff,
+    )
+    base = run_ros_monte_carlo(**kw)
+    off = run_ros_monte_carlo(**kw, availability_variance_off=True)
+    # Availability-off narrows each team's spread (removes the playing-time and SV
+    # role variance), so the user's p90-p10 band must not widen.
+    b = base["team_results"]["Me"]
+    o = off["team_results"]["Me"]
+    assert (o["p90"] - o["p10"]) <= (b["p90"] - b["p10"]) + 1e-9
+    assert np.isfinite(o["first_pct"])
 
 
 # ---------------------------------------------------------------------------
