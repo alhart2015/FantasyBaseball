@@ -632,6 +632,8 @@ def _sv_role_mu(
     rng: np.random.Generator,
     fraction_remaining: float,
     n_iter: int | None = None,
+    *,
+    pin_role: bool = False,
 ) -> np.ndarray:
     """SV NegBin mean for the closer role-switch mixture: ``base_sv * eff_mean * X'``,
     where ``X'`` is the mean-1 per-draw role multiplier (mean-neutral; the between-
@@ -640,9 +642,14 @@ def _sv_role_mu(
     while the mean rides ``base_sv`` (ROS in-season). ``n_iter`` None -> ``(n_players,)``
     for the scalar path; an int -> ``(n_iter, n_players)`` for the batch path. Shared by
     both MC paths so their SV distribution -- and thus the active-slot pitcher selection
-    SV feeds -- stay identical."""
+    SV feeds -- stay identical. ``pin_role`` pins the role multiplier to its mean (1.0)
+    instead of the sampled draw, for the availability-variance-off headline attribution."""
+    # Draw unconditionally so the rng stream (and thus common-random-numbers vs the
+    # baseline) is unchanged; when pinning, use the mixture's expected multiplier
+    # (E[X'] == 1 by construction, see closer_mixture) instead of the sampled role.
     x = closer_mixture.role_multiplier_draw(sv_curve, rng, fraction_remaining, n_iter=n_iter)
-    return np.asarray(base_sv * eff_mean * x, dtype=float)
+    role = 1.0 if pin_role else x
+    return np.asarray(base_sv * eff_mean * role, dtype=float)
 
 
 def _apply_variance(
@@ -771,6 +778,7 @@ def _apply_variance_batch(
     suppress_repl: bool = False,
     pt_volumes: np.ndarray | None = None,
     sv_curve: np.ndarray | None = None,
+    availability_variance_off: bool = False,
 ) -> VarianceBatch:
     """Vectorized ``_apply_variance`` over ``n_iter`` iterations at once.
 
@@ -808,6 +816,12 @@ def _apply_variance_batch(
       reason as ``pt_volumes``: the flat dict carries ROS SV, which mid-season would
       read a locked closer as a fringe arm. ``None`` (default) keys the mixture on the
       per-player ``base["sv"]`` -> byte-identical (preseason, where ROS == full-season).
+    - ``availability_variance_off``: pins the playing-time scale to ``eff_mean`` (zero
+      spread) and the SV role multiplier to its mean (1.0), for a headline attribution
+      that isolates performance variance from availability/role variance. All rng draws
+      still happen (only the transform differs), so the rng stream -- and thus common
+      random numbers vs the baseline run -- is unchanged. ``False`` (default) is the
+      legacy behavior -> byte-identical.
     """
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
@@ -846,7 +860,11 @@ def _apply_variance_batch(
     z_pt = np.empty((n_iter, n_players))
     for j in range(n_players):
         z_pt[:, j] = np.interp(us[:, j], QUANTILE_LEVELS, ladders[j])
-    scales = np.maximum(0.0, eff_mean[None, :] + z_pt * eff_sd[None, :])
+    # Availability-off: pin every draw to eff_mean (zero playing-time spread)
+    # while STILL consuming `us`/`z_pt` above, so the rng stream stays aligned
+    # with the baseline run (common random numbers) -- only the transform differs.
+    pt_spread = 0.0 if availability_variance_off else z_pt * eff_sd[None, :]
+    scales = np.maximum(0.0, eff_mean[None, :] + pt_spread)
 
     base = {col: np.array([safe_float(p.get(col)) for p in players]) for col in counting_cols}
 
@@ -866,7 +884,13 @@ def _apply_variance_batch(
     if not is_hitter and "sv" in idx_map:
         sv_curve_arr = base["sv"] if sv_curve is None else np.asarray(sv_curve, dtype=float)
         mu_mat[:, :, idx_map["sv"]] = _sv_role_mu(
-            base["sv"], sv_curve_arr, eff_mean, rng, fraction_remaining, n_iter=n_iter
+            base["sv"],
+            sv_curve_arr,
+            eff_mean,
+            rng,
+            fraction_remaining,
+            n_iter=n_iter,
+            pin_role=availability_variance_off,
         )
 
     # One flattened copula draw over every (iter, player, stat) cell. C-order
