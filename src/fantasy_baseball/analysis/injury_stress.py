@@ -9,14 +9,17 @@ from __future__ import annotations
 
 import dataclasses
 import itertools
+import json
+import math
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
 from fantasy_baseball.mc_roster import build_effective_rosters
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
-from fantasy_baseball.models.standings import CategoryStats
-from fantasy_baseball.scoring import _classify_roster
+from fantasy_baseball.models.standings import CategoryStats, Standings, build_eos_baseline
+from fantasy_baseball.scoring import _classify_roster, build_team_sds, score_roto_dict
 from fantasy_baseball.simulation import (
     _full_season_pt_volume,
     _replacement_line,
@@ -28,6 +31,7 @@ from fantasy_baseball.utils.constants import (
     PITCHING_COUNTING,
     QUANTILE_LEVELS,
     Category,
+    OpportunityStat,
 )
 from fantasy_baseball.utils.playing_time import (
     playing_time_moments,
@@ -109,6 +113,93 @@ class McInputs:
     denoms: dict[Category, float]
     user_team_name: str
     projected_margin: float
+
+
+def build_actual_standings(standings: Standings) -> dict[str, dict[str, float]]:
+    """{team: {R..WHIP, IP, AB}} -- mirrors refresh_pipeline.py:1451-1460 exactly
+    (AB from PA * AB_PER_PA), so it matches what the dashboard MC consumed."""
+    out: dict[str, dict[str, float]] = {}
+    for e in standings.entries:
+        row = e.stats.to_dict()
+        ip = e.extras.get(OpportunityStat.IP)
+        pa = e.extras.get(OpportunityStat.PA)
+        if ip is not None:
+            row["IP"] = float(ip)
+        if pa is not None:
+            row["AB"] = float(pa) * AB_PER_PA
+        out[e.team_name] = row
+    return out
+
+
+def projected_margin_from_eos(eos_baseline: dict[str, CategoryStats], user_team_name: str) -> float:
+    """Signed deterministic projected roto margin: user total minus the best other
+    team's total. score_roto_dict accepts the {team: CategoryStats} baseline directly."""
+    roto = score_roto_dict(eos_baseline)
+    user = roto[user_team_name]["total"]
+    others = [v["total"] for t, v in roto.items() if t != user_team_name]
+    return float(user - max(others)) if others else float(user)
+
+
+def load_mc_inputs_from_upstash(config_path: Path | None = None) -> McInputs:
+    """Assemble the ROS-MC inputs from STORED (last-refresh vintage) Upstash blobs;
+    no Yahoo call. eos_baseline/team_sds are recomputed on the stored
+    fraction_remaining so the baseline matches the dashboard's stored MC. (Minor AVG
+    drift is possible vs the pipeline's un-persisted ownership-attributed team-AB
+    overlay; it cancels in the scenario deltas, which are the deliverable.)"""
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+    from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
+    from fantasy_baseball.data.redis_store import get_latest_standings
+    from fantasy_baseball.models.positions import BENCH_SLOTS
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    root = Path(__file__).resolve().parents[3]
+    cfg = load_config(config_path or (root / "config" / "league.yaml"))
+    kv = build_explicit_upstash_kv()
+
+    def cache(key: CacheKey):  # unwrap the {"_meta","_data"} envelope (cache:* blobs)
+        raw = kv.get(redis_key(key))
+        if raw is None:
+            raise RuntimeError(f"Upstash missing {key}; run a refresh first.")
+        o = json.loads(raw) if isinstance(raw, str) else raw
+        return o["_data"] if isinstance(o, dict) and "_data" in o else o
+
+    user_blob = cache(CacheKey.ROSTER)
+    opp_blob = cache(CacheKey.OPP_ROSTERS)
+    proj_blob = cache(CacheKey.PROJECTIONS)
+
+    user_players = [Player.from_dict(p) for p in user_blob]
+    opp_players = {t: [Player.from_dict(p) for p in r] for t, r in opp_blob.items()}
+    team_rosters = {cfg.team_name: user_players, **opp_players}
+
+    standings = get_latest_standings(kv)  # Standings object (not a cache:* envelope)
+    if standings is None:
+        raise RuntimeError("Upstash missing standings history; run a refresh first.")
+    actual_standings = build_actual_standings(standings)
+
+    fr = float(proj_blob["fraction_remaining"])  # vintage -> matches dashboard MC
+    denoms = get_sgp_denominators(cfg.sgp_overrides)
+
+    ytd_by_team = {e.team_name: e.ytd_components() for e in standings.entries}
+    eos_baseline = build_eos_baseline(team_rosters, ytd_by_team)
+    team_sds = build_team_sds(team_rosters, math.sqrt(fr))
+
+    non_hitter = {str(s) for s in BENCH_SLOTS} | {"P"}
+    h_slots = sum(v for k, v in cfg.roster_slots.items() if k not in non_hitter)
+    p_slots = cfg.roster_slots.get("P", 9)
+
+    return McInputs(
+        team_rosters=team_rosters,
+        actual_standings=actual_standings,
+        fraction_remaining=fr,
+        h_slots=h_slots,
+        p_slots=p_slots,
+        eos_baseline=eos_baseline,
+        team_sds=team_sds,
+        denoms=denoms,
+        user_team_name=cfg.team_name,
+        projected_margin=projected_margin_from_eos(eos_baseline, cfg.team_name),
+    )
 
 
 def _replacement_ros(player: Player) -> HitterStats | PitcherStats:

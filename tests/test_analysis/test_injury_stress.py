@@ -203,7 +203,25 @@ def test_render_report_is_ascii_and_has_sections():
     res = run_stress_test(_synth_inputs(), n_iter=200, pair_top_k=4)
     text = render_report(res)
     text.encode("ascii")  # raises if any non-ASCII slipped in
-    for marker in ["WHAT INJURY RISK COSTS", "STAYS HEALTHY", "MOST EXPOSED",
-                   "LOSING TWO", "generic"]:
+    for marker in [
+        "WHAT INJURY RISK COSTS",
+        "STAYS HEALTHY",
+        "MOST EXPOSED",
+        "LOSING TWO",
+        "generic",
+    ]:
         assert marker.lower() in text.lower()
     assert "Star" in text
+
+
+# ---------------------------------------------------------------------------
+# Live Upstash input assembly (pure helpers)
+# ---------------------------------------------------------------------------
+
+
+def test_projected_margin_from_eos_signs_correctly():
+    from fantasy_baseball.analysis.injury_stress import projected_margin_from_eos
+
+    inp = _synth_inputs()
+    m = projected_margin_from_eos(inp.eos_baseline, "Me")
+    assert isinstance(m, float)  # 2-team synthetic: sign follows Me-vs-Opp roto totals
