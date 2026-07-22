@@ -929,6 +929,34 @@ def test_run_ros_monte_carlo_accepts_effective_rosters():
     assert np.isfinite(result["team_results"]["Me"]["median_pts"])
 
 
+def test_run_ros_mc_availability_off_threads_through():
+    """availability_variance_off threads all the way from run_ros_monte_carlo
+    down through simulate_remaining_season_batch, the ROS-direct hitter/pitcher
+    helpers, and _sample_hitter_bodies to every _apply_variance_batch call."""
+    rosters = _mixed_rosters()
+    actuals = {t: {} for t in rosters}
+    eff = {t: _eff_roster(players, team=t) for t, players in rosters.items()}
+    kw = dict(
+        team_rosters=rosters,
+        actual_standings=actuals,
+        fraction_remaining=0.4,
+        h_slots=13,
+        p_slots=9,
+        user_team_name="Me",
+        n_iterations=60,
+        seed=42,
+        effective_rosters=eff,
+    )
+    base = run_ros_monte_carlo(**kw)
+    off = run_ros_monte_carlo(**kw, availability_variance_off=True)
+    # Availability-off narrows each team's spread (removes the playing-time and SV
+    # role variance), so the user's p90-p10 band must not widen.
+    b = base["team_results"]["Me"]
+    o = off["team_results"]["Me"]
+    assert (o["p90"] - o["p10"]) <= (b["p90"] - b["p10"]) + 1e-9
+    assert np.isfinite(o["first_pct"])
+
+
 # ---------------------------------------------------------------------------
 # Phase 5: ROS-direct pitcher integration.
 # ---------------------------------------------------------------------------

@@ -863,7 +863,12 @@ def _apply_variance_batch(
     # Availability-off: pin every draw to eff_mean (zero playing-time spread)
     # while STILL consuming `us`/`z_pt` above, so the rng stream stays aligned
     # with the baseline run (common random numbers) -- only the transform differs.
-    pt_spread = 0.0 if availability_variance_off else z_pt * eff_sd[None, :]
+    # np.zeros_like(z_pt) (NOT a bare 0.0 python float) keeps pt_spread's shape
+    # (n_iter, n_players): a scalar 0.0 broadcasts eff_mean[None, :] + 0.0 down to
+    # shape (1, n_players), collapsing `scales`/`frac_missed` to a single iteration
+    # row that downstream per-iteration indexing (e.g. the bench-fill loop's
+    # frac_missed[it, idx]) then reads out of bounds for it >= 1.
+    pt_spread = np.zeros_like(z_pt) if availability_variance_off else z_pt * eff_sd[None, :]
     scales = np.maximum(0.0, eff_mean[None, :] + pt_spread)
 
     base = {col: np.array([safe_float(p.get(col)) for p in players]) for col in counting_cols}
@@ -924,6 +929,8 @@ def _sample_hitter_bodies(
     rng: np.random.Generator,
     fraction_remaining: float,
     n_iter: int,
+    *,
+    availability_variance_off: bool = False,
 ) -> VarianceBatch:
     """Sample HITTER bodies' rest-of-season lines with the ROS-direct hitter
     settings: ``pt_mean_fraction=1.0`` (full mean haircut over the ROS window),
@@ -944,6 +951,7 @@ def _sample_hitter_bodies(
         pt_mean_fraction=1.0,
         suppress_repl=True,
         pt_volumes=pt_volumes,
+        availability_variance_off=availability_variance_off,
     )
 
 
@@ -952,6 +960,8 @@ def _simulate_team_hitters_ros_direct(
     fraction_remaining: float,
     rng: np.random.Generator,
     n_iter: int,
+    *,
+    availability_variance_off: bool = False,
 ) -> dict[str, np.ndarray]:
     """Return the team's ROS-ONLY hitter arrays (each shape ``(n_iter,)``):
     ``{R, HR, RBI, SB, ros_h, ros_ab}``.
@@ -1004,7 +1014,13 @@ def _simulate_team_hitters_ros_direct(
         out["ros_ab"] = zeros.copy()
         return out
 
-    active_vb = _sample_hitter_bodies(active_h_bodies, rng, fraction_remaining, n_iter)
+    active_vb = _sample_hitter_bodies(
+        active_h_bodies,
+        rng,
+        fraction_remaining,
+        n_iter,
+        availability_variance_off=availability_variance_off,
+    )
 
     # Per-active-body realized ROS counts = sampled draw * displacement factor.
     factors = np.array([b.factor for b in active_h_bodies])  # (n_active,)
@@ -1019,7 +1035,13 @@ def _simulate_team_hitters_ros_direct(
     # so the active stream is unchanged and an EMPTY bench pool no-ops the rng
     # (_apply_variance_batch returns before any draw when n_players == 0). See the
     # sampled-bench-fill spec (2026-06-29).
-    bench_vb = _sample_hitter_bodies(bench_h_bodies, rng, fraction_remaining, n_iter)
+    bench_vb = _sample_hitter_bodies(
+        bench_h_bodies,
+        rng,
+        fraction_remaining,
+        n_iter,
+        availability_variance_off=availability_variance_off,
+    )
 
     # Per-iteration bench capacity + mean-neutral per-game rate, vectorized once
     # (the loop below only assembles samples + allocates). games_played =
@@ -1078,6 +1100,8 @@ def _simulate_team_pitchers_ros_direct(
     fraction_remaining: float,
     rng: np.random.Generator,
     n_iter: int,
+    *,
+    availability_variance_off: bool = False,
 ) -> dict[str, np.ndarray]:
     """Return the team's ROS-ONLY pitcher arrays (each shape ``(n_iter,)``):
     ``{W, K, SV}`` + ``ros_ip``/``ros_er``/``ros_bb``/``ros_ha`` (for the
@@ -1129,6 +1153,7 @@ def _simulate_team_pitchers_ros_direct(
         suppress_repl=True,
         pt_volumes=pt_volumes,
         sv_curve=sv_curve,
+        availability_variance_off=availability_variance_off,
     )
     factors = np.array([b.factor for b in active_p_bodies])  # (n_active,)
     realized = {col: vb.counts[col] * factors[None, :] for col in PITCHING_COUNTING}
@@ -1151,6 +1176,8 @@ def simulate_remaining_season_batch(
     n_iter: int,
     active_cols: dict | None = None,
     effective_rosters: dict[str, EffectiveRoster] | None = None,
+    *,
+    availability_variance_off: bool = False,
 ) -> dict[str, dict[str, np.ndarray]]:
     """Vectorized ``simulate_remaining_season`` over ``n_iter`` iterations.
 
@@ -1202,10 +1229,21 @@ def simulate_remaining_season_batch(
 
         if use_ros_direct:
             assert eff is not None  # use_ros_direct implies eff is not None
-            ros = _simulate_team_hitters_ros_direct(eff, fraction_remaining, rng, n_iter)
+            ros = _simulate_team_hitters_ros_direct(
+                eff,
+                fraction_remaining,
+                rng,
+                n_iter,
+                availability_variance_off=availability_variance_off,
+            )
         else:
             hb = _apply_variance_batch(
-                hitters, PlayerType.HITTER, rng, fraction_remaining, n_iter
+                hitters,
+                PlayerType.HITTER,
+                rng,
+                fraction_remaining,
+                n_iter,
+                availability_variance_off=availability_variance_off,
             ).counts
 
         team_cols = active_cols.get(team) if active_cols is not None else None
@@ -1233,10 +1271,21 @@ def simulate_remaining_season_batch(
         # hitter hb/ros draw, in the same order).
         if use_ros_direct_pitchers:
             assert eff is not None  # use_ros_direct_pitchers implies eff is not None
-            pros = _simulate_team_pitchers_ros_direct(eff, fraction_remaining, rng, n_iter)
+            pros = _simulate_team_pitchers_ros_direct(
+                eff,
+                fraction_remaining,
+                rng,
+                n_iter,
+                availability_variance_off=availability_variance_off,
+            )
         elif pitchers:
             pb = _apply_variance_batch(
-                pitchers, PlayerType.PITCHER, rng, fraction_remaining, n_iter
+                pitchers,
+                PlayerType.PITCHER,
+                rng,
+                fraction_remaining,
+                n_iter,
+                availability_variance_off=availability_variance_off,
             ).counts
             if team_cols is not None:
                 cols = team_cols["p"]
@@ -1469,6 +1518,8 @@ def run_ros_monte_carlo(
     seed: int = 42,
     progress_cb=None,
     effective_rosters: dict[str, EffectiveRoster] | None = None,
+    *,
+    availability_variance_off: bool = False,
 ) -> dict:
     """Run a Monte Carlo simulation over the remaining season.
 
@@ -1491,6 +1542,11 @@ def run_ros_monte_carlo(
         n_iterations: Number of simulation iterations.
         seed: RNG seed for reproducibility.
         progress_cb: Optional callback(msg: str) called every 200 iterations.
+        availability_variance_off: When True, threads through to every
+            ``_apply_variance_batch`` call in the batch (top-k and ROS-direct)
+            and pins playing-time scale + SV role multiplier to their means,
+            isolating performance variance from availability/role variance.
+            ``False`` (default) is the legacy behavior -> byte-identical.
 
     Returns:
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
@@ -1534,6 +1590,7 @@ def run_ros_monte_carlo(
         p_slots,
         n_iterations,
         effective_rosters=effective_rosters,
+        availability_variance_off=availability_variance_off,
     )
 
     for i in range(n_iterations):
