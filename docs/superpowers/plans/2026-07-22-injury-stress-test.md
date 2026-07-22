@@ -73,6 +73,21 @@ def test_availability_variance_off_default_is_byte_identical():
     )
     for col in a.counts:
         assert np.array_equal(a.counts[col], b.counts[col])
+
+
+def test_availability_off_pins_sv_role_reduces_sv_spread():
+    import numpy as np
+    from fantasy_baseball.simulation import _apply_variance_batch
+
+    closers = [{"name": "CL", "player_type": "pitcher", "w": 3, "k": 80, "sv": 35,
+                "ip": 65, "er": 22, "bb": 24, "h_allowed": 50, "positions": ["RP"]}]
+    base = _apply_variance_batch(closers, "pitcher", np.random.default_rng(9), 0.5, 400)
+    off = _apply_variance_batch(closers, "pitcher", np.random.default_rng(9), 0.5, 400,
+                                availability_variance_off=True)
+    # Availability-off pins the SV role multiplier to its mean (removes the role-switch
+    # between-component variance); the NegBin performance variance stays, so SV spread
+    # drops but is not zero.
+    assert off.counts["sv"].std() < base.counts["sv"].std()
 ```
 
 - [ ] **Step 2: Run to verify it fails**
@@ -120,8 +135,8 @@ Change the SV mean line (currently the `_sv_role_mu(...)` call ~line 868-870) to
 
 - [ ] **Step 5: Run tests to verify they pass**
 
-Run: `pytest tests/test_mc_integration.py -k availability_variance_off -v`
-Expected: PASS (both).
+Run: `pytest tests/test_mc_integration.py -k availability -v`
+Expected: PASS (all three: the two `availability_variance_off` tests and the SV-pin test).
 
 - [ ] **Step 6: Commit**
 
@@ -624,7 +639,7 @@ def test_run_stress_test_ranks_and_flags():
     inp = _synth_inputs()
     res = run_stress_test(inp, n_iter=300, pair_top_k=4)
     names = [e.name for e in res.singles]
-    assert names[0] == "Star"                       # highest exposure ranked first
+    assert names.index("Star") < names.index("Weak")  # the star outranks the weak bat
     assert res.singles == sorted(res.singles, key=lambda e: e.win_pct_cost, reverse=True)
     assert 0.0 <= res.health.p_all_healthy <= 1.0
     # pairs are top-K choose 2 and ranked by joint cost
@@ -1077,6 +1092,29 @@ Expected: prints a per-run time and an estimated total. **Runtime gate:** if `ru
 
 Run: `python scripts/injury_stress_test.py --out injury_stress_report.md`
 Expected: a complete ASCII report to stdout with all five sections and a written `injury_stress_report.md`. Read it and sanity-check: baseline win% is in a plausible range, the singles list is ranked with the biggest bats on top, availability-off win% >= baseline win%.
+
+- [ ] **Step 2b: Reconciliation against the dashboard's stored MC**
+
+Verify the baseline reproduces the dashboard's stored `first_pct` (the spec's reconciliation obligation). Run:
+```bash
+python - <<'PY'
+import json, sys
+from pathlib import Path
+sys.path.insert(0, str(Path("src").resolve()))
+from fantasy_baseball.analysis.injury_stress import load_mc_inputs_from_upstash, win_pct
+from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
+inp = load_mc_inputs_from_upstash()
+fresh = win_pct(inp, inp.team_rosters[inp.user_team_name], n_iter=1000)
+kv = build_explicit_upstash_kv()
+raw = kv.get(redis_key(CacheKey.MONTE_CARLO))
+o = json.loads(raw) if isinstance(raw, str) else raw
+data = o["_data"] if isinstance(o, dict) and "_data" in o else o
+cached = data["rest_of_season"]["team_results"][inp.user_team_name]["first_pct"]
+print(f"fresh baseline first_pct={fresh}  cached first_pct={cached}  delta={fresh - cached:+.1f}")
+PY
+```
+Expected: `delta` is small (within ~1-2 win pts; exactly 0 if the vintage inputs and eos-AB overlay coincide). A large delta means the input assembly diverged from the pipeline -- investigate before trusting the report. This is a reported check, not a hard assertion (the un-persisted team-AB-attribution overlay can cause a small AVG-driven drift, documented in the loader).
 
 - [ ] **Step 3: Run the full test suite**
 

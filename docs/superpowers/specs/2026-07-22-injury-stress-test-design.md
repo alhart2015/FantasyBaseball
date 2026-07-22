@@ -138,9 +138,12 @@ injury" conditional.
 
 Three numbers side by side:
 - Deterministic projected roto **margin** -- the signed gap between the user and the
-  projected leader (positive = ahead, "you win by N"; negative = behind). Read from
-  Upstash's stored projected standings (the same point estimate the dashboard shows),
-  not recomputed, so it matches the dashboard.
+  projected leader (positive = ahead, "you win by N"; negative = behind). Computed by
+  scoring the same `eos_baseline` the MC consumes (the dashboard's projected standings
+  IS the scored `eos_baseline`), so it reproduces the dashboard's projected margin up
+  to the minor un-persisted team-AB-attribution drift (which the reconciliation note
+  documents). This avoids a second, blob-shape-fragile read of the stored projected
+  standings for a number the baseline already has in hand.
 - Full MC win% (the real number).
 - Availability-variance-off MC win% (same expected roster, availability luck removed).
 
