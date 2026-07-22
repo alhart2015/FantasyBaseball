@@ -114,10 +114,14 @@ def _synth_inputs():
     )
 
 
+def _find(players, name):
+    return next(p for p in players if p.name == name)
+
+
 def test_substitute_swaps_ros_to_scaled_replacement():
     inp = _synth_inputs()
     me = inp.team_rosters["Me"]
-    sub = substitute_replacement(me, ["Star"])
+    sub = substitute_replacement(me, [_find(me, "Star")])
     orig = {p.name: p for p in me}
     subd = {p.name: p for p in sub}
     assert subd["Weak"].rest_of_season is orig["Weak"].rest_of_season  # untouched
@@ -138,7 +142,7 @@ def test_substitute_swaps_ros_to_scaled_replacement():
 def test_substitute_works_for_a_pitcher():
     inp = _synth_inputs()
     me = inp.team_rosters["Me"]
-    subd = {p.name: p for p in substitute_replacement(me, ["Ace"])}
+    subd = {p.name: p for p in substitute_replacement(me, [_find(me, "Ace")])}
     orig = {p.name: p for p in me}
     # IP is preserved by design: the replacement arm is scaled to occupy Ace's
     # OWN ROS volume, not to shrink it (same innings bucket, worse per-IP rate).
@@ -156,8 +160,8 @@ def test_counterfactual_star_costs_more_than_weak():
     inp = _synth_inputs()
     me = inp.team_rosters["Me"]
     base = win_pct(inp, me, n_iter=300)
-    lose_star = win_pct(inp, substitute_replacement(me, ["Star"]), n_iter=300)
-    lose_weak = win_pct(inp, substitute_replacement(me, ["Weak"]), n_iter=300)
+    lose_star = win_pct(inp, substitute_replacement(me, [_find(me, "Star")]), n_iter=300)
+    lose_weak = win_pct(inp, substitute_replacement(me, [_find(me, "Weak")]), n_iter=300)
     assert base - lose_star >= base - lose_weak  # star hurts at least as much
     assert base - lose_star > 0.0  # losing the star has a real cost
 
@@ -166,7 +170,7 @@ def test_counterfactual_pitcher_has_cost_and_no_raw_hole():
     inp = _synth_inputs()
     me = inp.team_rosters["Me"]
     base = win_pct(inp, me, n_iter=300)
-    lose_ace = win_pct(inp, substitute_replacement(me, ["Ace"]), n_iter=300)
+    lose_ace = win_pct(inp, substitute_replacement(me, [_find(me, "Ace")]), n_iter=300)
     assert base - lose_ace > 0.0  # a replacement arm still pitches -> real, finite cost
 
 

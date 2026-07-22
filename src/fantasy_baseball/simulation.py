@@ -1177,7 +1177,7 @@ def simulate_remaining_season_batch(
     active_cols: dict | None = None,
     effective_rosters: dict[str, EffectiveRoster] | None = None,
     *,
-    availability_variance_off: bool = False,
+    availability_off_team: str | None = None,
 ) -> dict[str, dict[str, np.ndarray]]:
     """Vectorized ``simulate_remaining_season`` over ``n_iter`` iterations.
 
@@ -1226,6 +1226,10 @@ def simulate_remaining_season_batch(
         eff = effective_rosters.get(team) if effective_rosters is not None else None
         use_ros_direct = _ROS_DIRECT_HITTERS and eff is not None
         use_ros_direct_pitchers = _ROS_DIRECT_PITCHERS and eff is not None
+        # Availability-off is scoped to a single team (the user): pinning every
+        # team's availability would also remove opponents' catch-up variance, so a
+        # leader-vs-field delta labeled as the USER's injury cost would overstate it.
+        team_off = availability_off_team is not None and team == availability_off_team
 
         if use_ros_direct:
             assert eff is not None  # use_ros_direct implies eff is not None
@@ -1234,7 +1238,7 @@ def simulate_remaining_season_batch(
                 fraction_remaining,
                 rng,
                 n_iter,
-                availability_variance_off=availability_variance_off,
+                availability_variance_off=team_off,
             )
         else:
             hb = _apply_variance_batch(
@@ -1243,7 +1247,7 @@ def simulate_remaining_season_batch(
                 rng,
                 fraction_remaining,
                 n_iter,
-                availability_variance_off=availability_variance_off,
+                availability_variance_off=team_off,
             ).counts
 
         team_cols = active_cols.get(team) if active_cols is not None else None
@@ -1276,7 +1280,7 @@ def simulate_remaining_season_batch(
                 fraction_remaining,
                 rng,
                 n_iter,
-                availability_variance_off=availability_variance_off,
+                availability_variance_off=team_off,
             )
         elif pitchers:
             pb = _apply_variance_batch(
@@ -1285,7 +1289,7 @@ def simulate_remaining_season_batch(
                 rng,
                 fraction_remaining,
                 n_iter,
-                availability_variance_off=availability_variance_off,
+                availability_variance_off=team_off,
             ).counts
             if team_cols is not None:
                 cols = team_cols["p"]
@@ -1542,11 +1546,13 @@ def run_ros_monte_carlo(
         n_iterations: Number of simulation iterations.
         seed: RNG seed for reproducibility.
         progress_cb: Optional callback(msg: str) called every 200 iterations.
-        availability_variance_off: When True, threads through to every
-            ``_apply_variance_batch`` call in the batch (top-k and ROS-direct)
-            and pins playing-time scale + SV role multiplier to their means,
-            isolating performance variance from availability/role variance.
-            ``False`` (default) is the legacy behavior -> byte-identical.
+        availability_variance_off: When True, pins the playing-time scale + SV
+            role multiplier to their means for the USER's team only (via
+            ``availability_off_team=user_team_name``), isolating that team's own
+            availability/role variance from performance variance. Scoped to the
+            user (not league-wide) so the resulting win% delta is the user's own
+            injury cost, not a leader-vs-field swing that also removes opponents'
+            catch-up variance. ``False`` (default) is byte-identical legacy MC.
 
     Returns:
         {"team_results": {team: {median_pts, p10, p90, first_pct, top3_pct}},
@@ -1590,7 +1596,7 @@ def run_ros_monte_carlo(
         p_slots,
         n_iterations,
         effective_rosters=effective_rosters,
-        availability_variance_off=availability_variance_off,
+        availability_off_team=(user_team_name if availability_variance_off else None),
     )
 
     for i in range(n_iterations):

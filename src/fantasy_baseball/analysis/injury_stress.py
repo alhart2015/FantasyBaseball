@@ -91,7 +91,9 @@ def health_probabilities(
         scale = np.maximum(0.0, eff_mean + z * eff_sd)
         significant[:, j] = scale <= eff_mean * (1.0 - threshold)
     counts = significant.sum(axis=1)
-    per_player = {p.name: float(significant[:, j].mean()) for j, p in enumerate(active_players)}
+    per_player = {
+        p.name: float(m) for p, m in zip(active_players, significant.mean(axis=0), strict=True)
+    }
     return HealthProbs(
         p_all_healthy=float((counts == 0).mean()),
         p_one=float((counts == 1).mean()),
@@ -248,18 +250,17 @@ def _replacement_ros(player: Player) -> HitterStats | PitcherStats:
     raise ValueError(f"{player.name!r} has no rest_of_season line to substitute a replacement into")
 
 
-def substitute_replacement(user_players: list[Player], target_names: list[str]) -> list[Player]:
-    """Clone `user_players`, replacing each named player's ROS line with a
-    position-matched replacement-level line (see `_replacement_ros`). Non-targets
+def substitute_replacement(user_players: list[Player], targets: list[Player]) -> list[Player]:
+    """Clone `user_players`, replacing each targeted player's ROS line with a
+    position-matched replacement-level line (see `_replacement_ros`). Targets are
+    matched by object IDENTITY, not name, so two same-name players on one roster
+    (e.g. a hitter and pitcher both named 'Will Smith') never collide. Non-targets
     are shared unchanged (same object)."""
-    targets = set(target_names)
-    out: list[Player] = []
-    for p in user_players:
-        if p.name in targets:
-            out.append(dataclasses.replace(p, rest_of_season=_replacement_ros(p)))
-        else:
-            out.append(p)
-    return out
+    target_ids = {id(t) for t in targets}
+    return [
+        dataclasses.replace(p, rest_of_season=_replacement_ros(p)) if id(p) in target_ids else p
+        for p in user_players
+    ]
 
 
 def win_pct(
@@ -343,23 +344,21 @@ def run_stress_test(
     active, _il, _bench = _classify_roster(me)
     health = health_probabilities(active, inputs.fraction_remaining, threshold=threshold, seed=seed)
 
-    singles: list[PlayerExposure] = []
+    # Track (player, cost) together so ranking and pair lookups key on object
+    # identity, never bare name -- two same-name players must not collide.
+    scored: list[tuple[Player, float]] = []
     for p in active:
-        wp = win_pct(inputs, substitute_replacement(me, [p.name]), n_iter=n_iter, seed=seed)
-        singles.append(PlayerExposure(p.name, p.player_type.value, base - wp))
-    singles.sort(key=lambda e: e.win_pct_cost, reverse=True)
+        wp = win_pct(inputs, substitute_replacement(me, [p]), n_iter=n_iter, seed=seed)
+        scored.append((p, base - wp))
+    scored.sort(key=lambda pc: pc[1], reverse=True)
+    singles = [PlayerExposure(p.name, p.player_type.value, cost) for p, cost in scored]
 
-    cost_by_name = {e.name: e.win_pct_cost for e in singles}
-    top = singles[:pair_top_k]
+    top = scored[:pair_top_k]
     pairs: list[PairExposure] = []
-    for a, b in itertools.combinations(top, 2):
-        wp = win_pct(inputs, substitute_replacement(me, [a.name, b.name]), n_iter=n_iter, seed=seed)
+    for (pa, ca), (pb, cb) in itertools.combinations(top, 2):
+        wp = win_pct(inputs, substitute_replacement(me, [pa, pb]), n_iter=n_iter, seed=seed)
         joint = base - wp
-        pairs.append(
-            PairExposure(
-                a.name, b.name, joint, joint - (cost_by_name[a.name] + cost_by_name[b.name])
-            )
-        )
+        pairs.append(PairExposure(pa.name, pb.name, joint, joint - (ca + cb)))
     pairs.sort(key=lambda e: e.joint_cost, reverse=True)
 
     return StressResult(
@@ -415,7 +414,7 @@ def render_report(result: StressResult) -> str:
     lines.append("-" * 72)
     lines.append(f"  {'Player':<24}{'Type':<9}{'win% cost':>10}")
     for e in r.singles:
-        lines.append(f"  {e.name[:23]:<24}{e.player_type:<9}{e.win_pct_cost:>9.1f}")
+        lines.append(f"  {e.name[:23]:<24}{e.player_type:<9}{e.win_pct_cost:>10.1f}")
 
     lines.append("")
     lines.append("4. LOSING TWO (top exposures, ranked by joint win% cost)")
@@ -429,9 +428,10 @@ def render_report(result: StressResult) -> str:
     lines.append("")
     lines.append("5. NOTE")
     lines.append("-" * 72)
-    lines.append("  Section 2 uses a GENERIC (volume/role) injury model -- every player in a")
-    lines.append("  PA/IP band shares the same downside. Per-player injury history is not yet")
-    lines.append("  modeled (deferred; see the design's Future work).")
+    lines.append("  Section 2 models missed PLAYING TIME only (generic by PA/IP band); it does")
+    lines.append("  NOT capture a closer keeping his innings but losing the role (and its saves)")
+    lines.append("  -- that saves risk surfaces in the Section 3/4 counterfactuals instead.")
+    lines.append("  Per-player injury history is also not yet modeled (deferred; see Future work).")
     lines.append(
         f"  MC: n_iter={r.n_iter}, seed={r.seed} (common random numbers across scenarios)."
     )

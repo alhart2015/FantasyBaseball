@@ -15,6 +15,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fantasy_baseball.analysis.injury_stress import (
+    DEFAULT_N_ITER,
     PAIR_TOP_K,
     SIGNIFICANT_TIME_THRESHOLD,
     load_mc_inputs_from_upstash,
@@ -28,7 +29,7 @@ def main() -> int:
     ap = argparse.ArgumentParser(description="Injury stress-test for the ROS lead.")
     ap.add_argument("--threshold", type=float, default=SIGNIFICANT_TIME_THRESHOLD)
     ap.add_argument("--pair-top-k", type=int, default=PAIR_TOP_K)
-    ap.add_argument("--n-iter", type=int, default=1000)
+    ap.add_argument("--n-iter", type=int, default=DEFAULT_N_ITER)
     ap.add_argument("--out", type=str, default=None, help="write the report to this path")
     args = ap.parse_args()
 
