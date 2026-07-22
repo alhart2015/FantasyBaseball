@@ -195,3 +195,15 @@ def test_run_stress_test_ranks_and_flags():
     # pairs are top-K choose 2 and ranked by joint cost
     assert len(res.pairs) == 6  # C(4, 2)
     assert res.pairs == sorted(res.pairs, key=lambda e: e.joint_cost, reverse=True)
+
+
+def test_render_report_is_ascii_and_has_sections():
+    from fantasy_baseball.analysis.injury_stress import render_report, run_stress_test
+
+    res = run_stress_test(_synth_inputs(), n_iter=200, pair_top_k=4)
+    text = render_report(res)
+    text.encode("ascii")  # raises if any non-ASCII slipped in
+    for marker in ["WHAT INJURY RISK COSTS", "STAYS HEALTHY", "MOST EXPOSED",
+                   "LOSING TWO", "generic"]:
+        assert marker.lower() in text.lower()
+    assert "Star" in text

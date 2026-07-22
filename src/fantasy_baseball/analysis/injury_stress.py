@@ -282,3 +282,66 @@ def run_stress_test(
         n_iter=n_iter,
         seed=seed,
     )
+
+
+def _pct(x: float) -> str:
+    return f"{x:5.1f}%"
+
+
+def render_report(result: StressResult) -> str:
+    r = result
+    lines: list[str] = []
+    lines.append("=" * 72)
+    lines.append("INJURY STRESS-TEST")
+    lines.append("=" * 72)
+
+    lines.append("")
+    lines.append("1. WHAT INJURY RISK COSTS YOU")
+    lines.append("-" * 72)
+    margin = r.projected_margin
+    side = "ahead of" if margin >= 0 else "behind"
+    lines.append(f"  Deterministic projected roto margin : {margin:+.1f} pts ({side} the leader)")
+    lines.append(f"  Win% if availability lands as expected: {_pct(r.availability_off_win_pct)}")
+    lines.append(f"  Win% (real, with injury risk)         : {_pct(r.baseline_win_pct)}")
+    lines.append(
+        f"  -> Injury/availability risk costs you : "
+        f"{r.availability_off_win_pct - r.baseline_win_pct:+.1f} win pts"
+    )
+
+    lines.append("")
+    lines.append("2. HOW LIKELY IS EVERYONE STAYS HEALTHY?")
+    lines.append("-" * 72)
+    thr = round(r.threshold * 100)
+    lines.append(f"  (a player 'loses significant time' = >= {thr}% below expected playing time)")
+    lines.append(
+        f"  P(no active player loses significant time): {_pct(r.health.p_all_healthy * 100)}"
+    )
+    lines.append(f"  P(exactly one does)                       : {_pct(r.health.p_one * 100)}")
+    lines.append(f"  P(two or more)                            : {_pct(r.health.p_two_plus * 100)}")
+
+    lines.append("")
+    lines.append("3. WHO ARE YOU MOST EXPOSED TO? (lose one, replaced)")
+    lines.append("-" * 72)
+    lines.append(f"  {'Player':<24}{'Type':<9}{'win% cost':>10}")
+    for e in r.singles:
+        lines.append(f"  {e.name[:23]:<24}{e.player_type:<9}{e.win_pct_cost:>9.1f}")
+
+    lines.append("")
+    lines.append("4. LOSING TWO (top exposures, ranked by joint win% cost)")
+    lines.append("-" * 72)
+    lines.append(f"  {'Pair':<40}{'joint':>8}{'vs sum':>9}")
+    for p in r.pairs:
+        pair = f"{p.name_a[:18]} + {p.name_b[:18]}"
+        tag = "  (worse than additive)" if p.super_additive > 0.5 else ""
+        lines.append(f"  {pair:<40}{p.joint_cost:>8.1f}{p.super_additive:>+9.1f}{tag}")
+
+    lines.append("")
+    lines.append("5. NOTE")
+    lines.append("-" * 72)
+    lines.append("  Section 2 uses a GENERIC (volume/role) injury model -- every player in a")
+    lines.append("  PA/IP band shares the same downside. Per-player injury history is not yet")
+    lines.append("  modeled (deferred; see the design's Future work).")
+    lines.append(
+        f"  MC: n_iter={r.n_iter}, seed={r.seed} (common random numbers across scenarios)."
+    )
+    return "\n".join(lines)
