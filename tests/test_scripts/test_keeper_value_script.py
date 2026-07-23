@@ -1,3 +1,4 @@
+import argparse
 import sys
 from pathlib import Path
 
@@ -8,6 +9,24 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
 import keeper_value as script
+
+
+def test_discounts_arg_parses_and_validates():
+    assert script._discounts_arg("0.6,0.8,0.9") == [0.6, 0.8, 0.9]
+    assert script._discounts_arg("0.5") == [0.5]
+    assert script._discounts_arg("1.0") == [1.0]  # 1.0 = no discount, allowed
+    for bad in ["0", "1.5", "-0.2", "abc", ""]:
+        with pytest.raises(argparse.ArgumentTypeError):
+            script._discounts_arg(bad)
+
+
+def test_parse_args_defaults_and_overrides():
+    default = script._parse_args([])
+    assert default.horizon == 3
+    assert default.discount == [0.60, 0.70, 0.80, 0.90]
+    custom = script._parse_args(["--horizon", "2", "--discount", "0.7,0.95"])
+    assert custom.horizon == 2
+    assert custom.discount == [0.7, 0.95]
 
 
 def test_load_zips_year_missing_raises_with_url(tmp_path):

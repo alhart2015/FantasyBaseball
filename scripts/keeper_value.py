@@ -6,6 +6,7 @@ docs/superpowers/specs/2026-07-22-keeper-value-design.md.
 
 from __future__ import annotations
 
+import argparse
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from fantasy_baseball.analysis.keeper_value import (
+    DEFAULT_HORIZON,
     discounted_total,
     keeper_value,
     out_year_share,
@@ -34,6 +36,7 @@ from fantasy_baseball.sgp.rankings import fg_key, lookup_rank, rank_key
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECTIONS_ROOT = REPO_ROOT / "data" / "projections"
 CONFIG_PATH = REPO_ROOT / "config" / "league.yaml"
+BASE_YEAR = 2026  # the anchor year: the DB's blended board + the ZiPS trajectory denominator
 DISCOUNTS = [0.60, 0.70, 0.80, 0.90]
 CANDIDATES = [
     "Juan Soto",
@@ -198,10 +201,48 @@ def render(results, discounts: list[float], candidate_ids: set[str]) -> str:
     return "\n".join(lines)
 
 
-def main() -> None:
+def _discounts_arg(s: str) -> list[float]:
+    """Parse a comma-separated discount list, e.g. '0.6,0.8,0.9'. Each must be in (0, 1]."""
+    try:
+        vals = [float(x) for x in s.split(",") if x.strip()]
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid discount list {s!r}: {exc}") from exc
+    if not vals or any(not (0.0 < v <= 1.0) for v in vals):
+        raise argparse.ArgumentTypeError(
+            f"discounts must be comma-separated values in (0, 1], e.g. 0.6,0.8,0.9; got {s!r}"
+        )
+    return vals
+
+
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    ap = argparse.ArgumentParser(
+        description="Rank players by keeper-asset value (discounted multi-year VAR)."
+    )
+    ap.add_argument(
+        "--horizon",
+        type=int,
+        default=DEFAULT_HORIZON,
+        help="years to score, including the base year (default 3 = ZiPS availability; "
+        ">3 requires the matching ZiPS out-year exports).",
+    )
+    ap.add_argument(
+        "--discount",
+        type=_discounts_arg,
+        default=list(DISCOUNTS),
+        metavar="R[,R,...]",
+        help="comma-separated discount rates to sweep, each in (0, 1] "
+        "(default 0.60,0.70,0.80,0.90). 1.0 = no discount (out-years count fully).",
+    )
+    return ap.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    results, candidate_ids = build_results(base_year=2026, horizon=3)
-    print(render(results, DISCOUNTS, candidate_ids))
+    args = _parse_args(argv)
+    if args.horizon < 1:
+        raise SystemExit("--horizon must be >= 1")
+    results, candidate_ids = build_results(base_year=BASE_YEAR, horizon=args.horizon)
+    print(render(results, args.discount, candidate_ids))
 
 
 if __name__ == "__main__":
