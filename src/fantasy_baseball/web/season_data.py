@@ -159,6 +159,18 @@ def _is_envelope(obj: object) -> bool:
     )
 
 
+def unwrap_cache_envelope(obj: Any) -> dict | list:
+    """Return the payload from a provenance envelope, or ``obj`` unchanged if bare.
+
+    Public decoder of the ``_data`` envelope key for callers OUTSIDE the
+    ``get_kv()`` read path (which decodes inline in :func:`_read_enveloped`) --
+    e.g. a script reading prod Upstash directly via ``build_explicit_upstash_kv``.
+    Sharing it keeps those readers on the same ``{_meta, _data}`` contract instead
+    of hardcoding ``"_data"``.
+    """
+    return cast("dict | list", obj[_ENVELOPE_DATA] if _is_envelope(obj) else obj)
+
+
 def _read_enveloped(key: CacheKey) -> tuple[dict | list | None, dict]:
     """Read a cache key ONCE, returning ``(data, meta)``.
 

@@ -1030,12 +1030,8 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/evaluate-trade", methods=["POST"])
     def api_evaluate_trade():
-        from fantasy_baseball.models.player import Player
-        from fantasy_baseball.trades.multi_trade import (
-            TradeProposal,
-            build_waiver_pool,
-            evaluate_multi_trade,
-        )
+        from fantasy_baseball.trades.eval_inputs import load_trade_eval_context
+        from fantasy_baseball.trades.multi_trade import TradeProposal, evaluate_multi_trade
 
         data = request.get_json(silent=True) or {}
         opponent = (data.get("opponent") or "").strip()
@@ -1051,18 +1047,17 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": f"Unknown opponent: {opponent}"}), 400
 
         proj_cache = read_cache_dict(CacheKey.PROJECTIONS) or {}
-        projected_standings_raw = proj_cache.get("projected_standings")
-        team_sds = _team_sds_from_cache(proj_cache.get("team_sds"))
-        fr = proj_cache.get("fraction_remaining")
-        fr = 1.0 if fr is None else float(fr)
-        if not projected_standings_raw:
+        if not proj_cache.get("projected_standings"):
             return jsonify({"error": "No projected standings. Run a refresh first."}), 404
 
-        ros_cache = read_cache_dict(CacheKey.ROS_PROJECTIONS) or {}
-
-        hart_roster = [Player.from_dict(p) for p in roster_raw]
-        opp_rosters = {n: [Player.from_dict(p) for p in ps] for n, ps in opp_rosters_raw.items()}
-        waiver_pool = build_waiver_pool(hart_roster, opp_rosters, ros_cache)
+        ctx = load_trade_eval_context(
+            hart_name=config.team_name,
+            roster_raw=roster_raw,
+            opp_rosters_raw=opp_rosters_raw,
+            proj_cache=proj_cache,
+            ros_cache=read_cache_dict(CacheKey.ROS_PROJECTIONS) or {},
+            roster_slots=config.roster_slots,
+        )
 
         try:
             send = _coerce_key_list(data.get("send"), "send")
@@ -1089,13 +1084,13 @@ def register_routes(app: Flask) -> None:
         result = evaluate_multi_trade(
             proposal=proposal,
             hart_name=config.team_name,
-            hart_roster=hart_roster,
-            opp_rosters=opp_rosters,
-            waiver_pool=waiver_pool,
-            projected_standings=_projected_from_cache(projected_standings_raw),
-            team_sds=team_sds,
-            roster_slots=config.roster_slots,
-            fraction_remaining=fr,
+            hart_roster=ctx.hart_roster,
+            opp_rosters=ctx.opp_rosters,
+            waiver_pool=ctx.waiver_pool,
+            projected_standings=ctx.projected_standings,
+            team_sds=ctx.team_sds,
+            roster_slots=ctx.roster_slots,
+            fraction_remaining=ctx.fraction_remaining,
         )
 
         def _serialize_view(view) -> dict:
