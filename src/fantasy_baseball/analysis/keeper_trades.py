@@ -64,17 +64,19 @@ def keeper_viable_packages(
     max_give: int,
 ) -> Iterator[tuple[RosterPlayer, ...]]:
     """Packages (subsets of giveable) that strictly lift the opponent's trio once
-    `acquire` leaves and the package arrives. Ordered fewest-players, then least
-    total keeper_value given (protect Hart's better surplus)."""
+    `acquire` leaves and the package arrives. Yielded fewest-players first, then
+    least total keeper_value given (protect Hart's better surplus). Enumerated
+    lazily by size so a consumer that stops at the first hit never builds the
+    larger-size combinations."""
     opp_without = [p for p in opp_roster if p.player_id != acquire.player_id]
-    candidates: list[tuple[int, float, tuple[RosterPlayer, ...]]] = []
     for size in range(1, max_give + 1):
-        for combo in combinations(giveable, size):
-            if top3_sum([*opp_without, *combo]) > opp_top3_before:
-                candidates.append((size, sum(p.keeper_value for p in combo), combo))
-    candidates.sort(key=lambda c: (c[0], c[1]))  # fewest players, then least kv given
-    for _size, _cost, combo in candidates:
-        yield combo
+        viable = [
+            combo
+            for combo in combinations(giveable, size)
+            if top3_sum([*opp_without, *combo]) > opp_top3_before
+        ]
+        viable.sort(key=lambda combo: sum(p.keeper_value for p in combo))  # least kv given first
+        yield from viable
 
 
 def generate_consolidation_trades(
@@ -90,6 +92,9 @@ def generate_consolidation_trades(
         return []
     my_top2, my_third = me[:2], me[2].keeper_value
     my_top3_before = top3_sum(me)
+    # Exclude the protected top-2 by player_id (not a me[2:] slice): guards the rare
+    # same-name collision CLAUDE.md warns about (e.g. two "Luis Garcia::pitcher" entries
+    # on one roster), where a top-2 keeper could otherwise leak into the giveable pool.
     protect = {me[0].player_id, me[1].player_id}
     giveable = [p for p in me if p.player_id not in protect]
 
@@ -102,50 +107,38 @@ def generate_consolidation_trades(
             if g.keeper_value <= my_third:
                 continue
             my_gain = g.keeper_value - my_third
-            my_top3_after = my_top2[0].keeper_value + my_top2[1].keeper_value + g.keeper_value
             # Hart keeps his protected top-2 + the acquired stud (the package is all
             # below the top-2, so removing it can't change the post-trade top-3).
             my_keepers = tuple(top3([*my_top2, g]))
+            my_top3_after = float(sum(p.keeper_value for p in my_keepers))
             for pkg in keeper_viable_packages(g, roster, giveable, opp_top3_before, max_give):
                 verdict = guardrail(pkg, g)
                 if not verdict.ok:
                     continue
-                out.append(
-                    _suggestion(
-                        team,
-                        g,
-                        pkg,
-                        "minimal",
-                        my_top3_before,
-                        my_top3_after,
-                        my_gain,
-                        my_keepers,
-                        roster,
-                        opp_top3_before,
-                        verdict,
-                    )
-                )
+                picks = [("minimal", pkg, verdict)]
                 if sweetener:
                     extra = next((p for p in giveable if p not in pkg), None)
                     if extra is not None:
                         spkg = (*pkg, extra)
                         sv = guardrail(spkg, g)
                         if sv.ok:
-                            out.append(
-                                _suggestion(
-                                    team,
-                                    g,
-                                    spkg,
-                                    "sweetened",
-                                    my_top3_before,
-                                    my_top3_after,
-                                    my_gain,
-                                    my_keepers,
-                                    roster,
-                                    opp_top3_before,
-                                    sv,
-                                )
-                            )
+                            picks.append(("sweetened", spkg, sv))
+                for variant, package, v in picks:
+                    out.append(
+                        _suggestion(
+                            team,
+                            g,
+                            package,
+                            variant,
+                            my_top3_before,
+                            my_top3_after,
+                            my_gain,
+                            my_keepers,
+                            roster,
+                            opp_top3_before,
+                            v,
+                        )
+                    )
                 break  # first passing minimal package wins for this (team, g)
     out.sort(key=lambda s: s.my_gain, reverse=True)
     return out

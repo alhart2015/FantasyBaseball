@@ -31,7 +31,7 @@ def test_to_roster_players_attaches_keeper_value_and_zero_for_unmatched():
     assert all(isinstance(p, RosterPlayer) for p in out)
 
 
-def test_ros_refills_and_drops_picks_top_and_bottom(monkeypatch):
+def test_ros_refill_and_drop_selection(monkeypatch):
     from fantasy_baseball.models.player import Player, PlayerType
 
     def pl(name):
@@ -41,6 +41,8 @@ def test_ros_refills_and_drops_picks_top_and_bottom(monkeypatch):
     monkeypatch.setattr(script, "_ros_value", lambda p, denoms: vals[p.name])
     waiver = {pl(n).player_key: pl(n) for n in ("fa_hi", "fa_mid", "fa_lo")}
     opp = [pl("opp_a"), pl("opp_b"), pl("opp_c")]
-    adds, drops = script._ros_refills_and_drops(waiver, opp, denoms=None, n=1)
-    assert adds == ["fa_hi::hitter"]  # top-1 refill by ROS value
-    assert drops == ["opp_b::hitter"]  # bottom-1 drop (2.0 is lowest)
+    # waiver keys are sorted best-ROS-first once; the guardrail slices the top n
+    assert script._waiver_keys_by_ros(waiver, denoms=None)[:1] == ["fa_hi::hitter"]
+    assert script._opp_drop_keys(opp, denoms=None, n=1) == [
+        "opp_b::hitter"
+    ]  # bottom-1 (2.0 lowest)

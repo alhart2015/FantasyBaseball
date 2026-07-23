@@ -30,6 +30,7 @@ from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.rankings import fg_key, rank_key
 from fantasy_baseball.trades.eval_inputs import load_trade_eval_context
 from fantasy_baseball.trades.multi_trade import evaluate_multi_trade
+from fantasy_baseball.web.season_data import unwrap_cache_envelope
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CONFIG_PATH = REPO_ROOT / "config" / "league.yaml"
@@ -65,21 +66,31 @@ def _cache(kv, key):
     raw = kv.get(redis_key(key))
     if raw is None:
         raise RuntimeError(f"Upstash missing {key}; run a refresh first.")
-    o = json.loads(raw) if isinstance(raw, str) else raw
-    return o["_data"] if isinstance(o, dict) and "_data" in o else o
+    obj = json.loads(raw) if isinstance(raw, str) else raw
+    return unwrap_cache_envelope(obj)
 
 
-def _ros_refills_and_drops(waiver_pool, opp_players, denoms, n):
-    """(top-n waiver refill keys by ROS value, bottom-n opp drop keys by ROS value).
-    `opp_players` already excludes the received stud. Pure given Players + denoms."""
-    adds = sorted(waiver_pool.values(), key=lambda p: _ros_value(p, denoms), reverse=True)
+def _waiver_keys_by_ros(waiver_pool, denoms):
+    """Waiver player_keys, best ROS value first. Invariant across a run, so the
+    caller sorts the (large) pool once and slices per guardrail call instead of
+    re-sorting on every package evaluation."""
+    ordered = sorted(waiver_pool.values(), key=lambda p: _ros_value(p, denoms), reverse=True)
+    return [p.player_key for p in ordered]
+
+
+def _opp_drop_keys(opp_players, denoms, n):
+    """Bottom-n opp drop keys by ROS value. `opp_players` already excludes the
+    received stud. Pure given Players + denoms."""
+    if n == 0:  # size-1 packages (the common case) drop nothing -- skip the sort
+        return []
     drops = sorted(opp_players, key=lambda p: _ros_value(p, denoms))
-    return [p.player_key for p in adds[:n]], [p.player_key for p in drops[:n]]
+    return [p.player_key for p in drops[:n]]
 
 
 def make_guardrail(ctx, denoms, threshold):
     """Injected guardrail: resolves the opponent from `receive`, builds a
     roster-legal proposal, and returns evaluate_multi_trade's verdict for Hart."""
+    waiver_keys = _waiver_keys_by_ros(ctx.waiver_pool, denoms)  # sort the pool once, not per call
 
     def _owning_team(receive_key: str) -> str:
         for team, players in ctx.opp_rosters.items():
@@ -92,7 +103,8 @@ def make_guardrail(ctx, denoms, threshold):
         n = max(0, len(package_keys) - 1)
         opp_name = _owning_team(receive.player_id)
         opp_players = [p for p in ctx.opp_rosters[opp_name] if p.player_key != receive.player_id]
-        my_adds, opp_drops = _ros_refills_and_drops(ctx.waiver_pool, opp_players, denoms, n)
+        my_adds = waiver_keys[:n]
+        opp_drops = _opp_drop_keys(opp_players, denoms, n)
         proposal = build_consolidation_proposal(
             opponent=opp_name,
             hart_players=ctx.hart_roster,
@@ -124,17 +136,12 @@ def make_guardrail(ctx, denoms, threshold):
 def render(suggestions) -> str:
     if not suggestions:
         return "No keeper-mutual consolidation trades found."
-    order: list[tuple[str, str]] = []
     groups: dict[tuple[str, str], list] = {}
     for s in suggestions:
         key = (s.target_team, s.acquire.player_id)
-        if key not in groups:
-            groups[key] = []
-            order.append(key)
-        groups[key].append(s)
+        groups.setdefault(key, []).append(s)
     lines = ["Keeper-mutual consolidation trades (ranked by your keeper gain)", ""]
-    for key in order:
-        rows = groups[key]
+    for key, rows in groups.items():
         a = rows[0].acquire
         lines.append(f"ACQUIRE {a.name} (kv {a.keeper_value:.1f}) from {key[0]}")
         for s in rows:
