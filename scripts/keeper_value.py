@@ -7,6 +7,7 @@ docs/superpowers/specs/2026-07-22-keeper-value-design.md.
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from fantasy_baseball.analysis.draft_value import parse_full_season_lines
 from fantasy_baseball.analysis.keeper_value import (
     DEFAULT_HORIZON,
     discounted_total,
@@ -22,16 +24,19 @@ from fantasy_baseball.analysis.keeper_value import (
     out_year_share,
 )
 from fantasy_baseball.config import load_config
+from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.db import (
     get_blended_projections,
     get_connection,
     get_positions,
 )
 from fantasy_baseball.data.fangraphs import load_projection_set
+from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
 from fantasy_baseball.draft.board import build_board_from_frames
 from fantasy_baseball.draft.keepers import find_keeper_match, index_by_normalized_name
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.rankings import fg_key, lookup_rank, rank_key
+from fantasy_baseball.web.season_data import unwrap_cache_envelope
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECTIONS_ROOT = REPO_ROOT / "data" / "projections"
@@ -65,6 +70,21 @@ def _fg_id(row: pd.Series) -> str | None:
     """Row's FanGraphs id as a str, or None when absent/NaN (blend rows may lack it)."""
     fg = row.get("fg_id")
     return str(fg) if fg is not None and pd.notna(fg) else None
+
+
+def load_current_full_season_lines() -> dict:
+    """Fresh Upstash read of cache:full_season_projections (YTD+ROS blend), parsed to
+    the by-name map. Fails loud if the blob is missing/empty -- never silently serve
+    preseason under a `current` label."""
+    kv = build_explicit_upstash_kv()
+    raw = kv.get(redis_key(CacheKey.FULL_SEASON_PROJECTIONS))
+    if raw is None:
+        raise SystemExit("cache:full_season_projections missing in Upstash; run a refresh first.")
+    payload = unwrap_cache_envelope(json.loads(raw) if isinstance(raw, str) else raw)
+    if not isinstance(payload, dict) or not (payload.get("hitters") or payload.get("pitchers")):
+        raise SystemExit("cache:full_season_projections is empty; run a refresh first.")
+    _by_mlbam, by_name = parse_full_season_lines(payload)
+    return by_name
 
 
 def zips_index(hitters: pd.DataFrame, pitchers: pd.DataFrame) -> dict[str, dict[str, Any]]:

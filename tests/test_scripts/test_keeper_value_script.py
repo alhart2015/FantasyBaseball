@@ -196,3 +196,39 @@ def test_zips_by_year_missing_player_is_none():
     )
     got = script._zips_by_year("000", "Nobody Here", "hitter", {2027: idx})
     assert got[2027] is None  # unknown fg_id + unknown name -> None (per_year_var flags it)
+
+
+def _fake_kv(raw):
+    class _KV:
+        def get(self, _key):
+            return raw
+
+    return _KV()
+
+
+def test_load_current_lines_fails_loud_when_missing(monkeypatch):
+    monkeypatch.setattr(script, "build_explicit_upstash_kv", lambda: _fake_kv(None))
+    with pytest.raises(SystemExit):
+        script.load_current_full_season_lines()
+
+
+def test_load_current_lines_fails_loud_when_empty(monkeypatch):
+    envelope = {"_meta": {}, "_data": {"hitters": [], "pitchers": []}}
+    monkeypatch.setattr(script, "build_explicit_upstash_kv", lambda: _fake_kv(envelope))
+    with pytest.raises(SystemExit):
+        script.load_current_full_season_lines()
+
+
+def test_load_current_lines_parses_present_blob(monkeypatch):
+    from fantasy_baseball.sgp.rankings import rank_key
+
+    envelope = {
+        "_meta": {},
+        "_data": {
+            "hitters": [{"name": "Al Star", "mlbam_id": 111, "hr": 40, "ab": 550, "h": 165}],
+            "pitchers": [],
+        },
+    }
+    monkeypatch.setattr(script, "build_explicit_upstash_kv", lambda: _fake_kv(envelope))
+    by_name = script.load_current_full_season_lines()
+    assert by_name[rank_key("Al Star", "hitter")]["hr"] == 40
