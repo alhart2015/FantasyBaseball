@@ -173,7 +173,9 @@ def render(results, discounts: list[float], candidate_ids: set[str], limit: int 
         order = sorted(results, key=lambda r: totals[d][r.player_id], reverse=True)
         ranks[d] = {r.player_id: i + 1 for i, r in enumerate(order)}
 
-    primary = discounts[-1]  # order rows by the most dynasty-weighted discount
+    # Order rows (and thus which top-N --limit keeps) by the most dynasty-weighted
+    # discount -- the LARGEST rate, regardless of --discount input order.
+    primary = max(discounts)
     ranked = sorted(results, key=lambda r: totals[primary][r.player_id], reverse=True)
     shown = ranked if limit <= 0 else ranked[:limit]
 
@@ -219,6 +221,17 @@ def _discounts_arg(s: str) -> list[float]:
     return vals
 
 
+def _nonneg_int(s: str) -> int:
+    """Parse a non-negative int for --limit (0 = show all)."""
+    try:
+        v = int(s)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid int {s!r}: {exc}") from exc
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0 (0 shows all); got {v}")
+    return v
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Rank players by keeper-asset value (discounted multi-year VAR)."
@@ -240,7 +253,7 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     )
     ap.add_argument(
         "--limit",
-        type=int,
+        type=_nonneg_int,
         default=100,
         help="show only the top N players by keeper value (default 100; 0 = all). "
         "Skips the long tail no one would keep.",
