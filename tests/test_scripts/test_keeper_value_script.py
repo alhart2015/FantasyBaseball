@@ -11,6 +11,47 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import keeper_value as script
 
 
+def _kvr(i):
+    from fantasy_baseball.analysis.keeper_value import KeeperValueResult
+
+    v = 100.0 - i
+    return KeeperValueResult(
+        player_id=f"p{i}::hitter",
+        name=f"p{i}",
+        per_year_var={2026: v, 2027: v, 2028: v},
+        total=v,
+        flags=[],
+        pct_from_out_years=0.5,
+        pct_from_saves=None,
+    )
+
+
+def _row_count(out: str) -> int:
+    # a body row has a rank cell like "(#  1)"; the title's "(#rank ...)" has no digit
+    import re
+
+    return sum(bool(re.search(r"\(#\s*\d", ln)) for ln in out.splitlines())
+
+
+def test_render_truncates_to_limit():
+    results = [_kvr(i) for i in range(10)]
+    out = script.render(results, [0.8], set(), limit=3)
+    assert _row_count(out) == 3  # only 3 body rows
+    assert "showing top 3 of 10" in out
+
+
+def test_render_limit_zero_shows_all():
+    results = [_kvr(i) for i in range(10)]
+    out = script.render(results, [0.8], set(), limit=0)
+    assert _row_count(out) == 10
+    assert "showing top" not in out
+
+
+def test_parse_args_limit_default_is_100():
+    assert script._parse_args([]).limit == 100
+    assert script._parse_args(["--limit", "0"]).limit == 0
+
+
 def test_discounts_arg_parses_and_validates():
     assert script._discounts_arg("0.6,0.8,0.9") == [0.6, 0.8, 0.9]
     assert script._discounts_arg("0.5") == [0.5]
