@@ -210,7 +210,23 @@ def _replacement_ros(player: Player) -> HitterStats | PitcherStats:
     object; `player.rest_of_season` is not mutated."""
     is_hitter = player.player_type == PlayerType.HITTER
     ros = player.rest_of_season
-    repl = _replacement_line(player.to_flat_dict(), is_hitter)
+    # Route the replacement ROLE on the FULL-SEASON line, not the ROS line. Roster
+    # blobs carry only the generic slot "P" (no SP/RP), so _replacement_line always
+    # falls back to role_from_ip vs STARTER_IP_THRESHOLD -- a FULL-SEASON 100-IP bar.
+    # The ~70-IP mid-season ROS line sinks EVERY starter under 100 and hands him the
+    # K-rich, save-bearing RP line -- an UPGRADE that flips his injury exposure
+    # negative (issue #251). The full-season flat dict carries the real ~180 IP, so
+    # role_from_ip picks SP. Hitters route by positions only (IP ignored); the
+    # counting line is still SCALED to the ROS volume below.
+    #
+    # KNOWN RESIDUAL (issue #253): full-season IP is YTD+ROS -- a total-IP proxy for
+    # a role that is really about USAGE (innings per appearance). It still misroutes
+    # a pitcher whose role != his season-IP total: an injured starter (depressed IP
+    # -> RP, understating his exposure) or a role-changed arm. Preferring preseason
+    # IP just swaps that miss for a role-changed one, so the robust fix (route by
+    # innings-per-appearance) is deferred as its own calibrated change, not another
+    # total-IP epicycle here.
+    repl = _replacement_line(player.to_flat_dict_full_season(), is_hitter)
     if isinstance(ros, HitterStats):
         x_ab = float(ros.ab) if ros.ab else 0.0
         factor = (x_ab / repl["ab"]) if repl.get("ab") else 0.0

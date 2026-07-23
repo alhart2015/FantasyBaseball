@@ -3,6 +3,7 @@ import math
 from fantasy_baseball.analysis.injury_stress import (
     HealthProbs,
     McInputs,
+    _replacement_ros,
     health_probabilities,
     substitute_replacement,
     win_pct,
@@ -172,6 +173,34 @@ def test_counterfactual_pitcher_has_cost_and_no_raw_hole():
     base = win_pct(inp, me, n_iter=300)
     lose_ace = win_pct(inp, substitute_replacement(me, [_find(me, "Ace")]), n_iter=300)
     assert base - lose_ace > 0.0  # a replacement arm still pitches -> real, finite cost
+
+
+def test_replacement_ros_routes_starter_by_full_season_ip():
+    # Regression for issue #251. Production roster blobs carry only the generic slot
+    # position Position.P (never SP/RP eligibility), so _replacement_line's position
+    # routing can't fire and falls back to role_from_ip. Mid-season a real starter's
+    # REST-OF-SEASON IP (~73) sits below STARTER_IP_THRESHOLD (100) even though his
+    # FULL-SEASON IP (~180) clears it. Role must be decided on full-season IP -> SP,
+    # not the shrunken ROS IP -> RP: an SP wrongly handed the K-rich, save-bearing RP
+    # line grades an injury as an UPGRADE (negative single-loss exposure). (Injured /
+    # role-changed pitchers whose season-IP TOTAL misrepresents their usage are a
+    # deferred residual needing an innings-per-appearance signal -- issue #253.)
+    starter = Player(
+        name="RealStarter",
+        player_type=PlayerType.PITCHER,
+        positions=[Position.P],  # generic slot -- mirrors the stored roster blob
+        rest_of_season=PitcherStats.from_dict(
+            {"w": 5, "k": 65, "sv": 0, "ip": 73, "er": 29, "bb": 22, "h_allowed": 63, "g": 12}
+        ),
+        full_season_projection=PitcherStats.from_dict(
+            {"w": 13, "k": 175, "sv": 0, "ip": 180, "er": 70, "bb": 50, "h_allowed": 150, "g": 30}
+        ),
+    )
+    repl = _replacement_ros(starter)
+    assert isinstance(repl, PitcherStats)
+    assert repl.ip == starter.rest_of_season.ip  # scaled to his OWN ROS innings
+    assert repl.sv == 0.0  # SP replacement carries NO saves; the RP line would
+    assert repl.k * 9.0 / repl.ip < 10.0  # SP replacement ~9.0 K/9, not the RP ~11.5
 
 
 def test_win_pct_is_deterministic():

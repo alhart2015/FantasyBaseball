@@ -383,6 +383,9 @@ def role_from_ip(ip: float) -> str:
     Single source of truth for the IP -> role rule: ``ip >=
     STARTER_IP_THRESHOLD`` is a starter. NaN/None coerce to 0 (RP) via
     ``safe_float`` so callers don't each re-guard bad data.
+
+    Pass FULL-SEASON IP: the threshold is a full-season bar, so a partial
+    to-date or rest-of-season IP misclassifies starters as relievers (issue #251).
     """
     return "SP" if safe_float(ip) >= STARTER_IP_THRESHOLD else "RP"
 
