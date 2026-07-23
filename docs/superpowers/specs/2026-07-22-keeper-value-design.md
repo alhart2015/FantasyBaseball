@@ -140,12 +140,16 @@ class KeeperValueResult:
     player_id: str
     name: str
     per_year_var: dict[int, float]     # {2026:.., 2027:.., 2028:..}
-    total: float                       # discounted sum (the ranking key)
-    used_fallback: bool                # anchor missing -> approach A
-    flags: list[str]                   # e.g. ["no_zips_2028", "fallback_A"]
-    pct_from_out_years: float | None   # display-only; None when total <= eps_share
-    pct_from_saves: float | None       # display-only; None when total <= eps_share
+    total: float                       # discounted sum at the call's discount (ranking key)
+    flags: list[str]                   # e.g. ["no_zips_2028", "fallback_A"]; carries the
+                                       # sole fallback signal (test membership, no separate bool)
+    pct_from_out_years: float | None   # at the call's discount; None when total <= eps_share
+    pct_from_saves: float | None       # None when the 2026-anchor SGP magnitude <= eps_share
 ```
+
+`total` and `pct_from_out_years` are the single-discount snapshot at the call's
+`discount`; the sweep report recomputes both per displayed discount (via
+`discounted_total` / `out_year_share`), so it never reads the stored values.
 
 `keeper_value(...)` takes the anchor line, the per-year ZiPS lines, the shared
 league context (replacement floors, SGP denoms, `team_ab`/`team_ip`, positions,

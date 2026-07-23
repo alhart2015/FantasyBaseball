@@ -32,9 +32,49 @@ def test_load_zips_year_loads_present(tmp_path):
     assert not hitters.empty and not pitchers.empty
 
 
-def test_is_candidate_matches_by_normalized_name():
-    from fantasy_baseball.utils.name_utils import normalize_name
+def test_resolve_candidate_ids_is_collision_safe_by_var():
+    # Two same-normalized-name players; find_keeper_match must pick the higher-VAR
+    # one, so the highlight resolves to exactly that player_id (never both).
+    board = pd.DataFrame(
+        [
+            {
+                "name": "Star Guy",
+                "player_id": "star::hitter",
+                "name_normalized": "star guy",
+                "var": 12.0,
+            },
+            {
+                "name": "Star Guy",
+                "player_id": "scrub::hitter",
+                "name_normalized": "star guy",
+                "var": 1.0,
+            },
+            {"name": "Other", "player_id": "other::hitter", "name_normalized": "other", "var": 5.0},
+        ]
+    )
+    ids = script.resolve_candidate_ids(board, ["Star Guy"])
+    assert ids == {"star::hitter"}  # higher-VAR match only, not the namesake
 
-    norms = {normalize_name(n) for n in ["Julio Rodriguez"]}
-    assert script.is_candidate("Julio Rodriguez", norms) is True
-    assert script.is_candidate("Some Other", norms) is False
+
+def test_zips_index_disambiguates_same_name_by_fg_id():
+    # Two same-name/same-type hitters distinguished only by fg_id must NOT collapse:
+    # each resolves to its own line via lookup_rank(fg_id, ...).
+    hitters = pd.DataFrame(
+        [
+            {"name": "Max Muncy", "fg_id": "111", "hr": 35, "ab": 500},
+            {"name": "Max Muncy", "fg_id": "222", "hr": 10, "ab": 300},
+        ]
+    )
+    idx = script.zips_index(hitters, pd.DataFrame())
+    indices = {2027: idx}
+    a = script._zips_by_year("111", "Max Muncy", "hitter", indices)[2027]
+    b = script._zips_by_year("222", "Max Muncy", "hitter", indices)[2027]
+    assert a["hr"] == 35 and b["hr"] == 10  # distinct lines, no last-write-wins collapse
+
+
+def test_zips_by_year_missing_player_is_none():
+    idx = script.zips_index(
+        pd.DataFrame([{"name": "Someone", "fg_id": "999", "hr": 20, "ab": 400}]), pd.DataFrame()
+    )
+    got = script._zips_by_year("000", "Nobody Here", "hitter", {2027: idx})
+    assert got[2027] is None  # unknown fg_id + unknown name -> None (per_year_var flags it)

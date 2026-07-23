@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from fantasy_baseball.analysis.keeper_value import (
     discounted_total,
     keeper_value,
+    out_year_share,
 )
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.db import (
@@ -26,8 +27,9 @@ from fantasy_baseball.data.db import (
 )
 from fantasy_baseball.data.fangraphs import load_projection_set
 from fantasy_baseball.draft.board import build_board_from_frames
+from fantasy_baseball.draft.keepers import find_keeper_match, index_by_normalized_name
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.utils.name_utils import normalize_name
+from fantasy_baseball.sgp.rankings import fg_key, lookup_rank, rank_key
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECTIONS_ROOT = REPO_ROOT / "data" / "projections"
@@ -56,20 +58,57 @@ def load_zips_year(projections_root: Path, year: int) -> tuple[pd.DataFrame, pd.
     return hitters, pitchers
 
 
+def _fg_id(row: pd.Series) -> str | None:
+    """Row's FanGraphs id as a str, or None when absent/NaN (blend rows may lack it)."""
+    fg = row.get("fg_id")
+    return str(fg) if fg is not None and pd.notna(fg) else None
+
+
 def zips_index(hitters: pd.DataFrame, pitchers: pd.DataFrame) -> dict[str, dict[str, Any]]:
+    """Index ZiPS lines by fg_id (primary) and normalized-name (fallback), both
+    namespaced by player_type -- so same-name/same-type players (Max Muncy LAD vs
+    ATH) resolve by fg_id and don't collapse last-write-wins. Read via lookup_rank.
+
+    Inherent residual: a same-name/same-type pair can only be disambiguated when
+    both sides carry a real fg_id. A board row whose fg_id was fillna'd to its name
+    (no id in any blended system), or a ZiPS row lacking an id, falls to the name
+    key -- last-write-wins -- and can't be told apart from its namesake. There is no
+    code fix without a shared id; the common (real-fg_id) collision is resolved.
+    """
     idx: dict[str, dict[str, Any]] = {}
     for df, ptype in [(hitters, PlayerType.HITTER), (pitchers, PlayerType.PITCHER)]:
         for _, row in df.iterrows():
-            idx[f"{normalize_name(row['name'])}::{ptype}"] = row.to_dict()
+            line = row.to_dict()
+            fg = _fg_id(row)
+            if fg is not None:
+                idx[fg_key(fg, ptype)] = line
+            idx[rank_key(row["name"], ptype)] = line  # name fallback (no-fg_id players)
     return idx
 
 
-def is_candidate(name: str, candidate_norms: set[str]) -> bool:
-    return normalize_name(name) in candidate_norms
+def resolve_candidate_ids(board: pd.DataFrame, candidates: list[str]) -> set[str]:
+    """Map each candidate name to the player_id of its best-VAR board match, so the
+    highlight is collision-safe (VAR tie-break via find_keeper_match), never bare-name.
+    """
+    by_norm = index_by_normalized_name(board.to_dict("records"))
+    ids: set[str] = set()
+    for name in candidates:
+        match = find_keeper_match(name, by_norm)
+        if match is not None:
+            ids.add(match["player_id"])
+    return ids
 
 
-def _zips_by_year(player_key: str, indices: dict[int, dict[str, dict[str, Any]]]) -> dict:
-    return {year: idx.get(player_key) for year, idx in indices.items()}
+def _zips_by_year(
+    fg_id: str | None,
+    name: str,
+    player_type: str,
+    indices: dict[int, dict[str, dict[str, Any]]],
+) -> dict[int, dict[str, Any] | None]:
+    # lookup_rank tries fg_id (fg_key) first, then name (rank_key); {} miss -> None.
+    return {
+        year: (lookup_rank(idx, fg_id, name, player_type) or None) for year, idx in indices.items()
+    }
 
 
 def build_results(base_year: int, horizon: int):
@@ -92,9 +131,9 @@ def build_results(base_year: int, horizon: int):
         year: zips_index(*load_zips_year(PROJECTIONS_ROOT, year))
         for year in range(base_year, base_year + horizon)
     }
+    candidate_ids = resolve_candidate_ids(board, CANDIDATES)
     results = []
     for _, row in board.iterrows():
-        key = f"{row['name_normalized']}::{row['player_type']}"
         results.append(
             keeper_value(
                 row["player_id"],
@@ -102,21 +141,21 @@ def build_results(base_year: int, horizon: int):
                 row.to_dict(),
                 list(row["positions"]),
                 str(row["player_type"]),
-                _zips_by_year(key, indices),
+                _zips_by_year(_fg_id(row), row["name"], row["player_type"], indices),
                 scale,
                 base_year=base_year,
                 horizon=horizon,
             )
         )
-    return results
+    return results, candidate_ids
 
 
-def render(results, discounts: list[float]) -> str:
-    candidate_norms = {normalize_name(c) for c in CANDIDATES}
+def render(results, discounts: list[float], candidate_ids: set[str]) -> str:
     if not results:
         return "No players scored."
-    base_year = min(next(iter(results)).per_year_var)
-    horizon = len(next(iter(results)).per_year_var)
+    first = next(iter(results))
+    base_year = min(first.per_year_var)
+    horizon = len(first.per_year_var)
 
     # Total for every (player, discount), then rank per discount so the ranking
     # slide across discounts is explicit (spec: "total and rank at each discount").
@@ -144,12 +183,14 @@ def render(results, discounts: list[float]) -> str:
     )
     lines.append(header)
     for r in ranked:
-        mark = "*" if is_candidate(r.name, candidate_norms) else " "
+        mark = "*" if r.player_id in candidate_ids else " "
         cells = " ".join(
             f"{totals[d][r.player_id]:7.1f}(#{ranks[d][r.player_id]:>3})" for d in discounts
         )
         per = "/".join(f"{r.per_year_var[base_year + k]:.0f}" for k in range(horizon))
-        pout = "N/A " if r.pct_from_out_years is None else f"{r.pct_from_out_years * 100:3.0f}%"
+        # %out shown at the primary (row-ordering) discount so it matches the ranking.
+        pct_out = out_year_share(r.per_year_var, base_year, totals[primary][r.player_id])
+        pout = "N/A " if pct_out is None else f"{pct_out * 100:3.0f}%"
         psv = "N/A " if r.pct_from_saves is None else f"{r.pct_from_saves * 100:3.0f}%"
         lines.append(
             f"{mark} {r.name[:22]:22} {cells}  {per:>10}  {pout} {psv}  {','.join(r.flags)}"
@@ -159,8 +200,8 @@ def render(results, discounts: list[float]) -> str:
 
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    results = build_results(base_year=2026, horizon=3)
-    print(render(results, DISCOUNTS))
+    results, candidate_ids = build_results(base_year=2026, horizon=3)
+    print(render(results, DISCOUNTS, candidate_ids))
 
 
 if __name__ == "__main__":

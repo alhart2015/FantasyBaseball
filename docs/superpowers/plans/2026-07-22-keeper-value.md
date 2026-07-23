@@ -4,6 +4,16 @@
 
 **Source spec:** `docs/superpowers/specs/2026-07-22-keeper-value-design.md`
 
+> **Post-implementation amendment (loop-review).** Two shape changes landed after this
+> plan was written; the code blocks below still show the original forms:
+> - `KeeperValueResult` has **no `used_fallback` field** — a fallback is signalled
+>   solely by `"fallback_A" in flags` (the boolean was redundant with `flags`).
+> - `per_year_var(...)` returns **`(pyv, flags)`** (a 2-tuple), not `(pyv, flags,
+>   used_fallback)`. Callers/tests test `"fallback_A" in flags`.
+> The report also joins ZiPS lines to the board by **fg_id (primary) + name (fallback)**
+> via `sgp/rankings.py::fg_key`/`lookup_rank`, and highlights candidates by resolving
+> them to best-VAR `player_id`s via `find_keeper_match` — not by bare-name matching.
+
 **Goal:** Add a reusable, general keeper-asset-value metric that scores any player on discounted multi-year VAR (2026 blend anchor + ZiPS out-year trajectory), plus a ranked report script that sweeps the discount rate.
 
 **Architecture:** A pure-math module `analysis/keeper_value.py` composes the existing full-season SGP->VAR path (`calculate_player_sgp` + `calculate_var`) over three years: year 2026 uses the player's blended anchor line; out-years scale that anchor per-stat by ZiPS's own year-over-year ratios (clamped), then run through the same scoring. A thin I/O script `scripts/keeper_value.py` builds the shared league context via `build_board_from_frames` (returns `ScaleInputs`), loads the manual ZiPS CSV exports, scores every board player, and renders an ASCII table swept across discount rates. No network I/O; risk modeling is out of scope for v1.
@@ -39,7 +49,7 @@
 **Interfaces:**
 - Consumes: `utils.constants.safe_float`.
 - Produces:
-  - `KeeperValueResult` dataclass (frozen) with fields: `player_id: str`, `name: str`, `per_year_var: dict[int, float]`, `total: float`, `used_fallback: bool`, `flags: list[str]`, `pct_from_out_years: float | None`, `pct_from_saves: float | None`.
+  - `KeeperValueResult` dataclass (frozen) with fields: `player_id: str`, `name: str`, `per_year_var: dict[int, float]`, `total: float`, `flags: list[str]`, `pct_from_out_years: float | None`, `pct_from_saves: float | None`. (See the amendment note above: no `used_fallback` field; fallback is `"fallback_A" in flags`.)
   - Module constants: `DEFAULT_DISCOUNT = 0.80`, `DEFAULT_HORIZON = 3`, `DEFAULT_RATIO_BAND = (0.25, 2.5)`, `DEFAULT_MIN_AB = 100.0`, `DEFAULT_MIN_IP = 20.0`, `EPS = 1e-6`, `DEFAULT_EPS_SHARE = 1.0`, `HITTER_FIELDS = ("r", "hr", "rbi", "sb", "ab", "avg")`, `PITCHER_FIELDS = ("w", "k", "sv", "ip", "era", "whip")`.
   - `_clamp_ratio(numer: float, denom: float, band: tuple[float, float], eps: float) -> float | None` — returns the clamped ratio, or `None` when `abs(denom) < eps` (ratio undefined).
   - `_scale_line(anchor: Mapping[str, Any], zips_base: Mapping[str, Any], zips_y: Mapping[str, Any], player_type: str, band: tuple[float, float], eps: float) -> dict[str, Any]` — returns a copy of `anchor` with each scored field multiplied by its clamped ZiPS ratio; a field whose ratio is `None` is left at the anchor value.

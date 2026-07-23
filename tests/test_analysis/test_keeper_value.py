@@ -86,6 +86,18 @@ def test_scale_line_scales_scored_fields_and_keeps_flat_on_none():
     assert out["sb"] == 10.0  # zips_base sb == 0 -> ratio None -> flat
 
 
+def test_scale_line_holds_flat_on_missing_or_nan_numerator():
+    # A blank/NaN or absent out-year cell carries no aging signal -> hold flat,
+    # symmetric with a missing base (NOT floored to the band low of 0.25).
+    anchor = {"r": 100.0, "hr": 30.0, "ab": 500.0}
+    zips_base = {"r": 100.0, "hr": 30.0, "ab": 500.0}
+    zips_y = {"r": 110.0, "hr": float("nan")}  # hr NaN, ab absent
+    out = kv._scale_line(anchor, zips_base, zips_y, "hitter", (0.25, 2.5), kv.EPS)
+    assert abs(out["r"] - 110.0) < 1e-9  # 100 * (110/100)
+    assert out["hr"] == 30.0  # NaN numerator -> flat, not 30*0.25
+    assert out["ab"] == 500.0  # absent numerator -> flat
+
+
 def test_value_of_line_matches_board_var():
     board, scale = _tiny_scale_and_board()
     row = board[board["name"] == "Star Bat"].iloc[0]
@@ -104,7 +116,7 @@ def test_per_year_var_missing_out_year_is_zero_and_flagged():
         2027: {**anchor, "hr": anchor["hr"] * 0.9},
         2028: None,
     }
-    pyv, flags, _used_fallback = kv.per_year_var(
+    pyv, flags = kv.per_year_var(
         anchor, list(row["positions"]), row["player_type"], zips_by_year, scale
     )
     assert set(pyv) == {2026, 2027, 2028}
@@ -121,10 +133,9 @@ def test_per_year_var_low_pt_base_falls_back_to_approach_a():
     tiny_base = {**anchor, "ab": 40}
     zips_2027 = {**anchor, "hr": 20}
     zips_by_year = {2026: tiny_base, 2027: zips_2027, 2028: zips_2027}
-    pyv, flags, used_fallback = kv.per_year_var(
+    pyv, flags = kv.per_year_var(
         anchor, list(row["positions"]), row["player_type"], zips_by_year, scale
     )
-    assert used_fallback is True
     assert "fallback_A" in flags
     # Approach A: out-year V equals scoring the raw ZiPS 2027 line directly.
     expected = kv._value_of_line(zips_2027, list(row["positions"]), row["player_type"], scale)
@@ -134,6 +145,18 @@ def test_per_year_var_low_pt_base_falls_back_to_approach_a():
 def test_discounted_total_weights_by_year():
     pyv = {2026: 10.0, 2027: 10.0, 2028: 10.0}
     assert abs(kv.discounted_total(pyv, 2026, 0.8, 3) - (10.0 + 8.0 + 6.4)) < 1e-9
+
+
+def test_out_year_share_scales_with_discount_and_guards():
+    pyv = {2026: 10.0, 2027: 10.0, 2028: 10.0}
+    t_low = kv.discounted_total(pyv, 2026, 0.5, 3)
+    t_high = kv.discounted_total(pyv, 2026, 0.9, 3)
+    s_low = kv.out_year_share(pyv, 2026, t_low)
+    s_high = kv.out_year_share(pyv, 2026, t_high)
+    assert s_low is not None and s_high is not None
+    assert s_high > s_low  # out-years weigh more at a shallower discount
+    # guard: a total at/below eps_share -> None, never a blown-up ratio
+    assert kv.out_year_share(pyv, 2026, t_low, eps_share=1e9) is None
 
 
 def test_keeper_value_horizon_1_equals_board_var():

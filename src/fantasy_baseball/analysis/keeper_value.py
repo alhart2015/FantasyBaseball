@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
@@ -18,6 +18,11 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.player_value import calculate_counting_sgp, calculate_player_sgp
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import Category, safe_float
+
+if TYPE_CHECKING:
+    # Type-only import: keeps this module I/O-free at runtime (draft.board pulls
+    # data.db) while giving mypy the real ScaleInputs shape for scale.* accesses.
+    from fantasy_baseball.draft.board import ScaleInputs
 
 DEFAULT_DISCOUNT = 0.80
 DEFAULT_HORIZON = 3
@@ -37,7 +42,8 @@ class KeeperValueResult:
     name: str
     per_year_var: dict[int, float]
     total: float
-    used_fallback: bool
+    # flags carries the sole fallback signal ("fallback_A") plus any "no_zips_<year>";
+    # consumers test membership rather than a separate redundant boolean.
     flags: list[str]
     pct_from_out_years: float | None
     pct_from_saves: float | None
@@ -64,17 +70,21 @@ def _scale_line(
 ) -> dict[str, Any]:
     out = dict(anchor)
     for field in _fields_for(player_type):
-        ratio = _clamp_ratio(
-            safe_float(zips_y.get(field, 0)), safe_float(zips_base.get(field, 0)), band, eps
-        )
+        num = zips_y.get(field)
+        # A missing/blank out-year cell carries no aging signal -> hold the anchor
+        # flat, symmetric with a missing base (which _clamp_ratio maps to None). A
+        # real numerator near 0 is a genuine decline and is clamped to the band low.
+        if num is None or pd.isna(num):
+            continue
+        ratio = _clamp_ratio(safe_float(num), safe_float(zips_base.get(field, 0)), band, eps)
         if ratio is None:
-            continue  # undefined ratio -> hold the anchor value flat for this field
+            continue  # undefined ratio (missing base) -> hold the anchor value flat
         out[field] = safe_float(anchor.get(field, 0)) * ratio
     return out
 
 
-def _line_sgp(line: Mapping[str, Any], player_type: str, scale) -> float:
-    series = pd.Series({**dict(line), "player_type": PlayerType(player_type)})
+def _line_sgp(line: Mapping[str, Any], player_type: str, scale: ScaleInputs) -> float:
+    series = pd.Series({**line, "player_type": PlayerType(player_type)})
     return calculate_player_sgp(
         series,
         denoms=scale.denoms,
@@ -86,11 +96,13 @@ def _line_sgp(line: Mapping[str, Any], player_type: str, scale) -> float:
     )
 
 
-def _value_of_line(line: Mapping[str, Any], positions: list[str], player_type: str, scale) -> float:
+def _value_of_line(
+    line: Mapping[str, Any], positions: list[str], player_type: str, scale: ScaleInputs
+) -> float:
     total_sgp = _line_sgp(line, player_type, scale)
     series = pd.Series(
         {
-            **dict(line),
+            **line,
             "player_type": PlayerType(player_type),
             "positions": list(positions),
             "total_sgp": total_sgp,
@@ -112,18 +124,21 @@ def per_year_var(
     positions: list[str],
     player_type: str,
     zips_by_year: Mapping[int, Mapping[str, Any] | None],
-    scale,
+    scale: ScaleInputs,
     *,
     base_year: int = 2026,
     horizon: int = DEFAULT_HORIZON,
     ratio_band: tuple[float, float] = DEFAULT_RATIO_BAND,
     min_pt: float | None = None,
     eps: float = EPS,
-) -> tuple[dict[int, float], list[str], bool]:
+) -> tuple[dict[int, float], list[str]]:
     pyv: dict[int, float] = {}
     flags: list[str] = []
-    used_fallback = False
     zips_base = zips_by_year.get(base_year)
+
+    def _flag_fallback() -> None:
+        if "fallback_A" not in flags:
+            flags.append("fallback_A")
 
     for k in range(horizon):
         year = base_year + k
@@ -131,9 +146,7 @@ def per_year_var(
             if anchor_line:
                 pyv[year] = _value_of_line(anchor_line, positions, player_type, scale)
             elif zips_base:
-                used_fallback = True
-                if "fallback_A" not in flags:
-                    flags.append("fallback_A")
+                _flag_fallback()
                 pyv[year] = _value_of_line(zips_base, positions, player_type, scale)
             else:
                 pyv[year] = 0.0
@@ -152,21 +165,19 @@ def per_year_var(
         # `zips_base is None` is subsumed by `approach_a` (via `not zips_base`); it is
         # repeated here so the type checker narrows zips_base to non-None in the else.
         if approach_a or zips_base is None:
-            used_fallback = True
-            if "fallback_A" not in flags:
-                flags.append("fallback_A")
+            _flag_fallback()
             line = zips_y
         else:
             line = _scale_line(anchor_line, zips_base, zips_y, player_type, ratio_band, eps)
         pyv[year] = _value_of_line(line, positions, player_type, scale)
 
-    return pyv, flags, used_fallback
+    return pyv, flags
 
 
 def pct_from_saves(
     anchor_line: Mapping[str, Any],
     player_type: str,
-    scale,
+    scale: ScaleInputs,
     *,
     eps_share: float = DEFAULT_EPS_SHARE,
 ) -> float | None:
@@ -185,6 +196,21 @@ def discounted_total(
     return sum(discount**k * pyv.get(base_year + k, 0.0) for k in range(horizon))
 
 
+def out_year_share(
+    pyv: Mapping[int, float], base_year: int, total: float, *, eps_share: float = DEFAULT_EPS_SHARE
+) -> float | None:
+    """Out-year (post-base-year) contribution as a share of ``total``.
+
+    ``total`` is the discounted sum at the discount of interest; the year-0 term
+    is undiscounted, so the out-year slice is ``total - pyv[base_year]``. Guarded:
+    a near-zero or negative ``total`` (sub-replacement keeper) yields ``None`` so
+    the share never explodes or flips sign.
+    """
+    if total <= eps_share:
+        return None
+    return (total - pyv.get(base_year, 0.0)) / total
+
+
 def keeper_value(
     player_id: str,
     name: str,
@@ -192,7 +218,7 @@ def keeper_value(
     positions: list[str],
     player_type: str,
     zips_by_year: Mapping[int, Mapping[str, Any] | None],
-    scale,
+    scale: ScaleInputs,
     *,
     base_year: int = 2026,
     discount: float = DEFAULT_DISCOUNT,
@@ -202,7 +228,10 @@ def keeper_value(
     eps: float = EPS,
     eps_share: float = DEFAULT_EPS_SHARE,
 ) -> KeeperValueResult:
-    pyv, flags, used_fallback = per_year_var(
+    # Single-discount snapshot: total and pct_from_out_years are computed at this
+    # call's `discount`. A sweep report recomputes both per displayed discount (via
+    # discounted_total / out_year_share) rather than reading these stored fields.
+    pyv, flags = per_year_var(
         anchor_line,
         positions,
         player_type,
@@ -215,18 +244,12 @@ def keeper_value(
         eps=eps,
     )
     total = discounted_total(pyv, base_year, discount, horizon)
-    if total <= eps_share:
-        pct_out = None
-    else:
-        out_years = sum(discount**k * pyv.get(base_year + k, 0.0) for k in range(1, horizon))
-        pct_out = out_years / total
     return KeeperValueResult(
         player_id=player_id,
         name=name,
         per_year_var=pyv,
         total=total,
-        used_fallback=used_fallback,
         flags=flags,
-        pct_from_out_years=pct_out,
+        pct_from_out_years=out_year_share(pyv, base_year, total, eps_share=eps_share),
         pct_from_saves=pct_from_saves(anchor_line, player_type, scale, eps_share=eps_share),
     )
