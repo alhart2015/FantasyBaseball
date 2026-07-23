@@ -518,3 +518,82 @@ def test_build_cache_two_way_display_name_per_team():
     disp_t1 = sorted(p["display_name"] for p in t1["players"])
     assert disp_t1 == ["Shohei Ohtani (H)", "Shohei Ohtani (P)"]
     assert t2["players"][0]["display_name"] == "Shohei Ohtani"  # solo -> no suffix
+
+
+def test_parse_full_season_lines_keys_by_name_and_mlbam():
+    from fantasy_baseball.analysis.draft_value import parse_full_season_lines
+    from fantasy_baseball.sgp.rankings import rank_key
+
+    payload = {
+        "hitters": [
+            {
+                "name": "Al Star",
+                "mlbam_id": 111,
+                "r": 90,
+                "hr": 40,
+                "rbi": 100,
+                "sb": 8,
+                "ab": 550,
+                "h": 165,
+            }
+        ],
+        "pitchers": [
+            {
+                "name": "Ace One",
+                "mlbam_id": 222,
+                "w": 15,
+                "k": 200,
+                "sv": 0,
+                "ip": 190,
+                "er": 60,
+                "bb": 40,
+                "h_allowed": 150,
+            }
+        ],
+    }
+    by_mlbam, by_name = parse_full_season_lines(payload)
+    assert by_name[rank_key("Al Star", "hitter")]["hr"] == 40
+    assert by_name[rank_key("Ace One", "pitcher")]["k"] == 200
+    assert (111, "hitter") in by_mlbam
+
+
+def test_parse_full_season_lines_empty_payload():
+    from fantasy_baseball.analysis.draft_value import parse_full_season_lines
+
+    assert parse_full_season_lines({}) == ({}, {})
+
+
+def test_parse_full_season_lines_namesake_keeps_higher_volume():
+    from fantasy_baseball.analysis.draft_value import parse_full_season_lines
+    from fantasy_baseball.sgp.rankings import rank_key
+
+    # two "Mason Miller" pitchers, distinct mlbam; by_name must keep the higher-IP one
+    payload = {
+        "hitters": [],
+        "pitchers": [
+            {
+                "name": "Mason Miller",
+                "mlbam_id": 1,
+                "ip": 12,
+                "k": 20,
+                "w": 0,
+                "sv": 5,
+                "er": 4,
+                "bb": 3,
+                "h_allowed": 8,
+            },
+            {
+                "name": "Mason Miller",
+                "mlbam_id": 2,
+                "ip": 180,
+                "k": 210,
+                "w": 14,
+                "sv": 0,
+                "er": 60,
+                "bb": 40,
+                "h_allowed": 150,
+            },
+        ],
+    }
+    _by_mlbam, by_name = parse_full_season_lines(payload)
+    assert by_name[rank_key("Mason Miller", "pitcher")]["ip"] == 180  # higher-volume wins

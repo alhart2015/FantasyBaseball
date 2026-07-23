@@ -594,18 +594,14 @@ def _insert_by_name(
         name_mlbam[key] = mlbam
 
 
-def load_full_season_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], dict[str, Any]]:
-    """Full-season projection lines, keyed by mlbam id AND by ``name::player_type``.
+def parse_full_season_lines(
+    payload: dict[str, Any],
+) -> tuple[dict[tuple[int, str], dict[str, Any]], dict[str, Any]]:
+    """Pure parse of a full_season_projections payload into ``(by_mlbam, by_name)``.
 
-    Reads ``CacheKey.FULL_SEASON_PROJECTIONS`` from the KV store (Upstash on
-    Render, SQLite locally). Each record carries a real ``mlbam_id`` and a
-    ``name``. Returns ``(by_mlbam, by_name)``: ``by_mlbam`` is the authoritative
-    join (immune to namesake collisions like the two Mason Millers), keyed by int
-    mlbam id; ``by_name`` is a fallback keyed ``name_normalized::player_type`` that
-    keeps the higher-volume namesake so the real MLB player wins over a scrub.
-    Returns ``({}, {})`` when the KV store lacks the blob (unsynced local runtime).
+    Extracted from :func:`load_full_season_lines` so a caller with its own KV client
+    (the keeper script reading fresh Upstash) reuses the identical keying/tie-break.
     """
-    payload = read_cache_dict(CacheKey.FULL_SEASON_PROJECTIONS) or {}
     by_mlbam: dict[tuple[int, str], dict[str, Any]] = {}
     by_name: dict[str, Any] = {}
     name_mlbam: dict[str, int | None] = {}
@@ -627,6 +623,17 @@ def load_full_season_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], dic
             key = rank_key(name, ptype)
             _insert_by_name(by_name, name_mlbam, key, line, vol, mlbam)
     return by_mlbam, by_name
+
+
+def load_full_season_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], dict[str, Any]]:
+    """Full-season projection lines, keyed by mlbam id AND by ``name::player_type``.
+
+    Reads ``CacheKey.FULL_SEASON_PROJECTIONS`` from the KV store (Upstash on
+    Render, SQLite locally) and parses it via :func:`parse_full_season_lines`.
+    Returns ``({}, {})`` when the KV store lacks the blob (unsynced local runtime).
+    """
+    payload = read_cache_dict(CacheKey.FULL_SEASON_PROJECTIONS) or {}
+    return parse_full_season_lines(payload)
 
 
 def load_actual_to_date_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], dict[str, Any]]:
