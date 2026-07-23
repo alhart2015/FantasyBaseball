@@ -1,4 +1,6 @@
 from fantasy_baseball.analysis import keeper_trades as kt
+from fantasy_baseball.models.player import Player, PlayerType
+from fantasy_baseball.models.positions import Position
 
 
 def rp(name, kv):
@@ -87,3 +89,29 @@ def test_suggestions_sorted_by_my_gain_desc():
     gains = [s.my_gain for s in out]
     assert gains == sorted(gains, reverse=True)
     assert out[0].acquire.name == "big"
+
+
+def _pl(name, pos):
+    return Player(name=name, player_type=PlayerType.HITTER, selected_position=pos)
+
+
+def test_build_consolidation_proposal_balances_and_sets_active():
+    # Hart active: soto(OF), jrod(OF), cam(3B); bench: woo(BN)
+    hart = [_pl("soto", Position.OF), _pl("jrod", Position.OF),
+            _pl("cam", Position.THIRD_BASE), _pl("woo", Position.BN)]
+    prop = kt.build_consolidation_proposal(
+        opponent="Spacemen",
+        hart_players=hart,
+        package_keys=["cam::hitter", "woo::hitter"],   # send 2
+        receive_key="judge::hitter",                    # get 1
+        my_adds_keys=["fa1::hitter"],                   # refill N-1 = 1
+        opp_drop_keys=["scrub::hitter"],                # opp drops N-1 = 1
+    )
+    assert prop.send == ["cam::hitter", "woo::hitter"]
+    assert prop.receive == ["judge::hitter"]
+    assert prop.my_adds == ["fa1::hitter"]
+    assert prop.opp_drops == ["scrub::hitter"]
+    # cam was active and is sent -> leaves active; judge + fa1 enter; soto/jrod stay
+    assert prop.my_active_ids == {"soto::hitter", "jrod::hitter", "judge::hitter", "fa1::hitter"}
+    assert prop.opp_active_ids == set()          # empty -> evaluator opp fallback
+    assert prop.my_active_ids                     # regression: NEVER empty

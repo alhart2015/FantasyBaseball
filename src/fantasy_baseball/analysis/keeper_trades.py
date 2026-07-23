@@ -9,6 +9,9 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 
+from fantasy_baseball.models.player import Player
+from fantasy_baseball.trades.multi_trade import TradeProposal, _current_active_set
+
 
 @dataclass(frozen=True)
 class RosterPlayer:
@@ -129,4 +132,30 @@ def _suggestion(
         my_top3_before=my_before, my_top3_after=my_after, my_gain=my_gain,
         their_top3_before=opp_before, their_top3_after=their_after,
         their_gain=their_after - opp_before, guardrail=verdict,
+    )
+
+
+def build_consolidation_proposal(
+    *,
+    opponent: str,
+    hart_players: Sequence[Player],
+    package_keys: Sequence[str],
+    receive_key: str,
+    my_adds_keys: Sequence[str],
+    opp_drop_keys: Sequence[str],
+) -> TradeProposal:
+    """Roster-legal 1-for-N consolidation proposal. `my_active_ids` is the post-trade
+    active set -- REQUIRED, or evaluate_multi_trade zeroes Hart's active roster
+    (multi_trade.py:200-213). opp_active_ids stays empty (opp fallback handles it)."""
+    current_active = _current_active_set(hart_players)
+    my_active = (current_active - set(package_keys)) | {receive_key} | set(my_adds_keys)
+    return TradeProposal(
+        opponent=opponent,
+        send=list(package_keys),
+        receive=[receive_key],
+        my_drops=[],
+        opp_drops=list(opp_drop_keys),
+        my_adds=list(my_adds_keys),
+        my_active_ids=my_active,
+        opp_active_ids=set(),
     )
