@@ -201,6 +201,19 @@ def test_parse_full_season_lines_keys_by_name_and_mlbam():
 
 def test_parse_full_season_lines_empty_payload():
     assert parse_full_season_lines({}) == ({}, {})
+
+
+def test_parse_full_season_lines_namesake_keeps_higher_volume():
+    # two "Mason Miller" pitchers, distinct mlbam; by_name must keep the higher-IP one
+    payload = {
+        "hitters": [],
+        "pitchers": [
+            {"name": "Mason Miller", "mlbam_id": 1, "ip": 12, "k": 20, "w": 0, "sv": 5, "er": 4, "bb": 3, "h_allowed": 8},
+            {"name": "Mason Miller", "mlbam_id": 2, "ip": 180, "k": 210, "w": 14, "sv": 0, "er": 60, "bb": 40, "h_allowed": 150},
+        ],
+    }
+    _by_mlbam, by_name = parse_full_season_lines(payload)
+    assert by_name[rank_key("Mason Miller", "pitcher")]["ip"] == 180  # higher-volume wins
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -440,6 +453,18 @@ def build_results(base_year: int, horizon: int, *, anchor: str = "current"):
     if anchor == "current":
         by_name = load_current_full_season_lines()
         hitters, pitchers, current_keys = overlay_current_anchors(hitters, pitchers, by_name)
+        board_keys = {
+            rank_key(str(n), pt)
+            for df, pt in ((hitters, "hitter"), (pitchers, "pitcher"))
+            for n in df["name"]
+        }
+        skipped = sum(1 for k in by_name if k not in board_keys)
+        if skipped:
+            print(
+                f"[keeper-value] {skipped} current-blob players absent from the "
+                f"preseason board (skipped; see spec follow-up)",
+                file=sys.stderr,
+            )
     board, scale = build_board_from_frames(
         hitters,
         pitchers,
@@ -473,7 +498,9 @@ def build_results(base_year: int, horizon: int, *, anchor: str = "current"):
     return results, candidate_ids
 ```
 
-Import the Task-1 functions at the top of `scripts/keeper_value.py`:
+Import the Task-1 functions at the top of `scripts/keeper_value.py`. (`rank_key` for
+the skip count and `sys` are already imported -- lines 34 and 10 -- so no new
+sgp.rankings/sys import is needed.)
 
 ```python
 from fantasy_baseball.analysis.keeper_value import (
@@ -483,6 +510,20 @@ from fantasy_baseball.analysis.keeper_value import (
     overlay_current_anchors,   # new
 )
 ```
+
+**Cross-caller note (verify, do not skip):** `scripts/keeper_trades.py` also calls
+`build_results(base_year=..., horizon=...)`. The new keyword-only `anchor="current"`
+default means the keeper-**trade** generator now uses current-season keeper values
+and requires a synced `cache:full_season_projections` (fail-loud) -- this is the
+intended "trade generator inherits the fix" behavior from the spec. It is
+signature-compatible (both existing call sites omit `anchor`). Task 5 verification
+re-runs the keeper_trades suites to confirm nothing breaks.
+
+**Characterization (preseason unchanged):** `preseason` mode is behavior-preserving
+**by construction** -- every new line in `build_results` is guarded by
+`if anchor == "current":`, so `--anchor preseason` executes the exact pre-change
+path. The automated no-op is Task 1's `test_overlay_keeps_preseason_when_no_current_line`
+(empty overlay = identity); the manual baseline (Step 6a) confirms end-to-end.
 
 In `main`, pass the flag:
 
@@ -520,7 +561,9 @@ git commit -m "feat(keeper-value): --anchor current|preseason (current-season an
 Run at repo root and fix every failure before declaring done:
 
 ```bash
-python -m pytest tests/test_analysis/test_keeper_value.py tests/test_analysis/test_draft_value.py tests/test_scripts/test_keeper_value_script.py -q
+# includes the keeper_trades suites: build_results' new default anchor flows into
+# the trade generator, so confirm it still passes.
+python -m pytest tests/test_analysis/test_keeper_value.py tests/test_analysis/test_draft_value.py tests/test_scripts/test_keeper_value_script.py tests/test_analysis/test_keeper_trades.py tests/test_scripts/test_keeper_trades_script.py -q
 python -m ruff check src/fantasy_baseball/analysis/keeper_value.py src/fantasy_baseball/analysis/draft_value.py scripts/keeper_value.py tests/
 python -m ruff format --check src/fantasy_baseball/analysis/keeper_value.py src/fantasy_baseball/analysis/draft_value.py scripts/keeper_value.py tests/
 python -m mypy src/fantasy_baseball/analysis/keeper_value.py src/fantasy_baseball/analysis/draft_value.py
