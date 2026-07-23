@@ -5,7 +5,7 @@ docs/superpowers/specs/2026-07-23-keeper-trade-generator-design.md.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from itertools import combinations
 
@@ -65,3 +65,68 @@ def keeper_viable_packages(
     candidates.sort(key=lambda c: (c[0], c[1]))  # fewest players, then least kv given
     for _size, _cost, combo in candidates:
         yield combo
+
+
+def generate_consolidation_trades(
+    my_team: str,
+    rosters: Mapping[str, Sequence[RosterPlayer]],
+    guardrail: Guardrail,
+    *,
+    max_give: int = 3,
+    sweetener: bool = True,
+) -> list[TradeSuggestion]:
+    me = sorted(rosters[my_team], key=lambda p: p.keeper_value, reverse=True)
+    if len(me) < 3:
+        return []
+    my_top2, my_third = me[:2], me[2].keeper_value
+    my_top3_before = top3_sum(me)
+    protect = {me[0].player_id, me[1].player_id}
+    giveable = [p for p in me if p.player_id not in protect]
+
+    out: list[TradeSuggestion] = []
+    for team, roster in rosters.items():
+        if team == my_team:
+            continue
+        opp_top3_before = top3_sum(roster)
+        for g in roster:
+            if g.keeper_value <= my_third:
+                continue
+            my_gain = g.keeper_value - my_third
+            my_top3_after = my_top2[0].keeper_value + my_top2[1].keeper_value + g.keeper_value
+            for pkg in keeper_viable_packages(g, roster, giveable, opp_top3_before, max_give):
+                verdict = guardrail(pkg, g)
+                if not verdict.ok:
+                    continue
+                out.append(
+                    _suggestion(
+                        team, g, pkg, "minimal", my_top3_before, my_top3_after,
+                        my_gain, roster, opp_top3_before, verdict,
+                    )
+                )
+                if sweetener:
+                    extra = next((p for p in giveable if p not in pkg), None)
+                    if extra is not None:
+                        spkg = (*pkg, extra)
+                        sv = guardrail(spkg, g)
+                        if sv.ok:
+                            out.append(
+                                _suggestion(
+                                    team, g, spkg, "sweetened", my_top3_before,
+                                    my_top3_after, my_gain, roster, opp_top3_before, sv,
+                                )
+                            )
+                break  # first passing minimal package wins for this (team, g)
+    out.sort(key=lambda s: s.my_gain, reverse=True)
+    return out
+
+
+def _suggestion(
+    team, g, pkg, variant, my_before, my_after, my_gain, roster, opp_before, verdict
+) -> TradeSuggestion:
+    their_after = top3_sum([p for p in roster if p.player_id != g.player_id] + list(pkg))
+    return TradeSuggestion(
+        target_team=team, acquire=g, give=tuple(pkg), variant=variant,
+        my_top3_before=my_before, my_top3_after=my_after, my_gain=my_gain,
+        their_top3_before=opp_before, their_top3_after=their_after,
+        their_gain=their_after - opp_before, guardrail=verdict,
+    )

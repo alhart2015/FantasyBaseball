@@ -30,3 +30,60 @@ def test_keeper_viable_packages_ordered_and_improving():
     # among equal-size viable packages, least total keeper_value given comes first
     two_player = [pkg for pkg in pkgs if len(pkg) == 2]
     assert set(two_player[0]) == {giveable[0], giveable[1]}
+
+
+def _league():
+    hart = [rp("soto", 18), rp("jrod", 16), rp("cam", 14), rp("woo", 12), rp("wood", 9)]
+    spacemen = [rp("judge", 17), rp("g", 8), rp("t", 7)]
+    return {"Hart": hart, "Spacemen": spacemen}
+
+
+def _pass_all(give, receive):
+    return kt.GuardrailResult(legal=True, delta_total=-1.0, ok=True)
+
+
+def test_consolidation_found_both_trios_improve():
+    out = kt.generate_consolidation_trades("Hart", _league(), _pass_all, sweetener=False)
+    assert out, "expected a suggestion"
+    s = next(x for x in out if x.acquire.name == "judge")
+    assert s.my_top3_after > s.my_top3_before
+    assert s.their_top3_after > s.their_top3_before
+    assert s.my_gain == 17 - 14
+
+
+def test_displaced_keeper_is_free_gain_is_fixed():
+    out = kt.generate_consolidation_trades("Hart", _league(), _pass_all, sweetener=False)
+    s = next(x for x in out if x.acquire.name == "judge")
+    assert s.my_gain == 3.0
+
+
+def test_guardrail_skips_first_package_takes_next():
+    seen = []
+
+    def gr(give, receive):
+        seen.append(tuple(p.name for p in give))
+        ok = len(give) >= 2 and any(p.name == "wood" for p in give)
+        return kt.GuardrailResult(legal=True, delta_total=-1.0, ok=ok)
+
+    out = kt.generate_consolidation_trades("Hart", _league(), gr, sweetener=False)
+    s = next(x for x in out if x.acquire.name == "judge")
+    assert any(p.name == "wood" for p in s.give)
+    assert len(seen) >= 2
+
+
+def test_no_target_when_no_stud_above_my_third():
+    league = {"Hart": [rp("soto", 18), rp("jrod", 16), rp("cam", 14)],
+              "Weak": [rp("x", 10), rp("y", 5), rp("z", 3)]}
+    assert kt.generate_consolidation_trades("Hart", league, _pass_all) == []
+
+
+def test_suggestions_sorted_by_my_gain_desc():
+    league = {
+        "Hart": [rp("soto", 18), rp("jrod", 16), rp("cam", 14), rp("woo", 12), rp("wood", 9)],
+        "A": [rp("big", 20), rp("a1", 3), rp("a2", 2)],
+        "B": [rp("mid", 15), rp("b1", 3), rp("b2", 2)],
+    }
+    out = kt.generate_consolidation_trades("Hart", league, _pass_all, sweetener=False)
+    gains = [s.my_gain for s in out]
+    assert gains == sorted(gains, reverse=True)
+    assert out[0].acquire.name == "big"
