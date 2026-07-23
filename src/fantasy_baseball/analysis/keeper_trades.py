@@ -102,8 +102,16 @@ def generate_consolidation_trades(
                     continue
                 out.append(
                     _suggestion(
-                        team, g, pkg, "minimal", my_top3_before, my_top3_after,
-                        my_gain, roster, opp_top3_before, verdict,
+                        team,
+                        g,
+                        pkg,
+                        "minimal",
+                        my_top3_before,
+                        my_top3_after,
+                        my_gain,
+                        roster,
+                        opp_top3_before,
+                        verdict,
                     )
                 )
                 if sweetener:
@@ -114,8 +122,16 @@ def generate_consolidation_trades(
                         if sv.ok:
                             out.append(
                                 _suggestion(
-                                    team, g, spkg, "sweetened", my_top3_before,
-                                    my_top3_after, my_gain, roster, opp_top3_before, sv,
+                                    team,
+                                    g,
+                                    spkg,
+                                    "sweetened",
+                                    my_top3_before,
+                                    my_top3_after,
+                                    my_gain,
+                                    roster,
+                                    opp_top3_before,
+                                    sv,
                                 )
                             )
                 break  # first passing minimal package wins for this (team, g)
@@ -128,17 +144,24 @@ def _suggestion(
 ) -> TradeSuggestion:
     their_after = top3_sum([p for p in roster if p.player_id != g.player_id] + list(pkg))
     return TradeSuggestion(
-        target_team=team, acquire=g, give=tuple(pkg), variant=variant,
-        my_top3_before=my_before, my_top3_after=my_after, my_gain=my_gain,
-        their_top3_before=opp_before, their_top3_after=their_after,
-        their_gain=their_after - opp_before, guardrail=verdict,
+        target_team=team,
+        acquire=g,
+        give=tuple(pkg),
+        variant=variant,
+        my_top3_before=my_before,
+        my_top3_after=my_after,
+        my_gain=my_gain,
+        their_top3_before=opp_before,
+        their_top3_after=their_after,
+        their_gain=their_after - opp_before,
+        guardrail=verdict,
     )
 
 
 def build_consolidation_proposal(
     *,
     opponent: str,
-    hart_players: Sequence[Player],
+    hart_players: list[Player],  # list (not Sequence): _current_active_set expects list
     package_keys: Sequence[str],
     receive_key: str,
     my_adds_keys: Sequence[str],

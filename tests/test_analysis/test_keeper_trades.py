@@ -74,8 +74,10 @@ def test_guardrail_skips_first_package_takes_next():
 
 
 def test_no_target_when_no_stud_above_my_third():
-    league = {"Hart": [rp("soto", 18), rp("jrod", 16), rp("cam", 14)],
-              "Weak": [rp("x", 10), rp("y", 5), rp("z", 3)]}
+    league = {
+        "Hart": [rp("soto", 18), rp("jrod", 16), rp("cam", 14)],
+        "Weak": [rp("x", 10), rp("y", 5), rp("z", 3)],
+    }
     assert kt.generate_consolidation_trades("Hart", league, _pass_all) == []
 
 
@@ -97,15 +99,19 @@ def _pl(name, pos):
 
 def test_build_consolidation_proposal_balances_and_sets_active():
     # Hart active: soto(OF), jrod(OF), cam(3B); bench: woo(BN)
-    hart = [_pl("soto", Position.OF), _pl("jrod", Position.OF),
-            _pl("cam", Position.THIRD_BASE), _pl("woo", Position.BN)]
+    hart = [
+        _pl("soto", Position.OF),
+        _pl("jrod", Position.OF),
+        _pl("cam", Position.THIRD_BASE),
+        _pl("woo", Position.BN),
+    ]
     prop = kt.build_consolidation_proposal(
         opponent="Spacemen",
         hart_players=hart,
-        package_keys=["cam::hitter", "woo::hitter"],   # send 2
-        receive_key="judge::hitter",                    # get 1
-        my_adds_keys=["fa1::hitter"],                   # refill N-1 = 1
-        opp_drop_keys=["scrub::hitter"],                # opp drops N-1 = 1
+        package_keys=["cam::hitter", "woo::hitter"],  # send 2
+        receive_key="judge::hitter",  # get 1
+        my_adds_keys=["fa1::hitter"],  # refill N-1 = 1
+        opp_drop_keys=["scrub::hitter"],  # opp drops N-1 = 1
     )
     assert prop.send == ["cam::hitter", "woo::hitter"]
     assert prop.receive == ["judge::hitter"]
@@ -113,5 +119,5 @@ def test_build_consolidation_proposal_balances_and_sets_active():
     assert prop.opp_drops == ["scrub::hitter"]
     # cam was active and is sent -> leaves active; judge + fa1 enter; soto/jrod stay
     assert prop.my_active_ids == {"soto::hitter", "jrod::hitter", "judge::hitter", "fa1::hitter"}
-    assert prop.opp_active_ids == set()          # empty -> evaluator opp fallback
-    assert prop.my_active_ids                     # regression: NEVER empty
+    assert prop.opp_active_ids == set()  # empty -> evaluator opp fallback
+    assert prop.my_active_ids  # regression: NEVER empty

@@ -4,8 +4,9 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
-import keeper_trades as script  # noqa: E402
-from fantasy_baseball.analysis.keeper_trades import RosterPlayer  # noqa: E402
+import keeper_trades as script
+
+from fantasy_baseball.analysis.keeper_trades import RosterPlayer
 
 
 def test_to_roster_players_attaches_keeper_value_and_zero_for_unmatched():
