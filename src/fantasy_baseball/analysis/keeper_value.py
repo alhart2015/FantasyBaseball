@@ -9,13 +9,14 @@ See docs/superpowers/specs/2026-07-22-keeper-value-design.md.
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.player_value import calculate_counting_sgp, calculate_player_sgp
+from fantasy_baseball.sgp.rankings import rank_key
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import Category, safe_float
 
@@ -253,3 +254,52 @@ def keeper_value(
         pct_from_out_years=out_year_share(pyv, base_year, total, eps_share=eps_share),
         pct_from_saves=pct_from_saves(anchor_line, player_type, scale, eps_share=eps_share),
     )
+
+
+def overlay_current_anchors(
+    hitters: pd.DataFrame,
+    pitchers: pd.DataFrame,
+    current_by_name: Mapping[str, Mapping[str, Any]],
+    *,
+    min_ab: float = DEFAULT_MIN_AB,
+    min_ip: float = DEFAULT_MIN_IP,
+) -> tuple[pd.DataFrame, pd.DataFrame, set[str]]:
+    """Replace each board frame's stat line with the current-talent line when one
+    exists for that player (keyed name::player_type) AND clears the min-PT floor.
+
+    Returns ``(merged_hitters, merged_pitchers, current_keys)`` where ``current_keys``
+    are the ``rank_key(name, player_type)`` values that received the current anchor;
+    every other player keeps its preseason line and is flagged by the caller.
+    """
+    current_keys: set[str] = set()
+    out = []
+    for df, ptype, fields, vol_field, floor in (
+        (hitters, "hitter", HITTER_FIELDS, "ab", min_ab),
+        (pitchers, "pitcher", PITCHER_FIELDS, "ip", min_ip),
+    ):
+        merged = df.copy()
+        for idx, name in merged["name"].items():
+            key = rank_key(str(name), ptype)
+            line = current_by_name.get(key)
+            if line is None or safe_float(line.get(vol_field, 0)) < floor:
+                continue
+            for f in fields:
+                merged.at[idx, f] = line.get(f)
+            current_keys.add(key)
+        out.append(merged)
+    return out[0], out[1], current_keys
+
+
+def mark_preseason_fallback(
+    results: list[KeeperValueResult], current_keys: set[str]
+) -> list[KeeperValueResult]:
+    """Append ``anchor_preseason_fallback`` to every result NOT scored off a current
+    anchor (i.e. whose ``name::player_type`` is not in ``current_keys``)."""
+    marked = []
+    for r in results:
+        ptype = r.player_id.rsplit("::", 1)[-1]
+        if rank_key(r.name, ptype) in current_keys:
+            marked.append(r)
+        else:
+            marked.append(replace(r, flags=[*r.flags, "anchor_preseason_fallback"]))
+    return marked

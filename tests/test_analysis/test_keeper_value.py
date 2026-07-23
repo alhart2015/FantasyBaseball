@@ -3,6 +3,7 @@ import pandas as pd
 from fantasy_baseball.analysis import keeper_value as kv
 from fantasy_baseball.draft.board import build_board_from_frames
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.rankings import rank_key
 
 
 def _tiny_scale_and_board():
@@ -290,3 +291,55 @@ def test_keeper_value_populates_pct_from_saves():
         scale,
     )
     assert res.pct_from_saves is not None and res.pct_from_saves > 0.0
+
+
+def _frame(name, ptype_fields):
+    # ptype_fields: dict of stat->value for one player row
+    return pd.DataFrame([{"name": name, "fg_id": "1", **ptype_fields}])
+
+
+def test_overlay_uses_current_line_above_floor():
+    pre = _frame("Al Star", {"r": 60, "hr": 20, "rbi": 60, "sb": 5, "ab": 500, "avg": 0.250})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    current = {
+        rank_key("Al Star", "hitter"): {
+            "r": 90,
+            "hr": 40,
+            "rbi": 100,
+            "sb": 8,
+            "ab": 550,
+            "avg": 0.300,
+        }
+    }
+    h, _p, keys = kv.overlay_current_anchors(pre, empty_p, current)
+    assert h.iloc[0]["hr"] == 40 and h.iloc[0]["avg"] == 0.300  # current stats win
+    assert rank_key("Al Star", "hitter") in keys
+
+
+def test_overlay_keeps_preseason_when_no_current_line():
+    pre = _frame("No Data", {"r": 60, "hr": 20, "rbi": 60, "sb": 5, "ab": 500, "avg": 0.250})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    h, _p, keys = kv.overlay_current_anchors(pre, empty_p, {})
+    assert h.iloc[0]["hr"] == 20  # preseason unchanged
+    assert keys == set()
+
+
+def test_overlay_keeps_preseason_when_current_below_floor():
+    pre = _frame("Hurt Guy", {"r": 60, "hr": 20, "rbi": 60, "sb": 5, "ab": 500, "avg": 0.250})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    # 40 AB is below DEFAULT_MIN_AB (100) -> keep preseason
+    current = {
+        rank_key("Hurt Guy", "hitter"): {"r": 8, "hr": 3, "rbi": 9, "sb": 0, "ab": 40, "avg": 0.300}
+    }
+    h, _p, keys = kv.overlay_current_anchors(pre, empty_p, current)
+    assert h.iloc[0]["hr"] == 20  # kept preseason
+    assert keys == set()
+
+
+def test_mark_preseason_fallback_flags_only_non_current():
+    r_cur = kv.KeeperValueResult("aaa::hitter", "Al Star", {2026: 1.0}, 1.0, [], 0.5, None)
+    r_pre = kv.KeeperValueResult("bbb::hitter", "No Data", {2026: 1.0}, 1.0, [], 0.5, None)
+    out = kv.mark_preseason_fallback([r_cur, r_pre], {rank_key("Al Star", "hitter")})
+    flags = {r.name: r.flags for r in out}
+    assert "anchor_preseason_fallback" not in flags["Al Star"]
+    assert "anchor_preseason_fallback" in flags["No Data"]
