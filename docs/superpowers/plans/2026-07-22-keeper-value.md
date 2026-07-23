@@ -440,7 +440,8 @@ git commit -m "feat(keeper-value): per_year_var with approach-A fallback + missi
 def test_discounted_total_weights_by_year():
     from fantasy_baseball.analysis import keeper_value as kv
     pyv = {2026: 10.0, 2027: 10.0, 2028: 10.0}
-    assert kv.discounted_total(pyv, 2026, 0.8, 3) == 10.0 + 8.0 + 6.4
+    # tolerance, not ==: 0.8**2 * 10 is not exactly 6.4 in float
+    assert abs(kv.discounted_total(pyv, 2026, 0.8, 3) - (10.0 + 8.0 + 6.4)) < 1e-9
 
 
 def test_keeper_value_horizon_1_equals_board_var():

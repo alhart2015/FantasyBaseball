@@ -87,3 +87,69 @@ def test_per_year_var_low_pt_base_falls_back_to_approach_a():
     # Approach A: out-year V equals scoring the raw ZiPS 2027 line directly.
     expected = kv._value_of_line(zips_2027, list(row["positions"]), row["player_type"], scale)
     assert abs(pyv[2027] - expected) < 1e-9
+
+
+def test_discounted_total_weights_by_year():
+    pyv = {2026: 10.0, 2027: 10.0, 2028: 10.0}
+    assert abs(kv.discounted_total(pyv, 2026, 0.8, 3) - (10.0 + 8.0 + 6.4)) < 1e-9
+
+
+def test_keeper_value_horizon_1_equals_board_var():
+    board, scale = _tiny_scale_and_board()
+    row = board[board["name"] == "Star Bat"].iloc[0]
+    anchor = row.to_dict()
+    res = kv.keeper_value(
+        row["player_id"], row["name"], anchor, list(row["positions"]), row["player_type"],
+        {2026: anchor}, scale, horizon=1,
+    )
+    assert abs(res.total - float(row["var"])) < 1e-9  # currency parity
+
+
+def test_youth_premium_emerges_and_widens_as_discount_shallows():
+    """Two players, identical 2026 VAR, different ZiPS decline curves.
+    The flatter (younger) curve ranks higher, and the gap widens as discount rises."""
+    board, scale = _tiny_scale_and_board()
+    row = board[board["name"] == "Star Bat"].iloc[0]
+    anchor = row.to_dict()
+    pt, positions = row["player_type"], list(row["positions"])
+
+    young = {2026: anchor, 2027: anchor, 2028: anchor}
+    decayed_27 = {**anchor, "r": anchor["r"] * 0.85, "hr": anchor["hr"] * 0.85,
+                  "rbi": anchor["rbi"] * 0.85, "sb": anchor["sb"] * 0.85}
+    decayed_28 = {**anchor, "r": anchor["r"] * 0.70, "hr": anchor["hr"] * 0.70,
+                  "rbi": anchor["rbi"] * 0.70, "sb": anchor["sb"] * 0.70}
+    old = {2026: anchor, 2027: decayed_27, 2028: decayed_28}
+
+    def total(zbys, discount):
+        return kv.keeper_value("y", "y", anchor, positions, pt, zbys, scale, discount=discount).total
+
+    gap_steep = total(young, 0.60) - total(old, 0.60)
+    gap_shallow = total(young, 0.90) - total(old, 0.90)
+    assert gap_steep > 0                      # young always wins
+    assert gap_shallow > gap_steep            # advantage grows as out-years count more
+
+
+def test_keeper_value_none_share_when_total_below_eps():
+    board, scale = _tiny_scale_and_board()
+    row = board[board["name"] == "Meh Bat"].iloc[0]  # low/near-replacement value
+    anchor = row.to_dict()
+    res = kv.keeper_value(
+        row["player_id"], row["name"], anchor, list(row["positions"]), row["player_type"],
+        {2026: anchor, 2027: anchor, 2028: anchor}, scale, eps_share=1e9,  # force the guard
+    )
+    assert res.pct_from_out_years is None
+
+
+def test_keeper_value_zero_year_is_kept_not_dropped():
+    """A year whose V is exactly 0.0 is a real value: it stays in per_year_var
+    and participates in the discounted sum (numeric-default guard)."""
+    board, scale = _tiny_scale_and_board()
+    row = board[board["name"] == "Star Bat"].iloc[0]
+    anchor = row.to_dict()
+    res = kv.keeper_value(
+        row["player_id"], row["name"], anchor, list(row["positions"]), row["player_type"],
+        {2026: anchor, 2027: anchor, 2028: None}, scale, discount=1.0,  # 2028 missing -> 0.0
+    )
+    assert res.per_year_var[2028] == 0.0
+    assert 2028 in res.per_year_var  # not dropped
+    assert abs(res.total - (res.per_year_var[2026] + res.per_year_var[2027] + 0.0)) < 1e-9

@@ -165,3 +165,48 @@ def per_year_var(
         pyv[year] = _value_of_line(line, positions, player_type, scale)
 
     return pyv, flags, used_fallback
+
+
+def discounted_total(
+    pyv: Mapping[int, float], base_year: int, discount: float, horizon: int
+) -> float:
+    return sum(discount**k * pyv.get(base_year + k, 0.0) for k in range(horizon))
+
+
+def keeper_value(
+    player_id: str,
+    name: str,
+    anchor_line: Mapping[str, Any],
+    positions: list[str],
+    player_type: str,
+    zips_by_year: Mapping[int, Mapping[str, Any] | None],
+    scale,
+    *,
+    base_year: int = 2026,
+    discount: float = DEFAULT_DISCOUNT,
+    horizon: int = DEFAULT_HORIZON,
+    ratio_band: tuple[float, float] = DEFAULT_RATIO_BAND,
+    min_pt: float | None = None,
+    eps: float = EPS,
+    eps_share: float = DEFAULT_EPS_SHARE,
+) -> KeeperValueResult:
+    pyv, flags, used_fallback = per_year_var(
+        anchor_line, positions, player_type, zips_by_year, scale,
+        base_year=base_year, horizon=horizon, ratio_band=ratio_band, min_pt=min_pt, eps=eps,
+    )
+    total = discounted_total(pyv, base_year, discount, horizon)
+    if total <= eps_share:
+        pct_out = None
+    else:
+        out_years = sum(discount**k * pyv.get(base_year + k, 0.0) for k in range(1, horizon))
+        pct_out = out_years / total
+    return KeeperValueResult(
+        player_id=player_id,
+        name=name,
+        per_year_var=pyv,
+        total=total,
+        used_fallback=used_fallback,
+        flags=flags,
+        pct_from_out_years=pct_out,
+        pct_from_saves=None,  # set in Task 5
+    )
