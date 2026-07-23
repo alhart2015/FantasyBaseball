@@ -123,14 +123,32 @@ The generator reads them **live from Upstash** (`build_explicit_upstash_kv`,
 unwrap the `_data` envelope) like `injury_stress.load_mc_inputs_from_upstash`.
 
 **Roster-legal proposal (the one real cost of "correct").** A 1-for-N
-consolidation unbalances rosters, so each candidate builds a legal `TradeProposal`:
-`send` = package keys, `receive` = `[G key]`, and to rebalance --
-`my_adds` = Hart's `N-1` best waiver refills from `waiver_pool` (so his roster
-stays full and the eval credits a replacement, not an empty slot), `opp_drops` =
-the opponent's `N-1` lowest keeper-value players (whom they'd cut to fit the
-package). `my_active_ids` / `opp_active_ids` are derived from the roster blobs'
-active slots (verify the exact field at implementation; default to the evaluator's
-own handling if absent). A candidate that can't be made legal is skipped.
+consolidation unbalances rosters, so each candidate builds a legal `TradeProposal`
+through a **pure, unit-tested** helper `build_consolidation_proposal(...)`:
+
+- `send` = package `name::type` keys; `receive` = `[G key]`.
+- `my_adds` = the top `N-1` players in `waiver_pool` by **ROS value** (Hart's
+  roster stays full and the eval credits a real replacement, not an empty slot).
+- `opp_drops` = the opponent's `N-1` lowest **ROS-value** rostered players
+  (consistent 2026 basis -- the opponent cuts fringe bodies to fit the package).
+  ROS value for both sides comes from the same ROS-projection cache
+  (`ROS_PROJECTIONS`) that `build_waiver_pool` reads; tie-break by player key.
+- `my_active_ids` = Hart's **post-trade active set**, computed as
+  `(current active keys) - (sent keys) + {G key} + (my_adds keys)` -- the sent
+  players vacate active slots and the received/added players slide in. This is
+  **required, not optional**: with an empty `my_active_ids` the evaluator treats
+  Hart's *entire active roster* as leaving (`multi_trade.py:200-213`), producing a
+  garbage delta. It mirrors the evaluator's own opp-side fallback
+  (`multi_trade.py:231-243`). It is a heuristic -- it does not re-optimize the
+  lineup or enforce per-slot limits -- consistent with how the evaluator treats
+  the opponent; optimal-lineup refinement is a non-goal.
+- `opp_active_ids` = **empty** -- the evaluator's opp-side fallback
+  (`multi_trade.py:231-243`) derives the opponent's post-trade active set from
+  `opp_drops` + the incoming package, which is exactly what we want.
+
+Current active sets come from the roster blobs' active (non-bench) slots (the
+evaluator's `_current_active_set`). A candidate whose proposal
+`evaluate_multi_trade` reports `legal=False` is skipped, not emitted.
 
 **Bounding evaluator calls.** `evaluate_multi_trade` recomputes league standings,
 so the pure generator receives the guardrail as an **injected callable** and
@@ -143,9 +161,19 @@ opponent's trio improve) is decided first, cheaply, with no evaluator call.
 
 - **Create** `src/fantasy_baseball/analysis/keeper_trades.py` -- **pure** logic:
   the data model, `generate_consolidation_trades(...)`, keeper-viable-package
-  enumeration, top-3 helpers. Takes rosters (keeper_value only) and a **guardrail
-  callable**; **no I/O**. Fully unit-testable with synthetic leagues + a mock
-  guardrail.
+  enumeration, top-3 helpers, and `build_consolidation_proposal(...)` (constructs
+  the roster-legal `TradeProposal` -- `send`/`receive`/`my_adds`/`opp_drops` and
+  the computed `my_active_ids`; takes rosters + ROS-ranked waiver/opponent inputs
+  + package + `G`, returns a `TradeProposal`). Takes rosters (keeper_value only)
+  and a **guardrail callable**; **no I/O**. Fully unit-testable with synthetic
+  leagues + a mock guardrail.
+
+**Data-source split (deliberate):** keeper values are computed **offline** from
+the local board (`build_results` over the local DB blend; each player's
+`keeper_value = discounted_total(r.per_year_var, base_year, discount, horizon)` at
+the chosen `--discount`). Rosters and every `evaluate_multi_trade` input come
+from **live Upstash**. The script wires these two sources; the pure module sees
+only the resulting annotated rosters + the guardrail callable.
 - **Create** `src/fantasy_baseball/trades/eval_inputs.py` -- shared assembly of
   `evaluate_multi_trade`'s inputs (`load_trade_eval_context`), extracted from the
   `/api/evaluate-trade` route (including its `_projected_from_cache` /
@@ -273,6 +301,13 @@ CLI: `--discount R` (single rate for the keeper ranking, default 0.80),
 - **Ranking test:** suggestions sort by `my_gain` desc.
 - **Matching/zero-value test:** an unmatched roster player is treated as
   keeper_value 0 and never appears in a top-3.
+- **Proposal-builder test:** `build_consolidation_proposal` on a synthetic roster
+  + waiver pool produces the right `TradeProposal` -- `send`/`receive` keys match
+  the package/`G`; `my_adds` = the top `N-1` waiver players by ROS value;
+  `opp_drops` = the opponent's `N-1` lowest ROS-value players; `my_active_ids` =
+  `(current active) - sent + {G} + my_adds`; `opp_active_ids` empty. Includes the
+  `N-1` count (a 1-for-2 adds 1 / drops 1) and the empty-`my_active_ids`
+  regression (the builder never leaves it empty).
 - **`eval_inputs` round-trip test** (`tests/test_trades/`): `load_trade_eval_context`
   turns a fixture cache blob into the exact inputs `evaluate_multi_trade` accepts
   (a smoke test that the extraction preserves the route's behavior). The real
@@ -298,5 +333,9 @@ CLI: `--discount R` (single rate for the keeper ranking, default 0.80),
 - **Modified:** `web/season_routes.py` -- the `/api/evaluate-trade` input
   assembly is extracted into `trades/eval_inputs.py::load_trade_eval_context` and
   the route is refactored to call it, so the route and the generator share one
-  path (no duplicated assembly). Behavior of the route is unchanged (the
-  round-trip test guards this).
+  path (no duplicated assembly). **Regression strategy:** the existing
+  `tests/test_web/test_season_routes.py` coverage of `/api/evaluate-trade` must
+  still pass after the refactor; if it does not currently exercise that route, add
+  a characterization test that pins its response on a fixture blob **before**
+  extracting. The `eval_inputs` round-trip test additionally pins the extracted
+  helper's output shape.
