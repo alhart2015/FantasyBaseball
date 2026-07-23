@@ -21,7 +21,9 @@ from fantasy_baseball.analysis.keeper_value import (
     DEFAULT_HORIZON,
     discounted_total,
     keeper_value,
+    mark_preseason_fallback,
     out_year_share,
+    overlay_current_anchors,
 )
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
@@ -134,7 +136,7 @@ def _zips_by_year(
     }
 
 
-def build_results(base_year: int, horizon: int):
+def build_results(base_year: int, horizon: int, *, anchor: str = "current"):
     conn = get_connection()
     try:
         hitters, pitchers = get_blended_projections(conn)
@@ -142,6 +144,22 @@ def build_results(base_year: int, horizon: int):
     finally:
         conn.close()
     config = load_config(CONFIG_PATH)
+    current_keys: set[str] = set()
+    if anchor == "current":
+        by_name = load_current_full_season_lines()
+        hitters, pitchers, current_keys = overlay_current_anchors(hitters, pitchers, by_name)
+        board_keys = {
+            rank_key(str(n), pt)
+            for df, pt in ((hitters, "hitter"), (pitchers, "pitcher"))
+            for n in df["name"]
+        }
+        skipped = sum(1 for k in by_name if k not in board_keys)
+        if skipped:
+            print(
+                f"[keeper-value] {skipped} current-blob players absent from the "
+                f"preseason board (skipped; see spec follow-up)",
+                file=sys.stderr,
+            )
     board, scale = build_board_from_frames(
         hitters,
         pitchers,
@@ -170,6 +188,8 @@ def build_results(base_year: int, horizon: int):
                 horizon=horizon,
             )
         )
+    if anchor == "current":
+        results = mark_preseason_fallback(results, current_keys)
     return results, candidate_ids
 
 
@@ -278,6 +298,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="show only the top N players by keeper value (default 100; 0 = all). "
         "Skips the long tail no one would keep.",
     )
+    ap.add_argument(
+        "--anchor",
+        choices=["current", "preseason"],
+        default="current",
+        help="anchor the 2026 base on current-season talent (YTD+ROS, default) or the "
+        "preseason blend. current requires a synced cache:full_season_projections.",
+    )
     return ap.parse_args(argv)
 
 
@@ -286,7 +313,9 @@ def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     if args.horizon < 1:
         raise SystemExit("--horizon must be >= 1")
-    results, candidate_ids = build_results(base_year=BASE_YEAR, horizon=args.horizon)
+    results, candidate_ids = build_results(
+        base_year=BASE_YEAR, horizon=args.horizon, anchor=args.anchor
+    )
     print(render(results, args.discount, candidate_ids, limit=args.limit))
 
 

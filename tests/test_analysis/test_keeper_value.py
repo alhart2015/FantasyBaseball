@@ -343,3 +343,29 @@ def test_mark_preseason_fallback_flags_only_non_current():
     flags = {r.name: r.flags for r in out}
     assert "anchor_preseason_fallback" not in flags["Al Star"]
     assert "anchor_preseason_fallback" in flags["No Data"]
+
+
+def test_breakout_anchor_scores_higher_than_modest():
+    board, scale = _tiny_scale_and_board()
+    # Explicitly select a hitter row: the fixture board is sorted by VAR
+    # descending, and "Ace Arm" (pitcher) outranks "Star Bat" here, so a bare
+    # board.iloc[0] would grab a pitcher -- scaling hr/r/rbi/sb/ab/avg on a
+    # pitcher line is a no-op (pitcher scoring uses w/k/sv/ip/era/whip), which
+    # made hi == lo rather than exercising the intended hitter breakout.
+    row = board[board["player_type"] == "hitter"].iloc[0]
+    zips_by_year = {
+        2026: {"hr": 25, "r": 80, "rbi": 80, "sb": 5, "ab": 550, "avg": 0.260},
+        2027: {"hr": 26, "r": 82, "rbi": 82, "sb": 5, "ab": 550, "avg": 0.262},
+        2028: {"hr": 27, "r": 84, "rbi": 84, "sb": 5, "ab": 550, "avg": 0.264},
+    }
+    modest = {**row.to_dict(), "hr": 20, "r": 70, "rbi": 70, "sb": 4, "ab": 540, "avg": 0.255}
+    breakout = {**row.to_dict(), "hr": 40, "r": 100, "rbi": 105, "sb": 9, "ab": 560, "avg": 0.300}
+    common = dict(
+        positions=list(row["positions"]),
+        player_type=row["player_type"],
+        zips_by_year=zips_by_year,
+        scale=scale,
+    )
+    lo = kv.discounted_total(kv.per_year_var(modest, **common)[0], 2026, 0.8, 3)
+    hi = kv.discounted_total(kv.per_year_var(breakout, **common)[0], 2026, 0.8, 3)
+    assert hi > lo

@@ -232,3 +232,13 @@ def test_load_current_lines_parses_present_blob(monkeypatch):
     monkeypatch.setattr(script, "build_explicit_upstash_kv", lambda: _fake_kv(envelope))
     by_name = script.load_current_full_season_lines()
     assert by_name[rank_key("Al Star", "hitter")]["hr"] == 40
+
+
+def test_parse_args_anchor_default_is_current():
+    assert script._parse_args([]).anchor == "current"
+    assert script._parse_args(["--anchor", "preseason"]).anchor == "preseason"
+
+
+def test_parse_args_anchor_rejects_invalid():
+    with pytest.raises(SystemExit):
+        script._parse_args(["--anchor", "bogus"])
