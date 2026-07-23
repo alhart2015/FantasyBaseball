@@ -727,7 +727,9 @@ def test_load_zips_year_loads_present(tmp_path):
     pd.DataFrame([{"Name": "A B", "AB": 500, "H": 150, "HR": 30, "R": 90, "RBI": 95, "SB": 10, "AVG": 0.300}]).to_csv(
         d / "zips-hitters.csv", index=False
     )
-    pd.DataFrame([{"Name": "C D", "IP": 180, "W": 14, "K": 200, "ERA": 3.2, "WHIP": 1.05, "SV": 0}]).to_csv(
+    # FanGraphs (and ZiPS) exports use "SO" for strikeouts; PITCHING_COLUMN_MAP
+    # normalizes SO -> k. A "K" header would NOT be recognized.
+    pd.DataFrame([{"Name": "C D", "IP": 180, "W": 14, "SO": 200, "ERA": 3.2, "WHIP": 1.05, "SV": 0}]).to_csv(
         d / "zips-pitchers.csv", index=False
     )
     hitters, pitchers = script.load_zips_year(tmp_path, 2027)
@@ -852,25 +854,41 @@ def build_results(base_year: int, horizon: int):
 def render(results, discounts: list[float]) -> str:
     from fantasy_baseball.analysis.keeper_value import discounted_total
     candidate_norms = {normalize_name(c) for c in CANDIDATES}
-    base_year = min(next(iter(results)).per_year_var) if results else 2026
-    horizon = len(next(iter(results)).per_year_var) if results else 0
-    ranked = sorted(
-        results, key=lambda r: discounted_total(r.per_year_var, base_year, discounts[-1], horizon),
-        reverse=True,
-    )
-    lines = ["Keeper-asset value (discounted multi-year VAR)", ""]
-    header = f"{'':1} {'Player':22} " + " ".join(f"d={d:.2f}" for d in discounts)
-    header += "   perYr(" + "/".join(str(base_year + k) for k in range(horizon)) + ")  %out  %sv  flags"
+    if not results:
+        return "No players scored."
+    base_year = min(next(iter(results)).per_year_var)
+    horizon = len(next(iter(results)).per_year_var)
+
+    # Total for every (player, discount), then rank per discount so the ranking
+    # slide across discounts is explicit (spec: "total and rank at each discount").
+    totals = {
+        d: {r.player_id: discounted_total(r.per_year_var, base_year, d, horizon) for r in results}
+        for d in discounts
+    }
+    ranks: dict[float, dict[str, int]] = {}
+    for d in discounts:
+        order = sorted(results, key=lambda r: totals[d][r.player_id], reverse=True)
+        ranks[d] = {r.player_id: i + 1 for i, r in enumerate(order)}
+
+    primary = discounts[-1]  # order rows by the most dynasty-weighted discount
+    ranked = sorted(results, key=lambda r: totals[primary][r.player_id], reverse=True)
+
+    lines = [
+        "Keeper-asset value (discounted multi-year VAR); cell = total(#rank at that discount)",
+        "",
+    ]
+    header = f"{'':1} {'Player':22} " + " ".join(f"{'d=' + format(d, '.2f'):>13}" for d in discounts)
+    header += "  perYr(" + "/".join(str(base_year + k) for k in range(horizon)) + ")  %out  %sv  flags"
     lines.append(header)
     for r in ranked:
         mark = "*" if is_candidate(r.name, candidate_norms) else " "
-        totals = " ".join(
-            f"{discounted_total(r.per_year_var, base_year, d, horizon):6.1f}" for d in discounts
+        cells = " ".join(
+            f"{totals[d][r.player_id]:7.1f}(#{ranks[d][r.player_id]:>3})" for d in discounts
         )
         per = "/".join(f"{r.per_year_var[base_year + k]:.0f}" for k in range(horizon))
-        pout = "N/A " if r.pct_from_out_years is None else f"{r.pct_from_out_years*100:3.0f}%"
-        psv = "N/A " if r.pct_from_saves is None else f"{r.pct_from_saves*100:3.0f}%"
-        lines.append(f"{mark} {r.name[:22]:22} {totals}   {per:>10}  {pout} {psv}  {','.join(r.flags)}")
+        pout = "N/A " if r.pct_from_out_years is None else f"{r.pct_from_out_years * 100:3.0f}%"
+        psv = "N/A " if r.pct_from_saves is None else f"{r.pct_from_saves * 100:3.0f}%"
+        lines.append(f"{mark} {r.name[:22]:22} {cells}  {per:>10}  {pout} {psv}  {','.join(r.flags)}")
     return "\n".join(lines)
 
 
