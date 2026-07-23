@@ -9,14 +9,56 @@ def _tiny_scale_and_board():
     # build_board_from_frames scores every row via calculate_player_sgp, which
     # dispatches on player_type -- so the input frames must carry it (real frames
     # get it from parse_*_csv / get_blended_projections).
-    hitters = pd.DataFrame([
-        {"name": "Star Bat", "r": 100, "hr": 35, "rbi": 100, "sb": 15, "ab": 550, "h": 165, "avg": 0.300, "player_type": PlayerType.HITTER},
-        {"name": "Meh Bat", "r": 60, "hr": 12, "rbi": 55, "sb": 5, "ab": 480, "h": 120, "avg": 0.250, "player_type": PlayerType.HITTER},
-    ])
-    pitchers = pd.DataFrame([
-        {"name": "Ace Arm", "w": 15, "k": 220, "sv": 0, "ip": 190, "era": 3.10, "whip": 1.05, "player_type": PlayerType.PITCHER},
-        {"name": "Closer Guy", "w": 4, "k": 90, "sv": 35, "ip": 65, "era": 2.70, "whip": 1.00, "player_type": PlayerType.PITCHER},
-    ])
+    hitters = pd.DataFrame(
+        [
+            {
+                "name": "Star Bat",
+                "r": 100,
+                "hr": 35,
+                "rbi": 100,
+                "sb": 15,
+                "ab": 550,
+                "h": 165,
+                "avg": 0.300,
+                "player_type": PlayerType.HITTER,
+            },
+            {
+                "name": "Meh Bat",
+                "r": 60,
+                "hr": 12,
+                "rbi": 55,
+                "sb": 5,
+                "ab": 480,
+                "h": 120,
+                "avg": 0.250,
+                "player_type": PlayerType.HITTER,
+            },
+        ]
+    )
+    pitchers = pd.DataFrame(
+        [
+            {
+                "name": "Ace Arm",
+                "w": 15,
+                "k": 220,
+                "sv": 0,
+                "ip": 190,
+                "era": 3.10,
+                "whip": 1.05,
+                "player_type": PlayerType.PITCHER,
+            },
+            {
+                "name": "Closer Guy",
+                "w": 4,
+                "k": 90,
+                "sv": 35,
+                "ip": 65,
+                "era": 2.70,
+                "whip": 1.00,
+                "player_type": PlayerType.PITCHER,
+            },
+        ]
+    )
     positions = {"Star Bat": ["OF"], "Meh Bat": ["2B"], "Ace Arm": ["SP"], "Closer Guy": ["RP"]}
     board, scale = build_board_from_frames(hitters, pitchers, positions)
     return board, scale
@@ -24,9 +66,9 @@ def _tiny_scale_and_board():
 
 def test_clamp_ratio_clamps_to_band():
     band = (0.25, 2.5)
-    assert kv._clamp_ratio(10.0, 2.0, band, kv.EPS) == 2.5   # 5.0 -> clamp hi
+    assert kv._clamp_ratio(10.0, 2.0, band, kv.EPS) == 2.5  # 5.0 -> clamp hi
     assert kv._clamp_ratio(1.0, 10.0, band, kv.EPS) == 0.25  # 0.1 -> clamp lo
-    assert kv._clamp_ratio(3.0, 4.0, band, kv.EPS) == 0.75   # in-band
+    assert kv._clamp_ratio(3.0, 4.0, band, kv.EPS) == 0.75  # in-band
 
 
 def test_clamp_ratio_none_on_tiny_denominator():
@@ -38,10 +80,10 @@ def test_scale_line_scales_scored_fields_and_keeps_flat_on_none():
     zips_base = {"r": 90.0, "hr": 25.0, "rbi": 80.0, "sb": 0.0, "ab": 450.0, "avg": 0.270}
     zips_y = {"r": 99.0, "hr": 20.0, "rbi": 88.0, "sb": 5.0, "ab": 441.0, "avg": 0.2565}
     out = kv._scale_line(anchor, zips_base, zips_y, "hitter", (0.25, 2.5), kv.EPS)
-    assert out["r"] == 100.0 * (99.0 / 90.0)         # 1.10
-    assert out["hr"] == 30.0 * (20.0 / 25.0)          # 0.80
+    assert out["r"] == 100.0 * (99.0 / 90.0)  # 1.10
+    assert out["hr"] == 30.0 * (20.0 / 25.0)  # 0.80
     assert round(out["avg"], 4) == round(0.280 * (0.2565 / 0.270), 4)  # rate scaled directly
-    assert out["sb"] == 10.0                          # zips_base sb == 0 -> ratio None -> flat
+    assert out["sb"] == 10.0  # zips_base sb == 0 -> ratio None -> flat
 
 
 def test_value_of_line_matches_board_var():
@@ -62,7 +104,7 @@ def test_per_year_var_missing_out_year_is_zero_and_flagged():
         2027: {**anchor, "hr": anchor["hr"] * 0.9},
         2028: None,
     }
-    pyv, flags, used_fallback = kv.per_year_var(
+    pyv, flags, _used_fallback = kv.per_year_var(
         anchor, list(row["positions"]), row["player_type"], zips_by_year, scale
     )
     assert set(pyv) == {2026, 2027, 2028}
@@ -99,8 +141,14 @@ def test_keeper_value_horizon_1_equals_board_var():
     row = board[board["name"] == "Star Bat"].iloc[0]
     anchor = row.to_dict()
     res = kv.keeper_value(
-        row["player_id"], row["name"], anchor, list(row["positions"]), row["player_type"],
-        {2026: anchor}, scale, horizon=1,
+        row["player_id"],
+        row["name"],
+        anchor,
+        list(row["positions"]),
+        row["player_type"],
+        {2026: anchor},
+        scale,
+        horizon=1,
     )
     assert abs(res.total - float(row["var"])) < 1e-9  # currency parity
 
@@ -114,19 +162,31 @@ def test_youth_premium_emerges_and_widens_as_discount_shallows():
     pt, positions = row["player_type"], list(row["positions"])
 
     young = {2026: anchor, 2027: anchor, 2028: anchor}
-    decayed_27 = {**anchor, "r": anchor["r"] * 0.85, "hr": anchor["hr"] * 0.85,
-                  "rbi": anchor["rbi"] * 0.85, "sb": anchor["sb"] * 0.85}
-    decayed_28 = {**anchor, "r": anchor["r"] * 0.70, "hr": anchor["hr"] * 0.70,
-                  "rbi": anchor["rbi"] * 0.70, "sb": anchor["sb"] * 0.70}
+    decayed_27 = {
+        **anchor,
+        "r": anchor["r"] * 0.85,
+        "hr": anchor["hr"] * 0.85,
+        "rbi": anchor["rbi"] * 0.85,
+        "sb": anchor["sb"] * 0.85,
+    }
+    decayed_28 = {
+        **anchor,
+        "r": anchor["r"] * 0.70,
+        "hr": anchor["hr"] * 0.70,
+        "rbi": anchor["rbi"] * 0.70,
+        "sb": anchor["sb"] * 0.70,
+    }
     old = {2026: anchor, 2027: decayed_27, 2028: decayed_28}
 
     def total(zbys, discount):
-        return kv.keeper_value("y", "y", anchor, positions, pt, zbys, scale, discount=discount).total
+        return kv.keeper_value(
+            "y", "y", anchor, positions, pt, zbys, scale, discount=discount
+        ).total
 
     gap_steep = total(young, 0.60) - total(old, 0.60)
     gap_shallow = total(young, 0.90) - total(old, 0.90)
-    assert gap_steep > 0                      # young always wins
-    assert gap_shallow > gap_steep            # advantage grows as out-years count more
+    assert gap_steep > 0  # young always wins
+    assert gap_shallow > gap_steep  # advantage grows as out-years count more
 
 
 def test_keeper_value_none_share_when_total_below_eps():
@@ -134,8 +194,14 @@ def test_keeper_value_none_share_when_total_below_eps():
     row = board[board["name"] == "Meh Bat"].iloc[0]  # low/near-replacement value
     anchor = row.to_dict()
     res = kv.keeper_value(
-        row["player_id"], row["name"], anchor, list(row["positions"]), row["player_type"],
-        {2026: anchor, 2027: anchor, 2028: anchor}, scale, eps_share=1e9,  # force the guard
+        row["player_id"],
+        row["name"],
+        anchor,
+        list(row["positions"]),
+        row["player_type"],
+        {2026: anchor, 2027: anchor, 2028: anchor},
+        scale,
+        eps_share=1e9,  # force the guard
     )
     assert res.pct_from_out_years is None
 
@@ -147,8 +213,14 @@ def test_keeper_value_zero_year_is_kept_not_dropped():
     row = board[board["name"] == "Star Bat"].iloc[0]
     anchor = row.to_dict()
     res = kv.keeper_value(
-        row["player_id"], row["name"], anchor, list(row["positions"]), row["player_type"],
-        {2026: anchor, 2027: anchor, 2028: None}, scale, discount=1.0,  # 2028 missing -> 0.0
+        row["player_id"],
+        row["name"],
+        anchor,
+        list(row["positions"]),
+        row["player_type"],
+        {2026: anchor, 2027: anchor, 2028: None},
+        scale,
+        discount=1.0,  # 2028 missing -> 0.0
     )
     assert res.per_year_var[2028] == 0.0
     assert 2028 in res.per_year_var  # not dropped
@@ -170,7 +242,7 @@ def test_pct_from_saves_positive_for_closer_and_beats_starter():
     ace = board[board["name"] == "Ace Arm"].iloc[0]
     closer_share = kv.pct_from_saves(closer.to_dict(), "pitcher", scale)
     ace_share = kv.pct_from_saves(ace.to_dict(), "pitcher", scale)
-    assert ace_share == 0.0                    # no saves -> 0 share
+    assert ace_share == 0.0  # no saves -> 0 share
     assert closer_share is not None and closer_share > 0.0
     assert closer_share > ace_share
 
@@ -186,7 +258,12 @@ def test_keeper_value_populates_pct_from_saves():
     row = board[board["name"] == "Closer Guy"].iloc[0]
     anchor = row.to_dict()
     res = kv.keeper_value(
-        row["player_id"], row["name"], anchor, list(row["positions"]), "pitcher",
-        {2026: anchor, 2027: anchor, 2028: anchor}, scale,
+        row["player_id"],
+        row["name"],
+        anchor,
+        list(row["positions"]),
+        "pitcher",
+        {2026: anchor, 2027: anchor, 2028: anchor},
+        scale,
     )
     assert res.pct_from_saves is not None and res.pct_from_saves > 0.0

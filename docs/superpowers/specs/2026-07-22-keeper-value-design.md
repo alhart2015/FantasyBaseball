@@ -119,7 +119,8 @@ guardrails against the small-denominator blowup:
 
 - **Denominator floor:** if `ZiPS_2026(stat)` is below `eps` (default `1e-6`), or
   the player's ZiPS-2026 line is below `min_pt_for_trajectory` (concrete defaults:
-  **100 PA** for hitters, **20 IP** for pitchers; both tunable), the ratio is
+  **100 AB** for hitters -- the projection CSVs carry `ab`, not `pa` -- and
+  **20 IP** for pitchers; both tunable), the ratio is
   unstable -> **fall back to approach A** for that player (feed the ZiPS out-year
   line directly through the pipeline), flag `fallback_A`.
 - **Ratio clamp:** clamp each ratio to a configurable band (default `[0.25, 2.5]`)

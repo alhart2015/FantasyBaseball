@@ -14,28 +14,32 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from fantasy_baseball.analysis.keeper_value import (  # noqa: E402
+from fantasy_baseball.analysis.keeper_value import (
     discounted_total,
     keeper_value,
 )
-from fantasy_baseball.config import load_config  # noqa: E402
-from fantasy_baseball.data.db import (  # noqa: E402
+from fantasy_baseball.config import load_config
+from fantasy_baseball.data.db import (
     get_blended_projections,
     get_connection,
     get_positions,
 )
-from fantasy_baseball.data.fangraphs import load_projection_set  # noqa: E402
-from fantasy_baseball.draft.board import build_board_from_frames  # noqa: E402
-from fantasy_baseball.models.player import PlayerType  # noqa: E402
-from fantasy_baseball.utils.name_utils import normalize_name  # noqa: E402
+from fantasy_baseball.data.fangraphs import load_projection_set
+from fantasy_baseball.draft.board import build_board_from_frames
+from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.utils.name_utils import normalize_name
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECTIONS_ROOT = REPO_ROOT / "data" / "projections"
 CONFIG_PATH = REPO_ROOT / "config" / "league.yaml"
 DISCOUNTS = [0.60, 0.70, 0.80, 0.90]
 CANDIDATES = [
-    "Juan Soto", "Julio Rodriguez", "Junior Caminero",
-    "CJ Abrams", "Mason Miller", "Kyle Tucker",
+    "Juan Soto",
+    "Julio Rodriguez",
+    "Junior Caminero",
+    "CJ Abrams",
+    "Mason Miller",
+    "Kyle Tucker",
 ]
 _ZIPS_URL = "https://www.fangraphs.com/projections?type=zips&stats={t}&pos=all"
 
@@ -77,7 +81,9 @@ def build_results(base_year: int, horizon: int):
         conn.close()
     config = load_config(CONFIG_PATH)
     board, scale = build_board_from_frames(
-        hitters, pitchers, positions,
+        hitters,
+        pitchers,
+        positions,
         roster_slots=config.roster_slots or None,
         num_teams=config.num_teams,
         sgp_overrides=config.sgp_overrides,
@@ -91,9 +97,15 @@ def build_results(base_year: int, horizon: int):
         key = f"{row['name_normalized']}::{row['player_type']}"
         results.append(
             keeper_value(
-                row["player_id"], row["name"], row.to_dict(), list(row["positions"]),
-                str(row["player_type"]), _zips_by_year(key, indices), scale,
-                base_year=base_year, horizon=horizon,
+                row["player_id"],
+                row["name"],
+                row.to_dict(),
+                list(row["positions"]),
+                str(row["player_type"]),
+                _zips_by_year(key, indices),
+                scale,
+                base_year=base_year,
+                horizon=horizon,
             )
         )
     return results
@@ -124,8 +136,12 @@ def render(results, discounts: list[float]) -> str:
         "Keeper-asset value (discounted multi-year VAR); cell = total(#rank at that discount)",
         "",
     ]
-    header = f"{'':1} {'Player':22} " + " ".join(f"{'d=' + format(d, '.2f'):>13}" for d in discounts)
-    header += "  perYr(" + "/".join(str(base_year + k) for k in range(horizon)) + ")  %out  %sv  flags"
+    header = f"{'':1} {'Player':22} " + " ".join(
+        f"{'d=' + format(d, '.2f'):>13}" for d in discounts
+    )
+    header += (
+        "  perYr(" + "/".join(str(base_year + k) for k in range(horizon)) + ")  %out  %sv  flags"
+    )
     lines.append(header)
     for r in ranked:
         mark = "*" if is_candidate(r.name, candidate_norms) else " "
@@ -135,7 +151,9 @@ def render(results, discounts: list[float]) -> str:
         per = "/".join(f"{r.per_year_var[base_year + k]:.0f}" for k in range(horizon))
         pout = "N/A " if r.pct_from_out_years is None else f"{r.pct_from_out_years * 100:3.0f}%"
         psv = "N/A " if r.pct_from_saves is None else f"{r.pct_from_saves * 100:3.0f}%"
-        lines.append(f"{mark} {r.name[:22]:22} {cells}  {per:>10}  {pout} {psv}  {','.join(r.flags)}")
+        lines.append(
+            f"{mark} {r.name[:22]:22} {cells}  {per:>10}  {pout} {psv}  {','.join(r.flags)}"
+        )
     return "\n".join(lines)
 
 

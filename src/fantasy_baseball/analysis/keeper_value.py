@@ -47,9 +47,7 @@ def _fields_for(player_type: str) -> tuple[str, ...]:
     return HITTER_FIELDS if player_type == "hitter" else PITCHER_FIELDS
 
 
-def _clamp_ratio(
-    numer: float, denom: float, band: tuple[float, float], eps: float
-) -> float | None:
+def _clamp_ratio(numer: float, denom: float, band: tuple[float, float], eps: float) -> float | None:
     if abs(denom) < eps:
         return None
     lo, hi = band
@@ -88,9 +86,7 @@ def _line_sgp(line: Mapping[str, Any], player_type: str, scale) -> float:
     )
 
 
-def _value_of_line(
-    line: Mapping[str, Any], positions: list[str], player_type: str, scale
-) -> float:
+def _value_of_line(line: Mapping[str, Any], positions: list[str], player_type: str, scale) -> float:
     total_sgp = _line_sgp(line, player_type, scale)
     series = pd.Series(
         {
@@ -151,11 +147,11 @@ def per_year_var(
             continue
 
         approach_a = (
-            (not anchor_line)
-            or (not zips_base)
-            or _below_min_pt(zips_base, player_type, min_pt)
+            (not anchor_line) or (not zips_base) or _below_min_pt(zips_base, player_type, min_pt)
         )
-        if approach_a:
+        # `zips_base is None` is subsumed by `approach_a` (via `not zips_base`); it is
+        # repeated here so the type checker narrows zips_base to non-None in the else.
+        if approach_a or zips_base is None:
             used_fallback = True
             if "fallback_A" not in flags:
                 flags.append("fallback_A")
@@ -207,8 +203,16 @@ def keeper_value(
     eps_share: float = DEFAULT_EPS_SHARE,
 ) -> KeeperValueResult:
     pyv, flags, used_fallback = per_year_var(
-        anchor_line, positions, player_type, zips_by_year, scale,
-        base_year=base_year, horizon=horizon, ratio_band=ratio_band, min_pt=min_pt, eps=eps,
+        anchor_line,
+        positions,
+        player_type,
+        zips_by_year,
+        scale,
+        base_year=base_year,
+        horizon=horizon,
+        ratio_band=ratio_band,
+        min_pt=min_pt,
+        eps=eps,
     )
     total = discounted_total(pyv, base_year, discount, horizon)
     if total <= eps_share:
