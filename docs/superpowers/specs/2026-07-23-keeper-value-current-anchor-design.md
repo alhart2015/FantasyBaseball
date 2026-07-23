@@ -81,13 +81,23 @@ math**:
    from Upstash** (local SQLite may be stale -- see CLAUDE.md; mirror the
    `keeper_trades.py` / `refresh_remote.py` explicit-Upstash path rather than the
    default `get_kv()` local read).
-3. **Per-player overlay:** for each preseason board row, if a current-talent line
-   exists for that player, replace the stat line with it; else keep preseason and
-   flag it (`anchor_preseason_fallback`, surfaced in the report like `fallback_A`).
-   Join by `mlbam_id` where the board row carries it (the ZiPS CSVs include
-   `MLBAMID`), else by normalized `name::player_type` -- the same dual-key scheme
-   `load_full_season_lines` uses; namesake collisions resolve by the existing
-   volume/VAR tiebreak conventions.
+3. **Per-player overlay:** for each preseason board row, use its current-talent
+   line when one **exists and clears the min-PT floor** (below); otherwise keep
+   preseason and flag it (`anchor_preseason_fallback`, surfaced in the report like
+   `fallback_A`).
+   **Join key:** normalized `name::player_type`. The board is keyed by `fg_id`
+   (`blended_projections` PK is `(year, fg_id)`) and the current-talent lines are
+   keyed by `mlbam_id`, so `name::player_type` is the only shared key -- which is
+   the repo's documented cross-source-join convention (CLAUDE.md: "Name
+   normalization ... is used for keeper matching and cross-source joins ... tie-break
+   by VAR"). Use `load_full_season_lines()`'s `by_name` output, which already keeps
+   the higher-volume record on a namesake collision.
+   **Current-vs-preseason gate (min-PT floor):** use the current line only when its
+   projected full-season volume clears `DEFAULT_MIN_AB` (100 AB, hitters) /
+   `DEFAULT_MIN_IP` (20 IP, pitchers) -- the same floor `_below_min_pt` already
+   applies to out-year ratios. A player who has barely played / not debuted has a
+   present-but-tiny current line; the floor routes them to the preseason anchor
+   rather than a noise-dominated one.
 4. Feed the overlaid frames to `build_board_from_frames(...)`. The board, its
    `ScaleInputs` (denominators from `config` are league constants and unchanged;
    `team_ab`/`team_ip` and replacement levels re-derive from the current board),
@@ -123,16 +133,23 @@ cache:full_season_projections (Upstash, YTD+ROS blend) -> per-player overlay
 
 ## Edge cases
 
-- **Player in preseason board, no current line** (not yet debuted, injured all
-  year, sub-min-PT): keep preseason anchor, flag `anchor_preseason_fallback`.
+- **No current line, or below the min-PT floor** (not yet debuted, barely played,
+  season-long injury): keep preseason anchor, flag `anchor_preseason_fallback`.
   The existing per-out-year `approach_a`/`fallback_A` path is unaffected.
+- **Mid-season-ending injury (known limitation).** A player who played a
+  meaningful chunk (clears the min-PT floor) then was hurt has a *depressed*
+  projected-final line (YTD + near-zero ROS), so the current anchor understates
+  his keeper talent. This is an accepted limitation of the projected-final choice
+  for the MVP: it is a real signal about 2026 but a weak one about 2027-28 talent.
+  The forward-true-talent-rate variant (deferred, tied to the trajectory model)
+  is what ultimately fixes it; do NOT special-case injuries here.
 - **Player in current blob but not the preseason board** (a call-up absent from
   the preseason blend): out of scope for the MVP -- the preseason board is the
   coverage base. Note the count of such skips so the gap is visible, don't hide
   it. (Adding them is a follow-up.)
-- **Namesakes** (two "Mason Miller" pitchers): join by `mlbam_id` first; the
-  `name::player_type` fallback keeps the higher-volume record, as
-  `load_full_season_lines` already does.
+- **Namesakes** (two "Mason Miller" pitchers): the `name::player_type` join keeps
+  the higher-volume record, as `load_full_season_lines`' `by_name` output already
+  does. (No mlbam join is available -- the board is fg_id-keyed.)
 - **Stale/missing Upstash blob:** fail loud in `current` mode (see Mode toggle).
 
 ## Testing
@@ -141,11 +158,20 @@ cache:full_season_projections (Upstash, YTD+ROS blend) -> per-player overlay
   guards it.
 - New unit tests around the anchor overlay (pure, no I/O): given a preseason
   frame + a current-talent lines dict, assert (a) a player with a current line
-  gets the current stats, (b) a player without one keeps preseason and is
-  flagged, (c) the mlbam join beats the name fallback on a namesake, (d)
+  above the min-PT floor gets the current stats, (b) a player with no current
+  line keeps preseason and is flagged, (c) a player whose current line is BELOW
+  the min-PT floor keeps preseason and is flagged, (d) a namesake collision
+  resolves to the higher-volume record via the `name::player_type` join, (e)
   `preseason` mode is a no-op overlay.
-- A regression fixture pinning the motivating case: a preseason-modest / current-
-  breakout hitter ranks materially higher under `current` than `preseason`.
+- **Regression fixture (concrete):** a preseason-modest / current-breakout hitter
+  has a strictly higher discounted keeper total AND a better (lower) rank under
+  `current` than under `preseason` for the same discount/horizon.
+- **Characterization:** `preseason` mode reproduces the pre-change `build_results`
+  output exactly (same `KeeperValueResult` list), proving the default-off path is
+  behavior-preserving.
+- **Fail-loud:** `current` mode with a missing/empty `full_season_projections`
+  blob raises the specified "run a refresh" error rather than returning a
+  preseason-labelled result.
 
 ## Reuse summary
 
