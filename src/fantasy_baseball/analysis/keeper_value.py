@@ -101,3 +101,67 @@ def _value_of_line(
         }
     )
     return float(calculate_var(series, scale.replacement_levels))
+
+
+def _below_min_pt(zips_line: Mapping[str, Any], player_type: str, min_pt: float | None) -> bool:
+    if player_type == "hitter":
+        thresh = min_pt if min_pt is not None else DEFAULT_MIN_AB
+        return safe_float(zips_line.get("ab", 0)) < thresh
+    thresh = min_pt if min_pt is not None else DEFAULT_MIN_IP
+    return safe_float(zips_line.get("ip", 0)) < thresh
+
+
+def per_year_var(
+    anchor_line: Mapping[str, Any],
+    positions: list[str],
+    player_type: str,
+    zips_by_year: Mapping[int, Mapping[str, Any] | None],
+    scale,
+    *,
+    base_year: int = 2026,
+    horizon: int = DEFAULT_HORIZON,
+    ratio_band: tuple[float, float] = DEFAULT_RATIO_BAND,
+    min_pt: float | None = None,
+    eps: float = EPS,
+) -> tuple[dict[int, float], list[str], bool]:
+    pyv: dict[int, float] = {}
+    flags: list[str] = []
+    used_fallback = False
+    zips_base = zips_by_year.get(base_year)
+
+    for k in range(horizon):
+        year = base_year + k
+        if k == 0:
+            if anchor_line:
+                pyv[year] = _value_of_line(anchor_line, positions, player_type, scale)
+            elif zips_base:
+                used_fallback = True
+                if "fallback_A" not in flags:
+                    flags.append("fallback_A")
+                pyv[year] = _value_of_line(zips_base, positions, player_type, scale)
+            else:
+                pyv[year] = 0.0
+                flags.append(f"no_zips_{year}")
+            continue
+
+        zips_y = zips_by_year.get(year)
+        if not zips_y:
+            pyv[year] = 0.0
+            flags.append(f"no_zips_{year}")
+            continue
+
+        approach_a = (
+            (not anchor_line)
+            or (not zips_base)
+            or _below_min_pt(zips_base, player_type, min_pt)
+        )
+        if approach_a:
+            used_fallback = True
+            if "fallback_A" not in flags:
+                flags.append("fallback_A")
+            line = zips_y
+        else:
+            line = _scale_line(anchor_line, zips_base, zips_y, player_type, ratio_band, eps)
+        pyv[year] = _value_of_line(line, positions, player_type, scale)
+
+    return pyv, flags, used_fallback

@@ -50,3 +50,40 @@ def test_value_of_line_matches_board_var():
     line = row.to_dict()
     v = kv._value_of_line(line, list(row["positions"]), row["player_type"], scale)
     assert abs(v - float(row["var"])) < 1e-9
+
+
+def test_per_year_var_missing_out_year_is_zero_and_flagged():
+    board, scale = _tiny_scale_and_board()
+    row = board[board["name"] == "Star Bat"].iloc[0]
+    anchor = row.to_dict()
+    # ZiPS base present, 2027 present, 2028 missing.
+    zips_by_year = {
+        2026: anchor,
+        2027: {**anchor, "hr": anchor["hr"] * 0.9},
+        2028: None,
+    }
+    pyv, flags, used_fallback = kv.per_year_var(
+        anchor, list(row["positions"]), row["player_type"], zips_by_year, scale
+    )
+    assert set(pyv) == {2026, 2027, 2028}
+    assert pyv[2028] == 0.0
+    assert "no_zips_2028" in flags
+    assert abs(pyv[2026] - float(row["var"])) < 1e-9  # base year == board var
+
+
+def test_per_year_var_low_pt_base_falls_back_to_approach_a():
+    board, scale = _tiny_scale_and_board()
+    row = board[board["name"] == "Star Bat"].iloc[0]
+    anchor = row.to_dict()
+    # ZiPS base line has AB below the 100 default -> out-years use approach A.
+    tiny_base = {**anchor, "ab": 40}
+    zips_2027 = {**anchor, "hr": 20}
+    zips_by_year = {2026: tiny_base, 2027: zips_2027, 2028: zips_2027}
+    pyv, flags, used_fallback = kv.per_year_var(
+        anchor, list(row["positions"]), row["player_type"], zips_by_year, scale
+    )
+    assert used_fallback is True
+    assert "fallback_A" in flags
+    # Approach A: out-year V equals scoring the raw ZiPS 2027 line directly.
+    expected = kv._value_of_line(zips_2027, list(row["positions"]), row["player_type"], scale)
+    assert abs(pyv[2027] - expected) < 1e-9
