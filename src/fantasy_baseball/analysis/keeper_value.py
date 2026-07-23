@@ -15,9 +15,9 @@ from typing import Any
 import pandas as pd
 
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.sgp.player_value import calculate_player_sgp
+from fantasy_baseball.sgp.player_value import calculate_counting_sgp, calculate_player_sgp
 from fantasy_baseball.sgp.var import calculate_var
-from fantasy_baseball.utils.constants import safe_float
+from fantasy_baseball.utils.constants import Category, safe_float
 
 DEFAULT_DISCOUNT = 0.80
 DEFAULT_HORIZON = 3
@@ -167,6 +167,22 @@ def per_year_var(
     return pyv, flags, used_fallback
 
 
+def pct_from_saves(
+    anchor_line: Mapping[str, Any],
+    player_type: str,
+    scale,
+    *,
+    eps_share: float = DEFAULT_EPS_SHARE,
+) -> float | None:
+    if player_type != "pitcher":
+        return 0.0
+    sgp = _line_sgp(anchor_line, player_type, scale)
+    if abs(sgp) <= eps_share:
+        return None
+    sv_sgp = calculate_counting_sgp(safe_float(anchor_line.get("sv", 0)), scale.denoms[Category.SV])
+    return sv_sgp / sgp
+
+
 def discounted_total(
     pyv: Mapping[int, float], base_year: int, discount: float, horizon: int
 ) -> float:
@@ -208,5 +224,5 @@ def keeper_value(
         used_fallback=used_fallback,
         flags=flags,
         pct_from_out_years=pct_out,
-        pct_from_saves=None,  # set in Task 5
+        pct_from_saves=pct_from_saves(anchor_line, player_type, scale, eps_share=eps_share),
     )

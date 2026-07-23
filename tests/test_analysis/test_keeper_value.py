@@ -153,3 +153,40 @@ def test_keeper_value_zero_year_is_kept_not_dropped():
     assert res.per_year_var[2028] == 0.0
     assert 2028 in res.per_year_var  # not dropped
     assert abs(res.total - (res.per_year_var[2026] + res.per_year_var[2027] + 0.0)) < 1e-9
+
+
+def test_pct_from_saves_zero_for_hitter():
+    board, scale = _tiny_scale_and_board()
+    row = board[board["name"] == "Star Bat"].iloc[0]
+    assert kv.pct_from_saves(row.to_dict(), "hitter", scale) == 0.0
+
+
+def test_pct_from_saves_positive_for_closer_and_beats_starter():
+    # Robust relational assertion (avoids a magic threshold that depends on the
+    # tiny fixture's pool-derived denominators): a closer's saves share is
+    # positive and strictly greater than a save-less starter's (which is 0.0).
+    board, scale = _tiny_scale_and_board()
+    closer = board[board["name"] == "Closer Guy"].iloc[0]
+    ace = board[board["name"] == "Ace Arm"].iloc[0]
+    closer_share = kv.pct_from_saves(closer.to_dict(), "pitcher", scale)
+    ace_share = kv.pct_from_saves(ace.to_dict(), "pitcher", scale)
+    assert ace_share == 0.0                    # no saves -> 0 share
+    assert closer_share is not None and closer_share > 0.0
+    assert closer_share > ace_share
+
+
+def test_pct_from_saves_none_when_sgp_below_eps():
+    board, scale = _tiny_scale_and_board()
+    row = board[board["name"] == "Closer Guy"].iloc[0]
+    assert kv.pct_from_saves(row.to_dict(), "pitcher", scale, eps_share=1e9) is None
+
+
+def test_keeper_value_populates_pct_from_saves():
+    board, scale = _tiny_scale_and_board()
+    row = board[board["name"] == "Closer Guy"].iloc[0]
+    anchor = row.to_dict()
+    res = kv.keeper_value(
+        row["player_id"], row["name"], anchor, list(row["positions"]), "pitcher",
+        {2026: anchor, 2027: anchor, 2028: anchor}, scale,
+    )
+    assert res.pct_from_saves is not None and res.pct_from_saves > 0.0
