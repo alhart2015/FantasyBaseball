@@ -5,8 +5,9 @@ docs/superpowers/specs/2026-07-23-keeper-trade-generator-design.md.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass
+from itertools import combinations
 
 
 @dataclass(frozen=True)
@@ -43,3 +44,24 @@ class TradeSuggestion:
 
 def top3_sum(players: Iterable[RosterPlayer]) -> float:
     return float(sum(sorted((p.keeper_value for p in players), reverse=True)[:3]))
+
+
+def keeper_viable_packages(
+    acquire: RosterPlayer,
+    opp_roster: Sequence[RosterPlayer],
+    giveable: Sequence[RosterPlayer],
+    opp_top3_before: float,
+    max_give: int,
+) -> Iterator[tuple[RosterPlayer, ...]]:
+    """Packages (subsets of giveable) that strictly lift the opponent's trio once
+    `acquire` leaves and the package arrives. Ordered fewest-players, then least
+    total keeper_value given (protect Hart's better surplus)."""
+    opp_without = [p for p in opp_roster if p.player_id != acquire.player_id]
+    candidates: list[tuple[int, float, tuple[RosterPlayer, ...]]] = []
+    for size in range(1, max_give + 1):
+        for combo in combinations(giveable, size):
+            if top3_sum([*opp_without, *combo]) > opp_top3_before:
+                candidates.append((size, sum(p.keeper_value for p in combo), combo))
+    candidates.sort(key=lambda c: (c[0], c[1]))  # fewest players, then least kv given
+    for _size, _cost, combo in candidates:
+        yield combo
