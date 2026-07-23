@@ -67,16 +67,27 @@ current year). Instead:
   from blended component stats") -- we scale components, rates fall out. We never
   scale a rate directly.
 
-- Each year's scaled line then runs through the **existing SGP -> VAR path** --
-  the same `_sgp(line, scale, team_ab, team_ip)` + `calculate_var(series, floors,
-  role_ip=...)` sequence already used in `analysis/draft_value.py` -- to produce
-  `V(p, y)`.
+- Each year's scaled line then runs through the **full-season SGP -> VAR path**,
+  the same one the draft board uses: `sgp/player_value.py::calculate_player_sgp(
+  series, denoms=denoms, team_ab=team_ab, team_ip=team_ip)` to get `total_sgp`,
+  then `sgp/var.py::calculate_var(series_with_total_sgp, floors, role_ip=...)` to
+  net against the positional floor -- exactly the `board.py:99` sequence.
+
+  **Do not** reuse `analysis/draft_value.py::_sgp` / `_value_of_line`: those are
+  the *in-season, to-date* deltaRoto seam that scales counting stats by a partial
+  `fraction` via `ScaleInputs`. Keeper value is a **full-season** valuation
+  (`fraction == 1.0`), so the `fraction`/`ScaleInputs` machinery is not used at
+  all; call `calculate_player_sgp` directly like the board does.
+
+- **Full-season inputs come from the shared league context** (see Component 4,
+  "shared context"): `denoms` from the league's SGP denominators, and
+  `team_ab` / `team_ip` at their full-season league values (the board's
+  defaults / `config/league.yaml`), NOT any to-date-scaled values.
 
 - **Held constant across the horizon** (documented simplifying assumptions):
   2026 position eligibility, 2026 position-aware replacement floors
-  (`position_aware_replacement_levels`), 2026 SGP denominators, and the SGP scale
-  context (`team_ab` / `team_ip`). We are pricing the aging curve, not future
-  league drift.
+  (`position_aware_replacement_levels`), 2026 SGP denominators, and full-season
+  `team_ab` / `team_ip`. We are pricing the aging curve, not future league drift.
 
 ## Components
 
@@ -102,11 +113,11 @@ the actionable-error pattern in `data/projections.py::validate_projections_dir`.
 Per player, per out-year, per stat: compute `ratio(stat, y)` with two numeric
 guardrails against the small-denominator blowup:
 
-- **Denominator floor:** if `ZiPS_2026(stat)` is below `eps` (or the player's
-  ZiPS-2026 line is below `min_pt_for_trajectory` -- default ~100 PA hitters /
-  ~20 IP pitchers), the ratio is unstable -> **fall back to approach A** for that
-  player (feed the ZiPS out-year line directly through the pipeline), flag
-  `fallback_A`.
+- **Denominator floor:** if `ZiPS_2026(stat)` is below `eps` (default `1e-6`), or
+  the player's ZiPS-2026 line is below `min_pt_for_trajectory` (concrete defaults:
+  **100 PA** for hitters, **20 IP** for pitchers; both tunable), the ratio is
+  unstable -> **fall back to approach A** for that player (feed the ZiPS out-year
+  line directly through the pipeline), flag `fallback_A`.
 - **Ratio clamp:** clamp each ratio to a configurable band (default `[0.25, 2.5]`)
   so a single small denominator can't explode a counting stat.
 
@@ -127,30 +138,59 @@ class KeeperValueResult:
     total: float                       # discounted sum (the ranking key)
     used_fallback: bool                # anchor missing -> approach A
     flags: list[str]                   # e.g. ["no_zips_2028", "fallback_A"]
-    pct_from_out_years: float          # discounted (2027+2028) / total
-    pct_from_saves: float              # share of value from the SV category
+    pct_from_out_years: float | None   # display-only; None when total <= eps_share
+    pct_from_saves: float | None       # display-only; None when total <= eps_share
 ```
 
 `keeper_value(...)` takes the anchor line, the per-year ZiPS lines, the shared
-league context (replacement floors, SGP scale, positions, player_type), and the
-`discount` / `horizon` / `ratio_band` / `min_pt_for_trajectory` knobs.
+league context (replacement floors, SGP denoms, `team_ab`/`team_ip`, positions,
+player_type), and the `discount` / `horizon` / `ratio_band` /
+`min_pt_for_trajectory` knobs.
+
+**Transparency-column definitions (display-only; never part of the ranking):**
+
+- `pct_from_out_years` = `discounted(V_2027 + V_2028) / total`. Because VAR can be
+  negative (sub-replacement), `total` can be near-zero or negative, which makes
+  this ratio explode or flip sign. **Guard:** when `total <= eps_share` (default
+  `eps_share = 1.0` standings-point), report `None` (rendered `N/A`), never a
+  number. This is the exact numeric-default trap the repo warns about.
+- `pct_from_saves` = the **SV category's share of the player's 2026-anchor SGP**,
+  not of VAR. SGP is category-additive (a sum of per-category standings gains), so
+  a per-category share is well defined; VAR (a single scalar netted against a
+  positional floor) is not. Computed on the 2026 anchor line only; `0.0` for any
+  hitter (no SV component). Guard is on **its own denominator**, the 2026-anchor
+  total SGP (which is also sign-unstable for weak players): when
+  `abs(sgp_2026) <= eps_share`, report `None`.
 
 ### 4. Report script
 
 New `scripts/keeper_value.py`:
 
-1. Build the shared league context once (blend 2026, replacement floors, SGP
-   scale) -- reuse the board-build path so it matches the draft board's numbers.
+1. Build the **shared context** once. The metric needs only:
+   - the 2026 blended stat lines (`blend_projections` over `data/projections/2026/`);
+   - positional replacement floors (`position_aware_replacement_levels(denoms, rates)`);
+   - SGP `denoms` (from `config/league.yaml`) and full-season `team_ab` / `team_ip`;
+   - per-player positions/eligibility.
+
+   Read positions/eligibility from the **cached draft board** (the file the
+   dashboard's `--rebuild-board` produces) rather than a live Yahoo fetch -- this
+   script does no network I/O. It does **not** apply keepers, ADP, or draft state;
+   it scores the raw projection universe. Reusing the board's `denoms`/floors/
+   `team_ab`/`team_ip` is what makes the 2026 column reconcile with the draft board.
 2. Load ZiPS 2026/2027/2028 lines via the out-year loader.
 3. Score every board player with `keeper_value(...)`.
 4. **Sweep `discount`** over a configurable list (default `[0.60, 0.70, 0.80,
    0.90]`); for each, rank by `total`.
 5. Emit an ASCII table: each player's `total` and rank at each discount, the
    per-year VAR, and the two transparency columns (`% from out-years`,
-   `% from saves`). **Highlight the manager's candidate set** (Soto, Julio
-   Rodriguez, Junior Caminero, CJ Abrams, Mason Miller, Kyle Tucker). ASCII-only
-   output; `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` at the
-   entry point in case a player name carries an accent.
+   `% from saves`, rendered `N/A` when `None`). **Highlight the manager's
+   candidate set** (Soto, Julio Rodriguez, Junior Caminero, CJ Abrams, Mason
+   Miller, Kyle Tucker) -- match by **normalized name** (`utils/name_utils.
+   normalize_name`) / `name::player_type` id, never bare name, tie-breaking on VAR
+   per `draft/keepers.py::find_keeper_match`, so a namesake collision can't
+   highlight the wrong player. ASCII-only output;
+   `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` at the entry point
+   in case a player name carries an accent.
 
 ## Data flow
 
@@ -160,7 +200,7 @@ manual ZiPS export
   -> out-year loader (load_projection_set)
   -> trajectory ratios vs ZiPS 2026 (floored + clamped)
   -> scale the 2026 blended anchor line per stat
-  -> _sgp(...) + calculate_var(...) per year  -> V(p, y)
+  -> calculate_player_sgp(...) + calculate_var(...) per year  -> V(p, y)
   -> discount + sum                            -> KeeperValueResult.total
   -> discount sweep + ranked ASCII report
 ```
@@ -196,8 +236,10 @@ manual ZiPS export
 - **Fallback tests:** missing anchor -> approach A + `fallback_A` flag; missing
   out-year line -> `V=0.0` + `no_zips_{y}` flag (assert the flag, not just the
   number).
-- **Transparency-column tests:** `pct_from_out_years` and `pct_from_saves` sum/behave
-  sensibly (a hitter has `pct_from_saves == 0`; a pure closer's is high).
+- **Transparency-column tests:** a hitter has `pct_from_saves == 0.0`; a pure
+  closer's is high. A **sub-replacement player** (negative discounted `total`, and
+  a near-zero 2026 SGP) returns `pct_from_out_years is None` / `pct_from_saves is
+  None`, rendered `N/A` -- never a blown-up or sign-flipped ratio.
 - **Numeric-default test:** a player whose year `V` is exactly `0.0` is not sorted
   or shared as if missing.
 
