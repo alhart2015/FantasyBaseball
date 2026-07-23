@@ -17,6 +17,12 @@ def test_top3_sum_handles_fewer_than_three():
     assert kt.top3_sum([]) == 0.0
 
 
+def test_top3_returns_three_highest_players():
+    players = [rp("a", 10), rp("b", 8), rp("c", 6), rp("d", 4)]
+    assert [p.name for p in kt.top3(players)] == ["a", "b", "c"]
+    assert [p.name for p in kt.top3([rp("a", 10), rp("b", 8)])] == ["a", "b"]
+
+
 def test_keeper_viable_packages_ordered_and_improving():
     # opp: stud G(16) + scrubs s1(3), s2(2)  -> top3_before = 21
     G = rp("G", 16)
@@ -51,6 +57,10 @@ def test_consolidation_found_both_trios_improve():
     assert s.my_top3_after > s.my_top3_before
     assert s.their_top3_after > s.their_top3_before
     assert s.my_gain == 17 - 14
+    # post-trade keeper sets (the new "where does this leave us" output)
+    assert {p.name for p in s.my_keepers_after} == {"soto", "jrod", "judge"}
+    assert "judge" not in {p.name for p in s.their_keepers_after}  # judge left their side
+    assert s.their_top3_after == sum(p.keeper_value for p in s.their_keepers_after)
 
 
 def test_displaced_keeper_is_free_gain_is_fixed():

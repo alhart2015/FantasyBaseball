@@ -42,11 +42,18 @@ class TradeSuggestion:
     their_top3_before: float
     their_top3_after: float
     their_gain: float
+    my_keepers_after: tuple[RosterPlayer, ...]  # your post-trade top-3, highest first
+    their_keepers_after: tuple[RosterPlayer, ...]  # their post-trade top-3, highest first
     guardrail: GuardrailResult
 
 
+def top3(players: Iterable[RosterPlayer]) -> list[RosterPlayer]:
+    """The three highest-keeper_value players (or all, if fewer), highest first."""
+    return sorted(players, key=lambda p: p.keeper_value, reverse=True)[:3]
+
+
 def top3_sum(players: Iterable[RosterPlayer]) -> float:
-    return float(sum(sorted((p.keeper_value for p in players), reverse=True)[:3]))
+    return float(sum(p.keeper_value for p in top3(players)))
 
 
 def keeper_viable_packages(
@@ -96,6 +103,9 @@ def generate_consolidation_trades(
                 continue
             my_gain = g.keeper_value - my_third
             my_top3_after = my_top2[0].keeper_value + my_top2[1].keeper_value + g.keeper_value
+            # Hart keeps his protected top-2 + the acquired stud (the package is all
+            # below the top-2, so removing it can't change the post-trade top-3).
+            my_keepers = tuple(top3([*my_top2, g]))
             for pkg in keeper_viable_packages(g, roster, giveable, opp_top3_before, max_give):
                 verdict = guardrail(pkg, g)
                 if not verdict.ok:
@@ -109,6 +119,7 @@ def generate_consolidation_trades(
                         my_top3_before,
                         my_top3_after,
                         my_gain,
+                        my_keepers,
                         roster,
                         opp_top3_before,
                         verdict,
@@ -129,6 +140,7 @@ def generate_consolidation_trades(
                                     my_top3_before,
                                     my_top3_after,
                                     my_gain,
+                                    my_keepers,
                                     roster,
                                     opp_top3_before,
                                     sv,
@@ -140,9 +152,10 @@ def generate_consolidation_trades(
 
 
 def _suggestion(
-    team, g, pkg, variant, my_before, my_after, my_gain, roster, opp_before, verdict
+    team, g, pkg, variant, my_before, my_after, my_gain, my_keepers, roster, opp_before, verdict
 ) -> TradeSuggestion:
-    their_after = top3_sum([p for p in roster if p.player_id != g.player_id] + list(pkg))
+    their_keepers = top3([p for p in roster if p.player_id != g.player_id] + list(pkg))
+    their_after = float(sum(p.keeper_value for p in their_keepers))
     return TradeSuggestion(
         target_team=team,
         acquire=g,
@@ -154,6 +167,8 @@ def _suggestion(
         their_top3_before=opp_before,
         their_top3_after=their_after,
         their_gain=their_after - opp_before,
+        my_keepers_after=tuple(my_keepers),
+        their_keepers_after=tuple(their_keepers),
         guardrail=verdict,
     )
 

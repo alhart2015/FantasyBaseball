@@ -140,13 +140,16 @@ def render(suggestions) -> str:
         for s in rows:
             give = " + ".join(f"{p.name} ({p.keeper_value:.1f})" for p in s.give)
             g = s.guardrail
+            my_keep = ", ".join(p.name for p in s.my_keepers_after)
+            their_keep = ", ".join(p.name for p in s.their_keepers_after)
             lines.append(f"  give [{s.variant}]: {give}")
             lines.append(
-                f"    YOU:  top-3 {s.my_top3_before:.1f} -> {s.my_top3_after:.1f} (+{s.my_gain:.1f})"
+                f"    YOU:  top-3 {s.my_top3_before:.1f} -> {s.my_top3_after:.1f} "
+                f"(+{s.my_gain:.1f})   keep: {my_keep}"
             )
             lines.append(
                 f"    THEM: top-3 {s.their_top3_before:.1f} -> {s.their_top3_after:.1f} "
-                f"(+{s.their_gain:.1f})"
+                f"(+{s.their_gain:.1f})   keep: {their_keep}"
             )
             lines.append(
                 f"    2026: roto delta {g.delta_total:+.1f}  guardrail {'OK' if g.ok else 'FAIL'}"
