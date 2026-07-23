@@ -336,6 +336,44 @@ def test_overlay_keeps_preseason_when_current_below_floor():
     assert keys == set()
 
 
+def test_overlay_pitcher_uses_current_line_above_floor():
+    empty_h = pd.DataFrame(columns=["name", "fg_id", "r", "hr", "rbi", "sb", "ab", "avg"])
+    pre = _frame("Ace Arm", {"w": 8, "k": 140, "sv": 0, "ip": 95, "era": 3.50, "whip": 1.15})
+    # 95 IP is above DEFAULT_MIN_IP (20) -> use current
+    current = {
+        rank_key("Ace Arm", "pitcher"): {
+            "w": 12,
+            "k": 165,
+            "sv": 0,
+            "ip": 140,
+            "era": 3.10,
+            "whip": 1.05,
+        }
+    }
+    _h, p, keys = kv.overlay_current_anchors(empty_h, pre, current)
+    assert p.iloc[0]["k"] == 165 and p.iloc[0]["era"] == 3.10  # current stats win
+    assert rank_key("Ace Arm", "pitcher") in keys
+
+
+def test_overlay_pitcher_keeps_preseason_when_current_below_floor():
+    empty_h = pd.DataFrame(columns=["name", "fg_id", "r", "hr", "rbi", "sb", "ab", "avg"])
+    pre = _frame("Limited Guy", {"w": 2, "k": 35, "sv": 0, "ip": 45, "era": 4.00, "whip": 1.30})
+    # 10 IP is below DEFAULT_MIN_IP (20) -> keep preseason
+    current = {
+        rank_key("Limited Guy", "pitcher"): {
+            "w": 1,
+            "k": 12,
+            "sv": 0,
+            "ip": 10,
+            "era": 3.80,
+            "whip": 1.20,
+        }
+    }
+    _h, p, keys = kv.overlay_current_anchors(empty_h, pre, current)
+    assert p.iloc[0]["k"] == 35  # kept preseason
+    assert keys == set()
+
+
 def test_mark_preseason_fallback_flags_only_non_current():
     r_cur = kv.KeeperValueResult("aaa::hitter", "Al Star", {2026: 1.0}, 1.0, [], 0.5, None)
     r_pre = kv.KeeperValueResult("bbb::hitter", "No Data", {2026: 1.0}, 1.0, [], 0.5, None)

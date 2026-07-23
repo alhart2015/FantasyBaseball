@@ -1,7 +1,7 @@
 """Rank players by keeper-asset value (discounted multi-year VAR), swept across
-discount rates. Reads projections/positions from SQLite and manual ZiPS out-year
-CSV exports; does no network I/O. See
-docs/superpowers/specs/2026-07-22-keeper-value-design.md.
+discount rates. Default --anchor current reads cache:full_season_projections fresh
+from Upstash; --anchor preseason reads only SQLite + manual ZiPS out-year CSV
+exports (no network I/O). See docs/superpowers/specs/2026-07-22-keeper-value-design.md.
 """
 
 from __future__ import annotations
