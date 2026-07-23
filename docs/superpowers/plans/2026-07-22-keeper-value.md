@@ -189,13 +189,17 @@ from fantasy_baseball.draft.board import build_board_from_frames
 
 
 def _tiny_scale_and_board():
+    # build_board_from_frames scores every row via calculate_player_sgp, which
+    # dispatches on player_type -- the input frames MUST carry it (real frames get
+    # it from parse_*_csv / get_blended_projections).
+    from fantasy_baseball.models.player import PlayerType
     hitters = pd.DataFrame([
-        {"name": "Star Bat", "r": 100, "hr": 35, "rbi": 100, "sb": 15, "ab": 550, "h": 165, "avg": 0.300},
-        {"name": "Meh Bat", "r": 60, "hr": 12, "rbi": 55, "sb": 5, "ab": 480, "h": 120, "avg": 0.250},
+        {"name": "Star Bat", "r": 100, "hr": 35, "rbi": 100, "sb": 15, "ab": 550, "h": 165, "avg": 0.300, "player_type": PlayerType.HITTER},
+        {"name": "Meh Bat", "r": 60, "hr": 12, "rbi": 55, "sb": 5, "ab": 480, "h": 120, "avg": 0.250, "player_type": PlayerType.HITTER},
     ])
     pitchers = pd.DataFrame([
-        {"name": "Ace Arm", "w": 15, "k": 220, "sv": 0, "ip": 190, "era": 3.10, "whip": 1.05},
-        {"name": "Closer Guy", "w": 4, "k": 90, "sv": 35, "ip": 65, "era": 2.70, "whip": 1.00},
+        {"name": "Ace Arm", "w": 15, "k": 220, "sv": 0, "ip": 190, "era": 3.10, "whip": 1.05, "player_type": PlayerType.PITCHER},
+        {"name": "Closer Guy", "w": 4, "k": 90, "sv": 35, "ip": 65, "era": 2.70, "whip": 1.00, "player_type": PlayerType.PITCHER},
     ])
     positions = {"Star Bat": ["OF"], "Meh Bat": ["2B"], "Ace Arm": ["SP"], "Closer Guy": ["RP"]}
     board, scale = build_board_from_frames(hitters, pitchers, positions)

@@ -12,6 +12,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+import pandas as pd
+
+from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
+from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import safe_float
 
 DEFAULT_DISCOUNT = 0.80
@@ -68,3 +73,31 @@ def _scale_line(
             continue  # undefined ratio -> hold the anchor value flat for this field
         out[field] = safe_float(anchor.get(field, 0)) * ratio
     return out
+
+
+def _line_sgp(line: Mapping[str, Any], player_type: str, scale) -> float:
+    series = pd.Series({**dict(line), "player_type": PlayerType(player_type)})
+    return calculate_player_sgp(
+        series,
+        denoms=scale.denoms,
+        replacement_avg=scale.repl_rates["avg"],
+        replacement_era=scale.repl_rates["era"],
+        replacement_whip=scale.repl_rates["whip"],
+        team_ab=scale.team_ab,
+        team_ip=scale.team_ip,
+    )
+
+
+def _value_of_line(
+    line: Mapping[str, Any], positions: list[str], player_type: str, scale
+) -> float:
+    total_sgp = _line_sgp(line, player_type, scale)
+    series = pd.Series(
+        {
+            **dict(line),
+            "player_type": PlayerType(player_type),
+            "positions": list(positions),
+            "total_sgp": total_sgp,
+        }
+    )
+    return float(calculate_var(series, scale.replacement_levels))
