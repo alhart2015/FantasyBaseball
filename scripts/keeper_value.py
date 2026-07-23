@@ -153,7 +153,9 @@ def build_results(base_year: int, horizon: int):
     return results, candidate_ids
 
 
-def render(results, discounts: list[float], candidate_ids: set[str]) -> str:
+def render(results, discounts: list[float], candidate_ids: set[str], limit: int = 0) -> str:
+    """Render the ranked table. ``limit > 0`` shows only the top ``limit`` players
+    (the leaguewide rank column still reflects the full pool)."""
     if not results:
         return "No players scored."
     first = next(iter(results))
@@ -171,13 +173,18 @@ def render(results, discounts: list[float], candidate_ids: set[str]) -> str:
         order = sorted(results, key=lambda r: totals[d][r.player_id], reverse=True)
         ranks[d] = {r.player_id: i + 1 for i, r in enumerate(order)}
 
-    primary = discounts[-1]  # order rows by the most dynasty-weighted discount
+    # Order rows (and thus which top-N --limit keeps) by the most dynasty-weighted
+    # discount -- the LARGEST rate, regardless of --discount input order.
+    primary = max(discounts)
     ranked = sorted(results, key=lambda r: totals[primary][r.player_id], reverse=True)
+    shown = ranked if limit <= 0 else ranked[:limit]
 
     lines = [
         "Keeper-asset value (discounted multi-year VAR); cell = total(#rank at that discount)",
-        "",
     ]
+    if 0 < limit < len(ranked):
+        lines.append(f"(showing top {limit} of {len(ranked)})")
+    lines.append("")
     header = f"{'':1} {'Player':22} " + " ".join(
         f"{'d=' + format(d, '.2f'):>13}" for d in discounts
     )
@@ -185,7 +192,7 @@ def render(results, discounts: list[float], candidate_ids: set[str]) -> str:
         "  perYr(" + "/".join(str(base_year + k) for k in range(horizon)) + ")  %out  %sv  flags"
     )
     lines.append(header)
-    for r in ranked:
+    for r in shown:
         mark = "*" if r.player_id in candidate_ids else " "
         cells = " ".join(
             f"{totals[d][r.player_id]:7.1f}(#{ranks[d][r.player_id]:>3})" for d in discounts
@@ -214,6 +221,17 @@ def _discounts_arg(s: str) -> list[float]:
     return vals
 
 
+def _nonneg_int(s: str) -> int:
+    """Parse a non-negative int for --limit (0 = show all)."""
+    try:
+        v = int(s)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid int {s!r}: {exc}") from exc
+    if v < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0 (0 shows all); got {v}")
+    return v
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Rank players by keeper-asset value (discounted multi-year VAR)."
@@ -233,6 +251,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="comma-separated discount rates to sweep, each in (0, 1] "
         "(default 0.60,0.70,0.80,0.90). 1.0 = no discount (out-years count fully).",
     )
+    ap.add_argument(
+        "--limit",
+        type=_nonneg_int,
+        default=100,
+        help="show only the top N players by keeper value (default 100; 0 = all). "
+        "Skips the long tail no one would keep.",
+    )
     return ap.parse_args(argv)
 
 
@@ -242,7 +267,7 @@ def main(argv: list[str] | None = None) -> None:
     if args.horizon < 1:
         raise SystemExit("--horizon must be >= 1")
     results, candidate_ids = build_results(base_year=BASE_YEAR, horizon=args.horizon)
-    print(render(results, args.discount, candidate_ids))
+    print(render(results, args.discount, candidate_ids, limit=args.limit))
 
 
 if __name__ == "__main__":
