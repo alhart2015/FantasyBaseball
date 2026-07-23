@@ -62,10 +62,14 @@ current year). Instead:
   ZiPS supplies *only the aging shape*; the level stays anchored to consensus.
   Playing-time decline is captured because PA/AB/IP are themselves scaled stats.
 
-- **Rate stats (AVG/ERA/WHIP)** are recomputed from the scaled component counting
-  stats exactly as `blend_projections` already does (it "recomputes rate stats
-  from blended component stats") -- we scale components, rates fall out. We never
-  scale a rate directly.
+- **Which fields get scaled:** exactly the ones `calculate_player_sgp` consumes,
+  each by its own ZiPS ratio -- hitters `r/hr/rbi/sb` (counting), `ab` (volume),
+  `avg` (rate); pitchers `w/k/sv` (counting), `ip` (volume), `era/whip` (rate).
+  **Rate stats ARE scaled directly** by their ZiPS rate-ratio
+  (`ZiPS_y(rate) / ZiPS_2026(rate)`), because that ratio *is* ZiPS's projected
+  aging of the rate and `calculate_player_sgp` reads `avg`/`era`/`whip` as rates
+  (it does not reconstruct them from `h`/`er`/`bb`). Fields the SGP function does
+  not read (e.g. `h`) are ignored -- no need to scale them.
 
 - Each year's scaled line then runs through the **full-season SGP -> VAR path**,
   the same one the draft board uses: `sgp/player_value.py::calculate_player_sgp(
@@ -166,17 +170,18 @@ player_type), and the `discount` / `horizon` / `ratio_band` /
 
 New `scripts/keeper_value.py`:
 
-1. Build the **shared context** once. The metric needs only:
-   - the 2026 blended stat lines (`blend_projections` over `data/projections/2026/`);
-   - positional replacement floors (`position_aware_replacement_levels(denoms, rates)`);
-   - SGP `denoms` (from `config/league.yaml`) and full-season `team_ab` / `team_ip`;
-   - per-player positions/eligibility.
-
-   Read positions/eligibility from the **cached draft board** (the file the
-   dashboard's `--rebuild-board` produces) rather than a live Yahoo fetch -- this
-   script does no network I/O. It does **not** apply keepers, ADP, or draft state;
-   it scores the raw projection universe. Reusing the board's `denoms`/floors/
-   `team_ab`/`team_ip` is what makes the 2026 column reconcile with the draft board.
+1. Build the **shared context** once via the existing board seam:
+   `draft/board.py::build_board_from_frames(hitters, pitchers, positions,
+   roster_slots, num_teams, sgp_overrides)` returns `(board_df, ScaleInputs)`.
+   `ScaleInputs` already carries the entire context the metric needs -- `denoms`,
+   `repl_rates`, `replacement_levels`, `team_ab`, `team_ip` -- and `board_df`
+   carries per-player `player_id`, `name_normalized`, `positions`, `player_type`,
+   the 2026 blended stat line, and `var`. Because the metric scores its 2026 year
+   on this same `ScaleInputs`, the 2026 column reconciles with the board exactly.
+   Load `hitters`/`pitchers`/`positions` from SQLite (`get_blended_projections`,
+   `get_positions`), matching `build_draft_board`. This script does **no** network
+   I/O and does **not** apply keepers/ADP/draft state -- it scores the raw
+   projection universe.
 2. Load ZiPS 2026/2027/2028 lines via the out-year loader.
 3. Score every board player with `keeper_value(...)`.
 4. **Sweep `discount`** over a configurable list (default `[0.60, 0.70, 0.80,
@@ -215,8 +220,9 @@ manual ZiPS export
   masquerading as real values.
 - **Tiny ZiPS-2026 denominator:** handled by the denominator floor + ratio clamp
   (see Trajectory engine).
-- **Rate-stat handling:** never scale AVG/ERA/WHIP directly; recompute from scaled
-  components.
+- **Rate-stat handling:** scale `avg`/`era`/`whip` by their ZiPS rate-ratios
+  (same clamp), alongside the counting/volume fields -- `calculate_player_sgp`
+  reads them as rates, so no component reconstruction is needed.
 - **Saves and other role/opportunity stats in out-years:** taken straight from
   ZiPS (per decision -- the manager filters out players at risk of losing a closer
   role *before* they are keeper candidates, so role-loss is handled upstream by
