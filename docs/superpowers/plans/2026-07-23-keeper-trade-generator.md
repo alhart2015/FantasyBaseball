@@ -399,7 +399,7 @@ def _pl(name, pos):
 def test_build_consolidation_proposal_balances_and_sets_active():
     # Hart active: soto(OF), jrod(OF), cam(3B); bench: woo(BN)
     hart = [_pl("soto", Position.OF), _pl("jrod", Position.OF),
-            _pl("cam", Position.THIRD), _pl("woo", Position.BN)]
+            _pl("cam", Position.THIRD_BASE), _pl("woo", Position.BN)]
     prop = kt.build_consolidation_proposal(
         opponent="Spacemen",
         hart_players=hart,
@@ -496,10 +496,15 @@ def _fixture_blobs():
     roster_raw = [{"name": "A B", "player_type": "hitter", "hr": 20, "ab": 400}]
     opp_raw = {"Opp": [{"name": "C D", "player_type": "pitcher", "ip": 100, "w": 8}]}
     proj_cache = {
-        "projected_standings": {"entries": [
-            {"team_name": "Hart of the Order", "stats": {}},
-            {"team_name": "Opp", "stats": {}},
-        ]},
+        # ProjectedStandings.from_json shape: effective_date + teams[{name, stats}];
+        # stats {} -> CategoryStats defaults (models/standings.py:363-381).
+        "projected_standings": {
+            "effective_date": "2026-07-23",
+            "teams": [
+                {"name": "Hart of the Order", "stats": {}},
+                {"name": "Opp", "stats": {}},
+            ],
+        },
         "team_sds": None,
         "fraction_remaining": 0.4,
     }
@@ -541,7 +546,8 @@ from dataclasses import dataclass
 from typing import Any
 
 from fantasy_baseball.models.player import Player
-from fantasy_baseball.models.standings import ProjectedStandings, team_sds_from_json
+from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.scoring import team_sds_from_json
 from fantasy_baseball.trades.multi_trade import build_waiver_pool
 from fantasy_baseball.utils.constants import Category
 
@@ -587,7 +593,7 @@ def load_trade_eval_context(
     )
 ```
 
-(Confirm the exact import paths for `ProjectedStandings` / `team_sds_from_json` by grepping `web/season_routes.py` imports; adjust if they live elsewhere.)
+(Confirmed paths: `ProjectedStandings` is in `models.standings`; `team_sds_from_json` is in `scoring` -- as imported above.)
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -638,7 +644,7 @@ git commit -m "refactor(trades): extract shared load_trade_eval_context; route u
 - Produces (importable functions; guarded `main()`):
   - `_ros_value(player, denoms) -> float` -- `calculate_player_sgp(player.rest_of_season, denoms)` or `-inf` if no ROS line.
   - `_ros_refills_and_drops(waiver_pool, opp_players, denoms, n) -> (list[str], list[str])` -- top-`n` waiver keys by ROS value; `opp_players`' bottom-`n` keys by ROS value (`opp_players` already excludes the received stud).
-  - `to_roster_players(players, keeper_by_key) -> list[RosterPlayer]` -- attach keeper_value by `rank_key` (roster `fg_id` is usually absent, so name-based; `keeper_by_key` is keyed by `rank_key`).
+  - `to_roster_players(players, keeper_by_key) -> list[RosterPlayer]` -- attach keeper_value **fg_id-primary** (`fg_key(p.fg_id, type)` when present) with `rank_key(name, type)` fallback; unmatched -> `0.0`. `keeper_by_key` is indexed by both the board `player_id` (fg-based when available) and `rank_key(name)`.
   - `make_guardrail(ctx, denoms, threshold) -> Guardrail` -- resolves the opponent from `receive`, calls `_ros_refills_and_drops` + `build_consolidation_proposal` + `evaluate_multi_trade`.
   - `render(suggestions) -> str`.
 
@@ -658,14 +664,22 @@ from fantasy_baseball.analysis.keeper_trades import RosterPlayer  # noqa: E402
 
 def test_to_roster_players_attaches_keeper_value_and_zero_for_unmatched():
     from fantasy_baseball.models.player import Player, PlayerType
-    from fantasy_baseball.sgp.rankings import rank_key
+    from fantasy_baseball.sgp.rankings import fg_key, rank_key
 
-    players = [Player(name="Juan Soto", player_type=PlayerType.HITTER),
-               Player(name="Nobody Here", player_type=PlayerType.HITTER)]
-    keeper_by_key = {rank_key("Juan Soto", PlayerType.HITTER): 18.0}
+    players = [
+        Player(name="Juan Soto", player_type=PlayerType.HITTER),                 # name match
+        Player(name="Two Names", player_type=PlayerType.HITTER, fg_id="999"),     # fg_id match
+        Player(name="Nobody Here", player_type=PlayerType.HITTER),               # unmatched
+    ]
+    keeper_by_key = {
+        rank_key("Juan Soto", PlayerType.HITTER): 18.0,
+        fg_key("999", PlayerType.HITTER): 12.0,                 # fg-based board id
+        rank_key("Two Names", PlayerType.HITTER): 1.0,          # decoy: fg_id must win
+    }
     out = script.to_roster_players(players, keeper_by_key)
     kv = {p.name: p.keeper_value for p in out}
     assert kv["Juan Soto"] == 18.0
+    assert kv["Two Names"] == 12.0                  # fg_id-primary beats the name entry
     assert kv["Nobody Here"] == 0.0                 # unmatched -> 0.0, never dropped
     assert all(isinstance(p, RosterPlayer) for p in out)
 
@@ -722,7 +736,7 @@ from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.sgp.rankings import rank_key
+from fantasy_baseball.sgp.rankings import fg_key, rank_key
 from fantasy_baseball.trades.eval_inputs import load_trade_eval_context
 from fantasy_baseball.trades.multi_trade import evaluate_multi_trade
 
@@ -737,10 +751,19 @@ def _ros_value(player: Player, denoms) -> float:
 
 
 def to_roster_players(players, keeper_by_key) -> list[RosterPlayer]:
+    """Attach keeper_value fg_id-primary, name fallback (spec + CLAUDE.md 'never key
+    on bare names'). keeper_by_key holds BOTH fg-based board ids and rank_key(name)."""
     out = []
     for p in players:
-        val = keeper_by_key.get(rank_key(p.name, p.player_type), 0.0)
-        out.append(RosterPlayer(player_id=p.player_key, name=p.name, keeper_value=val))
+        val = None
+        if p.fg_id:
+            val = keeper_by_key.get(fg_key(str(p.fg_id), p.player_type))
+        if val is None:
+            val = keeper_by_key.get(rank_key(p.name, p.player_type))
+        out.append(RosterPlayer(
+            player_id=p.player_key, name=p.name,
+            keeper_value=val if val is not None else 0.0,
+        ))
     return out
 ```
 
@@ -816,12 +839,15 @@ def main(argv=None):
 
     # 1. offline keeper values -> {rank_key: keeper_value}
     results, _ = kv_script.build_results(base_year=kv_script.BASE_YEAR, horizon=args.horizon)
-    keeper_by_key = {}
+    keeper_by_key: dict[str, float] = {}
     for r in results:
-        k = rank_key(r.name, r.player_id.rsplit("::", 1)[-1])
+        ptype = r.player_id.rsplit("::", 1)[-1]
         val = discounted_total(r.per_year_var, kv_script.BASE_YEAR, args.discount, args.horizon)
-        if k not in keeper_by_key or val > keeper_by_key[k]:
-            keeper_by_key[k] = val
+        # index by BOTH the board player_id (== fg_key form when the board is
+        # fg-based) and rank_key(name) so roster lookup can prefer fg_id.
+        for k in (r.player_id, rank_key(r.name, ptype)):
+            if k not in keeper_by_key or val > keeper_by_key[k]:
+                keeper_by_key[k] = val
 
     # 2. live Upstash: assemble the eval context + rosters
     kv = build_explicit_upstash_kv()
@@ -937,5 +963,4 @@ git commit -m "chore(keeper-trades): end-of-effort verification fixes"
 - **Importing `_current_active_set` (a private) from `multi_trade`** is deliberate reuse of the evaluator's own active-set definition (so the proposal's active math matches the evaluator's). If ruff/vulture object to importing a private, promote it to `current_active_set` in `multi_trade.py` (same commit) and update both call sites.
 - **`_ros_value` returns `-inf` for no-ROS players** so they sink to the bottom for refills (never picked) and to the bottom for drops (dropped first) -- consistent. `denoms=None` in the helper's unit test is fine because that test stubs `_ros_value`; the live path passes real `denoms`.
 - **Roster `Player.fg_id` is usually absent** (Yahoo rosters), so keeper matching falls to `rank_key` (normalized name) -- the same path the leaguewide keeper analysis used successfully.
-- **Confirm import paths** for `ProjectedStandings` / `team_sds_from_json` (Task 5) by reading `web/season_routes.py`'s imports before writing `eval_inputs.py`; adjust if they live in a different module than `models.standings`.
 - **You cannot fully run `main()` without live Upstash** + the local keeper board + ZiPS 2027/2028 CSVs. The unit tests do not need any of that; the live smoke does.
