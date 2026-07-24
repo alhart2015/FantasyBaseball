@@ -82,6 +82,13 @@ def _raw_fg_hitter_lines(cache_dir: Path, year: int) -> dict[int, Line]:
     if not path.exists():
         return {}
     raw = pd.read_csv(path)
+    missing = [c for c in _COUNTING_COLS if c not in raw.columns]
+    if missing:
+        raise ValueError(
+            f"{path} is missing raw FanGraphs counting columns {missing}; this looks like a "
+            "renamed-only frame (see module docstring on fetch_or_cache writing the PRE-rename "
+            "frame) -- refusing to silently default counting stats to 0.0."
+        )
     out: dict[int, Line] = {}
     for _, r in raw.iterrows():
         fg = r.get("IDfg")
@@ -122,12 +129,8 @@ def _zips_hitters_index(projections_root: Path, year: int) -> dict[int, Line] | 
         except (TypeError, ValueError):
             continue
         idx[fgid] = {
-            "pa": float(row.get("pa", 0.0)),
-            "hr": float(row.get("hr", 0.0)),
-            "r": float(row.get("r", 0.0)),
-            "rbi": float(row.get("rbi", 0.0)),
-            "sb": float(row.get("sb", 0.0)),
-            "avg": float(row.get("avg", 0.0)),
+            key: (float(v) if (v := row.get(key)) is not None and pd.notna(v) else 0.0)
+            for key in ("pa", "hr", "r", "rbi", "sb", "avg")
         }
     return idx
 
