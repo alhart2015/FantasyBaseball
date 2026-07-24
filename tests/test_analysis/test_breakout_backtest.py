@@ -100,3 +100,102 @@ def test_run_backtest_three_estimators_and_ci():
     assert out["spearman"]["skill_adjusted"] >= out["spearman"]["surface"]
     assert "ci_skill_vs_surface" in out and "ci_skill_vs_zips" in out
     assert "label_lift" in out and out["verdict"] in ("clears gate", "not good enough")
+
+
+def _mk_hitter_row(mlbam, pa, xslg, slg, xba, ba, age=27.0):
+    from fantasy_baseball.analysis import breakout
+
+    return breakout.SkillLuckRow(
+        mlbam=mlbam,
+        player_type="hitter",
+        pa=pa,
+        ip=0.0,
+        age=age,
+        barrel_pct=0.10,
+        xslg=xslg,
+        slg=slg,
+        xba=xba,
+        ba=ba,
+        babip=0.310,
+        xwoba=0.330,
+        woba=0.330,
+        k_pct=0.22,
+        bb_pct=0.08,
+    )
+
+
+def _mk_candidate_year(p_hr, q_hr, mlbam_p, mlbam_q, actual_p_hr, actual_q_hr):
+    """One backtest-year's corpus data: two hitters (P, Q) sharing a common marcel-prior
+    baseline (hist hr rate 0.020, avg 0.250) but far enough from it in surface HR to
+    clear CANDIDATE_DEVIATION (0.15) on both sides.
+
+    P is a small, fully-xStat-confirmed HR bump (xslg == slg); Q is a large, unconfirmed
+    HR bump (xslg << slg, i.e. Statcast contradicts the surface power). Whether the
+    actual next-year outcome favors P or Q (``actual_p_hr`` vs ``actual_q_hr``) decides
+    which confirm_weight the grid search in tune_wmap rewards for that year. Building
+    the 2021 (fit) and 2023 (report) years with opposite P/Q outcomes makes the two
+    years genuinely pull tune_wmap toward *different* WMapParams when tuned in
+    isolation -- which is what makes the leakage probes below non-degenerate. (A
+    same-shaped-every-year corpus would let every confirm_weight tie on rank
+    correlation, so a leakage bug that read the wrong year would go undetected.)
+    """
+    hist = [(2020, {"hr": 0.020, "avg": 0.250})]
+    surface_p = {"pa": 600, "ab": 540, "hr": p_hr, "r": 90, "rbi": 90, "sb": 5, "avg": 0.270}
+    surface_q = {"pa": 600, "ab": 540, "hr": q_hr, "r": 90, "rbi": 90, "sb": 5, "avg": 0.270}
+    slg_p = surface_p["hr"] / surface_p["ab"] * 4  # confirmed: xslg == slg
+    p_row = _mk_hitter_row(mlbam_p, 600, xslg=slg_p, slg=slg_p, xba=0.270, ba=0.270)
+    q_row = _mk_hitter_row(mlbam_q, 600, xslg=0.35, slg=0.90, xba=0.230, ba=0.270)
+    return {
+        mlbam_p: (surface_p, p_row, {"hr": actual_p_hr, "avg": 0.270}, hist, None),
+        mlbam_q: (surface_q, q_row, {"hr": actual_q_hr, "avg": 0.270}, hist, None),
+    }
+
+
+def _mk_distinct_years_corpus():
+    """fit_years=[2021], report_years=[2023]; each year has its own 2 qualifying
+    candidates (verified against CANDIDATE_DEVIATION) and its own actual-outcome shape,
+    so the two years are not interchangeable for tune_wmap's grid search."""
+    return {
+        2021: _mk_candidate_year(28, 55, 1, 2, actual_p_hr=0.045, actual_q_hr=0.090),
+        2023: _mk_candidate_year(34, 73, 101, 102, actual_p_hr=0.090, actual_q_hr=0.030),
+    }
+
+
+def test_tune_wmap_ignores_report_year_data():
+    """tune_wmap(fit_years=[2021]) must return identical params regardless of what the
+    2023 (report-year) rows contain -- proving tune_wmap never reads report-year data.
+    Fails if a future edit ever folds report_years into the grid-search corpus (e.g.
+    tuning over all corpus years instead of just fit_years)."""
+    from fantasy_baseball.analysis import breakout_backtest as bb
+
+    corpus = _mk_distinct_years_corpus()
+    p1 = bb.tune_wmap(corpus, fit_years=[2021])
+
+    corpus_mutated = dict(corpus)
+    corpus_mutated[2023] = _mk_candidate_year(
+        90, 15, 101, 102, actual_p_hr=0.005, actual_q_hr=0.400
+    )
+    p2 = bb.tune_wmap(corpus_mutated, fit_years=[2021])
+
+    assert corpus[2021] is corpus_mutated[2021]  # sanity: 2021 rows are untouched
+    assert p1 == p2
+
+
+def test_run_backtest_uses_fit_tuned_params_not_report():
+    """run_backtest(params=None) must tune on fit_years and evaluate those fixed params
+    on report_years -- never re-tune on report_years. By construction (see
+    _mk_candidate_year), tuning on [2021] alone picks a different confirm_weight than
+    tuning on [2023] alone would, so if run_backtest's internal auto-tune ever read
+    report_years instead of fit_years, the resulting skill_adjusted spearman on
+    report_years would diverge from this fit-tuned, pinned-params run."""
+    from fantasy_baseball.analysis import breakout_backtest as bb
+
+    corpus = _mk_distinct_years_corpus()
+    auto = bb.run_backtest(corpus, fit_years=[2021], report_years=[2023])
+    pinned = bb.run_backtest(
+        corpus,
+        fit_years=[2021],
+        report_years=[2023],
+        params=bb.tune_wmap(corpus, fit_years=[2021]),
+    )
+    assert auto["spearman"] == pinned["spearman"]
