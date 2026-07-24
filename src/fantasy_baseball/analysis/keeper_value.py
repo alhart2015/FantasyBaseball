@@ -27,6 +27,11 @@ if TYPE_CHECKING:
 
 DEFAULT_DISCOUNT = 0.80
 DEFAULT_HORIZON = 3
+# Out-year (2027+) regression toward ZiPS's own forward projection: 0 = pure
+# anchor x aging-ratio (over-indexes on the current season), 1 = pure ZiPS
+# out-year. 0.6 = "mostly ZiPS" -- keeps ~40% of the realized-2026 signal while
+# leaning on ZiPS's regressed multi-year view (inherits ZiPS's skill-vs-luck sort).
+DEFAULT_OUT_YEAR_REGRESSION = 0.6
 DEFAULT_RATIO_BAND = (0.25, 2.5)
 DEFAULT_MIN_AB = 100.0
 DEFAULT_MIN_IP = 20.0
@@ -132,6 +137,7 @@ def per_year_var(
     ratio_band: tuple[float, float] = DEFAULT_RATIO_BAND,
     min_pt: float | None = None,
     eps: float = EPS,
+    out_year_regression: float = 0.0,
 ) -> tuple[dict[int, float], list[str]]:
     pyv: dict[int, float] = {}
     flags: list[str] = []
@@ -170,6 +176,15 @@ def per_year_var(
             line = zips_y
         else:
             line = _scale_line(anchor_line, zips_base, zips_y, player_type, ratio_band, eps)
+            if out_year_regression > 0.0:
+                # Regress the current-anchor-scaled out-year toward ZiPS's own
+                # (regressed, multi-year) out-year projection, per scored field.
+                # lam=0 keeps the pure anchor x ratio; lam=1 is pure ZiPS out-year.
+                lam = min(1.0, out_year_regression)
+                for f in _fields_for(player_type):
+                    zy = zips_y.get(f)
+                    if zy is not None and not pd.isna(zy):
+                        line[f] = (1.0 - lam) * safe_float(line.get(f, 0)) + lam * safe_float(zy)
         pyv[year] = _value_of_line(line, positions, player_type, scale)
 
     return pyv, flags
@@ -228,6 +243,7 @@ def keeper_value(
     min_pt: float | None = None,
     eps: float = EPS,
     eps_share: float = DEFAULT_EPS_SHARE,
+    out_year_regression: float = 0.0,
 ) -> KeeperValueResult:
     # Single-discount snapshot: total and pct_from_out_years are computed at this
     # call's `discount`. A sweep report recomputes both per displayed discount (via
@@ -243,6 +259,7 @@ def keeper_value(
         ratio_band=ratio_band,
         min_pt=min_pt,
         eps=eps,
+        out_year_regression=out_year_regression,
     )
     total = discounted_total(pyv, base_year, discount, horizon)
     return KeeperValueResult(

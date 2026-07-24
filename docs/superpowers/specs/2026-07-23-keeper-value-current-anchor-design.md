@@ -113,6 +113,30 @@ math**:
   serve preseason under a `current` label (mislabeled data drives wrong keeper
   decisions).
 
+### Out-year regression (post-spot-check refinement)
+
+The current anchor is right for 2026, but the out-years are `anchor x aging-ratio`,
+so a partial-season breakout is *aged* forward, never *regressed* -- all three years
+sit at the hot-2026 level. Live spot-check symptoms: a BABIP-driven career year (Otto
+Lopez) out-ranked an elite talent in a down year (Soto), and one breakout (Wood)
+dominated the three-year board.
+
+Fix: `out_year_regression` (fraction in [0,1], `DEFAULT_OUT_YEAR_REGRESSION = 0.6`,
+`--out-year-regression` CLI flag). For each out-year scored field, blend the
+anchor-scaled value toward ZiPS's own out-year projection:
+`line[f] = (1-lam)*scaled[f] + lam*zips_y[f]`. `lam=0` = pure anchor x ratio (the
+over-indexing original); `lam=1` = pure ZiPS out-year (ignores 2026 for the future);
+`0.6` = mostly-ZiPS. 2026 (the base year) is untouched.
+
+Why lean on ZiPS's out-year: a ROS-signal diagnostic showed the projection systems
+already sort skill from luck within the current year (Wood's gains are ISO/BB%-driven
+and retained; Otto's are BABIP-driven), and ZiPS's *multi-year* out-year model regresses
+the luck out entirely. So leaning the out-years on ZiPS inherits that skill-vs-luck
+discrimination for free -- no custom breakout detector needed for v1 (that is the
+DARKO trajectory follow-up). Empirically at `0.6`: Otto #18->#44, Soto #29->#10, Wood
+stays #1 but at a sane level. The default flows through `build_results`, so the
+keeper-trade generator uses the same regressed values.
+
 ## Data flow (current mode)
 
 ```

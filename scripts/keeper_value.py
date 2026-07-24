@@ -19,6 +19,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from fantasy_baseball.analysis.draft_value import parse_full_season_lines
 from fantasy_baseball.analysis.keeper_value import (
     DEFAULT_HORIZON,
+    DEFAULT_OUT_YEAR_REGRESSION,
     discounted_total,
     keeper_value,
     mark_preseason_fallback,
@@ -136,7 +137,13 @@ def _zips_by_year(
     }
 
 
-def build_results(base_year: int, horizon: int, *, anchor: str = "current"):
+def build_results(
+    base_year: int,
+    horizon: int,
+    *,
+    anchor: str = "current",
+    out_year_regression: float = DEFAULT_OUT_YEAR_REGRESSION,
+):
     conn = get_connection()
     try:
         hitters, pitchers = get_blended_projections(conn)
@@ -186,6 +193,7 @@ def build_results(base_year: int, horizon: int, *, anchor: str = "current"):
                 scale,
                 base_year=base_year,
                 horizon=horizon,
+                out_year_regression=out_year_regression,
             )
         )
     if anchor == "current":
@@ -272,6 +280,17 @@ def _nonneg_int(s: str) -> int:
     return v
 
 
+def _unit_float(s: str) -> float:
+    """Parse a fraction in [0, 1] for --out-year-regression."""
+    try:
+        v = float(s)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid float {s!r}: {exc}") from exc
+    if not (0.0 <= v <= 1.0):
+        raise argparse.ArgumentTypeError(f"must be in [0, 1]; got {v}")
+    return v
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Rank players by keeper-asset value (discounted multi-year VAR)."
@@ -305,6 +324,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="anchor the 2026 base on current-season talent (YTD+ROS, default) or the "
         "preseason blend. current requires a synced cache:full_season_projections.",
     )
+    ap.add_argument(
+        "--out-year-regression",
+        type=_unit_float,
+        default=DEFAULT_OUT_YEAR_REGRESSION,
+        metavar="F",
+        help=f"regress 2027+ toward ZiPS's forward projection, fraction in [0,1] "
+        f"(default {DEFAULT_OUT_YEAR_REGRESSION}). 0 = pure current-anchor x aging "
+        f"(over-indexes on this year); 1 = pure ZiPS out-year (ignores this year).",
+    )
     return ap.parse_args(argv)
 
 
@@ -314,7 +342,10 @@ def main(argv: list[str] | None = None) -> None:
     if args.horizon < 1:
         raise SystemExit("--horizon must be >= 1")
     results, candidate_ids = build_results(
-        base_year=BASE_YEAR, horizon=args.horizon, anchor=args.anchor
+        base_year=BASE_YEAR,
+        horizon=args.horizon,
+        anchor=args.anchor,
+        out_year_regression=args.out_year_regression,
     )
     print(render(results, args.discount, candidate_ids, limit=args.limit))
 

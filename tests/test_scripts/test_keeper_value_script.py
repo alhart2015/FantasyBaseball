@@ -242,3 +242,19 @@ def test_parse_args_anchor_default_is_current():
 def test_parse_args_anchor_rejects_invalid():
     with pytest.raises(SystemExit):
         script._parse_args(["--anchor", "bogus"])
+
+
+def test_parse_args_out_year_regression_default_and_bounds():
+    assert script._parse_args([]).out_year_regression == 0.6
+    assert script._parse_args(["--out-year-regression", "0"]).out_year_regression == 0.0
+    with pytest.raises(SystemExit):
+        script._parse_args(["--out-year-regression", "1.5"])
+
+
+def test_unit_float_validates():
+    assert script._unit_float("0") == 0.0
+    assert script._unit_float("0.6") == 0.6
+    assert script._unit_float("1") == 1.0
+    for bad in ["-0.1", "1.5", "abc", ""]:
+        with pytest.raises(argparse.ArgumentTypeError):
+            script._unit_float(bad)

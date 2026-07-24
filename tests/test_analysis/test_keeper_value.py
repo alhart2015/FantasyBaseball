@@ -407,3 +407,29 @@ def test_breakout_anchor_scores_higher_than_modest():
     lo = kv.discounted_total(kv.per_year_var(modest, **common)[0], 2026, 0.8, 3)
     hi = kv.discounted_total(kv.per_year_var(breakout, **common)[0], 2026, 0.8, 3)
     assert hi > lo
+
+
+def test_out_year_regression_blends_toward_zips():
+    # A breakout anchor scaled forward (out_year_regression=0) beats ZiPS's modest
+    # out-year projection (=1); the 0.6 blend sits strictly between. 2026 (base year)
+    # is unaffected by the knob.
+    board, scale = _tiny_scale_and_board()
+    row = board[board["player_type"] == "hitter"].iloc[0]
+    anchor = {**row.to_dict(), "hr": 40, "r": 100, "rbi": 105, "sb": 9, "ab": 560, "avg": 0.300}
+    zips_by_year = {
+        2026: {"hr": 20, "r": 70, "rbi": 70, "sb": 4, "ab": 540, "avg": 0.255},
+        2027: {"hr": 21, "r": 72, "rbi": 72, "sb": 4, "ab": 540, "avg": 0.257},
+        2028: {"hr": 22, "r": 74, "rbi": 74, "sb": 4, "ab": 540, "avg": 0.259},
+    }
+    common = dict(
+        positions=list(row["positions"]),
+        player_type=row["player_type"],
+        zips_by_year=zips_by_year,
+        scale=scale,
+    )
+    pure_anchor = kv.per_year_var(anchor, **common, out_year_regression=0.0)[0]
+    pure_zips = kv.per_year_var(anchor, **common, out_year_regression=1.0)[0]
+    blended = kv.per_year_var(anchor, **common, out_year_regression=0.6)[0]
+    assert pure_anchor[2026] == pure_zips[2026] == blended[2026]  # base year untouched
+    assert pure_zips[2027] < blended[2027] < pure_anchor[2027]  # 0.6 between the extremes
+    assert pure_zips[2028] < blended[2028] < pure_anchor[2028]
