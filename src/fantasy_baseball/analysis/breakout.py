@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from fantasy_baseball.utils.constants import safe_float
+
 
 @dataclass(frozen=True)
 class SkillLuckRow:
@@ -47,3 +49,20 @@ class BreakoutResult:
 
 
 LABELS = ("real breakout", "lucky mirage", "real decline", "slump", "stable")
+
+
+HITTER_COUNTING = ("hr", "r", "rbi", "sb")
+
+
+def line_rates(line, player_type):
+    if player_type == "hitter":
+        pa = safe_float(line.get("pa", 0))
+        rates = {k: (safe_float(line.get(k, 0)) / pa if pa > 0 else 0.0) for k in HITTER_COUNTING}
+        rates["avg"] = safe_float(line.get("avg", 0))
+        return rates
+    ip = safe_float(line.get("ip", 0))
+    rates = {"k": (safe_float(line.get("k", 0)) / ip if ip > 0 else 0.0),
+             "w": (safe_float(line.get("w", 0)) / ip if ip > 0 else 0.0),
+             "sv": (safe_float(line.get("sv", 0)) / ip if ip > 0 else 0.0),
+             "era": safe_float(line.get("era", 0)), "whip": safe_float(line.get("whip", 0))}
+    return rates
