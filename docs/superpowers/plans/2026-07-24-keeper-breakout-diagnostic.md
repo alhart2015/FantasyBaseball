@@ -751,18 +751,33 @@ def adjust_line(surface_line, projection_line, row, player_type, *,
     confidence = "low" if sample < stab or row.xwoba is None else "full"
     return BreakoutResult(adjusted, label, reason, w_by_stat, confidence, surface, believed)
 
-def _label(believed, surface, thr):
-    # believed (w-weighted) confirms real movement; surface (raw) with a quieted
-    # believed signal is luck.
-    if believed >= thr:
-        return "real breakout"
-    if believed <= -thr:
-        return "real decline"
+# NOTE (post-implementation correction): the threshold form below was found
+# INCONSISTENT with test_adjust_line_orders_skill_above_luck during execution --
+# with confirm_weight=0.5 a total mirage still keeps ~half its surface move in
+# `believed`, so a fixed believed-threshold cannot separate mirage from real
+# breakout (the lucky hitter's believed exceeds thr -> mislabeled "real breakout").
+# The SHIPPED version uses a symmetric magnitude ratio instead (luck = the surface
+# move is > 2x the belief-kept move), which passes all tests and matches the design
+# intent. Use the shipped form:
+#
+#     MIRAGE_RATIO = 2.0
+#     def _label(believed, surface, thr, *, mirage_ratio=MIRAGE_RATIO):
+#         if abs(surface) < thr:
+#             return "stable"
+#         luck = abs(surface) > mirage_ratio * abs(believed)
+#         if surface >= thr:
+#             return "lucky mirage" if luck else "real breakout"
+#         return "slump" if luck else "real decline"
+def _label(believed, surface, thr, *, mirage_ratio=2.0):
+    # believed = w-weighted (skill-backed) deviation; surface = raw deviation.
+    # A big surface move belief mostly regressed away is luck; one belief largely
+    # kept is real. Symmetric on both signs; multiplication guards near-zero believed.
+    if abs(surface) < thr:
+        return "stable"
+    luck = abs(surface) > mirage_ratio * abs(believed)
     if surface >= thr:
-        return "lucky mirage"   # surface jumped, w regressed it away
-    if surface <= -thr:
-        return "slump"          # surface cratered, underlying says it recovers
-    return "stable"
+        return "lucky mirage" if luck else "real breakout"
+    return "slump" if luck else "real decline"
 
 def _reason(s_rates, p_rates, w_by_stat, player_type):
     # name the largest-magnitude believed mover
