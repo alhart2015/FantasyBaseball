@@ -58,8 +58,60 @@ class BreakoutResult:
     reason: str                       # short ASCII driver string
     w_by_stat: dict[str, float]       # believed-fraction per adjusted rate, for the report/backtest
     confidence: str                   # "full" | "low"
+    surface_deviation: float          # raw signed aggregate surface-vs-projection deviation
+    believed_deviation: float         # w-weighted signed deviation (drives the label)
 
 LABELS = ("real breakout", "lucky mirage", "real decline", "slump", "stable")
+```
+
+---
+
+## Phase 0: Shared shapes
+
+### Task 0: Create breakout.py with the shared dataclasses
+
+Ordering matters: the Phase-1 data layer (Task 3) imports `SkillLuckRow` from
+`breakout.py`, so the shapes module must exist first. This task creates
+`breakout.py` containing ONLY the dataclasses and `LABELS` from "Shared data
+shapes" above; later tasks (4-7) add functions to the same file.
+
+**Files:**
+- Create: `src/fantasy_baseball/analysis/breakout.py`
+- Test: `tests/test_analysis/test_breakout.py`
+
+- [ ] **Step 1: Write the failing test**
+
+```python
+# tests/test_analysis/test_breakout.py
+from fantasy_baseball.analysis import breakout
+
+def test_shapes_exist():
+    row = breakout.SkillLuckRow(mlbam=1, player_type="hitter", pa=600, ip=0.0, age=27.0,
+        barrel_pct=None, xslg=None, slg=None, xba=None, ba=None, babip=None,
+        xwoba=None, woba=None, k_pct=None, bb_pct=None)
+    assert row.player_type == "hitter"
+    assert "real breakout" in breakout.LABELS
+```
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `pytest tests/test_analysis/test_breakout.py::test_shapes_exist -v`
+Expected: FAIL (module `breakout` not found).
+
+- [ ] **Step 3: Write minimal implementation**
+
+Create `src/fantasy_baseball/analysis/breakout.py` with a module docstring, `from __future__ import annotations`, `from dataclasses import dataclass, field`, and the `SkillLuckRow`, `BreakoutResult` dataclasses and `LABELS` tuple exactly as in "Shared data shapes" above.
+
+- [ ] **Step 4: Run test to verify it passes**
+
+Run: `pytest tests/test_analysis/test_breakout.py::test_shapes_exist -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add src/fantasy_baseball/analysis/breakout.py tests/test_analysis/test_breakout.py
+git commit -m "feat(breakout): shared SkillLuckRow/BreakoutResult shapes"
 ```
 
 ---
@@ -359,10 +411,11 @@ Expected: FAIL (`build_hitter_skill_luck` undefined).
 - [ ] **Step 3: Write minimal implementation**
 
 ```python
-# append to skill_luck.py
+# append to skill_luck.py -- HOIST these two imports into the module's top import
+# block (ruff E402): `from dataclasses import dataclass` and the SkillLuckRow import.
 from dataclasses import dataclass
 
-from fantasy_baseball.analysis.breakout import SkillLuckRow  # shared shape (Phase 2 Task 4 defines it)
+from fantasy_baseball.analysis.breakout import SkillLuckRow  # shared shape from Task 0
 
 
 @dataclass(frozen=True)
@@ -432,15 +485,15 @@ git commit -m "feat(skill-luck): join FG+Statcast into per-season SkillLuckRow +
 
 ## Phase 2: Classifier (pure)
 
-### Task 4: SkillLuckRow / BreakoutResult shapes + rate extraction
+### Task 4: Rate extraction (line_rates)
 
 **Files:**
-- Create: `src/fantasy_baseball/analysis/breakout.py`
+- Modify: `src/fantasy_baseball/analysis/breakout.py` (created in Task 0)
 - Test: `tests/test_analysis/test_breakout.py`
 
 **Interfaces:**
-- Consumes: nothing (pure).
-- Produces: the `SkillLuckRow`, `BreakoutResult`, `LABELS` shapes (see "Shared data shapes" above), plus `line_rates(line: Mapping[str, Any], player_type: str) -> dict[str, float]` converting a counting line to the per-PA/per-IP rates the classifier compares. Hitter rates: `hr, r, rbi, sb` per PA and `avg` (= H/AB). Pitcher rates: `k` per IP, `w, sv` per IP, `era`, `whip`.
+- Consumes: the `SkillLuckRow` / `LABELS` shapes from Task 0.
+- Produces: `line_rates(line: Mapping[str, Any], player_type: str) -> dict[str, float]` converting a counting line to the per-PA/per-IP rates the classifier compares. Hitter rates: `hr, r, rbi, sb` per PA and `avg` (= H/AB). Pitcher rates: `k` per IP, `w, sv` per IP, `era`, `whip`.
 
 - [ ] **Step 1: Write the failing test**
 
@@ -467,7 +520,7 @@ Expected: FAIL (module/`line_rates` undefined).
 
 - [ ] **Step 3: Write minimal implementation**
 
-Create `breakout.py` with the dataclasses from "Shared data shapes", then:
+Add to `breakout.py` (created in Task 0):
 
 ```python
 from fantasy_baseball.utils.constants import safe_float
@@ -645,6 +698,16 @@ def test_adjust_line_low_confidence_small_sample():
     assert r.confidence == "low"
     # small sample -> adjusted HR rate pulled toward the projection rate, not the hot surface
     assert r.adjusted_line["hr"] < surface["hr"]
+
+def test_adjust_line_real_decline_labeled():
+    proj = {"pa": 600, "ab": 540, "hr": 35, "r": 100, "rbi": 105, "sb": 8, "avg": 0.290}
+    surface = {"pa": 600, "ab": 540, "hr": 15, "r": 65, "rbi": 60, "sb": 4, "avg": 0.235}
+    # underlying confirms the drop is real: xSLG/xBA/xwOBA all down with the surface
+    row = breakout.SkillLuckRow(mlbam=4, player_type="hitter", pa=600, ip=0.0, age=34.0,
+        barrel_pct=0.05, xslg=0.360, slg=0.360, xba=0.238, ba=0.235, babip=0.270,
+        xwoba=0.300, woba=0.302, k_pct=0.27, bb_pct=0.06)
+    r = breakout.adjust_line(surface, proj, row, "hitter")
+    assert r.label == "real decline"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -664,33 +727,41 @@ def adjust_line(surface_line, projection_line, row, player_type, *,
     pt = safe_float(surface_line.get("pa" if player_type == "hitter" else "ip", 0))
     adjusted = dict(surface_line)  # carry non-scored fields (positions, ab, ip, etc.)
     w_by_stat: dict[str, float] = {}
-    signed = 0.0
+    believed = 0.0   # w-weighted signed deviation -> drives the label
+    surface = 0.0    # raw (unweighted) signed deviation -> drives the deviator flag
     for stat, s_rate in s_rates.items():
         p_rate = p_rates.get(stat, s_rate)
         w = w_for_stat(stat, row, player_type, params)
         w_by_stat[stat] = w
         adj_rate = p_rate + w * (s_rate - p_rate)
-        # signed believed deviation, luck-direction aware for era/whip (lower=better)
+        # luck-direction aware for era/whip (lower = better)
         direction = -1.0 if stat in ("era", "whip") else 1.0
         denom = abs(p_rate) if abs(p_rate) > 1e-9 else 1.0
-        signed += direction * w * (s_rate - p_rate) / denom
+        term = direction * (s_rate - p_rate) / denom
+        believed += w * term
+        surface += term
         if stat in _RATE_ONLY:
             adjusted[stat] = adj_rate
         else:
             adjusted[stat] = adj_rate * pt
-    label = _label(signed, deviation_threshold)
+    label = _label(believed, surface, deviation_threshold)
     reason = _reason(s_rates, p_rates, w_by_stat, player_type)
     sample = row.pa if player_type == "hitter" else row.ip
     stab = params.stat_stabilize.get("hr" if player_type == "hitter" else "k", params.pa_stabilize)
     confidence = "low" if sample < stab or row.xwoba is None else "full"
-    return BreakoutResult(adjusted, label, reason, w_by_stat, confidence)
+    return BreakoutResult(adjusted, label, reason, w_by_stat, confidence, surface, believed)
 
-def _label(signed, thr):
-    if signed >= thr:
+def _label(believed, surface, thr):
+    # believed (w-weighted) confirms real movement; surface (raw) with a quieted
+    # believed signal is luck.
+    if believed >= thr:
         return "real breakout"
-    if signed <= -thr:
+    if believed <= -thr:
         return "real decline"
-    # near zero, but check whether the SURFACE screamed and w quieted it -> mirage/slump
+    if surface >= thr:
+        return "lucky mirage"   # surface jumped, w regressed it away
+    if surface <= -thr:
+        return "slump"          # surface cratered, underlying says it recovers
     return "stable"
 
 def _reason(s_rates, p_rates, w_by_stat, player_type):
@@ -701,7 +772,11 @@ def _reason(s_rates, p_rates, w_by_stat, player_type):
     return f"{best} {dirn}, w={w_by_stat.get(best, 0):.2f}"
 ```
 
-> The mirage/slump refinement (surface deviates hard but believed-signed stays near zero) is a labeling nicety; implement it only if `test_adjust_line_orders_skill_above_luck_at_equal_surface` needs `rl.label == "lucky mirage"` to be exact -- the test accepts `("lucky mirage", "stable")`, so the minimal `_label` above passes. If you tighten the test later, extend `_label` to compare raw-surface deviation against believed deviation.
+> `_label` distinguishes mirage/slump from stable by comparing the raw `surface`
+> deviation against the `believed` (w-weighted) one: a big surface jump that `w`
+> regressed away is a `lucky mirage`. The ordering test accepts
+> `("lucky mirage", "stable")` for `rl`, so it passes either way; tighten it to
+> exactly `"lucky mirage"` once you have confirmed the seed thresholds on real data.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -759,6 +834,10 @@ def test_breakout_rows_surface_equals_kv_and_adjusted_regresses_luck(monkeypatch
     assert row["adjusted_value"] < row["surface_value"]  # luck regressed out
     assert row["delta"] == row["adjusted_value"] - row["surface_value"]
     assert row["label"] in breakout.LABELS
+    # spec-required deviator flag + underlying numbers
+    assert row["deviator"] is True                 # HR 40 vs proj 20 is a big surface move
+    assert abs(row["woba_xwoba_gap"] - (0.380 - 0.315)) < 1e-9
+    assert row["babip"] == 0.385 and row["barrel_pct"] == 0.06
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -775,8 +854,12 @@ from fantasy_baseball.analysis import keeper_value as _kv_mod
 def _kv(pid, name, anchor, positions, ptype, zips_by_year, scale, **kw):
     return _kv_mod.keeper_value(pid, name, anchor, positions, ptype, zips_by_year, scale, **kw)
 
-def breakout_rows(board, scale, indices, skill_luck, projections, *, base_year, horizon, discount):
-    from fantasy_baseball.sgp.rankings import rank_key
+DEVIATION_THRESHOLD = 0.12  # shared by adjust_line's label and the report's deviator flag
+
+def breakout_rows(board, scale, indices, skill_luck, projections, *, base_year, horizon, discount,
+                  out_year_regression=_kv_mod.DEFAULT_OUT_YEAR_REGRESSION):
+    # out_year_regression MUST match scripts/keeper_value.py:build_results so the surface
+    # value equals today's --anchor current number and surface/adjusted differ ONLY in the anchor.
     rows = []
     for _, r in board.iterrows():
         row = r.to_dict()
@@ -786,22 +869,33 @@ def breakout_rows(board, scale, indices, skill_luck, projections, *, base_year, 
         positions = list(row["positions"])
         zby = _zips_for(row, indices, base_year, horizon)  # helper mirrors kv_script._zips_by_year
         surface = _kv(row["player_id"], row["name"], row, positions, ptype, zby, scale,
-                      base_year=base_year, horizon=horizon).total
+                      base_year=base_year, horizon=horizon, discount=discount,
+                      out_year_regression=out_year_regression).total
         sl = skill_luck.get(fgid) if fgid is not None else None
         proj = projections.get(f"{fg}::{ptype}") if fg is not None else None
         if sl is not None and proj is not None:
-            res = adjust_line(row, proj, sl, ptype)
+            res = adjust_line(row, proj, sl, ptype, deviation_threshold=DEVIATION_THRESHOLD)
             adjusted = _kv(row["player_id"], row["name"], res.adjusted_line, positions, ptype, zby,
-                           scale, base_year=base_year, horizon=horizon).total
-            label, reason, conf = res.label, res.reason, res.confidence
+                           scale, base_year=base_year, horizon=horizon, discount=discount,
+                           out_year_regression=out_year_regression).total
+            gap = (sl.woba - sl.xwoba) if sl.woba is not None and sl.xwoba is not None else None
+            under = {"woba_xwoba_gap": gap, "babip": sl.babip, "barrel_pct": sl.barrel_pct,
+                     "k_pct": sl.k_pct, "bb_pct": sl.bb_pct}
+            rows.append({"name": row["name"], "player_type": ptype, "surface_value": surface,
+                         "adjusted_value": adjusted, "delta": adjusted - surface,
+                         "label": res.label, "reason": res.reason, "confidence": res.confidence,
+                         "deviator": abs(res.surface_deviation) >= DEVIATION_THRESHOLD, **under})
         else:
-            adjusted, label, reason, conf = surface, "stable", "no skill/luck data", "low"
-        rows.append({"name": row["name"], "player_type": ptype, "surface_value": surface,
-                     "adjusted_value": adjusted, "delta": adjusted - surface,
-                     "label": label, "reason": reason, "confidence": conf})
+            rows.append({"name": row["name"], "player_type": ptype, "surface_value": surface,
+                         "adjusted_value": surface, "delta": 0.0, "label": "stable",
+                         "reason": "no skill/luck data", "confidence": "low", "deviator": False,
+                         "woba_xwoba_gap": None, "babip": None, "barrel_pct": None,
+                         "k_pct": None, "bb_pct": None})
     rows.sort(key=lambda d: d["adjusted_value"], reverse=True)
     return rows
 ```
+
+`DEVIATION_THRESHOLD = 0.12` is a module constant in `breakout.py` (equal to the default `adjust_line` carries), so the report's `deviator` flag and the classifier's label share one threshold.
 
 `_zips_for` mirrors `scripts/keeper_value.py:_zips_by_year` (look up each year's ZiPS index by fg_id then name; miss -> None). With the empty `indices={}` the test passes, it returns `{}`, which `keeper_value` treats as all-out-year-missing (year-0 anchor still values via the anchor line):
 
@@ -985,9 +1079,14 @@ git commit -m "feat(breakout-backtest): fixed-yardstick rate-MAE and ruler SGP"
 - Modify: `src/fantasy_baseball/analysis/breakout_backtest.py` (pure `run_backtest` over pre-loaded corpus)
 - Test: `tests/test_analysis/test_breakout_backtest.py`
 
+**Scope:** the backtest is **hitters-only in v1** (pitcher expected-stats coverage on Savant is thinner and starts later). This is stated in the `run_backtest` docstring and printed in the script summary -- not a silent cap. Pitcher backtest is a named follow-up.
+
 **Interfaces:**
-- Consumes: `marcel_prior`, `rate_mae`, `sgp_on_ruler`, `adjust_line`, `line_rates`.
-- Produces: `run_backtest(corpus, *, fit_years, report_years, ruler=DEFAULT_RULER) -> dict` where `corpus[year]` maps `fg_id -> (surface_line, skill_luck_row, actual_next_rates, history, zips_line_or_None)`. Returns Spearman rank-correlation of each estimator's ruler-SGP with realized next-year ruler-SGP on `report_years`, plus a bootstrap CI on `(skill_adjusted - surface)`, and per-estimator rate-MAE. The script builds `corpus` from cached `data/skill_luck/` frames across 2015-2024 and writes `data/stats/breakout_backtest_results.csv`.
+- Consumes: `marcel_prior`, `rate_mae`, `sgp_on_ruler`, `adjust_line`, `line_rates`, `WMapParams`/`DEFAULT_WMAP`.
+- Produces:
+  - `tune_wmap(corpus, fit_years, *, ruler=DEFAULT_RULER) -> WMapParams` -- small grid search over `confirm_weight` and the `hr`/`avg` stabilizers, selecting the params that maximize the skill-adjusted Spearman **on `fit_years` only** (never touches `report_years`).
+  - `run_backtest(corpus, *, fit_years, report_years, params=None, ruler=DEFAULT_RULER) -> dict` where `corpus[year]` maps `fg_id -> (surface_line, skill_luck_row, actual_next_rates, history, zips_line_or_None)`. When `params is None` it calls `tune_wmap(corpus, fit_years)` first, then evaluates the fixed tuned params on the **candidate population** of `report_years` (players whose raw surface-vs-prior deviation clears `CANDIDATE_DEVIATION`). Returns Spearman of THREE estimators (`surface`, `skill_adjusted`, `pure_zips`) vs realized next-year ruler-SGP, a bootstrap CI on `(skill_adjusted - surface)` and on `(skill_adjusted - pure_zips)` (the latter over the ZiPS-covered subset only), per-estimator rate-MAE, and a `label_lift` (retention across believed-deviation terciles). The verdict clears only when BOTH CIs exclude zero.
+  - The script builds `corpus` from cached `data/skill_luck/` frames across 2015-2024 and writes `data/stats/breakout_backtest_results.csv`.
 
 - [ ] **Step 1: Write the failing test** (synthetic 2-year corpus)
 
@@ -1005,17 +1104,27 @@ def _mk_corpus():
     actual_lucky = {"hr": 0.033, "avg": 0.262}
     actual_real = {"hr": 0.062, "avg": 0.298}
     hist = [(2022, {"hr": 0.033, "avg": 0.262})]
+    zips_lucky = {"pa": 600, "hr": 21, "avg": 0.265}   # ZiPS already regressed the mirage
+    zips_real = {"pa": 600, "hr": 37, "avg": 0.296}
     return {2023: {
-        10: (surface, lucky, actual_lucky, hist, None),
-        20: (surface, real, actual_real, hist, None),
+        10: (surface, lucky, actual_lucky, hist, zips_lucky),
+        20: (surface, real, actual_real, hist, zips_real),
     }}
 
-def test_run_backtest_skill_beats_surface_on_synthetic():
+def test_tune_wmap_returns_params_without_touching_report_years():
+    from fantasy_baseball.analysis import breakout_backtest as bb
+    from fantasy_baseball.analysis.breakout import WMapParams
+    p = bb.tune_wmap(_mk_corpus(), fit_years=[2023])
+    assert isinstance(p, WMapParams)
+
+def test_run_backtest_three_estimators_and_ci():
     from fantasy_baseball.analysis import breakout_backtest as bb
     out = bb.run_backtest(_mk_corpus(), fit_years=[2023], report_years=[2023])
-    # skill-adjusted ranks the sustaining player above the mirage better than surface
+    # all three estimators present; skill-adjusted at least ties surface at ranking
+    assert set(out["spearman"]) == {"surface", "skill_adjusted", "pure_zips"}
     assert out["spearman"]["skill_adjusted"] >= out["spearman"]["surface"]
-    assert "ci_low" in out and "ci_high" in out
+    assert "ci_skill_vs_surface" in out and "ci_skill_vs_zips" in out
+    assert "label_lift" in out and out["verdict"] in ("clears gate", "not good enough")
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -1028,15 +1137,19 @@ Expected: FAIL (`run_backtest` undefined).
 ```python
 from statistics import fmean
 
-from fantasy_baseball.analysis.breakout import adjust_line, line_rates
+from fantasy_baseball.analysis.breakout import DEFAULT_WMAP, WMapParams, adjust_line, line_rates
+
+CANDIDATE_DEVIATION = 0.15   # raw surface-vs-prior deviation to count as a breakout/decline candidate
+_TUNE_GRID = {"confirm_weight": [0.3, 0.5, 0.7], "hr": [80.0, 120.0, 200.0], "avg": [600.0, 800.0, 1200.0]}
 
 def _league_mean(year_data):
-    # crude league-mean rate over the corpus year (enough for the reconstructed prior)
     rows = [line_rates(s, "hitter") for s, *_ in year_data.values()]
     keys = set().union(*[set(r) for r in rows]) if rows else set()
     return {k: fmean([r.get(k, 0.0) for r in rows]) for k in keys}
 
 def _spearman(xs, ys):
+    if len(xs) < 2:
+        return 0.0
     def ranks(v):
         order = sorted(range(len(v)), key=lambda i: v[i])
         rk = [0.0] * len(v)
@@ -1044,31 +1157,103 @@ def _spearman(xs, ys):
             rk[i] = float(pos)
         return rk
     rx, ry = ranks(xs), ranks(ys)
-    n = len(xs)
-    if n < 2:
-        return 0.0
     mx, my = fmean(rx), fmean(ry)
     cov = sum((a - mx) * (b - my) for a, b in zip(rx, ry))
     vx = sum((a - mx) ** 2 for a in rx) ** 0.5
     vy = sum((b - my) ** 2 for b in ry) ** 0.5
     return cov / (vx * vy) if vx > 0 and vy > 0 else 0.0
 
-def run_backtest(corpus, *, fit_years, report_years, ruler=DEFAULT_RULER):
-    est_scores = {"surface": [], "skill_adjusted": [], "actual": []}
-    for year in report_years:
+def _params(confirm_weight, hr_stab, avg_stab):
+    base = dict(DEFAULT_WMAP.stat_stabilize)
+    base.update({"hr": hr_stab, "avg": avg_stab})
+    return WMapParams(confirm_weight=confirm_weight, stat_stabilize=base)
+
+def _records(corpus, years, params, ruler):
+    """Per-candidate scored records for `years` under `params` (hitters only)."""
+    recs = []
+    for year in years:
         year_data = corpus[year]
         lg = _league_mean(year_data)
-        for _fgid, (surface, sl, actual_next, hist, _zips) in year_data.items():
-            proj = marcel_prior(hist, lg, sl.age)
-            adj = adjust_line(surface, {**surface, **_rates_to_line(proj, surface)}, sl, "hitter")
-            est_scores["surface"].append(sgp_on_ruler(line_rates(surface, "hitter"), ruler))
-            est_scores["skill_adjusted"].append(sgp_on_ruler(line_rates(adj.adjusted_line, "hitter"), ruler))
-            est_scores["actual"].append(sgp_on_ruler(actual_next, ruler))
-    spearman = {e: _spearman(est_scores[e], est_scores["actual"]) for e in ("surface", "skill_adjusted")}
-    ci_low, ci_high = _bootstrap_diff(est_scores["skill_adjusted"], est_scores["surface"],
-                                      est_scores["actual"])
-    return {"spearman": spearman, "ci_low": ci_low, "ci_high": ci_high,
-            "n": len(est_scores["actual"])}
+        for surface, sl, actual_next, hist, zips_line in year_data.values():
+            proj_line = {**surface, **_rates_to_line(marcel_prior(hist, lg, sl.age), surface)}
+            res = adjust_line(surface, proj_line, sl, "hitter", params=params,
+                              deviation_threshold=CANDIDATE_DEVIATION)
+            if abs(res.surface_deviation) < CANDIDATE_DEVIATION:
+                continue  # not a breakout/decline candidate this year
+            recs.append({
+                "surface": sgp_on_ruler(line_rates(surface, "hitter"), ruler),
+                "skill": sgp_on_ruler(line_rates(res.adjusted_line, "hitter"), ruler),
+                "zips": (sgp_on_ruler(line_rates(zips_line, "hitter"), ruler)
+                         if zips_line is not None else None),
+                "actual": sgp_on_ruler(actual_next, ruler),
+                "believed": res.believed_deviation,
+                "surface_rates": line_rates(surface, "hitter"),
+                "adjusted_rates": line_rates(res.adjusted_line, "hitter"),
+                "prior_rates": line_rates(proj_line, "hitter"),
+                "actual_rates": actual_next,
+            })
+    return recs
+
+def tune_wmap(corpus, fit_years, *, ruler=DEFAULT_RULER):
+    """Grid-search w-params on fit_years ONLY; never reads report_years."""
+    best, best_rho = DEFAULT_WMAP, -2.0
+    for cw in _TUNE_GRID["confirm_weight"]:
+        for hr in _TUNE_GRID["hr"]:
+            for avg in _TUNE_GRID["avg"]:
+                p = _params(cw, hr, avg)
+                recs = _records(corpus, fit_years, p, ruler)
+                rho = _spearman([r["skill"] for r in recs], [r["actual"] for r in recs])
+                if rho > best_rho:
+                    best, best_rho = p, rho
+    return best
+
+def _retention(rec):
+    holds = []
+    for s, sr in rec["surface_rates"].items():
+        pr = rec["prior_rates"].get(s, sr)
+        ar = rec["actual_rates"].get(s)
+        if ar is None or abs(sr - pr) < 1e-9:
+            continue
+        holds.append((ar - pr) / (sr - pr))   # 1.0 = fully held, 0.0 = fully regressed
+    return fmean(holds) if holds else 0.0
+
+def _label_lift(recs):
+    if len(recs) < 3:
+        return 0.0
+    ordered = sorted(recs, key=lambda r: r["believed"])
+    k = len(ordered) // 3
+    return fmean([_retention(r) for r in ordered[-k:]]) - fmean([_retention(r) for r in ordered[:k]])
+
+def run_backtest(corpus, *, fit_years, report_years, params=None, ruler=DEFAULT_RULER):
+    """Hitters-only v1. Tunes w on fit_years (unless params given), evaluates the
+    fixed params on the candidate population of report_years across three estimators.
+    Pitcher backtest is a named follow-up (thinner Savant pitcher xStats coverage)."""
+    if params is None:
+        params = tune_wmap(corpus, fit_years, ruler=ruler)
+    recs = _records(corpus, report_years, params, ruler)
+    actual = [r["actual"] for r in recs]
+    zrecs = [r for r in recs if r["zips"] is not None]
+    spearman = {
+        "surface": _spearman([r["surface"] for r in recs], actual),
+        "skill_adjusted": _spearman([r["skill"] for r in recs], actual),
+        "pure_zips": _spearman([r["zips"] for r in zrecs], [r["actual"] for r in zrecs]),
+    }
+    ci_vs_surface = _bootstrap_diff([r["skill"] for r in recs], [r["surface"] for r in recs], actual)
+    ci_vs_zips = (_bootstrap_diff([r["skill"] for r in zrecs], [r["zips"] for r in zrecs],
+                                  [r["actual"] for r in zrecs]) if len(zrecs) >= 2 else (0.0, 0.0))
+    clears = ci_vs_surface[0] > 0 and ci_vs_zips[0] > 0
+    return {
+        "spearman": spearman,
+        "ci_skill_vs_surface": ci_vs_surface,
+        "ci_skill_vs_zips": ci_vs_zips,
+        "rate_mae": {
+            "surface": fmean([rate_mae(r["surface_rates"], r["actual_rates"]) for r in recs]) if recs else 0.0,
+            "skill_adjusted": fmean([rate_mae(r["adjusted_rates"], r["actual_rates"]) for r in recs]) if recs else 0.0,
+        },
+        "label_lift": _label_lift(recs),
+        "verdict": "clears gate" if clears else "not good enough",
+        "n": len(recs),
+    }
 ```
 
 Local helpers in the same file (deterministic -- seeded RNG, no wall-clock entropy):
@@ -1085,20 +1270,33 @@ def _rates_to_line(rate_line, pt_source):
         line[s] = v if s in ("avg", "era", "whip") else v * pt
     return line
 
-def _bootstrap_diff(skill, surface, actual, *, iters=2000, seed=0):
+def _bootstrap_diff(a, b, actual, *, iters=2000, seed=0):
+    # 95% CI on spearman(a, actual) - spearman(b, actual) via seeded resampling.
     rng = random.Random(seed)
     n = len(actual)
+    if n < 2:
+        return 0.0, 0.0
     diffs = []
     for _ in range(iters):
         idx = [rng.randrange(n) for _ in range(n)]
-        sk = _spearman([skill[i] for i in idx], [actual[i] for i in idx])
-        su = _spearman([surface[i] for i in idx], [actual[i] for i in idx])
-        diffs.append(sk - su)
+        da = _spearman([a[i] for i in idx], [actual[i] for i in idx])
+        db = _spearman([b[i] for i in idx], [actual[i] for i in idx])
+        diffs.append(da - db)
     diffs.sort()
     return diffs[int(0.025 * iters)], diffs[int(0.975 * iters)]
 ```
 
-The script iterates cached years, assembles `corpus`, calls `run_backtest(fit_years=range(2015,2023), report_years=[2023,2024])`, and writes the results CSV + a printed summary stating the acceptance verdict (gap CI `ci_low > 0` -> "clears gate"; else "not good enough -> automation stays deferred").
+The script iterates cached years and assembles `corpus`: for each year it joins the
+cached `data/skill_luck/` frames (surface = that year's actual line, `SkillLuckRow` =
+that year's underlying, `actual_next` = the following year's actual rates, `history` =
+prior years' actual rate lines for the Marcel prior) and attaches `zips_line` from the
+archived ZiPS export (via `scripts/keeper_value.py:load_zips_year`) for the 2022-2024
+report years, `None` elsewhere. It then calls
+`run_backtest(fit_years=range(2015, 2023), report_years=[2023, 2024])`, writes the
+per-estimator results to `data/stats/breakout_backtest_results.csv`, and prints the
+summary including `verdict` (`clears gate` = both `ci_skill_vs_surface[0] > 0` and
+`ci_skill_vs_zips[0] > 0`; else `not good enough -> automation stays deferred`), a note
+that v1 is **hitters-only**, and the ZiPS-covered subset size.
 
 - [ ] **Step 4: Run test to verify it passes**
 
@@ -1128,3 +1326,5 @@ git commit -m "feat(breakout-backtest): year-over-year 3-estimator backtest with
 - The classifier's seed `w`-mapping and label thresholds are **provisional** until Task 10's backtest runs on real cached data; the report must print a "provisional -- pending backtest" banner (Phase 3).
 - Live data fetches (Tasks 1-3 defaults) hit FanGraphs/Savant and are NOT exercised in tests. First real fetch may trip the `_rename_strict` guard if pybaseball's column spellings drifted -- that is the guard doing its job; print `raw.columns.tolist()` and update the rename map, do not silence it.
 - Pitcher parity functions are folded into their hitter task (same seam). If a reviewer would reject the hitter path without the pitcher path, split them; otherwise keep together.
+- The spec mentions name-normalization tie-breaks and a name-collision join test. This plan's cross-source join is **purely id-based** (FanGraphs `IDfg` <-> MLBAM via the Chadwick register; board joined on its own `fg_id`), so there is no name key in the join path and the collision test is moot -- a board row lacking a numeric `fg_id` simply gets no adjustment (falls back to the surface value) rather than risking a wrong name match. If a future change reintroduces a name-keyed fallback, add the deliberate-collision test then.
+- The backtest (Task 10) is **hitters-only in v1** by design (thinner/later Savant pitcher expected-stats coverage); the classifier and report handle both. This is stated in the `run_backtest` docstring and the script summary, not silently capped.
