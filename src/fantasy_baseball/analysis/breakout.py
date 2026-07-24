@@ -150,3 +150,97 @@ def w_for_stat(stat: str, row: SkillLuckRow, player_type: str, params: WMapParam
     # blend: never let confirmation alone drive w to 0 when sample is huge, nor vice versa
     cw = params.confirm_weight
     return reliability * ((1.0 - cw) + cw * confirm)
+
+
+_RATE_ONLY = {"avg", "era", "whip"}
+
+
+def adjust_line(
+    surface_line,
+    projection_line,
+    row,
+    player_type,
+    *,
+    params=DEFAULT_WMAP,
+    deviation_threshold=0.12,
+):
+    """Skill-adjusted counting line + label + reason.
+
+    Rates are shrunk: adjusted = proj + w*(surface - proj), re-multiplied by the
+    surface line's PT (held) to a counting line; avg/era/whip are carried as
+    adjusted rates directly. Label from the aggregate signed, w-weighted deviation
+    vs deviation_threshold; confidence "low" when sample below the stabilization
+    sample or xStats absent.
+    """
+    s_rates = line_rates(surface_line, player_type)
+    p_rates = line_rates(projection_line, player_type)
+    pt = safe_float(surface_line.get("pa" if player_type == "hitter" else "ip", 0))
+    adjusted = dict(surface_line)  # carry non-scored fields (positions, ab, ip, etc.)
+    w_by_stat: dict[str, float] = {}
+    believed = 0.0  # w-weighted signed deviation -> drives the label
+    surface = 0.0  # raw (unweighted) signed deviation -> drives the deviator flag
+    for stat, s_rate in s_rates.items():
+        p_rate = p_rates.get(stat, s_rate)
+        w = w_for_stat(stat, row, player_type, params)
+        w_by_stat[stat] = w
+        adj_rate = p_rate + w * (s_rate - p_rate)
+        # luck-direction aware for era/whip (lower = better)
+        direction = -1.0 if stat in ("era", "whip") else 1.0
+        denom = abs(p_rate) if abs(p_rate) > 1e-9 else 1.0
+        term = direction * (s_rate - p_rate) / denom
+        believed += w * term
+        surface += term
+        if stat in _RATE_ONLY:
+            adjusted[stat] = adj_rate
+        else:
+            adjusted[stat] = adj_rate * pt
+    label = _label(believed, surface, deviation_threshold)
+    reason = _reason(s_rates, p_rates, w_by_stat)
+    sample = row.pa if player_type == "hitter" else row.ip
+    stab = params.stat_stabilize.get("hr" if player_type == "hitter" else "k", params.pa_stabilize)
+    confidence = "low" if sample < stab or row.xwoba is None else "full"
+    return BreakoutResult(adjusted, label, reason, w_by_stat, confidence, surface, believed)
+
+
+def _label(believed, surface, thr):
+    """Label the movement: real breakout/decline, lucky mirage/slump, or stable.
+
+    believed (w-weighted) confirms real movement; surface (raw) with a quieted
+    believed signal is luck. When believed is above threshold but surface is much
+    higher (>2x), the w-weights have regressed significantly, indicating low
+    confirmation (lucky mirage).
+    """
+    if believed >= thr:
+        # Check if surface is much higher than believed -> w's regressed it away
+        if surface > 0 and believed > 0 and surface / believed > 2.0:
+            return "lucky mirage"  # surface jumped but w regressed it substantially
+        return "real breakout"
+    if believed <= -thr:
+        # Check if surface is much lower than believed -> w's regressed it away
+        if surface < 0 and believed < 0 and surface / believed < 0.5:
+            return "slump"  # surface cratered but w regressed it substantially
+        return "real decline"
+    if surface >= thr:
+        return "lucky mirage"  # surface jumped, w regressed it away
+    if surface <= -thr:
+        return "slump"  # surface cratered, underlying says it recovers
+    return "stable"
+
+
+def _reason(s_rates, p_rates, w_by_stat):
+    """Name the largest-magnitude believed mover (normalized by projection rate)."""
+
+    def contribution(k):
+        s_rate = s_rates[k]
+        p_rate = p_rates.get(k, s_rate)
+        w = w_by_stat.get(k, 0)
+        # use direction-aware term like believed calculation
+        direction = -1.0 if k in ("era", "whip") else 1.0
+        denom = abs(p_rate) if abs(p_rate) > 1e-9 else 1.0
+        term = direction * (s_rate - p_rate) / denom
+        return abs(w * term)
+
+    best = max(s_rates, key=contribution)
+    delta = s_rates[best] - p_rates.get(best, s_rates[best])
+    dirn = "up" if delta > 0 else "down"
+    return f"{best} {dirn}, w={w_by_stat.get(best, 0):.2f}"

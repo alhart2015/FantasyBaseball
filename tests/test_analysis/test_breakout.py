@@ -86,3 +86,100 @@ def test_avg_mirage_low_w_when_xba_flat_babip_high():
     assert breakout.w_for_stat("avg", mirage, "hitter", p) < breakout.w_for_stat(
         "avg", real, "hitter", p
     )
+
+
+def test_adjust_line_orders_skill_above_luck_at_equal_surface():
+    proj = {"pa": 600, "ab": 540, "hr": 20, "r": 80, "rbi": 80, "sb": 10, "avg": 0.260}
+    surface = {"pa": 600, "ab": 540, "hr": 40, "r": 100, "rbi": 110, "sb": 10, "avg": 0.300}
+    backed = breakout.SkillLuckRow(
+        mlbam=1,
+        player_type="hitter",
+        pa=600,
+        ip=0.0,
+        age=26.0,
+        barrel_pct=0.16,
+        xslg=0.580,
+        slg=0.580,
+        xba=0.298,
+        ba=0.300,
+        babip=0.300,
+        xwoba=0.380,
+        woba=0.382,
+        k_pct=0.20,
+        bb_pct=0.10,
+    )
+    lucky = breakout.SkillLuckRow(
+        mlbam=2,
+        player_type="hitter",
+        pa=600,
+        ip=0.0,
+        age=26.0,
+        barrel_pct=0.06,
+        xslg=0.410,
+        slg=0.580,
+        xba=0.255,
+        ba=0.300,
+        babip=0.380,
+        xwoba=0.315,
+        woba=0.382,
+        k_pct=0.24,
+        bb_pct=0.06,
+    )
+    rb = breakout.adjust_line(surface, proj, backed, "hitter")
+    rl = breakout.adjust_line(surface, proj, lucky, "hitter")
+    # same surface, but the barrel-backed hitter keeps more of the HR jump
+    assert rb.adjusted_line["hr"] > rl.adjusted_line["hr"]
+    assert rb.label == "real breakout"
+    assert rl.label in ("lucky mirage", "stable")
+    assert "hr" in rb.reason.lower() or "barrel" in rb.reason.lower()
+
+
+def test_adjust_line_low_confidence_small_sample():
+    proj = {"pa": 600, "ab": 540, "hr": 20, "r": 80, "rbi": 80, "sb": 10, "avg": 0.260}
+    surface = {"pa": 80, "ab": 70, "hr": 8, "r": 15, "rbi": 16, "sb": 1, "avg": 0.330}
+    row = breakout.SkillLuckRow(
+        mlbam=3,
+        player_type="hitter",
+        pa=80,
+        ip=0.0,
+        age=24.0,
+        barrel_pct=0.14,
+        xslg=0.520,
+        slg=0.560,
+        xba=0.290,
+        ba=0.330,
+        babip=0.360,
+        xwoba=0.360,
+        woba=0.370,
+        k_pct=0.22,
+        bb_pct=0.08,
+    )
+    r = breakout.adjust_line(surface, proj, row, "hitter")
+    assert r.confidence == "low"
+    # small sample -> adjusted HR rate pulled toward the projection rate, not the hot surface
+    assert r.adjusted_line["hr"] < surface["hr"]
+
+
+def test_adjust_line_real_decline_labeled():
+    proj = {"pa": 600, "ab": 540, "hr": 35, "r": 100, "rbi": 105, "sb": 8, "avg": 0.290}
+    surface = {"pa": 600, "ab": 540, "hr": 15, "r": 65, "rbi": 60, "sb": 4, "avg": 0.235}
+    # underlying confirms the drop is real: xSLG/xBA/xwOBA all down with the surface
+    row = breakout.SkillLuckRow(
+        mlbam=4,
+        player_type="hitter",
+        pa=600,
+        ip=0.0,
+        age=34.0,
+        barrel_pct=0.05,
+        xslg=0.360,
+        slg=0.360,
+        xba=0.238,
+        ba=0.235,
+        babip=0.270,
+        xwoba=0.300,
+        woba=0.302,
+        k_pct=0.27,
+        bb_pct=0.06,
+    )
+    r = breakout.adjust_line(surface, proj, row, "hitter")
+    assert r.label == "real decline"
