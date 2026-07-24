@@ -196,3 +196,80 @@ def test_zips_by_year_missing_player_is_none():
     )
     got = script._zips_by_year("000", "Nobody Here", "hitter", {2027: idx})
     assert got[2027] is None  # unknown fg_id + unknown name -> None (per_year_var flags it)
+
+
+def _fake_kv(raw):
+    class _KV:
+        def get(self, _key):
+            return raw
+
+    return _KV()
+
+
+def test_load_current_lines_fails_loud_when_missing(monkeypatch):
+    monkeypatch.setattr(script, "build_explicit_upstash_kv", lambda: _fake_kv(None))
+    with pytest.raises(SystemExit):
+        script.load_current_full_season_lines()
+
+
+def test_load_current_lines_fails_loud_when_empty(monkeypatch):
+    envelope = {"_meta": {}, "_data": {"hitters": [], "pitchers": []}}
+    monkeypatch.setattr(script, "build_explicit_upstash_kv", lambda: _fake_kv(envelope))
+    with pytest.raises(SystemExit):
+        script.load_current_full_season_lines()
+
+
+def test_load_current_lines_parses_present_blob(monkeypatch):
+    from fantasy_baseball.sgp.rankings import rank_key
+
+    envelope = {
+        "_meta": {},
+        "_data": {
+            "hitters": [{"name": "Al Star", "mlbam_id": 111, "hr": 40, "ab": 550, "h": 165}],
+            "pitchers": [],
+        },
+    }
+    monkeypatch.setattr(script, "build_explicit_upstash_kv", lambda: _fake_kv(envelope))
+    by_name = script.load_current_full_season_lines()
+    assert by_name[rank_key("Al Star", "hitter")]["hr"] == 40
+
+
+def test_parse_args_anchor_default_is_current():
+    assert script._parse_args([]).anchor == "current"
+    assert script._parse_args(["--anchor", "preseason"]).anchor == "preseason"
+
+
+def test_parse_args_anchor_rejects_invalid():
+    with pytest.raises(SystemExit):
+        script._parse_args(["--anchor", "bogus"])
+
+
+def test_parse_args_out_year_regression_default_and_bounds():
+    assert script._parse_args([]).out_year_regression == 0.6
+    assert script._parse_args(["--out-year-regression", "0"]).out_year_regression == 0.0
+    with pytest.raises(SystemExit):
+        script._parse_args(["--out-year-regression", "1.5"])
+
+
+def test_unit_float_validates():
+    assert script._unit_float("0") == 0.0
+    assert script._unit_float("0.6") == 0.6
+    assert script._unit_float("1") == 1.0
+    for bad in ["-0.1", "1.5", "abc", ""]:
+        with pytest.raises(argparse.ArgumentTypeError):
+            script._unit_float(bad)
+
+
+def test_parse_args_pt_heal_cap_default_and_bounds():
+    assert script._parse_args([]).pt_heal_cap == 2.0
+    assert script._parse_args(["--pt-heal-cap", "1"]).pt_heal_cap == 1.0
+    with pytest.raises(SystemExit):
+        script._parse_args(["--pt-heal-cap", "0.5"])
+
+
+def test_min_one_float_validates():
+    assert script._min_one_float("1") == 1.0
+    assert script._min_one_float("2.5") == 2.5
+    for bad in ["0.9", "0", "-1", "abc", ""]:
+        with pytest.raises(argparse.ArgumentTypeError):
+            script._min_one_float(bad)

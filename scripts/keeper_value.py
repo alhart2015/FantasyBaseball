@@ -1,12 +1,13 @@
 """Rank players by keeper-asset value (discounted multi-year VAR), swept across
-discount rates. Reads projections/positions from SQLite and manual ZiPS out-year
-CSV exports; does no network I/O. See
-docs/superpowers/specs/2026-07-22-keeper-value-design.md.
+discount rates. Default --anchor current reads cache:full_season_projections fresh
+from Upstash; --anchor preseason reads only SQLite + manual ZiPS out-year CSV
+exports (no network I/O). See docs/superpowers/specs/2026-07-22-keeper-value-design.md.
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Any
@@ -15,23 +16,31 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+from fantasy_baseball.analysis.draft_value import parse_full_season_lines
 from fantasy_baseball.analysis.keeper_value import (
     DEFAULT_HORIZON,
+    DEFAULT_OUT_YEAR_REGRESSION,
+    DEFAULT_PT_HEAL_CAP,
     discounted_total,
     keeper_value,
+    mark_preseason_fallback,
     out_year_share,
+    overlay_current_anchors,
 )
 from fantasy_baseball.config import load_config
+from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.db import (
     get_blended_projections,
     get_connection,
     get_positions,
 )
 from fantasy_baseball.data.fangraphs import load_projection_set
+from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
 from fantasy_baseball.draft.board import build_board_from_frames
 from fantasy_baseball.draft.keepers import find_keeper_match, index_by_normalized_name
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.rankings import fg_key, lookup_rank, rank_key
+from fantasy_baseball.web.season_data import unwrap_cache_envelope
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PROJECTIONS_ROOT = REPO_ROOT / "data" / "projections"
@@ -65,6 +74,21 @@ def _fg_id(row: pd.Series) -> str | None:
     """Row's FanGraphs id as a str, or None when absent/NaN (blend rows may lack it)."""
     fg = row.get("fg_id")
     return str(fg) if fg is not None and pd.notna(fg) else None
+
+
+def load_current_full_season_lines() -> dict:
+    """Fresh Upstash read of cache:full_season_projections (YTD+ROS blend), parsed to
+    the by-name map. Fails loud if the blob is missing/empty -- never silently serve
+    preseason under a `current` label."""
+    kv = build_explicit_upstash_kv()
+    raw = kv.get(redis_key(CacheKey.FULL_SEASON_PROJECTIONS))
+    if raw is None:
+        raise SystemExit("cache:full_season_projections missing in Upstash; run a refresh first.")
+    payload = unwrap_cache_envelope(json.loads(raw) if isinstance(raw, str) else raw)
+    if not isinstance(payload, dict) or not (payload.get("hitters") or payload.get("pitchers")):
+        raise SystemExit("cache:full_season_projections is empty; run a refresh first.")
+    _by_mlbam, by_name = parse_full_season_lines(payload)
+    return by_name
 
 
 def zips_index(hitters: pd.DataFrame, pitchers: pd.DataFrame) -> dict[str, dict[str, Any]]:
@@ -114,7 +138,14 @@ def _zips_by_year(
     }
 
 
-def build_results(base_year: int, horizon: int):
+def build_results(
+    base_year: int,
+    horizon: int,
+    *,
+    anchor: str = "current",
+    out_year_regression: float = DEFAULT_OUT_YEAR_REGRESSION,
+    pt_heal_cap: float = DEFAULT_PT_HEAL_CAP,
+):
     conn = get_connection()
     try:
         hitters, pitchers = get_blended_projections(conn)
@@ -122,6 +153,24 @@ def build_results(base_year: int, horizon: int):
     finally:
         conn.close()
     config = load_config(CONFIG_PATH)
+    current_keys: set[str] = set()
+    if anchor == "current":
+        by_name = load_current_full_season_lines()
+        hitters, pitchers, current_keys = overlay_current_anchors(
+            hitters, pitchers, by_name, heal_cap=pt_heal_cap
+        )
+        board_keys = {
+            rank_key(str(n), pt)
+            for df, pt in ((hitters, "hitter"), (pitchers, "pitcher"))
+            for n in df["name"]
+        }
+        skipped = sum(1 for k in by_name if k not in board_keys)
+        if skipped:
+            print(
+                f"[keeper-value] {skipped} current-blob players absent from the "
+                f"preseason board (skipped; see spec follow-up)",
+                file=sys.stderr,
+            )
     board, scale = build_board_from_frames(
         hitters,
         pitchers,
@@ -148,8 +197,11 @@ def build_results(base_year: int, horizon: int):
                 scale,
                 base_year=base_year,
                 horizon=horizon,
+                out_year_regression=out_year_regression,
             )
         )
+    if anchor == "current":
+        results = mark_preseason_fallback(results, current_keys)
     return results, candidate_ids
 
 
@@ -232,6 +284,28 @@ def _nonneg_int(s: str) -> int:
     return v
 
 
+def _unit_float(s: str) -> float:
+    """Parse a fraction in [0, 1] for --out-year-regression."""
+    try:
+        v = float(s)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid float {s!r}: {exc}") from exc
+    if not (0.0 <= v <= 1.0):
+        raise argparse.ArgumentTypeError(f"must be in [0, 1]; got {v}")
+    return v
+
+
+def _min_one_float(s: str) -> float:
+    """Parse a float >= 1.0 for --pt-heal-cap (1.0 disables the heal)."""
+    try:
+        v = float(s)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid float {s!r}: {exc}") from exc
+    if v < 1.0:
+        raise argparse.ArgumentTypeError(f"must be >= 1.0 (1.0 disables); got {v}")
+    return v
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Rank players by keeper-asset value (discounted multi-year VAR)."
@@ -258,6 +332,31 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         help="show only the top N players by keeper value (default 100; 0 = all). "
         "Skips the long tail no one would keep.",
     )
+    ap.add_argument(
+        "--anchor",
+        choices=["current", "preseason"],
+        default="current",
+        help="anchor the 2026 base on current-season talent (YTD+ROS, default) or the "
+        "preseason blend. current requires a synced cache:full_season_projections.",
+    )
+    ap.add_argument(
+        "--out-year-regression",
+        type=_unit_float,
+        default=DEFAULT_OUT_YEAR_REGRESSION,
+        metavar="F",
+        help=f"regress 2027+ toward ZiPS's forward projection, fraction in [0,1] "
+        f"(default {DEFAULT_OUT_YEAR_REGRESSION}). 0 = pure current-anchor x aging "
+        f"(over-indexes on this year); 1 = pure ZiPS out-year (ignores this year).",
+    )
+    ap.add_argument(
+        "--pt-heal-cap",
+        type=_min_one_float,
+        default=DEFAULT_PT_HEAL_CAP,
+        metavar="X",
+        help=f"heal injury-shortened anchors: scale counting stats up toward healthy "
+        f"PT by min(X, preseason_PT/current_PT), X >= 1 (default {DEFAULT_PT_HEAL_CAP}). "
+        f"1.0 disables. Rates (talent) are never scaled.",
+    )
     return ap.parse_args(argv)
 
 
@@ -266,7 +365,13 @@ def main(argv: list[str] | None = None) -> None:
     args = _parse_args(argv)
     if args.horizon < 1:
         raise SystemExit("--horizon must be >= 1")
-    results, candidate_ids = build_results(base_year=BASE_YEAR, horizon=args.horizon)
+    results, candidate_ids = build_results(
+        base_year=BASE_YEAR,
+        horizon=args.horizon,
+        anchor=args.anchor,
+        out_year_regression=args.out_year_regression,
+        pt_heal_cap=args.pt_heal_cap,
+    )
     print(render(results, args.discount, candidate_ids, limit=args.limit))
 
 

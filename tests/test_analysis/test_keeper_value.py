@@ -3,6 +3,7 @@ import pandas as pd
 from fantasy_baseball.analysis import keeper_value as kv
 from fantasy_baseball.draft.board import build_board_from_frames
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.sgp.rankings import rank_key
 
 
 def _tiny_scale_and_board():
@@ -290,3 +291,198 @@ def test_keeper_value_populates_pct_from_saves():
         scale,
     )
     assert res.pct_from_saves is not None and res.pct_from_saves > 0.0
+
+
+def _frame(name, ptype_fields):
+    # ptype_fields: dict of stat->value for one player row
+    return pd.DataFrame([{"name": name, "fg_id": "1", **ptype_fields}])
+
+
+def test_overlay_uses_current_line_above_floor():
+    pre = _frame("Al Star", {"r": 60, "hr": 20, "rbi": 60, "sb": 5, "ab": 500, "avg": 0.250})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    current = {
+        rank_key("Al Star", "hitter"): {
+            "r": 90,
+            "hr": 40,
+            "rbi": 100,
+            "sb": 8,
+            "ab": 550,
+            "avg": 0.300,
+        }
+    }
+    h, _p, keys = kv.overlay_current_anchors(pre, empty_p, current)
+    assert h.iloc[0]["hr"] == 40 and h.iloc[0]["avg"] == 0.300  # current stats win
+    assert rank_key("Al Star", "hitter") in keys
+
+
+def test_overlay_keeps_preseason_when_no_current_line():
+    pre = _frame("No Data", {"r": 60, "hr": 20, "rbi": 60, "sb": 5, "ab": 500, "avg": 0.250})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    h, _p, keys = kv.overlay_current_anchors(pre, empty_p, {})
+    assert h.iloc[0]["hr"] == 20  # preseason unchanged
+    assert keys == set()
+
+
+def test_overlay_keeps_preseason_when_current_below_floor():
+    pre = _frame("Hurt Guy", {"r": 60, "hr": 20, "rbi": 60, "sb": 5, "ab": 500, "avg": 0.250})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    # 40 AB is below DEFAULT_MIN_AB (100) -> keep preseason
+    current = {
+        rank_key("Hurt Guy", "hitter"): {"r": 8, "hr": 3, "rbi": 9, "sb": 0, "ab": 40, "avg": 0.300}
+    }
+    h, _p, keys = kv.overlay_current_anchors(pre, empty_p, current)
+    assert h.iloc[0]["hr"] == 20  # kept preseason
+    assert keys == set()
+
+
+def test_overlay_pitcher_uses_current_line_above_floor():
+    empty_h = pd.DataFrame(columns=["name", "fg_id", "r", "hr", "rbi", "sb", "ab", "avg"])
+    pre = _frame("Ace Arm", {"w": 8, "k": 140, "sv": 0, "ip": 95, "era": 3.50, "whip": 1.15})
+    # 95 IP is above DEFAULT_MIN_IP (20) -> use current
+    current = {
+        rank_key("Ace Arm", "pitcher"): {
+            "w": 12,
+            "k": 165,
+            "sv": 0,
+            "ip": 140,
+            "era": 3.10,
+            "whip": 1.05,
+        }
+    }
+    _h, p, keys = kv.overlay_current_anchors(empty_h, pre, current)
+    assert p.iloc[0]["k"] == 165 and p.iloc[0]["era"] == 3.10  # current stats win
+    assert rank_key("Ace Arm", "pitcher") in keys
+
+
+def test_overlay_pitcher_keeps_preseason_when_current_below_floor():
+    empty_h = pd.DataFrame(columns=["name", "fg_id", "r", "hr", "rbi", "sb", "ab", "avg"])
+    pre = _frame("Limited Guy", {"w": 2, "k": 35, "sv": 0, "ip": 45, "era": 4.00, "whip": 1.30})
+    # 10 IP is below DEFAULT_MIN_IP (20) -> keep preseason
+    current = {
+        rank_key("Limited Guy", "pitcher"): {
+            "w": 1,
+            "k": 12,
+            "sv": 0,
+            "ip": 10,
+            "era": 3.80,
+            "whip": 1.20,
+        }
+    }
+    _h, p, keys = kv.overlay_current_anchors(empty_h, pre, current)
+    assert p.iloc[0]["k"] == 35  # kept preseason
+    assert keys == set()
+
+
+def test_overlay_pt_heals_severe_injury_capped():
+    # preseason 600 AB; current 250 AB -> factor min(cap=2.0, 600/250=2.4)=2.0 (cap binds).
+    pre = _frame("Hurt Star", {"r": 45, "hr": 15, "rbi": 45, "sb": 3, "ab": 600, "avg": 0.280})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    current = {
+        rank_key("Hurt Star", "hitter"): {
+            "r": 45,
+            "hr": 15,
+            "rbi": 45,
+            "sb": 3,
+            "ab": 250,
+            "avg": 0.300,
+        }
+    }
+    h, _p, keys = kv.overlay_current_anchors(pre, empty_p, current, heal_cap=2.0)
+    assert h.iloc[0]["hr"] == 30  # 15 * 2.0 (cap), not 15 * 2.4
+    assert h.iloc[0]["ab"] == 500  # 250 * 2.0
+    assert h.iloc[0]["avg"] == 0.300  # rate held -- talent not scaled
+    assert rank_key("Hurt Star", "hitter") in keys
+
+
+def test_overlay_pt_heal_is_partial_for_a_mild_dip():
+    # continuous/monotonic: current 500 of preseason 600 -> factor min(2.0, 1.2)=1.2.
+    pre = _frame("Mild Dip", {"r": 90, "hr": 30, "rbi": 90, "sb": 5, "ab": 600, "avg": 0.280})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    current = {
+        rank_key("Mild Dip", "hitter"): {
+            "r": 75,
+            "hr": 25,
+            "rbi": 75,
+            "sb": 4,
+            "ab": 500,
+            "avg": 0.290,
+        }
+    }
+    h, _p, _k = kv.overlay_current_anchors(pre, empty_p, current, heal_cap=2.0)
+    assert h.iloc[0]["hr"] == 30.0  # 25 * 1.2
+    assert h.iloc[0]["ab"] == 600.0  # 500 * 1.2
+
+
+def test_overlay_pt_heal_off_and_full_pt_unscaled():
+    # heal_cap<=1.0 disables; and a player at/above preseason PT is never scaled (up only).
+    pre = _frame("Full", {"r": 90, "hr": 30, "rbi": 90, "sb": 5, "ab": 600, "avg": 0.280})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    current = {
+        rank_key("Full", "hitter"): {"r": 80, "hr": 25, "rbi": 80, "sb": 4, "ab": 620, "avg": 0.290}
+    }
+    h_off, _p, _k = kv.overlay_current_anchors(pre, empty_p, current, heal_cap=1.0)
+    assert h_off.iloc[0]["hr"] == 25  # disabled -> raw current line
+    h_on, _p2, _k2 = kv.overlay_current_anchors(pre, empty_p, current, heal_cap=2.0)
+    assert h_on.iloc[0]["hr"] == 25  # cur 620 >= pre 600 -> no heal (up only)
+
+
+def test_mark_preseason_fallback_flags_only_non_current():
+    r_cur = kv.KeeperValueResult("aaa::hitter", "Al Star", {2026: 1.0}, 1.0, [], 0.5, None)
+    r_pre = kv.KeeperValueResult("bbb::hitter", "No Data", {2026: 1.0}, 1.0, [], 0.5, None)
+    out = kv.mark_preseason_fallback([r_cur, r_pre], {rank_key("Al Star", "hitter")})
+    flags = {r.name: r.flags for r in out}
+    assert "anchor_preseason_fallback" not in flags["Al Star"]
+    assert "anchor_preseason_fallback" in flags["No Data"]
+
+
+def test_breakout_anchor_scores_higher_than_modest():
+    board, scale = _tiny_scale_and_board()
+    # Explicitly select a hitter row: the fixture board is sorted by VAR
+    # descending, and "Ace Arm" (pitcher) outranks "Star Bat" here, so a bare
+    # board.iloc[0] would grab a pitcher -- scaling hr/r/rbi/sb/ab/avg on a
+    # pitcher line is a no-op (pitcher scoring uses w/k/sv/ip/era/whip), which
+    # made hi == lo rather than exercising the intended hitter breakout.
+    row = board[board["player_type"] == "hitter"].iloc[0]
+    zips_by_year = {
+        2026: {"hr": 25, "r": 80, "rbi": 80, "sb": 5, "ab": 550, "avg": 0.260},
+        2027: {"hr": 26, "r": 82, "rbi": 82, "sb": 5, "ab": 550, "avg": 0.262},
+        2028: {"hr": 27, "r": 84, "rbi": 84, "sb": 5, "ab": 550, "avg": 0.264},
+    }
+    modest = {**row.to_dict(), "hr": 20, "r": 70, "rbi": 70, "sb": 4, "ab": 540, "avg": 0.255}
+    breakout = {**row.to_dict(), "hr": 40, "r": 100, "rbi": 105, "sb": 9, "ab": 560, "avg": 0.300}
+    common = dict(
+        positions=list(row["positions"]),
+        player_type=row["player_type"],
+        zips_by_year=zips_by_year,
+        scale=scale,
+    )
+    lo = kv.discounted_total(kv.per_year_var(modest, **common)[0], 2026, 0.8, 3)
+    hi = kv.discounted_total(kv.per_year_var(breakout, **common)[0], 2026, 0.8, 3)
+    assert hi > lo
+
+
+def test_out_year_regression_blends_toward_zips():
+    # A breakout anchor scaled forward (out_year_regression=0) beats ZiPS's modest
+    # out-year projection (=1); the 0.6 blend sits strictly between. 2026 (base year)
+    # is unaffected by the knob.
+    board, scale = _tiny_scale_and_board()
+    row = board[board["player_type"] == "hitter"].iloc[0]
+    anchor = {**row.to_dict(), "hr": 40, "r": 100, "rbi": 105, "sb": 9, "ab": 560, "avg": 0.300}
+    zips_by_year = {
+        2026: {"hr": 20, "r": 70, "rbi": 70, "sb": 4, "ab": 540, "avg": 0.255},
+        2027: {"hr": 21, "r": 72, "rbi": 72, "sb": 4, "ab": 540, "avg": 0.257},
+        2028: {"hr": 22, "r": 74, "rbi": 74, "sb": 4, "ab": 540, "avg": 0.259},
+    }
+    common = dict(
+        positions=list(row["positions"]),
+        player_type=row["player_type"],
+        zips_by_year=zips_by_year,
+        scale=scale,
+    )
+    pure_anchor = kv.per_year_var(anchor, **common, out_year_regression=0.0)[0]
+    pure_zips = kv.per_year_var(anchor, **common, out_year_regression=1.0)[0]
+    blended = kv.per_year_var(anchor, **common, out_year_regression=0.6)[0]
+    assert pure_anchor[2026] == pure_zips[2026] == blended[2026]  # base year untouched
+    assert pure_zips[2027] < blended[2027] < pure_anchor[2027]  # 0.6 between the extremes
+    assert pure_zips[2028] < blended[2028] < pure_anchor[2028]
