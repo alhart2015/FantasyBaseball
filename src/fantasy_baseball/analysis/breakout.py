@@ -102,6 +102,8 @@ class WMapParams:
 
 DEFAULT_WMAP = WMapParams()
 
+MIRAGE_RATIO = 2.0  # surface move this many times the believed move -> luck, not skill
+
 
 def _reliability(sample: float, stabilize: float) -> float:
     """Reliability: fraction of total signal attributable to sample vs noise.
@@ -202,29 +204,18 @@ def adjust_line(
     return BreakoutResult(adjusted, label, reason, w_by_stat, confidence, surface, believed)
 
 
-def _label(believed, surface, thr):
-    """Label the movement: real breakout/decline, lucky mirage/slump, or stable.
-
-    believed (w-weighted) confirms real movement; surface (raw) with a quieted
-    believed signal is luck. When believed is above threshold but surface is much
-    higher (>2x), the w-weights have regressed significantly, indicating low
-    confirmation (lucky mirage).
-    """
-    if believed >= thr:
-        # Check if surface is much higher than believed -> w's regressed it away
-        if surface > 0 and believed > 0 and surface / believed > 2.0:
-            return "lucky mirage"  # surface jumped but w regressed it substantially
-        return "real breakout"
-    if believed <= -thr:
-        # Check if surface is much lower than believed -> w's regressed it away
-        if surface < 0 and believed < 0 and surface / believed < 0.5:
-            return "slump"  # surface cratered but w regressed it substantially
-        return "real decline"
+def _label(believed, surface, thr, *, mirage_ratio=MIRAGE_RATIO):
+    # believed = w-weighted (skill-backed) deviation; surface = raw deviation.
+    # A big surface move that belief mostly regressed away is luck
+    # (mirage/slump); one belief largely kept is real (breakout/decline).
+    # Symmetric on both signs; multiplication (not division) so a near-zero
+    # believed cannot blow up.
+    if abs(surface) < thr:
+        return "stable"
+    luck = abs(surface) > mirage_ratio * abs(believed)
     if surface >= thr:
-        return "lucky mirage"  # surface jumped, w regressed it away
-    if surface <= -thr:
-        return "slump"  # surface cratered, underlying says it recovers
-    return "stable"
+        return "lucky mirage" if luck else "real breakout"
+    return "slump" if luck else "real decline"
 
 
 def _reason(s_rates, p_rates, w_by_stat):

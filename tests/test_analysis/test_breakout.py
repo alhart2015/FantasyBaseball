@@ -160,6 +160,66 @@ def test_adjust_line_low_confidence_small_sample():
     assert r.adjusted_line["hr"] < surface["hr"]
 
 
+def test_adjust_line_lucky_mirage_labeled():
+    """Big HR surge, but Statcast xStats stay flat: slg >> xslg, woba >> xwoba,
+    low barrel. w regresses the HR jump away almost entirely -> lucky mirage,
+    not real breakout.
+    """
+    proj = {"pa": 600, "ab": 540, "hr": 20, "r": 80, "rbi": 80, "sb": 10, "avg": 0.260}
+    surface = {"pa": 600, "ab": 540, "hr": 40, "r": 80, "rbi": 80, "sb": 10, "avg": 0.260}
+    row = breakout.SkillLuckRow(
+        mlbam=10,
+        player_type="hitter",
+        pa=600,
+        ip=0.0,
+        age=27.0,
+        barrel_pct=0.05,
+        xslg=0.380,
+        slg=0.560,
+        xba=0.250,
+        ba=0.260,
+        babip=0.330,
+        xwoba=0.310,
+        woba=0.360,
+        k_pct=0.24,
+        bb_pct=0.06,
+    )
+    r = breakout.adjust_line(surface, proj, row, "hitter")
+    assert r.surface_deviation > 0
+    assert abs(r.surface_deviation) > 2.0 * abs(r.believed_deviation)
+    assert r.label == "lucky mirage"
+
+
+def test_adjust_line_slump_labeled():
+    """Big drop in HR/R/RBI/AVG, but Statcast xStats (xslg/xba/xwoba, high
+    barrel) stay strong and actual results (slg/ba/woba) are suppressed by bad
+    luck (low BABIP). The drop is largely unconfirmed -> slump, not real decline.
+    """
+    proj = {"pa": 600, "ab": 540, "hr": 35, "r": 100, "rbi": 105, "sb": 8, "avg": 0.290}
+    surface = {"pa": 600, "ab": 540, "hr": 15, "r": 65, "rbi": 60, "sb": 4, "avg": 0.235}
+    row = breakout.SkillLuckRow(
+        mlbam=20,
+        player_type="hitter",
+        pa=600,
+        ip=0.0,
+        age=27.0,
+        barrel_pct=0.17,
+        xslg=0.560,
+        slg=0.380,
+        xba=0.300,
+        ba=0.235,
+        babip=0.230,
+        xwoba=0.370,
+        woba=0.300,
+        k_pct=0.20,
+        bb_pct=0.09,
+    )
+    r = breakout.adjust_line(surface, proj, row, "hitter")
+    assert r.surface_deviation < 0
+    assert abs(r.surface_deviation) > 2.0 * abs(r.believed_deviation)
+    assert r.label == "slump"
+
+
 def test_adjust_line_real_decline_labeled():
     proj = {"pa": 600, "ab": 540, "hr": 35, "r": 100, "rbi": 105, "sb": 8, "avg": 0.290}
     surface = {"pa": 600, "ab": 540, "hr": 15, "r": 65, "rbi": 60, "sb": 4, "avg": 0.235}
