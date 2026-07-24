@@ -32,6 +32,13 @@ DEFAULT_HORIZON = 3
 # out-year. 0.6 = "mostly ZiPS" -- keeps ~40% of the realized-2026 signal while
 # leaning on ZiPS's regressed multi-year view (inherits ZiPS's skill-vs-luck sort).
 DEFAULT_OUT_YEAR_REGRESSION = 0.6
+# PT-heal: when a player's current (YTD+ROS) playing time is below
+# DEFAULT_PT_HEAL_BELOW x their preseason PT (an injury, not a talent decline),
+# scale the counting stats up to the healthy PT (rates held) so a lost half-season
+# doesn't negate keeper talent -- capped at DEFAULT_PT_HEAL_CAP x the current PT so
+# a tiny, noisy sample isn't extrapolated to a full season. 0 disables.
+DEFAULT_PT_HEAL_BELOW = 0.65
+DEFAULT_PT_HEAL_CAP = 2.0
 DEFAULT_RATIO_BAND = (0.25, 2.5)
 DEFAULT_MIN_AB = 100.0
 DEFAULT_MIN_IP = 20.0
@@ -280,9 +287,17 @@ def overlay_current_anchors(
     *,
     min_ab: float = DEFAULT_MIN_AB,
     min_ip: float = DEFAULT_MIN_IP,
+    heal_below: float = 0.0,
+    heal_cap: float = DEFAULT_PT_HEAL_CAP,
 ) -> tuple[pd.DataFrame, pd.DataFrame, set[str]]:
     """Replace each board frame's stat line with the current-talent line when one
     exists for that player (keyed name::player_type) AND clears the min-PT floor.
+
+    ``heal_below`` PT-heals injury-shortened anchors (up only): when a player's
+    current PT (ab/ip) is below ``heal_below`` x their preseason PT, scale the
+    counting stats up to the healthy PT (rates held), capped at ``heal_cap`` x the
+    current PT. 0 disables (use the raw current line). Rates (avg/era/whip) carry
+    the skill signal and are never scaled, so a genuine decline is not healed.
 
     Returns ``(merged_hitters, merged_pitchers, current_keys)`` where ``current_keys``
     are the ``rank_key(name, player_type)`` values that received the current anchor;
@@ -290,18 +305,30 @@ def overlay_current_anchors(
     """
     current_keys: set[str] = set()
     out = []
-    for df, ptype, fields, vol_field, floor in (
-        (hitters, "hitter", HITTER_FIELDS, "ab", min_ab),
-        (pitchers, "pitcher", PITCHER_FIELDS, "ip", min_ip),
+    for df, ptype, fields, vol_field, rate_fields, floor in (
+        (hitters, "hitter", HITTER_FIELDS, "ab", ("avg",), min_ab),
+        (pitchers, "pitcher", PITCHER_FIELDS, "ip", ("era", "whip"), min_ip),
     ):
         merged = df.copy()
         for idx, name in merged["name"].items():
             key = rank_key(str(name), ptype)
             line = current_by_name.get(key)
-            if line is None or safe_float(line.get(vol_field, 0)) < floor:
+            cur_pt = safe_float(line.get(vol_field, 0)) if line is not None else 0.0
+            if line is None or cur_pt < floor:
                 continue
+            factor = 1.0
+            if heal_below > 0.0 and vol_field in merged.columns:
+                pre_pt = safe_float(merged.at[idx, vol_field])
+                if pre_pt > 0.0 and cur_pt < heal_below * pre_pt:
+                    factor = min(heal_cap, pre_pt / cur_pt)
             for f in fields:
-                merged.at[idx, f] = line.get(f)
+                v = safe_float(line.get(f))
+                if f == vol_field:
+                    merged.at[idx, f] = cur_pt * factor
+                elif f in rate_fields:
+                    merged.at[idx, f] = v
+                else:
+                    merged.at[idx, f] = v * factor
             current_keys.add(key)
         out.append(merged)
     return out[0], out[1], current_keys

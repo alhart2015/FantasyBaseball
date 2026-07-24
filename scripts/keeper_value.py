@@ -20,6 +20,7 @@ from fantasy_baseball.analysis.draft_value import parse_full_season_lines
 from fantasy_baseball.analysis.keeper_value import (
     DEFAULT_HORIZON,
     DEFAULT_OUT_YEAR_REGRESSION,
+    DEFAULT_PT_HEAL_BELOW,
     discounted_total,
     keeper_value,
     mark_preseason_fallback,
@@ -143,6 +144,7 @@ def build_results(
     *,
     anchor: str = "current",
     out_year_regression: float = DEFAULT_OUT_YEAR_REGRESSION,
+    pt_heal_below: float = DEFAULT_PT_HEAL_BELOW,
 ):
     conn = get_connection()
     try:
@@ -154,7 +156,9 @@ def build_results(
     current_keys: set[str] = set()
     if anchor == "current":
         by_name = load_current_full_season_lines()
-        hitters, pitchers, current_keys = overlay_current_anchors(hitters, pitchers, by_name)
+        hitters, pitchers, current_keys = overlay_current_anchors(
+            hitters, pitchers, by_name, heal_below=pt_heal_below
+        )
         board_keys = {
             rank_key(str(n), pt)
             for df, pt in ((hitters, "hitter"), (pitchers, "pitcher"))
@@ -333,6 +337,15 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         f"(default {DEFAULT_OUT_YEAR_REGRESSION}). 0 = pure current-anchor x aging "
         f"(over-indexes on this year); 1 = pure ZiPS out-year (ignores this year).",
     )
+    ap.add_argument(
+        "--pt-heal",
+        type=_unit_float,
+        default=DEFAULT_PT_HEAL_BELOW,
+        metavar="F",
+        help=f"heal injury-shortened anchors: scale counting stats up to healthy PT "
+        f"when current PT < F x preseason PT, fraction in [0,1] (default "
+        f"{DEFAULT_PT_HEAL_BELOW}). 0 disables. Rates (talent) are never scaled.",
+    )
     return ap.parse_args(argv)
 
 
@@ -346,6 +359,7 @@ def main(argv: list[str] | None = None) -> None:
         horizon=args.horizon,
         anchor=args.anchor,
         out_year_regression=args.out_year_regression,
+        pt_heal_below=args.pt_heal,
     )
     print(render(results, args.discount, candidate_ids, limit=args.limit))
 

@@ -258,3 +258,10 @@ def test_unit_float_validates():
     for bad in ["-0.1", "1.5", "abc", ""]:
         with pytest.raises(argparse.ArgumentTypeError):
             script._unit_float(bad)
+
+
+def test_parse_args_pt_heal_default_and_bounds():
+    assert script._parse_args([]).pt_heal == 0.65
+    assert script._parse_args(["--pt-heal", "0"]).pt_heal == 0.0
+    with pytest.raises(SystemExit):
+        script._parse_args(["--pt-heal", "2"])

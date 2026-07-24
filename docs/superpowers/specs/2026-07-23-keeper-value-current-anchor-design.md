@@ -137,6 +137,21 @@ DARKO trajectory follow-up). Empirically at `0.6`: Otto #18->#44, Soto #29->#10,
 stays #1 but at a sane level. The default flows through `build_results`, so the
 keeper-trade generator uses the same regressed values.
 
+### PT-heal for injury-shortened anchors (post-spot-check refinement)
+
+The current anchor is projected-final *counting totals* (YTD+ROS), so a mid-season
+injury shrinks the totals even though the rates (talent) are intact -- e.g. Aaron
+Judge (half a season lost, 624->307 AB) fell to #136 at value 2.5 (would be 16.3
+healthy). Fix: `heal_below` (`DEFAULT_PT_HEAL_BELOW = 0.65`, `--pt-heal` CLI flag)
+in `overlay_current_anchors` -- **up only**. When a player's current PT (ab/ip) is
+below `heal_below x` their preseason PT, scale the *counting* stats up to the healthy
+PT (`factor = min(DEFAULT_PT_HEAL_CAP=2.0, preseason_PT/current_PT)`); the PT field
+becomes `current_PT x factor`. Rates (avg/era/whip) carry the skill signal and are
+never scaled, so a genuine decline is not healed -- only lost *time* is. The cap
+prevents extrapolating a tiny, noisy sample to a full season; sub-floor players still
+fall back to preseason. Empirically: Judge #136->#22; normal players move <=0.1.
+`0` disables. Flows through `build_results` (trade generator inherits it).
+
 ## Data flow (current mode)
 
 ```
@@ -160,13 +175,11 @@ cache:full_season_projections (Upstash, YTD+ROS blend) -> per-player overlay
 - **No current line, or below the min-PT floor** (not yet debuted, barely played,
   season-long injury): keep preseason anchor, flag `anchor_preseason_fallback`.
   The existing per-out-year `approach_a`/`fallback_A` path is unaffected.
-- **Mid-season-ending injury (known limitation).** A player who played a
+- **Mid-season injury -- handled by PT-heal (see above).** A player who played a
   meaningful chunk (clears the min-PT floor) then was hurt has a *depressed*
-  projected-final line (YTD + near-zero ROS), so the current anchor understates
-  his keeper talent. This is an accepted limitation of the projected-final choice
-  for the MVP: it is a real signal about 2026 but a weak one about 2027-28 talent.
-  The forward-true-talent-rate variant (deferred, tied to the trajectory model)
-  is what ultimately fixes it; do NOT special-case injuries here.
+  projected-final line (YTD + near-zero ROS). The `heal_below` PT-heal scales his
+  counting stats up to a healthy PT (rates held), so lost *time* no longer negates
+  keeper talent; a full-season decline (normal PT, weak rates) is untouched.
 - **Player in current blob but not the preseason board** (a call-up absent from
   the preseason blend): out of scope for the MVP -- the preseason board is the
   coverage base. Note the count of such skips so the gap is visible, don't hide
