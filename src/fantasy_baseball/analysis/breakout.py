@@ -302,6 +302,13 @@ def breakout_rows(
             out_year_regression=out_year_regression,
         ).total
         sl = skill_luck.get(fgid) if fgid is not None else None
+        if sl is not None and sl.player_type != ptype:
+            # Two-way fg_id collision (e.g. Ohtani): skill_luck is keyed by bare
+            # fg_id, so a hitter and pitcher row can share a key. A wrong-type
+            # row must not be used -- degrade to the no-data fallback below
+            # rather than silently corrupting this board row with the other
+            # player_type's Statcast numbers.
+            sl = None
         proj = projections.get(f"{fg}::{ptype}") if fg is not None else None
         if sl is not None and proj is not None:
             res = adjust_line(row, proj, sl, ptype, deviation_threshold=DEVIATION_THRESHOLD)

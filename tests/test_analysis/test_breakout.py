@@ -303,6 +303,96 @@ def test_breakout_rows_surface_equals_kv_and_adjusted_regresses_luck(monkeypatch
     assert row["babip"] == 0.385 and row["barrel_pct"] == 0.06
 
 
+def test_breakout_rows_two_way_fgid_collision_degrades_to_no_data(monkeypatch):
+    """Two-way players (e.g. Ohtani) share one FanGraphs id across their hitter
+    and pitcher rows. skill_luck is keyed by bare fg_id, so a hitter row can be
+    stored under the same key a pitcher board row looks up. The board row's
+    player_type must be checked against the looked-up row's before use -- a
+    mismatch must degrade to the no-data fallback, not borrow the wrong
+    player's Statcast numbers (which would corrupt the pitcher's reliability
+    and report line)."""
+    import pandas as pd
+
+    from fantasy_baseball.analysis import keeper_value
+
+    # pitcher board row whose fg_id collides with a HITTER row in skill_luck
+    board = pd.DataFrame(
+        [
+            {
+                "player_id": "Two Way Guy::pitcher",
+                "name": "Two Way Guy",
+                "player_type": "pitcher",
+                "positions": ["SP"],
+                "fg_id": "30001",
+                "ip": 150,
+                "k": 180,
+                "w": 12,
+                "sv": 0,
+                "era": 3.20,
+                "whip": 1.10,
+            }
+        ]
+    )
+    projections = {
+        "30001::pitcher": {
+            "ip": 150,
+            "k": 160,
+            "w": 10,
+            "sv": 0,
+            "era": 3.60,
+            "whip": 1.20,
+        }
+    }
+    # mismatched row: player_type="hitter" stored under the pitcher's fg_id key
+    skill_luck = {
+        30001: breakout.SkillLuckRow(
+            mlbam=999999,
+            player_type="hitter",
+            pa=600,
+            ip=0.0,
+            age=27.0,
+            barrel_pct=0.20,
+            xslg=0.600,
+            slg=0.600,
+            xba=0.310,
+            ba=0.310,
+            babip=0.340,
+            xwoba=0.400,
+            woba=0.400,
+            k_pct=0.18,
+            bb_pct=0.10,
+        )
+    }
+
+    def fake_kv(pid, name, anchor, pos, ptype, zby, scale, **kw):
+        return keeper_value.KeeperValueResult(
+            pid, name, {2026: anchor["k"]}, float(anchor["k"]), [], None, None
+        )
+
+    monkeypatch.setattr(breakout, "_kv", fake_kv, raising=False)
+    rows = breakout.breakout_rows(
+        board,
+        scale=None,
+        indices={},
+        skill_luck=skill_luck,
+        projections=projections,
+        base_year=2026,
+        horizon=3,
+        discount=0.8,
+    )
+    row = rows[0]
+    # degraded gracefully: adjusted == surface, stable/not-a-deviator, no borrowed data
+    assert row["adjusted_value"] == row["surface_value"]
+    assert row["label"] == "stable"
+    assert row["deviator"] is False
+    assert row["reason"] == "no skill/luck data"
+    assert row["woba_xwoba_gap"] is None
+    assert row["babip"] is None
+    assert row["barrel_pct"] is None
+    assert row["k_pct"] is None
+    assert row["bb_pct"] is None
+
+
 def test_adjust_line_real_decline_labeled():
     proj = {"pa": 600, "ab": 540, "hr": 35, "r": 100, "rbi": 105, "sb": 8, "avg": 0.290}
     surface = {"pa": 600, "ab": 540, "hr": 15, "r": 65, "rbi": 60, "sb": 4, "avg": 0.235}

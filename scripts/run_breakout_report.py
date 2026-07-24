@@ -61,9 +61,15 @@ def _merged_skill_luck(cache_dir: Path, year: int) -> dict:
 
     KNOWN LIMITATION: a two-way player who shares one FanGraphs id across
     batting_stats/pitching_stats (e.g. Ohtani) collides on this int key -- the
-    hitter row wins and the pitcher board row falls back to "no skill/luck
-    data". No board-side fix is possible without namespacing this dict by
-    player_type too; deferred (rare in practice: one player leaguewide).
+    hitter row wins the merge, so ``skill_luck.get(fgid)`` returns the hitter's
+    row for BOTH of that player's board rows. breakout_rows guards this: it
+    compares the looked-up row's player_type against the board row's and
+    discards a mismatch, so the pitcher board row degrades gracefully to "no
+    skill/luck data" instead of being corrupted with the hitter's Statcast
+    numbers. No board-side fix is possible without namespacing this dict by
+    player_type too, which would let the pitcher board row get its OWN
+    skill/luck data (full two-way valuation); deferred (rare in practice: one
+    player leaguewide).
     """
     hitters, _ = build_hitter_skill_luck(cache_dir, year)
     pitchers, _ = build_pitcher_skill_luck(cache_dir, year)
