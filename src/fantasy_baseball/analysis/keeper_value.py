@@ -32,12 +32,13 @@ DEFAULT_HORIZON = 3
 # out-year. 0.6 = "mostly ZiPS" -- keeps ~40% of the realized-2026 signal while
 # leaning on ZiPS's regressed multi-year view (inherits ZiPS's skill-vs-luck sort).
 DEFAULT_OUT_YEAR_REGRESSION = 0.6
-# PT-heal: when a player's current (YTD+ROS) playing time is below
-# DEFAULT_PT_HEAL_BELOW x their preseason PT (an injury, not a talent decline),
-# scale the counting stats up to the healthy PT (rates held) so a lost half-season
-# doesn't negate keeper talent -- capped at DEFAULT_PT_HEAL_CAP x the current PT so
-# a tiny, noisy sample isn't extrapolated to a full season. 0 disables.
-DEFAULT_PT_HEAL_BELOW = 0.65
+# PT-heal: when a player's current (YTD+ROS) playing time is below his preseason
+# PT (an injury, not a talent decline), scale the counting stats up toward the
+# healthy PT (rates held) so a lost half-season doesn't negate keeper talent. The
+# heal factor is max(1, min(cap, preseason_PT/current_PT)): continuous and monotonic
+# in playing time (a mild PT dip gets a mild bump, a severe injury the full cap), so
+# there is no threshold cliff. `cap` is the max multiplier -- it bounds how far a
+# tiny, noisy sample is extrapolated; cap <= 1.0 disables the heal.
 DEFAULT_PT_HEAL_CAP = 2.0
 DEFAULT_RATIO_BAND = (0.25, 2.5)
 DEFAULT_MIN_AB = 100.0
@@ -287,17 +288,23 @@ def overlay_current_anchors(
     *,
     min_ab: float = DEFAULT_MIN_AB,
     min_ip: float = DEFAULT_MIN_IP,
-    heal_below: float = 0.0,
-    heal_cap: float = DEFAULT_PT_HEAL_CAP,
+    heal_cap: float = 1.0,
 ) -> tuple[pd.DataFrame, pd.DataFrame, set[str]]:
     """Replace each board frame's stat line with the current-talent line when one
     exists for that player (keyed name::player_type) AND clears the min-PT floor.
 
-    ``heal_below`` PT-heals injury-shortened anchors (up only): when a player's
-    current PT (ab/ip) is below ``heal_below`` x their preseason PT, scale the
-    counting stats up to the healthy PT (rates held), capped at ``heal_cap`` x the
-    current PT. 0 disables (use the raw current line). Rates (avg/era/whip) carry
-    the skill signal and are never scaled, so a genuine decline is not healed.
+    ``heal_cap`` PT-heals injury-shortened anchors (up only): a player whose current
+    PT (ab/ip) is below his preseason PT has his counting stats scaled by
+    ``factor = min(heal_cap, preseason_PT/current_PT)`` toward the healthy PT, with
+    rates (avg/era/whip) held. The factor is continuous and monotonic in playing time
+    (a mild PT dip -> mild bump, a severe injury -> the full cap), so there is no
+    threshold cliff. ``heal_cap <= 1.0`` disables it (use the raw current line).
+
+    KNOWN LIMITATION (heuristic): a PT drop is assumed to be injury -- a genuine
+    playing-time *loss* (a platoon/role bat with strong rates but few PA) is
+    over-healed, since only IL data could distinguish it (deferred, see the risk
+    follow-up). A performance decline is NOT over-healed: rates are held, so scaling
+    a low-rate line up to full PT still yields low counting value.
 
     Returns ``(merged_hitters, merged_pitchers, current_keys)`` where ``current_keys``
     are the ``rank_key(name, player_type)`` values that received the current anchor;
@@ -310,25 +317,29 @@ def overlay_current_anchors(
         (pitchers, "pitcher", PITCHER_FIELDS, "ip", ("era", "whip"), min_ip),
     ):
         merged = df.copy()
+        # Overlaid/healed stats are fractional; float the scored columns so writing a
+        # scaled value into an int-typed frame is lossless (and pandas doesn't warn).
+        present = [f for f in fields if f in merged.columns]
+        if present:
+            merged[present] = merged[present].astype(float)
         for idx, name in merged["name"].items():
             key = rank_key(str(name), ptype)
             line = current_by_name.get(key)
-            cur_pt = safe_float(line.get(vol_field, 0)) if line is not None else 0.0
-            if line is None or cur_pt < floor:
+            if line is None:
+                continue
+            cur_pt = safe_float(line.get(vol_field, 0))
+            if cur_pt < floor:
                 continue
             factor = 1.0
-            if heal_below > 0.0 and vol_field in merged.columns:
+            if heal_cap > 1.0 and cur_pt > 0.0 and vol_field in merged.columns:
                 pre_pt = safe_float(merged.at[idx, vol_field])
-                if pre_pt > 0.0 and cur_pt < heal_below * pre_pt:
+                if pre_pt > cur_pt:  # played less than projected -> heal up (capped)
                     factor = min(heal_cap, pre_pt / cur_pt)
+            # rates (avg/era/whip) carry talent and are held; volume + counting
+            # stats scale with the (healed) playing time.
             for f in fields:
                 v = safe_float(line.get(f))
-                if f == vol_field:
-                    merged.at[idx, f] = cur_pt * factor
-                elif f in rate_fields:
-                    merged.at[idx, f] = v
-                else:
-                    merged.at[idx, f] = v * factor
+                merged.at[idx, f] = v if f in rate_fields else v * factor
             current_keys.add(key)
         out.append(merged)
     return out[0], out[1], current_keys

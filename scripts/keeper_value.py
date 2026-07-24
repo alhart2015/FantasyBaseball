@@ -20,7 +20,7 @@ from fantasy_baseball.analysis.draft_value import parse_full_season_lines
 from fantasy_baseball.analysis.keeper_value import (
     DEFAULT_HORIZON,
     DEFAULT_OUT_YEAR_REGRESSION,
-    DEFAULT_PT_HEAL_BELOW,
+    DEFAULT_PT_HEAL_CAP,
     discounted_total,
     keeper_value,
     mark_preseason_fallback,
@@ -144,7 +144,7 @@ def build_results(
     *,
     anchor: str = "current",
     out_year_regression: float = DEFAULT_OUT_YEAR_REGRESSION,
-    pt_heal_below: float = DEFAULT_PT_HEAL_BELOW,
+    pt_heal_cap: float = DEFAULT_PT_HEAL_CAP,
 ):
     conn = get_connection()
     try:
@@ -157,7 +157,7 @@ def build_results(
     if anchor == "current":
         by_name = load_current_full_season_lines()
         hitters, pitchers, current_keys = overlay_current_anchors(
-            hitters, pitchers, by_name, heal_below=pt_heal_below
+            hitters, pitchers, by_name, heal_cap=pt_heal_cap
         )
         board_keys = {
             rank_key(str(n), pt)
@@ -295,6 +295,17 @@ def _unit_float(s: str) -> float:
     return v
 
 
+def _min_one_float(s: str) -> float:
+    """Parse a float >= 1.0 for --pt-heal-cap (1.0 disables the heal)."""
+    try:
+        v = float(s)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(f"invalid float {s!r}: {exc}") from exc
+    if v < 1.0:
+        raise argparse.ArgumentTypeError(f"must be >= 1.0 (1.0 disables); got {v}")
+    return v
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(
         description="Rank players by keeper-asset value (discounted multi-year VAR)."
@@ -338,13 +349,13 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         f"(over-indexes on this year); 1 = pure ZiPS out-year (ignores this year).",
     )
     ap.add_argument(
-        "--pt-heal",
-        type=_unit_float,
-        default=DEFAULT_PT_HEAL_BELOW,
-        metavar="F",
-        help=f"heal injury-shortened anchors: scale counting stats up to healthy PT "
-        f"when current PT < F x preseason PT, fraction in [0,1] (default "
-        f"{DEFAULT_PT_HEAL_BELOW}). 0 disables. Rates (talent) are never scaled.",
+        "--pt-heal-cap",
+        type=_min_one_float,
+        default=DEFAULT_PT_HEAL_CAP,
+        metavar="X",
+        help=f"heal injury-shortened anchors: scale counting stats up toward healthy "
+        f"PT by min(X, preseason_PT/current_PT), X >= 1 (default {DEFAULT_PT_HEAL_CAP}). "
+        f"1.0 disables. Rates (talent) are never scaled.",
     )
     return ap.parse_args(argv)
 
@@ -359,7 +370,7 @@ def main(argv: list[str] | None = None) -> None:
         horizon=args.horizon,
         anchor=args.anchor,
         out_year_regression=args.out_year_regression,
-        pt_heal_below=args.pt_heal,
+        pt_heal_cap=args.pt_heal_cap,
     )
     print(render(results, args.discount, candidate_ids, limit=args.limit))
 

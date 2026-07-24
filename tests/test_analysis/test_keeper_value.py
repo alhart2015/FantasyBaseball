@@ -374,9 +374,8 @@ def test_overlay_pitcher_keeps_preseason_when_current_below_floor():
     assert keys == set()
 
 
-def test_overlay_pt_heals_injury_up_only_capped():
-    # preseason 600 AB; current 250 AB (< 0.65*600=390) with elite rates -> heal up,
-    # factor min(cap=2.0, 600/250=2.4) = 2.0: counting x2, PT x2, rate held.
+def test_overlay_pt_heals_severe_injury_capped():
+    # preseason 600 AB; current 250 AB -> factor min(cap=2.0, 600/250=2.4)=2.0 (cap binds).
     pre = _frame("Hurt Star", {"r": 45, "hr": 15, "rbi": 45, "sb": 3, "ab": 600, "avg": 0.280})
     empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
     current = {
@@ -389,30 +388,43 @@ def test_overlay_pt_heals_injury_up_only_capped():
             "avg": 0.300,
         }
     }
-    h, _p, keys = kv.overlay_current_anchors(pre, empty_p, current, heal_below=0.65, heal_cap=2.0)
+    h, _p, keys = kv.overlay_current_anchors(pre, empty_p, current, heal_cap=2.0)
     assert h.iloc[0]["hr"] == 30  # 15 * 2.0 (cap), not 15 * 2.4
     assert h.iloc[0]["ab"] == 500  # 250 * 2.0
     assert h.iloc[0]["avg"] == 0.300  # rate held -- talent not scaled
     assert rank_key("Hurt Star", "hitter") in keys
 
 
-def test_overlay_pt_heal_leaves_healthy_unscaled():
-    # current 500 AB >= 0.65*600 -> no heal; current line used verbatim.
-    pre = _frame("Healthy", {"r": 90, "hr": 30, "rbi": 90, "sb": 5, "ab": 600, "avg": 0.280})
+def test_overlay_pt_heal_is_partial_for_a_mild_dip():
+    # continuous/monotonic: current 500 of preseason 600 -> factor min(2.0, 1.2)=1.2.
+    pre = _frame("Mild Dip", {"r": 90, "hr": 30, "rbi": 90, "sb": 5, "ab": 600, "avg": 0.280})
     empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
     current = {
-        rank_key("Healthy", "hitter"): {
-            "r": 80,
+        rank_key("Mild Dip", "hitter"): {
+            "r": 75,
             "hr": 25,
-            "rbi": 80,
+            "rbi": 75,
             "sb": 4,
             "ab": 500,
             "avg": 0.290,
         }
     }
-    h, _p, _k = kv.overlay_current_anchors(pre, empty_p, current, heal_below=0.65)
-    assert h.iloc[0]["hr"] == 25  # unchanged
-    assert h.iloc[0]["ab"] == 500
+    h, _p, _k = kv.overlay_current_anchors(pre, empty_p, current, heal_cap=2.0)
+    assert h.iloc[0]["hr"] == 30.0  # 25 * 1.2
+    assert h.iloc[0]["ab"] == 600.0  # 500 * 1.2
+
+
+def test_overlay_pt_heal_off_and_full_pt_unscaled():
+    # heal_cap<=1.0 disables; and a player at/above preseason PT is never scaled (up only).
+    pre = _frame("Full", {"r": 90, "hr": 30, "rbi": 90, "sb": 5, "ab": 600, "avg": 0.280})
+    empty_p = pd.DataFrame(columns=["name", "fg_id", "w", "k", "sv", "ip", "era", "whip"])
+    current = {
+        rank_key("Full", "hitter"): {"r": 80, "hr": 25, "rbi": 80, "sb": 4, "ab": 620, "avg": 0.290}
+    }
+    h_off, _p, _k = kv.overlay_current_anchors(pre, empty_p, current, heal_cap=1.0)
+    assert h_off.iloc[0]["hr"] == 25  # disabled -> raw current line
+    h_on, _p2, _k2 = kv.overlay_current_anchors(pre, empty_p, current, heal_cap=2.0)
+    assert h_on.iloc[0]["hr"] == 25  # cur 620 >= pre 600 -> no heal (up only)
 
 
 def test_mark_preseason_fallback_flags_only_non_current():

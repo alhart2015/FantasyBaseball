@@ -260,8 +260,16 @@ def test_unit_float_validates():
             script._unit_float(bad)
 
 
-def test_parse_args_pt_heal_default_and_bounds():
-    assert script._parse_args([]).pt_heal == 0.65
-    assert script._parse_args(["--pt-heal", "0"]).pt_heal == 0.0
+def test_parse_args_pt_heal_cap_default_and_bounds():
+    assert script._parse_args([]).pt_heal_cap == 2.0
+    assert script._parse_args(["--pt-heal-cap", "1"]).pt_heal_cap == 1.0
     with pytest.raises(SystemExit):
-        script._parse_args(["--pt-heal", "2"])
+        script._parse_args(["--pt-heal-cap", "0.5"])
+
+
+def test_min_one_float_validates():
+    assert script._min_one_float("1") == 1.0
+    assert script._min_one_float("2.5") == 2.5
+    for bad in ["0.9", "0", "-1", "abc", ""]:
+        with pytest.raises(argparse.ArgumentTypeError):
+            script._min_one_float(bad)
