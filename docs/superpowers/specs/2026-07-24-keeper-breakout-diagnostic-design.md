@@ -127,18 +127,28 @@ K/IP, W, SV, ERA, WHIP):
 adjusted_rate[r] = projection_rate[r] + w[r] * (surface_rate[r] - projection_rate[r])
 ```
 
-- `projection_rate[r]` = the preseason projection's rate (the prior).
-- `surface_rate[r]` = the current-season rate.
+- `projection_rate[r]` = the prior. **In the 2026 report** this is the blended preseason
+  projection (the same blend the draft board uses, per `config/league.yaml`'s configured
+  projection systems), not ZiPS alone. **In the historical backtest** (years lacking a
+  blended preseason file) it is a reconstructed Marcel-style prior -- see Unit 4.
+- `surface_rate[r]` = the rates of the **current YTD+ROS anchor line** -- the exact same
+  anchor `keeper_value --anchor current` consumes (from `cache:full_season_projections`),
+  not YTD actuals alone. This guarantees the report's surface column reconciles with today's
+  number (Unit 3).
 - `w[r]` in [0, 1] = how much of the deviation to believe. `w[r]` is an explicit,
   documented function of:
   - **reliability** (sample size: PA for hitters, IP/BF for pitchers) -- more sample -> higher `w`;
   - **confirmation** from the matching underlying signal -- power (HR, SLG) confirmed by
     barrel% and xSLG; AVG confirmed by xBA vs BABIP; pitcher ratios confirmed by K%/BB%;
-    SB and SV are role/health-driven and sticky (high `w` when playing time holds).
+    SB is role/health-driven and sticky; SV is role-driven but volatile (closer changes), so
+    its confirmation leans on holds/role signals and its `w` stays conservative.
 
-The adjusted rates are rescaled by a playing-time estimate (consistent with how the anchor
-is built today) to produce the **skill-adjusted anchor line** (a counting line in the same
-shape `keeper_value` consumes).
+**Playing time is held, not adjusted.** Only rates are shrunk. The adjusted rates are
+multiplied by a fixed PT estimate to produce the counting line: the report uses the
+**PT-healed projected PA/IP that `keeper_value` already computes** (so an injury-shortened
+season is not read as talent loss and PT matches the surface-believed line's PT); the
+backtest uses the player's actual year-Y PA/IP. The result is the **skill-adjusted anchor
+line** (a counting line in the same shape `keeper_value` consumes).
 
 The **label** is derived from the aggregate, `w`-weighted signed deviation: large positive
 believed delta -> `real breakout`; large positive *surface* delta with low `w` ->
@@ -148,20 +158,30 @@ confirms"` vs `"AVG up on .380 BABIP, xBA flat -> mirage"`).
 
 The `w`-mapping's parameters (reliability curve shape, confirmation weights, label
 thresholds) are the knobs the backtest tunes. They live as named module constants with
-documented defaults.
+documented defaults. Phase 3 ships with **domain-prior seed defaults** (chosen from known
+stabilization points -- e.g. K% and barrel% stabilize fast, BABIP slow); until Phase 4
+validates them, the report labels its numbers **provisional** and not yet trusted for final
+decisions.
 
 ### Unit 3: Report
 
 Script: `scripts/run_breakout_report.py`. Library entry point in `breakout.py` where
 practical (keep I/O in the script, computation in the library, per repo convention).
 
-For each rostered/keeper-eligible player it emits: `skill-adjusted keeper value` (rank key),
-`surface-believed keeper value` (== today's `--anchor current` number), the **delta** (the
-"mirage tax" in roto points), `label`, `reason`, and the key underlying numbers
-(wOBA-xwOBA gap, BABIP, barrel%, K%/BB%). Ranked by skill-adjusted value. Outputs
-`breakout_report.csv` and `breakout_report.md`, consistent with existing keeper report
-artifacts. Forward value uses `keeper_value` with its existing aging (unchanged); the only
-substitution is the anchor line.
+The report lists **all keeper-eligible players**, sorted by skill-adjusted value, with a
+`deviator` flag on those whose surface departs from projection beyond the candidate
+threshold (so the breakout/decline cases surface at a glance without hiding the full board).
+For each it emits: `skill-adjusted keeper value` (rank key), `surface-believed keeper value`,
+the **delta** (the "mirage tax" in roto points), `label`, `reason`, and the key underlying
+numbers (wOBA-xwOBA gap, BABIP, barrel%, K%/BB%). Outputs `breakout_report.csv` and
+`breakout_report.md`, consistent with existing keeper report artifacts.
+
+**Both value columns come from one `keeper_value.keeper_value(...)` call each -- same
+positions, `zips_by_year`, and `scale` -- differing only in the anchor line passed
+(surface-believed vs skill-adjusted).** Because the surface-believed call reuses the exact
+`--anchor current` anchor-construction path (Unit 2), the `surface-believed keeper value`
+column equals today's number **by construction**, not by assertion. Aging is `keeper_value`'s
+existing shape, unchanged.
 
 ### Unit 4: Backtest
 
@@ -173,23 +193,47 @@ Because no in-season projection history exists for past years (ROS is overwritte
 the backtest is **year-over-year**, not midseason. Corpus: player-seasons 2015-2024 with
 FanGraphs rates + Statcast xStats + age, joined, min-PA/IP gated.
 
-Two estimators of a player's forward line are compared against realized year Y+1 actuals:
+**Fixed-yardstick space (no historical `keeper_value` call).** The historical backtest does
+NOT call `keeper_value` -- the repo has neither archived ZiPS out-years nor a per-season
+league scale for past years. Instead each estimator's forward line is scored two ways:
+(a) **per-stat rate MAE** vs realized year-Y+1 rates (no scale needed); and (b) a single
+**forward SGP** computed with the CURRENT league `ScaleInputs` used as a constant ruler
+across all seasons -- comparing estimators on one fixed yardstick, not reconstructing each
+year's true keeper value. The 2026 report's `keeper_value` call is a separate path.
+
+**The prior for the skill-adjusted and surface estimators.** For backtest years the
+`projection_rate` prior is a **reconstructed Marcel-style projection**: a weighted blend of
+the player's prior-N-year actual rates (recent-weighted), regressed toward the league mean
+by sample, with a simple age adjustment. This same prior defines the candidate population
+(year-Y surface deviating from prior beyond the threshold). Archived-ZiPS years (2022-2024)
+additionally get the **pure-ZiPS** baseline; coverage is stated explicitly in the output --
+no silent cap.
+
+Estimators compared against realized year-Y+1 actuals:
 
 - **surface-believed** (year-Y surface rates at face value),
 - **skill-adjusted** (this design's adjusted line),
-- **pure-ZiPS** (ZiPS's own projection) -- available only for years with archived ZiPS
-  (2022, 2023, 2024 as year Y). Coverage is stated explicitly in the output; no silent cap.
+- **pure-ZiPS** (2022-2024 only).
 
 Headline metric (decision-relevant): **rank correlation (Spearman) of each estimator's
-forward keeper value with realized year-Y+1 value**, on the candidate population (players
-whose year-Y surface deviated from their expectation beyond a threshold, both up and down).
-Does ranking by the skill-adjusted value order next year's keepers better than ranking by
-surface or by ZiPS? Secondary metrics: per-stat MAE of predicted vs actual year-Y+1 rate,
-and label discrimination (lift of the sustainability score in predicting how much of a
-surface gain is retained).
+forward SGP with realized year-Y+1 SGP** (same fixed ruler), on the candidate population.
+To keep this a pure rate-quality test with no playing-time confound, **PT is held constant
+across all three estimators AND the realized target** -- every line (predicted and actual)
+is built at the same held PA/IP (the player's year-Y actual), so only the rates differ. SGP
+aggregation then weights those rates by roto importance (what plain rate MAE cannot).
+Does ranking by skill-adjusted value order next year's keepers better than ranking by
+surface or by ZiPS? Secondary: per-stat rate MAE, and label discrimination (lift of the
+sustainability score in predicting how much of a surface gain is retained). (Projecting PT
+forward -- rewarding players likely to keep playing -- is a deferred backtest refinement.)
 
-The `w`-mapping is tuned on this corpus. Guard against overfitting by reporting the metric
-on held-out seasons (fit on 2015-2022, report on 2023-2024) in addition to in-sample.
+**Acceptance criterion (the go/no-go rule).** Automation stays deferred UNLESS the
+skill-adjusted estimator's headline rank correlation exceeds BOTH baselines on the
+**held-out** seasons (fit `w` on 2015-2022, report on 2023-2024) by a margin beyond sampling
+noise -- concretely, the skill-adjusted vs surface improvement's bootstrap confidence
+interval excludes zero. An in-sample-only or within-noise edge is a "not good enough"
+verdict, and the report stays a manual resource. Overfitting is guarded by this held-out
+split; min-PA/IP gate and candidate-deviation threshold are named tunable constants with
+starting defaults (following the `DEFAULT_MIN_AB` pattern).
 
 ## Edge cases / failure modes
 
@@ -246,4 +290,10 @@ End-of-effort verification per CLAUDE.md: `pytest`, `ruff check .`, `ruff format
   cannot directly validate a midseason call.
 - The pure-ZiPS baseline is limited to 2022-2024 (archived-ZiPS years); the surface baseline
   spans the full corpus.
+- The historical backtest feeds the skill-adjusted estimator a **reconstructed Marcel prior**
+  in place of the real preseason projection it uses in production; the surface-believed
+  baseline needs no prior. So a rough reconstructed prior can only handicap the skill-adjusted
+  estimator, making the comparison **conservative** -- clearing the gate under a rougher prior
+  is stronger evidence, while failing it is ambiguous between method and prior. The 2022-2024
+  pure-ZiPS baseline (a real projection) is the cleaner read on those years.
 - Metrics are not park-adjusted in v1.
