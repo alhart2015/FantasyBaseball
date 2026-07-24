@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 import keeper_value as kv_script  # scripts/keeper_value.py: board/scale/anchor loading
 
-from fantasy_baseball.analysis.breakout import breakout_rows
+from fantasy_baseball.analysis.breakout import SkillLuckRow, breakout_rows
 from fantasy_baseball.analysis.keeper_value import DEFAULT_DISCOUNT
 from fantasy_baseball.data.skill_luck import build_hitter_skill_luck, build_pitcher_skill_luck
 from fantasy_baseball.draft.board import build_board_from_frames
@@ -55,26 +55,68 @@ def _preseason_projection_index(hitters: pd.DataFrame, pitchers: pd.DataFrame) -
     return idx
 
 
-def _merged_skill_luck(cache_dir: Path, year: int) -> dict:
-    """Hitter + pitcher SkillLuckRow, keyed by fg_id (matching breakout_rows'
-    ``skill_luck.get(fgid)`` lookup).
+def _mlbam_fg_bridge(indices: dict) -> dict[tuple[int, str], str]:
+    """{(mlbam, player_type): fg_id} built from the ZiPS out-year `indices`
+    ``load_inputs`` already loads for the keeper-value horizon -- no extra I/O.
 
-    KNOWN LIMITATION: a two-way player who shares one FanGraphs id across
-    batting_stats/pitching_stats (e.g. Ohtani) collides on this int key -- the
-    hitter row wins the merge, so ``skill_luck.get(fgid)`` returns the hitter's
-    row for BOTH of that player's board rows. breakout_rows guards this: it
-    compares the looked-up row's player_type against the board row's and
-    discards a mismatch, so the pitcher board row degrades gracefully to "no
-    skill/luck data" instead of being corrupted with the hitter's Statcast
-    numbers. No board-side fix is possible without namespacing this dict by
-    player_type too, which would let the pitcher board row get its OWN
-    skill/luck data (full two-way valuation); deferred (rare in practice: one
-    player leaguewide).
+    ``kv_script.zips_index`` rows are ``row.to_dict()`` of the raw ZiPS export
+    (via ``kv_script.load_zips_year`` -> ``fangraphs.load_projection_set``),
+    which keeps every CSV column under its renamed name, including both
+    ``fg_id`` (from PlayerId) and ``mlbam_id`` (from MLBAMID) -- so the pairing
+    falls out of data the report loads anyway for keeper_value's ZiPS
+    trajectory lookup. Namespaced by player_type so a two-way player's hitter
+    and pitcher fg_id (mlbam_id is person-level and identical across both
+    roles) resolve independently.
+    """
+    bridge: dict[tuple[int, str], str] = {}
+    for idx in indices.values():
+        for line in idx.values():
+            mlbam, fg, ptype = line.get("mlbam_id"), line.get("fg_id"), line.get("player_type")
+            if ptype is None or pd.isna(mlbam) or pd.isna(fg):
+                continue
+            bridge[(int(mlbam), str(ptype))] = str(fg)
+    return bridge
+
+
+def _rekey_to_fg_id(
+    rows: dict[int, SkillLuckRow], player_type: str, bridge: dict[tuple[int, str], str]
+) -> dict[int, SkillLuckRow]:
+    """MLBAM-keyed SkillLuckRows -> fg_id-keyed, via `bridge`. An mlbam with no
+    fg_id pairing in any loaded ZiPS export is dropped -- that player's row
+    degrades to breakout_rows' "no skill/luck data" fallback rather than being
+    silently mis-keyed."""
+    out: dict[int, SkillLuckRow] = {}
+    for mlbam, row in rows.items():
+        fg = bridge.get((mlbam, player_type))
+        if fg is None or not fg.isdigit():
+            continue
+        out[int(fg)] = row
+    return out
+
+
+def _merged_skill_luck(
+    cache_dir: Path, year: int, bridge: dict[tuple[int, str], str]
+) -> dict[int, SkillLuckRow]:
+    """Hitter + pitcher SkillLuckRow, re-keyed from MLBAM (skill_luck's native
+    key) to fg_id via `bridge` (matching breakout_rows' ``skill_luck.get(fgid)``
+    lookup).
+
+    KNOWN LIMITATION: a two-way player whose hitter and pitcher fg_id happen to
+    collide (e.g. Ohtani, if FanGraphs assigns him one id across both roles)
+    collides on this int key -- the hitter row wins the merge, so
+    ``skill_luck.get(fgid)`` returns the hitter's row for BOTH of that player's
+    board rows. breakout_rows guards this: it compares the looked-up row's
+    player_type against the board row's and discards a mismatch, so the
+    pitcher board row degrades gracefully to "no skill/luck data" instead of
+    being corrupted with the hitter's Statcast numbers. No board-side fix is
+    possible without namespacing this dict by player_type too, which would let
+    the pitcher board row get its OWN skill/luck data (full two-way
+    valuation); deferred (rare in practice: one player leaguewide).
     """
     hitters, _ = build_hitter_skill_luck(cache_dir, year)
     pitchers, _ = build_pitcher_skill_luck(cache_dir, year)
-    merged = dict(hitters)
-    for fgid, row in pitchers.items():
+    merged = _rekey_to_fg_id(hitters, "hitter", bridge)
+    for fgid, row in _rekey_to_fg_id(pitchers, "pitcher", bridge).items():
         merged.setdefault(fgid, row)
     return merged
 
@@ -111,7 +153,8 @@ def load_inputs(*, horizon: int, pt_heal_cap: float, skill_luck_year: int):
         year: kv_script.zips_index(*kv_script.load_zips_year(kv_script.PROJECTIONS_ROOT, year))
         for year in range(BASE_YEAR, BASE_YEAR + horizon)
     }
-    skill_luck = _merged_skill_luck(SKILL_LUCK_CACHE_DIR, skill_luck_year)
+    bridge = _mlbam_fg_bridge(indices)
+    skill_luck = _merged_skill_luck(SKILL_LUCK_CACHE_DIR, skill_luck_year, bridge)
     return board, scale, indices, skill_luck, projections
 
 

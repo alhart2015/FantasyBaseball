@@ -2,35 +2,36 @@
 Phase 4 -- the go/no-go gate for any future automation of the report in
 scripts/run_breakout_report.py).
 
-Builds a per-year corpus from cached data/skill_luck/ hitter frames spanning
-2015-2024 -- surface = that year's actual FanGraphs counting line, SkillLuckRow
-= that year's Statcast xStats/FanGraphs-rate underlying, actual_next = the
-FOLLOWING year's actual rates, history = up to 3 prior years' actual rate
-lines (for the Marcel prior), zips_line = the archived ZiPS forecast published
-for the following season (via scripts/keeper_value.py:load_zips_year; None
-when that archive isn't cached). Calls
+Builds a per-year corpus (hitters only), keyed by MLBAM, from:
+- MLB Stats API season lines (surface / actual_next / history counting lines +
+  derived K%/BB%/BABIP) via fantasy_baseball.data.skill_luck, and
+- Baseball Savant expected stats (the SkillLuckRow underlying), and
+- the archived ZiPS forecast published for the following season (data/
+  projections/{year+1}/zips-hitters*.csv, joined on MLBAMID; None when that
+  archive isn't cached).
+
+surface = that year's actual line, actual_next = the FOLLOWING year's actual
+rates, history = up to 3 prior years' actual rate lines (Marcel prior),
+zips_line = ZiPS's own forecast for the following season. Calls
 fantasy_baseball.analysis.breakout_backtest.run_backtest to compare three
-estimators -- surface (last year's line, unadjusted), skill_adjusted (this
-diagnostic's regression), and pure_zips (a professional projection system's
-own forecast) -- against realized next-year performance, tuning the
-w-mapping on 2015-2022 only and holding out 2023-2024 to report on. Writes
+estimators -- surface (unadjusted), skill_adjusted (this diagnostic), and
+pure_zips -- against realized next-year performance, tuning the w-mapping on
+2015-2022 only and holding out 2023-2024 to report on. Writes
 data/stats/breakout_backtest_results.csv.
 
 v1 is HITTERS-ONLY (pitcher expected-stats coverage on Savant is thinner and
 starts later); pitcher backtest is a named follow-up.
 
-Historical FanGraphs/Statcast fetches (10 years x FanGraphs hitters + 2
-Statcast endpoints + the Chadwick id-map register) proxy through pybaseball,
-which is subject to the same FanGraphs Cloudflare 403 blocking already
-documented for the live ROS fetch path -- a first run with an empty
-data/skill_luck/ cache is expected to need retries or a manual CSV mirror,
-the same as scripts/refresh_ros.py's known failure mode.
+Data sources are the MLB Stats API (public, no auth) + Baseball Savant -- no
+FanGraphs, so no Cloudflare 403. pure_zips is limited to the report years whose
+following-season ZiPS archive is on disk (2022-2025).
 
 See docs/superpowers/specs/2026-07-24-keeper-breakout-diagnostic-design.md.
 """
 
 from __future__ import annotations
 
+import glob
 import sys
 from pathlib import Path
 
@@ -38,30 +39,20 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import keeper_value as kv_script  # scripts/keeper_value.py: load_zips_year
-
 from fantasy_baseball.analysis.breakout import line_rates
 from fantasy_baseball.analysis.breakout_backtest import Corpus, CorpusEntry, Line, run_backtest
 from fantasy_baseball.data import skill_luck
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SKILL_LUCK_CACHE_DIR = REPO_ROOT / "data" / "skill_luck"
+PROJECTIONS_ROOT = REPO_ROOT / "data" / "projections"
 OUT_PATH = REPO_ROOT / "data" / "stats" / "breakout_backtest_results.csv"
 
 FIT_YEARS = range(2015, 2023)  # 2015..2022: tuning only, never scored
 REPORT_YEARS = [2023, 2024]  # held-out: the years run_backtest reports on
 ALL_YEARS = list(range(2015, 2025))  # 2015..2024: the full corpus span
 
-_COUNTING_COLS = ("PA", "AB", "HR", "R", "RBI", "SB", "AVG")
-_COUNTING_KEYS = {
-    "PA": "pa",
-    "AB": "ab",
-    "HR": "hr",
-    "R": "r",
-    "RBI": "rbi",
-    "SB": "sb",
-    "AVG": "avg",
-}
+_ROTO_KEYS = ("pa", "hr", "r", "rbi", "sb", "avg")
 
 V1_HITTERS_ONLY_NOTE = (
     "v1 is HITTERS-ONLY: pitcher expected-stats coverage on Savant is thinner and "
@@ -69,121 +60,84 @@ V1_HITTERS_ONLY_NOTE = (
 )
 
 
-def _raw_fg_hitter_lines(cache_dir: Path, year: int) -> dict[int, Line]:
-    """Full FanGraphs counting line (PA, AB, HR, R, RBI, SB, AVG) keyed by fg_id,
-    read from the RAW cached fg_h_{year}.csv. skill_luck.load_fg_hitters strips
-    its in-memory return value to a narrow rename map for SkillLuckRow (Age,
-    K%, BB%, BABIP, HR/FB, Contact%, PA) -- the counting stats the backtest's
-    surface/actual_next/history lines need live outside that map, but
-    fetch_or_cache still writes the FULL raw pybaseball frame to this path, so
-    reading it directly recovers them without a second fetch.
-    """
-    path = cache_dir / f"fg_h_{year}.csv"
-    if not path.exists():
-        return {}
-    raw = pd.read_csv(path)
-    missing = [c for c in _COUNTING_COLS if c not in raw.columns]
-    if missing:
-        raise ValueError(
-            f"{path} is missing raw FanGraphs counting columns {missing}; this looks like a "
-            "renamed-only frame (see module docstring on fetch_or_cache writing the PRE-rename "
-            "frame) -- refusing to silently default counting stats to 0.0."
-        )
+def _mlb_hitter_roto(cache_dir: Path, year: int) -> dict[int, Line]:
+    """MLB Stats API counting line (pa/hr/r/rbi/sb/avg) keyed by MLBAM."""
+    df = skill_luck.load_mlb_hitters(cache_dir, year)
     out: dict[int, Line] = {}
-    for _, r in raw.iterrows():
-        fg = r.get("IDfg")
-        if pd.isna(fg):
-            continue
-        line: Line = {}
-        for col in _COUNTING_COLS:
-            v = r.get(col)
-            line[_COUNTING_KEYS[col]] = float(v) if v is not None and pd.notna(v) else 0.0
-        out[int(fg)] = line
+    for r in df.itertuples(index=False):
+        out[int(r.mlbam)] = {k: float(getattr(r, k)) for k in _ROTO_KEYS}
     return out
 
 
-def _ensure_raw_fg_hitters(cache_dir: Path, year: int) -> dict[int, Line]:
-    """Populate/reuse the fg_h_{year}.csv cache via skill_luck's fetch-or-cache
-    path (same default pybaseball fetcher, same file), then read it back for
-    the full counting line."""
-    skill_luck.load_fg_hitters(cache_dir, year)  # side effect: ensures the cache file exists
-    return _raw_fg_hitter_lines(cache_dir, year)
-
-
-def _zips_hitters_index(projections_root: Path, year: int) -> dict[int, Line] | None:
-    """fg_id -> ZiPS counting line for the archived `year` hitters export, or
-    None when that year's ZiPS archive isn't cached (load_zips_year raises
-    FileNotFoundError with a download link; the backtest treats this player-
-    year as ZiPS-uncovered rather than failing the whole run)."""
-    try:
-        hitters, _pitchers = kv_script.load_zips_year(projections_root, year)
-    except FileNotFoundError:
+def _zips_hitters_by_mlbam(projections_root: Path, year: int) -> dict[int, Line] | None:
+    """MLBAM -> ZiPS counting line for the archived `year` hitters export, or None
+    when that year's ZiPS archive isn't on disk (treated as ZiPS-uncovered rather
+    than failing the whole run)."""
+    matches = glob.glob(str(projections_root / str(year) / "zips-hitters*.csv"))
+    if not matches:
         return None
+    df = pd.read_csv(matches[0])
+    if "MLBAMID" not in df.columns:
+        return None
+    src = {"pa": "PA", "hr": "HR", "r": "R", "rbi": "RBI", "sb": "SB", "avg": "AVG"}
     idx: dict[int, Line] = {}
-    for _, row in hitters.iterrows():
-        fg = row.get("fg_id")
-        if fg is None or pd.isna(fg):
+    for _, row in df.iterrows():
+        m = row.get("MLBAMID")
+        if m is None or pd.isna(m):
             continue
-        try:
-            fgid = int(fg)
-        except (TypeError, ValueError):
-            continue
-        idx[fgid] = {
-            key: (float(v) if (v := row.get(key)) is not None and pd.notna(v) else 0.0)
-            for key in ("pa", "hr", "r", "rbi", "sb", "avg")
+        idx[int(m)] = {
+            k: (float(v) if (v := row.get(col)) is not None and pd.notna(v) else 0.0)
+            for k, col in src.items()
         }
     return idx
 
 
 def build_corpus(cache_dir: Path, projections_root: Path, years: list[int]) -> Corpus:
-    """Assemble the year -> {fg_id -> (surface, SkillLuckRow, actual_next_rates,
-    history, zips_line)} corpus run_backtest consumes (hitters only). `years`
-    must be requested with enough lead years already cached/fetchable for the
-    Marcel history lookback -- this function fetches `years` plus one trailing
-    year (for actual_next) but does NOT reach further back for history than
-    `years` itself provides, so the earliest requested years will have a
-    thinner-than-3-year history (gracefully handled by marcel_prior).
-    """
+    """Assemble the year -> {mlbam -> (surface, SkillLuckRow, actual_next_rates,
+    history, zips_line)} corpus run_backtest consumes (hitters only). Fetches
+    `years` plus one trailing year (for actual_next); history reaches back only
+    as far as `years` provides, so the earliest requested years get a thinner
+    Marcel history (gracefully handled by marcel_prior)."""
     span = sorted(set(years) | {y + 1 for y in years})
-    raw_lines = {y: _ensure_raw_fg_hitters(cache_dir, y) for y in span}
-    skill_luck_by_year = {y: skill_luck.build_hitter_skill_luck(cache_dir, y)[0] for y in span}
-    zips_by_forecast_year = {y + 1: _zips_hitters_index(projections_root, y + 1) for y in years}
+    roto = {y: _mlb_hitter_roto(cache_dir, y) for y in span}
+    # Savant only exists from 2015; a year with no xStats yields an empty dict.
+    skill_by_year = {
+        y: (skill_luck.build_hitter_skill_luck(cache_dir, y)[0] if y >= 2015 else {}) for y in span
+    }
+    zips_by_forecast_year = {y + 1: _zips_hitters_by_mlbam(projections_root, y + 1) for y in years}
 
     corpus: Corpus = {}
     for year in years:
         year_data: dict[int, CorpusEntry] = {}
-        next_lines = raw_lines.get(year + 1, {})
+        next_lines = roto.get(year + 1, {})
         zidx = zips_by_forecast_year.get(year + 1)
-        for fgid, surface in raw_lines[year].items():
-            sl = skill_luck_by_year[year].get(fgid)
+        for mlbam, surface in roto[year].items():
+            sl = skill_by_year[year].get(mlbam)
             if sl is None:
-                continue  # no Statcast/FanGraphs-rate underlying this year -- can't score
-            next_line = next_lines.get(fgid)
+                continue  # no Statcast underlying this year -- can't score
+            next_line = next_lines.get(mlbam)
             if next_line is None:
-                continue  # didn't play (enough) the following year -- no outcome to grade against
+                continue  # didn't play the following year -- no outcome to grade against
             actual_next = line_rates(next_line, "hitter")
             hist = [
-                (y2, line_rates(raw_lines[y2][fgid], "hitter"))
+                (y2, line_rates(roto[y2][mlbam], "hitter"))
                 for y2 in range(year - 1, year - 4, -1)
-                if y2 in raw_lines and fgid in raw_lines[y2]
+                if y2 in roto and mlbam in roto[y2]
             ]
-            zips_line = zidx.get(fgid) if zidx is not None else None
-            year_data[fgid] = (surface, sl, actual_next, hist, zips_line)
+            zips_line = zidx.get(mlbam) if zidx is not None else None
+            year_data[mlbam] = (surface, sl, actual_next, hist, zips_line)
         corpus[year] = year_data
     return corpus
 
 
 def _zips_covered_count(corpus: Corpus, years: list[int]) -> int:
-    """Report-year population (pre-candidate-filter) with a ZiPS line attached --
-    the subset run_backtest's ci_skill_vs_zips is actually computed over is a
-    further (smaller) restriction to the candidate/deviator population; this is
-    the raw coverage size, for the printed summary."""
+    """Report-year population (pre-candidate-filter) with a ZiPS line attached."""
     return sum(1 for y in years for entry in corpus[y].values() if entry[4] is not None)
 
 
 def main() -> None:
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
-    corpus = build_corpus(SKILL_LUCK_CACHE_DIR, kv_script.PROJECTIONS_ROOT, ALL_YEARS)
+    corpus = build_corpus(SKILL_LUCK_CACHE_DIR, PROJECTIONS_ROOT, ALL_YEARS)
     results = run_backtest(corpus, fit_years=FIT_YEARS, report_years=REPORT_YEARS)
     n_zips_covered = _zips_covered_count(corpus, REPORT_YEARS)
 

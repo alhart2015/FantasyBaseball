@@ -1,7 +1,13 @@
-"""Season-level skill/luck data layer: FanGraphs rates + age, Statcast xStats,
-and the MLBAM<->FanGraphs id map, cached to data/skill_luck/. Fetch-on-miss,
-never overwrite a good cache with an empty/failed pull. See
-docs/superpowers/specs/2026-07-24-keeper-breakout-diagnostic-design.md.
+"""Season-level skill/luck data layer: MLB Stats API roto lines + derived rates
+and Statcast xStats, cached to data/skill_luck/, keyed by MLBAM id. Fetch-on-miss,
+never overwrite a good cache with an empty/failed pull.
+
+Data sources (both public, no auth, MLBAM-native -- no FanGraphs / Cloudflare):
+- MLB Stats API (statsapi.mlb.com): season counting line (H/HR/R/RBI/SB/AVG/PA;
+  W/SV/IP/K/ERA/WHIP) plus the raw components to DERIVE K%, BB%, BABIP.
+- Baseball Savant (via pybaseball): expected stats (xwOBA/xBA/xSLG) + barrel%.
+
+See docs/superpowers/specs/2026-07-24-keeper-breakout-diagnostic-design.md.
 """
 
 from __future__ import annotations
@@ -14,7 +20,8 @@ import pandas as pd
 
 from fantasy_baseball.analysis.breakout import SkillLuckRow  # shared shape from Task 0
 
-ID_MAP_FILE = "id_map_mlbam_fg.csv"
+_MLB_STATS_URL = "https://statsapi.mlb.com/api/v1/stats"
+_MLB_PAGE = 1000
 
 
 def _read_cached(path: Path) -> pd.DataFrame | None:
@@ -39,20 +46,6 @@ def fetch_or_cache(path: Path, fetcher: Callable[[], pd.DataFrame]) -> pd.DataFr
     return df
 
 
-# Explicit source-column -> SkillLuckRow-field maps. If a source key is missing we
-# raise KeyError (fail loud) rather than silently emit a NaN column.
-_FG_HIT_RENAME = {
-    "IDfg": "key_fangraphs",
-    "Age": "age",
-    "K%": "k_pct",
-    "BB%": "bb_pct",
-    "BABIP": "babip",
-    "HR/FB": "hr_fb",
-    "Contact%": "contact_pct",
-    "PA": "pa",
-}
-
-
 def _rename_strict(df: pd.DataFrame, rename: dict[str, str]) -> pd.DataFrame:
     missing = [c for c in rename if c not in df.columns]
     if missing:
@@ -60,17 +53,132 @@ def _rename_strict(df: pd.DataFrame, rename: dict[str, str]) -> pd.DataFrame:
     return df[list(rename)].rename(columns=rename)
 
 
-def load_fg_hitters(
+def _f(v) -> float | None:
+    return None if v is None or pd.isna(v) else float(v)
+
+
+def _parse_ip(raw) -> float:
+    """MLB Stats API innings-pitched uses thirds notation ('177.2' = 177 + 2/3)."""
+    if raw is None or pd.isna(raw):
+        return 0.0
+    s = str(raw)
+    if "." in s:
+        whole, frac = s.split(".", 1)
+        return int(whole) + (int(frac[:1]) / 3.0)
+    return float(s)
+
+
+# ---------------------------------------------------------------------------
+# MLB Stats API season lines (roto counting + derived rates), keyed by MLBAM.
+# ---------------------------------------------------------------------------
+
+
+def _mlb_fetch_season(group: str, year: int) -> pd.DataFrame:
+    """Paginated season-stats leaderboard for `group` ('hitting'|'pitching'),
+    one combined row per player, keyed by MLBAM. Local import keeps the module
+    import-safe (no network at import time)."""
+    import requests
+
+    rows: list[dict] = []
+    offset = 0
+    while True:
+        params: dict[str, str | int] = {
+            "stats": "season",
+            "group": group,
+            "season": year,
+            "sportId": 1,
+            "playerPool": "all",
+            "limit": _MLB_PAGE,
+            "offset": offset,
+        }
+        resp = requests.get(_MLB_STATS_URL, params=params, timeout=60)
+        resp.raise_for_status()
+        stats = resp.json().get("stats", [])
+        splits = stats[0]["splits"] if stats else []
+        if not splits:
+            break
+        for sp in splits:
+            rows.append({"mlbam": sp["player"]["id"], **sp["stat"]})
+        if len(splits) < _MLB_PAGE:
+            break
+        offset += _MLB_PAGE
+    return pd.DataFrame(rows)
+
+
+def load_mlb_hitters(
     cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
 ) -> pd.DataFrame:
-    def _default() -> pd.DataFrame:
-        from pybaseball import batting_stats  # local import: keeps module import-safe
+    """Per-hitter season line keyed by MLBAM: pa/ab/h/hr/r/rbi/sb/avg plus derived
+    k_pct, bb_pct, babip. Cached raw; rates derived on load."""
+    raw = fetch_or_cache(
+        cache_dir / f"mlb_h_{year}.csv", fetcher or (lambda: _mlb_fetch_season("hitting", year))
+    )
+    out: list[dict] = []
+    for r in raw.itertuples(index=False):
+        pa = float(getattr(r, "plateAppearances", 0) or 0)
+        if pa <= 0:
+            continue
+        ab = float(getattr(r, "atBats", 0) or 0)
+        h = float(getattr(r, "hits", 0) or 0)
+        hr = float(getattr(r, "homeRuns", 0) or 0)
+        so = float(getattr(r, "strikeOuts", 0) or 0)
+        bb = float(getattr(r, "baseOnBalls", 0) or 0)
+        sf = float(getattr(r, "sacFlies", 0) or 0)
+        denom = ab - so - hr + sf
+        out.append(
+            {
+                "mlbam": int(r.mlbam),
+                "pa": pa,
+                "ab": ab,
+                "h": h,
+                "hr": hr,
+                "r": float(getattr(r, "runs", 0) or 0),
+                "rbi": float(getattr(r, "rbi", 0) or 0),
+                "sb": float(getattr(r, "stolenBases", 0) or 0),
+                "avg": float(getattr(r, "avg", 0) or 0),
+                "k_pct": so / pa,
+                "bb_pct": bb / pa,
+                "babip": (h - hr) / denom if denom > 0 else float("nan"),
+            }
+        )
+    return pd.DataFrame(out)
 
-        return batting_stats(year, qual=1)
 
-    raw = fetch_or_cache(cache_dir / f"fg_h_{year}.csv", fetcher or _default)
-    return _rename_strict(raw, _FG_HIT_RENAME)
+def load_mlb_pitchers(
+    cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
+) -> pd.DataFrame:
+    """Per-pitcher season line keyed by MLBAM: ip/w/sv/k/era/whip plus derived
+    k_pct, bb_pct (per batter faced)."""
+    raw = fetch_or_cache(
+        cache_dir / f"mlb_p_{year}.csv", fetcher or (lambda: _mlb_fetch_season("pitching", year))
+    )
+    out: list[dict] = []
+    for r in raw.itertuples(index=False):
+        ip = _parse_ip(getattr(r, "inningsPitched", 0))
+        if ip <= 0:
+            continue
+        tbf = float(getattr(r, "battersFaced", 0) or 0)
+        so = float(getattr(r, "strikeOuts", 0) or 0)
+        bb = float(getattr(r, "baseOnBalls", 0) or 0)
+        out.append(
+            {
+                "mlbam": int(r.mlbam),
+                "ip": ip,
+                "w": float(getattr(r, "wins", 0) or 0),
+                "sv": float(getattr(r, "saves", 0) or 0),
+                "k": so,
+                "era": float(getattr(r, "era", 0) or 0),
+                "whip": float(getattr(r, "whip", 0) or 0),
+                "k_pct": so / tbf if tbf > 0 else float("nan"),
+                "bb_pct": bb / tbf if tbf > 0 else float("nan"),
+            }
+        )
+    return pd.DataFrame(out)
 
+
+# ---------------------------------------------------------------------------
+# Statcast expected stats (Baseball Savant), keyed by MLBAM.
+# ---------------------------------------------------------------------------
 
 _STATCAST_XHIT_RENAME = {
     "player_id": "mlbam",
@@ -82,6 +190,7 @@ _STATCAST_XHIT_RENAME = {
     "est_slg": "xslg",
 }
 _STATCAST_BARREL_RENAME = {"player_id": "mlbam", "brl_percent": "barrel_pct"}
+_STATCAST_XPITCH_RENAME = {"player_id": "mlbam", "woba": "woba", "est_woba": "xwoba"}
 
 
 def load_statcast_hitters(
@@ -92,16 +201,12 @@ def load_statcast_hitters(
     barrels_fetcher: Callable[[], pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     def _x() -> pd.DataFrame:
-        from pybaseball import (  # local import: keeps module import-safe
-            statcast_batter_expected_stats,
-        )
+        from pybaseball import statcast_batter_expected_stats
 
         return statcast_batter_expected_stats(year, minPA=1)
 
     def _b() -> pd.DataFrame:
-        from pybaseball import (  # local import: keeps module import-safe
-            statcast_batter_exitvelo_barrels,
-        )
+        from pybaseball import statcast_batter_exitvelo_barrels
 
         return statcast_batter_exitvelo_barrels(year, minBBE=1)
 
@@ -118,58 +223,6 @@ def load_statcast_hitters(
     return x.merge(b, on="mlbam", how="left")
 
 
-def load_id_map(
-    cache_dir: Path, *, fetcher: Callable[[], pd.DataFrame] | None = None
-) -> pd.DataFrame:
-    path = cache_dir / ID_MAP_FILE
-    cached = _read_cached(path)
-    if cached is not None:
-        return cached
-    if fetcher is None:
-        from pybaseball import chadwick_register  # local import: keeps module import-safe
-
-        fetcher = chadwick_register
-    reg = fetcher()
-    out = (
-        reg[["key_mlbam", "key_fangraphs"]]
-        .dropna()
-        .astype({"key_mlbam": int, "key_fangraphs": int})
-    )
-    if out.empty:
-        raise RuntimeError("chadwick_register returned no usable id rows; refusing to cache empty")
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    out.to_csv(path, index=False)
-    return out
-
-
-_FG_PITCH_RENAME = {
-    "IDfg": "key_fangraphs",
-    "Age": "age",
-    "K%": "k_pct",
-    "BB%": "bb_pct",
-    "IP": "ip",
-}
-
-
-def load_fg_pitchers(
-    cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
-) -> pd.DataFrame:
-    def _default() -> pd.DataFrame:
-        from pybaseball import pitching_stats  # local import: keeps module import-safe
-
-        return pitching_stats(year, qual=1)
-
-    raw = fetch_or_cache(cache_dir / f"fg_p_{year}.csv", fetcher or _default)
-    return _rename_strict(raw, _FG_PITCH_RENAME)
-
-
-_STATCAST_XPITCH_RENAME = {
-    "player_id": "mlbam",
-    "woba": "woba",
-    "est_woba": "xwoba",
-}
-
-
 def load_statcast_pitchers(
     cache_dir: Path,
     year: int,
@@ -177,9 +230,7 @@ def load_statcast_pitchers(
     xstats_fetcher: Callable[[], pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     def _x() -> pd.DataFrame:
-        from pybaseball import (  # local import: keeps module import-safe
-            statcast_pitcher_expected_stats,
-        )
+        from pybaseball import statcast_pitcher_expected_stats
 
         return statcast_pitcher_expected_stats(year, minPA=1)
 
@@ -189,57 +240,44 @@ def load_statcast_pitchers(
     )
 
 
+# ---------------------------------------------------------------------------
+# Join into per-player-season SkillLuckRow, keyed by MLBAM.
+# ---------------------------------------------------------------------------
+
+
 @dataclass(frozen=True)
 class CoverageReport:
-    matched: int  # FG rows with Statcast xStats joined
-    fg_only: int  # FG rows without Statcast
-    unmatched_fg: list[int]  # FG ids absent from the id map
-
-
-def _f(v) -> float | None:
-    return None if v is None or pd.isna(v) else float(v)
+    matched: int  # MLB-line players with Statcast xStats joined
+    no_xstats: int  # MLB-line players without a Statcast row (small sample / pre-2015)
 
 
 def build_hitter_skill_luck(
     cache_dir: Path, year: int, *, fetchers: dict[str, Callable[[], pd.DataFrame]] | None = None
 ) -> tuple[dict[int, SkillLuckRow], CoverageReport]:
     fetchers = fetchers or {}
-    id_map = load_id_map(cache_dir, fetcher=fetchers.get("id_map"))
-    fg = load_fg_hitters(cache_dir, year, fetcher=fetchers.get("fg"))
+    mlb = load_mlb_hitters(cache_dir, year, fetcher=fetchers.get("mlb"))
     sc = load_statcast_hitters(
         cache_dir,
         year,
         xstats_fetcher=fetchers.get("sc_x"),
         barrels_fetcher=fetchers.get("sc_brl"),
     )
-    fg2m = dict(
-        zip(
-            id_map["key_fangraphs"].astype(int),
-            id_map["key_mlbam"].astype(int),
-            strict=True,
-        )
-    )
     sc_by_mlbam = {int(r.mlbam): r for r in sc.itertuples(index=False)}
     rows: dict[int, SkillLuckRow] = {}
-    matched = fg_only = 0
-    unmatched: list[int] = []
-    for r in fg.itertuples(index=False):
-        fgid = int(r.key_fangraphs)
-        mlbam = fg2m.get(fgid)
-        if mlbam is None:
-            unmatched.append(fgid)
-            continue
+    matched = no_xstats = 0
+    for r in mlb.itertuples(index=False):
+        mlbam = int(r.mlbam)
         s = sc_by_mlbam.get(mlbam)
         if s is not None:
             matched += 1
         else:
-            fg_only += 1
-        rows[fgid] = SkillLuckRow(
+            no_xstats += 1
+        rows[mlbam] = SkillLuckRow(
             mlbam=mlbam,
             player_type="hitter",
             pa=float(r.pa),
             ip=0.0,
-            age=_f(r.age),
+            age=None,  # age is only marcel's mild adjustment; not sourced (marcel handles None)
             barrel_pct=_f(getattr(s, "barrel_pct", None)) if s else None,
             xslg=_f(getattr(s, "xslg", None)) if s else None,
             slg=_f(getattr(s, "slg", None)) if s else None,
@@ -251,44 +289,31 @@ def build_hitter_skill_luck(
             k_pct=_f(r.k_pct),
             bb_pct=_f(r.bb_pct),
         )
-    return rows, CoverageReport(matched, fg_only, unmatched)
+    return rows, CoverageReport(matched, no_xstats)
 
 
 def build_pitcher_skill_luck(
     cache_dir: Path, year: int, *, fetchers: dict[str, Callable[[], pd.DataFrame]] | None = None
 ) -> tuple[dict[int, SkillLuckRow], CoverageReport]:
     fetchers = fetchers or {}
-    id_map = load_id_map(cache_dir, fetcher=fetchers.get("id_map"))
-    fg = load_fg_pitchers(cache_dir, year, fetcher=fetchers.get("fg"))
+    mlb = load_mlb_pitchers(cache_dir, year, fetcher=fetchers.get("mlb"))
     sc = load_statcast_pitchers(cache_dir, year, xstats_fetcher=fetchers.get("sc_x"))
-    fg2m = dict(
-        zip(
-            id_map["key_fangraphs"].astype(int),
-            id_map["key_mlbam"].astype(int),
-            strict=True,
-        )
-    )
     sc_by_mlbam = {int(r.mlbam): r for r in sc.itertuples(index=False)}
     rows: dict[int, SkillLuckRow] = {}
-    matched = fg_only = 0
-    unmatched: list[int] = []
-    for r in fg.itertuples(index=False):
-        fgid = int(r.key_fangraphs)
-        mlbam = fg2m.get(fgid)
-        if mlbam is None:
-            unmatched.append(fgid)
-            continue
+    matched = no_xstats = 0
+    for r in mlb.itertuples(index=False):
+        mlbam = int(r.mlbam)
         s = sc_by_mlbam.get(mlbam)
         if s is not None:
             matched += 1
         else:
-            fg_only += 1
-        rows[fgid] = SkillLuckRow(
+            no_xstats += 1
+        rows[mlbam] = SkillLuckRow(
             mlbam=mlbam,
             player_type="pitcher",
             pa=0.0,
             ip=float(r.ip),
-            age=_f(r.age),
+            age=None,
             barrel_pct=None,
             xslg=None,
             slg=None,
@@ -300,4 +325,4 @@ def build_pitcher_skill_luck(
             k_pct=_f(r.k_pct),
             bb_pct=_f(r.bb_pct),
         )
-    return rows, CoverageReport(matched, fg_only, unmatched)
+    return rows, CoverageReport(matched, no_xstats)
