@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 
+from fantasy_baseball.analysis import keeper_value as _kv_mod
 from fantasy_baseball.utils.constants import safe_float
 
 
@@ -235,3 +236,128 @@ def _reason(s_rates, p_rates, w_by_stat):
     delta = s_rates[best] - p_rates.get(best, s_rates[best])
     dirn = "up" if delta > 0 else "down"
     return f"{best} {dirn}, w={w_by_stat.get(best, 0):.2f}"
+
+
+def _kv(pid, name, anchor, positions, ptype, zips_by_year, scale, **kw):
+    """Indirection so tests can stub the keeper_value call."""
+    return _kv_mod.keeper_value(pid, name, anchor, positions, ptype, zips_by_year, scale, **kw)
+
+
+DEVIATION_THRESHOLD = 0.12  # shared by adjust_line's label and the report's deviator flag
+
+
+def _zips_for(row, indices, base_year, horizon):
+    """Mirrors scripts/keeper_value.py:_zips_by_year (look up each year's ZiPS
+    index by fg_id then name; miss -> None), bounded to [base_year, base_year +
+    horizon) so a caller-supplied `indices` wider than the scored horizon can't
+    leak extra years into the per_year_var loop."""
+    from fantasy_baseball.sgp.rankings import lookup_rank
+
+    fg = row.get("fg_id")
+    fgid = str(fg) if fg is not None and str(fg).strip() else None
+    ptype = str(row["player_type"])
+    return {
+        yr: (lookup_rank(indices.get(yr, {}), fgid, row["name"], ptype) or None)
+        for yr in range(base_year, base_year + horizon)
+    }
+
+
+def breakout_rows(
+    board,
+    scale,
+    indices,
+    skill_luck,
+    projections,
+    *,
+    base_year,
+    horizon,
+    discount,
+    out_year_regression=_kv_mod.DEFAULT_OUT_YEAR_REGRESSION,
+):
+    """Per-board-player surface-believed vs skill-adjusted keeper value.
+
+    ``out_year_regression`` MUST match scripts/keeper_value.py:build_results so the
+    surface value equals today's --anchor current number and surface/adjusted
+    differ ONLY in the anchor.
+    """
+    rows = []
+    for _, r in board.iterrows():
+        row = r.to_dict()
+        ptype = str(row["player_type"])
+        fg = row.get("fg_id")
+        fgid = int(fg) if fg is not None and str(fg).isdigit() else None
+        positions = list(row["positions"])
+        zby = _zips_for(row, indices, base_year, horizon)  # mirrors kv_script._zips_by_year
+        surface = _kv(
+            row["player_id"],
+            row["name"],
+            row,
+            positions,
+            ptype,
+            zby,
+            scale,
+            base_year=base_year,
+            horizon=horizon,
+            discount=discount,
+            out_year_regression=out_year_regression,
+        ).total
+        sl = skill_luck.get(fgid) if fgid is not None else None
+        proj = projections.get(f"{fg}::{ptype}") if fg is not None else None
+        if sl is not None and proj is not None:
+            res = adjust_line(row, proj, sl, ptype, deviation_threshold=DEVIATION_THRESHOLD)
+            adjusted = _kv(
+                row["player_id"],
+                row["name"],
+                res.adjusted_line,
+                positions,
+                ptype,
+                zby,
+                scale,
+                base_year=base_year,
+                horizon=horizon,
+                discount=discount,
+                out_year_regression=out_year_regression,
+            ).total
+            gap = (sl.woba - sl.xwoba) if sl.woba is not None and sl.xwoba is not None else None
+            under = {
+                "woba_xwoba_gap": gap,
+                "babip": sl.babip,
+                "barrel_pct": sl.barrel_pct,
+                "k_pct": sl.k_pct,
+                "bb_pct": sl.bb_pct,
+            }
+            rows.append(
+                {
+                    "name": row["name"],
+                    "player_type": ptype,
+                    "surface_value": surface,
+                    "adjusted_value": adjusted,
+                    "delta": adjusted - surface,
+                    "label": res.label,
+                    "reason": res.reason,
+                    "confidence": res.confidence,
+                    "deviator": abs(res.surface_deviation) >= DEVIATION_THRESHOLD,
+                    **under,
+                }
+            )
+        else:
+            rows.append(
+                {
+                    "name": row["name"],
+                    "player_type": ptype,
+                    "surface_value": surface,
+                    "adjusted_value": surface,
+                    "delta": 0.0,
+                    "label": "stable",
+                    "reason": "no skill/luck data",
+                    "confidence": "low",
+                    "deviator": False,
+                    "woba_xwoba_gap": None,
+                    "babip": None,
+                    "barrel_pct": None,
+                    "k_pct": None,
+                    "bb_pct": None,
+                }
+            )
+    rows.sort(key=lambda d: d["adjusted_value"], reverse=True)
+    return rows

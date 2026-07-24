@@ -220,6 +220,89 @@ def test_adjust_line_slump_labeled():
     assert r.label == "slump"
 
 
+def test_breakout_rows_surface_equals_kv_and_adjusted_regresses_luck(monkeypatch):
+    import pandas as pd
+
+    from fantasy_baseball.analysis import keeper_value
+
+    # one lucky hitter: hot surface, flat xStats -> adjusted value below surface value
+    board = pd.DataFrame(
+        [
+            {
+                "player_id": "Lucky Guy::hitter",
+                "name": "Lucky Guy",
+                "player_type": "hitter",
+                "positions": ["OF"],
+                "fg_id": "20123",
+                "pa": 600,
+                "ab": 540,
+                "hr": 40,
+                "r": 100,
+                "rbi": 110,
+                "sb": 10,
+                "avg": 0.320,
+            }
+        ]
+    )
+    projections = {
+        "20123::hitter": {
+            "pa": 600,
+            "ab": 540,
+            "hr": 20,
+            "r": 80,
+            "rbi": 80,
+            "sb": 10,
+            "avg": 0.260,
+        }
+    }
+    skill_luck = {
+        20123: breakout.SkillLuckRow(
+            mlbam=665742,
+            player_type="hitter",
+            pa=600,
+            ip=0.0,
+            age=27.0,
+            barrel_pct=0.06,
+            xslg=0.410,
+            slg=0.560,
+            xba=0.255,
+            ba=0.320,
+            babip=0.385,
+            xwoba=0.315,
+            woba=0.380,
+            k_pct=0.24,
+            bb_pct=0.05,
+        )
+    }
+
+    # stub keeper_value to a monotonic function of HR so the test is deterministic
+    def fake_kv(pid, name, anchor, pos, ptype, zby, scale, **kw):
+        return keeper_value.KeeperValueResult(
+            pid, name, {2026: anchor["hr"]}, float(anchor["hr"]), [], None, None
+        )
+
+    monkeypatch.setattr(breakout, "_kv", fake_kv, raising=False)
+    rows = breakout.breakout_rows(
+        board,
+        scale=None,
+        indices={},
+        skill_luck=skill_luck,
+        projections=projections,
+        base_year=2026,
+        horizon=3,
+        discount=0.8,
+    )
+    row = rows[0]
+    assert row["surface_value"] == 40.0  # surface anchor untouched
+    assert row["adjusted_value"] < row["surface_value"]  # luck regressed out
+    assert row["delta"] == row["adjusted_value"] - row["surface_value"]
+    assert row["label"] in breakout.LABELS
+    # spec-required deviator flag + underlying numbers
+    assert row["deviator"] is True  # HR 40 vs proj 20 is a big surface move
+    assert abs(row["woba_xwoba_gap"] - (0.380 - 0.315)) < 1e-9
+    assert row["babip"] == 0.385 and row["barrel_pct"] == 0.06
+
+
 def test_adjust_line_real_decline_labeled():
     proj = {"pa": 600, "ab": 540, "hr": 35, "r": 100, "rbi": 105, "sb": 8, "avg": 0.290}
     surface = {"pa": 600, "ab": 540, "hr": 15, "r": 65, "rbi": 60, "sb": 4, "avg": 0.235}
