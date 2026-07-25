@@ -103,6 +103,8 @@ class WMapParams:
 
 DEFAULT_WMAP = WMapParams()
 
+MIRAGE_RATIO = 2.0  # a surface move > this x the believed move -> luck (mirage/slump)
+
 # Roto-VALUE weight per unit of rate deviation, for the label aggregation. The
 # label's believed/surface deviations sum `weight * (s_rate - p_rate)` across
 # stats so each stat's voice matches its ROTO impact -- NOT its percentage swing.
@@ -226,23 +228,20 @@ def adjust_line(
     return BreakoutResult(adjusted, label, reason, w_by_stat, confidence, surface, believed)
 
 
-def _label(believed, surface, thr):
-    # believed = w-weighted, roto-value-weighted signed deviation (what the model
-    # believes is real, in roto points); surface = the same but unweighted by w
-    # (the raw apparent move). If the model believes a NET real gain/loss, that is
-    # a breakout/decline (its reason names the real driver, even for a mixed line).
-    # "Mirage"/"slump" is reserved for a big APPARENT move the model does NOT
-    # believe (surface clears the threshold, believed does not) -- a fluke with no
-    # real net component.
-    if believed >= thr:
-        return "real breakout"
-    if believed <= -thr:
-        return "real decline"
+def _label(believed, surface, thr, *, mirage_ratio=MIRAGE_RATIO):
+    # CONSERVATIVE label (the mirage-vs-breakout boundary is UNVALIDATED pending
+    # the backtest). A big apparent move (surface) that belief mostly did NOT
+    # confirm -- surface > mirage_ratio x |believed| -- is luck ("mirage"/"slump"),
+    # even when the net believed deviation is positive. This keeps a mixed line
+    # whose gain is only partly believed (e.g. a HR-only power uptick amid
+    # unbelieved R/RBI/AVG) from reading as a clean breakout. Symmetric on both
+    # signs; multiplication (not division) so a near-zero believed cannot blow up.
+    if abs(surface) < thr:
+        return "stable"
+    luck = abs(surface) > mirage_ratio * abs(believed)
     if surface >= thr:
-        return "lucky mirage"
-    if surface <= -thr:
-        return "slump"
-    return "stable"
+        return "lucky mirage" if luck else "real breakout"
+    return "slump" if luck else "real decline"
 
 
 def _reason(s_rates, p_rates, w_by_stat):
