@@ -103,7 +103,28 @@ class WMapParams:
 
 DEFAULT_WMAP = WMapParams()
 
-MIRAGE_RATIO = 2.0  # surface move this many times the believed move -> luck, not skill
+# Roto-VALUE weight per unit of rate deviation, for the label aggregation. The
+# label's believed/surface deviations sum `weight * (s_rate - p_rate)` across
+# stats so each stat's voice matches its ROTO impact -- NOT its percentage swing.
+# (The old `/ |p_rate|` relative form let a tiny-denominator stat dominate: a
+# 1-SB dip on a 5-SB projection is a -20% swing that swamped a +25% HR jump, so a
+# power breakout mislabeled as a decline.) Seed values approximate a full-season
+# ~1-roto-point move mapping to ~1.0 (avg discounted for team-AB dilution);
+# pitcher weights are seed/untuned (backtest is hitters-only). Tunable, like the
+# w-mapping. KNOWN LIMITATION: a fixed avg/era/whip weight can't see the team-AB
+# context the real SGP valuation uses, so it is approximate for those rate stats.
+LABEL_WEIGHTS = {
+    "hr": 65.0,
+    "r": 33.0,
+    "rbi": 33.0,
+    "sb": 85.0,
+    "avg": 40.0,
+    "k": 10.0,
+    "w": 100.0,
+    "sv": 90.0,
+    "era": 2.0,
+    "whip": 60.0,
+}
 
 
 def _reliability(sample: float, stabilize: float) -> float:
@@ -165,32 +186,32 @@ def adjust_line(
     player_type,
     *,
     params=DEFAULT_WMAP,
-    deviation_threshold=0.12,
+    deviation_threshold=0.2,
 ):
     """Skill-adjusted counting line + label + reason.
 
     Rates are shrunk: adjusted = proj + w*(surface - proj), re-multiplied by the
     surface line's PT (held) to a counting line; avg/era/whip are carried as
-    adjusted rates directly. Label from the aggregate signed, w-weighted deviation
-    vs deviation_threshold; confidence "low" when sample below the stabilization
-    sample or xStats absent.
+    adjusted rates directly. Label from the aggregate signed, ROTO-VALUE-weighted
+    deviation (LABEL_WEIGHTS, in ~roto points) vs deviation_threshold; confidence
+    "low" when sample below the stabilization sample or xStats absent.
     """
     s_rates = line_rates(surface_line, player_type)
     p_rates = line_rates(projection_line, player_type)
     pt = safe_float(surface_line.get("pa" if player_type == "hitter" else "ip", 0))
     adjusted = dict(surface_line)  # carry non-scored fields (positions, ab, ip, etc.)
     w_by_stat: dict[str, float] = {}
-    believed = 0.0  # w-weighted signed deviation -> drives the label
-    surface = 0.0  # raw (unweighted) signed deviation -> drives the deviator flag
+    believed = 0.0  # w-weighted, roto-value-weighted signed deviation -> drives the label
+    surface = 0.0  # raw (roto-value-weighted) signed deviation -> drives the deviator flag
     for stat, s_rate in s_rates.items():
         p_rate = p_rates.get(stat, s_rate)
         w = w_for_stat(stat, row, player_type, params)
         w_by_stat[stat] = w
         adj_rate = p_rate + w * (s_rate - p_rate)
-        # luck-direction aware for era/whip (lower = better)
+        # luck-direction aware for era/whip (lower = better); weight by roto value
+        # (NOT relative to |p_rate|, which explodes tiny-denominator stats).
         direction = -1.0 if stat in ("era", "whip") else 1.0
-        denom = abs(p_rate) if abs(p_rate) > 1e-9 else 1.0
-        term = direction * (s_rate - p_rate) / denom
+        term = direction * LABEL_WEIGHTS.get(stat, 0.0) * (s_rate - p_rate)
         believed += w * term
         surface += term
         if stat in _RATE_ONLY:
@@ -205,31 +226,35 @@ def adjust_line(
     return BreakoutResult(adjusted, label, reason, w_by_stat, confidence, surface, believed)
 
 
-def _label(believed, surface, thr, *, mirage_ratio=MIRAGE_RATIO):
-    # believed = w-weighted (skill-backed) deviation; surface = raw deviation.
-    # A big surface move that belief mostly regressed away is luck
-    # (mirage/slump); one belief largely kept is real (breakout/decline).
-    # Symmetric on both signs; multiplication (not division) so a near-zero
-    # believed cannot blow up.
-    if abs(surface) < thr:
-        return "stable"
-    luck = abs(surface) > mirage_ratio * abs(believed)
+def _label(believed, surface, thr):
+    # believed = w-weighted, roto-value-weighted signed deviation (what the model
+    # believes is real, in roto points); surface = the same but unweighted by w
+    # (the raw apparent move). If the model believes a NET real gain/loss, that is
+    # a breakout/decline (its reason names the real driver, even for a mixed line).
+    # "Mirage"/"slump" is reserved for a big APPARENT move the model does NOT
+    # believe (surface clears the threshold, believed does not) -- a fluke with no
+    # real net component.
+    if believed >= thr:
+        return "real breakout"
+    if believed <= -thr:
+        return "real decline"
     if surface >= thr:
-        return "lucky mirage" if luck else "real breakout"
-    return "slump" if luck else "real decline"
+        return "lucky mirage"
+    if surface <= -thr:
+        return "slump"
+    return "stable"
 
 
 def _reason(s_rates, p_rates, w_by_stat):
-    """Name the largest-magnitude believed mover (normalized by projection rate)."""
+    """Name the largest believed mover, weighted by roto value (same scale the
+    label uses -- so the reason matches what drove the label)."""
 
     def contribution(k):
         s_rate = s_rates[k]
         p_rate = p_rates.get(k, s_rate)
         w = w_by_stat.get(k, 0)
-        # use direction-aware term like believed calculation
         direction = -1.0 if k in ("era", "whip") else 1.0
-        denom = abs(p_rate) if abs(p_rate) > 1e-9 else 1.0
-        term = direction * (s_rate - p_rate) / denom
+        term = direction * LABEL_WEIGHTS.get(k, 0.0) * (s_rate - p_rate)
         return abs(w * term)
 
     best = max(s_rates, key=contribution)
@@ -243,7 +268,9 @@ def _kv(pid, name, anchor, positions, ptype, zips_by_year, scale, **kw):
     return _kv_mod.keeper_value(pid, name, anchor, positions, ptype, zips_by_year, scale, **kw)
 
 
-DEVIATION_THRESHOLD = 0.12  # shared by adjust_line's label and the report's deviator flag
+DEVIATION_THRESHOLD = (
+    0.2  # roto-value scale; shared by adjust_line's label + report's deviator flag
+)
 
 
 def _zips_for(row, indices, base_year, horizon):
