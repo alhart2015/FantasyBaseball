@@ -71,10 +71,15 @@ living in `breakout.py` alongside the existing stabilization constants.
 
 ### Weight form
 
-- **Primary:** a single flat `w_b` tuned by grid search on fit-years.
+- **Primary:** a single flat `w_b` tuned by grid search on fit-years over
+  `{0.00, 0.05, ..., 1.00}` (weight on the barrel anchor).
 - **Reported variant:** a reliability-scaled weight (more surface weight for higher-PA
-  players), `w_s = reliability * cw`. Ship whichever generalizes better on held-out
-  years; default to flat unless the scaled one clearly wins (fewer knobs).
+  players), `w_s = reliability * cw` with `reliability = pa / (pa + 120)` (the shipped
+  HR stabilization) and `cw` swept over `{0.1, 0.2, ..., 1.0}`. Ship whichever
+  generalizes better on held-out years; default to flat unless the scaled one clearly
+  wins (fewer knobs).
+- `barrel_expected` is clamped to `>= 0` (a degenerate/extreme `brl_pa` can't produce a
+  negative expected HR rate).
 
 ### Fallback (no barrels)
 
@@ -89,10 +94,12 @@ The HR branch of the confirm gate (`_confirm_gap(slg, xslg, 0.150)`) is supersed
 barrel-covered players (it demonstrably added nothing). It remains only on the Marcel
 fallback path.
 
-## The gating backtest (extends `hr_confirm.py`, committed -- not scratch)
+## The gating backtest (reuses `hr_confirm.py`, committed -- not scratch)
 
-Two additions to the harness + a new report script section (or a sibling script
-`scripts/backtest_hr_level.py` reusing the same corpus builder):
+Two additions, delivered as a **sibling script `scripts/backtest_hr_level.py`** that
+reuses `hr_confirm.build_hr_records` + `fit_barrel_calibration` + `expected_hr_rate`
+(shared library stays in `hr_confirm.py`; the script is thin orchestration, matching
+`backtest_hr_confirm.py`):
 
 1. **Direct-level test (captures the finding):** Spearman of `barrel_expected`,
    `surface_hr`, `xhr_rate` vs next-year HR/PA, with bootstrap CIs on the pairwise
@@ -107,29 +114,45 @@ Two additions to the harness + a new report script section (or a sibling script
    **seeded** bootstrap CI on `Spearman(barrel-anchored) - Spearman(shipped)`.
 
 **Gate rule:** barrel-anchored ships **only if** its Spearman-difference CI vs the
-shipped line **excludes 0** (lower bound > 0), on the full applied population (that is
-where the wire-in acts). Top-100/top-50 are reported as robustness (the edge was
-largest there; it must not invert). Also report the flat-vs-reliability-scaled weight
-comparison; freeze the winner's `A`, `B`, `w`.
+shipped line **excludes 0** (lower bound > 0) on the **HR-mover** population (below).
+Top-100/top-50 are reported as robustness (the edge was largest there; it must not
+invert). Also report the flat-vs-reliability-scaled weight comparison; the winner's
+`A`, `B`, `w` are what get frozen.
 
 **Population:** the same `build_hr_records` common-support + PA-floor + HR-mover
-filters as #262 (barrel-covered players only, which is exactly the wire-in's
-applicability set). Fit 2016-2020, report 2021-2024.
+filters as #262 (`|surface_hr - prior_hr| >= 0.005`), fit 2016-2020 / report 2021-2024.
+The wire-in acts on *all* barrel-covered hitters, but the anchor change only has
+leverage on the movers -- for a non-mover, `surface ~= Marcel ~= barrel_expected`, so
+the forecast barely moves. Gating on the mover set is therefore the relevant,
+conservative test; the run also reports an **unfiltered (all barrel-covered)** variant
+as a sanity check that the change doesn't degrade the near-unchanged middle.
+
+**Method vs production fit (no leakage):** the gate above **validates the method** on
+held-out report years (constants tuned on fit-years only, scored on report-years). It
+is a separate, later step -- taken *only after* the gate clears -- to **refit** `A`,
+`B`, `w` on **all** available seasons for the production constants (standard practice:
+hold out to prove the method generalizes, then use all data for the shipped fit). The
+held-out claim is about the method, not the all-data constants; the two fits are kept
+distinct so this is not read as circular.
 
 ## Freeze & wire-in (Phase 2, gated on the backtest)
 
 Only if the gate clears:
 
 - **Constants in `breakout.py`:** `HR_BARREL_SLOPE (B)`, `HR_BARREL_INTERCEPT (A)`,
-  `HR_BARREL_WEIGHT` (flat `w_b`) or the reliability `cw` -- fit on all available
-  seasons (2016..latest), frozen with a one-line provenance comment (the backtest that
-  produced them), analogous to the existing seed constants.
-- **`adjust_line` HR override:** when `row.brl_pa is not None`, set HR's baseline
-  `p_rate = barrel_expected(row.brl_pa)` and HR's weight to the frozen barrel weight,
+  `HR_BARREL_WEIGHT` (flat `w_b`) or the reliability `cw` -- **refit on all available
+  seasons (2016..latest)** per the no-leakage step above (the gate that authorized them
+  ran on the held-out split), frozen with a one-line provenance comment (the backtest +
+  the fit span), analogous to the existing seed constants.
+- **`adjust_line` HR override (anchor only):** when `row.brl_pa is not None`, override
+  HR's baseline `p_rate = barrel_expected(row.brl_pa)` (clamped >= 0) before the shrink,
   so `adj_hr`, the believed/surface deviation, and the label's HR contribution all use
-  barrel-expected as the HR baseline consistently. Else, current behavior.
-- **`w_for_stat("hr")`:** returns the barrel weight when `brl_pa` present, else the
-  current `reliability*confirm_xslg`.
+  barrel-expected as the HR baseline consistently. The weight is NOT set here -- it
+  comes from `w_for_stat` as it does for every stat (single source of truth). Else,
+  current behavior.
+- **`w_for_stat("hr")` (weight only):** returns the frozen barrel weight when `brl_pa`
+  present (flat `w_s = 1 - w_b`, or `reliability*cw`), else the current
+  `reliability*confirm_xslg`. This is the one place the HR weight is decided.
 - **Report (`run_breakout_report.py`):** surface `barrel_expected` for HR next to
   surface HR so the driver of the HR adjustment is visible.
 
@@ -159,5 +182,5 @@ Only if the gate clears:
   is a consequence, not a gated claim; the label boundary remains flagged unvalidated.
 - **Small-sample top-50** CIs are wide; top-N is robustness, not the gate.
 - If the gate does **not** clear (barrel-anchored fails to beat the shipped line on the
-  full held-out population despite the direct-level edge), we do NOT wire in; the
+  held-out mover population despite the direct-level edge), we do NOT wire in; the
   deliverable is the committed direct-level + gate backtest and that negative result.
