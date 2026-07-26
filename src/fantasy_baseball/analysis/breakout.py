@@ -37,6 +37,11 @@ class SkillLuckRow:
     k_pct: float | None
     bb_pct: float | None
     # pitcher confirmations (K-BB, xwOBA-against reuse xwoba/woba/k_pct/bb_pct above)
+    # HR-confirmation extras (issue #262). Optional: None for pitchers, pre-2016
+    # (the xHR leaderboard starts 2016), or unmatched players. Defaults keep the
+    # existing keyword constructors valid.
+    brl_pa: float | None = None  # barrels per PA (share, e.g. 0.049)
+    xhr: float | None = None  # park-adjusted expected HR (season count)
 
 
 @dataclass(frozen=True)

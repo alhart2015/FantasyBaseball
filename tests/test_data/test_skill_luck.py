@@ -6,6 +6,29 @@ import pytest
 from fantasy_baseball.data import skill_luck
 
 
+def test_fetch_or_cache_tolerate_empty_returns_typed_frame_without_writing(tmp_path: Path):
+    q = tmp_path / "hr_empty.csv"
+    empty = pd.DataFrame({"player_id": [], "xhr": []})  # header-only (pre-2016)
+    out = skill_luck.fetch_or_cache(q, lambda: empty, tolerate_empty=True)
+    assert list(out.columns) == ["player_id", "xhr"] and len(out) == 0
+    assert not q.exists()  # empty leaderboard is not cached
+
+
+def test_load_statcast_hr_renames_and_keys_by_mlbam(tmp_path: Path):
+    raw = pd.DataFrame(
+        {"player_id": [621566, 665742], "xhr": [48.2, 40.1], "hr_total": [54, 41]}
+    )
+    out = skill_luck.load_statcast_hr(tmp_path, 2023, fetcher=lambda: raw)
+    assert list(out.columns) == ["mlbam", "xhr"]
+    assert out.set_index("mlbam").loc[621566, "xhr"] == pytest.approx(48.2)
+
+
+def test_load_statcast_hr_tolerates_empty_pre_2016(tmp_path: Path):
+    empty = pd.DataFrame({"player_id": [], "xhr": [], "hr_total": []})
+    out = skill_luck.load_statcast_hr(tmp_path, 2015, fetcher=lambda: empty)
+    assert list(out.columns) == ["mlbam", "xhr"] and len(out) == 0
+
+
 def test_fetch_or_cache_refuses_empty_and_reuses(tmp_path: Path):
     calls = {"n": 0}
     good = pd.DataFrame({"a": [1, 2]})
@@ -84,7 +107,8 @@ def test_build_hitter_skill_luck_joins_and_reports_coverage(tmp_path: Path):
             "est_slg": [0.520],
         }
     )
-    sc_brl = pd.DataFrame({"player_id": [665742], "brl_percent": [14.0]})
+    sc_brl = pd.DataFrame({"player_id": [665742], "brl_percent": [14.0], "brl_pa": [4.9]})
+    sc_hr = pd.DataFrame({"player_id": [665742], "xhr": [28.5], "hr_total": [30]})
 
     rows, cov = skill_luck.build_hitter_skill_luck(
         tmp_path,
@@ -93,13 +117,16 @@ def test_build_hitter_skill_luck_joins_and_reports_coverage(tmp_path: Path):
             "mlb": lambda: mlb,
             "sc_x": lambda: sc_x,
             "sc_brl": lambda: sc_brl,
+            "sc_hr": lambda: sc_hr,
         },
     )
     soto = rows[665742]
     assert soto.mlbam == 665742 and soto.woba == 0.400 and soto.xwoba == 0.360
     assert soto.barrel_pct == 0.14 and soto.k_pct == pytest.approx(120 / 600)
+    assert soto.brl_pa == pytest.approx(0.049) and soto.xhr == pytest.approx(28.5)
     # mlbam 800 has no statcast row -> present but xStats None
     assert rows[800].xwoba is None and rows[800].woba is None
+    assert rows[800].xhr is None and rows[800].brl_pa is None
     assert cov.matched == 1 and cov.no_xstats == 1
 
 
