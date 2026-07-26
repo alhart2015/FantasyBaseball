@@ -45,10 +45,15 @@ def _direct_level(report, calib):
     surf = [r["surface_hr"] for r in report]
     xhr = [r["xhr_rate"] for r in report]
     brl = [H.expected_hr_rate("barrel", r, calib) for r in report]
-    sp = {"surface": _spearman(surf, actual), "xhr": _spearman(xhr, actual),
-          "barrel": _spearman(brl, actual)}
-    ci = {"barrel_minus_surface": _bootstrap_diff(brl, surf, actual, seed=H.SEED),
-          "xhr_minus_surface": _bootstrap_diff(xhr, surf, actual, seed=H.SEED)}
+    sp = {
+        "surface": _spearman(surf, actual),
+        "xhr": _spearman(xhr, actual),
+        "barrel": _spearman(brl, actual),
+    }
+    ci = {
+        "barrel_minus_surface": _bootstrap_diff(brl, surf, actual, seed=H.SEED),
+        "xhr_minus_surface": _bootstrap_diff(xhr, surf, actual, seed=H.SEED),
+    }
     return sp, ci
 
 
@@ -99,21 +104,29 @@ def run_level_gate(corpus, *, fit_years, report_years):
     prod_cw = _tune_rel_cw(prod_fit, prod_calib)
 
     return {
-        "n_fit": len(fit), "n_report": len(report),
-        "calib": calib, "w_s": w_s, "cw": cw,
+        "n_fit": len(fit),
+        "n_report": len(report),
+        "calib": calib,
+        "w_s": w_s,
+        "cw": cw,
         "weight_form": weight_form,
         "barrel_spearman": _spearman(flat_fwd, actual),
         "rel_spearman": _spearman(rel_fwd, actual),
         "shipped_spearman": _spearman(shipped_fwd, actual),
-        "barrel_mae": fmean([abs(a - b) for a, b in zip(flat_fwd, actual)]),
-        "shipped_mae": fmean([abs(a - b) for a, b in zip(shipped_fwd, actual)]),
-        "gate_ci": gate_ci,             # the CHOSEN form's CI vs shipped
-        "flat_ci": flat_ci, "rel_ci": rel_ci,
+        "barrel_mae": fmean([abs(a - b) for a, b in zip(flat_fwd, actual, strict=True)]),
+        "shipped_mae": fmean([abs(a - b) for a, b in zip(shipped_fwd, actual, strict=True)]),
+        "gate_ci": gate_ci,  # the CHOSEN form's CI vs shipped
+        "flat_ci": flat_ci,
+        "rel_ci": rel_ci,
         "gate_clears": gate_ci[0] > 0,
         "direct_level_spearman": sp_dl,
         "direct_level_ci": ci_dl,
-        "prod_constants": {"slope": prod_calib[0], "intercept": prod_calib[1],
-                           "w_s": prod_w, "cw": prod_cw},
+        "prod_constants": {
+            "slope": prod_calib[0],
+            "intercept": prod_calib[1],
+            "w_s": prod_w,
+            "cw": prod_cw,
+        },
     }
 
 
@@ -124,22 +137,38 @@ def main():
     corpus = bt.build_corpus(bt.SKILL_LUCK_CACHE_DIR, bt.PROJECTIONS_ROOT, SOURCE_YEARS)
     res = run_level_gate(corpus, fit_years=FIT_YEARS, report_years=REPORT_YEARS)
     print("Barrel-anchored HR level gate -- vs the shipped surface->Marcel line")
-    print(f"  fit {FIT_YEARS} report {REPORT_YEARS}  n_fit {res['n_fit']} n_report {res['n_report']}")
-    print(f"  Spearman: flat(w_s={res['w_s']:.2f}) {res['barrel_spearman']:+.3f}  "
-          f"rel(cw={res['cw']:.2f}) {res['rel_spearman']:+.3f}  shipped {res['shipped_spearman']:+.3f}")
+    print(
+        f"  fit {FIT_YEARS} report {REPORT_YEARS}  n_fit {res['n_fit']} n_report {res['n_report']}"
+    )
+    print(
+        f"  Spearman: flat(w_s={res['w_s']:.2f}) {res['barrel_spearman']:+.3f}  "
+        f"rel(cw={res['cw']:.2f}) {res['rel_spearman']:+.3f}  shipped {res['shipped_spearman']:+.3f}"
+    )
     print(f"  MAE: barrel(flat) {res['barrel_mae']:.4f}  shipped {res['shipped_mae']:.4f}")
-    print(f"  flat CI vs shipped {tuple(round(x,3) for x in res['flat_ci'])}  "
-          f"rel CI vs shipped {tuple(round(x,3) for x in res['rel_ci'])}  "
-          f"-> chosen form: {res['weight_form']}")
+    print(
+        f"  flat CI vs shipped {tuple(round(x, 3) for x in res['flat_ci'])}  "
+        f"rel CI vs shipped {tuple(round(x, 3) for x in res['rel_ci'])}  "
+        f"-> chosen form: {res['weight_form']}"
+    )
     lo, hi = res["gate_ci"]
-    print(f"  GATE ({res['weight_form']}) CI barrel-anchored - shipped [{lo:+.3f}, {hi:+.3f}] -> "
-          f"{'GATE CLEARS' if res['gate_clears'] else 'GATE DOES NOT CLEAR'}")
-    print("  direct-level Spearman:", {k: round(v, 3) for k, v in res["direct_level_spearman"].items()})
-    print("  direct-level CI:", {k: (round(v[0], 3), round(v[1], 3))
-                                  for k, v in res["direct_level_ci"].items()})
+    print(
+        f"  GATE ({res['weight_form']}) CI barrel-anchored - shipped [{lo:+.3f}, {hi:+.3f}] -> "
+        f"{'GATE CLEARS' if res['gate_clears'] else 'GATE DOES NOT CLEAR'}"
+    )
+    print(
+        "  direct-level Spearman:",
+        {k: round(v, 3) for k, v in res["direct_level_spearman"].items()},
+    )
+    print(
+        "  direct-level CI:",
+        {k: (round(v[0], 3), round(v[1], 3)) for k, v in res["direct_level_ci"].items()},
+    )
     # robustness: top-100/50 + unfiltered, on the chosen weight form
-    for label, kw in [("TOP-100", {"top_n": 100}), ("TOP-50", {"top_n": 50}),
-                      ("UNFILTERED", {"hr_move_min": 0.0})]:
+    for label, kw in [
+        ("TOP-100", {"top_n": 100}),
+        ("TOP-50", {"top_n": 50}),
+        ("UNFILTERED", {"hr_move_min": 0.0}),
+    ]:
         rep = _by_year(corpus, REPORT_YEARS, **kw)
         act = [r["actual_hr"] for r in rep]
         if res["weight_form"] == "rel":
@@ -148,25 +177,38 @@ def main():
             b = [H.level_blend_forward(r, res["calib"], res["w_s"]) for r in rep]
         s = H._forwards(rep, "xslg", res["calib"], H.SHIPPED_XSLG_SCALE)
         ci = _bootstrap_diff(b, s, act, seed=H.SEED)
-        print(f"  robustness {label}: n={len(rep)} barrel {_spearman(b,act):+.3f} "
-              f"shipped {_spearman(s,act):+.3f} CI [{ci[0]:+.3f},{ci[1]:+.3f}]")
+        print(
+            f"  robustness {label}: n={len(rep)} barrel {_spearman(b, act):+.3f} "
+            f"shipped {_spearman(s, act):+.3f} CI [{ci[0]:+.3f},{ci[1]:+.3f}]"
+        )
     pc = res["prod_constants"]
     wtd = pc["cw"] if res["weight_form"] == "rel" else pc["w_s"]
-    print(f"  PRODUCTION CONSTANTS (refit all {SOURCE_YEARS[0]}-{SOURCE_YEARS[-1]}, "
-          f"form={res['weight_form']}): HR_BARREL_SLOPE={pc['slope']:.5f} "
-          f"HR_BARREL_INTERCEPT={pc['intercept']:.5f} HR_BARREL_WEIGHT={wtd:.3f}")
+    print(
+        f"  PRODUCTION CONSTANTS (refit all {SOURCE_YEARS[0]}-{SOURCE_YEARS[-1]}, "
+        f"form={res['weight_form']}): HR_BARREL_SLOPE={pc['slope']:.5f} "
+        f"HR_BARREL_INTERCEPT={pc['intercept']:.5f} HR_BARREL_WEIGHT={wtd:.3f}"
+    )
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
-    rows = [{"metric": k, "value": v} for k, v in {
-        "n_report": res["n_report"], "weight_form": res["weight_form"],
-        "w_s": res["w_s"], "cw": res["cw"],
-        "barrel_spearman": res["barrel_spearman"], "rel_spearman": res["rel_spearman"],
-        "shipped_spearman": res["shipped_spearman"],
-        "gate_ci_low": res["gate_ci"][0], "gate_ci_high": res["gate_ci"][1],
-        "gate_clears": res["gate_clears"],
-        "prod_slope": pc["slope"], "prod_intercept": pc["intercept"],
-        "prod_w_s": pc["w_s"], "prod_cw": pc["cw"],
-    }.items()]
+    rows = [
+        {"metric": k, "value": v}
+        for k, v in {
+            "n_report": res["n_report"],
+            "weight_form": res["weight_form"],
+            "w_s": res["w_s"],
+            "cw": res["cw"],
+            "barrel_spearman": res["barrel_spearman"],
+            "rel_spearman": res["rel_spearman"],
+            "shipped_spearman": res["shipped_spearman"],
+            "gate_ci_low": res["gate_ci"][0],
+            "gate_ci_high": res["gate_ci"][1],
+            "gate_clears": res["gate_clears"],
+            "prod_slope": pc["slope"],
+            "prod_intercept": pc["intercept"],
+            "prod_w_s": pc["w_s"],
+            "prod_cw": pc["cw"],
+        }.items()
+    ]
     pd.DataFrame(rows).to_csv(OUT_PATH, index=False)
     print(f"\nWrote {OUT_PATH}")
 

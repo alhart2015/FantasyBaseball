@@ -30,8 +30,12 @@ def test_level_blend_forward_is_weighted_average():
 
 def test_tune_level_weight_picks_grid_argmax():
     recs = [
-        _rec(mlbam=i, brl_pa=0.02 + 0.002 * i, surface_hr=0.03 + 0.001 * i,
-             actual_hr=0.03 + 0.001 * i)
+        _rec(
+            mlbam=i,
+            brl_pa=0.02 + 0.002 * i,
+            surface_hr=0.03 + 0.001 * i,
+            actual_hr=0.03 + 0.001 * i,
+        )
         for i in range(30)
     ]
     w = hr_confirm.tune_level_weight(recs, (0.5, 0.01))
