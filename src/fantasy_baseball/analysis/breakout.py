@@ -10,7 +10,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 
 from fantasy_baseball.analysis import keeper_value as _kv_mod
-from fantasy_baseball.utils.constants import safe_float
+from fantasy_baseball.utils.constants import INVERSE_STATS, RATE_STATS, safe_float
 
 
 @dataclass(frozen=True)
@@ -179,10 +179,12 @@ def w_for_stat(stat: str, row: SkillLuckRow, player_type: str, params: WMapParam
     return reliability * ((1.0 - cw) + cw * confirm)
 
 
-# Domain stat-sets, named once here (the domain module) and imported by
-# breakout_backtest so the two files can't silently desync on either fact.
-INVERTED_STATS = frozenset({"era", "whip"})  # roto cats where lower is better
-RATE_ONLY = frozenset({"avg", "era", "whip"})  # carried as rates, not scaled by PT
+# Domain stat-sets projected to breakout's lowercase string keys from the repo's
+# canonical Category sets (utils.constants) -- derived, not re-typed, so a change to
+# the canonical inverse/rate categories can't leave breakout (or breakout_backtest's
+# ruler and _rates_to_line, which import these) stale.
+INVERTED_STATS: frozenset[str] = frozenset(c.value.lower() for c in INVERSE_STATS)
+RATE_ONLY: frozenset[str] = frozenset(c.value.lower() for c in RATE_STATS)
 
 DEVIATION_THRESHOLD = (
     0.2  # roto-value scale; shared by adjust_line's label + report's deviator flag
