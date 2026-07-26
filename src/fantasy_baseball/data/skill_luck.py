@@ -59,9 +59,10 @@ def _f(v) -> float | None:
 
 
 def _sf(s: Any, field: str) -> float | None:
-    """Statcast expected-stat field as float-or-None; None when the player had no
-    matched Statcast row (`s is None`)."""
-    return _f(getattr(s, field, None)) if s is not None else None
+    """Statcast expected-stat field as float-or-None. None when the field is
+    missing/NaN OR when the player had no matched Statcast row: getattr(None,
+    field, None) returns the default, so the s-is-None case needs no guard."""
+    return _f(getattr(s, field, None))
 
 
 def _num(v) -> float:

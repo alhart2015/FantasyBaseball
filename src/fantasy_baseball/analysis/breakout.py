@@ -179,7 +179,10 @@ def w_for_stat(stat: str, row: SkillLuckRow, player_type: str, params: WMapParam
     return reliability * ((1.0 - cw) + cw * confirm)
 
 
-_RATE_ONLY = {"avg", "era", "whip"}
+# Domain stat-sets, named once here (the domain module) and imported by
+# breakout_backtest so the two files can't silently desync on either fact.
+INVERTED_STATS = frozenset({"era", "whip"})  # roto cats where lower is better
+RATE_ONLY = frozenset({"avg", "era", "whip"})  # carried as rates, not scaled by PT
 
 DEVIATION_THRESHOLD = (
     0.2  # roto-value scale; shared by adjust_line's label + report's deviator flag
@@ -191,7 +194,7 @@ def _weighted_term(stat: str, s_rate: float, p_rate: float) -> float:
     era/whip are inverted (lower is better), and the weight is a fixed roto value
     (NOT relative to |p_rate|, which would explode tiny-denominator stats). Shared
     by adjust_line's label aggregation and _reason's mover ranking so both agree."""
-    direction = -1.0 if stat in ("era", "whip") else 1.0
+    direction = -1.0 if stat in INVERTED_STATS else 1.0
     return direction * LABEL_WEIGHTS.get(stat, 0.0) * (s_rate - p_rate)
 
 
@@ -227,7 +230,7 @@ def adjust_line(
         term = _weighted_term(stat, s_rate, p_rate)
         believed += w * term
         surface += term
-        if stat in _RATE_ONLY:
+        if stat in RATE_ONLY:
             adjusted[stat] = adj_rate
         else:
             adjusted[stat] = adj_rate * pt

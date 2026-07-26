@@ -7,7 +7,9 @@ from typing import Any
 
 from fantasy_baseball.analysis.breakout import (
     DEFAULT_WMAP,
+    INVERTED_STATS,
     LABEL_WEIGHTS,
+    RATE_ONLY,
     SkillLuckRow,
     WMapParams,
     adjust_line,
@@ -21,7 +23,7 @@ _REGRESS_W = 4.0  # league-mean pseudo-weight
 # ~96% of the composite before rebalancing -- dominates the spread), with era/whip
 # NEGATED so sgp_on_ruler stays a plain dot product where lower is better. Derived,
 # not re-typed, so retuning LABEL_WEIGHTS can't silently desync the two.
-DEFAULT_RULER = {k: (-v if k in ("era", "whip") else v) for k, v in LABEL_WEIGHTS.items()}
+DEFAULT_RULER = {k: (-v if k in INVERTED_STATS else v) for k, v in LABEL_WEIGHTS.items()}
 
 CANDIDATE_DEVIATION = (
     0.15  # raw surface-vs-prior deviation to count as a breakout/decline candidate
@@ -118,7 +120,7 @@ def _rates_to_line(rate_line: Line, pt_source: Line) -> Line:
     pt = float(pt_source.get("pa", 0.0))
     line = dict(pt_source)
     for s, v in rate_line.items():
-        line[s] = v if s in ("avg", "era", "whip") else v * pt
+        line[s] = v if s in RATE_ONLY else v * pt
     return line
 
 
