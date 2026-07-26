@@ -31,6 +31,19 @@ def test_ruler_penalizes_era():
     assert bb.sgp_on_ruler({"era": 3.0}, w) > bb.sgp_on_ruler({"era": 5.0}, w)
 
 
+def test_spearman_tie_handling_pinned():
+    """Pin _spearman's tie behavior. It uses ordinal (index-broken) ranks, not
+    averaged ranks; _bootstrap_diff resamples with replacement, so ties occur on
+    nearly every iteration and swapping in tie-averaged ranks (e.g. scipy.rankdata)
+    would shift the CI bounds and could flip the backtest verdict. This test fails
+    loudly if the ranker is ever changed, so that stays a deliberate decision."""
+    # No ties, perfectly monotonic -> +1.0.
+    assert abs(bb._spearman([1.0, 2.0, 3.0], [10.0, 20.0, 30.0]) - 1.0) < 1e-9
+    # Tied x-values: ordinal ranking yields exactly -0.5 here; tie-averaging would
+    # give ~-0.866 instead. Pinning -0.5 catches a silent swap to averaged ranks.
+    assert abs(bb._spearman([5.0, 5.0, 1.0], [1.0, 2.0, 3.0]) - (-0.5)) < 1e-9
+
+
 def _mk_corpus():
     from fantasy_baseball.analysis import breakout
 

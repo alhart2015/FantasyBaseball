@@ -5,8 +5,6 @@ from collections.abc import Collection
 from statistics import fmean
 from typing import Any
 
-from scipy.stats import rankdata
-
 from fantasy_baseball.analysis.breakout import (
     DEFAULT_WMAP,
     LABEL_WEIGHTS,
@@ -84,14 +82,28 @@ def _league_mean(year_data: CorpusYear) -> Line:
 
 
 def _spearman(xs: list[float], ys: list[float]) -> float:
+    # Ties get ordinal (index-broken) ranks, NOT averaged ranks. This is the
+    # metric the backtest verdict was validated on -- do not swap in tie-averaged
+    # ranks (e.g. scipy.stats.rankdata) as a "cleanup": _bootstrap_diff resamples
+    # with replacement, so nearly every iteration has ties, and averaging shifts
+    # the CI bounds enough to flip 'clears gate'. test_spearman_tie_handling_pinned
+    # guards this. Adopting tie-averaging is a deliberate, backtest-re-run decision.
     if len(xs) < 2:
         return 0.0
-    rx, ry = rankdata(xs), rankdata(ys)  # scipy: tied values share the averaged rank
+
+    def ranks(v: list[float]) -> list[float]:
+        order = sorted(range(len(v)), key=lambda i: v[i])
+        rk = [0.0] * len(v)
+        for pos, i in enumerate(order):
+            rk[i] = float(pos)
+        return rk
+
+    rx, ry = ranks(xs), ranks(ys)
     mx, my = fmean(rx), fmean(ry)
     cov = sum((a - mx) * (b - my) for a, b in zip(rx, ry, strict=True))
     vx = sum((a - mx) ** 2 for a in rx) ** 0.5
     vy = sum((b - my) ** 2 for b in ry) ** 0.5
-    return float(cov / (vx * vy)) if vx > 0 and vy > 0 else 0.0
+    return cov / (vx * vy) if vx > 0 and vy > 0 else 0.0
 
 
 def _params(confirm_weight: float, hr_stab: float, avg_stab: float) -> WMapParams:
