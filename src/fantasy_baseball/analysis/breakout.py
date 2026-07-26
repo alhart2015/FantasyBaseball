@@ -186,6 +186,15 @@ DEVIATION_THRESHOLD = (
 )
 
 
+def _weighted_term(stat: str, s_rate: float, p_rate: float) -> float:
+    """Signed, roto-value-weighted deviation for one stat, on the label's scale.
+    era/whip are inverted (lower is better), and the weight is a fixed roto value
+    (NOT relative to |p_rate|, which would explode tiny-denominator stats). Shared
+    by adjust_line's label aggregation and _reason's mover ranking so both agree."""
+    direction = -1.0 if stat in ("era", "whip") else 1.0
+    return direction * LABEL_WEIGHTS.get(stat, 0.0) * (s_rate - p_rate)
+
+
 def adjust_line(
     surface_line,
     projection_line,
@@ -215,10 +224,7 @@ def adjust_line(
         w = w_for_stat(stat, row, player_type, params)
         w_by_stat[stat] = w
         adj_rate = p_rate + w * (s_rate - p_rate)
-        # luck-direction aware for era/whip (lower = better); weight by roto value
-        # (NOT relative to |p_rate|, which explodes tiny-denominator stats).
-        direction = -1.0 if stat in ("era", "whip") else 1.0
-        term = direction * LABEL_WEIGHTS.get(stat, 0.0) * (s_rate - p_rate)
+        term = _weighted_term(stat, s_rate, p_rate)
         believed += w * term
         surface += term
         if stat in _RATE_ONLY:
@@ -262,9 +268,7 @@ def _reason(s_rates, p_rates, w_by_stat):
         s_rate = s_rates[k]
         p_rate = p_rates.get(k, s_rate)
         w = w_by_stat.get(k, 0)
-        direction = -1.0 if k in ("era", "whip") else 1.0
-        term = direction * LABEL_WEIGHTS.get(k, 0.0) * (s_rate - p_rate)
-        return abs(w * term)
+        return abs(w * _weighted_term(k, s_rate, p_rate))
 
     best = max(s_rates, key=contribution)
     delta = s_rates[best] - p_rates.get(best, s_rates[best])

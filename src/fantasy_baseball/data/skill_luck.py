@@ -58,6 +58,12 @@ def _f(v) -> float | None:
     return None if v is None or pd.isna(v) else float(v)
 
 
+def _sf(s: Any, field: str) -> float | None:
+    """Statcast expected-stat field as float-or-None; None when the player had no
+    matched Statcast row (`s is None`)."""
+    return _f(getattr(s, field, None)) if s is not None else None
+
+
 def _num(v) -> float:
     """Parse a numeric field from the MLB Stats API / cache, defensively.
 
@@ -71,6 +77,13 @@ def _num(v) -> float:
     except (TypeError, ValueError):
         return 0.0
     return 0.0 if pd.isna(f) else f
+
+
+def _getf(r: Any, field: str) -> float:
+    """MLB-line counting/rate field as a safe float -- 0.0 when the column is absent
+    or a non-numeric sentinel (see _num). Wrapping every field keeps a later-added
+    column from silently reintroducing the sentinel-string crash _num guards."""
+    return _num(getattr(r, field, 0))
 
 
 def _parse_ip(raw) -> float:
@@ -137,15 +150,15 @@ def load_mlb_hitters(
     )
     out: list[dict] = []
     for r in raw.itertuples(index=False):
-        pa = _num(getattr(r, "plateAppearances", 0))
+        pa = _getf(r, "plateAppearances")
         if pa <= 0:
             continue
-        ab = _num(getattr(r, "atBats", 0))
-        h = _num(getattr(r, "hits", 0))
-        hr = _num(getattr(r, "homeRuns", 0))
-        so = _num(getattr(r, "strikeOuts", 0))
-        bb = _num(getattr(r, "baseOnBalls", 0))
-        sf = _num(getattr(r, "sacFlies", 0))
+        ab = _getf(r, "atBats")
+        h = _getf(r, "hits")
+        hr = _getf(r, "homeRuns")
+        so = _getf(r, "strikeOuts")
+        bb = _getf(r, "baseOnBalls")
+        sf = _getf(r, "sacFlies")
         denom = ab - so - hr + sf
         out.append(
             {
@@ -154,10 +167,10 @@ def load_mlb_hitters(
                 "ab": ab,
                 "h": h,
                 "hr": hr,
-                "r": _num(getattr(r, "runs", 0)),
-                "rbi": _num(getattr(r, "rbi", 0)),
-                "sb": _num(getattr(r, "stolenBases", 0)),
-                "avg": _num(getattr(r, "avg", 0)),
+                "r": _getf(r, "runs"),
+                "rbi": _getf(r, "rbi"),
+                "sb": _getf(r, "stolenBases"),
+                "avg": _getf(r, "avg"),
                 "k_pct": so / pa,
                 "bb_pct": bb / pa,
                 "babip": (h - hr) / denom if denom > 0 else float("nan"),
@@ -179,18 +192,18 @@ def load_mlb_pitchers(
         ip = _parse_ip(getattr(r, "inningsPitched", 0))
         if ip <= 0:
             continue
-        tbf = _num(getattr(r, "battersFaced", 0))
-        so = _num(getattr(r, "strikeOuts", 0))
-        bb = _num(getattr(r, "baseOnBalls", 0))
+        tbf = _getf(r, "battersFaced")
+        so = _getf(r, "strikeOuts")
+        bb = _getf(r, "baseOnBalls")
         out.append(
             {
                 "mlbam": int(r.mlbam),
                 "ip": ip,
-                "w": _num(getattr(r, "wins", 0)),
-                "sv": _num(getattr(r, "saves", 0)),
+                "w": _getf(r, "wins"),
+                "sv": _getf(r, "saves"),
                 "k": so,
-                "era": _num(getattr(r, "era", 0)),
-                "whip": _num(getattr(r, "whip", 0)),
+                "era": _getf(r, "era"),
+                "whip": _getf(r, "whip"),
                 "k_pct": so / tbf if tbf > 0 else float("nan"),
                 "bb_pct": bb / tbf if tbf > 0 else float("nan"),
             }
@@ -315,14 +328,14 @@ def build_hitter_skill_luck(
             pa=float(r.pa),
             ip=0.0,
             age=None,  # age is only marcel's mild adjustment; not sourced (marcel handles None)
-            barrel_pct=_f(getattr(s, "barrel_pct", None)) if s else None,
-            xslg=_f(getattr(s, "xslg", None)) if s else None,
-            slg=_f(getattr(s, "slg", None)) if s else None,
-            xba=_f(getattr(s, "xba", None)) if s else None,
-            ba=_f(getattr(s, "ba", None)) if s else None,
+            barrel_pct=_sf(s, "barrel_pct"),
+            xslg=_sf(s, "xslg"),
+            slg=_sf(s, "slg"),
+            xba=_sf(s, "xba"),
+            ba=_sf(s, "ba"),
             babip=_f(r.babip),
-            xwoba=_f(getattr(s, "xwoba", None)) if s else None,
-            woba=_f(getattr(s, "woba", None)) if s else None,
+            xwoba=_sf(s, "xwoba"),
+            woba=_sf(s, "woba"),
             k_pct=_f(r.k_pct),
             bb_pct=_f(r.bb_pct),
         ),
@@ -350,8 +363,8 @@ def build_pitcher_skill_luck(
             xba=None,
             ba=None,
             babip=None,
-            xwoba=_f(getattr(s, "xwoba", None)) if s else None,
-            woba=_f(getattr(s, "woba", None)) if s else None,
+            xwoba=_sf(s, "xwoba"),
+            woba=_sf(s, "woba"),
             k_pct=_f(r.k_pct),
             bb_pct=_f(r.bb_pct),
         ),

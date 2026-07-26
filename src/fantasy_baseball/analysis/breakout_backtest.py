@@ -5,8 +5,11 @@ from collections.abc import Collection
 from statistics import fmean
 from typing import Any
 
+from scipy.stats import rankdata
+
 from fantasy_baseball.analysis.breakout import (
     DEFAULT_WMAP,
+    LABEL_WEIGHTS,
     SkillLuckRow,
     WMapParams,
     adjust_line,
@@ -16,22 +19,11 @@ from fantasy_baseball.analysis.breakout import (
 _RECENCY = {0: 5.0, 1: 4.0, 2: 3.0}  # most-recent .. 3rd
 _REGRESS_W = 4.0  # league-mean pseudo-weight
 
-# SGP-calibrated per-PA-rate weights, matched to breakout.py:LABEL_WEIGHTS so no
-# single category (previously avg, at ~96% of the composite) dominates the
-# spread. era/whip are NEGATIVE so sgp_on_ruler stays a plain dot product where
-# lower is better.
-DEFAULT_RULER = {
-    "hr": 65.0,
-    "r": 33.0,
-    "rbi": 33.0,
-    "sb": 85.0,
-    "avg": 40.0,
-    "k": 10.0,
-    "w": 100.0,
-    "sv": 90.0,
-    "era": -2.0,
-    "whip": -60.0,
-}
+# The backtest ruler IS breakout.py:LABEL_WEIGHTS (so no single category -- avg was
+# ~96% of the composite before rebalancing -- dominates the spread), with era/whip
+# NEGATED so sgp_on_ruler stays a plain dot product where lower is better. Derived,
+# not re-typed, so retuning LABEL_WEIGHTS can't silently desync the two.
+DEFAULT_RULER = {k: (-v if k in ("era", "whip") else v) for k, v in LABEL_WEIGHTS.items()}
 
 CANDIDATE_DEVIATION = (
     0.15  # raw surface-vs-prior deviation to count as a breakout/decline candidate
@@ -94,20 +86,12 @@ def _league_mean(year_data: CorpusYear) -> Line:
 def _spearman(xs: list[float], ys: list[float]) -> float:
     if len(xs) < 2:
         return 0.0
-
-    def ranks(v: list[float]) -> list[float]:
-        order = sorted(range(len(v)), key=lambda i: v[i])
-        rk = [0.0] * len(v)
-        for pos, i in enumerate(order):
-            rk[i] = float(pos)
-        return rk
-
-    rx, ry = ranks(xs), ranks(ys)
+    rx, ry = rankdata(xs), rankdata(ys)  # scipy: tied values share the averaged rank
     mx, my = fmean(rx), fmean(ry)
     cov = sum((a - mx) * (b - my) for a, b in zip(rx, ry, strict=True))
     vx = sum((a - mx) ** 2 for a in rx) ** 0.5
     vy = sum((b - my) ** 2 for b in ry) ** 0.5
-    return cov / (vx * vy) if vx > 0 and vy > 0 else 0.0
+    return float(cov / (vx * vy)) if vx > 0 and vy > 0 else 0.0
 
 
 def _params(confirm_weight: float, hr_stab: float, avg_stab: float) -> WMapParams:
