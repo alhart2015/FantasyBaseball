@@ -204,8 +204,10 @@ def test_run_level_gate_wellformed():
     assert res["n_report"] == 12
     assert "gate_ci" in res and len(res["gate_ci"]) == 2
     assert res["gate_clears"] in (True, False)
+    assert res["weight_form"] in ("flat", "rel")
     assert set(res["direct_level_spearman"]) >= {"surface", "barrel", "xhr"}
     assert 0.0 <= res["prod_constants"]["w_s"] <= 1.0
+    assert 0.0 <= res["prod_constants"]["cw"] <= 1.0
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -232,11 +234,14 @@ from statistics import fmean
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-import backtest_breakout as bt
 import pandas as pd
 
 from fantasy_baseball.analysis import hr_confirm as H
-from fantasy_baseball.analysis.breakout_backtest import _bootstrap_diff, _spearman, rate_mae
+from fantasy_baseball.analysis.breakout_backtest import _bootstrap_diff, _spearman
+
+# NOTE: `backtest_breakout` lives in scripts/ and is imported lazily inside main()
+# only. Importing it at module scope would break the importlib-based integration test
+# (scripts/ is on sys.path only when this file is RUN directly, not when imported).
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUT_PATH = REPO_ROOT / "data" / "stats" / "hr_level_backtest_results.csv"
@@ -266,76 +271,123 @@ def _direct_level(report, calib):
     return sp, ci
 
 
+REL_CW_GRID = [0.1 * i for i in range(1, 11)]  # reliability-scaled cw, 0.1 .. 1.0
+
+
+def _rel_forward(rec, calib, cw):
+    """Reliability-scaled variant: w_s = reliability*cw, reliability = pa/(pa+120)."""
+    barrel = H.expected_hr_rate("barrel", rec, calib)
+    rel = H._reliability(rec["pa"], H.HR_STABILIZE)
+    return barrel + rel * cw * (rec["surface_hr"] - barrel)
+
+
+def _tune_rel_cw(fit_records, calib):
+    actual = [r["actual_hr"] for r in fit_records]
+    best_cw, best_rho = REL_CW_GRID[0], -2.0
+    for cw in REL_CW_GRID:
+        rho = _spearman([_rel_forward(r, calib, cw) for r in fit_records], actual)
+        if rho > best_rho:
+            best_cw, best_rho = cw, rho
+    return best_cw
+
+
 def run_level_gate(corpus, *, fit_years, report_years):
     calib = H.fit_barrel_calibration(H.build_hr_records(corpus, fit_years, hr_move_min=0.0))
     fit = _by_year(corpus, fit_years)
     report = _by_year(corpus, report_years)
     actual = [r["actual_hr"] for r in report]
-
-    w_s = H.tune_level_weight(fit, calib)
-    barrel_fwd = [H.level_blend_forward(r, calib, w_s) for r in report]
     shipped_fwd = H._forwards(report, "xslg", calib, H.SHIPPED_XSLG_SCALE)
-    gate_ci = _bootstrap_diff(barrel_fwd, shipped_fwd, actual, seed=H.SEED)
+
+    # flat weight (primary) vs reliability-scaled weight (reported variant)
+    w_s = H.tune_level_weight(fit, calib)
+    flat_fwd = [H.level_blend_forward(r, calib, w_s) for r in report]
+    flat_ci = _bootstrap_diff(flat_fwd, shipped_fwd, actual, seed=H.SEED)
+    cw = _tune_rel_cw(fit, calib)
+    rel_fwd = [_rel_forward(r, calib, cw) for r in report]
+    rel_ci = _bootstrap_diff(rel_fwd, shipped_fwd, actual, seed=H.SEED)
+
+    # default flat; the scaled form is chosen only if its CI lower bound is strictly
+    # higher (spec: "default to flat unless the scaled one clearly wins").
+    use_rel = rel_ci[0] > flat_ci[0]
+    weight_form = "rel" if use_rel else "flat"
+    gate_ci = rel_ci if use_rel else flat_ci
     sp_dl, ci_dl = _direct_level(report, calib)
 
-    # production constants: refit calib + tune weight on ALL source years (no holdout)
+    # production constants: refit calib + tune both weights on ALL source years (no holdout)
     all_years = sorted(set(fit_years) | set(report_years))
     prod_calib = H.fit_barrel_calibration(H.build_hr_records(corpus, all_years, hr_move_min=0.0))
-    prod_w = H.tune_level_weight(_by_year(corpus, all_years), prod_calib)
+    prod_fit = _by_year(corpus, all_years)
+    prod_w = H.tune_level_weight(prod_fit, prod_calib)
+    prod_cw = _tune_rel_cw(prod_fit, prod_calib)
 
     return {
         "n_fit": len(fit), "n_report": len(report),
-        "calib": calib, "w_s": w_s,
-        "barrel_spearman": _spearman(barrel_fwd, actual),
+        "calib": calib, "w_s": w_s, "cw": cw,
+        "weight_form": weight_form,
+        "barrel_spearman": _spearman(flat_fwd, actual),
+        "rel_spearman": _spearman(rel_fwd, actual),
         "shipped_spearman": _spearman(shipped_fwd, actual),
-        "barrel_mae": fmean([abs(a - b) for a, b in zip(barrel_fwd, actual)]),
+        "barrel_mae": fmean([abs(a - b) for a, b in zip(flat_fwd, actual)]),
         "shipped_mae": fmean([abs(a - b) for a, b in zip(shipped_fwd, actual)]),
-        "gate_ci": gate_ci,
+        "gate_ci": gate_ci,             # the CHOSEN form's CI vs shipped
+        "flat_ci": flat_ci, "rel_ci": rel_ci,
         "gate_clears": gate_ci[0] > 0,
         "direct_level_spearman": sp_dl,
         "direct_level_ci": ci_dl,
-        "prod_constants": {"slope": prod_calib[0], "intercept": prod_calib[1], "w_s": prod_w},
+        "prod_constants": {"slope": prod_calib[0], "intercept": prod_calib[1],
+                           "w_s": prod_w, "cw": prod_cw},
     }
 
 
 def main():
+    import backtest_breakout as bt  # lazy: scripts/ is only on sys.path on direct run
+
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
     corpus = bt.build_corpus(bt.SKILL_LUCK_CACHE_DIR, bt.PROJECTIONS_ROOT, SOURCE_YEARS)
     res = run_level_gate(corpus, fit_years=FIT_YEARS, report_years=REPORT_YEARS)
     print("Barrel-anchored HR level gate -- vs the shipped surface->Marcel line")
     print(f"  fit {FIT_YEARS} report {REPORT_YEARS}  n_fit {res['n_fit']} n_report {res['n_report']}")
-    print(f"  tuned surface-weight w_s={res['w_s']:.2f} (w_b={1-res['w_s']:.2f})")
-    print(f"  Spearman: barrel-anchored {res['barrel_spearman']:+.3f}  "
-          f"shipped {res['shipped_spearman']:+.3f}")
-    print(f"  MAE: barrel-anchored {res['barrel_mae']:.4f}  shipped {res['shipped_mae']:.4f}")
+    print(f"  Spearman: flat(w_s={res['w_s']:.2f}) {res['barrel_spearman']:+.3f}  "
+          f"rel(cw={res['cw']:.2f}) {res['rel_spearman']:+.3f}  shipped {res['shipped_spearman']:+.3f}")
+    print(f"  MAE: barrel(flat) {res['barrel_mae']:.4f}  shipped {res['shipped_mae']:.4f}")
+    print(f"  flat CI vs shipped {tuple(round(x,3) for x in res['flat_ci'])}  "
+          f"rel CI vs shipped {tuple(round(x,3) for x in res['rel_ci'])}  "
+          f"-> chosen form: {res['weight_form']}")
     lo, hi = res["gate_ci"]
-    print(f"  GATE CI barrel-anchored - shipped [{lo:+.3f}, {hi:+.3f}] -> "
+    print(f"  GATE ({res['weight_form']}) CI barrel-anchored - shipped [{lo:+.3f}, {hi:+.3f}] -> "
           f"{'GATE CLEARS' if res['gate_clears'] else 'GATE DOES NOT CLEAR'}")
     print("  direct-level Spearman:", {k: round(v, 3) for k, v in res["direct_level_spearman"].items()})
     print("  direct-level CI:", {k: (round(v[0], 3), round(v[1], 3))
                                   for k, v in res["direct_level_ci"].items()})
-    # robustness: top-100/50 + unfiltered
+    # robustness: top-100/50 + unfiltered, on the chosen weight form
     for label, kw in [("TOP-100", {"top_n": 100}), ("TOP-50", {"top_n": 50}),
                       ("UNFILTERED", {"hr_move_min": 0.0})]:
         rep = _by_year(corpus, REPORT_YEARS, **kw)
         act = [r["actual_hr"] for r in rep]
-        b = [H.level_blend_forward(r, res["calib"], res["w_s"]) for r in rep]
+        if res["weight_form"] == "rel":
+            b = [_rel_forward(r, res["calib"], res["cw"]) for r in rep]
+        else:
+            b = [H.level_blend_forward(r, res["calib"], res["w_s"]) for r in rep]
         s = H._forwards(rep, "xslg", res["calib"], H.SHIPPED_XSLG_SCALE)
         ci = _bootstrap_diff(b, s, act, seed=H.SEED)
         print(f"  robustness {label}: n={len(rep)} barrel {_spearman(b,act):+.3f} "
               f"shipped {_spearman(s,act):+.3f} CI [{ci[0]:+.3f},{ci[1]:+.3f}]")
     pc = res["prod_constants"]
-    print(f"  PRODUCTION CONSTANTS (refit all {SOURCE_YEARS[0]}-{SOURCE_YEARS[-1]}): "
-          f"HR_BARREL_SLOPE={pc['slope']:.5f} HR_BARREL_INTERCEPT={pc['intercept']:.5f} "
-          f"HR_BARREL_WEIGHT(w_s)={pc['w_s']:.2f}")
+    wtd = pc["cw"] if res["weight_form"] == "rel" else pc["w_s"]
+    print(f"  PRODUCTION CONSTANTS (refit all {SOURCE_YEARS[0]}-{SOURCE_YEARS[-1]}, "
+          f"form={res['weight_form']}): HR_BARREL_SLOPE={pc['slope']:.5f} "
+          f"HR_BARREL_INTERCEPT={pc['intercept']:.5f} HR_BARREL_WEIGHT={wtd:.3f}")
 
     OUT_PATH.parent.mkdir(parents=True, exist_ok=True)
     rows = [{"metric": k, "value": v} for k, v in {
-        "n_report": res["n_report"], "w_s": res["w_s"],
-        "barrel_spearman": res["barrel_spearman"], "shipped_spearman": res["shipped_spearman"],
+        "n_report": res["n_report"], "weight_form": res["weight_form"],
+        "w_s": res["w_s"], "cw": res["cw"],
+        "barrel_spearman": res["barrel_spearman"], "rel_spearman": res["rel_spearman"],
+        "shipped_spearman": res["shipped_spearman"],
         "gate_ci_low": res["gate_ci"][0], "gate_ci_high": res["gate_ci"][1],
         "gate_clears": res["gate_clears"],
-        "prod_slope": pc["slope"], "prod_intercept": pc["intercept"], "prod_w_s": pc["w_s"],
+        "prod_slope": pc["slope"], "prod_intercept": pc["intercept"],
+        "prod_w_s": pc["w_s"], "prod_cw": pc["cw"],
     }.items()]
     pd.DataFrame(rows).to_csv(OUT_PATH, index=False)
     print(f"\nWrote {OUT_PATH}")
@@ -364,9 +416,14 @@ git commit -m "feat(breakout): barrel-anchored HR gate backtest + result (#262)"
 
 - [ ] **Step 7: DECISION GATE**
 
-Read the printed `GATE CLEARS` / `GATE DOES NOT CLEAR`.
-- **CLEARS** -> proceed to Phase 2 with the printed `PRODUCTION CONSTANTS`.
-- **DOES NOT CLEAR** -> STOP. Do not wire in. The deliverable is the committed direct-level + gate backtest and the negative result; report it (numbers + why) and run the Phase-1 end-of-effort checks (Task 5, minus the wire-in tests).
+Read the printed `GATE CLEARS` / `GATE DOES NOT CLEAR` and the `chosen form`
+(`flat` or `rel`).
+- **CLEARS** -> proceed to Phase 2 with the printed `PRODUCTION CONSTANTS` and the
+  chosen `form` (flat -> `HR_BARREL_WEIGHT = w_s` used directly; rel ->
+  `HR_BARREL_WEIGHT = cw` used as `reliability*cw`).
+- **DOES NOT CLEAR** -> STOP. Do not wire in. The deliverable is the committed
+  direct-level + gate backtest and the negative result; report it (numbers + why) and
+  run the Phase-1 end-of-effort checks (Task 5, minus the wire-in tests).
 
 ---
 
@@ -476,17 +533,21 @@ git commit -m "feat(breakout): wire barrel-anchored HR level into adjust_line (#
 **Files:**
 - Modify: `scripts/run_breakout_report.py` (surface `barrel_expected` for HR)
 
-- [ ] **Step 1: Read the report script's HR row rendering**
+- [ ] **Step 1: Read the report script's HR row rendering (authoritative)**
 
-Run: `grep -n "barrel_pct\|hr\|xslg\|w_by_stat" scripts/run_breakout_report.py`
-Confirm where per-stat HR context is printed.
+Run: `grep -n "barrel_pct\|hr\|xslg\|w_by_stat\|SkillLuckRow\|print(" scripts/run_breakout_report.py`
+and read the surrounding function. Identify the EXACT line that renders per-player HR
+context (surface HR / xSLG). This line's format string is the idiom Step 2 extends --
+do not invent a new column layout.
 
 - [ ] **Step 2: Add `barrel_expected` next to surface HR**
 
-Where the report builds the HR line for a player with `row.brl_pa is not None`, compute
-`breakout.barrel_expected_rate(row.brl_pa, breakout.HR_BARREL_SLOPE, breakout.HR_BARREL_INTERCEPT)`
-and render it (ASCII, e.g. `barrelHR=NN.N`) alongside surface HR so the driver is
-visible. Follow the script's existing column/format idiom.
+On the exact render line from Step 1, for a player with `row.brl_pa is not None`, add an
+ASCII field `barrelHR={val:.1f}` where
+`val = breakout.barrel_expected_rate(row.brl_pa, breakout.HR_BARREL_SLOPE, breakout.HR_BARREL_INTERCEPT) * pa`
+(HR count; use the same PA the row uses for other counting stats), matched to that
+line's existing spacing/format. If the row has no `brl_pa`, render nothing extra
+(the fallback path is unchanged).
 
 - [ ] **Step 3: Smoke-run the report**
 
@@ -522,7 +583,9 @@ The `resend` ModuleNotFoundError in `tests/test_summary` / `tests/test_scripts/t
 
 **Spec coverage:**
 - Weighted-average estimate + calibration + >=0 clamp -> Task 1 (`barrel_expected_rate`, `level_blend_forward`). [covered]
-- Weight grids (flat primary; reliability variant) -> Task 1 `LEVEL_WEIGHT_GRID`, Task 3 Step 4 note. [covered]
+- Weight grids (flat primary + reliability-scaled variant, report comparison, ship
+  winner default-flat) -> Task 1 `LEVEL_WEIGHT_GRID`; Task 2 `run_level_gate` computes
+  BOTH forms, their CIs, and `weight_form`; Task 3 Step 4 wires the chosen form. [covered]
 - Fallback on `brl_pa is None` -> Task 3 Steps 4-5 (both key on `is not None`); characterization test Task 3 Step 1. [covered]
 - Remove xSLG-HR confirm for barrel players -> Task 3 Step 4 early return (fallback keeps it). [covered]
 - Gate backtest (direct-level + level-blend vs shipped, seeded CI, top-N + unfiltered, method-vs-production-fit) -> Task 2. [covered]
