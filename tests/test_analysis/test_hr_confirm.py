@@ -19,6 +19,25 @@ def _rec(**kw):
     return base
 
 
+def test_level_blend_forward_is_weighted_average():
+    calib = (0.5, 0.01)  # slope, intercept -> barrel_expected(0.08) = 0.05
+    rec = _rec(brl_pa=0.08, surface_hr=0.07)
+    f = hr_confirm.level_blend_forward(rec, calib, w_s=0.25)
+    # barrel + w_s*(surface - barrel) == w_b*barrel + (1-w_b)*surface
+    assert math.isclose(f, 0.05 + 0.25 * (0.07 - 0.05))
+    assert math.isclose(f, 0.75 * 0.05 + 0.25 * 0.07)
+
+
+def test_tune_level_weight_picks_grid_argmax():
+    recs = [
+        _rec(mlbam=i, brl_pa=0.02 + 0.002 * i, surface_hr=0.03 + 0.001 * i,
+             actual_hr=0.03 + 0.001 * i)
+        for i in range(30)
+    ]
+    w = hr_confirm.tune_level_weight(recs, (0.5, 0.01))
+    assert w in hr_confirm.LEVEL_WEIGHT_GRID
+
+
 def test_barrel_calibration_recovers_known_line():
     # y = 0.5*x + 0.01 exactly -> slope 0.5, intercept 0.01
     recs = [_rec(brl_pa=x / 100.0, surface_hr=0.5 * (x / 100.0) + 0.01) for x in range(2, 20)]

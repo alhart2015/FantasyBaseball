@@ -149,6 +149,14 @@ def _confirm_gap(actual: float | None, expected: float | None, scale: float) -> 
     return max(0.0, 1.0 - abs(actual - expected) / scale)
 
 
+def barrel_expected_rate(brl_pa: float, slope: float, intercept: float) -> float:
+    """Barrel-implied expected HR/PA: the calibrated line HR/PA ~ brl_pa, clamped to
+    >= 0 (a degenerate/extreme brl_pa must not yield a negative expected HR rate).
+    Shared by the gate backtest (fitted calib) and the live diagnostic (frozen
+    constants) so both agree. See issue #262 / backtest_hr_level.py."""
+    return max(0.0, intercept + slope * brl_pa)
+
+
 def w_for_stat(stat: str, row: SkillLuckRow, player_type: str, params: WMapParams) -> float:
     """Believed fraction: reliability * confirmation, in [0, 1].
 

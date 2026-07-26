@@ -61,6 +61,13 @@ def _row(**kw):
     return breakout.SkillLuckRow(**base)
 
 
+def test_barrel_expected_rate_is_line_clamped_at_zero():
+    # intercept + slope*brl_pa, clamped >= 0
+    assert breakout.barrel_expected_rate(0.08, 0.5, 0.01) == 0.05
+    assert breakout.barrel_expected_rate(0.0, 0.5, 0.01) == 0.01
+    assert breakout.barrel_expected_rate(0.0, 1.0, -0.5) == 0.0  # clamp
+
+
 def test_barrel_backed_hr_has_higher_w_than_unbacked():
     backed = _row(barrel_pct=0.16, xslg=0.560, slg=0.560)  # xSLG confirms the power
     lucky = _row(barrel_pct=0.06, xslg=0.410, slg=0.560)  # slg >> xslg -> luck

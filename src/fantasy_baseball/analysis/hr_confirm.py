@@ -14,6 +14,7 @@ from typing import Any
 from fantasy_baseball.analysis.breakout import (
     _confirm_gap,  # reused so the xslg candidate is byte-identical to w_for_stat's HR branch
     _reliability,
+    barrel_expected_rate,
     line_rates,
 )
 from fantasy_baseball.analysis.breakout_backtest import (
@@ -39,6 +40,7 @@ HR_STABILIZE = 120.0  # shipped stat_stabilize["hr"]
 CONFIRM_WEIGHT = 0.5  # shipped confirm_weight
 HRPA_SCALE_GRID = [0.010 + 0.005 * i for i in range(11)]  # 0.010 .. 0.060
 SLG_SCALE_GRID = [0.075 + 0.025 * i for i in range(8)]  # 0.075 .. 0.250
+LEVEL_WEIGHT_GRID = [0.05 * i for i in range(21)]  # w_s (weight on surface), 0.00 .. 1.00
 
 
 def build_hr_records(
@@ -102,7 +104,7 @@ def expected_hr_rate(candidate: str, rec: HrRecord, calib: BarrelCalib) -> float
     in SLG units); callers guard on candidate."""
     if candidate == "barrel":
         slope, intercept = calib
-        return intercept + slope * rec["brl_pa"]
+        return barrel_expected_rate(rec["brl_pa"], slope, intercept)
     if candidate == "xhr":
         return rec["xhr_rate"]
     raise ValueError(candidate)
@@ -149,6 +151,24 @@ def tune_scale(fit_records: list[HrRecord], candidate: str, calib: BarrelCalib) 
         if rho > best_rho:
             best_scale, best_rho = scale, rho
     return best_scale
+
+
+def level_blend_forward(rec: HrRecord, calib: BarrelCalib, w_s: float) -> float:
+    """Barrel-anchored HR forward: barrel_expected + w_s*(surface - barrel_expected),
+    i.e. w_b*barrel_expected + (1-w_b)*surface with w_b = 1 - w_s (issue #262)."""
+    barrel = expected_hr_rate("barrel", rec, calib)
+    return barrel + w_s * (rec["surface_hr"] - barrel)
+
+
+def tune_level_weight(fit_records: list[HrRecord], calib: BarrelCalib) -> float:
+    """Grid-search the surface weight w_s on FIT records, max fit-year Spearman."""
+    actual = [r["actual_hr"] for r in fit_records]
+    best_w, best_rho = LEVEL_WEIGHT_GRID[0], -2.0
+    for w_s in LEVEL_WEIGHT_GRID:
+        rho = _spearman([level_blend_forward(r, calib, w_s) for r in fit_records], actual)
+        if rho > best_rho:
+            best_w, best_rho = w_s, rho
+    return best_w
 
 
 def signed_gap(candidate: str, rec: HrRecord, calib: BarrelCalib) -> float:
