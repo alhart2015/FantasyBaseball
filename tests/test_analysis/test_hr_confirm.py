@@ -5,8 +5,15 @@ from fantasy_baseball.analysis import breakout, hr_confirm
 
 def _rec(**kw):
     base = dict(
-        mlbam=1, prior_hr=0.04, surface_hr=0.06, actual_hr=0.05, pa=600.0,
-        slg=0.520, xslg=0.470, brl_pa=0.08, xhr_rate=0.045,
+        mlbam=1,
+        prior_hr=0.04,
+        surface_hr=0.06,
+        actual_hr=0.05,
+        pa=600.0,
+        slg=0.520,
+        xslg=0.470,
+        brl_pa=0.08,
+        xhr_rate=0.045,
     )
     base.update(kw)
     return base
@@ -33,9 +40,21 @@ def test_forward_hr_matches_breakout_w_for_stat_for_xslg_shipped():
     # The xslg candidate at the shipped 0.150 scale must equal w_for_stat's HR blend.
     rec = _rec()
     row = breakout.SkillLuckRow(
-        mlbam=1, player_type="hitter", pa=rec["pa"], ip=0.0, age=None,
-        barrel_pct=None, xslg=rec["xslg"], slg=rec["slg"], xba=None, ba=None,
-        babip=None, xwoba=None, woba=None, k_pct=None, bb_pct=None,
+        mlbam=1,
+        player_type="hitter",
+        pa=rec["pa"],
+        ip=0.0,
+        age=None,
+        barrel_pct=None,
+        xslg=rec["xslg"],
+        slg=rec["slg"],
+        xba=None,
+        ba=None,
+        babip=None,
+        xwoba=None,
+        woba=None,
+        k_pct=None,
+        bb_pct=None,
     )
     w = breakout.w_for_stat("hr", row, "hitter", breakout.DEFAULT_WMAP)
     cv = hr_confirm.confirm("xslg", rec, (0.0, 0.0), scale=hr_confirm.SHIPPED_XSLG_SCALE)
@@ -46,8 +65,9 @@ def test_forward_hr_matches_breakout_w_for_stat_for_xslg_shipped():
 
 
 def test_tune_scale_picks_grid_argmax_on_fit():
-    recs = [_rec(mlbam=i, surface_hr=0.04 + 0.001 * i, actual_hr=0.04 + 0.001 * i)
-            for i in range(30)]
+    recs = [
+        _rec(mlbam=i, surface_hr=0.04 + 0.001 * i, actual_hr=0.04 + 0.001 * i) for i in range(30)
+    ]
     s = hr_confirm.tune_scale(recs, "xhr", (0.5, 0.01))
     assert s in hr_confirm.HRPA_SCALE_GRID
 

@@ -15,9 +15,7 @@ def test_fetch_or_cache_tolerate_empty_returns_typed_frame_without_writing(tmp_p
 
 
 def test_load_statcast_hr_renames_and_keys_by_mlbam(tmp_path: Path):
-    raw = pd.DataFrame(
-        {"player_id": [621566, 665742], "xhr": [48.2, 40.1], "hr_total": [54, 41]}
-    )
+    raw = pd.DataFrame({"player_id": [621566, 665742], "xhr": [48.2, 40.1], "hr_total": [54, 41]})
     out = skill_luck.load_statcast_hr(tmp_path, 2023, fetcher=lambda: raw)
     assert list(out.columns) == ["mlbam", "xhr"]
     assert out.set_index("mlbam").loc[621566, "xhr"] == pytest.approx(48.2)

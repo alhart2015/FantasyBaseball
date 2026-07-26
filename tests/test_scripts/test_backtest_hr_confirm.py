@@ -3,9 +3,23 @@ from fantasy_baseball.analysis import breakout, hr_confirm
 
 def _row(mlbam, pa, slg, xslg, brl_pa, xhr):
     return breakout.SkillLuckRow(
-        mlbam=mlbam, player_type="hitter", pa=pa, ip=0.0, age=27.0,
-        barrel_pct=None, xslg=xslg, slg=slg, xba=None, ba=None, babip=None,
-        xwoba=None, woba=None, k_pct=None, bb_pct=None, brl_pa=brl_pa, xhr=xhr,
+        mlbam=mlbam,
+        player_type="hitter",
+        pa=pa,
+        ip=0.0,
+        age=27.0,
+        barrel_pct=None,
+        xslg=xslg,
+        slg=slg,
+        xba=None,
+        ba=None,
+        babip=None,
+        xwoba=None,
+        woba=None,
+        k_pct=None,
+        bb_pct=None,
+        brl_pa=brl_pa,
+        xhr=xhr,
     )
 
 

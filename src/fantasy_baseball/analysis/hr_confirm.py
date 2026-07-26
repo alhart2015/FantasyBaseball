@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Collection
 from statistics import fmean
+from typing import Any
 
 from fantasy_baseball.analysis.breakout import (
     _confirm_gap,  # reused so the xslg candidate is byte-identical to w_for_stat's HR branch
@@ -193,7 +194,7 @@ def _verdict_for(*, ci: tuple[float, float], mae_delta: float, tier_signs: list[
 
 def run(
     corpus: Corpus, *, fit_years: Collection[int], report_years: Collection[int], seed: int = SEED
-) -> dict:
+) -> dict[str, Any]:
     """Full backtest: calibrate + tune scales on fit_years, score all candidates on
     the held-out report_years, level-control, verdict per challenger vs xslg."""
     # Barrel HR/PA ~ brl_pa is calibrated on the FULL fit-year skill range (PA floor +
@@ -217,7 +218,7 @@ def run(
     spearman = {k: _spearman(v, actual) for k, v in forwards.items()}
     mae = {k: _mean_mae(v, actual) for k, v in forwards.items()}
 
-    verdicts: dict[str, dict] = {}
+    verdicts: dict[str, dict[str, Any]] = {}
     for cand in ("barrel", "xhr"):
         ci = _bootstrap_diff(forwards[cand], forwards["xslg"], actual, seed=seed)
         tiers = level_control(report, cand, calib)

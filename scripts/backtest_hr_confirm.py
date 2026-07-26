@@ -13,9 +13,9 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
+import backtest_breakout as bt  # build_corpus + cache/projection paths
 import pandas as pd
 
-import backtest_breakout as bt  # build_corpus + cache/projection paths
 from fantasy_baseball.analysis import hr_confirm
 
 REPO_ROOT = Path(__file__).resolve().parents[1]

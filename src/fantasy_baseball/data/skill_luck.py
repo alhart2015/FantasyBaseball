@@ -233,8 +233,7 @@ _STATCAST_BARREL_RENAME = {"player_id": "mlbam", "brl_percent": "barrel_pct", "b
 _STATCAST_XPITCH_RENAME = {"player_id": "mlbam", "woba": "woba", "est_woba": "xwoba"}
 _STATCAST_HR_RENAME = {"player_id": "mlbam", "xhr": "xhr"}
 _SAVANT_HR_URL = (
-    "https://baseballsavant.mlb.com/leaderboard/home-runs"
-    "?type=batter&year={year}&min=1&csv=true"
+    "https://baseballsavant.mlb.com/leaderboard/home-runs?type=batter&year={year}&min=1&csv=true"
 )
 
 
