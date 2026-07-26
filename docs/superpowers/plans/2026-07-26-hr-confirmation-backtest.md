@@ -168,9 +168,17 @@ def _fetch_savant_hr(year: int) -> pd.DataFrame:
         _SAVANT_HR_URL.format(year=year),
         headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
     )
-    with urllib.request.urlopen(req, timeout=60) as resp:  # noqa: S310 (fixed Savant host)
+    with urllib.request.urlopen(req, timeout=60) as resp:  # fixed Savant https host
         body = resp.read().decode("utf-8-sig", "replace")
     return pd.read_csv(io.StringIO(body))
+```
+
+(Do not pre-add a `# noqa`. If `ruff check .` in Task 4 flags `S310` on the
+`urlopen` line, add `# noqa: S310` then; adding it speculatively can itself trip
+`RUF100` unused-noqa when the `S` rules are not enabled.)
+
+```python
+# (end of _fetch_savant_hr; the loader below is unchanged)
 
 
 def load_statcast_hr(
@@ -265,7 +273,7 @@ def test_barrel_calibration_recovers_known_line():
     # y = 0.5*x + 0.01 exactly -> slope 0.5, intercept 0.01
     recs = [_rec(brl_pa=x / 100.0, surface_hr=0.5 * (x / 100.0) + 0.01) for x in range(2, 20)]
     slope, intercept = hr_confirm.fit_barrel_calibration(recs)
-    assert slope == hr_confirm.pytest_approx(0.5) if False else math.isclose(slope, 0.5, rel_tol=1e-6)
+    assert math.isclose(slope, 0.5, rel_tol=1e-6)
     assert math.isclose(intercept, 0.01, abs_tol=1e-6)
 
 
@@ -301,19 +309,25 @@ def test_tune_scale_picks_grid_argmax_on_fit():
     assert s in hr_confirm.HRPA_SCALE_GRID
 
 
-def test_verdict_flags_level_confound(monkeypatch):
-    # A candidate CI-positive but with the expected sign in <2 tiers -> "level-confounded".
-    res = hr_confirm._verdict_for(
-        ci=(0.02, 0.08), mae_delta=0.0, tier_signs=[+1, +1, -1]
+def test_verdict_rule_all_branches():
+    V = hr_confirm._verdict_for
+    # CI includes 0 -> no, regardless of tiers/MAE
+    assert V(ci=(-0.01, 0.05), mae_delta=0.0, tier_signs=[-1, -1, -1]) == "no (CI includes 0)"
+    # CI-positive but expected sign in <2 tiers -> level-confounded
+    assert V(ci=(0.02, 0.08), mae_delta=0.0, tier_signs=[+1, +1, -1]) == (
+        "level-confounded -- do not wire in"
     )
-    assert res == "level-confounded -- do not wire in"
-    assert hr_confirm._verdict_for(ci=(0.02, 0.08), mae_delta=0.0,
-                                   tier_signs=[-1, -1, -1]) == "wire-in eligible"
-    assert hr_confirm._verdict_for(ci=(-0.01, 0.05), mae_delta=0.0,
-                                   tier_signs=[-1, -1, -1]) == "no (CI includes 0)"
+    # CI-positive, survives level-control, but MAE worse by > MAE_EPS -> inconsistent
+    assert V(ci=(0.02, 0.08), mae_delta=0.001, tier_signs=[-1, -1, -1]) == (
+        "CI-positive but MAE-inconsistent"
+    )
+    # CI-positive, survives level-control, MAE fine -> wire-in eligible
+    assert V(ci=(0.02, 0.08), mae_delta=0.0, tier_signs=[-1, -1, -1]) == "wire-in eligible"
+    # Fewer than 3 tiers (thin sample) -> inconclusive, not a false confound verdict
+    assert V(ci=(0.02, 0.08), mae_delta=0.0, tier_signs=[]) == (
+        "inconclusive (thin sample for level-control)"
+    )
 ```
-
-(Remove the stray `pytest_approx` line; it is only there to show intent -- use `math.isclose`.)
 
 - [ ] **Step 2: Run tests to verify they fail**
 
@@ -349,9 +363,9 @@ from fantasy_baseball.analysis.breakout_backtest import (
     _league_mean,
     _rates_to_line,
     marcel_prior,
+    _spearman,
     rate_mae,
 )
-from fantasy_baseball.analysis.breakout_backtest import _spearman as _spearman
 
 HrRecord = dict[str, float]
 BarrelCalib = tuple[float, float]  # (slope, intercept) for HR/PA ~ brl_pa
@@ -508,6 +522,8 @@ def _verdict_for(*, ci: tuple[float, float], mae_delta: float, tier_signs: list[
     level-control Spearman (expected: negative)."""
     if ci[0] <= 0:
         return "no (CI includes 0)"
+    if len(tier_signs) < 3:
+        return "inconclusive (thin sample for level-control)"
     if sum(1 for s in tier_signs if s < 0) < 2:
         return "level-confounded -- do not wire in"
     if mae_delta > MAE_EPS:
@@ -520,9 +536,12 @@ def run(
 ) -> dict:
     """Full backtest: calibrate + tune scales on fit_years, score all candidates on
     the held-out report_years, level-control, verdict per challenger vs xslg."""
+    # Barrel HR/PA ~ brl_pa is calibrated on the FULL fit-year skill range (PA floor +
+    # common support, NO mover filter) per the spec, so the slope is unbiased; scale
+    # tuning uses the mover population `fit` (matching what report scoring evaluates).
+    calib = fit_barrel_calibration(build_hr_records(corpus, fit_years, hr_move_min=0.0))
     fit = build_hr_records(corpus, fit_years)
     report = build_hr_records(corpus, report_years)
-    calib = fit_barrel_calibration(fit)
     actual = [r["actual_hr"] for r in report]
 
     scales = {c: tune_scale(fit, c, calib) for c in CANDIDATES}
@@ -599,40 +618,58 @@ def _row(mlbam, pa, slg, xslg, brl_pa, xhr):
     )
 
 
-def _entry(pa, hr, next_hr, slg, xslg, brl_pa, xhr, mlbam):
-    surface = {"pa": pa, "hr": hr, "r": 80, "rbi": 80, "sb": 5, "avg": 0.270}
+_PA = 600.0
+# Low-HR prior history so every current surface is a clear mover
+# (|surface-prior| >> HR_MOVE_MIN); avoids any tuning-to-pass on the filter.
+_PRIOR_HR = 8
+
+
+def _entry(hr, next_hr, brl_pa, xhr, mlbam):
+    surface = {"pa": _PA, "hr": hr, "r": 80, "rbi": 80, "sb": 5, "avg": 0.270}
     actual_next = breakout.line_rates(
-        {"pa": pa, "hr": next_hr, "r": 80, "rbi": 80, "sb": 5, "avg": 0.270}, "hitter"
+        {"pa": _PA, "hr": next_hr, "r": 80, "rbi": 80, "sb": 5, "avg": 0.270}, "hitter"
     )
-    hist = [(2019, breakout.line_rates(surface, "hitter"))]
-    return (surface, _row(mlbam, pa, slg, xslg, brl_pa, xhr), actual_next, hist, None)
+    prior_line = {"pa": _PA, "hr": _PRIOR_HR, "r": 60, "rbi": 60, "sb": 5, "avg": 0.250}
+    hist = [
+        (2018, breakout.line_rates(prior_line, "hitter")),
+        (2019, breakout.line_rates(prior_line, "hitter")),
+    ]
+    return (surface, _row(mlbam, _PA, 0.520, 0.470, brl_pa, xhr), actual_next, hist, None)
 
 
 def test_run_produces_wellformed_verdicts():
-    # 12 movers/year so terciles are non-empty; xhr overperformers regress next year.
-    def year(y_hr_shift):
+    # 12 hitters/year, HR spread 26..37 (all clear movers vs the low prior); brl_pa
+    # varies so the barrel calibration is non-degenerate; overperformers regress
+    # next year (next_hr = hr - 4), and xhr tracks the regressed level.
+    def year():
         data = {}
         for i in range(12):
-            pa = 600.0
-            hr = 20 + i + y_hr_shift  # spread across HR levels
-            data[1000 + i] = _entry(pa, hr, hr - 4, 0.520, 0.470, 0.08, (hr - 4), 1000 + i)
+            hr = 26 + i
+            brl_pa = 0.04 + 0.004 * i
+            data[1000 + i] = _entry(hr, hr - 4, brl_pa, (hr - 4), 1000 + i)
         return data
 
-    corpus = {2020: year(0), 2021: year(1)}
+    corpus = {2020: year(), 2021: year()}
     res = hr_confirm.run(corpus, fit_years=[2020], report_years=[2021])
-    assert res["n_report"] > 0
+    assert res["n_report"] == 12  # all 12 clear the PA floor + mover filter
     assert set(res["verdicts"]) == {"barrel", "xhr"}
     for cand in ("barrel", "xhr"):
         assert res["verdicts"][cand]["verdict"] in {
-            "no (CI includes 0)", "level-confounded -- do not wire in",
-            "CI-positive but MAE-inconsistent", "wire-in eligible",
+            "no (CI includes 0)",
+            "level-confounded -- do not wire in",
+            "CI-positive but MAE-inconsistent",
+            "wire-in eligible",
+            "inconclusive (thin sample for level-control)",
         }
+    # deterministic: identical CI bounds on a second run (seeded bootstrap)
+    res2 = hr_confirm.run(corpus, fit_years=[2020], report_years=[2021])
+    assert res["verdicts"]["xhr"]["ci_vs_xslg"] == res2["verdicts"]["xhr"]["ci_vs_xslg"]
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_scripts/test_backtest_hr_confirm.py -v`
-Expected: FAIL (assertion or, if `build_hr_records` filters everything, `n_report == 0`). Adjust the synthetic HR spread until `n_report > 0`, then it should pass against Task 2 code. (This test exercises `hr_confirm.run`, not the script's I/O.)
+Expected: FAIL -- collection/`ImportError` or an assertion, because Task 2's `hr_confirm.run` is what it exercises (not the script's I/O). Once Task 2 is implemented it PASSES: the fixture is a mover by construction (surface HR 26..37 vs a prior of 8), so `n_report == 12` deterministically -- no fixture tuning required.
 
 - [ ] **Step 3: Write the script**
 
@@ -768,7 +805,8 @@ If a challenger cleared the gate, open/refresh the follow-up note (issue #262 co
 - Sample/splits: common support 2016-2024, fit 2016-2020, report 2021-2024, `PA_FLOOR`/`HR_MOVE_MIN` constants -> Task 3 constants + Task 2 `build_hr_records`. [covered]
 - No `w_for_stat` change; wiring deferred -> Task 4 Step 3. [covered]
 - Testing: fetcher rename/empty-tolerance, calibration, confirm monotonicity, verdict-logic pins, xslg==w_for_stat equivalence -> Tasks 1-2 tests. [covered]
-- Bootstrap determinism: `_bootstrap_diff` already seeds (Global Constraints); the spec's "seed 12345" is `SEED`. A dedicated two-run determinism test is folded into trusting the seeded stdlib RNG + the equivalence test; add an explicit `test_run_is_deterministic` (two `run(...)` calls, same corpus, identical `ci_vs_xslg`) if desired. [covered; optional extra test noted]
+- Bootstrap determinism: `_bootstrap_diff` already seeds (Global Constraints); the spec's "seed 12345" is `SEED`. Pinned as a REQUIRED assertion in Task 3's `test_run_produces_wellformed_verdicts` -- two `run(...)` calls on the same corpus return identical `ci_vs_xslg`. [covered]
+- Barrel calibration population: fit on the FULL fit-year skill range (`hr_move_min=0.0`), not the mover subset, per the spec -> Task 2 `run` (`fit_barrel_calibration(build_hr_records(..., hr_move_min=0.0))`). [covered]
 
 **Placeholder scan:** No TODO/TBD. The one stray `pytest_approx` reference in Task 2 Step 1 is explicitly flagged to delete. Empty-tolerance, network-failure, and thin-tercile paths all have concrete handling.
 
