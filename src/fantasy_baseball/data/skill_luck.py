@@ -15,6 +15,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import pandas as pd
 
@@ -57,15 +58,36 @@ def _f(v) -> float | None:
     return None if v is None or pd.isna(v) else float(v)
 
 
+def _num(v) -> float:
+    """Parse a numeric field from the MLB Stats API / cache, defensively.
+
+    Rate stats arrive as STRINGS and can be a non-numeric sentinel ('.---',
+    '-.--', '---') for PA>0/AB=0 players (walk-only hitters, old NL pitchers);
+    blank cache cells read back as NaN. Returns 0.0 for anything unparseable
+    (including NaN) instead of raising or propagating NaN.
+    """
+    try:
+        f = float(v)
+    except (TypeError, ValueError):
+        return 0.0
+    return 0.0 if pd.isna(f) else f
+
+
 def _parse_ip(raw) -> float:
-    """MLB Stats API innings-pitched uses thirds notation ('177.2' = 177 + 2/3)."""
+    """MLB Stats API innings-pitched uses thirds notation ('177.2' = 177 + 2/3).
+    Non-numeric sentinels (e.g. '.---') and NaN cache cells parse to 0.0 rather
+    than raising.
+    """
     if raw is None or pd.isna(raw):
         return 0.0
     s = str(raw)
-    if "." in s:
-        whole, frac = s.split(".", 1)
-        return int(whole) + (int(frac[:1]) / 3.0)
-    return float(s)
+    try:
+        if "." in s:
+            whole, frac = s.split(".", 1)
+            return int(whole) + (int(frac[:1]) / 3.0)
+        return float(s)
+    except ValueError:
+        return 0.0
 
 
 # ---------------------------------------------------------------------------
@@ -115,15 +137,15 @@ def load_mlb_hitters(
     )
     out: list[dict] = []
     for r in raw.itertuples(index=False):
-        pa = float(getattr(r, "plateAppearances", 0) or 0)
+        pa = _num(getattr(r, "plateAppearances", 0))
         if pa <= 0:
             continue
-        ab = float(getattr(r, "atBats", 0) or 0)
-        h = float(getattr(r, "hits", 0) or 0)
-        hr = float(getattr(r, "homeRuns", 0) or 0)
-        so = float(getattr(r, "strikeOuts", 0) or 0)
-        bb = float(getattr(r, "baseOnBalls", 0) or 0)
-        sf = float(getattr(r, "sacFlies", 0) or 0)
+        ab = _num(getattr(r, "atBats", 0))
+        h = _num(getattr(r, "hits", 0))
+        hr = _num(getattr(r, "homeRuns", 0))
+        so = _num(getattr(r, "strikeOuts", 0))
+        bb = _num(getattr(r, "baseOnBalls", 0))
+        sf = _num(getattr(r, "sacFlies", 0))
         denom = ab - so - hr + sf
         out.append(
             {
@@ -132,10 +154,10 @@ def load_mlb_hitters(
                 "ab": ab,
                 "h": h,
                 "hr": hr,
-                "r": float(getattr(r, "runs", 0) or 0),
-                "rbi": float(getattr(r, "rbi", 0) or 0),
-                "sb": float(getattr(r, "stolenBases", 0) or 0),
-                "avg": float(getattr(r, "avg", 0) or 0),
+                "r": _num(getattr(r, "runs", 0)),
+                "rbi": _num(getattr(r, "rbi", 0)),
+                "sb": _num(getattr(r, "stolenBases", 0)),
+                "avg": _num(getattr(r, "avg", 0)),
                 "k_pct": so / pa,
                 "bb_pct": bb / pa,
                 "babip": (h - hr) / denom if denom > 0 else float("nan"),
@@ -157,18 +179,18 @@ def load_mlb_pitchers(
         ip = _parse_ip(getattr(r, "inningsPitched", 0))
         if ip <= 0:
             continue
-        tbf = float(getattr(r, "battersFaced", 0) or 0)
-        so = float(getattr(r, "strikeOuts", 0) or 0)
-        bb = float(getattr(r, "baseOnBalls", 0) or 0)
+        tbf = _num(getattr(r, "battersFaced", 0))
+        so = _num(getattr(r, "strikeOuts", 0))
+        bb = _num(getattr(r, "baseOnBalls", 0))
         out.append(
             {
                 "mlbam": int(r.mlbam),
                 "ip": ip,
-                "w": float(getattr(r, "wins", 0) or 0),
-                "sv": float(getattr(r, "saves", 0) or 0),
+                "w": _num(getattr(r, "wins", 0)),
+                "sv": _num(getattr(r, "saves", 0)),
                 "k": so,
-                "era": float(getattr(r, "era", 0) or 0),
-                "whip": float(getattr(r, "whip", 0) or 0),
+                "era": _num(getattr(r, "era", 0)),
+                "whip": _num(getattr(r, "whip", 0)),
                 "k_pct": so / tbf if tbf > 0 else float("nan"),
                 "bb_pct": bb / tbf if tbf > 0 else float("nan"),
             }
@@ -251,6 +273,28 @@ class CoverageReport:
     no_xstats: int  # MLB-line players without a Statcast row (small sample / pre-2015)
 
 
+def _join_and_count(
+    mlb: pd.DataFrame,
+    sc: pd.DataFrame,
+    build_row: Callable[[int, Any, Any], SkillLuckRow],
+) -> tuple[dict[int, SkillLuckRow], CoverageReport]:
+    """Join `mlb` season lines to `sc` Statcast rows by MLBAM, counting coverage.
+    `build_row(mlbam, r, s)` builds the SkillLuckRow for one player (`s` is the
+    matched Statcast namedtuple, or None when unmatched)."""
+    sc_by_mlbam = {int(r.mlbam): r for r in sc.itertuples(index=False)}
+    rows: dict[int, SkillLuckRow] = {}
+    matched = no_xstats = 0
+    for r in mlb.itertuples(index=False):
+        mlbam = int(r.mlbam)
+        s = sc_by_mlbam.get(mlbam)
+        if s is not None:
+            matched += 1
+        else:
+            no_xstats += 1
+        rows[mlbam] = build_row(mlbam, r, s)
+    return rows, CoverageReport(matched, no_xstats)
+
+
 def build_hitter_skill_luck(
     cache_dir: Path, year: int, *, fetchers: dict[str, Callable[[], pd.DataFrame]] | None = None
 ) -> tuple[dict[int, SkillLuckRow], CoverageReport]:
@@ -262,17 +306,10 @@ def build_hitter_skill_luck(
         xstats_fetcher=fetchers.get("sc_x"),
         barrels_fetcher=fetchers.get("sc_brl"),
     )
-    sc_by_mlbam = {int(r.mlbam): r for r in sc.itertuples(index=False)}
-    rows: dict[int, SkillLuckRow] = {}
-    matched = no_xstats = 0
-    for r in mlb.itertuples(index=False):
-        mlbam = int(r.mlbam)
-        s = sc_by_mlbam.get(mlbam)
-        if s is not None:
-            matched += 1
-        else:
-            no_xstats += 1
-        rows[mlbam] = SkillLuckRow(
+    return _join_and_count(
+        mlb,
+        sc,
+        lambda mlbam, r, s: SkillLuckRow(
             mlbam=mlbam,
             player_type="hitter",
             pa=float(r.pa),
@@ -288,8 +325,8 @@ def build_hitter_skill_luck(
             woba=_f(getattr(s, "woba", None)) if s else None,
             k_pct=_f(r.k_pct),
             bb_pct=_f(r.bb_pct),
-        )
-    return rows, CoverageReport(matched, no_xstats)
+        ),
+    )
 
 
 def build_pitcher_skill_luck(
@@ -298,17 +335,10 @@ def build_pitcher_skill_luck(
     fetchers = fetchers or {}
     mlb = load_mlb_pitchers(cache_dir, year, fetcher=fetchers.get("mlb"))
     sc = load_statcast_pitchers(cache_dir, year, xstats_fetcher=fetchers.get("sc_x"))
-    sc_by_mlbam = {int(r.mlbam): r for r in sc.itertuples(index=False)}
-    rows: dict[int, SkillLuckRow] = {}
-    matched = no_xstats = 0
-    for r in mlb.itertuples(index=False):
-        mlbam = int(r.mlbam)
-        s = sc_by_mlbam.get(mlbam)
-        if s is not None:
-            matched += 1
-        else:
-            no_xstats += 1
-        rows[mlbam] = SkillLuckRow(
+    return _join_and_count(
+        mlb,
+        sc,
+        lambda mlbam, r, s: SkillLuckRow(
             mlbam=mlbam,
             player_type="pitcher",
             pa=0.0,
@@ -324,5 +354,5 @@ def build_pitcher_skill_luck(
             woba=_f(getattr(s, "woba", None)) if s else None,
             k_pct=_f(r.k_pct),
             bb_pct=_f(r.bb_pct),
-        )
-    return rows, CoverageReport(matched, no_xstats)
+        ),
+    )

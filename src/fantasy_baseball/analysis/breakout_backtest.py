@@ -16,17 +16,21 @@ from fantasy_baseball.analysis.breakout import (
 _RECENCY = {0: 5.0, 1: 4.0, 2: 3.0}  # most-recent .. 3rd
 _REGRESS_W = 4.0  # league-mean pseudo-weight
 
+# SGP-calibrated per-PA-rate weights, matched to breakout.py:LABEL_WEIGHTS so no
+# single category (previously avg, at ~96% of the composite) dominates the
+# spread. era/whip are NEGATIVE so sgp_on_ruler stays a plain dot product where
+# lower is better.
 DEFAULT_RULER = {
-    "hr": 100.0,
-    "r": 60.0,
-    "rbi": 60.0,
-    "sb": 120.0,
-    "avg": 1500.0,
-    "k": 40.0,
-    "w": 300.0,
-    "sv": 250.0,
-    "era": -200.0,
-    "whip": -400.0,
+    "hr": 65.0,
+    "r": 33.0,
+    "rbi": 33.0,
+    "sb": 85.0,
+    "avg": 40.0,
+    "k": 10.0,
+    "w": 100.0,
+    "sv": 90.0,
+    "era": -2.0,
+    "whip": -60.0,
 }
 
 CANDIDATE_DEVIATION = (
@@ -142,10 +146,12 @@ def _records(
             )
             if abs(res.surface_deviation) < CANDIDATE_DEVIATION:
                 continue  # not a breakout/decline candidate this year
+            surface_rates = line_rates(surface, "hitter")
+            adjusted_rates = line_rates(res.adjusted_line, "hitter")
             recs.append(
                 {
-                    "surface": sgp_on_ruler(line_rates(surface, "hitter"), ruler),
-                    "skill": sgp_on_ruler(line_rates(res.adjusted_line, "hitter"), ruler),
+                    "surface": sgp_on_ruler(surface_rates, ruler),
+                    "skill": sgp_on_ruler(adjusted_rates, ruler),
                     "zips": (
                         sgp_on_ruler(line_rates(zips_line, "hitter"), ruler)
                         if zips_line is not None
@@ -153,8 +159,8 @@ def _records(
                     ),
                     "actual": sgp_on_ruler(actual_next, ruler),
                     "believed": res.believed_deviation,
-                    "surface_rates": line_rates(surface, "hitter"),
-                    "adjusted_rates": line_rates(res.adjusted_line, "hitter"),
+                    "surface_rates": surface_rates,
+                    "adjusted_rates": adjusted_rates,
                     "prior_rates": line_rates(proj_line, "hitter"),
                     "actual_rates": actual_next,
                 }
@@ -178,6 +184,9 @@ def tune_wmap(
     return best
 
 
+_RETENTION_CLAMP = 2.0  # a near-zero (sr-pr) gap must not blow up into a dominant outlier
+
+
 def _retention(rec: Record) -> float:
     holds: list[float] = []
     for s, sr in rec["surface_rates"].items():
@@ -185,7 +194,8 @@ def _retention(rec: Record) -> float:
         ar = rec["actual_rates"].get(s)
         if ar is None or abs(sr - pr) < 1e-9:
             continue
-        holds.append((ar - pr) / (sr - pr))  # 1.0 = fully held, 0.0 = fully regressed
+        r = (ar - pr) / (sr - pr)  # 1.0 = fully held, 0.0 = fully regressed
+        holds.append(max(-_RETENTION_CLAMP, min(_RETENTION_CLAMP, r)))
     return fmean(holds) if holds else 0.0
 
 
@@ -249,23 +259,20 @@ def run_backtest(
         else (0.0, 0.0)
     )
     clears = ci_vs_surface[0] > 0 and ci_vs_zips[0] > 0
+
+    def _mean_rate_mae(key: str) -> float:
+        return fmean([rate_mae(r[key], r["actual_rates"]) for r in recs]) if recs else 0.0
+
     return {
         "spearman": spearman,
         "ci_skill_vs_surface": ci_vs_surface,
         "ci_skill_vs_zips": ci_vs_zips,
         "rate_mae": {
-            "surface": (
-                fmean([rate_mae(r["surface_rates"], r["actual_rates"]) for r in recs])
-                if recs
-                else 0.0
-            ),
-            "skill_adjusted": (
-                fmean([rate_mae(r["adjusted_rates"], r["actual_rates"]) for r in recs])
-                if recs
-                else 0.0
-            ),
+            "surface": _mean_rate_mae("surface_rates"),
+            "skill_adjusted": _mean_rate_mae("adjusted_rates"),
         },
         "label_lift": _label_lift(recs),
         "verdict": "clears gate" if clears else "not good enough",
         "n": len(recs),
+        "n_zips": len(zrecs),  # pure_zips spearman is over this subset, not `n`
     }

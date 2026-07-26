@@ -79,7 +79,8 @@ def line_rates(line, player_type):
 class WMapParams:
     """Parameters for w-mapping (reliability x confirmation). Seed defaults calibrated
     for 5x5 roto keeper context: PA stabilization ~300 AB-equiv for hitters, IP for pitchers.
-    Per-stat overrides for fast-settling signals (K%, barrel% ~ 60-100) vs slow (BABIP ~800).
+    Per-stat overrides for fast-settling signals (e.g. hr=120, k=60) vs slow-settling
+    (avg=800).
     """
 
     pa_stabilize: float = 300.0
@@ -102,8 +103,6 @@ class WMapParams:
 
 
 DEFAULT_WMAP = WMapParams()
-
-MIRAGE_RATIO = 2.0  # a surface move > this x the believed move -> luck (mirage/slump)
 
 # Roto-VALUE weight per unit of rate deviation, for the label aggregation. The
 # label's believed/surface deviations sum `weight * (s_rate - p_rate)` across
@@ -149,9 +148,11 @@ def w_for_stat(stat: str, row: SkillLuckRow, player_type: str, params: WMapParam
     """Believed fraction: reliability * confirmation, in [0, 1].
 
     reliability = sample / (sample + stabilize[stat])
-    confirmation = how well the underlying xStat supports the surface stat
-    (barrel/xSLG for hr; xBA vs BABIP for avg; K-BB and xwOBA for pitcher ratios;
-    SB from PA-reliability only; SV conservative).
+    confirmation = how well the underlying xStat supports the surface stat:
+    slg vs xslg for hr; ba vs xba for avg; woba vs xwoba for r/rbi and all
+    pitcher ratios (k/w/sv/era/whip); sb is confirm=1.0 fixed (role/speed
+    sticky -- reliability alone governs). barrel_pct/babip/k_pct/bb_pct are
+    display-only elsewhere in the report and are not consulted here.
 
     The blend (1-cw)*reliability + cw*reliability*confirm ensures that huge samples
     have high w even when confirmation is absent, while tiny samples shrink w regardless.
@@ -180,6 +181,10 @@ def w_for_stat(stat: str, row: SkillLuckRow, player_type: str, params: WMapParam
 
 _RATE_ONLY = {"avg", "era", "whip"}
 
+DEVIATION_THRESHOLD = (
+    0.2  # roto-value scale; shared by adjust_line's label + report's deviator flag
+)
+
 
 def adjust_line(
     surface_line,
@@ -188,7 +193,7 @@ def adjust_line(
     player_type,
     *,
     params=DEFAULT_WMAP,
-    deviation_threshold=0.2,
+    deviation_threshold=DEVIATION_THRESHOLD,
 ):
     """Skill-adjusted counting line + label + reason.
 
@@ -228,20 +233,25 @@ def adjust_line(
     return BreakoutResult(adjusted, label, reason, w_by_stat, confidence, surface, believed)
 
 
-def _label(believed, surface, thr, *, mirage_ratio=MIRAGE_RATIO):
+MIRAGE_RATIO = 2.0  # a surface move > this x the believed move is mostly luck (mirage/slump)
+
+
+def _label(believed, surface, thr):
     # CONSERVATIVE label (the mirage-vs-breakout boundary is UNVALIDATED pending
-    # the backtest). A big apparent move (surface) that belief mostly did NOT
-    # confirm -- surface > mirage_ratio x |believed| -- is luck ("mirage"/"slump"),
-    # even when the net believed deviation is positive. This keeps a mixed line
-    # whose gain is only partly believed (e.g. a HR-only power uptick amid
-    # unbelieved R/RBI/AVG) from reading as a clean breakout. Symmetric on both
-    # signs; multiplication (not division) so a near-zero believed cannot blow up.
+    # the backtest). A 'real' breakout/decline requires believed to (a) AGREE IN
+    # SIGN with surface and independently clear the threshold -- so a line the
+    # model nets DOWN never reads as a breakout just because its raw magnitude is
+    # nonzero -- AND (b) not be a small fraction of the apparent move: when the
+    # surface move is more than MIRAGE_RATIO x the believed move, most of it is
+    # unbelieved, so it's luck ("mirage" up, "slump" down) even if believed
+    # clears the threshold. Symmetric on both signs.
     if abs(surface) < thr:
         return "stable"
-    luck = abs(surface) > mirage_ratio * abs(believed)
     if surface >= thr:
-        return "lucky mirage" if luck else "real breakout"
-    return "slump" if luck else "real decline"
+        real = believed >= thr and surface <= MIRAGE_RATIO * abs(believed)
+        return "real breakout" if real else "lucky mirage"
+    real = believed <= -thr and abs(surface) <= MIRAGE_RATIO * abs(believed)
+    return "real decline" if real else "slump"
 
 
 def _reason(s_rates, p_rates, w_by_stat):
@@ -265,11 +275,6 @@ def _reason(s_rates, p_rates, w_by_stat):
 def _kv(pid, name, anchor, positions, ptype, zips_by_year, scale, **kw):
     """Indirection so tests can stub the keeper_value call."""
     return _kv_mod.keeper_value(pid, name, anchor, positions, ptype, zips_by_year, scale, **kw)
-
-
-DEVIATION_THRESHOLD = (
-    0.2  # roto-value scale; shared by adjust_line's label + report's deviator flag
-)
 
 
 def _zips_for(row, indices, base_year, horizon):
@@ -305,6 +310,11 @@ def breakout_rows(
     ``out_year_regression`` MUST match scripts/keeper_value.py:build_results so the
     surface value equals today's --anchor current number and surface/adjusted
     differ ONLY in the anchor.
+
+    ``skill_luck`` MUST be keyed by int fg_id (FanGraphs id), NOT MLBAM: the
+    data-layer ``build_*_skill_luck`` functions return MLBAM-keyed dicts, so a
+    caller (run_breakout_report) must re-key them via the ZiPS bridge before
+    passing them in here.
     """
     rows = []
     for _, r in board.iterrows():
@@ -314,19 +324,24 @@ def breakout_rows(
         fgid = int(fg) if fg is not None and str(fg).isdigit() else None
         positions = list(row["positions"])
         zby = _zips_for(row, indices, base_year, horizon)  # mirrors kv_script._zips_by_year
-        surface = _kv(
-            row["player_id"],
-            row["name"],
-            row,
-            positions,
-            ptype,
-            zby,
-            scale,
-            base_year=base_year,
-            horizon=horizon,
-            discount=discount,
-            out_year_regression=out_year_regression,
-        ).total
+
+        def _value(anchor, row=row, positions=positions, ptype=ptype, zby=zby):
+            return _kv(
+                row["player_id"],
+                row["name"],
+                anchor,
+                positions,
+                ptype,
+                zby,
+                scale,
+                base_year=base_year,
+                horizon=horizon,
+                discount=discount,
+                out_year_regression=out_year_regression,
+            ).total
+
+        surface = _value(row)
+        base = {"name": row["name"], "player_type": ptype, "surface_value": surface}
         sl = skill_luck.get(fgid) if fgid is not None else None
         if sl is not None and sl.player_type != ptype:
             # Two-way fg_id collision (e.g. Ohtani): skill_luck is keyed by bare
@@ -338,19 +353,7 @@ def breakout_rows(
         proj = projections.get(f"{fg}::{ptype}") if fg is not None else None
         if sl is not None and proj is not None:
             res = adjust_line(row, proj, sl, ptype, deviation_threshold=DEVIATION_THRESHOLD)
-            adjusted = _kv(
-                row["player_id"],
-                row["name"],
-                res.adjusted_line,
-                positions,
-                ptype,
-                zby,
-                scale,
-                base_year=base_year,
-                horizon=horizon,
-                discount=discount,
-                out_year_regression=out_year_regression,
-            ).total
+            adjusted = _value(res.adjusted_line)
             gap = (sl.woba - sl.xwoba) if sl.woba is not None and sl.xwoba is not None else None
             under = {
                 "woba_xwoba_gap": gap,
@@ -361,9 +364,7 @@ def breakout_rows(
             }
             rows.append(
                 {
-                    "name": row["name"],
-                    "player_type": ptype,
-                    "surface_value": surface,
+                    **base,
                     "adjusted_value": adjusted,
                     "delta": adjusted - surface,
                     "label": res.label,
@@ -376,9 +377,7 @@ def breakout_rows(
         else:
             rows.append(
                 {
-                    "name": row["name"],
-                    "player_type": ptype,
-                    "surface_value": surface,
+                    **base,
                     "adjusted_value": surface,
                     "delta": 0.0,
                     "label": "stable",

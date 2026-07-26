@@ -148,7 +148,8 @@ def main() -> None:
     print(f"  ZiPS-covered report-year population (pre-candidate-filter): {n_zips_covered}")
     print("  spearman vs realized next-year ruler-SGP:")
     for k, v in results["spearman"].items():
-        print(f"    {k:15s} {v:+.3f}")
+        label = f"{k} (over ZiPS-covered subset, n={results['n_zips']})" if k == "pure_zips" else k
+        print(f"    {label:50s} {v:+.3f}")
     lo, hi = results["ci_skill_vs_surface"]
     print(f"  95% CI skill_adjusted - surface: [{lo:+.3f}, {hi:+.3f}]")
     lo, hi = results["ci_skill_vs_zips"]

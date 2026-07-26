@@ -56,7 +56,8 @@ def main() -> None:
     params = tune_wmap(corpus, list(bt.FIT_YEARS))
     recs = _records(corpus, bt.REPORT_YEARS, params, DEFAULT_RULER)
     actual = [r["actual"] for r in recs]
-    flat = [sgp_on_ruler(_flat_rates(r), DEFAULT_RULER) for r in recs]
+    flat_rates = [_flat_rates(r) for r in recs]
+    flat = [sgp_on_ruler(fr, DEFAULT_RULER) for fr in flat_rates]
 
     spearman = {
         "surface (all current)": _spearman([r["surface"] for r in recs], actual),
@@ -65,7 +66,9 @@ def main() -> None:
     }
     mae = {
         "surface": fmean([rate_mae(r["surface_rates"], r["actual_rates"]) for r in recs]),
-        "flat_0.6": fmean([rate_mae(_flat_rates(r), r["actual_rates"]) for r in recs]),
+        "flat_0.6": fmean(
+            [rate_mae(fr, r["actual_rates"]) for fr, r in zip(flat_rates, recs, strict=True)]
+        ),
         "skill_adj": fmean([rate_mae(r["adjusted_rates"], r["actual_rates"]) for r in recs]),
     }
     ci_skill_vs_flat = _bootstrap_diff([r["skill"] for r in recs], flat, actual)
