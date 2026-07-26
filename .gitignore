@@ -31,6 +31,9 @@ data/sim_results/
 data/cache/
 data/cache_archive/
 
+# Skill/luck data layer cache: MLB Stats API + Savant season pulls (re-fetchable)
+data/skill_luck/
+
 # SQLite databases (populated at runtime)
 data/*.db
 
