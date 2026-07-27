@@ -62,10 +62,14 @@ mandatory keeping. Three caveats, all required in the output:
   it depends on whether early picks deviate toward or away from best-available, and an
   earlier draft of this spec asserted a sign it could not derive. Report par alongside the
   assumption and leave the sign to observation.
-- **The par pool excludes relievers** (section 5.1), which biases `par_3` down and surplus
-  up. This is not hypothetical: with saves restored the best 2027 reliever scores +4.342
-  against `par_3` of 4.397 -- correctly-valued closers sit essentially *at* the round-3
-  ordinal. Disclose the direction.
+- **The par pool excludes relievers** (section 5.1). Measured under the league's own
+  denominators, this turns out to change nothing: even with saves restored the best 2027
+  reliever scores 4.342 against `par_3` of 4.766, and no reliever cracks the top 28 under
+  either the default or the league denominator set -- so restoring them to the par pool moves
+  `par_1..3` by exactly zero. An earlier draft claimed closers sit "essentially at" the
+  round-3 ordinal; that compared a league-denominator reliever against a default-denominator
+  par and was an artifact of mixing configurations. Every SGP or VAR figure quoted anywhere in
+  this spec must name its denominator set.
 
 **Trajectory.** A separate 2028 column: "will he still be keep-worthy next year." Never
 blended into the headline.
@@ -121,8 +125,9 @@ are computed and reported in a separate not-comparable list, never ranked agains
 or starters, never placed in a projected trio, and never included in the par pool.
 
 Consequences to accept and disclose: a genuine closer keeper cannot be evaluated by this
-feature, and at least one opponent trio is affected today (Pete Fairbanks, Send in the
-Cavalli, the only `GS/G` reliever among the seven pitcher keepers).
+feature, and this affects **every team, not a corner case** -- all ten rosters carry between 1
+and 5 relievers today (section 7). Pete Fairbanks is the only `GS/G` reliever among the 30
+current keepers, but the keeper list is the 2026 one; the 2027 candidate pool is far wider.
 
 **SP/RP classification** comes from the ZiPS out-year file: a pitcher is a reliever when
 `GS / G < 0.5`. Both columns are parsed by `PITCHING_COLUMN_MAP` and are non-null in all
@@ -143,13 +148,19 @@ spec claimed the opposite; that claim was wrong and would have shipped a large s
 `calculate_var` routes a pitcher to its SP or RP floor via `_pitcher_floor_key`, which calls
 `role_from_ip` -- `"SP" if ip >= 100.0 else "RP"` (`sgp/var.py:28-29`,
 `utils/constants.py:390`). `GS` is never consulted; the docstring says the position token is
-deliberately ignored because `PitcherStats` has no `GS` field at deployment.
+deliberately ignored -- because the draft board carries no real SP/RP eligibility (matched
+pitchers are stored as a bare `"P"`, unmatched ones default to `"SP"`). That reason does not
+apply here: this feature *does* have real role information from `GS/G`. Note `PitcherStats`
+carries `g` and `gs`, as does `cache:full_season_projections` on all 6455 pitcher rows, so the
+data was always available -- the floor routing simply never used it.
 
 ZiPS out-year files hedge innings hard, so this misroutes the majority of the population
 this feature retains: of the 727 pitchers with `GS/G >= 0.5` in ZiPS 2027, **418 (57.5%)
-project under 100 IP** (median 97.0) -- Snell 98.3, Glasnow 99.0, Bradish 99.3, Sasaki
+project under 100 IP** (their median is 88.0; 97.0 is the median across all 727) -- Snell 98.3,
+Glasnow 99.0, Bradish 99.3, Sasaki
 97.7. Each is scored against the RP floor, which carries 8 free saves worth 1.143 SGP that
-no out-year pitcher can earn; the SP/RP floor gap is roughly 1.9 SGP. Fifty pitchers cross
+no out-year pitcher can earn; the SP/RP floor gap is 1.93 SGP under default denominators, 1.87 under the league's. 51
+pitchers cross
 the threshold between the 2026 and 2027 vintages purely from out-year hedging.
 
 **Requirement:** every pitcher must be routed to its floor by the `GS/G` role, not by
@@ -190,9 +201,20 @@ K_2027   = IP_2027 * (K/IP)_2027       # and likewise W, ER, BB, H_allowed
 ```
 
 Multiplying `H/AB` by PA instead of AB inflates AVG by `1/0.8977 = 1.114` (mean `AB/PA` in
-ZiPS 2027), turning a .250 hitter into .278 -- worth 11.2 SGP at the league's 0.0025 AVG
-denominator, larger than the entire VAR range of the top-30 board. Deriving AB from PA also
+ZiPS 2027), turning a .250 hitter into .278. That is worth roughly **0.9-1.3 SGP** depending
+on playing time -- AVG scores as marginal hits divided by `denominator * team_ab`
+(`sgp/player_value.py:19-29`, `DEFAULT_TEAM_AB = 5500`), so the naive `0.0285 / 0.0025 = 11.4`
+overstates it about tenfold by omitting the `player_ab / team_ab` weight. The error is still
+worth eliminating -- 1.1 SGP is the same order as the 1.143 SGP of free saves this spec treats
+as decisive elsewhere -- but it does not exceed the top-30 VAR range. Deriving AB from PA also
 makes `AB <= PA` structural rather than a constraint to police.
+
+**Clamp the reconstructed output, not just playing time.** The fold is linear, so a large
+negative rate residual can drive a reconstructed rate below zero -- most reachable on `SB/PA`
+and `HR/PA`. A negative `ER/IP` is the dangerous one: `calculate_pitching_rate_sgp` rewards
+a negative ERA without bound. And PA clamped to 0 yields `AB = 0` and `AVG = 0/0`. Every
+reconstructed rate is floored at 0 and every `0/0` guarded, on the output side as well as the
+input side.
 
 **AVG/ERA/WHIP are recomputed from folded components**, never folded directly:
 `AVG = H/AB`, `ERA = 9*ER/IP`, `WHIP = (BB + H_allowed)/IP`. BB and H_allowed are folded
@@ -200,8 +222,10 @@ makes `AB <= PA` structural rather than a constraint to police.
 (`sgp/replacement.py:121-124`) needs them as distinct columns, as do `PITCHER_PROJ_KEYS`
 and `PITCHER_CORR_STATS`.
 
-*Honest note:* for the rates themselves this decomposition is algebraically equivalent to
-folding the rate directly, since the playing time cancels. It earns its keep on the seven
+*Honest note:* for AVG and ERA this decomposition is algebraically equivalent to folding the
+rate directly, since the playing time cancels. It is **not** equivalent for WHIP, because BB and
+H_allowed carry separate coefficients, so `fold(BB/IP) + fold(H/IP) != fold(WHIP)` unless the two
+happen to be equal. It earns its keep on the seven
 **counting** categories, where `count = rate * PT`, and on producing the components
 `calculate_replacement_rates` requires. One mechanism serves all three needs.
 
@@ -218,16 +242,31 @@ itself, and shrinking it in proportion to the playing time an injury suppressed 
 circular and would make the PT coefficient structurally unable to learn from players who
 lost time. **So the shrink applies to rate residuals only.**
 
-The functional form and constants are an increment-1 deliverable (section 6), subject to
-two requirements: the shrink must be **bounded at or below 1** so it can never amplify a
-residual, and whatever playing-time quantity feeds it must be the **same quantity** used by
-the gate (5.4) and the minuend (6.4), which an earlier draft got wrong by using three
-different bases.
+**The shrink's functional form and constants are part of the estimator and therefore an
+increment-1 deliverable** (section 6.2), subject to one hard requirement: it must be
+**bounded at or below 1** so it can never amplify a residual.
+
+On which playing-time quantity feeds it, an earlier draft demanded that the shrink, the 5.4
+gate and the 6.4 minuend all use "the same quantity." That is unsatisfiable and was wrong:
+the minuend is a full-season line that is roughly a third rest-of-season projection, while
+the shrink and the gate are about *sampling noise*, which only realized playing time carries.
+Projected playing time contributes no noise, so weighting the shrink by a blended figure would
+understate it. **The shrink and the gate use realized MLB playing time; the minuend is the
+full-season line.** They are deliberately different, and the estimator must state the
+consequence: in calibration `actual_Y` is fully realized so all three coincide, which is
+itself a train/serve gap (6.4).
 
 ### 5.4 Gating: who gets folded at all
 
 **Players below a minimum realized 2026 MLB playing time pass through at raw ZiPS 2027,
 flagged `unfolded`.**
+
+**The threshold itself is an increment-1 deliverable**, for hitters (PA) and pitchers (IP)
+separately; the spec deliberately does not pin a number it cannot justify. Two things the
+study must settle alongside it: whether the serve-time gate equals the fit-sample threshold
+(they are different objects -- one selects training rows, the other decides passthrough in
+production -- and may legitimately differ), and what the pitcher analogue is, since every
+threshold quoted in section 6.3 is a hitter PA figure.
 
 This gate is load-bearing. Because the shrink does not apply to the playing-time residual
 (5.3), an ungated player with little or no MLB time would have his 2027 playing time folded
@@ -286,16 +325,21 @@ required for the `config/league.yaml` keeper list** -- exact-name joining drops 
 
 **Position eligibility is the weak join and must be disclosed.** `calculate_var` routes
 hitters on `player["positions"]`, whose only source is `cache:positions` -- **706 entries,
-keyed by bare normalized name**, against a 2027 pool of 3,739 rows, an 18.5% match rate.
+keyed by bare normalized name**, against a 2027 pool of 3,739 rows -- 704 matched, an 18.8%
+match rate.
 Two distinct failure modes:
 
 - **Unmatched (~81%).** Unmatched hitters fall to the UTIL floor; both move VAR. Flag every
   row using a defaulted position and report the coverage rate.
 - **Mis-matched.** Bare-name keying violates the repo's `name::player_type` rule
-  (CLAUDE.md: "Never key on bare names"), and the 2027 pool has **17 normalized-name
-  collisions across the hitter and pitcher files** -- including `edwin diaz` and `jacob webb`,
-  whose cache entries are `['P']`, so the *hitter* rows would route to a pitcher floor. These
-  are silently wrong and currently unflagged. Increment 2 must key positions by
+  (CLAUDE.md: "Never key on bare names"). The 2027 pool has 17 normalized-name collisions, and
+  they split into two different problems: **7 are cross-type** (a hitter row and a pitcher row
+  sharing a name), which is the one that misroutes floors, and 10 are within-file namesakes,
+  which is a dedupe/tie-break problem instead. Of the 7 cross-type collisions only 3 appear in
+  `cache:positions`, and they fail in both directions: `edwin diaz` (cached `['P','IL']`) sends
+  the *hitter* row to a pitcher floor, while `jose fermin` (cached
+  `['2B','3B','IF','OF','UTIL']`) sends the *pitcher* row to a hitter floor -- the same failure
+  as Ohtani. All are silently wrong and unflagged. Increment 2 must key positions by
   `name::player_type` or flag collisions.
 
 Since section 2's par ranks the pool, this is material: report par over both the full pool
@@ -351,7 +395,20 @@ right, not a footnote to a number.
 7. **Amplification bounded or refused.** A coefficient that would amplify residuals in
    production must not ship silently on the strength of held-out error alone.
 8. **The train/serve gap stated** (6.4).
-9. **The 5.4 gate discontinuity quantified** or a ramp specified.
+9. **The 5.4 gate discontinuity quantified** or a ramp specified, and **the gate thresholds
+   themselves chosen** for hitters and pitchers.
+10. **The shrink form and constants chosen and documented** (5.3). The shrink is part of the
+    estimator; it must not fall through the acceptance list.
+11. **The error metric pinned and recorded before the first fit** -- which scale, and how
+    aggregated across the eleven rate coefficients. Under this descope the increment that must
+    clear the gate also chooses the gate's yardstick, so the choice must be written down first,
+    not selected after seeing results.
+12. **A stated treatment for the systematic component of the playing-time residual.** ZiPS
+    hedges playing time pool-wide, so the PT residual has a large nonzero *mean* that is not
+    surprise (section 11: 2025 regulars ran +58 mean PA versus projection). A single
+    multiplicative coefficient cannot separate a level offset from signal, and the two
+    estimators that broke in earlier rounds -- a free scale term and a normalization term --
+    both died trying. This is the sharpest constraint on the choice.
 
 ### 6.3 The data
 
@@ -382,6 +439,16 @@ playing-time coefficient upward. Two cautions for whoever runs this:
 **Sample size** must be reported: roughly 350 matched hitters per pair at the 100 PA
 threshold, ~1050 across three pairs, before any per-category split. Against ZiPS 2023's 1716
 hitters at most ~45% can ever match.
+
+**Every figure above is hitters-only, and that is a gap increment 1 must close first.** Six of
+the twelve folded coefficients are pitcher-side (`K/IP`, `W/IP`, `ER/IP`, `BB/IP`,
+`H_allowed/IP`, and `IP` itself), yet this section contains no pitcher survivorship rate, no
+pitcher fit-sample size, and no pitcher playing-time threshold -- and section 6.5's row counts
+are for hitting only. The threshold choice matters more for pitchers than hitters: ZiPS 2023
+carries 1881 pitchers, 1316 at `IP >= 50` but only 328 at `IP >= 100`, a fourfold swing. **The
+first step of increment 1 is to measure pitcher sample size and survivorship on the same
+footing as the hitter figures above**, and to report whether the pitcher study is adequately
+powered at all. If it is not, that is a finding, not a reason to proceed quietly.
 
 ### 6.4 The train/serve gap
 
@@ -428,9 +495,12 @@ uncertainty.
 The study is complete when it delivers a written finding that documents the chosen estimator and
 reports every item in 6.2's requirement list.
 
-It **passes** if the chosen estimator beats both endpoints on held-out error on a majority of
-pairs. It **falls back** otherwise, shipping whichever endpoint performed best, recorded as the
-finding.
+**The bar is applied per coefficient, not globally.** A coefficient **passes** if it beats both
+endpoints on held-out error on a majority of pairs, and **falls back** otherwise to whichever
+endpoint performed best for that category, recorded as the finding. Per-category granularity is
+required because section 6.3 already anticipates that one category will misbehave for a known
+exogenous reason (the 2023 stolen-base rules break) and instructs against averaging it away; a
+single global verdict would either sink eleven good coefficients or smuggle a bad one through.
 
 Note the limit of this bar: it is measured on the rate/playing-time scale, while the feature
 consumes VAR *rank*. Rate error can improve while ranking degrades. VAR is not built until
@@ -450,9 +520,13 @@ Universe: `cache:roster` (the owner's 25) plus `cache:opp_rosters` (nine opponen
 **hitters and starting pitchers**, deduped by MLBAMID. The league table ranks the ten trios.
 
 Because relievers are excluded from the selection universe, a trio can never *contain* one. The
-flag that matters is different: **a team whose roster holds a reliever plausibly worth a keeper
-slot is flagged as having an unevaluable candidate**, so its trio is read as "best among
-evaluable players," not "best." One team qualifies today.
+flag that matters is different: **every team's trio is reported as "best among evaluable
+players," not "best."** This is not a corner case -- verified against the current rosters, **all
+ten teams carry between 1 and 5 relievers**, with closers spread across nearly all of them
+(Miller and Hader, Helsley, Diaz, Munoz, Williams, Iglesias, Duran, Suarez). The league table is
+therefore a comparison of *evaluable* talent league-wide, and that caveat belongs on the table
+itself, not in a footnote. An earlier draft claimed one team was affected; that was wrong by an
+order of magnitude and is the main cost of the reliever exclusion.
 
 **Trios are compared on absolute 2027 VAR, not surplus** -- per-team surplus would need each
 team's 2027 slot, which does not exist yet, and surplus is not field-relative anyway (section 2).
@@ -487,11 +561,17 @@ no VAR, no board.
 
 - Delivery: a script under `scripts/`, results to `data/analysis/`, plus the written finding
   (6.2) committed under `docs/`.
-- Tests: IP notation conversion; the shrink function including its zero and high-playing-time
-  bounds; the 5.4 gate, covering both zero playing time and absence from actuals; the 5.2
-  decomposition and reconstruction, specifically that each rate multiplies its own denominator
-  and that `AB <= PA` holds; NaN guarding on both the realized and ZiPS-base sides; and recovery
-  of a known planted coefficient on synthetic data.
+- Tests: IP notation conversion, plus `stat.era`/`stat.whip` string coercion plus the zero-IP
+  guard; short-page truncation detection in `_fetch_mlb_season` (section 6.5 calls this the real
+  ingest failure mode -- note `_MLB_PAGE = 1000` against ~750-800 rows means the loop never
+  iterates today, so truncation is currently unreachable and the test pins that assumption
+  rather than a live risk); `fetch_or_cache` not being used for an in-progress season; the
+  shrink function including its zero and high-playing-time bounds; the 5.4 gate, covering both
+  zero playing time and absence from actuals; the 5.2 decomposition and reconstruction --
+  each rate multiplying its own denominator, `AB <= PA`, and the output-side clamps for negative
+  rates, negative ERA and `0/0` AVG; NaN guarding on the realized side, the ZiPS-base side, and
+  the reconstructed side; survivorship handling; and recovery of a known planted coefficient on
+  synthetic data.
 - Acceptance: section 6.6.
 
 Review point: examine the findings and decide where to go next.
@@ -542,7 +622,8 @@ explicitly rather than editing assertions.
   1064) in ZiPS 2026. `HLD`/`QS`/`BS` likewise, unscored.
 - **95 of 1838 pitchers in ZiPS 2027 have no ZiPS 2026 counterpart**; all 1901 hitters do.
 - **No Age column in any of the seven ZiPS vintages** (2022-2028).
-- **418 of 727 `GS/G >= 0.5` pitchers in ZiPS 2027 project under 100 IP** (median 97.0), so they
+- **418 of 727 `GS/G >= 0.5` pitchers in ZiPS 2027 project under 100 IP** (median of those 418 is
+  88.0; 97.0 is the median of all 727), so they
   misroute to the RP floor under `role_from_ip`. SP/RP floor gap ~1.9 SGP; the RP floor's 8 free
   saves are worth 1.143 SGP.
 - 2027/2028 pitcher files are not swapped: the 2027 file drifts less from ZiPS 2026 than the 2028
@@ -554,16 +635,22 @@ explicitly rather than editing assertions.
   is not surprise -- a fact the estimator must contend with (6.2).
 - Mean `AB/PA` in ZiPS 2027 is 0.8977.
 - `keepers/mlb_stats.fetch_mlb_season` works for arbitrary historical years, keyed by MLBAM, and
-  returns the raw response with no column dropped. Confirmed present: `stat.wins`, `stat.saves`,
-  `stat.era`, `stat.whip`, `stat.strikeOuts`, `stat.inningsPitched`. The study additionally needs
-  `ER`, `BB`, `H` (pitchers) and `PA`, `AB`, `H` (hitters) for the 5.2 decomposition -- confirm
-  their exact field names against a live pull before planning, as section 6.5's caveats apply.
+  returns the raw response with no column dropped. **Every field the 5.2 decomposition needs was
+  confirmed present against a live 2025 pull:**
+  - hitters: `stat.plateAppearances`, `stat.atBats`, `stat.hits`, `stat.runs`, `stat.homeRuns`,
+    `stat.rbi`, `stat.stolenBases`
+  - pitchers: `stat.earnedRuns`, `stat.baseOnBalls`, `stat.hits`, `stat.inningsPitched`,
+    `stat.strikeOuts`, `stat.wins`, `stat.saves`
+
+  `stat.inningsPitched` is confirmed a **string in baseball notation** (observed values include
+  `'5.1'`, meaning 5 1/3 innings), so the 6.5 conversion is mandatory, not precautionary.
 - `position_aware_replacement_levels` (`sgp/replacement.py:240-279`) is a function of the
   denominators, the AVG/ERA/WHIP rate baselines, the module-global `REPLACEMENT_BY_POSITION`, and
   `team_ab`/`team_ip` -- not pool depth. But `calculate_replacement_rates` (line 93) and
   `find_replacement_players` (line 24) are pool-derived; see section 7.
-- `cache:positions` holds 706 bare-normalized-name entries; 18.5% match rate against the 3,739-row
-  2027 pool; 17 normalized-name collisions across the hitter and pitcher files.
+- `cache:positions` holds 706 bare-normalized-name entries; 704 of the 3,739-row 2027 pool match
+  (18.8%); 17 normalized-name collisions, of which 7 are cross-type (floor misrouting) and 10 are
+  within-file namesakes (dedupe).
 - `draft_value.ParCurve` / `par_for_slot` are backward-looking, built from historical picks;
   `keeper_par` is the mean VAR of kept players. Not the forward-looking par of section 2. Its
   docstring (`draft_value.py:485-488`) deliberately keeps a two-way player's rows **separate**,
@@ -589,6 +676,8 @@ explicitly rather than editing assertions.
 - Whether the playing-time coefficient needs a finer split than one per player type. Deferred to
   the increment 1 results.
 - Whether increment 2 extends `scripts/keeper_value.py` or replaces it.
-- The exact `role_ip` value passed per role (5.1), to be settled in the increment 2 plan.
+- The exact `role_ip` value passed per role (5.1), to be settled in the increment 2 plan. Any
+  value at or above `STARTER_IP_THRESHOLD` (100.0) routes a starter correctly and any value below
+  it routes a reliever correctly, so the choice is about legibility, not correctness.
 - Script the section 4 vintage check and retain both artifacts so the staleness claim stays
   reproducible.
