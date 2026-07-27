@@ -16,10 +16,11 @@ Three things a caller must not get wrong:
     RISES with `n0` (hr_pa: 0.407 at n0=100, 0.494 at 200, 0.655 at 400). Only the
     product `k * w` is identified. Using these `k` values with a different `n0` is
     meaningless (finding B.5).
-  * **Apply `fold.gate_ramp`, not `fold.gate_mask`.** The hard gate is a 78.7%
-    (hitter) / 44.6% (pitcher) cliff across two plate appearances, because the
-    playing-time term is unshrunk. `gate_mask` selects fit-sample rows; the ramp
-    is what production applies (finding B.7).
+  * **Apply `fold.gate_ramp`, not `fold.gate_mask`.** The hard gate is a cliff at
+    the threshold: 78.7% across two plate appearances for hitters, 44.6% across
+    two innings for pitchers, because the playing-time term is unshrunk.
+    `gate_mask` selects fit-sample rows; the ramp is what production applies
+    (finding B.7).
   * **`pa` and `k_ip` are endpoint fallbacks, not fitted values.** Both lost to
     `k=1` on held-out error under the pre-registered rule. For `pa` the mechanism
     is understood and unresolved -- see finding B.3, the largest open item.
@@ -63,11 +64,11 @@ class FoldPolicy:
         This exists so the three rules that are otherwise only prose become
         mechanical, and so no caller has to assemble them from primitives:
 
-          * **Ramp, not hard gate.** The gate is a 78.7% (hitter) / 44.6%
-            cliff for hitters across two plate appearances (and 44.6% across two
-            innings for pitchers) because the PT term is
-            unshrunk. `gate_ramp` removes the step; `gate_mask` is for selecting
-            fit-sample rows, never for serving.
+          * **Ramp, not hard gate.** The hard gate is a cliff at the threshold --
+            78.7% across two plate appearances for hitters, 44.6% across two
+            innings for pitchers -- because the PT term is unshrunk. `gate_ramp`
+            removes the step; `gate_mask` is for selecting fit-sample rows, never
+            for serving.
           * **Rates are shrunk, playing time is not.** Damping the PT residual by
             a function of the playing time an injury suppressed is circular and
             would make the coefficient unable to learn from lost time (spec 5.3).
@@ -156,7 +157,7 @@ def policy_from_study(report: pd.DataFrame, pt_col: str, ramp_width: float) -> F
     """
     fitted = report.loc[report["estimator"] == CHOSEN_ESTIMATOR]
     if fitted.empty:
-        raise ValueError("report contains no 'fitted-k' rows")
+        raise ValueError(f"report contains no {CHOSEN_ESTIMATOR!r} rows")
     coefficients: dict[str, float] = {}
     for column, row in fitted.set_index("column").iterrows():
         verdict = str(row["verdict"])

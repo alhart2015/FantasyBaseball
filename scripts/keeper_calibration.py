@@ -43,14 +43,21 @@ from fantasy_baseball.keepers.calibration import (
     leave_one_out,
     survivorship,
 )
-from fantasy_baseball.keepers.coefficients import FALLBACK_PREFIX, PASS_VERDICT
+from fantasy_baseball.keepers.coefficients import (
+    CHOSEN_ESTIMATOR,
+    FALLBACK_PREFIX,
+    PASS_VERDICT,
+)
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CACHE_DIR = REPO_ROOT / "data" / "cache" / "keeper_calibration"
 PROJECTIONS_ROOT = REPO_ROOT / "data" / "projections"
 ANALYSIS_DIR = REPO_ROOT / "data" / "analysis"
 
-CHOSEN = ShrunkTransfer.name
+# The library owns this string: it is the value `policy_from_study` matches on
+# when reading the report back. `test_chosen_estimator_name_matches_the_library`
+# binds it to ShrunkTransfer.name so the two cannot drift.
+CHOSEN = CHOSEN_ESTIMATOR
 ENDPOINT_NAMES = (ZeroTransfer.name, FullTransfer.name)
 
 

@@ -82,11 +82,19 @@ def mlb_pitching(**overrides: Any) -> pd.DataFrame:
 
 
 def write_zips_vintage(directory: Path, **overrides: Any) -> None:
-    """Write a hitters+pitchers ZiPS pair into `directory`, as `load_vintage` expects."""
+    """Write a hitters+pitchers ZiPS pair into `directory`, as `load_vintage` expects.
+
+    Every override goes to BOTH builders, so only keys shared by both schemas are
+    legal: `MLBAMID` and `H`. Anything else raises from `_frame` -- including
+    `PA`, which is valid for hitters alone. Set one side's fields by calling
+    `zips_hitters`/`zips_pitchers` directly and writing the CSVs yourself.
+
+    Note `H` means hits for the hitter file and hits allowed for the pitcher
+    file, so one override sets two different quantities.
+    """
     path = Path(directory)
     path.mkdir(parents=True, exist_ok=True)
-    # Forward overrides to BOTH builders rather than routing by key: routing
-    # silently swallows a typo (it matches neither schema) and would fan a key
-    # present in both dicts into two different meanings.
+    # Forwarding to both rather than routing by key keeps `_frame`'s unknown-key
+    # guard live: a routed typo would match neither schema and apply to nothing.
     zips_hitters(**overrides).to_csv(path / "zips-hitters.csv", index=False)
     zips_pitchers(**overrides).to_csv(path / "zips-pitchers.csv", index=False)

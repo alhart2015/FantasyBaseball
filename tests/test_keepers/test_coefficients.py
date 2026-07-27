@@ -123,3 +123,13 @@ def test_policy_from_study_rejects_a_report_mixing_fit_settings() -> None:
     )
     with pytest.raises(ValueError, match="mixes fit settings"):
         policy_from_study(report, pt_col="pa", ramp_width=100.0)
+
+
+def test_chosen_estimator_name_matches_the_library() -> None:
+    # `policy_from_study` matches report rows on CHOSEN_ESTIMATOR, but the name is
+    # defined by the estimator class. If they drift, the study emits a report the
+    # library cannot read -- and the failure is an empty policy, not an error.
+    from fantasy_baseball.keepers.calibration import ShrunkTransfer
+    from fantasy_baseball.keepers.coefficients import CHOSEN_ESTIMATOR
+
+    assert ShrunkTransfer.name == CHOSEN_ESTIMATOR
