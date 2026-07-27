@@ -438,6 +438,22 @@ def test_savant_hr_tolerates_empty_pre_2016(tmp_path: Path):
     out = fetch_savant_hr(tmp_path, 2015, fetcher=lambda: pd.DataFrame())
     assert out.empty
     assert not (tmp_path / "savant_hr_2015.csv").exists()
+
+
+def test_public_api_reexports():
+    import fantasy_baseball.keepers as k
+
+    expected = [
+        "fetch_or_cache",
+        "fetch_mlb_season",
+        "fetch_batter_expected",
+        "fetch_batter_barrels",
+        "fetch_pitcher_expected",
+        "fetch_savant_hr",
+    ]
+    for name in expected:
+        assert hasattr(k, name), f"{name} not re-exported from fantasy_baseball.keepers"
+        assert name in k.__all__, f"{name} missing from __all__"
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -576,7 +592,7 @@ __all__ = [
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_keepers/test_savant.py -v`
-Expected: PASS (4 passed).
+Expected: PASS (5 passed).
 
 - [ ] **Step 5: Verify gates**
 
@@ -606,12 +622,15 @@ git commit -m "feat(keepers): raw Baseball Savant pulls (#265)"
 
 - [ ] **Step 1: Pre-check -- confirm no surviving importer**
 
-Run:
+Run (`*.py` only, to skip `__pycache__` noise):
 ```bash
-grep -rlnE "analysis\.(breakout|hr_confirm|breakout_backtest)|data\.skill_luck|import (breakout|hr_confirm|skill_luck)" src/ scripts/ tests/ \
-  | grep -vE "test_breakout|test_hr_confirm|test_skill_luck|test_backtest_(breakout|hr_confirm|hr_level)|/breakout|/hr_confirm|/skill_luck|breakout_backtest"
+grep -rlnE "analysis\.(breakout|hr_confirm|breakout_backtest)|data\.skill_luck|import (breakout|hr_confirm|skill_luck)" \
+  --include='*.py' src/ scripts/ tests/
 ```
-Expected: no output (every remaining reference is itself a file being deleted). If any OTHER file appears, STOP and reconcile before deleting.
+Expected: EVERY printed path is a file in this task's delete set (the deleted
+modules, their backtests, and their tests import each other, so they self-match).
+Cross-check each printed path against the delete list below. If ANY path appears
+that is NOT in the delete set, STOP and reconcile before deleting.
 
 - [ ] **Step 2: Delete tracked files**
 
