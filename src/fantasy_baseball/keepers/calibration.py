@@ -11,10 +11,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 import pandas as pd
 
 from fantasy_baseball.keepers.actuals import normalize_hitting, normalize_pitching
+from fantasy_baseball.keepers.fold import shrink
 from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 from fantasy_baseball.keepers.vintages import load_vintage
 
@@ -114,3 +116,162 @@ def survivorship(pairs: list[YearPair], threshold: float) -> pd.DataFrame:
             }
         )
     return pd.DataFrame(rows)
+
+
+class Fitted(Protocol):
+    params: dict[str, float]
+
+    def predict(self, base: pd.Series, residual: pd.Series, weight: pd.Series) -> pd.Series: ...
+
+
+class Estimator(Protocol):
+    name: str
+
+    def fit(
+        self,
+        pairs: list[YearPair],
+        column: str,
+        n0: float,
+        *,
+        shrunk: bool = True,
+        weighted: bool = True,
+    ) -> Fitted:
+        """Fit one coefficient for `column`.
+
+        `shrunk` and `weighted` mirror the evaluation switches in `leave_one_out`
+        so a fitted estimator can optimize the SAME loss it is scored on (finding
+        A.1). The fixed endpoints ignore them.
+        """
+        ...
+
+
+class _FixedK:
+    """Endpoint estimator: predict = base + k * weight * residual, k not fitted."""
+
+    def __init__(self, k: float) -> None:
+        self.params = {"k": k}
+
+    def predict(self, base: pd.Series, residual: pd.Series, weight: pd.Series) -> pd.Series:
+        result: pd.Series = base + self.params["k"] * weight * residual.fillna(0.0)
+        return result
+
+
+class ZeroTransfer:
+    """k = 0: ignore the season entirely. This is today's stale-baseline behaviour."""
+
+    name = "k=0"
+
+    def fit(
+        self,
+        pairs: list[YearPair],
+        column: str,
+        n0: float,
+        *,
+        shrunk: bool = True,
+        weighted: bool = True,
+    ) -> Fitted:
+        return _FixedK(0.0)
+
+
+class FullTransfer:
+    """k = 1: move the full (shrunk) surprise."""
+
+    name = "k=1"
+
+    def fit(
+        self,
+        pairs: list[YearPair],
+        column: str,
+        n0: float,
+        *,
+        shrunk: bool = True,
+        weighted: bool = True,
+    ) -> Fitted:
+        return _FixedK(1.0)
+
+
+def weighted_mse(pred: pd.Series, actual: pd.Series, weight: pd.Series) -> float:
+    """Playing-time-weighted MSE, so a 20-PA player's rate cannot dominate."""
+    mask = actual.notna() & pred.notna() & (weight > 0)
+    if not mask.any():
+        return float("nan")
+    err = (pred[mask] - actual[mask]) ** 2
+    return float((err * weight[mask]).sum() / weight[mask].sum())
+
+
+def _eval_weight(pair: YearPair, weighted: bool) -> pd.Series:
+    """The metric's weight column, per the pre-registered decision (finding A.1).
+
+    Rate coefficients weight by realized year-Y+1 playing time so a 20-PA rate
+    cannot dominate a 600-PA one. The playing-time coefficient is UNWEIGHTED:
+    weighting the PT target by target_pt is circular, and it assigns weight 0 to
+    every non-survivor -- deleting exactly the players whose lost playing time the
+    coefficient exists to learn from.
+    """
+    if weighted:
+        return pair.target_pt
+    return pd.Series(1.0, index=pair.target_pt.index)
+
+
+def leave_one_out(
+    estimator: Estimator,
+    pairs: list[YearPair],
+    column: str,
+    n0: float,
+    *,
+    gate: float,
+    shrunk: bool = True,
+    weighted: bool = True,
+) -> pd.DataFrame:
+    """Fit on all pairs but one, evaluate on the held-out pair. Spec 6.3.
+
+    `gate` is the realized-playing-time floor from spec 5.4: rows below it are
+    excluded from both fitting and evaluation.
+
+    `shrunk=False` is REQUIRED for the playing-time coefficient. The shrink damps
+    noisy RATE observations; applying it to the PT residual would damp an injury
+    signal in proportion to the playing time the injury suppressed, and would make
+    the PT coefficient structurally unable to learn from lost time (spec 5.3).
+
+    `weighted=False` is likewise required for the playing-time coefficient -- see
+    `_eval_weight`. Fit and evaluation use the SAME weighting; fitting one loss and
+    scoring another would make the held-out comparison meaningless.
+    """
+    rows = []
+    for held in pairs:
+        train = [_gated(p, gate) for p in pairs if p.year != held.year]
+        fitted = estimator.fit(train, column, n0, shrunk=shrunk, weighted=weighted)
+        kept = _gated(held, gate)
+        weight = _shrink_weight(kept, n0, shrunk)
+        pred = fitted.predict(kept.base[column], kept.residual[column], weight)
+        rows.append(
+            {
+                "estimator": estimator.name,
+                "column": column,
+                "held_out_year": held.year,
+                "n": len(kept.base),
+                "error": weighted_mse(pred, kept.target[column], _eval_weight(kept, weighted)),
+                **{f"param_{k}": v for k, v in fitted.params.items()},
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _shrink_weight(pair: YearPair, n0: float, shrunk: bool) -> pd.Series:
+    """The fold's shrink weight for one pair, or all-ones when unshrunk."""
+    if shrunk:
+        return shrink(pair.realized_pt, n0)
+    return pd.Series(1.0, index=pair.realized_pt.index)
+
+
+def _gated(pair: YearPair, gate: float) -> YearPair:
+    """Restrict a pair to rows clearing the realized-playing-time gate (spec 5.4)."""
+    ids = pair.realized_pt.index[pair.realized_pt >= gate]
+    return YearPair(
+        year=pair.year,
+        base=pair.base.loc[ids],
+        residual=pair.residual.loc[ids],
+        target=pair.target.loc[ids],
+        realized_pt=pair.realized_pt.loc[ids],
+        target_pt=pair.target_pt.loc[ids],
+    )
