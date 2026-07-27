@@ -81,14 +81,22 @@ def build_pairs(
         act_next = normalize(fetch_mlb_season(cache_dir, year + 1, group))
         ids = zips.index.intersection(act_y.index)
         cols = list(zips.columns)  # rates AND the playing-time column
+        pt_col = PT_COL[player_type]
+        target = act_next.reindex(ids)[cols].copy()
+        # A player absent from the year-Y+1 leaderboard has NO Y+1 rate (NaN is the
+        # only honest answer) but he does have a well-defined Y+1 MLB playing time
+        # of zero. Leaving PT as NaN here would drop every non-survivor from the
+        # playing-time fit and evaluation, which is precisely the survivorship
+        # deletion spec 6.3 warns against. Rates stay NaN; only PT is filled.
+        target[pt_col] = target[pt_col].fillna(0.0)
         pairs.append(
             YearPair(
                 year=year,
                 base=zips.loc[ids, cols],
                 residual=act_y.loc[ids, cols] - zips.loc[ids, cols],
-                target=act_next.reindex(ids)[cols],
-                realized_pt=act_y.loc[ids, PT_COL[player_type]],
-                target_pt=act_next.reindex(ids)[PT_COL[player_type]].fillna(0.0),
+                target=target,
+                realized_pt=act_y.loc[ids, pt_col],
+                target_pt=target[pt_col],
             )
         )
     return pairs

@@ -1,8 +1,10 @@
 from dataclasses import replace
+from pathlib import Path
 
 import pandas as pd
 import pytest
 
+from fantasy_baseball.keepers import calibration
 from fantasy_baseball.keepers.calibration import (
     PAIR_YEARS,
     FullTransfer,
@@ -118,3 +120,53 @@ def test_unshrunk_weight_is_one_so_playing_time_is_not_damped() -> None:
     )
     # k=1 unshrunk predicts base + residual exactly, which equals the target here.
     assert out["error"].iloc[0] == pytest.approx(0.0)
+
+
+def test_build_pairs_keeps_non_survivors_with_zero_target_playing_time(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Absence from the Y+1 leaderboard: no Y+1 rate (NaN), but a real Y+1 MLB
+    # playing time of zero. Dropping these rows would delete the survivorship
+    # signal the PT coefficient exists to measure.
+    proj = tmp_path / "2024"
+    proj.mkdir()
+    pd.DataFrame(
+        {
+            "MLBAMID": [1, 2],
+            "PA": [600, 600],
+            "AB": [540, 540],
+            "H": [150, 150],
+            "R": [80, 80],
+            "HR": [25, 25],
+            "RBI": [80, 80],
+            "SB": [10, 10],
+        }
+    ).to_csv(proj / "zips-hitters.csv", index=False)
+    pd.DataFrame(
+        {"MLBAMID": [9], "IP": [180.0], "ER": [60], "BB": [45], "H": [150], "SO": [200], "W": [15]}
+    ).to_csv(proj / "zips-pitchers.csv", index=False)
+
+    def _raw(ids: list[int], pas: list[int]) -> pd.DataFrame:
+        return pd.DataFrame(
+            {
+                "player.id": ids,
+                "stat.plateAppearances": pas,
+                "stat.atBats": [int(p * 0.9) for p in pas],
+                "stat.hits": [int(p * 0.25) for p in pas],
+                "stat.runs": [int(p * 0.13) for p in pas],
+                "stat.homeRuns": [int(p * 0.04) for p in pas],
+                "stat.rbi": [int(p * 0.13) for p in pas],
+                "stat.stolenBases": [int(p * 0.02) for p in pas],
+            }
+        )
+
+    frames = {2024: _raw([1, 2], [620, 580]), 2025: _raw([1], [600])}
+    monkeypatch.setattr(
+        calibration, "fetch_mlb_season", lambda cache_dir, year, group: frames[year]
+    )
+    pair = calibration.build_pairs("hitter", tmp_path, tmp_path, years=(2024,))[0]
+
+    assert list(pair.base.index) == [1, 2]  # non-survivor still present
+    assert pd.isna(pair.target.loc[2, "hr_pa"])  # no Y+1 rate
+    assert pair.target.loc[2, "pa"] == 0.0  # but a real Y+1 playing time
+    assert pair.target_pt.loc[2] == 0.0
