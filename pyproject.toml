@@ -76,6 +76,7 @@ files = [
     "src/fantasy_baseball/draft/state.py",
     "src/fantasy_baseball/draft/strategy.py",
     "src/fantasy_baseball/draft/tracker.py",
+    "src/fantasy_baseball/keepers/",
     "src/fantasy_baseball/lineup/delta_roto.py",
     "src/fantasy_baseball/lineup/leverage.py",
     "src/fantasy_baseball/lineup/stash_value.py",
@@ -221,4 +222,9 @@ ignore_names = [
     "setUp",
     "tearDown",
     "test_*",
+    "fetch_mlb_season",
+    "fetch_batter_expected",
+    "fetch_batter_barrels",
+    "fetch_pitcher_expected",
+    "fetch_savant_hr",
 ]
