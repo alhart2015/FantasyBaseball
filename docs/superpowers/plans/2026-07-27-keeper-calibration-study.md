@@ -45,7 +45,7 @@ an injectable `fetcher` callable so tests never hit the API.
 | `src/fantasy_baseball/keepers/vintages.py` | Load a ZiPS vintage from disk and decompose it to the same canonical schema. |
 | `src/fantasy_baseball/keepers/fold.py` | The fold itself: shrink, gate, reconstruction, clamps. Pure functions, no I/O. **Reused unchanged by increment 2.** |
 | `src/fantasy_baseball/keepers/calibration.py` | Year-pair assembly, sample-size and survivorship measurement, estimator protocol, leave-one-pair-out evaluation, per-coefficient acceptance. |
-| `scripts/keeper_calibration.py` | CLI entry point; writes the results table to `data/analysis/`. |
+| `scripts/keeper_calibration.py` | CLI entry point. Results table to `data/analysis/`; MLB pulls cache under `data/cache/keeper_calibration/`, which is already gitignored -- `data/analysis/` is NOT. |
 | `tests/test_keepers/test_actuals.py` | |
 | `tests/test_keepers/test_vintages.py` | |
 | `tests/test_keepers/test_fold.py` | |
@@ -172,7 +172,7 @@ def innings_to_float(value: object) -> float:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_keepers/test_actuals.py -v`
-Expected: PASS (11 tests)
+Expected: PASS (10 tests -- 8 parametrized plus 2)
 
 - [ ] **Step 5: Run the gates and commit**
 
@@ -446,7 +446,8 @@ def test_zero_denominator_zips_rows_yield_nan(tmp_path: Path) -> None:
 
 
 def test_load_vintage_reads_real_files() -> None:
-    hitters, pitchers = load_vintage(2026, Path("data/projections"))
+    root = Path(__file__).resolve().parents[2] / "data" / "projections"
+    hitters, pitchers = load_vintage(2026, root)
     assert len(hitters) > 1000
     assert len(pitchers) > 1000
     assert hitters.index.name == "mlbam_id"
@@ -459,8 +460,8 @@ Expected: FAIL, `ModuleNotFoundError: No module named 'fantasy_baseball.keepers.
 
 - [ ] **Step 3: Write minimal implementation**
 
-First, in `actuals.py`, rename `_safe_ratio` to `safe_ratio` (update its two call sites in that
-file). Then create `vintages.py`:
+First, in `actuals.py`, rename `_safe_ratio` to `safe_ratio` -- there are **11** call sites in that file
+(6 in `normalize_hitting`, 5 in `normalize_pitching`). Then create `vintages.py`:
 
 ```python
 """Load a ZiPS vintage from disk and decompose it to the canonical rate/PT schema.
@@ -558,7 +559,7 @@ git commit -m "feat(keepers): decompose ZiPS vintages to canonical schema (#266)
 - Test: `tests/test_keepers/test_fold.py`
 
 **Interfaces:**
-- Consumes: the canonical schema constants from `actuals.py`.
+- Consumes: nothing. `fold.py` is self-contained and imports only numpy and pandas.
 - Produces: `shrink(n: pd.Series, n0: float) -> pd.Series`,
   `gate_mask(realized_pt: pd.Series, threshold: float) -> pd.Series`,
   `fold_rates(base, residual, weight, k) -> pd.DataFrame`,
@@ -756,7 +757,7 @@ def reconstruct_pitcher(rates: pd.DataFrame, ip: pd.Series) -> pd.DataFrame:
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `pytest tests/test_keepers/test_fold.py -v`
-Expected: PASS (9 tests)
+Expected: PASS (8 tests)
 
 - [ ] **Step 5: Run the gates and commit**
 
@@ -776,9 +777,11 @@ git commit -m "feat(keepers): fold primitives -- shrink, gate, reconstruction (#
 
 **Interfaces:**
 - Consumes: `load_vintage` (Task 3), `normalize_hitting`/`normalize_pitching` (Task 2),
-  `fetch_mlb_season` (`keepers/mlb_stats.py`), `gate_mask` (Task 4).
-- Produces: `YearPair` dataclass with fields `year`, `base`, `residual`, `target`,
-  `realized_pt`; `build_pairs(...) -> list[YearPair]`;
+  `fetch_mlb_season` (`keepers/mlb_stats.py`). Does NOT import `gate_mask` -- gating is
+  applied at fit time in Task 6, not at assembly time.
+- Produces: `YearPair` dataclass with **six** fields -- `year`, `base`, `residual`, `target`,
+  `realized_pt`, `target_pt`. `base`/`residual`/`target` carry the playing-time column
+  alongside the rates, because PT is the twelfth coefficient; `build_pairs(...) -> list[YearPair]`;
   `survivorship(pairs, threshold) -> pd.DataFrame`.
 
 **Spec 6.3 makes this the mandatory first measurement.** Every sample-size and survivorship
@@ -793,8 +796,14 @@ season (`season_end: 2026-09-28`); a 2021 pair is impossible because `data/proje
 
 - [ ] **Step 1: Write the failing test**
 
+Note the import block. Tasks 6 and 7 append tests to this same file and use `pytest.approx`
+and `numpy`, so both are imported now -- `tests/test_keepers/**` has no E402 per-file-ignore,
+so adding imports mid-file later would fail `ruff check`.
+
 ```python
+import numpy as np
 import pandas as pd
+import pytest
 
 from fantasy_baseball.keepers.calibration import PAIR_YEARS, YearPair, survivorship
 
@@ -852,6 +861,8 @@ from fantasy_baseball.keepers.vintages import load_vintage
 # no ZiPS vintage on disk (data/projections starts at 2022).
 PAIR_YEARS = (2022, 2023, 2024)
 
+PT_COL = {"hitter": "pa", "pitcher": "ip"}
+
 
 @dataclass(frozen=True)
 class YearPair:
@@ -865,31 +876,56 @@ class YearPair:
     target_pt: pd.Series     # actual_{Y+1} playing time
 
 
+LAST_COMPLETE_SEASON = 2025
+
+
 def build_pairs(
     player_type: str,
     cache_dir: Path,
     projections_root: Path,
     years: tuple[int, ...] = PAIR_YEARS,
 ) -> list[YearPair]:
+    """Assemble (Y, Y+1) observation sets.
+
+    Two properties are load-bearing and were both wrong in an earlier draft:
+
+    * The frames carry the PLAYING TIME column alongside the rates. PT is the
+      twelfth coefficient, and spec requirement 12 -- the systematic mean of the
+      PT residual -- is the single hardest constraint on the estimator. Stripping
+      PT here would make that requirement unaddressable.
+    * Membership is `zips ∩ actual_Y` ONLY. Intersecting year Y+1 as well would
+      precondition the sample on having survived, inflating the measured survival
+      rate by 7-9 points AND removing non-survivors before any estimator sees
+      them -- making spec requirement 5 unmeasurable. Absentees get a NaN target
+      and 0.0 target playing time, which is the honest encoding of "did not play".
+    """
+    if player_type not in {"hitter", "pitcher"}:
+        raise ValueError(f"player_type must be 'hitter' or 'pitcher', got {player_type!r}")
     group = "hitting" if player_type == "hitter" else "pitching"
     normalize = normalize_hitting if player_type == "hitter" else normalize_pitching
-    pt_col = "pa" if player_type == "hitter" else "ip"
     pairs: list[YearPair] = []
     for year in years:
+        if year + 1 > LAST_COMPLETE_SEASON:
+            # fetch_or_cache never invalidates, so a mid-season pull would freeze
+            # permanently. Fail loud rather than cache an in-progress season.
+            raise ValueError(
+                f"pair {year}->{year + 1} needs a complete {year + 1} season; "
+                f"last complete is {LAST_COMPLETE_SEASON}"
+            )
         zips_h, zips_p = load_vintage(year, projections_root)
         zips = zips_h if player_type == "hitter" else zips_p
         act_y = normalize(fetch_mlb_season(cache_dir, year, group))
         act_next = normalize(fetch_mlb_season(cache_dir, year + 1, group))
-        ids = zips.index.intersection(act_y.index).intersection(act_next.index)
-        rate_cols = [c for c in zips.columns if c != pt_col]
+        ids = zips.index.intersection(act_y.index)
+        cols = list(zips.columns)  # rates AND the playing-time column
         pairs.append(
             YearPair(
                 year=year,
-                base=zips.loc[ids, rate_cols],
-                residual=act_y.loc[ids, rate_cols] - zips.loc[ids, rate_cols],
-                target=act_next.loc[ids, rate_cols],
-                realized_pt=act_y.loc[ids, pt_col],
-                target_pt=act_next.loc[ids, pt_col],
+                base=zips.loc[ids, cols],
+                residual=act_y.loc[ids, cols] - zips.loc[ids, cols],
+                target=act_next.reindex(ids)[cols],
+                realized_pt=act_y.loc[ids, PT_COL[player_type]],
+                target_pt=act_next.reindex(ids)[PT_COL[player_type]].fillna(0.0),
             )
         )
     return pairs
@@ -910,7 +946,7 @@ def survivorship(pairs: list[YearPair], threshold: float) -> pd.DataFrame:
         rows.append(
             {
                 "year": pair.year,
-                "n_matched": int(len(pair.base)),
+                "n_matched": len(pair.base),
                 "n_in_year": n_in,
                 "n_survived": n_sur,
                 "survival_rate": (n_sur / n_in) if n_in else float("nan"),
@@ -933,7 +969,7 @@ python -c "
 import sys; sys.path.insert(0,'src')
 from pathlib import Path
 from fantasy_baseball.keepers.calibration import build_pairs, survivorship
-cache = Path('data/analysis/keeper_calibration_cache'); cache.mkdir(parents=True, exist_ok=True)
+cache = Path('data/cache/keeper_calibration'); cache.mkdir(parents=True, exist_ok=True)
 for ptype, thresholds in (('hitter',(100.0,300.0)), ('pitcher',(50.0,100.0))):
     pairs = build_pairs(ptype, cache, Path('data/projections'))
     for t in thresholds:
@@ -941,10 +977,28 @@ for ptype, thresholds in (('hitter',(100.0,300.0)), ('pitcher',(50.0,100.0))):
 "
 ```
 
-Record the output. Expected for hitters at 100 PA: roughly 350 matched per pair with survival
-near 75-80%, matching the spec. **The pitcher figures are unknown and are the point of this
-step.** If the pitcher sample at the chosen threshold is too small to fit twelve coefficients,
-that is a finding to report, not a reason to proceed quietly.
+Record the output. Verified expected values for hitters at 100 PA, with the corrected
+(non-preconditioned) membership:
+
+```
+year  n_matched  n_in_year  survival_rate
+2022        ~525        465          0.755
+2023        ~510        458          0.777
+2024        ~535        454          0.795
+```
+
+Note `n_matched` is 510-535, NOT the ~350 the spec quotes -- the spec's ~350 is roughly
+`n_survived`, and conflating the two was an error in an earlier draft of this plan. The survival
+rates above reproduce the spec's 75.5/77.7/79.5 exactly, which is the check that membership is
+built correctly: if you see 84-87%, `build_pairs` is preconditioning on survival and is wrong.
+
+**The pitcher figures are the point of this step.** Indicative measurements taken during plan
+review, but with the buggy preconditioned membership, so treat them as upper bounds to be
+re-measured: ~560-575 matched per pair; at `IP >= 50` about 311-313 in-year with survival ~69%;
+at `IP >= 100` about 116-129 in-year with survival ~61-63%. That is roughly 930 pitcher rows
+across three pairs at IP>=50 versus ~360 at IP>=100. **If the pitcher sample at your chosen
+threshold cannot support the coefficient count, that is a finding to report, not a reason to
+proceed quietly.**
 
 - [ ] **Step 6: Commit**
 
@@ -973,7 +1027,29 @@ The two endpoints are the things any chosen estimator must beat (spec 6.2 requir
 `ZeroTransfer` ignores the season entirely -- today's stale baseline -- and `FullTransfer`
 moves the full shrunk surprise.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Pin the error metric and the gate thresholds, in writing, first**
+
+Spec 6.2 requirements 9 and 11 say the metric and the gate thresholds must be recorded
+**before** the first fit, so the increment that has to clear the bar does not also choose the
+bar after seeing results. This step comes before the harness because the next step hardcodes
+the metric into `leave_one_out`.
+
+Create `docs/superpowers/keeper-calibration-finding-2026-07-27.md` with an **Advance
+decisions** section stating, with justification from Task 5's measured samples:
+
+- the error metric (playing-time-weighted MSE on the rate/PT scale) and its weight column;
+- that acceptance is per coefficient, not pooled (spec 6.6);
+- the chosen hitter (PA) and pitcher (IP) gate thresholds. Task 5 measured ~930 pitcher rows
+  across three pairs at `IP >= 50` versus ~360 at `IP >= 100`; say which you picked and why.
+
+Commit this file before writing any fitting code.
+
+```bash
+git add docs/superpowers/keeper-calibration-finding-2026-07-27.md
+git commit -m "docs(keepers): pre-register calibration metric and gates (#266)"
+```
+
+- [ ] **Step 2: Write the failing test**
 
 ```python
 from fantasy_baseball.keepers.calibration import (
@@ -1015,17 +1091,17 @@ def test_endpoints_predict_as_documented() -> None:
 
 def test_leave_one_out_holds_out_each_pair() -> None:
     pairs = [_pair(2022), _pair(2023), _pair(2024)]
-    out = leave_one_out(ZeroTransfer(), pairs, "hr_pa", n0=200.0)
+    out = leave_one_out(ZeroTransfer(), pairs, "hr_pa", n0=200.0, gate=0.0)
     assert sorted(out["held_out_year"]) == [2022, 2023, 2024]
     assert out["error"].notna().all()
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [ ] **Step 3: Run test to verify it fails**
 
 Run: `pytest tests/test_keepers/test_calibration.py -v`
 Expected: FAIL, `ImportError: cannot import name 'ZeroTransfer'`
 
-- [ ] **Step 3: Write minimal implementation**
+- [ ] **Step 4: Write minimal implementation**
 
 Append to `calibration.py` (add `from typing import Protocol` and
 `from fantasy_baseball.keepers.fold import shrink` at the top):
@@ -1034,9 +1110,7 @@ Append to `calibration.py` (add `from typing import Protocol` and
 class Fitted(Protocol):
     params: dict[str, float]
 
-    def predict(
-        self, base: pd.Series, residual: pd.Series, weight: pd.Series
-    ) -> pd.Series: ...
+    def predict(self, base: pd.Series, residual: pd.Series, weight: pd.Series) -> pd.Series: ...
 
 
 class Estimator(Protocol):
@@ -1084,26 +1158,60 @@ def weighted_mse(pred: pd.Series, actual: pd.Series, weight: pd.Series) -> float
 
 
 def leave_one_out(
-    estimator: Estimator, pairs: list[YearPair], column: str, n0: float
+    estimator: Estimator,
+    pairs: list[YearPair],
+    column: str,
+    n0: float,
+    *,
+    gate: float,
+    shrunk: bool = True,
 ) -> pd.DataFrame:
-    """Fit on all pairs but one, evaluate on the held-out pair. Spec 6.3."""
+    """Fit on all pairs but one, evaluate on the held-out pair. Spec 6.3.
+
+    `gate` is the realized-playing-time floor from spec 5.4: rows below it are
+    excluded from both fitting and evaluation. Without this parameter the
+    threshold Task 7 is told to choose would have nowhere to be applied.
+
+    `shrunk=False` is REQUIRED for the playing-time coefficient. The shrink damps
+    noisy RATE observations; applying it to the PT residual would damp an injury
+    signal in proportion to the playing time the injury suppressed, and would make
+    the PT coefficient structurally unable to learn from lost time (spec 5.3).
+    """
     rows = []
     for held in pairs:
-        train = [p for p in pairs if p.year != held.year]
+        train = [_gated(p, gate) for p in pairs if p.year != held.year]
         fitted = estimator.fit(train, column, n0)
-        weight = shrink(held.realized_pt, n0)
-        pred = fitted.predict(held.base[column], held.residual[column], weight)
+        kept = _gated(held, gate)
+        weight = (
+            shrink(kept.realized_pt, n0)
+            if shrunk
+            else pd.Series(1.0, index=kept.realized_pt.index)
+        )
+        pred = fitted.predict(kept.base[column], kept.residual[column], weight)
         rows.append(
             {
                 "estimator": estimator.name,
                 "column": column,
                 "held_out_year": held.year,
-                "n": int(len(held.base)),
-                "error": weighted_mse(pred, held.target[column], held.target_pt),
+                "n": len(kept.base),
+                "error": weighted_mse(pred, kept.target[column], kept.target_pt),
                 **{f"param_{k}": v for k, v in fitted.params.items()},
             }
         )
     return pd.DataFrame(rows)
+
+
+def _gated(pair: YearPair, gate: float) -> YearPair:
+    """Restrict a pair to rows clearing the realized-playing-time gate (spec 5.4)."""
+    ids = pair.realized_pt.index[pair.realized_pt >= gate]
+    return YearPair(
+        year=pair.year,
+        base=pair.base.loc[ids],
+        residual=pair.residual.loc[ids],
+        target=pair.target.loc[ids],
+        realized_pt=pair.realized_pt.loc[ids],
+        target_pt=pair.target_pt.loc[ids],
+    )
 ```
 
 - [ ] **Step 4: Run test to verify it passes**
@@ -1111,11 +1219,30 @@ def leave_one_out(
 Run: `pytest tests/test_keepers/test_calibration.py -v`
 Expected: PASS
 
-- [ ] **Step 5: Run the gates and commit**
+- [ ] **Step 5: Run tests, then authorize the one lint exception this task needs**
+
+Run: `pytest tests/test_keepers/test_calibration.py -v` -- Expected: PASS.
+
+`ruff check .` will now report **ARG002 x6**: `ZeroTransfer.fit` and `FullTransfer.fit` take
+`pairs`, `column`, `n0` and use none of them. That is not dead weight -- the signature IS the
+`Estimator` protocol contract, and the endpoints must match it to be interchangeable with the
+chosen estimator in `leave_one_out`. The repo already has this exact precedent: search
+`pyproject.toml` for `draft/strategy.py`, ignored for `ARG001` on the same
+fixed-dispatcher-signature grounds.
+
+Add to `[tool.ruff.lint.per-file-ignores]` in `pyproject.toml`:
+
+```toml
+# Endpoint estimators must match the Estimator protocol signature; the unused
+# args are the contract, not dead parameters.
+"src/fantasy_baseball/keepers/calibration.py" = ["ARG002"]
+```
+
+- [ ] **Step 6: Run the gates and commit**
 
 ```bash
 ruff check . && ruff format --check . && mypy
-git add src/fantasy_baseball/keepers/calibration.py tests/test_keepers/test_calibration.py
+git add src/fantasy_baseball/keepers/calibration.py tests/test_keepers/test_calibration.py pyproject.toml
 git commit -m "feat(keepers): estimator protocol, endpoints, leave-one-pair-out (#266)"
 ```
 
@@ -1126,7 +1253,7 @@ git commit -m "feat(keepers): estimator protocol, endpoints, leave-one-pair-out 
 **Files:**
 - Modify: `src/fantasy_baseball/keepers/calibration.py`
 - Test: `tests/test_keepers/test_calibration.py`
-- Create: `docs/superpowers/findings/2026-XX-XX-keeper-calibration-finding.md`
+- Create: `docs/superpowers/keeper-calibration-finding-2026-07-27.md`
 
 **Interfaces:**
 - Consumes: everything from Tasks 5-6.
@@ -1152,15 +1279,17 @@ candidate:
 - **Requirement 7:** a coefficient that would amplify residuals in production must not ship
   silently on held-out error alone.
 
-- [ ] **Step 1: Pin the error metric and the gate thresholds, and write them down**
+- [ ] **Step 1: Confirm the pre-registration still holds**
 
-Spec 6.2 requirements 9 and 11: the error metric and the gate thresholds must be recorded
-**before** the first fit, so the increment that must clear the gate does not also pick the gate's
-yardstick after seeing results. Create the finding document with an "Advance decisions" section
-stating: the metric (`weighted_mse` on the rate scale, weighted by target-year playing time),
-how it aggregates across coefficients (per coefficient, not pooled -- acceptance is per-category
-per spec 6.6), and the chosen hitter (PA) and pitcher (IP) gate thresholds with their
-justification from Task 5's measured samples. Commit this before proceeding.
+Task 6 Step 1 already committed the metric and gate thresholds. Re-read that section. If
+anything you learned since would change them, amend it **now, in a separate commit, before
+fitting** -- never after seeing a result you like.
+
+Note the twelfth coefficient: **playing time is fit like any other column**, by calling
+`leave_one_out(..., column=PT_COL[player_type], shrunk=False)`. The `shrunk=False` is not
+optional -- see spec 5.3 and the `leave_one_out` docstring. Spec requirement 12, the systematic
+mean of the PT residual, is the constraint that killed both previous estimators, and it applies
+to exactly this coefficient.
 
 - [ ] **Step 2: Write a failing test for the chosen estimator**
 
@@ -1192,7 +1321,9 @@ def test_estimator_recovers_a_planted_coefficient() -> None:
 - [ ] **Step 3: Run it to verify it fails**
 
 Run: `pytest tests/test_keepers/test_calibration.py -k planted -v`
-Expected: FAIL
+Expected: a **collection error** until you replace `<YourEstimator>` with your real class
+name (the angle brackets are a SyntaxError that takes down the whole file). After
+substituting, expect a genuine assertion failure on `params['k']`.
 
 - [ ] **Step 4: Implement the estimator and make it pass**
 
@@ -1238,9 +1369,9 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 
-import keeper_calibration as script  # noqa: E402
+import keeper_calibration as script
 
-from fantasy_baseball.keepers.calibration import YearPair  # noqa: E402
+from fantasy_baseball.keepers.calibration import YearPair
 
 
 def _synthetic_pairs() -> list[YearPair]:
@@ -1280,7 +1411,7 @@ def test_build_report_covers_every_coefficient_and_estimator() -> None:
 - [ ] **Step 2: Run test to verify it fails**
 
 Run: `pytest tests/test_scripts/test_keeper_calibration_script.py -v`
-Expected: FAIL, `ModuleNotFoundError: No module named 'scripts.keeper_calibration'`
+Expected: FAIL, `ModuleNotFoundError: No module named 'keeper_calibration'`
 
 - [ ] **Step 3: Write the script**
 
@@ -1328,7 +1459,8 @@ entries -- they remain callerless until a later increment.
 
 ```bash
 pytest -v && ruff check . && ruff format --check . && mypy && vulture
-git add scripts/keeper_calibration.py tests/test_scripts/ docs/superpowers/findings/ pyproject.toml
+git add scripts/keeper_calibration.py tests/test_scripts/ \
+  docs/superpowers/keeper-calibration-finding-2026-07-27.md pyproject.toml
 git commit -m "feat(keepers): calibration study script + written finding (#266)"
 ```
 
