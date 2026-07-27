@@ -1,6 +1,7 @@
 from dataclasses import replace
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -8,12 +9,14 @@ from fantasy_baseball.keepers import calibration
 from fantasy_baseball.keepers.calibration import (
     PAIR_YEARS,
     FullTransfer,
+    ShrunkTransfer,
     YearPair,
     ZeroTransfer,
     leave_one_out,
     survivorship,
     weighted_mse,
 )
+from fantasy_baseball.keepers.fold import shrink
 
 
 def test_pair_years_are_the_three_usable_ones() -> None:
@@ -170,3 +173,98 @@ def test_build_pairs_keeps_non_survivors_with_zero_target_playing_time(
     assert pd.isna(pair.target.loc[2, "hr_pa"])  # no Y+1 rate
     assert pair.target.loc[2, "pa"] == 0.0  # but a real Y+1 playing time
     assert pair.target_pt.loc[2] == 0.0
+
+
+def _planted_pair(
+    year: int,
+    k_true: float,
+    c_true: float,
+    n: int,
+    n0: float,
+    seed: int,
+    resid_mean: float = 0.0,
+) -> YearPair:
+    """One pair whose target is base + c_true + k_true * shrink * residual + noise.
+
+    `resid_mean` reproduces the playing-time case: ZiPS hedges pool-wide, so the
+    residual itself has a large systematic mean alongside the level offset.
+    """
+    rng = np.random.default_rng(seed)
+    idx = list(range(n))
+    base = pd.Series(rng.uniform(0.02, 0.06, n), index=idx)
+    resid = pd.Series(rng.normal(resid_mean, 0.01, n), index=idx)
+    realized = pd.Series(rng.uniform(150.0, 650.0, n), index=idx)
+    weight = shrink(realized, n0)
+    target = (
+        base + c_true + k_true * weight * resid + pd.Series(rng.normal(0.0, 1e-4, n), index=idx)
+    )
+    return YearPair(
+        year=year,
+        base=base.to_frame("hr_pa"),
+        residual=resid.to_frame("hr_pa"),
+        target=target.to_frame("hr_pa"),
+        realized_pt=realized,
+        target_pt=pd.Series(np.full(n, 600.0), index=idx),
+    )
+
+
+def test_estimator_recovers_a_planted_coefficient() -> None:
+    pair = _planted_pair(2022, k_true=0.6, c_true=0.0, n=500, n0=200.0, seed=0)
+    fitted = ShrunkTransfer().fit([pair], "hr_pa", n0=200.0)
+    assert fitted.params["k"] == pytest.approx(0.6, abs=0.05)
+
+
+def test_estimator_separates_a_level_offset_from_the_slope() -> None:
+    # Spec 6.2 requirement 12: the playing-time residual carries a large
+    # systematic MEAN that is not surprise. A pure multiplicative fit cannot
+    # separate the level from the signal; the nuisance intercept can.
+    pair = _planted_pair(2022, k_true=0.6, c_true=0.004, n=2000, n0=200.0, seed=1, resid_mean=0.006)
+    fitted = ShrunkTransfer().fit([pair], "hr_pa", n0=200.0)
+    assert fitted.params["k_raw"] == pytest.approx(0.6, abs=0.05)
+    assert fitted.params["c_fit"] == pytest.approx(0.004, abs=5e-4)
+
+    no_intercept = ShrunkTransfer(use_intercept=False).fit([pair], "hr_pa", n0=200.0)
+    # Without the intercept the level offset is forced onto the slope, which is
+    # the failure mode requirement 12 describes.
+    assert abs(no_intercept.params["k_raw"] - 0.6) > 0.2
+
+
+def test_shipped_prediction_does_not_apply_the_calibration_intercept() -> None:
+    # Requirement 1: the form applied in production is base + k * w * residual.
+    # The intercept is a calibration-only nuisance term whose production value
+    # is 0, because ZiPS_2027 is already aged forward and ZiPS_Y is not.
+    pair = _planted_pair(2022, k_true=0.6, c_true=0.01, n=400, n0=200.0, seed=2)
+    fitted = ShrunkTransfer().fit([pair], "hr_pa", n0=200.0)
+    base = pd.Series([0.04], index=[0])
+    resid = pd.Series([0.02], index=[0])
+    weight = pd.Series([1.0], index=[0])
+    expected = 0.04 + fitted.params["k"] * 0.02
+    assert fitted.predict(base, resid, weight).iloc[0] == pytest.approx(expected)
+
+
+def test_estimator_clamps_an_amplifying_coefficient_but_reports_the_raw_fit() -> None:
+    # Requirement 7: a coefficient that would amplify residuals must not ship
+    # silently. The shipped k is bounded; the raw fit stays visible.
+    pair = _planted_pair(2022, k_true=1.8, c_true=0.0, n=800, n0=200.0, seed=3)
+    fitted = ShrunkTransfer().fit([pair], "hr_pa", n0=200.0)
+    assert fitted.params["k_raw"] > 1.0
+    assert fitted.params["k"] == 1.0
+    assert fitted.params["clamped"] == 1.0
+
+
+def test_estimator_reports_a_confidence_interval() -> None:
+    pair = _planted_pair(2022, k_true=0.6, c_true=0.0, n=1000, n0=200.0, seed=4)
+    fitted = ShrunkTransfer().fit([pair], "hr_pa", n0=200.0)
+    assert fitted.params["ci_lo"] < fitted.params["k_raw"] < fitted.params["ci_hi"]
+    assert fitted.params["n_fit"] == 1000
+
+
+def test_estimator_drops_rows_the_metric_would_drop() -> None:
+    # Fit sample == eval sample: NaN targets (non-survivors) and zero-weight rows
+    # must not enter the weighted fit either.
+    pair = _planted_pair(2022, k_true=0.6, c_true=0.0, n=300, n0=200.0, seed=5)
+    target = pair.target.copy()
+    target.iloc[:100, 0] = np.nan
+    holed = replace(pair, target=target)
+    fitted = ShrunkTransfer().fit([holed], "hr_pa", n0=200.0)
+    assert fitted.params["n_fit"] == 200

@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
+import numpy as np
 import pandas as pd
 
 from fantasy_baseball.keepers.actuals import normalize_hitting, normalize_pitching
@@ -283,3 +284,140 @@ def _gated(pair: YearPair, gate: float) -> YearPair:
         realized_pt=pair.realized_pt.loc[ids],
         target_pt=pair.target_pt.loc[ids],
     )
+
+
+def _wls(
+    x: np.ndarray, y: np.ndarray, w: np.ndarray, use_intercept: bool
+) -> tuple[float, float, float]:
+    """Weighted least squares of y on x (plus an intercept), returning
+    (slope, intercept, robust slope standard error).
+
+    The standard error is the weighted HC1 sandwich rather than the classical
+    formula: year-over-year baseball residuals are heavy-tailed and strongly
+    heteroskedastic in playing time, so the classical SE would understate the
+    interval. `pinv` rather than `solve` so a degenerate design (a column with no
+    variance) yields the minimum-norm answer instead of raising.
+    """
+    design = np.column_stack([np.ones_like(x), x]) if use_intercept else x[:, None]
+    xtwx = design.T @ (design * w[:, None])
+    beta = np.linalg.pinv(xtwx) @ (design.T @ (w * y))
+    err = y - design @ beta
+    n, p = len(y), design.shape[1]
+    inv = np.linalg.pinv(xtwx)
+    meat = design.T @ (design * ((w * err) ** 2)[:, None])
+    cov = inv @ meat @ inv * (n / max(n - p, 1))
+    slope_at = 1 if use_intercept else 0
+    slope = float(beta[slope_at])
+    intercept = float(beta[0]) if use_intercept else 0.0
+    se = float(np.sqrt(max(float(cov[slope_at, slope_at]), 0.0)))
+    return slope, intercept, se
+
+
+class _FittedK:
+    """A fitted transfer coefficient. Predicts the SHIPPED form only.
+
+    `predict` deliberately does NOT add the fitted intercept: its production value
+    is 0 (see `ShrunkTransfer`), so applying it during held-out evaluation would
+    score a form the feature will never run, and would hand the fitted estimator a
+    level correction that neither endpoint gets.
+    """
+
+    def __init__(self, params: dict[str, float]) -> None:
+        self.params = params
+
+    def predict(self, base: pd.Series, residual: pd.Series, weight: pd.Series) -> pd.Series:
+        result: pd.Series = base + self.params["k"] * weight * residual.fillna(0.0)
+        return result
+
+
+class ShrunkTransfer:
+    """Fit `k` in `pred = base + k * shrink * residual` by weighted least squares.
+
+    The chosen estimator. How it answers spec 6.2's twelve requirements:
+
+    1. **Same functional form in calibration and production.** The shipped form is
+       `base + k * w * residual`, and that is exactly what `predict` computes, in
+       held-out evaluation and at serve time alike. One term exists only in
+       calibration: an additive nuisance intercept `c`, fit but never applied. Its
+       production value is **0**, because `ZiPS_Y` is a projection *for year Y*
+       while the calibration target is year Y+1, whereas `ZiPS_2027` is already
+       aged forward to the year it is being folded into. `c` absorbs exactly that
+       one-year pool-level drift so it does not leak into `k`. Note the intercept
+       is additive, NOT a free scale term on the base: `a*Z + k*(A - Z)` rewrites
+       as `(a - k)*Z + k*A`, which degenerates `k` into the plain OLS slope on
+       `actual_Y` and destroys the meaning of the k=0 / k=1 endpoints. Here the
+       coefficient on the base stays pinned at `1 - k*w` by construction, so both
+       endpoints keep their meaning. Per-player aging is not attempted: no ZiPS
+       vintage carries an Age column (spec requirement 1).
+    12. **The systematic component of the playing-time residual.** ZiPS hedges
+       playing time pool-wide, so the PT residual has a large nonzero mean that is
+       not surprise (2025 regulars ran +58 mean PA versus projection). The same
+       intercept separates that level offset from the cross-sectional signal: `k`
+       is then the slope on a player's deviation, not a blend of level and slope.
+       This is the requirement that killed the two earlier estimators, and it is
+       why the intercept is additive-and-unshipped rather than multiplicative.
+    7. **Amplification bounded, not silently shipped.** The raw fit is reported as
+       `k_raw` with a robust 95% interval, and the shipped `k` is clamped to
+       `bounds` (default [0, 1]); `clamped` flags when the two differ.
+    9/11. Metric, weights and gates are pre-registered in the finding document and
+       enter here through `shrunk`/`weighted`, which mirror `leave_one_out` so the
+       fit optimizes the same loss it is scored on.
+    2/3/4/5/6/8/10 are properties of the harness and the finding, not of this
+       class: leave-one-pair-out evaluation, the two endpoints, per-pair stability,
+       survivorship, the stated conditioning on `n0` and the gate, the train/serve
+       gap, and the shrink form.
+    """
+
+    name = "fitted-k"
+
+    def __init__(
+        self, bounds: tuple[float, float] = (0.0, 1.0), *, use_intercept: bool = True
+    ) -> None:
+        self.bounds = bounds
+        self.use_intercept = use_intercept
+
+    def fit(
+        self,
+        pairs: list[YearPair],
+        column: str,
+        n0: float,
+        *,
+        shrunk: bool = True,
+        weighted: bool = True,
+    ) -> Fitted:
+        xs: list[pd.Series] = []
+        ys: list[pd.Series] = []
+        ws: list[pd.Series] = []
+        for pair in pairs:
+            weight = _shrink_weight(pair, n0, shrunk)
+            x = weight * pair.residual[column]
+            y = pair.target[column] - pair.base[column]
+            w = _eval_weight(pair, weighted)
+            # The fit sample must equal the evaluation sample: the metric drops
+            # NaN targets (non-survivors have no Y+1 rate) and zero-weight rows,
+            # so the fit must drop them too.
+            mask = x.notna() & y.notna() & (w > 0)
+            xs.append(x[mask])
+            ys.append(y[mask])
+            ws.append(w[mask])
+        x_all = pd.concat(xs).to_numpy(dtype=float)
+        y_all = pd.concat(ys).to_numpy(dtype=float)
+        w_all = pd.concat(ws).to_numpy(dtype=float)
+        n_fit = len(y_all)
+        if n_fit < 3:
+            raise ValueError(f"cannot fit {column!r}: only {n_fit} usable rows")
+        k_raw, c_fit, se = _wls(x_all, y_all, w_all, self.use_intercept)
+        lo, hi = self.bounds
+        k = min(max(k_raw, lo), hi)
+        return _FittedK(
+            {
+                "k": k,
+                "k_raw": k_raw,
+                "clamped": float(k != k_raw),
+                "c_fit": c_fit,
+                "se_k": se,
+                "ci_lo": k_raw - 1.96 * se,
+                "ci_hi": k_raw + 1.96 * se,
+                "n_fit": float(n_fit),
+            }
+        )
