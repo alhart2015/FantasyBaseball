@@ -893,7 +893,7 @@ def build_pairs(
       twelfth coefficient, and spec requirement 12 -- the systematic mean of the
       PT residual -- is the single hardest constraint on the estimator. Stripping
       PT here would make that requirement unaddressable.
-    * Membership is `zips ∩ actual_Y` ONLY. Intersecting year Y+1 as well would
+    * Membership is `zips  INTERSECT  actual_Y` ONLY. Intersecting year Y+1 as well would
       precondition the sample on having survived, inflating the measured survival
       rate by 7-9 points AND removing non-survivors before any estimator sees
       them -- making spec requirement 5 unmeasurable. Absentees get a NaN target
@@ -1346,7 +1346,7 @@ git commit -m "feat(keepers): calibration estimator (#266)"
 **Files:**
 - Create: `scripts/keeper_calibration.py`
 - Test: `tests/test_scripts/test_keeper_calibration_script.py`
-- Modify: `docs/superpowers/findings/2026-XX-XX-keeper-calibration-finding.md`
+- Modify: `docs/superpowers/keeper-calibration-finding-2026-07-27.md`
 - Modify: `pyproject.toml` (vulture `ignore_names`)
 
 **Interfaces:**
