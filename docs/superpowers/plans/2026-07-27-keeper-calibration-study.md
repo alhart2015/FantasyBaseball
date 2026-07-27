@@ -1224,15 +1224,53 @@ git commit -m "feat(keepers): calibration estimator (#266)"
 
 - [ ] **Step 1: Write the failing test**
 
+Note the import style: this repo puts `scripts/` on `sys.path` and imports the module bare, rather
+than `from scripts.x import y` -- `pythonpath` in `pyproject.toml` is `["src"]` only. Follow
+`tests/test_scripts/test_keeper_value_script.py`.
+
 ```python
+import sys
 from pathlib import Path
 
-from scripts.keeper_calibration import build_report
+import numpy as np
+import pandas as pd
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+
+import keeper_calibration as script  # noqa: E402
+
+from fantasy_baseball.keepers.calibration import YearPair  # noqa: E402
 
 
-def test_build_report_covers_every_coefficient_and_estimator(tmp_path: Path) -> None:
-    # Uses the synthetic pair helper so the test never touches the network.
-    report = build_report(_synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=200.0)
+def _synthetic_pairs() -> list[YearPair]:
+    """Three pairs of deterministic data -- no network, no files."""
+    rng = np.random.default_rng(0)
+    pairs = []
+    for year in (2022, 2023, 2024):
+        n = 200
+        idx = list(range(n))
+        base = pd.DataFrame(
+            {"hr_pa": rng.uniform(0.02, 0.06, n), "sb_pa": rng.uniform(0.0, 0.05, n)}, index=idx
+        )
+        resid = pd.DataFrame(
+            {"hr_pa": rng.normal(0, 0.01, n), "sb_pa": rng.normal(0, 0.01, n)}, index=idx
+        )
+        pairs.append(
+            YearPair(
+                year=year,
+                base=base,
+                residual=resid,
+                target=base + 0.5 * resid,
+                realized_pt=pd.Series(np.full(n, 600.0), index=idx),
+                target_pt=pd.Series(np.full(n, 600.0), index=idx),
+            )
+        )
+    return pairs
+
+
+def test_build_report_covers_every_coefficient_and_estimator() -> None:
+    report = script.build_report(_synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=200.0)
     assert set(report["column"]) == {"hr_pa", "sb_pa"}
     assert {"k=0", "k=1"} <= set(report["estimator"])
     # Acceptance is per coefficient, not pooled -- spec 6.6.
