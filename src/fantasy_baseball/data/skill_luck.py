@@ -33,12 +33,16 @@ def _read_cached(path: Path) -> pd.DataFrame | None:
     return None
 
 
-def fetch_or_cache(path: Path, fetcher: Callable[[], pd.DataFrame]) -> pd.DataFrame:
+def fetch_or_cache(
+    path: Path, fetcher: Callable[[], pd.DataFrame], *, tolerate_empty: bool = False
+) -> pd.DataFrame:
     cached = _read_cached(path)
     if cached is not None:
         return cached
     df = fetcher()
     if df is None or df.empty:
+        if tolerate_empty and df is not None:
+            return df  # expected-empty (e.g. pre-2016 xHR); do not cache emptiness
         raise RuntimeError(
             f"fetch for {path.name} returned empty; refusing to overwrite/write cache"
         )
@@ -225,8 +229,41 @@ _STATCAST_XHIT_RENAME = {
     "slg": "slg",
     "est_slg": "xslg",
 }
-_STATCAST_BARREL_RENAME = {"player_id": "mlbam", "brl_percent": "barrel_pct"}
+_STATCAST_BARREL_RENAME = {"player_id": "mlbam", "brl_percent": "barrel_pct", "brl_pa": "brl_pa"}
 _STATCAST_XPITCH_RENAME = {"player_id": "mlbam", "woba": "woba", "est_woba": "xwoba"}
+_STATCAST_HR_RENAME = {"player_id": "mlbam", "xhr": "xhr"}
+_SAVANT_HR_URL = (
+    "https://baseballsavant.mlb.com/leaderboard/home-runs?type=batter&year={year}&min=1&csv=true"
+)
+
+
+def _fetch_savant_hr(year: int) -> pd.DataFrame:
+    """Baseball Savant expected-HR leaderboard CSV (park-adjusted xHR). pybaseball has
+    no wrapper, so fetch the CSV directly (browser UA + utf-8-sig for the BOM). Pre-2016
+    returns a header-only body (empty frame)."""
+    import io
+    import urllib.request
+
+    req = urllib.request.Request(
+        _SAVANT_HR_URL.format(year=year),
+        headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"},
+    )
+    with urllib.request.urlopen(req, timeout=60) as resp:  # fixed Savant https host
+        body = resp.read().decode("utf-8-sig", "replace")
+    return pd.read_csv(io.StringIO(body))
+
+
+def load_statcast_hr(
+    cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
+) -> pd.DataFrame:
+    """MLBAM -> park-adjusted expected HR (`xhr`, season count). Empty (0-row) frame
+    for pre-2016 years, where the leaderboard has no data."""
+    raw = fetch_or_cache(
+        cache_dir / f"sc_hr_h_{year}.csv",
+        fetcher or (lambda: _fetch_savant_hr(year)),
+        tolerate_empty=True,
+    )
+    return _rename_strict(raw, _STATCAST_HR_RENAME)
 
 
 def load_statcast_hitters(
@@ -254,8 +291,11 @@ def load_statcast_hitters(
         fetch_or_cache(cache_dir / f"sc_brl_h_{year}.csv", barrels_fetcher or _b),
         _STATCAST_BARREL_RENAME,
     )
-    # barrel_pct arrives as a percent (0-100) on Savant; normalize to a share.
-    b = b.assign(barrel_pct=b["barrel_pct"].astype(float) / 100.0)
+    # barrel_pct and brl_pa both arrive as percents (0-100) on Savant; -> shares.
+    b = b.assign(
+        barrel_pct=b["barrel_pct"].astype(float) / 100.0,
+        brl_pa=b["brl_pa"].astype(float) / 100.0,
+    )
     return x.merge(b, on="mlbam", how="left")
 
 
@@ -320,6 +360,8 @@ def build_hitter_skill_luck(
         xstats_fetcher=fetchers.get("sc_x"),
         barrels_fetcher=fetchers.get("sc_brl"),
     )
+    hr = load_statcast_hr(cache_dir, year, fetcher=fetchers.get("sc_hr"))
+    sc = sc.merge(hr, on="mlbam", how="left")  # xhr NaN when a player has no xHR row
     return _join_and_count(
         mlb,
         sc,
@@ -339,6 +381,8 @@ def build_hitter_skill_luck(
             woba=_sf(s, "woba"),
             k_pct=_f(r.k_pct),
             bb_pct=_f(r.bb_pct),
+            brl_pa=_sf(s, "brl_pa"),
+            xhr=_sf(s, "xhr"),
         ),
     )
 
@@ -368,5 +412,7 @@ def build_pitcher_skill_luck(
             woba=_sf(s, "woba"),
             k_pct=_f(r.k_pct),
             bb_pct=_f(r.bb_pct),
+            brl_pa=None,
+            xhr=None,
         ),
     )

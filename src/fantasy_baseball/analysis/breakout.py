@@ -37,6 +37,11 @@ class SkillLuckRow:
     k_pct: float | None
     bb_pct: float | None
     # pitcher confirmations (K-BB, xwOBA-against reuse xwoba/woba/k_pct/bb_pct above)
+    # HR-confirmation extras (issue #262). Optional: None for pitchers, pre-2016
+    # (the xHR leaderboard starts 2016), or unmatched players. Defaults keep the
+    # existing keyword constructors valid.
+    brl_pa: float | None = None  # barrels per PA (share, e.g. 0.049)
+    xhr: float | None = None  # park-adjusted expected HR (season count)
 
 
 @dataclass(frozen=True)
@@ -142,6 +147,14 @@ def _confirm_gap(actual: float | None, expected: float | None, scale: float) -> 
     if actual is None or expected is None:
         return 0.5  # no signal -> neutral
     return max(0.0, 1.0 - abs(actual - expected) / scale)
+
+
+def barrel_expected_rate(brl_pa: float, slope: float, intercept: float) -> float:
+    """Barrel-implied expected HR/PA: the calibrated line HR/PA ~ brl_pa, clamped to
+    >= 0 (a degenerate/extreme brl_pa must not yield a negative expected HR rate).
+    Shared by the gate backtest (fitted calib) and the live diagnostic (frozen
+    constants) so both agree. See issue #262 / backtest_hr_level.py."""
+    return max(0.0, intercept + slope * brl_pa)
 
 
 def w_for_stat(stat: str, row: SkillLuckRow, player_type: str, params: WMapParams) -> float:
