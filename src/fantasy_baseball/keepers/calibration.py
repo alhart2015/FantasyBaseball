@@ -248,9 +248,9 @@ def leave_one_out(
     """
     rows = []
     for held in pairs:
-        train = [_gated(p, gate) for p in pairs if p.year != held.year]
+        train = [gated(p, gate) for p in pairs if p.year != held.year]
         fitted = estimator.fit(train, column, n0, shrunk=shrunk, weighted=weighted)
-        kept = _gated(held, gate)
+        kept = gated(held, gate)
         weight = _shrink_weight(kept, n0, shrunk)
         pred = fitted.predict(kept.base[column], kept.residual[column], weight)
         rows.append(
@@ -273,7 +273,7 @@ def _shrink_weight(pair: YearPair, n0: float, shrunk: bool) -> pd.Series:
     return pd.Series(1.0, index=pair.realized_pt.index)
 
 
-def _gated(pair: YearPair, gate: float) -> YearPair:
+def gated(pair: YearPair, gate: float) -> YearPair:
     """Restrict a pair to rows clearing the realized-playing-time gate (spec 5.4)."""
     ids = pair.realized_pt.index[pair.realized_pt >= gate]
     return YearPair(

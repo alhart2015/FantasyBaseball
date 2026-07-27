@@ -225,7 +225,6 @@ ignore_names = [
     "setUp",
     "tearDown",
     "test_*",
-    "fetch_mlb_season",
     "fetch_batter_expected",
     "fetch_batter_barrels",
     "fetch_pitcher_expected",

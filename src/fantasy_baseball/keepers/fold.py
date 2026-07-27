@@ -87,3 +87,26 @@ def reconstruct_pitcher(rates: pd.DataFrame, ip: pd.Series) -> pd.DataFrame:
         },
         index=rates.index,
     )
+
+
+def gate_ramp(realized_pt: pd.Series, threshold: float, width: float) -> pd.Series:
+    """A linear on-ramp for the gate, in [0, 1], replacing the hard cliff.
+
+    `gate_mask` is fully on or fully off at `threshold`. Because the playing-time
+    term is unshrunk (spec 5.3), that boundary is a large discontinuity: a regular
+    lost to a May injury with a 120-PA line against a 400-PA ZiPS 2026 and a 380-PA
+    ZiPS 2027 passes through at 380 PA just below the gate and folds to
+    380 + k*(120 - 400) PA just above it -- a drop of tens of percent across a
+    couple of plate appearances. Spec 5.4 requires increment 1 either publish that
+    magnitude or specify a ramp; this is the ramp.
+
+    Ramps linearly from 0 at `threshold` to 1 at `threshold + width`. Below the
+    threshold a player is unfolded exactly as before, so the passthrough rule and
+    the "absence is not zero" rule (NaN -> 0.0 -> unfolded) are unchanged; the
+    ramp only removes the step at the boundary.
+    """
+    if width <= 0:
+        raise ValueError(f"ramp width must be positive, got {width}")
+    filled = realized_pt.fillna(0.0)
+    result: pd.Series = ((filled - threshold) / width).clip(lower=0.0, upper=1.0)
+    return result

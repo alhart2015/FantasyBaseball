@@ -158,5 +158,248 @@ which of the twelve requirements each design decision serves.
 
 ## Part B -- Results
 
-*(To be completed after the fits are run. Nothing above this line may be amended after the first
-fit without a separate, dated commit saying so.)*
+Run: `python scripts/keeper_calibration.py`. Raw output in
+`data/analysis/keeper_calibration_{hitter,pitcher}.csv`, the sensitivity grid in
+`*_n0_sweep.csv`. Every number below is the full-sample fit on the **gated** sample, with
+leave-one-pair-out errors from the same gate.
+
+### B.1 The chosen estimator: `ShrunkTransfer`
+
+```
+pred = base + k * w * (actual_Y - base)          w = n / (n + n0), n = realized year-Y PT
+```
+
+`k` is fit per coefficient by weighted least squares of `target - base` on `w * residual`,
+**with an additive nuisance intercept `c` that is fit but never applied**.
+
+*Why an intercept, and why unshipped (requirements 1 and 12).* The intercept absorbs the
+pool-wide level offset so it does not leak into the slope. Its production value is **0**,
+because `ZiPS_Y` is a projection *for year Y* while the calibration target is year Y+1,
+whereas `ZiPS_2027` is already aged forward to the year it is being folded into. `predict`
+therefore computes the shipped form only, in held-out evaluation and at serve time alike --
+so the comparison against the two endpoints is on identical footing and neither side gets a
+free level correction.
+
+*Why additive rather than a scale term.* A free scale `a` on the base rewrites
+`a*Z + k*(A - Z)` as `(a - k)*Z + k*A`, which degenerates `k` into the plain OLS slope on
+`actual_Y` and destroys the meaning of the `k=0` / `k=1` endpoints. That is the failure that
+killed one earlier attempt. With an additive intercept the coefficient on the base stays
+pinned at `1 - k*w` by construction, so both endpoints keep their meaning.
+
+Per-player aging is not attempted: no ZiPS vintage carries an Age column (spec 11).
+Confidence intervals are the weighted HC1 sandwich, not the classical formula -- year-over-year
+baseball residuals are heavy-tailed and heteroskedastic in playing time.
+
+### B.2 Fitted coefficients
+
+**Hitters** -- gate `PA >= 100`, `n0 = 200 PA`. 1241 rate rows, 1377 playing-time rows across
+the three pairs.
+
+| coefficient | k (shipped) | 95% CI | ex-2022 | ex-2023 | ex-2024 | spread | beats k=0 | beats k=1 | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| `hr_pa`  | **0.494** | [0.403, 0.586] | 0.480 | 0.561 | 0.447 | 0.115 | 3/3 | 3/3 | **pass** |
+| `r_pa`   | **0.531** | [0.432, 0.630] | 0.529 | 0.561 | 0.523 | 0.039 | 3/3 | 3/3 | **pass** |
+| `rbi_pa` | **0.532** | [0.441, 0.622] | 0.498 | 0.612 | 0.500 | 0.114 | 3/3 | 3/3 | **pass** |
+| `sb_pa`  | **0.637** | [0.480, 0.793] | 0.657 | 0.501 | 0.759 | 0.257 | 3/3 | 2/3 | **pass** |
+| `h_ab`   | **0.428** | [0.334, 0.522] | 0.416 | 0.476 | 0.400 | 0.076 | 3/3 | 3/3 | **pass** |
+| `ab_pa`  | **0.687** | [0.588, 0.785] | 0.661 | 0.666 | 0.743 | 0.082 | 3/3 | 3/3 | **pass** |
+| `pa`     | 0.646 | [0.584, 0.708] | 0.624 | 0.614 | 0.702 | 0.088 | 3/3 | 1/3 | **fallback:k=1** |
+
+**Pitchers** -- gate `IP >= 50`, `n0 = 50 IP`. 937 rate rows, 1049 playing-time rows.
+
+| coefficient | k (shipped) | 95% CI | ex-2022 | ex-2023 | ex-2024 | spread | beats k=0 | beats k=1 | verdict |
+|---|---|---|---|---|---|---|---|---|---|
+| `k_ip`  | 0.970 | [0.866, 1.073] | 0.928 | 1.024 | 0.960 | 0.096 | 3/3 | 0/3 | **fallback:k=1** |
+| `w_ip`  | **0.491** | [0.389, 0.593] | 0.459 | 0.515 | 0.493 | 0.056 | 3/3 | 3/3 | **pass** |
+| `er_ip` | **0.343** | [0.238, 0.447] | 0.341 | 0.395 | 0.313 | 0.082 | 3/3 | 3/3 | **pass** |
+| `bb_ip` | **0.697** | [0.582, 0.812] | 0.718 | 0.715 | 0.673 | 0.045 | 3/3 | 3/3 | **pass** |
+| `h_ip`  | **0.385** | [0.281, 0.489] | 0.410 | 0.362 | 0.394 | 0.048 | 3/3 | 3/3 | **pass** |
+| `ip`    | **0.631** | [0.517, 0.746] | 0.666 | 0.576 | 0.650 | 0.090 | 3/3 | 3/3 | **pass** |
+
+**The headline answer: `k` is roughly 0.4-0.7, and it is decisively not zero.** Ten of the
+twelve coefficients pass; both fallbacks land on `k=1`, never on `k=0`. Every coefficient beats
+the stale-baseline endpoint on all three held-out pairs, without exception. The feature is worth
+building.
+
+**No coefficient is out of range** (`out_of_range` is False everywhere), so requirement 7's
+refusal clause never fires. `k_ip`'s raw fit of 0.970 has a CI that includes 1.0; it is the one
+coefficient where the clamp could plausibly have bound, and it did not.
+
+### B.3 The two fallbacks
+
+**`k_ip` -- immaterial.** The fitted 0.970 loses to `k=1` on all three pairs, but by 0.4%
+(mean held-out error 0.020179 versus 0.020107). The reading is that **strikeout rate carries
+forward essentially in full**, and the pre-registered rule resolves a tie in the endpoint's
+favour. Ship `k=1`.
+
+**`pa` -- material, and the mechanism is understood.** This is requirement 12 in the flesh, and
+it corrects a spec assumption.
+
+Spec 6.2 states the playing-time residual has a large *positive* systematic mean, citing +58 PA
+for 2025 regulars. **On the actual fit sample the sign is the other way:**
+
+```
+                mean ZiPS_Y PT   mean actual_Y PT   mean residual   mean(target - base)   non-survivors
+hitters (>=100 PA)      470.0              379.0           -91.0                -142.0           9.9%
+pitchers (>=50 IP)       94.1               97.0            +3.0                 -21.0          10.7%
+```
+
+ZiPS over-projects playing time by 91 PA on this population, because the ZiPS file is a full
+pool and many of its projected regulars never get the plate appearances. The spec's +58 was
+measured on a narrower "regulars" population and does not transfer.
+
+The consequence is exactly what requirement 12 predicts. The fitted intercept for `pa` is
+**-83.1 PA** (and `c = E[y] - k*E[x] = -142 - 0.646*(-91) = -83.2`, which reproduces it). With
+the intercept unshipped, the `pa` prediction is systematically ~83 PA high, and `k=1` wins
+out of sample not because the true slope is 1.0 -- the CI [0.584, 0.708] excludes it -- but
+because moving further along a negative-mean residual absorbs part of the missing level
+correction. The diagnostic is unambiguous:
+
+```
+hitter pa, mean held-out error:   k=0  58985    k=1  34852    fitted-k  36519    fitted-k+c  29611
+pitcher ip, mean held-out error:  k=0   3335    k=1   3190    fitted-k   3001    fitted-k+c   2477
+```
+
+Applying the intercept beats every shipped option on both player types. It is **not shipped**,
+because doing so requires establishing that the level is a persistent ZiPS playing-time hedge
+(which `ZiPS_2027` would carry too) rather than the year-Y-to-Y+1 aging and attrition gap
+(which `ZiPS_2027` has already priced in). This study cannot separate the two -- that would need
+a vintage pair where the base is aged forward, which does not exist on disk. **This is the
+single largest open item handed to increment 2**, and it is worth taking: it is a 19% error
+reduction on hitter PA and a 17% reduction on pitcher IP, and PA multiplies every counting stat.
+
+Interim: ship `k=1` for `pa` and `k=0.631` for `ip` per the pre-registered rule.
+
+### B.4 Stability, and the stolen-base rules break
+
+`sb_pa` is the least stable coefficient by every measure: the widest per-fold spread (0.257
+versus 0.039-0.115 for the other hitter rates), the widest CI ([0.480, 0.793]), and the only
+rate coefficient that fails to beat `k=1` on all three pairs. That is consistent with spec
+6.3's warning about MLB's 2023 rules package.
+
+**But the three-pair sample cannot cleanly attribute it.** The pair that spans the break is
+2022->2023. Folds that *include* it in training produce both the lowest fit (0.501, training on
+2022+2024) and the highest (0.759, training on 2022+2023), so the instability is not a clean
+level shift the fold structure can isolate. Per spec 6.3 it is reported rather than averaged
+away: **`sb_pa = 0.637` is provisional**, carries the widest interval of any coefficient, and
+should be re-fit first when the 2025->2026 pair opens after the 2026 season.
+
+Every other coefficient is stable: per-fold spreads of 0.04-0.12, with all three folds inside
+the full-sample CI.
+
+### B.5 Conditioning on `n0` (requirement 6)
+
+The pre-registered sensitivity grid, hitters:
+
+```
+n0     hr_pa   r_pa  rbi_pa  sb_pa   h_ab  ab_pa      mean held-out error (hr_pa)
+100    0.407  0.437   0.439  0.535  0.348  0.574      0.000133
+200    0.494  0.531   0.532  0.637  0.428  0.687      0.000133
+400    0.655  0.701   0.701  0.824  0.574  0.895      0.000133
+```
+
+**`k` scales almost exactly inversely with the shrink, and the held-out error does not move.**
+That is the honest statement of what this study identifies: **the product `k * w` is identified;
+`k` alone is not.** Every coefficient above is meaningless without the stated `n0` beside it.
+Verdicts are stable across the whole grid for all eleven rate coefficients and both PT
+coefficients, with one exception: pitcher `k_ip` passes at `n0 = 25` (k = 0.806) and falls back
+to `k=1` at 50 and 100 -- the same tie described in B.3, resolved differently by a hair.
+
+Production must therefore use `n0 = 200 PA` / `n0 = 50 IP` with these coefficients, or refit.
+
+### B.6 Survivorship (requirement 5)
+
+Measured on the fit sample, in Part A. The treatment differs by coefficient, as spec 6.3
+requires, and both halves are stated:
+
+- **Rate coefficients are fit and scored on survivors only** (1241 of 1377 gated hitter rows,
+  90.1%; 937 of 1049 pitcher rows, 89.4%). A non-survivor has no year-Y+1 rate at all, so there
+  is nothing to fit against. These coefficients are therefore **conditional on continued play**,
+  and would be biased upward if read as unconditional persistence.
+- **The playing-time coefficients keep every non-survivor**, scored unweighted, with a target of
+  0. That is why `pa` and `ip` have larger `n` than the rates in the same table. The 9.9% /
+  10.7% of players who drop out of MLB entirely are the single largest source of playing-time
+  error, and deleting them would have inflated the PT coefficient exactly as spec 6.3 warns.
+
+### B.7 The gate discontinuity, and the ramp (requirement 9)
+
+Because the playing-time term is unshrunk, the hard gate is a step. Quantified with the shipped
+coefficients, for a regular lost to a May injury (`ZiPS_2026 = 400 PA`, `ZiPS_2027 = 380 PA`):
+
+| realized 2026 PA | folded 2027 PA | |
+|---|---|---|
+| 99 (below gate) | 380 | unfolded passthrough |
+| 101 (above gate) | 81 | `380 + 1.0 * (101 - 400)` |
+
+**a 78.7% drop across two plate appearances** -- larger than the spec's 59% illustration,
+because the shipped `pa` coefficient is 1.0 rather than 0.8. The pitcher analogue
+(`ZiPS_2026 = 150 IP`, `ZiPS_2027 = 140 IP`, `k = 0.631`) is 140 IP at 49 IP realized versus
+77.5 IP at 51 IP: a 44.6% drop.
+
+That is too large to justify, so **a ramp is specified**, implemented as
+`fold.gate_ramp(realized_pt, threshold, width)`: the fold weight ramps linearly from 0 at the
+threshold to 1 at `threshold + width`. Chosen widths: **100 PA for hitters, 50 IP for pitchers**
+-- i.e. full folding begins at twice the gate, and both ends of the ramp sit inside the fit
+sample's support. The same example becomes 377.0 PA at 101 PA realized, 255 PA at 150, and
+180 PA at 200, with no step anywhere. Below the threshold nothing changes: passthrough is
+unaffected, and absence from the leaderboard still resolves to no fold at all.
+
+`gate_mask` is retained -- it is what the fit sample uses, where a hard threshold is correct
+because it selects training rows rather than deciding a production value. **Increment 2 must
+apply `gate_ramp`, not `gate_mask`, on the serve path.**
+
+### B.8 The train/serve gap (requirement 8)
+
+The coefficients are fit on a fully-realized `actual_Y`. Production applies them to a 2026 line
+that is roughly 35% unrealized rest-of-season projection (spec 6.4, as of 2026-07-27). Analytic
+attenuation of the *applied* move relative to the calibrated one:
+
+- **Rate coefficients: ~0.57x.** Two compounding effects. The minuend blends in a ROS projection
+  that carries little surprise of its own, diluting the residual to roughly the realized share
+  (~0.65). And the shrink is computed on realized playing time, so a 600-PA-pace hitter sits at
+  ~390 PA with `w = 0.661` rather than the calibration's `w = 0.750`, a further 0.88x. Product
+  ~0.573.
+- **Playing-time coefficients: ~0.65x.** Unshrunk, so only the dilution applies.
+
+Both are **lower bounds on the transmitted signal**: FanGraphs ROS projections have themselves
+been updated with 2026 performance, so the ROS portion is not literally surprise-free. The
+attenuation shrinks weekly toward 1.0 as the season completes, while `k` stays frozen -- so the
+metric drifts, and the drift is toward the calibrated behaviour rather than away from it.
+
+Residual uncertainty that this study cannot remove: a re-fit with year-Y actuals truncated to a
+comparable season fraction is infeasible (`rest_of_season/` exists only for 2026, FanGraphs does
+not archive historical mid-season ROS files, and `game_logs` in `data/local.db` are 2026-only).
+Separately, spec 6.4 notes that using a ZiPS-only 2026 minuend removes the 5-system blend offset
+but covers only ~1,357 of 3,739 pool rows; increment 2 must state what happens to the uncovered
+rows.
+
+### B.9 Requirement checklist
+
+| # | Requirement | Where |
+|---|---|---|
+| 1 | Same functional form in calibration and production | B.1 -- intercept fit, never applied, production value 0 |
+| 2 | Out-of-sample, per-held-out-pair error | B.2, and the `err_<year>` columns in the CSVs |
+| 3 | Compared against both endpoints | B.2 -- beats `k=0` 3/3 everywhere; two `k=1` fallbacks |
+| 4 | Stability reported per category | B.4 -- per-fold fits and spreads |
+| 5 | Survivorship handled explicitly | B.6, measured in A |
+| 6 | Conditioning stated | B.5 -- `k*w` identified, `k` alone is not |
+| 7 | Amplification bounded or refused | B.2 -- clamp to [0,1]; nothing out of range |
+| 8 | Train/serve gap stated | B.8 -- ~0.57x rates, ~0.65x playing time |
+| 9 | Gate discontinuity quantified; thresholds chosen | B.7 (78.7% / 44.6%, ramp specified); A.3 |
+| 10 | Shrink form and constants chosen | A.4, conditioned in B.5 |
+| 11 | Metric pinned before the first fit | A.1, committed before any fitting code |
+| 12 | Systematic component of the PT residual treated | B.3 -- the sharpest finding in the study |
+
+### B.10 What increment 2 inherits
+
+1. **Ship the coefficients in B.2 with `n0 = 200 PA` / `n0 = 50 IP`.** They are not portable to
+   another shrink constant.
+2. **Use `gate_ramp`, not `gate_mask`, on the serve path** (B.7).
+3. **Resolve the playing-time level term** (B.3). Worth ~19% of hitter PA error, and PA
+   multiplies every counting stat. Requires deciding whether the -83 PA level is a persistent
+   ZiPS hedge or an aging gap `ZiPS_2027` has already priced.
+4. **Re-fit `sb_pa` first** when the 2025->2026 pair opens after the 2026 season (B.4).
+5. **Check at the rank level.** Spec 6.6 is explicit that this bar is measured on the rate/PT
+   scale while the feature consumes VAR *rank*; rate error can improve while ranking degrades.
+   VAR does not exist until increment 2, so that check is scoped there.
+6. Spec 5.1's `role_ip` routing fix, the par curve, and the cross-team table remain increment 2.

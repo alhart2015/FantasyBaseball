@@ -5,6 +5,7 @@ import pytest
 from fantasy_baseball.keepers.fold import (
     fold_rates,
     gate_mask,
+    gate_ramp,
     reconstruct_hitter,
     reconstruct_pitcher,
     shrink,
@@ -110,3 +111,28 @@ def test_reconstruct_pitcher_guards_zero_ip() -> None:
     out = reconstruct_pitcher(rates, pd.Series([0.0]))
     assert out["era"].iloc[0] == 0.0
     assert out["whip"].iloc[0] == 0.0
+
+
+def test_gate_ramp_removes_the_cliff_at_the_threshold() -> None:
+    realized = pd.Series([0.0, 99.0, 100.0, 150.0, 200.0, 600.0], index=range(6))
+    ramp = gate_ramp(realized, threshold=100.0, width=100.0)
+    assert list(ramp) == pytest.approx([0.0, 0.0, 0.0, 0.5, 1.0, 1.0])
+    assert ramp.is_monotonic_increasing
+
+
+def test_gate_ramp_agrees_with_the_hard_gate_off_the_ramp() -> None:
+    realized = pd.Series([50.0, 400.0], index=[1, 2])
+    ramp = gate_ramp(realized, threshold=100.0, width=100.0)
+    mask = gate_mask(realized, threshold=100.0)
+    assert list(ramp.astype(bool)) == list(mask)
+
+
+def test_gate_ramp_treats_missing_as_unfolded() -> None:
+    # Absence from the MLB leaderboard is AAA, not zero PA -- same rule as the
+    # hard gate: it must resolve to no fold at all.
+    assert gate_ramp(pd.Series([np.nan], index=[9]), threshold=100.0, width=100.0).iloc[0] == 0.0
+
+
+def test_gate_ramp_rejects_a_nonpositive_width() -> None:
+    with pytest.raises(ValueError, match="width must be positive"):
+        gate_ramp(pd.Series([100.0]), threshold=100.0, width=0.0)
