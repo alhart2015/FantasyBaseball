@@ -52,7 +52,7 @@ HITTER_PT = "pa"
 PITCHER_PT = "ip"
 
 
-def _safe_ratio(numer: pd.Series, denom: pd.Series) -> pd.Series:
+def safe_ratio(numer: pd.Series, denom: pd.Series) -> pd.Series:
     """Elementwise numer/denom with 0/0 -> NaN (never 0.0).
 
     NaN is the honest answer for "no observation"; 0.0 would read downstream as a
@@ -79,12 +79,12 @@ def normalize_hitting(raw: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(
         {
             HITTER_PT: pa,
-            "ab_pa": _safe_ratio(ab, pa),
-            "h_ab": _safe_ratio(num["hits"], ab),
-            "hr_pa": _safe_ratio(num["homeRuns"], pa),
-            "r_pa": _safe_ratio(num["runs"], pa),
-            "rbi_pa": _safe_ratio(num["rbi"], pa),
-            "sb_pa": _safe_ratio(num["stolenBases"], pa),
+            "ab_pa": safe_ratio(ab, pa),
+            "h_ab": safe_ratio(num["hits"], ab),
+            "hr_pa": safe_ratio(num["homeRuns"], pa),
+            "r_pa": safe_ratio(num["runs"], pa),
+            "rbi_pa": safe_ratio(num["rbi"], pa),
+            "sb_pa": safe_ratio(num["stolenBases"], pa),
         },
         index=frame.index,
     )
@@ -101,11 +101,11 @@ def normalize_pitching(raw: pd.DataFrame) -> pd.DataFrame:
     out = pd.DataFrame(
         {
             PITCHER_PT: ip,
-            "k_ip": _safe_ratio(num["strikeOuts"], ip),
-            "w_ip": _safe_ratio(num["wins"], ip),
-            "er_ip": _safe_ratio(num["earnedRuns"], ip),
-            "bb_ip": _safe_ratio(num["baseOnBalls"], ip),
-            "h_ip": _safe_ratio(num["hits"], ip),
+            "k_ip": safe_ratio(num["strikeOuts"], ip),
+            "w_ip": safe_ratio(num["wins"], ip),
+            "er_ip": safe_ratio(num["earnedRuns"], ip),
+            "bb_ip": safe_ratio(num["baseOnBalls"], ip),
+            "h_ip": safe_ratio(num["hits"], ip),
         },
         index=frame.index,
     )
