@@ -12,6 +12,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
 import keeper_calibration as script
 
 from fantasy_baseball.keepers.calibration import YearPair
+from fantasy_baseball.keepers.fold import shrink
+
+N0 = 200.0
 
 
 def _synthetic_pairs(k_true: float = 0.5) -> list[YearPair]:
@@ -28,7 +31,9 @@ def _synthetic_pairs(k_true: float = 0.5) -> list[YearPair]:
             {"hr_pa": rng.normal(0, 0.01, n), "sb_pa": rng.normal(0, 0.01, n)}, index=idx
         )
         realized = pd.Series(np.full(n, 600.0), index=idx)
-        weight = realized / (realized + 200.0)
+        # Use the real shrink rather than re-deriving it: a harness that
+        # reimplements the function under test can agree with a bug.
+        weight = shrink(realized, N0)
         pairs.append(
             YearPair(
                 year=year,
@@ -43,7 +48,7 @@ def _synthetic_pairs(k_true: float = 0.5) -> list[YearPair]:
 
 
 def test_build_report_covers_every_coefficient_and_estimator() -> None:
-    report = script.build_report(_synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=200.0)
+    report = script.build_report(_synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=N0)
     assert set(report["column"]) == {"hr_pa", "sb_pa"}
     assert {"k=0", "k=1"} <= set(report["estimator"])
     # Acceptance is per coefficient, not pooled -- spec 6.6.
@@ -53,7 +58,7 @@ def test_build_report_covers_every_coefficient_and_estimator() -> None:
 def test_report_passes_a_coefficient_the_fit_recovers() -> None:
     # k_true = 0.5 sits strictly between the two endpoints, so a working fit
     # must beat both on every held-out pair.
-    report = script.build_report(_synthetic_pairs(0.5), columns=("hr_pa",), n0=200.0)
+    report = script.build_report(_synthetic_pairs(0.5), columns=("hr_pa",), n0=N0)
     row = report.loc[report["estimator"] == "fitted-k"].iloc[0]
     assert row["verdict"] == "pass"
     assert row["k_full"] == pytest.approx(0.5, abs=0.05)
@@ -61,12 +66,12 @@ def test_report_passes_a_coefficient_the_fit_recovers() -> None:
 
 def test_report_falls_back_when_an_endpoint_wins() -> None:
     # k_true = 0 IS the k=0 endpoint, so the fitted estimator cannot beat it.
-    report = script.build_report(_synthetic_pairs(0.0), columns=("hr_pa",), n0=200.0)
+    report = script.build_report(_synthetic_pairs(0.0), columns=("hr_pa",), n0=N0)
     assert set(report["verdict"]) == {"fallback:k=0"}
 
 
 def test_report_flags_a_coefficient_outside_the_unit_interval() -> None:
-    report = script.build_report(_synthetic_pairs(1.6), columns=("hr_pa",), n0=200.0)
+    report = script.build_report(_synthetic_pairs(1.6), columns=("hr_pa",), n0=N0)
     row = report.loc[report["estimator"] == "fitted-k"].iloc[0]
     assert bool(row["out_of_range"]) is True
     assert row["k_full"] == 1.0  # shipped value is clamped
@@ -86,9 +91,26 @@ def test_playing_time_column_is_fit_unshrunk_and_unweighted(
         return real(estimator, pairs, column, n0, **kwargs)
 
     monkeypatch.setattr(script, "leave_one_out", spy)
-    script.build_report(_synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=200.0, pt_col="sb_pa")
+    script.build_report(_synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=N0, pt_col="sb_pa")
 
     pt_calls = [c for c in calls if c["column"] == "sb_pa"]
     rate_calls = [c for c in calls if c["column"] == "hr_pa"]
     assert pt_calls and all(c["shrunk"] is False and c["weighted"] is False for c in pt_calls)
     assert rate_calls and all(c["shrunk"] is True and c["weighted"] is True for c in rate_calls)
+
+
+def test_n0_sweep_reports_one_row_per_grid_point_and_column() -> None:
+    """The sweep had no test at all, which let a column collision ship.
+
+    `build_report` emits the `n0` it ran at; `n0_sweep` must read that column
+    rather than re-inserting it.
+    """
+    grid = (100.0, 200.0, 400.0)
+    sweep = script.n0_sweep(_synthetic_pairs(), ("hr_pa", "sb_pa"), grid, pt_col="sb_pa", gate=0.0)
+    assert len(sweep) == len(grid) * 2
+    assert sorted(sweep["n0"].unique()) == list(grid)
+    assert set(sweep["column"]) == {"hr_pa", "sb_pa"}
+    assert list(sweep.columns) == ["n0", "column", "k_full", "k_raw_full", "mean_error", "verdict"]
+    # k scales inversely with the shrink -- the study's central conditioning point.
+    hr = sweep.loc[sweep["column"] == "hr_pa"].sort_values("n0")
+    assert hr["k_full"].is_monotonic_increasing

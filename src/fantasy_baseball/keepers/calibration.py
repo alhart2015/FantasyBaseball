@@ -30,8 +30,6 @@ from fantasy_baseball.keepers.vintages import load_vintage
 # no ZiPS vintage on disk (data/projections starts at 2022).
 PAIR_YEARS = (2022, 2023, 2024)
 
-PT_COL = {"hitter": HITTER_PT, "pitcher": PITCHER_PT}
-
 
 @dataclass(frozen=True)
 class YearPair:
@@ -72,7 +70,7 @@ def build_pairs(
         raise ValueError(f"player_type must be 'hitter' or 'pitcher', got {player_type!r}")
     group = "hitting" if player_type == "hitter" else "pitching"
     normalize = normalize_hitting if player_type == "hitter" else normalize_pitching
-    pairs: list[YearPair] = []
+    pt_col = HITTER_PT if player_type == "hitter" else PITCHER_PT
     for year in years:
         if year + 1 > LAST_COMPLETE_SEASON:
             # fetch_or_cache never invalidates, so a mid-season pull would freeze
@@ -81,13 +79,19 @@ def build_pairs(
                 f"pair {year}->{year + 1} needs a complete {year + 1} season; "
                 f"last complete is {LAST_COMPLETE_SEASON}"
             )
-        zips_h, zips_p = load_vintage(year, projections_root)
-        zips = zips_h if player_type == "hitter" else zips_p
-        act_y = normalize(fetch_mlb_season(cache_dir, year, group))
-        act_next = normalize(fetch_mlb_season(cache_dir, year + 1, group))
+    # act_next of year Y is act_y of year Y+1, so the pairs overlap: fetch and
+    # normalize each season once rather than once per pair that mentions it.
+    actuals = {
+        y: normalize(fetch_mlb_season(cache_dir, y, group))
+        for y in sorted(set(years) | {y + 1 for y in years})
+    }
+    pairs: list[YearPair] = []
+    for year in years:
+        zips = load_vintage(year, projections_root, player_type)
+        act_y, act_next = actuals[year], actuals[year + 1]
         ids = zips.index.intersection(act_y.index)
         cols = list(zips.columns)  # rates AND the playing-time column
-        pt_col = PT_COL[player_type]
+        zips_rows = zips.loc[ids, cols]
         target = act_next.reindex(ids)[cols].copy()
         # A player absent from the year-Y+1 leaderboard has NO Y+1 rate (NaN is the
         # only honest answer) but he does have a well-defined Y+1 MLB playing time
@@ -98,8 +102,8 @@ def build_pairs(
         pairs.append(
             YearPair(
                 year=year,
-                base=zips.loc[ids, cols],
-                residual=act_y.loc[ids, cols] - zips.loc[ids, cols],
+                base=zips_rows,
+                residual=act_y.loc[ids, cols] - zips_rows,
                 target=target,
                 realized_pt=act_y.loc[ids, pt_col],
                 target_pt=target[pt_col],
@@ -132,12 +136,6 @@ def survivorship(pairs: list[YearPair], threshold: float) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-class Fitted(Protocol):
-    params: dict[str, float]
-
-    def predict(self, base: pd.Series, residual: pd.Series, weight: pd.Series) -> pd.Series: ...
-
-
 class Estimator(Protocol):
     name: str
 
@@ -149,7 +147,7 @@ class Estimator(Protocol):
         *,
         shrunk: bool = True,
         weighted: bool = True,
-    ) -> Fitted:
+    ) -> FittedK:
         """Fit one coefficient for `column`.
 
         `shrunk` and `weighted` mirror the evaluation switches in `leave_one_out`
@@ -162,7 +160,7 @@ class Estimator(Protocol):
 class _FixedTransfer:
     """Endpoint estimator: `k` is a constant, not fitted.
 
-    Both endpoints and the fitted estimator return the same `_FittedK`, so the
+    Both endpoints and the fitted estimator return the same `FittedK`, so the
     shipped prediction form is written ONCE. That matters: the whole held-out
     comparison rests on all three applying an identical functional form, and two
     copies of `base + k * w * residual` could silently drift apart.
@@ -171,16 +169,8 @@ class _FixedTransfer:
     name: str
     k: float
 
-    def fit(
-        self,
-        pairs: list[YearPair],
-        column: str,
-        n0: float,
-        *,
-        shrunk: bool = True,
-        weighted: bool = True,
-    ) -> Fitted:
-        return _FittedK({"k": self.k})
+    def fit(self, *_args: object, **_kwargs: object) -> FittedK:
+        return FittedK({"k": self.k})
 
 
 class ZeroTransfer(_FixedTransfer):
@@ -197,9 +187,21 @@ class FullTransfer(_FixedTransfer):
     k = 1.0
 
 
+def usable(observed: pd.Series, predicted: pd.Series, weight: pd.Series) -> pd.Series:
+    """Rows carrying enough information to be fit or scored.
+
+    ONE definition, used by both `weighted_mse` and `ShrunkTransfer.fit`, because
+    the fit sample must equal the evaluation sample -- fitting one loss and
+    scoring another would make the held-out comparison meaningless. Two copies of
+    this expression would let them drift apart silently.
+    """
+    result: pd.Series = observed.notna() & predicted.notna() & (weight > 0)
+    return result
+
+
 def weighted_mse(pred: pd.Series, actual: pd.Series, weight: pd.Series) -> float:
     """Playing-time-weighted MSE, so a 20-PA player's rate cannot dominate."""
-    mask = actual.notna() & pred.notna() & (weight > 0)
+    mask = usable(actual, pred, weight)
     if not mask.any():
         return float("nan")
     err = (pred[mask] - actual[mask]) ** 2
@@ -226,14 +228,15 @@ def leave_one_out(
     column: str,
     n0: float,
     *,
-    gate: float,
     shrunk: bool = True,
     weighted: bool = True,
 ) -> pd.DataFrame:
     """Fit on all pairs but one, evaluate on the held-out pair. Spec 6.3.
 
-    `gate` is the realized-playing-time floor from spec 5.4: rows below it are
-    excluded from both fitting and evaluation.
+    `pairs` must ALREADY be gated -- pass them through `gated(pair, threshold)`
+    once at the call site. Gating here would redo identical work for every
+    column and every estimator, and would leave two places that decide which
+    rows the study sees.
 
     `shrunk=False` is REQUIRED for the playing-time coefficient. The shrink damps
     noisy RATE observations; applying it to the PT residual would damp an injury
@@ -241,26 +244,23 @@ def leave_one_out(
     the PT coefficient structurally unable to learn from lost time (spec 5.3).
 
     `weighted=False` is likewise required for the playing-time coefficient -- see
-    `_eval_weight`. Fit and evaluation use the SAME weighting; fitting one loss and
-    scoring another would make the held-out comparison meaningless.
+    `_eval_weight`. Fit and evaluation use the SAME weighting.
     """
     rows = []
-    # Gate once, not once per fold per role: the gate depends on neither the
-    # held-out year nor the estimator, and gating is the dominant cost here.
-    kept_pairs = [gated(p, gate) for p in pairs]
-    for held in kept_pairs:
-        train = [p for p in kept_pairs if p.year != held.year]
+    # The shrink weight depends only on (pair, n0, shrunk), none of which vary
+    # across the folds, so it is computed once per pair rather than once per fold.
+    weights = {p.year: _shrink_weight(p, n0, shrunk) for p in pairs}
+    for held in pairs:
+        train = [p for p in pairs if p.year != held.year]
         fitted = estimator.fit(train, column, n0, shrunk=shrunk, weighted=weighted)
-        kept = held
-        weight = _shrink_weight(kept, n0, shrunk)
-        pred = fitted.predict(kept.base[column], kept.residual[column], weight)
+        pred = fitted.predict(held.base[column], held.residual[column], weights[held.year])
         rows.append(
             {
                 "estimator": estimator.name,
                 "column": column,
                 "held_out_year": held.year,
-                "n": len(kept.base),
-                "error": weighted_mse(pred, kept.target[column], _eval_weight(kept, weighted)),
+                "n": len(held.base),
+                "error": weighted_mse(pred, held.target[column], _eval_weight(held, weighted)),
                 **{f"param_{k}": v for k, v in fitted.params.items()},
             }
         )
@@ -320,7 +320,7 @@ def _wls(
     return slope, intercept, se
 
 
-class _FittedK:
+class FittedK:
     """A fitted transfer coefficient. Predicts the SHIPPED form only.
 
     `predict` deliberately does NOT add the fitted intercept: its production value
@@ -391,7 +391,7 @@ class ShrunkTransfer:
         *,
         shrunk: bool = True,
         weighted: bool = True,
-    ) -> Fitted:
+    ) -> FittedK:
         xs: list[np.ndarray] = []
         ys: list[np.ndarray] = []
         ws: list[np.ndarray] = []
@@ -400,10 +400,7 @@ class ShrunkTransfer:
             x = weight * pair.residual[column]
             y = pair.target[column] - pair.base[column]
             w = _eval_weight(pair, weighted)
-            # The fit sample must equal the evaluation sample: the metric drops
-            # NaN targets (non-survivors have no Y+1 rate) and zero-weight rows,
-            # so the fit must drop them too.
-            mask = x.notna() & y.notna() & (w > 0)
+            mask = usable(y, x, w)
             xs.append(x[mask].to_numpy(dtype=float))
             ys.append(y[mask].to_numpy(dtype=float))
             ws.append(w[mask].to_numpy(dtype=float))
@@ -416,7 +413,7 @@ class ShrunkTransfer:
         k_raw, c_fit, se = _wls(x_all, y_all, w_all, self.use_intercept)
         lo, hi = self.bounds
         k = min(max(k_raw, lo), hi)
-        return _FittedK(
+        return FittedK(
             {
                 "k": k,
                 "k_raw": k_raw,

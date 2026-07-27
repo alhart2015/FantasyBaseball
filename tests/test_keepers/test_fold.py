@@ -58,18 +58,23 @@ def test_fold_rates_passes_through_a_nan_residual() -> None:
     assert out["hr_pa"].iloc[0] == pytest.approx(0.04)
 
 
+HITTER_RATE_ROW = pd.DataFrame(
+    {
+        "ab_pa": [0.9],
+        "h_ab": [0.300],
+        "hr_pa": [0.05],
+        "r_pa": [0.15],
+        "rbi_pa": [0.16],
+        "sb_pa": [0.02],
+    }
+)
+PITCHER_RATE_ROW = pd.DataFrame(
+    {"k_ip": [1.0], "w_ip": [0.08], "er_ip": [0.35], "bb_ip": [0.25], "h_ip": [0.80]}
+)
+
+
 def test_reconstruct_hitter_uses_ab_for_hits_and_pa_for_counting() -> None:
-    rates = pd.DataFrame(
-        {
-            "ab_pa": [0.9],
-            "h_ab": [0.300],
-            "hr_pa": [0.05],
-            "r_pa": [0.15],
-            "rbi_pa": [0.16],
-            "sb_pa": [0.02],
-        }
-    )
-    out = reconstruct_hitter(rates, pd.Series([600.0]))
+    out = reconstruct_hitter(HITTER_RATE_ROW, pd.Series([600.0]))
     assert out["ab"].iloc[0] == pytest.approx(540.0)
     assert out["h"].iloc[0] == pytest.approx(540.0 * 0.300)  # AB, not PA
     assert out["avg"].iloc[0] == pytest.approx(0.300)  # not inflated by 1/0.9
@@ -78,25 +83,12 @@ def test_reconstruct_hitter_uses_ab_for_hits_and_pa_for_counting() -> None:
 
 
 def test_reconstruct_hitter_guards_zero_ab() -> None:
-    rates = pd.DataFrame(
-        {
-            "ab_pa": [0.9],
-            "h_ab": [0.300],
-            "hr_pa": [0.05],
-            "r_pa": [0.15],
-            "rbi_pa": [0.16],
-            "sb_pa": [0.02],
-        }
-    )
-    out = reconstruct_hitter(rates, pd.Series([0.0]))
+    out = reconstruct_hitter(HITTER_RATE_ROW, pd.Series([0.0]))
     assert out["avg"].iloc[0] == 0.0  # 0/0 guarded, not NaN
 
 
 def test_reconstruct_pitcher_builds_era_and_whip_from_components() -> None:
-    rates = pd.DataFrame(
-        {"k_ip": [1.0], "w_ip": [0.08], "er_ip": [0.35], "bb_ip": [0.25], "h_ip": [0.80]}
-    )
-    out = reconstruct_pitcher(rates, pd.Series([180.0]))
+    out = reconstruct_pitcher(PITCHER_RATE_ROW, pd.Series([180.0]))
     assert out["era"].iloc[0] == pytest.approx(9 * 0.35)
     assert out["whip"].iloc[0] == pytest.approx(0.25 + 0.80)
     assert out["k"].iloc[0] == pytest.approx(180.0)
@@ -105,10 +97,7 @@ def test_reconstruct_pitcher_builds_era_and_whip_from_components() -> None:
 
 
 def test_reconstruct_pitcher_guards_zero_ip() -> None:
-    rates = pd.DataFrame(
-        {"k_ip": [1.0], "w_ip": [0.08], "er_ip": [0.35], "bb_ip": [0.25], "h_ip": [0.80]}
-    )
-    out = reconstruct_pitcher(rates, pd.Series([0.0]))
+    out = reconstruct_pitcher(PITCHER_RATE_ROW, pd.Series([0.0]))
     assert out["era"].iloc[0] == 0.0
     assert out["whip"].iloc[0] == 0.0
 

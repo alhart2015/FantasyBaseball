@@ -189,11 +189,6 @@ ignore = [
 # predict_* recency models share a fixed (projection, games, cutoff) signature
 # so they can be swapped at the call site.
 "src/fantasy_baseball/analysis/recency.py" = ["ARG001"]
-# The endpoint estimator's fit() uses none of its five arguments -- the signature
-# IS the Estimator protocol contract, and the endpoints must match it to be
-# interchangeable with the fitted estimator inside leave_one_out. Whole-file
-# rather than five inline noqas on one signature, matching strategy.py above.
-"src/fantasy_baseball/keepers/calibration.py" = ["ARG002"]
 # Streaks Sunday report intentionally uses σ (sigma), − (true minus), → (arrow),
 # and — (em dash) for visual quality. RUF001 / RUF002 / RUF003 flag these as
 # ambiguous; suppressing for the report layer and its tests/CLI.

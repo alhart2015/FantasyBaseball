@@ -33,7 +33,7 @@ from fantasy_baseball.keepers.actuals import (
 )
 from fantasy_baseball.keepers.calibration import (
     PAIR_YEARS,
-    Fitted,
+    FittedK,
     FullTransfer,
     ShrunkTransfer,
     YearPair,
@@ -111,9 +111,8 @@ def build_report(
     would either sink ten good coefficients or smuggle that one through.
     """
     rows: list[dict[str, object]] = []
-    # The headline fit uses the SAME gated sample leave_one_out scores, or the
-    # shipped number would be fit on rows the study excluded. Gate once: it
-    # depends on neither the column nor the estimator.
+    # Gate once. Every consumer below sees the same rows, and `leave_one_out` no
+    # longer re-derives the gate per column per estimator.
     kept = [gated(p, gate) for p in pairs]
     for column in columns:
         # The playing-time coefficient is fit and scored unshrunk and unweighted.
@@ -122,15 +121,18 @@ def build_report(
         # time would delete every non-survivor (finding A.1).
         rate_like = column != pt_col
         folds = {
-            est.name: leave_one_out(
-                est, pairs, column, n0, gate=gate, shrunk=rate_like, weighted=rate_like
-            )
+            est.name: leave_one_out(est, kept, column, n0, shrunk=rate_like, weighted=rate_like)
             for est in (ShrunkTransfer(), ZeroTransfer(), FullTransfer())
         }
         chosen_full = ShrunkTransfer().fit(kept, column, n0, shrunk=rate_like, weighted=rate_like)
         verdict, wins = _verdict(folds)
         for name, fold in folds.items():
-            rows.append(_summarize(name, column, fold, verdict, wins, chosen_full))
+            row = _summarize(name, column, fold, verdict, wins, chosen_full)
+            # The coefficients are only interpretable against the n0 and gate they
+            # were fit under, so the artifact records them rather than leaving the
+            # shipped constants and the study free to drift apart silently.
+            row["n0"], row["gate"] = n0, gate
+            rows.append(row)
     return pd.DataFrame(rows)
 
 
@@ -140,17 +142,18 @@ def _verdict(folds: dict[str, pd.DataFrame]) -> tuple[str, dict[str, int]]:
     Otherwise fall back to whichever endpoint won more pairs head-to-head, with
     mean held-out error as the tie-break (spec 6.6).
     """
+    zero_name, full_name = ENDPOINT_NAMES
     errors = {name: fold.set_index("held_out_year")["error"] for name, fold in folds.items()}
     chosen = errors[CHOSEN]
     n_pairs = len(chosen)
     wins = {name: int((chosen < errors[name]).sum()) for name in ENDPOINT_NAMES}
     if all(w * 2 > n_pairs for w in wins.values()):
         return "pass", wins
-    zero_wins = int((errors["k=0"] < errors["k=1"]).sum())
+    zero_wins = int((errors[zero_name] < errors[full_name]).sum())
     if zero_wins * 2 > n_pairs:
-        best = "k=0"
+        best = zero_name
     elif zero_wins * 2 < n_pairs:
-        best = "k=1"
+        best = full_name
     else:
         best = min(ENDPOINT_NAMES, key=lambda name: float(errors[name].mean()))
     return f"fallback:{best}", wins
@@ -162,7 +165,7 @@ def _summarize(
     fold: pd.DataFrame,
     verdict: str,
     wins: dict[str, int],
-    chosen_full: Fitted,
+    chosen_full: FittedK,
 ) -> dict[str, object]:
     """One report row for one (estimator, coefficient)."""
     row: dict[str, object] = {
@@ -170,8 +173,8 @@ def _summarize(
         "column": column,
         "verdict": verdict,
         "mean_error": float(fold["error"].mean()),
-        "wins_vs_k0": wins["k=0"],
-        "wins_vs_k1": wins["k=1"],
+        "wins_vs_k0": wins[ENDPOINT_NAMES[0]],
+        "wins_vs_k1": wins[ENDPOINT_NAMES[1]],
         "n_pairs": len(fold),
     }
     is_chosen = name == CHOSEN
@@ -212,8 +215,8 @@ def n0_sweep(
     columns: tuple[str, ...],
     grid: tuple[float, ...],
     *,
-    pt_col: str | None = None,
-    gate: float = 0.0,
+    pt_col: str,
+    gate: float,
 ) -> pd.DataFrame:
     """The pre-registered sensitivity grid (finding A.4). Reported, never used to
     select the headline coefficient -- `k` and the shrink enter multiplicatively,
@@ -221,8 +224,8 @@ def n0_sweep(
     frames = []
     for n0 in grid:
         report = build_report(pairs, columns, n0, pt_col=pt_col, gate=gate)
-        chosen = report.loc[report["estimator"] == CHOSEN].copy()
-        chosen.insert(0, "n0", n0)
+        chosen = report.loc[report["estimator"] == CHOSEN]
+        # `build_report` already emits the n0 it was run at -- do not re-insert it.
         frames.append(chosen[["n0", "column", "k_full", "k_raw_full", "mean_error", "verdict"]])
     return pd.concat(frames, ignore_index=True)
 

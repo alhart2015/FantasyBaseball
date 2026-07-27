@@ -66,8 +66,11 @@ def decompose_pitchers(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def load_vintage(year: int, projections_root: Path) -> tuple[pd.DataFrame, pd.DataFrame]:
+def load_vintage(year: int, projections_root: Path, player_type: str) -> pd.DataFrame:
+    """One decomposed ZiPS vintage frame. Reads only the file it returns."""
+    if player_type not in {"hitter", "pitcher"}:
+        raise ValueError(f"player_type must be 'hitter' or 'pitcher', got {player_type!r}")
     directory = projections_root / str(year)
-    hitters = pd.read_csv(_find(directory, "hitters"))
-    pitchers = pd.read_csv(_find(directory, "pitchers"))
-    return decompose_hitters(hitters), decompose_pitchers(pitchers)
+    if player_type == "hitter":
+        return decompose_hitters(pd.read_csv(_find(directory, "hitters")))
+    return decompose_pitchers(pd.read_csv(_find(directory, "pitchers")))

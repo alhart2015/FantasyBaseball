@@ -11,6 +11,7 @@ from fantasy_baseball.keepers.actuals import (
     normalize_hitting,
     normalize_pitching,
 )
+from tests.test_keepers.conftest import mlb_hitting, mlb_pitching
 
 
 @pytest.mark.parametrize(
@@ -45,18 +46,7 @@ def test_coerce_numeric_handles_api_junk() -> None:
 
 
 def test_normalize_hitting_builds_rates_on_correct_denominators() -> None:
-    raw = pd.DataFrame(
-        {
-            "player.id": [1],
-            "stat.plateAppearances": [600],
-            "stat.atBats": [540],
-            "stat.hits": [162],
-            "stat.runs": [90],
-            "stat.homeRuns": [30],
-            "stat.rbi": [100],
-            "stat.stolenBases": [12],
-        }
-    )
+    raw = mlb_hitting()
     out = normalize_hitting(raw)
     row = out.loc[1]
     assert row["pa"] == 600.0
@@ -67,17 +57,7 @@ def test_normalize_hitting_builds_rates_on_correct_denominators() -> None:
 
 
 def test_normalize_pitching_converts_innings_notation() -> None:
-    raw = pd.DataFrame(
-        {
-            "player.id": [7],
-            "stat.inningsPitched": ["180.1"],
-            "stat.earnedRuns": [60],
-            "stat.baseOnBalls": [45],
-            "stat.hits": [150],
-            "stat.strikeOuts": [200],
-            "stat.wins": [15],
-        }
-    )
+    raw = mlb_pitching(**{"stat.inningsPitched": "180.1"})
     out = normalize_pitching(raw)
     row = out.loc[7]
     assert row["ip"] == pytest.approx(180 + 1 / 3)
@@ -88,16 +68,16 @@ def test_normalize_pitching_converts_innings_notation() -> None:
 def test_zero_playing_time_yields_nan_rates_not_zeros() -> None:
     # 0/0 must be NaN so the gate can see "no information", NOT 0.0 which reads
     # as "a real observation of zero rate" and would crush the fold.
-    raw = pd.DataFrame(
-        {
-            "player.id": [3],
-            "stat.plateAppearances": [0],
-            "stat.atBats": [0],
-            "stat.hits": [0],
-            "stat.runs": [0],
-            "stat.homeRuns": [0],
-            "stat.rbi": [0],
-            "stat.stolenBases": [0],
+    raw = mlb_hitting(
+        **{
+            "player.id": 3,
+            "stat.plateAppearances": 0,
+            "stat.atBats": 0,
+            "stat.hits": 0,
+            "stat.runs": 0,
+            "stat.homeRuns": 0,
+            "stat.rbi": 0,
+            "stat.stolenBases": 0,
         }
     )
     out = normalize_hitting(raw)
@@ -106,80 +86,25 @@ def test_zero_playing_time_yields_nan_rates_not_zeros() -> None:
 
 
 def test_normalize_drops_rows_without_an_mlbam_id() -> None:
-    raw = pd.DataFrame(
-        {
-            "player.id": [1, None],
-            "stat.plateAppearances": [600, 100],
-            "stat.atBats": [540, 90],
-            "stat.hits": [162, 27],
-            "stat.runs": [90, 10],
-            "stat.homeRuns": [30, 2],
-            "stat.rbi": [100, 9],
-            "stat.stolenBases": [12, 1],
-        }
-    )
+    raw = mlb_hitting(**{"player.id": [1, None]})
     assert list(normalize_hitting(raw).index) == [1]
 
 
 def test_rate_constants_match_the_emitted_column_order() -> None:
     # A positional zip() over a normalized frame must not mis-pair columns.
-    hitter = pd.DataFrame(
-        {
-            "player.id": [1],
-            "stat.plateAppearances": [600],
-            "stat.atBats": [540],
-            "stat.hits": [162],
-            "stat.runs": [90],
-            "stat.homeRuns": [30],
-            "stat.rbi": [100],
-            "stat.stolenBases": [12],
-        }
-    )
-    pitcher = pd.DataFrame(
-        {
-            "player.id": [7],
-            "stat.inningsPitched": ["180.1"],
-            "stat.earnedRuns": [60],
-            "stat.baseOnBalls": [45],
-            "stat.hits": [150],
-            "stat.strikeOuts": [200],
-            "stat.wins": [15],
-        }
-    )
-    assert list(normalize_hitting(hitter).columns) == [HITTER_PT, *HITTER_RATES]
-    assert list(normalize_pitching(pitcher).columns) == [PITCHER_PT, *PITCHER_RATES]
+    assert list(normalize_hitting(mlb_hitting()).columns) == [HITTER_PT, *HITTER_RATES]
+    assert list(normalize_pitching(mlb_pitching()).columns) == [PITCHER_PT, *PITCHER_RATES]
 
 
 def test_normalize_hitting_covers_every_rate() -> None:
-    raw = pd.DataFrame(
-        {
-            "player.id": [1],
-            "stat.plateAppearances": [600],
-            "stat.atBats": [540],
-            "stat.hits": [162],
-            "stat.runs": [90],
-            "stat.homeRuns": [30],
-            "stat.rbi": [100],
-            "stat.stolenBases": [12],
-        }
-    )
+    raw = mlb_hitting()
     row = normalize_hitting(raw).loc[1]
     assert row["r_pa"] == pytest.approx(90 / 600)
     assert row["rbi_pa"] == pytest.approx(100 / 600)
 
 
 def test_normalize_pitching_covers_every_rate() -> None:
-    raw = pd.DataFrame(
-        {
-            "player.id": [7],
-            "stat.inningsPitched": ["180.0"],
-            "stat.earnedRuns": [60],
-            "stat.baseOnBalls": [45],
-            "stat.hits": [150],
-            "stat.strikeOuts": [200],
-            "stat.wins": [15],
-        }
-    )
+    raw = mlb_pitching()
     row = normalize_pitching(raw).loc[7]
     assert row["w_ip"] == pytest.approx(15 / 180)
     assert row["bb_ip"] == pytest.approx(45 / 180)
@@ -187,16 +112,16 @@ def test_normalize_pitching_covers_every_rate() -> None:
 
 
 def test_zero_playing_time_yields_nan_on_every_hitter_rate() -> None:
-    raw = pd.DataFrame(
-        {
-            "player.id": [3],
-            "stat.plateAppearances": [0],
-            "stat.atBats": [0],
-            "stat.hits": [0],
-            "stat.runs": [0],
-            "stat.homeRuns": [0],
-            "stat.rbi": [0],
-            "stat.stolenBases": [0],
+    raw = mlb_hitting(
+        **{
+            "player.id": 3,
+            "stat.plateAppearances": 0,
+            "stat.atBats": 0,
+            "stat.hits": 0,
+            "stat.runs": 0,
+            "stat.homeRuns": 0,
+            "stat.rbi": 0,
+            "stat.stolenBases": 0,
         }
     )
     out = normalize_hitting(raw)
@@ -205,15 +130,15 @@ def test_zero_playing_time_yields_nan_on_every_hitter_rate() -> None:
 
 
 def test_zero_innings_yields_nan_on_every_pitcher_rate() -> None:
-    raw = pd.DataFrame(
-        {
-            "player.id": [8],
-            "stat.inningsPitched": ["0.0"],
-            "stat.earnedRuns": [0],
-            "stat.baseOnBalls": [0],
-            "stat.hits": [0],
-            "stat.strikeOuts": [0],
-            "stat.wins": [0],
+    raw = mlb_pitching(
+        **{
+            "player.id": 8,
+            "stat.inningsPitched": "0.0",
+            "stat.earnedRuns": 0,
+            "stat.baseOnBalls": 0,
+            "stat.hits": 0,
+            "stat.strikeOuts": 0,
+            "stat.wins": 0,
         }
     )
     out = normalize_pitching(raw)
@@ -223,15 +148,5 @@ def test_zero_innings_yields_nan_on_every_pitcher_rate() -> None:
 
 
 def test_normalize_pitching_drops_rows_without_an_mlbam_id() -> None:
-    raw = pd.DataFrame(
-        {
-            "player.id": [7, None],
-            "stat.inningsPitched": ["180.0", "20.0"],
-            "stat.earnedRuns": [60, 10],
-            "stat.baseOnBalls": [45, 8],
-            "stat.hits": [150, 22],
-            "stat.strikeOuts": [200, 18],
-            "stat.wins": [15, 1],
-        }
-    )
+    raw = mlb_pitching(**{"player.id": [7, None]})
     assert list(normalize_pitching(raw).index) == [7]

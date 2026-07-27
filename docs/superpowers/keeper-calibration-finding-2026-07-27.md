@@ -397,11 +397,25 @@ rows.
 1. **Ship the coefficients in B.2 with `n0 = 200 PA` / `n0 = 50 IP`.** They are not portable to
    another shrink constant. They are available in code as
    `keepers.coefficients.POLICIES[player_type]` -- a `FoldPolicy` carrying the per-column `k`
-   alongside the `n0`, gate and ramp width they are conditional on, held against the study's
-   CSV output by `tests/test_keepers/test_coefficients.py`. Import them; do not retype the
-   table above.
-2. **Use `gate_ramp`, not `gate_mask`, on the serve path** (B.7). `fold.fold_rates` accepts a
-   per-column coefficient mapping, so `POLICIES[t].coefficients` drops straight in.
+   alongside the `n0`, gate, ramp width and playing-time column they are conditional on. The
+   whole policy is re-derived from the study CSVs by `coefficients.policy_from_study` and
+   checked against the shipped constants in `tests/test_keepers/test_coefficients.py`, so a
+   re-run that moves the numbers fails the suite rather than drifting silently. Import them;
+   do not retype the table above.
+2. **Compose the fold weights with `FoldPolicy.serve_weights`, never by hand** (B.7). It is the
+   only place the three rules become mechanical rather than remembered:
+   `gate_ramp` not `gate_mask`; rates shrunk but playing time **not** (spec 5.3); and the
+   shrink using the policy's own `n0`. Then:
+
+   ```python
+   policy = POLICIES["hitter"]
+   folded = fold_rates(base, residual, policy.serve_weights(realized_pt), policy.coefficients)
+   ```
+
+   `fold_rates` takes per-column weights *and* per-column coefficients because the study
+   calibrated both per column. Passing a single weight for all twelve reproduces neither the
+   model nor the numbers in B.2 -- it folds playing time at the rate weight and silently
+   attenuates the move (a 500-PA base with a -100 PA residual lands on 434 instead of 400).
 3. **Resolve the playing-time level term** (B.3). Worth ~19% of hitter PA error, and PA
    multiplies every counting stat. Requires deciding whether the -83 PA level is a persistent
    ZiPS hedge or an aging gap `ZiPS_2027` has already priced.

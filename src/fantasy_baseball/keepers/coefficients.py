@@ -30,6 +30,10 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from types import MappingProxyType
 
+import pandas as pd
+
+from fantasy_baseball.keepers.fold import gate_ramp, shrink
+
 
 @dataclass(frozen=True)
 class FoldPolicy:
@@ -48,10 +52,34 @@ class FoldPolicy:
     ramp_width: float
     """Width of the linear on-ramp above `gate`, for `fold.gate_ramp`."""
 
+    pt_col: str
+    """Which coefficient is playing time. It is the one fit UNSHRUNK, so it is
+    the one `serve_weights` must not damp."""
+
+    def serve_weights(self, realized_pt: pd.Series) -> dict[str, pd.Series]:
+        """The per-column fold weights for the production path.
+
+        This exists so the three rules that are otherwise only prose become
+        mechanical, and so no caller has to assemble them from primitives:
+
+          * **Ramp, not hard gate.** The gate is a 78.7% (hitter) / 44.6%
+            (pitcher) cliff across two plate appearances because the PT term is
+            unshrunk. `gate_ramp` removes the step; `gate_mask` is for selecting
+            fit-sample rows, never for serving.
+          * **Rates are shrunk, playing time is not.** Damping the PT residual by
+            a function of the playing time an injury suppressed is circular and
+            would make the coefficient unable to learn from lost time (spec 5.3).
+          * **`k` is conditional on `n0`.** The shrink here uses this policy's own
+            `n0`, the one its coefficients were fit against.
+        """
+        ramp = gate_ramp(realized_pt, self.gate, self.ramp_width)
+        rate_weight = shrink(realized_pt, self.n0) * ramp
+        return {col: (ramp if col == self.pt_col else rate_weight) for col in self.coefficients}
+
 
 # Fitted 2026-07-27 over pairs 2022->2023, 2023->2024, 2024->2025.
 # `pa` is the k=1 fallback (fitted 0.646, CI [0.584, 0.708]); see finding B.3.
-HITTER = FoldPolicy(
+_HITTER = FoldPolicy(
     coefficients=MappingProxyType(
         {
             "hr_pa": 0.494,
@@ -66,11 +94,12 @@ HITTER = FoldPolicy(
     n0=200.0,
     gate=100.0,
     ramp_width=100.0,
+    pt_col="pa",
 )
 
 # `k_ip` is the k=1 fallback (fitted 0.970, CI [0.866, 1.073]); the fitted value
 # and the endpoint are 0.4% apart, so strikeout rate carries forward in full.
-PITCHER = FoldPolicy(
+_PITCHER = FoldPolicy(
     coefficients=MappingProxyType(
         {
             "k_ip": 1.000,  # fallback:k=1
@@ -84,6 +113,51 @@ PITCHER = FoldPolicy(
     n0=50.0,
     gate=50.0,
     ramp_width=50.0,
+    pt_col="ip",
 )
 
-POLICIES = MappingProxyType({"hitter": HITTER, "pitcher": PITCHER})
+POLICIES = MappingProxyType({"hitter": _HITTER, "pitcher": _PITCHER})
+
+
+_FALLBACK_PREFIX = "fallback:k="
+
+
+def policy_from_study(report: pd.DataFrame, pt_col: str, ramp_width: float) -> FoldPolicy:
+    """Derive a `FoldPolicy` from a `keeper_calibration_<type>.csv` report.
+
+    This is the rule that turns a study row into a shipped constant, and it lives
+    here rather than in prose or in a test so the re-fit promised for `sb_pa`
+    after the 2026 season is a mechanical diff instead of a hand transcription of
+    twelve floats:
+
+      * `verdict == "pass"`   -> ship the fitted `k_full`
+      * `verdict == "fallback:k=X"` -> ship the ENDPOINT X that beat it, not the
+        fitted value. The fallback means the fitted coefficient lost on held-out
+        error, so shipping it anyway would ignore the study's own bar (spec 6.6).
+
+    `n0` and `gate` come from the report too -- the coefficients are only
+    interpretable against the ones they were fit under.
+    """
+    fitted = report.loc[report["estimator"] == "fitted-k"]
+    if fitted.empty:
+        raise ValueError("report contains no 'fitted-k' rows")
+    coefficients: dict[str, float] = {}
+    for column, row in fitted.set_index("column").iterrows():
+        verdict = str(row["verdict"])
+        if verdict == "pass":
+            coefficients[str(column)] = round(float(row["k_full"]), 3)
+        elif verdict.startswith(_FALLBACK_PREFIX):
+            coefficients[str(column)] = float(verdict.removeprefix(_FALLBACK_PREFIX))
+        else:
+            raise ValueError(f"unrecognized verdict for {column!r}: {verdict!r}")
+    n0 = fitted["n0"].unique()
+    gate = fitted["gate"].unique()
+    if len(n0) != 1 or len(gate) != 1:
+        raise ValueError(f"report mixes fit settings: n0={n0}, gate={gate}")
+    return FoldPolicy(
+        coefficients=MappingProxyType(coefficients),
+        n0=float(n0[0]),
+        gate=float(gate[0]),
+        ramp_width=ramp_width,
+        pt_col=pt_col,
+    )

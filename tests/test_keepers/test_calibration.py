@@ -12,11 +12,13 @@ from fantasy_baseball.keepers.calibration import (
     ShrunkTransfer,
     YearPair,
     ZeroTransfer,
+    gated,
     leave_one_out,
     survivorship,
     weighted_mse,
 )
 from fantasy_baseball.keepers.fold import shrink
+from tests.test_keepers.conftest import mlb_hitting, write_zips_vintage
 
 
 def test_pair_years_are_the_three_usable_ones() -> None:
@@ -71,12 +73,14 @@ def test_endpoints_predict_as_documented() -> None:
 
 def test_leave_one_out_holds_out_each_pair() -> None:
     pairs = [_pair(2022), _pair(2023), _pair(2024)]
-    out = leave_one_out(ZeroTransfer(), pairs, "hr_pa", n0=200.0, gate=0.0)
+    out = leave_one_out(ZeroTransfer(), pairs, "hr_pa", n0=200.0)
     assert sorted(out["held_out_year"]) == [2022, 2023, 2024]
     assert out["error"].notna().all()
 
 
-def test_leave_one_out_gate_drops_rows_below_the_floor() -> None:
+def test_gated_drops_rows_below_the_floor() -> None:
+    # Gating is the caller's job and happens once, before leave_one_out sees the
+    # pairs -- so the study has exactly one place that decides which rows it uses.
     pair = _pair(2022)
     low = YearPair(
         year=2023,
@@ -86,7 +90,8 @@ def test_leave_one_out_gate_drops_rows_below_the_floor() -> None:
         realized_pt=pd.Series([600.0, 10.0, 10.0], index=pair.base.index),
         target_pt=pair.target_pt,
     )
-    out = leave_one_out(ZeroTransfer(), [pair, low], "hr_pa", n0=200.0, gate=100.0)
+    kept = [gated(p, 100.0) for p in (pair, low)]
+    out = leave_one_out(ZeroTransfer(), kept, "hr_pa", n0=200.0)
     assert int(out.loc[out["held_out_year"] == 2023, "n"].iloc[0]) == 1
     assert int(out.loc[out["held_out_year"] == 2022, "n"].iloc[0]) == 3
 
@@ -105,12 +110,8 @@ def test_unweighted_evaluation_keeps_rows_with_zero_target_playing_time() -> Non
         target_pt=pd.Series([520.0, 0.0], index=idx),
     )
     pairs = [pair, replace(pair, year=2023)]
-    weighted = leave_one_out(
-        ZeroTransfer(), pairs, "pa", n0=200.0, gate=0.0, shrunk=False, weighted=True
-    )
-    unweighted = leave_one_out(
-        ZeroTransfer(), pairs, "pa", n0=200.0, gate=0.0, shrunk=False, weighted=False
-    )
+    weighted = leave_one_out(ZeroTransfer(), pairs, "pa", n0=200.0, shrunk=False, weighted=True)
+    unweighted = leave_one_out(ZeroTransfer(), pairs, "pa", n0=200.0, shrunk=False, weighted=False)
     # Weighted drops the non-survivor entirely (weight 0); unweighted sees his
     # 500-PA miss, so the error is far larger.
     assert unweighted["error"].iloc[0] > weighted["error"].iloc[0]
@@ -118,9 +119,7 @@ def test_unweighted_evaluation_keeps_rows_with_zero_target_playing_time() -> Non
 
 def test_unshrunk_weight_is_one_so_playing_time_is_not_damped() -> None:
     pair = _pair(2022)
-    out = leave_one_out(
-        FullTransfer(), [pair, _pair(2023)], "hr_pa", n0=200.0, gate=0.0, shrunk=False
-    )
+    out = leave_one_out(FullTransfer(), [pair, _pair(2023)], "hr_pa", n0=200.0, shrunk=False)
     # k=1 unshrunk predicts base + residual exactly, which equals the target here.
     assert out["error"].iloc[0] == pytest.approx(0.0)
 
@@ -131,27 +130,11 @@ def test_build_pairs_keeps_non_survivors_with_zero_target_playing_time(
     # Absence from the Y+1 leaderboard: no Y+1 rate (NaN), but a real Y+1 MLB
     # playing time of zero. Dropping these rows would delete the survivorship
     # signal the PT coefficient exists to measure.
-    proj = tmp_path / "2024"
-    proj.mkdir()
-    pd.DataFrame(
-        {
-            "MLBAMID": [1, 2],
-            "PA": [600, 600],
-            "AB": [540, 540],
-            "H": [150, 150],
-            "R": [80, 80],
-            "HR": [25, 25],
-            "RBI": [80, 80],
-            "SB": [10, 10],
-        }
-    ).to_csv(proj / "zips-hitters.csv", index=False)
-    pd.DataFrame(
-        {"MLBAMID": [9], "IP": [180.0], "ER": [60], "BB": [45], "H": [150], "SO": [200], "W": [15]}
-    ).to_csv(proj / "zips-pitchers.csv", index=False)
+    write_zips_vintage(tmp_path / "2024", MLBAMID=[1, 2])
 
     def _raw(ids: list[int], pas: list[int]) -> pd.DataFrame:
-        return pd.DataFrame(
-            {
+        return mlb_hitting(
+            **{
                 "player.id": ids,
                 "stat.plateAppearances": pas,
                 "stat.atBats": [int(p * 0.9) for p in pas],

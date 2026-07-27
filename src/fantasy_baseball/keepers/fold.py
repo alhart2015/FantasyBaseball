@@ -42,24 +42,35 @@ def gate_mask(realized_pt: pd.Series, threshold: float) -> pd.Series:
 def fold_rates(
     base: pd.DataFrame,
     residual: pd.DataFrame,
-    weight: pd.Series,
+    weight: pd.Series | Mapping[str, pd.Series],
     k: float | Mapping[str, float],
 ) -> pd.DataFrame:
-    """base + k * weight * residual, per rate column, floored at 0.
+    """base + k * weight * residual, per column, floored at 0.
 
-    `k` may be a single coefficient or a per-column mapping. The mapping form is
-    the one production needs: the calibration study fits ONE coefficient PER
-    column (er_ip 0.343, ab_pa 0.687, k_ip 1.0, ...), so a scalar cannot express
-    the shipped model. A column missing from the mapping is not folded.
+    BOTH `k` and `weight` may be per-column mappings, and both have to be, because
+    the study calibrated them per column:
 
-    A NaN residual means "no observation" and passes through unmoved -- it must
-    never read as a move of zero-minus-base.
+      * `k` differs by column (er_ip 0.343, ab_pa 0.687, k_ip 1.0, ...).
+      * `weight` differs by KIND of column. The eleven rate coefficients were fit
+        at `w = shrink(pt, n0)`; the playing-time coefficient was fit UNSHRUNK at
+        `w = 1` (spec 5.3 -- damping the PT residual by a function of the playing
+        time an injury suppressed is circular). Passing one weight for all columns
+        therefore cannot reproduce the calibrated model, and folding PT at the
+        rate weight silently attenuates the playing-time move.
+
+    Build the weights with `coefficients.FoldPolicy.serve_weights`, which composes
+    them correctly; do not assemble them by hand. A column missing from `k` is not
+    folded. A NaN residual means "no observation" and passes through unmoved -- it
+    must never read as a move of zero-minus-base.
     """
-    coeffs = k if isinstance(k, Mapping) else dict.fromkeys(base.columns, float(k))
-    scale = pd.DataFrame(
-        {col: weight * coeffs.get(col, 0.0) for col in base.columns}, index=base.index
-    )
-    moved: pd.DataFrame = base + residual[base.columns].fillna(0.0) * scale
+    cols = base.columns
+    if isinstance(k, Mapping):
+        factors = pd.Series([float(k.get(col, 0.0)) for col in cols], index=cols)
+    else:
+        factors = pd.Series(float(k), index=cols)
+    per_col = weight if isinstance(weight, Mapping) else dict.fromkeys(cols, weight)
+    weights = pd.DataFrame({col: per_col[col] for col in cols}, index=base.index)
+    moved: pd.DataFrame = base + residual[cols].fillna(0.0).mul(weights).mul(factors, axis=1)
     return moved.clip(lower=0.0)
 
 
