@@ -57,9 +57,7 @@ def _frame(defaults: dict[str, Any], overrides: dict[str, Any]) -> pd.DataFrame:
         raise KeyError(f"not in the canonical schema: {sorted(unknown)}")
     merged = {**defaults, **overrides}
     rows = max((len(v) for v in merged.values() if isinstance(v, list)), default=1)
-    return pd.DataFrame(
-        {key: (val if isinstance(val, list) else [val] * rows) for key, val in merged.items()}
-    )
+    return pd.DataFrame(merged, index=range(rows))
 
 
 def zips_hitters(**overrides: Any) -> pd.DataFrame:
@@ -87,9 +85,8 @@ def write_zips_vintage(directory: Path, **overrides: Any) -> None:
     """Write a hitters+pitchers ZiPS pair into `directory`, as `load_vintage` expects."""
     path = Path(directory)
     path.mkdir(parents=True, exist_ok=True)
-    zips_hitters(**{k: v for k, v in overrides.items() if k in _ZIPS_HITTER}).to_csv(
-        path / "zips-hitters.csv", index=False
-    )
-    zips_pitchers(**{k: v for k, v in overrides.items() if k in _ZIPS_PITCHER}).to_csv(
-        path / "zips-pitchers.csv", index=False
-    )
+    # Forward overrides to BOTH builders rather than routing by key: routing
+    # silently swallows a typo (it matches neither schema) and would fan a key
+    # present in both dicts into two different meanings.
+    zips_hitters(**overrides).to_csv(path / "zips-hitters.csv", index=False)
+    zips_pitchers(**overrides).to_csv(path / "zips-pitchers.csv", index=False)

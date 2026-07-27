@@ -64,7 +64,7 @@ class FoldPolicy:
         mechanical, and so no caller has to assemble them from primitives:
 
           * **Ramp, not hard gate.** The gate is a 78.7% (hitter) / 44.6%
-            cliff for hitters across two plate appearances (44.6% across two
+            cliff for hitters across two plate appearances (and 44.6% across two
             innings for pitchers) because the PT term is
             unshrunk. `gate_ramp` removes the step; `gate_mask` is for selecting
             fit-sample rows, never for serving.
@@ -109,7 +109,7 @@ _HITTER = FoldPolicy(
 # are 3.0% apart but their HELD-OUT ERROR is only 0.36% apart, which is why the
 # pre-registered rule resolves it to the endpoint: strikeout rate carries forward
 # in full. Note the clamp DID bind in the ex-2023 fold (raw 1.024) and at n0=100
-# (raw 1.276) -- `out_of_range` only inspects the full-sample fit.
+# (raw 1.276); the report flags that per fold as `folds_clamped`.
 _PITCHER = FoldPolicy(
     coefficients=MappingProxyType(
         {
@@ -130,7 +130,12 @@ _PITCHER = FoldPolicy(
 POLICIES = MappingProxyType({"hitter": _HITTER, "pitcher": _PITCHER})
 
 
-_FALLBACK_PREFIX = "fallback:k="
+# The verdict vocabulary. `scripts/keeper_calibration.py` emits these and
+# `policy_from_study` parses them, so one module owns the strings rather than
+# both retyping them.
+PASS_VERDICT = "pass"
+FALLBACK_PREFIX = "fallback:k="
+CHOSEN_ESTIMATOR = "fitted-k"
 
 
 def policy_from_study(report: pd.DataFrame, pt_col: str, ramp_width: float) -> FoldPolicy:
@@ -149,16 +154,16 @@ def policy_from_study(report: pd.DataFrame, pt_col: str, ramp_width: float) -> F
     `n0` and `gate` come from the report too -- the coefficients are only
     interpretable against the ones they were fit under.
     """
-    fitted = report.loc[report["estimator"] == "fitted-k"]
+    fitted = report.loc[report["estimator"] == CHOSEN_ESTIMATOR]
     if fitted.empty:
         raise ValueError("report contains no 'fitted-k' rows")
     coefficients: dict[str, float] = {}
     for column, row in fitted.set_index("column").iterrows():
         verdict = str(row["verdict"])
-        if verdict == "pass":
+        if verdict == PASS_VERDICT:
             coefficients[str(column)] = round(float(row["k_full"]), 3)
-        elif verdict.startswith(_FALLBACK_PREFIX):
-            coefficients[str(column)] = float(verdict.removeprefix(_FALLBACK_PREFIX))
+        elif verdict.startswith(FALLBACK_PREFIX):
+            coefficients[str(column)] = float(verdict.removeprefix(FALLBACK_PREFIX))
         else:
             raise ValueError(f"unrecognized verdict for {column!r}: {verdict!r}")
     n0 = fitted["n0"].unique()

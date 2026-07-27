@@ -63,14 +63,21 @@ def fold_rates(
     folded, and needs no weight. A NaN residual means "no observation" and passes
     through unmoved -- it must never read as a move of zero-minus-base.
 
-    Raises on a misaligned weight index. Pandas would otherwise reindex a
-    mismatched Series to all-NaN and return a silently NaN frame; spec 5.5 notes
-    `safe_float` then coerces that to a plausible-looking 0.0 downstream. Serve
-    time reads realized playing time from a different frame than the projections,
-    so this is a live trap, not a theoretical one.
+    Raises on a misaligned weight index -- for EVERY supplied weight, folded or
+    not. Pandas would otherwise reindex a mismatched Series to all-NaN and return
+    a silently NaN frame; spec 5.5 notes `safe_float` then coerces that to a
+    plausible-looking 0.0 downstream. Serve time reads realized playing time from
+    a different frame than the projections, so this is a live trap.
+
+    Also raises when `k` names a column `base` does not have. That direction is a
+    mistake -- you asked to fold something that is not there -- and silently
+    ignoring it is how a `pa` coefficient goes missing without anyone noticing.
     """
     cols = base.columns
     if isinstance(k, Mapping):
+        unknown = [col for col in k if col not in cols]
+        if unknown:
+            raise KeyError(f"k names column(s) absent from base: {unknown}")
         factors = pd.Series([float(k.get(col, 0.0)) for col in cols], index=cols)
     else:
         factors = pd.Series(float(k), index=cols)
@@ -79,12 +86,14 @@ def fold_rates(
         missing = [col for col in folded if col not in weight]
         if missing:
             raise KeyError(f"no fold weight for column(s) {missing}; k folds them")
-        # An unfolded column needs no weight, so fill it with a harmless one.
-        per_col = {col: weight[col] if col in weight else base[col] * 0.0 for col in cols}
+        # An unfolded column needs no weight; 0.0 broadcasts against base.index.
+        per_col: dict[str, pd.Series | float] = {col: weight.get(col, 0.0) for col in cols}
     else:
         per_col = dict.fromkeys(cols, weight)
-    for col in folded:
-        if not per_col[col].index.equals(base.index):
+    # Validate EVERY supplied weight, not just the folded ones: a misaligned
+    # Series on an unfolded column would still reindex that column to all-NaN.
+    for col, w in per_col.items():
+        if isinstance(w, pd.Series) and not w.index.equals(base.index):
             raise ValueError(f"weight index for {col!r} does not match the base index")
     weights = pd.DataFrame(per_col, index=base.index)
     moved: pd.DataFrame = base + residual[cols].fillna(0.0).mul(weights).mul(factors, axis=1)

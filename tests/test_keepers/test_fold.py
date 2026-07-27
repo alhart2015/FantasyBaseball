@@ -145,3 +145,32 @@ def test_fold_rates_scalar_and_mapping_agree() -> None:
     scalar = fold_rates(base, resid, weight, k=0.6)
     mapping = fold_rates(base, resid, weight, k={"hr_pa": 0.6, "sb_pa": 0.6})
     pd.testing.assert_frame_equal(scalar, mapping)
+
+
+def test_fold_rates_rejects_a_misaligned_weight_on_an_unfolded_column() -> None:
+    # An unfolded column would still be reindexed to all-NaN by a mismatched
+    # weight, so the guard must walk every supplied weight, not just folded ones.
+    base = pd.DataFrame({"hr_pa": [0.04], "sb_pa": [0.02]}, index=[7])
+    resid = pd.DataFrame({"hr_pa": [0.01], "sb_pa": [0.01]}, index=[7])
+    weights = {
+        "hr_pa": pd.Series([1.0], index=[7]),
+        "sb_pa": pd.Series([1.0], index=[999]),  # misaligned, and unfolded below
+    }
+    with pytest.raises(ValueError, match="does not match the base index"):
+        fold_rates(base, resid, weights, k={"hr_pa": 1.0})
+
+
+def test_fold_rates_rejects_a_coefficient_for_a_column_that_is_not_there() -> None:
+    # Handing a full policy to a base frame missing `pa` must not silently drop
+    # the playing-time coefficient.
+    base = pd.DataFrame({"hr_pa": [0.04]}, index=[7])
+    resid = pd.DataFrame({"hr_pa": [0.01]}, index=[7])
+    with pytest.raises(KeyError, match="absent from base"):
+        fold_rates(base, resid, pd.Series([1.0], index=[7]), k={"hr_pa": 0.5, "pa": 1.0})
+
+
+def test_fold_rates_scalar_zero_still_validates_the_weight_index() -> None:
+    base = pd.DataFrame({"hr_pa": [0.04]}, index=[7])
+    resid = pd.DataFrame({"hr_pa": [0.01]}, index=[7])
+    with pytest.raises(ValueError, match="does not match the base index"):
+        fold_rates(base, resid, pd.Series([1.0], index=[0]), k=0.0)

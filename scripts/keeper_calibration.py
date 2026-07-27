@@ -43,6 +43,7 @@ from fantasy_baseball.keepers.calibration import (
     leave_one_out,
     survivorship,
 )
+from fantasy_baseball.keepers.coefficients import FALLBACK_PREFIX, PASS_VERDICT
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 CACHE_DIR = REPO_ROOT / "data" / "cache" / "keeper_calibration"
@@ -155,7 +156,7 @@ def _verdict(folds: dict[str, pd.DataFrame]) -> tuple[str, dict[str, int]]:
     n_pairs = len(chosen)
     wins = {name: int((chosen < errors[name]).sum()) for name in ENDPOINT_NAMES}
     if all(w * 2 > n_pairs for w in wins.values()):
-        return "pass", wins
+        return PASS_VERDICT, wins
     zero_wins = int((errors[zero_name] < errors[full_name]).sum())
     if zero_wins * 2 > n_pairs:
         best = zero_name
@@ -163,7 +164,7 @@ def _verdict(folds: dict[str, pd.DataFrame]) -> tuple[str, dict[str, int]]:
         best = full_name
     else:
         best = min(ENDPOINT_NAMES, key=lambda name: float(errors[name].mean()))
-    return f"fallback:{best}", wins
+    return FALLBACK_PREFIX + best.removeprefix("k="), wins
 
 
 def _summarize(
@@ -269,20 +270,32 @@ def level_term_diagnostic(
                 **{f"err_{int(r.held_out_year)}": float(r.error) for r in loo.itertuples()},
             }
         )
-    residual = pd.concat([p.residual[pt_col] for p in kept])
+    return pd.DataFrame(rows)
+
+
+def playing_time_levels(pairs: list[YearPair], pt_col: str, gate: float) -> pd.DataFrame:
+    """The systematic LEVEL in the playing-time residual (finding B.3).
+
+    Separate from `level_term_diagnostic` because it answers a different question
+    with a disjoint column set; merging them padded 44% of the artifact with
+    blanks and made `estimator` carry a magic 'levels' value.
+    """
+    kept = [gated(p, gate) for p in pairs]
     base = pd.concat([p.base[pt_col] for p in kept])
     realized = pd.concat([p.realized_pt for p in kept])
     target_pt = pd.concat([p.target_pt for p in kept])
-    levels = {
-        "column": pt_col,
-        "estimator": "levels",
-        "mean_zips_pt": float(base.mean()),
-        "mean_actual_pt": float(realized.mean()),
-        "mean_residual": float(residual.mean()),
-        "mean_target_minus_base": float((target_pt - base).mean()),
-        "frac_non_survivors": float((target_pt == 0).mean()),
-    }
-    return pd.DataFrame([*rows, levels])
+    return pd.DataFrame(
+        [
+            {
+                "column": pt_col,
+                "mean_zips_pt": float(base.mean()),
+                "mean_actual_pt": float(realized.mean()),
+                "mean_residual": float((realized - base).mean()),
+                "mean_target_minus_base": float((target_pt - base).mean()),
+                "frac_non_survivors": float((target_pt == 0).mean()),
+            }
+        ]
+    )
 
 
 class _WithIntercept(ShrunkTransfer):
@@ -350,10 +363,15 @@ def main() -> None:
         print(f"wrote {out}")
 
         diag = level_term_diagnostic(pairs, cfg.pt_col, cfg.n0, cfg.gate)
+        levels = playing_time_levels(pairs, cfg.pt_col, cfg.gate)
         diag_out = ANALYSIS_DIR / f"keeper_calibration_{player_type}_level_term.csv"
+        levels_out = ANALYSIS_DIR / f"keeper_calibration_{player_type}_pt_levels.csv"
         diag.to_csv(diag_out, index=False)
+        levels.to_csv(levels_out, index=False)
         _print_table(f"{player_type}: playing-time level term (finding B.3)", diag)
+        _print_table(f"{player_type}: playing-time levels (finding B.3)", levels)
         print(f"wrote {diag_out}")
+        print(f"wrote {levels_out}")
 
         if not args.skip_sweep:
             sweep = n0_sweep(pairs, cfg.columns, cfg.n0_grid, pt_col=cfg.pt_col, gate=cfg.gate)

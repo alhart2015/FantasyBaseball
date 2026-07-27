@@ -1,0 +1,2 @@
+column,mean_zips_pt,mean_actual_pt,mean_residual,mean_target_minus_base,frac_non_survivors
+ip,94.07445212837852,97.04639339053065,2.971941262152144,-20.995011391168475,0.10676835081029552

@@ -1,6 +1,6 @@
 """Hold the shipped constants against the study's own output.
 
-Without this, `coefficients.py` is twelve hand-typed floats that drift silently
+Without this, `coefficients.py` is thirteen hand-typed floats that drift silently
 from the CSVs the moment the study is re-run (e.g. when the 2025->2026 pair
 opens after the 2026 season). A failure here means the study moved and the
 shipped policy has not been updated deliberately -- it is not a flaky test.

@@ -95,23 +95,8 @@ def test_both_loaders_decompose_to_the_same_rates() -> None:
 def test_vintage_columns_match_the_rate_constants() -> None:
     # Same invariant the actuals loader is held to, so a positional zip() over
     # either side of the residual cannot mis-pair.
-    hitters = pd.DataFrame(
-        {
-            "MLBAMID": [1],
-            "PA": [600],
-            "AB": [540],
-            "H": [162],
-            "R": [90],
-            "HR": [30],
-            "RBI": [100],
-            "SB": [12],
-        }
-    )
-    pitchers = pd.DataFrame(
-        {"MLBAMID": [2], "IP": [180.0], "ER": [60], "BB": [45], "H": [150], "SO": [200], "W": [15]}
-    )
-    assert list(decompose_hitters(hitters).columns) == [HITTER_PT, *HITTER_RATES]
-    assert list(decompose_pitchers(pitchers).columns) == [PITCHER_PT, *PITCHER_RATES]
+    assert list(decompose_hitters(zips_hitters()).columns) == [HITTER_PT, *HITTER_RATES]
+    assert list(decompose_pitchers(zips_pitchers()).columns) == [PITCHER_PT, *PITCHER_RATES]
 
 
 def test_load_vintage_falls_back_to_a_year_suffixed_filename(tmp_path: Path) -> None:

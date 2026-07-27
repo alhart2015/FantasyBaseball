@@ -10,14 +10,15 @@ Two layers, deliberately separated:
   `coefficients` holds the shipped result.
 
 `POLICIES` is the production entry point: it carries the fitted coefficients
-together with the `n0`, gate and ramp width they are conditional on.
+together with the `n0`, gate and ramp width they are conditional on. The fold
+primitives are deliberately NOT re-exported here -- `FoldPolicy.serve_weights`
+composes them, and its docstring says not to assemble them by hand.
 """
 
 from __future__ import annotations
 
 from fantasy_baseball.keepers.cache import fetch_or_cache
 from fantasy_baseball.keepers.coefficients import POLICIES, FoldPolicy
-from fantasy_baseball.keepers.fold import fold_rates, gate_ramp, shrink
 from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 from fantasy_baseball.keepers.savant import (
     fetch_batter_barrels,
@@ -35,7 +36,4 @@ __all__ = [
     "fetch_or_cache",
     "fetch_pitcher_expected",
     "fetch_savant_hr",
-    "fold_rates",
-    "gate_ramp",
-    "shrink",
 ]

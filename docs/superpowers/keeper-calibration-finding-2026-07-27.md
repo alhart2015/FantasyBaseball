@@ -273,7 +273,8 @@ pitcher ip, mean held-out error:  k=0   3335    k=1   3190    fitted-k   3001   
 ```
 
 Regenerate with `python scripts/keeper_calibration.py`; the table above and the level figures
-come from `data/analysis/keeper_calibration_{hitter,pitcher}_level_term.csv`. The `fitted-k+c`
+come from `data/analysis/keeper_calibration_{hitter,pitcher}_level_term.csv` and
+`_pt_levels.csv`. The `fitted-k+c`
 row is a **diagnostic estimator that is never shipped** -- it exists so this finding's decisive
 number is reproducible from the committed script rather than taken on trust.
 
@@ -402,7 +403,7 @@ rows.
 | 4 | Stability reported per category | B.4 -- per-fold fits and spreads |
 | 5 | Survivorship handled explicitly | B.6, measured in A |
 | 6 | Conditioning stated | B.5 -- `k*w` identified, `k` alone is not |
-| 7 | Amplification bounded or refused | B.2 -- clamp to [0,1]; nothing out of range |
+| 7 | Amplification bounded or refused | B.2 -- clamp to [0,1]; no shipped coefficient amplifies, and per-fold clamping is reported (`folds_clamped`) rather than hidden |
 | 8 | Train/serve gap stated | B.8 -- ~0.57x rates, ~0.65x playing time |
 | 9 | Gate discontinuity quantified; thresholds chosen | B.7 (78.7% / 44.6%, ramp specified); A.3 |
 | 10 | Shrink form and constants chosen | A.4, conditioned in B.5 |
