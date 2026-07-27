@@ -5,11 +5,30 @@ skills needed**. Everything below is self-contained.
 
 ## TL;DR
 
-- Branch: **`feat/266-keeper-calibration`** (11 commits ahead of `main`, nothing pushed).
-- Spec and plan are written, adversarially reviewed, and committed.
-- **Tasks 1-2 of 8 are implemented and passing.** Resume at **Task 3**.
-- The plan file is the instruction set: `docs/superpowers/plans/2026-07-27-keeper-calibration-study.md`.
-  Each task has literal code to write. Just work through them in order.
+**Increment 1 is COMPLETE.** All 8 tasks are implemented, run for real, and committed on
+`feat/266-keeper-calibration` (nothing pushed, no PR).
+
+**Read the finding, not this file:**
+`docs/superpowers/keeper-calibration-finding-2026-07-27.md`. Part A is the pre-registration
+(metric, gates, shrink constants, committed before any fitting code); Part B is the result.
+
+**Headline:** `k` is roughly 0.4-0.7 and decisively not zero. Ten of twelve coefficients pass
+the per-coefficient bar; the two fallbacks land on `k=1`, never `k=0`; every coefficient beats
+the stale-baseline endpoint on all three held-out pairs. Coefficients are conditional on
+`n0 = 200 PA` / `n0 = 50 IP` -- the product `k*w` is identified, `k` alone is not.
+
+**The three things increment 2 must not miss** (full list in the finding's B.10):
+1. Use `fold.gate_ramp`, not `gate_mask`, on the serve path. The shipped playing-time
+   coefficients make the hard gate a 78.7% (hitter) / 44.6% (pitcher) cliff across two plate
+   appearances.
+2. Resolve the playing-time level term. The fit sample's mean PA residual is **-91, not the
+   spec's +58** -- ZiPS over-projects playing time on this population. An unshipped intercept
+   would cut hitter-PA error 19%; whether it belongs in production is the open question.
+3. Re-fit `sb_pa` first when the 2025->2026 pair opens. It is the least stable coefficient
+   (spread 0.257, CI [0.480, 0.793]) and is reported as provisional.
+
+Everything below is the original handoff, kept for context on how the work was framed. Its
+"resume at Task 3" instructions are spent.
 
 ## What this feature is
 
