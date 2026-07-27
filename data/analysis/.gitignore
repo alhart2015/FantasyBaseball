@@ -1,0 +1,8 @@
+# data/analysis/ holds both committed deliverables and scratch script output.
+# Default to ignoring, and allow the #266 study's artifacts explicitly -- they
+# are the deliverable, and tests/test_keepers/test_coefficients.py binds the
+# shipped coefficients to them (it SKIPS if they are absent, so untracking them
+# would silently remove the guard rather than fail).
+*
+!.gitignore
+!keeper_calibration_*.csv

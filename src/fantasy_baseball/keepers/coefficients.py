@@ -12,8 +12,9 @@ Three things a caller must not get wrong:
 
   * **The coefficients are conditional on `n0`.** `k` and the shrink enter the
     fold multiplicatively, and the study found `k` scales almost exactly
-    inversely with `n0` while held-out error does not move. Only the product
-    `k * w` is identified. Using these `k` values with a different `n0` is
+    inversely with the shrink WEIGHT while held-out error does not move -- so `k`
+    RISES with `n0` (hr_pa: 0.407 at n0=100, 0.494 at 200, 0.655 at 400). Only the
+    product `k * w` is identified. Using these `k` values with a different `n0` is
     meaningless (finding B.5).
   * **Apply `fold.gate_ramp`, not `fold.gate_mask`.** The hard gate is a 78.7%
     (hitter) / 44.6% (pitcher) cliff across two plate appearances, because the
@@ -63,7 +64,8 @@ class FoldPolicy:
         mechanical, and so no caller has to assemble them from primitives:
 
           * **Ramp, not hard gate.** The gate is a 78.7% (hitter) / 44.6%
-            (pitcher) cliff across two plate appearances because the PT term is
+            cliff for hitters across two plate appearances (44.6% across two
+            innings for pitchers) because the PT term is
             unshrunk. `gate_ramp` removes the step; `gate_mask` is for selecting
             fit-sample rows, never for serving.
           * **Rates are shrunk, playing time is not.** Damping the PT residual by
@@ -88,7 +90,13 @@ _HITTER = FoldPolicy(
             "sb_pa": 0.637,  # provisional -- widest CI, 2023 rules break (B.4)
             "h_ab": 0.428,
             "ab_pa": 0.687,
-            "pa": 1.000,  # fallback:k=1
+            # fallback:k=1 per the pre-registered rule. NOT a settled result: the
+            # fitted value is 0.646 (CI [0.584, 0.708], excluding 1.0), and k=1 wins
+            # out of sample only because it stands in for an unshipped -83 PA level
+            # term. Finding B.3 calls this the largest open item for increment 2,
+            # and note main's shipped keeper path applies an up-only PT heal
+            # (analysis/keeper_value.py DEFAULT_PT_HEAL_CAP) that pulls the other way.
+            "pa": 1.000,
         }
     ),
     n0=200.0,
@@ -97,8 +105,11 @@ _HITTER = FoldPolicy(
     pt_col="pa",
 )
 
-# `k_ip` is the k=1 fallback (fitted 0.970, CI [0.866, 1.073]); the fitted value
-# and the endpoint are 0.4% apart, so strikeout rate carries forward in full.
+# `k_ip` is the k=1 fallback (fitted 0.970, CI [0.866, 1.073]). The two coefficients
+# are 3.0% apart but their HELD-OUT ERROR is only 0.36% apart, which is why the
+# pre-registered rule resolves it to the endpoint: strikeout rate carries forward
+# in full. Note the clamp DID bind in the ex-2023 fold (raw 1.024) and at n0=100
+# (raw 1.276) -- `out_of_range` only inspects the full-sample fit.
 _PITCHER = FoldPolicy(
     coefficients=MappingProxyType(
         {
@@ -128,7 +139,7 @@ def policy_from_study(report: pd.DataFrame, pt_col: str, ramp_width: float) -> F
     This is the rule that turns a study row into a shipped constant, and it lives
     here rather than in prose or in a test so the re-fit promised for `sb_pa`
     after the 2026 season is a mechanical diff instead of a hand transcription of
-    twelve floats:
+    thirteen floats (six hitter rates + PA, five pitcher rates + IP):
 
       * `verdict == "pass"`   -> ship the fitted `k_full`
       * `verdict == "fallback:k=X"` -> ship the ENDPOINT X that beat it, not the

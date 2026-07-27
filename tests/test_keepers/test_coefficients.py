@@ -25,12 +25,16 @@ def _report(player_type: str) -> pd.DataFrame:
 
 @pytest.mark.parametrize("player_type", ["hitter", "pitcher"])
 def test_shipped_policy_matches_the_study(player_type: str) -> None:
-    """The whole policy, derived by the library's own rule -- not just the k values.
+    """The coefficients, n0 and gate, derived by the library's own rule.
 
     Deriving rather than re-implementing the comparison means n0 and gate are
     checked too. Re-running the study at a different n0 previously moved every k
     while `POLICIES` silently kept the old n0, which the module docstring calls
     meaningless.
+
+    `ramp_width` and `pt_col` are NOT checked here: the study does not measure
+    them, so they are fed in from the policy under test and cannot fail. They are
+    covered by the serve_weights tests below.
     """
     policy = POLICIES[player_type]
     derived = policy_from_study(

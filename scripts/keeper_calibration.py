@@ -99,10 +99,17 @@ def build_report(
     columns: tuple[str, ...],
     n0: float,
     *,
-    pt_col: str | None = None,
-    gate: float = 0.0,
+    pt_col: str | None,
+    gate: float,
 ) -> pd.DataFrame:
     """One row per (estimator, coefficient), with a per-coefficient verdict.
+
+    `pt_col` and `gate` are REQUIRED, with no defaults, deliberately. Omitting
+    them used to be possible and silently reproduced both bugs this study already
+    fixed once: `gate=0.0` fits on rows the study excludes, and `pt_col=None`
+    fits the playing-time column shrunk and weighted, which zero-weights every
+    non-survivor. Pass `pt_col=None` explicitly if the frames genuinely carry no
+    playing-time column.
 
     Acceptance is per coefficient and by majority of held-out pairs, never pooled
     across coefficients and never by mean error (finding A.2, spec 6.6). Section
@@ -203,8 +210,17 @@ def _summarize(
             "k_raw_min": float(raw.min()),
             "k_raw_max": float(raw.max()),
             "k_raw_spread": float(raw.max() - raw.min()),
-            # Requirement 7: an amplifying fit is flagged, never silent.
-            "out_of_range": bool(params["k_raw"] < 0.0 or params["k_raw"] > 1.0),
+            # Requirement 7: an amplifying fit is flagged, never silent. This must
+            # consider EVERY fold, not just the full-sample fit -- k_ip's ex-2023
+            # fold fits 1.024 and clamps while the full-sample fit sits at 0.970,
+            # which a full-sample-only flag reported as clean.
+            "out_of_range": bool(
+                params["k_raw"] < 0.0
+                or params["k_raw"] > 1.0
+                or (raw < 0.0).any()
+                or (raw > 1.0).any()
+            ),
+            "folds_clamped": int(((raw < 0.0) | (raw > 1.0)).sum()),
         }
     )
     return row
@@ -228,6 +244,74 @@ def n0_sweep(
         # `build_report` already emits the n0 it was run at -- do not re-insert it.
         frames.append(chosen[["n0", "column", "k_full", "k_raw_full", "mean_error", "verdict"]])
     return pd.concat(frames, ignore_index=True)
+
+
+def level_term_diagnostic(
+    pairs: list[YearPair], pt_col: str, n0: float, gate: float
+) -> pd.DataFrame:
+    """Evidence for finding B.3: how much of the playing-time error is a LEVEL.
+
+    Scores the shipped form against a variant that applies the fitted intercept.
+    The intercept's production value is 0 (it corrects the ZiPS_Y-targets-year-Y
+    gap, which ZiPS_2027 does not have), so this is a diagnostic and not a shipped
+    option -- but it is the number that explains why `pa` falls back to k=1, and
+    B.3 quotes it, so the script has to be able to regenerate it.
+    """
+    kept = [gated(p, gate) for p in pairs]
+    rows: list[dict[str, object]] = []
+    for est in (ZeroTransfer(), FullTransfer(), ShrunkTransfer(), _WithIntercept()):
+        loo = leave_one_out(est, kept, pt_col, n0, shrunk=False, weighted=False)
+        rows.append(
+            {
+                "column": pt_col,
+                "estimator": est.name,
+                "mean_error": float(loo["error"].mean()),
+                **{f"err_{int(r.held_out_year)}": float(r.error) for r in loo.itertuples()},
+            }
+        )
+    residual = pd.concat([p.residual[pt_col] for p in kept])
+    base = pd.concat([p.base[pt_col] for p in kept])
+    realized = pd.concat([p.realized_pt for p in kept])
+    target_pt = pd.concat([p.target_pt for p in kept])
+    levels = {
+        "column": pt_col,
+        "estimator": "levels",
+        "mean_zips_pt": float(base.mean()),
+        "mean_actual_pt": float(realized.mean()),
+        "mean_residual": float(residual.mean()),
+        "mean_target_minus_base": float((target_pt - base).mean()),
+        "frac_non_survivors": float((target_pt == 0).mean()),
+    }
+    return pd.DataFrame([*rows, levels])
+
+
+class _WithIntercept(ShrunkTransfer):
+    """Diagnostic only: applies the calibration intercept at predict time.
+
+    Never shipped -- see `level_term_diagnostic`. Exists so B.3's numbers come out
+    of the committed script rather than an ad-hoc session.
+    """
+
+    name = "fitted-k+c"
+
+    def fit(
+        self,
+        pairs: list[YearPair],
+        column: str,
+        n0: float,
+        *,
+        shrunk: bool = True,
+        weighted: bool = True,
+    ) -> FittedK:
+        fitted = super().fit(pairs, column, n0, shrunk=shrunk, weighted=weighted)
+        return _ShiftedK(fitted.params)
+
+
+class _ShiftedK(FittedK):
+    """`FittedK` that DOES apply `c_fit`. Diagnostic only."""
+
+    def predict(self, base: pd.Series, residual: pd.Series, weight: pd.Series) -> pd.Series:
+        return super().predict(base, residual, weight) + self.params["c_fit"]
 
 
 def _print_table(title: str, frame: pd.DataFrame) -> None:
@@ -265,6 +349,12 @@ def main() -> None:
         _print_table(f"{player_type}: leave-one-pair-out (gate {cfg.gate}, n0 {cfg.n0})", report)
         print(f"wrote {out}")
 
+        diag = level_term_diagnostic(pairs, cfg.pt_col, cfg.n0, cfg.gate)
+        diag_out = ANALYSIS_DIR / f"keeper_calibration_{player_type}_level_term.csv"
+        diag.to_csv(diag_out, index=False)
+        _print_table(f"{player_type}: playing-time level term (finding B.3)", diag)
+        print(f"wrote {diag_out}")
+
         if not args.skip_sweep:
             sweep = n0_sweep(pairs, cfg.columns, cfg.n0_grid, pt_col=cfg.pt_col, gate=cfg.gate)
             sweep_out = ANALYSIS_DIR / f"keeper_calibration_{player_type}_n0_sweep.csv"
@@ -274,10 +364,15 @@ def main() -> None:
 
     # The finding's Part A cites this table as the evidence that pair membership
     # is not preconditioned on survival (0.755/0.777/0.795, not 0.84-0.87). It
-    # must be regenerable by the script, not assembled by hand.
+    # must be regenerable by the script, not assembled by hand -- but a partial
+    # run would otherwise overwrite the committed both-types artifact with one
+    # player type's rows, silently shrinking the evidence Part A quotes.
     survivorship_out = ANALYSIS_DIR / "keeper_calibration_survivorship.csv"
-    pd.concat(survivorship_frames, ignore_index=True).to_csv(survivorship_out, index=False)
-    print(f"wrote {survivorship_out}")
+    if len(types) == 2:
+        pd.concat(survivorship_frames, ignore_index=True).to_csv(survivorship_out, index=False)
+        print(f"wrote {survivorship_out}")
+    else:
+        print(f"skipped {survivorship_out.name}: needs both player types (--player-type both)")
 
 
 if __name__ == "__main__":

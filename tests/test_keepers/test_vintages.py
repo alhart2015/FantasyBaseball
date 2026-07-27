@@ -134,3 +134,20 @@ def test_load_vintage_raises_when_no_export_exists(tmp_path: Path) -> None:
 def test_load_vintage_rejects_an_unknown_player_type(tmp_path: Path) -> None:
     with pytest.raises(ValueError, match="player_type must be"):
         load_vintage(2098, tmp_path, "goalie")
+
+
+@pytest.mark.parametrize("year", [2022, 2023, 2024])
+def test_calibration_vintages_are_preseason_not_rest_of_season(year: int) -> None:
+    """Spec 6.1's non-negotiable constraint, guarded.
+
+    The whole study rests on ZiPS_Y being a PRESEASON projection that has not seen
+    year Y. `data/projections/README.md` tells a human to drop rest-of-season
+    refreshes in under the identical `zips-hitters.csv` name that `load_vintage`
+    globs, so a stray overwrite would invalidate every coefficient silently. A RoS
+    file is short-horizon (2026's averages ~107 mean PA); a preseason one is not.
+    """
+    root = Path(__file__).resolve().parents[2] / "data" / "projections"
+    hitters = load_vintage(year, root, "hitter")
+    assert hitters["pa"].mean() > 200, f"{year} ZiPS hitters look rest-of-season, not preseason"
+    pitchers = load_vintage(year, root, "pitcher")
+    assert pitchers["ip"].mean() > 40, f"{year} ZiPS pitchers look rest-of-season, not preseason"

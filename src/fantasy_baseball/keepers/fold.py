@@ -60,16 +60,33 @@ def fold_rates(
 
     Build the weights with `coefficients.FoldPolicy.serve_weights`, which composes
     them correctly; do not assemble them by hand. A column missing from `k` is not
-    folded. A NaN residual means "no observation" and passes through unmoved -- it
-    must never read as a move of zero-minus-base.
+    folded, and needs no weight. A NaN residual means "no observation" and passes
+    through unmoved -- it must never read as a move of zero-minus-base.
+
+    Raises on a misaligned weight index. Pandas would otherwise reindex a
+    mismatched Series to all-NaN and return a silently NaN frame; spec 5.5 notes
+    `safe_float` then coerces that to a plausible-looking 0.0 downstream. Serve
+    time reads realized playing time from a different frame than the projections,
+    so this is a live trap, not a theoretical one.
     """
     cols = base.columns
     if isinstance(k, Mapping):
         factors = pd.Series([float(k.get(col, 0.0)) for col in cols], index=cols)
     else:
         factors = pd.Series(float(k), index=cols)
-    per_col = weight if isinstance(weight, Mapping) else dict.fromkeys(cols, weight)
-    weights = pd.DataFrame({col: per_col[col] for col in cols}, index=base.index)
+    folded = [col for col in cols if factors[col] != 0.0]
+    if isinstance(weight, Mapping):
+        missing = [col for col in folded if col not in weight]
+        if missing:
+            raise KeyError(f"no fold weight for column(s) {missing}; k folds them")
+        # An unfolded column needs no weight, so fill it with a harmless one.
+        per_col = {col: weight[col] if col in weight else base[col] * 0.0 for col in cols}
+    else:
+        per_col = dict.fromkeys(cols, weight)
+    for col in folded:
+        if not per_col[col].index.equals(base.index):
+            raise ValueError(f"weight index for {col!r} does not match the base index")
+    weights = pd.DataFrame(per_col, index=base.index)
     moved: pd.DataFrame = base + residual[cols].fillna(0.0).mul(weights).mul(factors, axis=1)
     return moved.clip(lower=0.0)
 
@@ -104,6 +121,14 @@ def reconstruct_hitter(rates: pd.DataFrame, pa: pd.Series) -> pd.DataFrame:
 
 
 def reconstruct_pitcher(rates: pd.DataFrame, ip: pd.Series) -> pd.DataFrame:
+    """Rebuild a pitcher line from folded rates.
+
+    NO SAVES. `SV` is populated in 0 of 1838 rows in the ZiPS out-years, so spec
+    5.1 excludes relievers from the out-year ranking entirely and SV is not folded.
+    A consumer that scores SV (`analysis.keeper_value.PITCHER_FIELDS` does) must
+    supply it from elsewhere or exclude the category -- it will not be in this
+    frame, and a missing column reads as zero saves.
+    """
     er = ip * rates["er_ip"]
     bb = ip * rates["bb_ip"]
     hits = ip * rates["h_ip"]
@@ -126,12 +151,13 @@ def gate_ramp(realized_pt: pd.Series, threshold: float, width: float) -> pd.Seri
     """A linear on-ramp for the gate, in [0, 1], replacing the hard cliff.
 
     `gate_mask` is fully on or fully off at `threshold`. Because the playing-time
-    term is unshrunk (spec 5.3), that boundary is a large discontinuity: a regular
-    lost to a May injury with a 120-PA line against a 400-PA ZiPS 2026 and a 380-PA
-    ZiPS 2027 passes through at 380 PA just below the gate and folds to
-    380 + k*(120 - 400) PA just above it -- a drop of tens of percent across a
-    couple of plate appearances. Spec 5.4 requires increment 1 either publish that
-    magnitude or specify a ramp; this is the ramp.
+    term is unshrunk (spec 5.3), that boundary is a large discontinuity. Measured
+    at the boundary itself, for a regular lost to a May injury against a 400-PA
+    ZiPS 2026 and a 380-PA ZiPS 2027, with the shipped `pa` coefficient of 1.0:
+    99 realized PA passes through unfolded at 380 PA, while 101 realized PA folds
+    to 380 + 1.0*(101 - 400) = 81 PA -- a 78.7% drop across two plate appearances.
+    The pitcher analogue is 44.6% across two innings. Spec 5.4 requires increment 1
+    either publish that magnitude or specify a ramp; this is the ramp.
 
     Ramps linearly from 0 at `threshold` to 1 at `threshold + width`. Below the
     threshold a player is unfolded exactly as before, so the passthrough rule and

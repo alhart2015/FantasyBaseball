@@ -174,7 +174,17 @@ class _FixedTransfer:
 
 
 class ZeroTransfer(_FixedTransfer):
-    """k = 0: ignore the season entirely. This is today's stale-baseline behaviour."""
+    """k = 0: ignore the season entirely -- the do-nothing endpoint spec 6.2
+    requirement 3 requires the study to beat.
+
+    NOT what main currently ships. Since PR #259, `analysis/keeper_value.py`
+    scales a current-season anchor by a ZiPS ratio and regresses it toward the
+    ZiPS out-year at `DEFAULT_OUT_YEAR_REGRESSION = 0.6`, so the incumbent already
+    carries roughly 40% of the realized-season signal. Beating `k=0` therefore
+    says the fold beats ignoring the season, NOT that it beats the shipped
+    estimator. Increment 2 owns that comparison -- increment 1 cannot make it
+    without importing `fantasy_baseball.analysis`, which spec 9 forbids.
+    """
 
     name = "k=0"
     k = 0.0
@@ -358,7 +368,9 @@ class ShrunkTransfer:
        vintage carries an Age column (spec requirement 1).
     12. **The systematic component of the playing-time residual.** ZiPS hedges
        playing time pool-wide, so the PT residual has a large nonzero mean that is
-       not surprise (2025 regulars ran +58 mean PA versus projection). The same
+       not surprise. MEASURED ON THIS FIT SAMPLE it is -91 mean PA, not the +58 the
+       spec quotes for a narrower "regulars" population -- ZiPS over-projects PA on
+       the ZiPS-matched pool, and the fitted level term is -83.1 PA. The same
        intercept separates that level offset from the cross-sectional signal: `k`
        is then the slope on a player's deviation, not a blend of level and slope.
        This is the requirement that killed the two earlier estimators, and it is

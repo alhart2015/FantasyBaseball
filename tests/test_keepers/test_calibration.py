@@ -243,11 +243,41 @@ def test_estimator_reports_a_confidence_interval() -> None:
 
 
 def test_estimator_drops_rows_the_metric_would_drop() -> None:
-    # Fit sample == eval sample: NaN targets (non-survivors) and zero-weight rows
-    # must not enter the weighted fit either.
+    # Fit sample == eval sample: a NaN target (a non-survivor, who has no Y+1
+    # rate) must not enter the weighted fit. The zero-weight half of `usable` is
+    # covered by test_unweighted_evaluation_keeps_rows_with_zero_target_playing_time.
     pair = _planted_pair(2022, k_true=0.6, c_true=0.0, n=300, n0=200.0, seed=5)
     target = pair.target.copy()
     target.iloc[:100, 0] = np.nan
     holed = replace(pair, target=target)
     fitted = ShrunkTransfer().fit([holed], "hr_pa", n0=200.0)
     assert fitted.params["n_fit"] == 200
+
+
+def test_build_pairs_refuses_an_incomplete_season(tmp_path: Path) -> None:
+    """Spec 9 requires this test and it never existed.
+
+    `keepers/cache.py` `fetch_or_cache` NEVER invalidates, so a mid-season pull
+    freezes permanently -- the one failure mode here that cannot self-heal. The
+    guard must fire BEFORE any fetch, not after.
+    """
+    fetched: list[int] = []
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(
+        calibration,
+        "fetch_mlb_season",
+        lambda cache_dir, year, group: fetched.append(year) or pd.DataFrame(),
+    )
+    try:
+        with pytest.raises(ValueError, match="needs a complete"):
+            calibration.build_pairs(
+                "hitter", tmp_path, tmp_path, years=(calibration.LAST_COMPLETE_SEASON,)
+            )
+    finally:
+        monkey.undo()
+    assert fetched == [], "the guard must fire before any season is fetched and cached"
+
+
+def test_build_pairs_rejects_an_unknown_player_type(tmp_path: Path) -> None:
+    with pytest.raises(ValueError, match="player_type must be"):
+        calibration.build_pairs("goalie", tmp_path, tmp_path)

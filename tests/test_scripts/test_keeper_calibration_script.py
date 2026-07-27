@@ -48,7 +48,9 @@ def _synthetic_pairs(k_true: float = 0.5) -> list[YearPair]:
 
 
 def test_build_report_covers_every_coefficient_and_estimator() -> None:
-    report = script.build_report(_synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=N0)
+    report = script.build_report(
+        _synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=N0, pt_col=None, gate=0.0
+    )
     assert set(report["column"]) == {"hr_pa", "sb_pa"}
     assert {"k=0", "k=1"} <= set(report["estimator"])
     # Acceptance is per coefficient, not pooled -- spec 6.6.
@@ -58,7 +60,9 @@ def test_build_report_covers_every_coefficient_and_estimator() -> None:
 def test_report_passes_a_coefficient_the_fit_recovers() -> None:
     # k_true = 0.5 sits strictly between the two endpoints, so a working fit
     # must beat both on every held-out pair.
-    report = script.build_report(_synthetic_pairs(0.5), columns=("hr_pa",), n0=N0)
+    report = script.build_report(
+        _synthetic_pairs(0.5), columns=("hr_pa",), n0=N0, pt_col=None, gate=0.0
+    )
     row = report.loc[report["estimator"] == "fitted-k"].iloc[0]
     assert row["verdict"] == "pass"
     assert row["k_full"] == pytest.approx(0.5, abs=0.05)
@@ -66,12 +70,16 @@ def test_report_passes_a_coefficient_the_fit_recovers() -> None:
 
 def test_report_falls_back_when_an_endpoint_wins() -> None:
     # k_true = 0 IS the k=0 endpoint, so the fitted estimator cannot beat it.
-    report = script.build_report(_synthetic_pairs(0.0), columns=("hr_pa",), n0=N0)
+    report = script.build_report(
+        _synthetic_pairs(0.0), columns=("hr_pa",), n0=N0, pt_col=None, gate=0.0
+    )
     assert set(report["verdict"]) == {"fallback:k=0"}
 
 
 def test_report_flags_a_coefficient_outside_the_unit_interval() -> None:
-    report = script.build_report(_synthetic_pairs(1.6), columns=("hr_pa",), n0=N0)
+    report = script.build_report(
+        _synthetic_pairs(1.6), columns=("hr_pa",), n0=N0, pt_col=None, gate=0.0
+    )
     row = report.loc[report["estimator"] == "fitted-k"].iloc[0]
     assert bool(row["out_of_range"]) is True
     assert row["k_full"] == 1.0  # shipped value is clamped
@@ -91,7 +99,9 @@ def test_playing_time_column_is_fit_unshrunk_and_unweighted(
         return real(estimator, pairs, column, n0, **kwargs)
 
     monkeypatch.setattr(script, "leave_one_out", spy)
-    script.build_report(_synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=N0, pt_col="sb_pa")
+    script.build_report(
+        _synthetic_pairs(), columns=("hr_pa", "sb_pa"), n0=N0, pt_col="sb_pa", gate=0.0
+    )
 
     pt_calls = [c for c in calls if c["column"] == "sb_pa"]
     rate_calls = [c for c in calls if c["column"] == "hr_pa"]
@@ -114,3 +124,11 @@ def test_n0_sweep_reports_one_row_per_grid_point_and_column() -> None:
     # k scales inversely with the shrink -- the study's central conditioning point.
     hr = sweep.loc[sweep["column"] == "hr_pa"].sort_values("n0")
     assert hr["k_full"].is_monotonic_increasing
+
+
+def test_build_report_requires_the_gate_and_pt_column() -> None:
+    # Omitting either silently reproduces a bug this study already fixed: an
+    # ungated fit, or the PT column fit shrunk+weighted (which zero-weights every
+    # non-survivor). They must be impossible to forget, not merely documented.
+    with pytest.raises(TypeError):
+        script.build_report(_synthetic_pairs(), columns=("hr_pa",), n0=N0)  # type: ignore[call-arg]

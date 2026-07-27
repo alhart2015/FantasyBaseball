@@ -216,14 +216,26 @@ the three pairs.
 | `h_ip`  | **0.385** | [0.281, 0.489] | 0.410 | 0.362 | 0.394 | 0.048 | 3/3 | 3/3 | **pass** |
 | `ip`    | **0.631** | [0.517, 0.746] | 0.666 | 0.576 | 0.650 | 0.090 | 3/3 | 3/3 | **pass** |
 
-**The headline answer: `k` is roughly 0.4-0.7, and it is decisively not zero.** Ten of the
-twelve coefficients pass; both fallbacks land on `k=1`, never on `k=0`. Every coefficient beats
-the stale-baseline endpoint on all three held-out pairs, without exception. The feature is worth
-building.
+**The headline answer: `k` is roughly 0.4-0.7, and it is decisively not zero.** **Eleven of the
+thirteen** coefficients pass (six hitter rates + PA, five pitcher rates + IP); both fallbacks
+land on `k=1`, never on `k=0`. Every coefficient beats the `k=0` endpoint on all three held-out
+pairs, without exception. The feature is worth building.
 
-**No coefficient is out of range** (`out_of_range` is False everywhere), so requirement 7's
-refusal clause never fires. `k_ip`'s raw fit of 0.970 has a CI that includes 1.0; it is the one
-coefficient where the clamp could plausibly have bound, and it did not.
+**What `k=0` is and is not.** It is the do-nothing endpoint spec 6.2 requirement 3 names --
+ignoring the season entirely. It is **not** what `main` currently ships: since PR #259,
+`analysis/keeper_value.py` scales a current-season anchor by a ZiPS ratio and regresses toward
+the ZiPS out-year at `DEFAULT_OUT_YEAR_REGRESSION = 0.6`, so the incumbent already carries
+roughly 40% of the realized-season signal. **Beating `k=0` therefore does not establish that the
+fold beats the shipped estimator.** Increment 1 cannot run that comparison -- spec 9 forbids
+importing `fantasy_baseball.analysis` -- so it is scoped to increment 2, alongside the rank-level
+check. Treat it as the study's largest unmeasured gap after B.3.
+
+**The full-sample fits are all in range, but the clamp does bind elsewhere.** `k_ip` fits 0.970
+full-sample with a CI including 1.0; its **ex-2023 fold fits 1.024** and clamps, which is why
+that fold's held-out error is bit-identical to `k=1`. At `n0 = 100` the full-sample `k_ip` fit is
+**1.276**, also clamped. Requirement 7's refusal clause never fires on a shipped coefficient, but
+`out_of_range` now reports per-fold clamping (`folds_clamped`) rather than inspecting only the
+full-sample fit, which is what previously made this invisible.
 
 ### B.3 The two fallbacks
 
@@ -259,6 +271,11 @@ correction. The diagnostic is unambiguous:
 hitter pa, mean held-out error:   k=0  58985    k=1  34852    fitted-k  36519    fitted-k+c  29611
 pitcher ip, mean held-out error:  k=0   3335    k=1   3190    fitted-k   3001    fitted-k+c   2477
 ```
+
+Regenerate with `python scripts/keeper_calibration.py`; the table above and the level figures
+come from `data/analysis/keeper_calibration_{hitter,pitcher}_level_term.csv`. The `fitted-k+c`
+row is a **diagnostic estimator that is never shipped** -- it exists so this finding's decisive
+number is reproducible from the committed script rather than taken on trust.
 
 Applying the intercept beats every shipped option on both player types. It is **not shipped**,
 because doing so requires establishing that the level is a persistent ZiPS playing-time hedge
@@ -413,14 +430,20 @@ rows.
    ```
 
    `fold_rates` takes per-column weights *and* per-column coefficients because the study
-   calibrated both per column. Passing a single weight for all twelve reproduces neither the
+   calibrated both per column. Passing a single weight for all thirteen reproduces neither the
    model nor the numbers in B.2 -- it folds playing time at the rate weight and silently
    attenuates the move (a 500-PA base with a -100 PA residual lands on 434 instead of 400).
 3. **Resolve the playing-time level term** (B.3). Worth ~19% of hitter PA error, and PA
    multiplies every counting stat. Requires deciding whether the -83 PA level is a persistent
    ZiPS hedge or an aging gap `ZiPS_2027` has already priced.
 4. **Re-fit `sb_pa` first** when the 2025->2026 pair opens after the 2026 season (B.4).
-5. **Check at the rank level.** Spec 6.6 is explicit that this bar is measured on the rate/PT
-   scale while the feature consumes VAR *rank*; rate error can improve while ranking degrades.
-   VAR does not exist until increment 2, so that check is scoped there.
+5. **Check at the rank level, and against the incumbent.** Spec 6.6 is explicit that this bar is
+   measured on the rate/PT scale while the feature consumes VAR *rank*; rate error can improve
+   while ranking degrades. Separately, B.2 notes the endpoints do not include the estimator
+   `main` actually ships (`analysis/keeper_value.py`, anchor x ratio regressed at 0.6). Both
+   checks need VAR, so both are increment 2's.
+7. **Playing time is scored without saves.** `fold.reconstruct_pitcher` emits no `sv` -- spec 5.1
+   excludes relievers from the out-year ranking because ZiPS populates `SV` in 0 of 1838 rows --
+   but `analysis.keeper_value.PITCHER_FIELDS` scores `sv`. A missing column reads as zero saves,
+   so increment 2 must supply it or exclude the category explicitly.
 6. Spec 5.1's `role_ip` routing fix, the par curve, and the cross-team table remain increment 2.
