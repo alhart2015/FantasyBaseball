@@ -1,9 +1,12 @@
 """Load a ZiPS vintage from disk and decompose it to the canonical rate/PT schema.
 
-Reads the raw CSV rather than going through data.fangraphs.load_projection_set,
-because that lowercases and remaps columns and drops MLBAMID -- which is the join
-key to the MLB actuals. Filename variants (year-suffixed, proj-from-dated) are
-resolved by glob here, matching the loader's own fallback behaviour.
+Reads the raw CSV rather than going through data.fangraphs.load_projection_set.
+The reason is the standalone constraint: increment 1 imports nothing from
+fantasy_baseball.data (spec 9). To be clear about what that loader does and does
+not do -- it preserves MLBAMID as `mlbam_id`, so the join key would survive; it
+is the dependency, not a defect, that rules it out. Filename variants
+(year-suffixed, proj-from-dated) are resolved by glob here, matching the
+loader's own fallback behaviour.
 """
 
 from __future__ import annotations
@@ -12,7 +15,12 @@ from pathlib import Path
 
 import pandas as pd
 
-from fantasy_baseball.keepers.actuals import HITTER_PT, PITCHER_PT, safe_ratio
+from fantasy_baseball.keepers.actuals import (
+    HITTER_PT,
+    PITCHER_PT,
+    index_by_mlbam,
+    safe_ratio,
+)
 
 
 def _find(directory: Path, player_type: str) -> Path:
@@ -25,15 +33,8 @@ def _find(directory: Path, player_type: str) -> Path:
     return matches[-1]
 
 
-def _indexed(df: pd.DataFrame) -> pd.DataFrame:
-    frame: pd.DataFrame = df.loc[df["MLBAMID"].notna()].copy()
-    frame["mlbam_id"] = frame["MLBAMID"].astype(int)
-    indexed: pd.DataFrame = frame.set_index("mlbam_id")
-    return indexed
-
-
 def decompose_hitters(df: pd.DataFrame) -> pd.DataFrame:
-    frame = _indexed(df)
+    frame = index_by_mlbam(df, "MLBAMID")
     pa, ab = frame["PA"].astype(float), frame["AB"].astype(float)
     return pd.DataFrame(
         {
@@ -50,7 +51,7 @@ def decompose_hitters(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def decompose_pitchers(df: pd.DataFrame) -> pd.DataFrame:
-    frame = _indexed(df)
+    frame = index_by_mlbam(df, "MLBAMID")
     ip = frame["IP"].astype(float)
     return pd.DataFrame(
         {

@@ -65,15 +65,20 @@ def safe_ratio(numer: pd.Series, denom: pd.Series) -> pd.Series:
     return result
 
 
-def _indexed(raw: pd.DataFrame) -> pd.DataFrame:
-    frame: pd.DataFrame = raw.loc[raw["player.id"].notna()].copy()
-    frame["mlbam_id"] = frame["player.id"].astype(int)
+def index_by_mlbam(raw: pd.DataFrame, id_col: str) -> pd.DataFrame:
+    """Index a source frame by integer `mlbam_id`, dropping rows without one.
+
+    Shared by the MLB-actuals loader (`player.id`) and the ZiPS vintage loader
+    (`MLBAMID`) so both sides of the residual apply the same drop rule.
+    """
+    frame: pd.DataFrame = raw.loc[raw[id_col].notna()].copy()
+    frame["mlbam_id"] = frame[id_col].astype(int)
     indexed: pd.DataFrame = frame.set_index("mlbam_id")
     return indexed
 
 
 def normalize_hitting(raw: pd.DataFrame) -> pd.DataFrame:
-    frame = _indexed(raw)
+    frame = index_by_mlbam(raw, "player.id")
     num = {
         col: frame[f"stat.{col}"].map(coerce_numeric)
         for col in ("plateAppearances", "atBats", "hits", "runs", "homeRuns", "rbi", "stolenBases")
@@ -95,7 +100,7 @@ def normalize_hitting(raw: pd.DataFrame) -> pd.DataFrame:
 
 
 def normalize_pitching(raw: pd.DataFrame) -> pd.DataFrame:
-    frame = _indexed(raw)
+    frame = index_by_mlbam(raw, "player.id")
     ip = frame["stat.inningsPitched"].map(innings_to_float)
     num = {
         col: frame[f"stat.{col}"].map(coerce_numeric)

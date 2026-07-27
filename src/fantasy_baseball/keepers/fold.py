@@ -11,8 +11,11 @@ Two rules here are load-bearing and were both wrong in earlier spec drafts:
 
 from __future__ import annotations
 
-import numpy as np
+from collections.abc import Mapping
+
 import pandas as pd
+
+from fantasy_baseball.keepers.actuals import safe_ratio
 
 
 def shrink(n: pd.Series, n0: float) -> pd.Series:
@@ -37,18 +40,37 @@ def gate_mask(realized_pt: pd.Series, threshold: float) -> pd.Series:
 
 
 def fold_rates(
-    base: pd.DataFrame, residual: pd.DataFrame, weight: pd.Series, k: float
+    base: pd.DataFrame,
+    residual: pd.DataFrame,
+    weight: pd.Series,
+    k: float | Mapping[str, float],
 ) -> pd.DataFrame:
-    """base + k * weight * residual, per rate column, floored at 0."""
-    out = base.copy()
-    for col in base.columns:
-        moved = base[col] + k * weight * residual[col].fillna(0.0)
-        out[col] = moved.clip(lower=0.0)
-    return out
+    """base + k * weight * residual, per rate column, floored at 0.
+
+    `k` may be a single coefficient or a per-column mapping. The mapping form is
+    the one production needs: the calibration study fits ONE coefficient PER
+    column (er_ip 0.343, ab_pa 0.687, k_ip 1.0, ...), so a scalar cannot express
+    the shipped model. A column missing from the mapping is not folded.
+
+    A NaN residual means "no observation" and passes through unmoved -- it must
+    never read as a move of zero-minus-base.
+    """
+    coeffs = k if isinstance(k, Mapping) else dict.fromkeys(base.columns, float(k))
+    scale = pd.DataFrame(
+        {col: weight * coeffs.get(col, 0.0) for col in base.columns}, index=base.index
+    )
+    moved: pd.DataFrame = base + residual[base.columns].fillna(0.0) * scale
+    return moved.clip(lower=0.0)
 
 
 def _guarded(numer: pd.Series, denom: pd.Series) -> pd.Series:
-    result: pd.Series = numer.divide(denom.where(denom > 0, other=np.nan)).fillna(0.0)
+    """`safe_ratio` with 0/0 resolved to 0.0 rather than NaN.
+
+    Same divide-by-zero guard as the input side; only the post-NaN policy differs.
+    On the OUTPUT side a reconstructed line needs a number the scoring path can
+    consume, and a player with zero playing time genuinely has a zero line.
+    """
+    result: pd.Series = safe_ratio(numer, denom).fillna(0.0)
     return result
 
 

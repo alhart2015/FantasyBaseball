@@ -136,3 +136,23 @@ def test_gate_ramp_treats_missing_as_unfolded() -> None:
 def test_gate_ramp_rejects_a_nonpositive_width() -> None:
     with pytest.raises(ValueError, match="width must be positive"):
         gate_ramp(pd.Series([100.0]), threshold=100.0, width=0.0)
+
+
+def test_fold_rates_accepts_a_per_column_coefficient_mapping() -> None:
+    # The study fits one k PER column, so the shipped model cannot be expressed
+    # by a scalar. A column absent from the mapping is not folded.
+    base = pd.DataFrame({"hr_pa": [0.040], "sb_pa": [0.020], "r_pa": [0.150]})
+    resid = pd.DataFrame({"hr_pa": [0.010], "sb_pa": [0.010], "r_pa": [0.010]})
+    out = fold_rates(base, resid, pd.Series([1.0]), k={"hr_pa": 0.5, "sb_pa": 1.0})
+    assert out["hr_pa"].iloc[0] == pytest.approx(0.045)
+    assert out["sb_pa"].iloc[0] == pytest.approx(0.030)
+    assert out["r_pa"].iloc[0] == pytest.approx(0.150)  # unmapped -> unfolded
+
+
+def test_fold_rates_scalar_and_mapping_agree() -> None:
+    base = pd.DataFrame({"hr_pa": [0.04, 0.05], "sb_pa": [0.02, 0.01]})
+    resid = pd.DataFrame({"hr_pa": [0.01, -0.02], "sb_pa": [-0.03, 0.02]})
+    weight = pd.Series([0.75, 0.5])
+    scalar = fold_rates(base, resid, weight, k=0.6)
+    mapping = fold_rates(base, resid, weight, k={"hr_pa": 0.6, "sb_pa": 0.6})
+    pd.testing.assert_frame_equal(scalar, mapping)

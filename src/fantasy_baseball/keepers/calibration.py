@@ -16,8 +16,13 @@ from typing import Protocol
 import numpy as np
 import pandas as pd
 
-from fantasy_baseball.keepers.actuals import normalize_hitting, normalize_pitching
-from fantasy_baseball.keepers.fold import shrink
+from fantasy_baseball.keepers.actuals import (
+    HITTER_PT,
+    PITCHER_PT,
+    normalize_hitting,
+    normalize_pitching,
+)
+from fantasy_baseball.keepers.fold import gate_mask, shrink
 from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 from fantasy_baseball.keepers.vintages import load_vintage
 
@@ -25,7 +30,7 @@ from fantasy_baseball.keepers.vintages import load_vintage
 # no ZiPS vintage on disk (data/projections starts at 2022).
 PAIR_YEARS = (2022, 2023, 2024)
 
-PT_COL = {"hitter": "pa", "pitcher": "ip"}
+PT_COL = {"hitter": HITTER_PT, "pitcher": PITCHER_PT}
 
 
 @dataclass(frozen=True)
@@ -154,49 +159,42 @@ class Estimator(Protocol):
         ...
 
 
-class _FixedK:
-    """Endpoint estimator: predict = base + k * weight * residual, k not fitted."""
+class _FixedTransfer:
+    """Endpoint estimator: `k` is a constant, not fitted.
 
-    def __init__(self, k: float) -> None:
-        self.params = {"k": k}
+    Both endpoints and the fitted estimator return the same `_FittedK`, so the
+    shipped prediction form is written ONCE. That matters: the whole held-out
+    comparison rests on all three applying an identical functional form, and two
+    copies of `base + k * w * residual` could silently drift apart.
+    """
 
-    def predict(self, base: pd.Series, residual: pd.Series, weight: pd.Series) -> pd.Series:
-        result: pd.Series = base + self.params["k"] * weight * residual.fillna(0.0)
-        return result
+    name: str
+    k: float
+
+    def fit(
+        self,
+        pairs: list[YearPair],
+        column: str,
+        n0: float,
+        *,
+        shrunk: bool = True,
+        weighted: bool = True,
+    ) -> Fitted:
+        return _FittedK({"k": self.k})
 
 
-class ZeroTransfer:
+class ZeroTransfer(_FixedTransfer):
     """k = 0: ignore the season entirely. This is today's stale-baseline behaviour."""
 
     name = "k=0"
-
-    def fit(
-        self,
-        pairs: list[YearPair],
-        column: str,
-        n0: float,
-        *,
-        shrunk: bool = True,
-        weighted: bool = True,
-    ) -> Fitted:
-        return _FixedK(0.0)
+    k = 0.0
 
 
-class FullTransfer:
+class FullTransfer(_FixedTransfer):
     """k = 1: move the full (shrunk) surprise."""
 
     name = "k=1"
-
-    def fit(
-        self,
-        pairs: list[YearPair],
-        column: str,
-        n0: float,
-        *,
-        shrunk: bool = True,
-        weighted: bool = True,
-    ) -> Fitted:
-        return _FixedK(1.0)
+    k = 1.0
 
 
 def weighted_mse(pred: pd.Series, actual: pd.Series, weight: pd.Series) -> float:
@@ -247,10 +245,13 @@ def leave_one_out(
     scoring another would make the held-out comparison meaningless.
     """
     rows = []
-    for held in pairs:
-        train = [gated(p, gate) for p in pairs if p.year != held.year]
+    # Gate once, not once per fold per role: the gate depends on neither the
+    # held-out year nor the estimator, and gating is the dominant cost here.
+    kept_pairs = [gated(p, gate) for p in pairs]
+    for held in kept_pairs:
+        train = [p for p in kept_pairs if p.year != held.year]
         fitted = estimator.fit(train, column, n0, shrunk=shrunk, weighted=weighted)
-        kept = gated(held, gate)
+        kept = held
         weight = _shrink_weight(kept, n0, shrunk)
         pred = fitted.predict(kept.base[column], kept.residual[column], weight)
         rows.append(
@@ -274,8 +275,12 @@ def _shrink_weight(pair: YearPair, n0: float, shrunk: bool) -> pd.Series:
 
 
 def gated(pair: YearPair, gate: float) -> YearPair:
-    """Restrict a pair to rows clearing the realized-playing-time gate (spec 5.4)."""
-    ids = pair.realized_pt.index[pair.realized_pt >= gate]
+    """Restrict a pair to rows clearing the realized-playing-time gate (spec 5.4).
+
+    Delegates the threshold rule to `fold.gate_mask` so the fit sample and the
+    serve path cannot drift apart on what "enough playing time" means.
+    """
+    ids = pair.realized_pt.index[gate_mask(pair.realized_pt, gate)]
     return YearPair(
         year=pair.year,
         base=pair.base.loc[ids],
@@ -298,18 +303,20 @@ def _wls(
     interval. `pinv` rather than `solve` so a degenerate design (a column with no
     variance) yields the minimum-norm answer instead of raising.
     """
-    design = np.column_stack([np.ones_like(x), x]) if use_intercept else x[:, None]
+    # Slope first, intercept second: column order in a design matrix is arbitrary,
+    # and pinning the slope to index 0 keeps it there whether or not an intercept
+    # is present, in both `beta` and `cov`.
+    design = np.column_stack([x, np.ones_like(x)]) if use_intercept else x[:, None]
     xtwx = design.T @ (design * w[:, None])
-    beta = np.linalg.pinv(xtwx) @ (design.T @ (w * y))
+    inv = np.linalg.pinv(xtwx)
+    beta = inv @ (design.T @ (w * y))
     err = y - design @ beta
     n, p = len(y), design.shape[1]
-    inv = np.linalg.pinv(xtwx)
     meat = design.T @ (design * ((w * err) ** 2)[:, None])
     cov = inv @ meat @ inv * (n / max(n - p, 1))
-    slope_at = 1 if use_intercept else 0
-    slope = float(beta[slope_at])
-    intercept = float(beta[0]) if use_intercept else 0.0
-    se = float(np.sqrt(max(float(cov[slope_at, slope_at]), 0.0)))
+    slope = float(beta[0])
+    intercept = float(beta[1]) if use_intercept else 0.0
+    se = float(np.sqrt(max(float(cov[0, 0]), 0.0)))
     return slope, intercept, se
 
 
@@ -385,9 +392,9 @@ class ShrunkTransfer:
         shrunk: bool = True,
         weighted: bool = True,
     ) -> Fitted:
-        xs: list[pd.Series] = []
-        ys: list[pd.Series] = []
-        ws: list[pd.Series] = []
+        xs: list[np.ndarray] = []
+        ys: list[np.ndarray] = []
+        ws: list[np.ndarray] = []
         for pair in pairs:
             weight = _shrink_weight(pair, n0, shrunk)
             x = weight * pair.residual[column]
@@ -397,12 +404,12 @@ class ShrunkTransfer:
             # NaN targets (non-survivors have no Y+1 rate) and zero-weight rows,
             # so the fit must drop them too.
             mask = x.notna() & y.notna() & (w > 0)
-            xs.append(x[mask])
-            ys.append(y[mask])
-            ws.append(w[mask])
-        x_all = pd.concat(xs).to_numpy(dtype=float)
-        y_all = pd.concat(ys).to_numpy(dtype=float)
-        w_all = pd.concat(ws).to_numpy(dtype=float)
+            xs.append(x[mask].to_numpy(dtype=float))
+            ys.append(y[mask].to_numpy(dtype=float))
+            ws.append(w[mask].to_numpy(dtype=float))
+        x_all = np.concatenate(xs) if xs else np.empty(0)
+        y_all = np.concatenate(ys) if ys else np.empty(0)
+        w_all = np.concatenate(ws) if ws else np.empty(0)
         n_fit = len(y_all)
         if n_fit < 3:
             raise ValueError(f"cannot fit {column!r}: only {n_fit} usable rows")

@@ -344,9 +344,11 @@ sample's support. The same example becomes 377.0 PA at 101 PA realized, 255 PA a
 180 PA at 200, with no step anywhere. Below the threshold nothing changes: passthrough is
 unaffected, and absence from the leaderboard still resolves to no fold at all.
 
-`gate_mask` is retained -- it is what the fit sample uses, where a hard threshold is correct
-because it selects training rows rather than deciding a production value. **Increment 2 must
-apply `gate_ramp`, not `gate_mask`, on the serve path.**
+`gate_mask` is retained and is what the fit sample uses -- `calibration.gated` calls it, so
+there is one definition of the threshold rule and the fit sample and the serve path cannot
+drift apart on what "enough playing time" means. A hard threshold is correct there because it
+selects training rows rather than deciding a production value. **Increment 2 must apply
+`gate_ramp`, not `gate_mask`, on the serve path.**
 
 ### B.8 The train/serve gap (requirement 8)
 
@@ -393,8 +395,13 @@ rows.
 ### B.10 What increment 2 inherits
 
 1. **Ship the coefficients in B.2 with `n0 = 200 PA` / `n0 = 50 IP`.** They are not portable to
-   another shrink constant.
-2. **Use `gate_ramp`, not `gate_mask`, on the serve path** (B.7).
+   another shrink constant. They are available in code as
+   `keepers.coefficients.POLICIES[player_type]` -- a `FoldPolicy` carrying the per-column `k`
+   alongside the `n0`, gate and ramp width they are conditional on, held against the study's
+   CSV output by `tests/test_keepers/test_coefficients.py`. Import them; do not retype the
+   table above.
+2. **Use `gate_ramp`, not `gate_mask`, on the serve path** (B.7). `fold.fold_rates` accepts a
+   per-column coefficient mapping, so `POLICIES[t].coefficients` drops straight in.
 3. **Resolve the playing-time level term** (B.3). Worth ~19% of hitter PA error, and PA
    multiplies every counting stat. Requires deciding whether the -83 PA level is a persistent
    ZiPS hedge or an aging gap `ZiPS_2027` has already priced.
