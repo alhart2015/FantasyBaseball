@@ -7,5 +7,6 @@ Downstream keeper-value logic (#266) is built on top of these; nothing here comp
 from __future__ import annotations
 
 from fantasy_baseball.keepers.cache import fetch_or_cache
+from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 
-__all__ = ["fetch_or_cache"]
+__all__ = ["fetch_mlb_season", "fetch_or_cache"]
