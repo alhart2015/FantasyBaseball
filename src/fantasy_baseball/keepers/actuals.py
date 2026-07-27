@@ -46,7 +46,10 @@ def innings_to_float(value: object) -> float:
     return coerce_numeric(whole) + int(outs_text) / 3.0
 
 
-HITTER_RATES = ("hr_pa", "r_pa", "rbi_pa", "sb_pa", "h_ab", "ab_pa")
+# Order matters: these must match the column order `normalize_hitting` /
+# `normalize_pitching` emit after the playing-time column, so a positional zip()
+# over a normalized frame cannot silently mis-pair. Enforced by test.
+HITTER_RATES = ("ab_pa", "h_ab", "hr_pa", "r_pa", "rbi_pa", "sb_pa")
 PITCHER_RATES = ("k_ip", "w_ip", "er_ip", "bb_ip", "h_ip")
 HITTER_PT = "pa"
 PITCHER_PT = "ip"

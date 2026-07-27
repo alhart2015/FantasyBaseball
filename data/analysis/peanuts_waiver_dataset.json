@@ -1,0 +1,1311 @@
+{
+ "teams": {
+  "Hart of the Order": {
+   "core_over": 10.82,
+   "waiver_over": 1.65,
+   "waiver_actual": 31.53,
+   "core_actual": 127.45,
+   "n_waiver": 21
+  },
+  "Hello Peanuts!": {
+   "core_over": 2.3,
+   "waiver_over": 25.08,
+   "waiver_actual": 53.07,
+   "core_actual": 96.83,
+   "n_waiver": 23
+  },
+  "SkeleThor": {
+   "core_over": -2.19,
+   "waiver_over": 12.4,
+   "waiver_actual": 32.12,
+   "core_actual": 100.9,
+   "n_waiver": 16
+  },
+  "Springfield Isotopes": {
+   "core_over": 2.11,
+   "waiver_over": 5.93,
+   "waiver_actual": 31.49,
+   "core_actual": 107.75,
+   "n_waiver": 14
+  },
+  "Jon's Underdogs": {
+   "core_over": -5.12,
+   "waiver_over": 16.53,
+   "waiver_actual": 34.33,
+   "core_actual": 101.87,
+   "n_waiver": 24
+  },
+  "Work in Progress": {
+   "core_over": -12.91,
+   "waiver_over": 3.45,
+   "waiver_actual": 17.19,
+   "core_actual": 95.72,
+   "n_waiver": 5
+  },
+  "Boston Estrellas": {
+   "core_over": -3.02,
+   "waiver_over": 13.96,
+   "waiver_actual": 35.03,
+   "core_actual": 84.37,
+   "n_waiver": 39
+  },
+  "Spacemen": {
+   "core_over": -13.57,
+   "waiver_over": -0.15,
+   "waiver_actual": 26.74,
+   "core_actual": 85.88,
+   "n_waiver": 23
+  },
+  "Tortured Baseball Department": {
+   "core_over": -15.24,
+   "waiver_over": -2.35,
+   "waiver_actual": 8.6,
+   "core_actual": 93.63,
+   "n_waiver": 4
+  },
+  "Send in the Cavalli": {
+   "core_over": -8.27,
+   "waiver_over": -1.21,
+   "waiver_actual": 13.8,
+   "core_actual": 97.92,
+   "n_waiver": 5
+  }
+ },
+ "peanuts_players": [
+  {
+   "name": "Salvador Perez",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 18,
+   "add_date": null,
+   "actual_sgp": 0.313,
+   "expected_sgp": 1.022,
+   "over_perf": -0.709,
+   "vol": 64.0,
+   "actual_counts": {
+    "r": 4.0,
+    "hr": 2.0,
+    "rbi": 2.0,
+    "sb": 0.0,
+    "ab": 59.0,
+    "h": 9.0,
+    "pa": 64.0
+   },
+   "n_windows": 3
+  },
+  {
+   "name": "Sal Stewart",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 8.362,
+   "expected_sgp": 4.948,
+   "over_perf": 3.414,
+   "vol": 361.0,
+   "actual_counts": {
+    "r": 45.0,
+    "hr": 16.0,
+    "rbi": 59.0,
+    "sb": 11.0,
+    "ab": 315.0,
+    "h": 79.0,
+    "pa": 361.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "Luke Keaschall",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 39,
+   "add_date": null,
+   "actual_sgp": 2.25,
+   "expected_sgp": 2.059,
+   "over_perf": 0.191,
+   "vol": 139.0,
+   "actual_counts": {
+    "r": 14.0,
+    "hr": 1.0,
+    "rbi": 14.0,
+    "sb": 7.0,
+    "ab": 127.0,
+    "h": 28.0,
+    "pa": 139.0
+   },
+   "n_windows": 6
+  },
+  {
+   "name": "Austin Riley",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 88,
+   "add_date": null,
+   "actual_sgp": 4.421,
+   "expected_sgp": 5.827,
+   "over_perf": -1.406,
+   "vol": 312.0,
+   "actual_counts": {
+    "r": 31.0,
+    "hr": 8.0,
+    "rbi": 36.0,
+    "sb": 4.0,
+    "ab": 279.0,
+    "h": 61.0,
+    "pa": 312.0
+   },
+   "n_windows": 13
+  },
+  {
+   "name": "Elly De La Cruz",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 7.085,
+   "expected_sgp": 8.616,
+   "over_perf": -1.53,
+   "vol": 285.0,
+   "actual_counts": {
+    "r": 44.0,
+    "hr": 13.0,
+    "rbi": 40.0,
+    "sb": 10.0,
+    "ab": 255.0,
+    "h": 69.0,
+    "pa": 285.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "Kevin McGonigle",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 6.214,
+   "expected_sgp": 4.801,
+   "over_perf": 1.413,
+   "vol": 363.0,
+   "actual_counts": {
+    "r": 50.0,
+    "hr": 6.0,
+    "rbi": 28.0,
+    "sb": 11.0,
+    "ab": 306.0,
+    "h": 84.0,
+    "pa": 363.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "Corbin Carroll",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 7.315,
+   "expected_sgp": 8.444,
+   "over_perf": -1.129,
+   "vol": 346.0,
+   "actual_counts": {
+    "r": 47.0,
+    "hr": 13.0,
+    "rbi": 43.0,
+    "sb": 9.0,
+    "ab": 301.0,
+    "h": 82.0,
+    "pa": 346.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "James Wood",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 10.408,
+   "expected_sgp": 6.864,
+   "over_perf": 3.544,
+   "vol": 400.0,
+   "actual_counts": {
+    "r": 73.0,
+    "hr": 21.0,
+    "rbi": 52.0,
+    "sb": 13.0,
+    "ab": 330.0,
+    "h": 88.0,
+    "pa": 400.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "Wyatt Langford",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 3.989,
+   "expected_sgp": 7.0,
+   "over_perf": -3.011,
+   "vol": 169.0,
+   "actual_counts": {
+    "r": 23.0,
+    "hr": 8.0,
+    "rbi": 20.0,
+    "sb": 6.0,
+    "ab": 158.0,
+    "h": 45.0,
+    "pa": 169.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "George Springer",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 53,
+   "add_date": null,
+   "actual_sgp": 1.199,
+   "expected_sgp": 3.457,
+   "over_perf": -2.257,
+   "vol": 120.0,
+   "actual_counts": {
+    "r": 10.0,
+    "hr": 3.0,
+    "rbi": 9.0,
+    "sb": 1.0,
+    "ab": 107.0,
+    "h": 21.0,
+    "pa": 120.0
+   },
+   "n_windows": 8
+  },
+  {
+   "name": "Jonathan Aranda",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 82,
+   "add_date": "2026-04-27",
+   "actual_sgp": 5.075,
+   "expected_sgp": 4.064,
+   "over_perf": 1.011,
+   "vol": 301.0,
+   "actual_counts": {
+    "r": 35.0,
+    "hr": 8.0,
+    "rbi": 44.0,
+    "sb": 0.0,
+    "ab": 246.0,
+    "h": 68.0,
+    "pa": 301.0
+   },
+   "n_windows": 13
+  },
+  {
+   "name": "Addison Barger",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 11,
+   "add_date": null,
+   "actual_sgp": 0.014,
+   "expected_sgp": 0.506,
+   "over_perf": -0.493,
+   "vol": 23.0,
+   "actual_counts": {
+    "r": 1.0,
+    "hr": 0.0,
+    "rbi": 2.0,
+    "sb": 0.0,
+    "ab": 19.0,
+    "h": 1.0,
+    "pa": 23.0
+   },
+   "n_windows": 2
+  },
+  {
+   "name": "Mike Trout",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 6.755,
+   "expected_sgp": 4.981,
+   "over_perf": 1.774,
+   "vol": 330.0,
+   "actual_counts": {
+    "r": 53.0,
+    "hr": 16.0,
+    "rbi": 35.0,
+    "sb": 6.0,
+    "ab": 263.0,
+    "h": 61.0,
+    "pa": 330.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "Samuel Basallo",
+   "class": "core",
+   "player_type": "hitter",
+   "days_owned": 11,
+   "add_date": null,
+   "actual_sgp": 0.161,
+   "expected_sgp": 0.459,
+   "over_perf": -0.298,
+   "vol": 25.0,
+   "actual_counts": {
+    "r": 2.0,
+    "hr": 1.0,
+    "rbi": 1.0,
+    "sb": 0.0,
+    "ab": 23.0,
+    "h": 3.0,
+    "pa": 25.0
+   },
+   "n_windows": 2
+  },
+  {
+   "name": "Hunter Brown",
+   "class": "core",
+   "player_type": "pitcher",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 1.592,
+   "expected_sgp": 6.533,
+   "over_perf": -4.941,
+   "vol": 20.7,
+   "actual_counts": {
+    "w": 1.0,
+    "k": 23.0,
+    "sv": 0.0,
+    "ip": 20.7,
+    "er": 5.0,
+    "bb": 9.0,
+    "h_allowed": 13.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "Jacob deGrom",
+   "class": "core",
+   "player_type": "pitcher",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 8.185,
+   "expected_sgp": 6.694,
+   "over_perf": 1.491,
+   "vol": 95.7,
+   "actual_counts": {
+    "w": 7.0,
+    "k": 115.0,
+    "sv": 0.0,
+    "ip": 95.7,
+    "er": 37.0,
+    "bb": 20.0,
+    "h_allowed": 75.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "Nolan McLean",
+   "class": "core",
+   "player_type": "pitcher",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 6.748,
+   "expected_sgp": 4.755,
+   "over_perf": 1.994,
+   "vol": 95.3,
+   "actual_counts": {
+    "w": 5.0,
+    "k": 113.0,
+    "sv": 0.0,
+    "ip": 95.3,
+    "er": 40.0,
+    "bb": 36.0,
+    "h_allowed": 71.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "Eury P\u00e9rez",
+   "class": "core",
+   "player_type": "pitcher",
+   "days_owned": 60,
+   "add_date": null,
+   "actual_sgp": 3.137,
+   "expected_sgp": 2.982,
+   "over_perf": 0.155,
+   "vol": 58.7,
+   "actual_counts": {
+    "w": 3.0,
+    "k": 63.0,
+    "sv": 0.0,
+    "ip": 58.7,
+    "er": 32.0,
+    "bb": 28.0,
+    "h_allowed": 48.0
+   },
+   "n_windows": 9
+  },
+  {
+   "name": "Chase Burns",
+   "class": "core",
+   "player_type": "pitcher",
+   "days_owned": 96,
+   "add_date": null,
+   "actual_sgp": 8.775,
+   "expected_sgp": 4.515,
+   "over_perf": 4.26,
+   "vol": 91.7,
+   "actual_counts": {
+    "w": 9.0,
+    "k": 112.0,
+    "sv": 0.0,
+    "ip": 91.7,
+    "er": 24.0,
+    "bb": 29.0,
+    "h_allowed": 70.0
+   },
+   "n_windows": 15
+  },
+  {
+   "name": "Shane McClanahan",
+   "class": "core",
+   "player_type": "pitcher",
+   "days_owned": 25,
+   "add_date": null,
+   "actual_sgp": 0.906,
+   "expected_sgp": 1.194,
+   "over_perf": -0.288,
+   "vol": 18.0,
+   "actual_counts": {
+    "w": 1.0,
+    "k": 18.0,
+    "sv": 0.0,
+    "ip": 18.0,
+    "er": 10.0,
+    "bb": 11.0,
+    "h_allowed": 13.0
+   },
+   "n_windows": 4
+  },
+  {
+   "name": "Kenley Jansen",
+   "class": "core",
+   "player_type": "pitcher",
+   "days_owned": 39,
+   "add_date": null,
+   "actual_sgp": 1.076,
+   "expected_sgp": 1.395,
+   "over_perf": -0.319,
+   "vol": 8.3,
+   "actual_counts": {
+    "w": 0.0,
+    "k": 10.0,
+    "sv": 6.0,
+    "ip": 8.3,
+    "er": 5.0,
+    "bb": 5.0,
+    "h_allowed": 8.0
+   },
+   "n_windows": 6
+  },
+  {
+   "name": "Jeff Hoffman",
+   "class": "core",
+   "player_type": "pitcher",
+   "days_owned": 32,
+   "add_date": null,
+   "actual_sgp": 1.131,
+   "expected_sgp": 1.497,
+   "over_perf": -0.366,
+   "vol": 11.7,
+   "actual_counts": {
+    "w": 1.0,
+    "k": 25.0,
+    "sv": 3.0,
+    "ip": 11.7,
+    "er": 9.0,
+    "bb": 7.0,
+    "h_allowed": 16.0
+   },
+   "n_windows": 5
+  },
+  {
+   "name": "Emilio Pag\u00e1n",
+   "class": "core",
+   "player_type": "pitcher",
+   "days_owned": 46,
+   "add_date": null,
+   "actual_sgp": 1.716,
+   "expected_sgp": 1.917,
+   "over_perf": -0.201,
+   "vol": 14.0,
+   "actual_counts": {
+    "w": 2.0,
+    "k": 11.0,
+    "sv": 6.0,
+    "ip": 14.0,
+    "er": 10.0,
+    "bb": 6.0,
+    "h_allowed": 14.0
+   },
+   "n_windows": 7
+  },
+  {
+   "name": "Jordan Walker",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 85,
+   "add_date": "2026-04-06",
+   "actual_sgp": 7.537,
+   "expected_sgp": 3.796,
+   "over_perf": 3.741,
+   "vol": 303.0,
+   "actual_counts": {
+    "r": 39.0,
+    "hr": 15.0,
+    "rbi": 49.0,
+    "sb": 9.0,
+    "ab": 278.0,
+    "h": 79.0,
+    "pa": 303.0
+   },
+   "n_windows": 13,
+   "delta_roto": 3.51,
+   "streak_at_pickup": {
+    "hr": "hot",
+    "r": "neutral",
+    "rbi": "hot",
+    "sb": "neutral",
+    "avg": "neutral"
+   },
+   "n_hot_at_pickup": 2,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 34.0,
+    "prod_per_pa": 0.529,
+    "avg": 0.3
+   },
+   "post_pickup_30d": {
+    "pa": 112.0,
+    "prod_per_pa": 0.473,
+    "avg": 0.31
+   }
+  },
+  {
+   "name": "Giancarlo Stanton",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 7,
+   "add_date": "2026-04-06",
+   "actual_sgp": 0.155,
+   "expected_sgp": 0.288,
+   "over_perf": -0.134,
+   "vol": 25.0,
+   "actual_counts": {
+    "r": 2.0,
+    "hr": 0.0,
+    "rbi": 2.0,
+    "sb": 0.0,
+    "ab": 21.0,
+    "h": 4.0,
+    "pa": 25.0
+   },
+   "n_windows": 1,
+   "delta_roto": -0.18,
+   "streak_at_pickup": {
+    "hr": "neutral",
+    "r": "neutral",
+    "rbi": "neutral",
+    "sb": "neutral",
+    "avg": "neutral"
+   },
+   "n_hot_at_pickup": 0,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 35.0,
+    "prod_per_pa": 0.314,
+    "avg": 0.394
+   },
+   "post_pickup_30d": {
+    "pa": 61.0,
+    "prod_per_pa": 0.246,
+    "avg": 0.175
+   }
+  },
+  {
+   "name": "Andrew Painter",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 21,
+   "add_date": "2026-04-01",
+   "actual_sgp": 0.276,
+   "expected_sgp": 0.609,
+   "over_perf": -0.333,
+   "vol": 14.7,
+   "actual_counts": {
+    "w": 0.0,
+    "k": 12.0,
+    "sv": 0.0,
+    "ip": 14.7,
+    "er": 9.0,
+    "bb": 4.0,
+    "h_allowed": 17.0
+   },
+   "n_windows": 3,
+   "delta_roto": -1.01
+  },
+  {
+   "name": "Jordan Westburg",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 14,
+   "add_date": "2026-03-31",
+   "actual_sgp": 0.0,
+   "expected_sgp": 0.593,
+   "over_perf": -0.593,
+   "vol": 0.0,
+   "actual_counts": {
+    "r": 0.0,
+    "hr": 0.0,
+    "rbi": 0.0,
+    "sb": 0.0,
+    "ab": 0.0,
+    "h": 0.0,
+    "pa": 0.0
+   },
+   "n_windows": 2,
+   "delta_roto": 0.95,
+   "pre_pickup_14d": {
+    "pa": 0.0,
+    "prod_per_pa": null,
+    "avg": null
+   },
+   "post_pickup_30d": {
+    "pa": 0.0,
+    "prod_per_pa": null,
+    "avg": null
+   }
+  },
+  {
+   "name": "Dillon Dingler",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 78,
+   "add_date": "2026-04-14",
+   "actual_sgp": 6.182,
+   "expected_sgp": 2.537,
+   "over_perf": 3.645,
+   "vol": 276.0,
+   "actual_counts": {
+    "r": 37.0,
+    "hr": 16.0,
+    "rbi": 48.0,
+    "sb": 0.0,
+    "ab": 251.0,
+    "h": 67.0,
+    "pa": 276.0
+   },
+   "n_windows": 12,
+   "delta_roto": -1.63,
+   "streak_at_pickup": {
+    "hr": "neutral",
+    "r": "neutral",
+    "rbi": "neutral",
+    "sb": "neutral",
+    "avg": "neutral"
+   },
+   "n_hot_at_pickup": 0,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 39.0,
+    "prod_per_pa": 0.359,
+    "avg": 0.219
+   },
+   "post_pickup_30d": {
+    "pa": 95.0,
+    "prod_per_pa": 0.284,
+    "avg": 0.236
+   }
+  },
+  {
+   "name": "Ryan O'Hearn",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 56,
+   "add_date": "2026-04-09",
+   "actual_sgp": 3.48,
+   "expected_sgp": 2.431,
+   "over_perf": 1.049,
+   "vol": 186.0,
+   "actual_counts": {
+    "r": 24.0,
+    "hr": 7.0,
+    "rbi": 27.0,
+    "sb": 1.0,
+    "ab": 173.0,
+    "h": 44.0,
+    "pa": 186.0
+   },
+   "n_windows": 8,
+   "delta_roto": 0.05,
+   "streak_at_pickup": {
+    "hr": "neutral",
+    "r": "neutral",
+    "rbi": "hot",
+    "sb": "neutral",
+    "avg": "neutral"
+   },
+   "n_hot_at_pickup": 1,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 49.0,
+    "prod_per_pa": 0.408,
+    "avg": 0.35
+   },
+   "post_pickup_30d": {
+    "pa": 103.0,
+    "prod_per_pa": 0.301,
+    "avg": 0.264
+   }
+  },
+  {
+   "name": "Reid Detmers",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 21,
+   "add_date": "2026-04-15",
+   "actual_sgp": 0.386,
+   "expected_sgp": 0.97,
+   "over_perf": -0.584,
+   "vol": 15.0,
+   "actual_counts": {
+    "w": 0.0,
+    "k": 16.0,
+    "sv": 0.0,
+    "ip": 15.0,
+    "er": 8.0,
+    "bb": 7.0,
+    "h_allowed": 16.0
+   },
+   "n_windows": 3,
+   "delta_roto": 1.43
+  },
+  {
+   "name": "Landen Roupp",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 42,
+   "add_date": "2026-04-15",
+   "actual_sgp": 1.844,
+   "expected_sgp": 1.49,
+   "over_perf": 0.353,
+   "vol": 41.3,
+   "actual_counts": {
+    "w": 2.0,
+    "k": 48.0,
+    "sv": 0.0,
+    "ip": 41.3,
+    "er": 24.0,
+    "bb": 20.0,
+    "h_allowed": 42.0
+   },
+   "n_windows": 6,
+   "delta_roto": 0.39
+  },
+  {
+   "name": "Carlos Rod\u00f3n",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 71,
+   "add_date": "2026-04-18",
+   "actual_sgp": 3.531,
+   "expected_sgp": 3.859,
+   "over_perf": -0.328,
+   "vol": 46.3,
+   "actual_counts": {
+    "w": 4.0,
+    "k": 52.0,
+    "sv": 0.0,
+    "ip": 46.3,
+    "er": 17.0,
+    "bb": 26.0,
+    "h_allowed": 32.0
+   },
+   "n_windows": 11,
+   "delta_roto": -0.08
+  },
+  {
+   "name": "Ildemaro Vargas",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 21,
+   "add_date": "2026-04-24",
+   "actual_sgp": 1.391,
+   "expected_sgp": 0.125,
+   "over_perf": 1.266,
+   "vol": 83.0,
+   "actual_counts": {
+    "r": 9.0,
+    "hr": 1.0,
+    "rbi": 11.0,
+    "sb": 1.0,
+    "ab": 79.0,
+    "h": 24.0,
+    "pa": 83.0
+   },
+   "n_windows": 3,
+   "delta_roto": 2.69,
+   "streak_at_pickup": {
+    "hr": "hot",
+    "r": "neutral",
+    "rbi": "hot",
+    "sb": "neutral",
+    "avg": "neutral"
+   },
+   "n_hot_at_pickup": 2,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 47.0,
+    "prod_per_pa": 0.532,
+    "avg": 0.304
+   },
+   "post_pickup_30d": {
+    "pa": 112.0,
+    "prod_per_pa": 0.295,
+    "avg": 0.283
+   }
+  },
+  {
+   "name": "Bryan Baker",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 64,
+   "add_date": "2026-04-26",
+   "actual_sgp": 3.611,
+   "expected_sgp": 1.635,
+   "over_perf": 1.976,
+   "vol": 21.0,
+   "actual_counts": {
+    "w": 0.0,
+    "k": 22.0,
+    "sv": 14.0,
+    "ip": 21.0,
+    "er": 3.0,
+    "bb": 8.0,
+    "h_allowed": 8.0
+   },
+   "n_windows": 10,
+   "delta_roto": 0.29
+  },
+  {
+   "name": "Louis Varland",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 57,
+   "add_date": "2026-04-26",
+   "actual_sgp": 4.763,
+   "expected_sgp": 1.568,
+   "over_perf": 3.195,
+   "vol": 29.0,
+   "actual_counts": {
+    "w": 2.0,
+    "k": 36.0,
+    "sv": 13.0,
+    "ip": 29.0,
+    "er": 4.0,
+    "bb": 8.0,
+    "h_allowed": 18.0
+   },
+   "n_windows": 9,
+   "delta_roto": -0.0
+  },
+  {
+   "name": "Payton Tolle",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 35,
+   "add_date": "2026-05-06",
+   "actual_sgp": 1.948,
+   "expected_sgp": 0.422,
+   "over_perf": 1.527,
+   "vol": 30.7,
+   "actual_counts": {
+    "w": 2.0,
+    "k": 27.0,
+    "sv": 0.0,
+    "ip": 30.7,
+    "er": 11.0,
+    "bb": 8.0,
+    "h_allowed": 29.0
+   },
+   "n_windows": 5,
+   "delta_roto": -0.41
+  },
+  {
+   "name": "Gregory Soto",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 50,
+   "add_date": "2026-05-08",
+   "actual_sgp": 1.415,
+   "expected_sgp": 1.089,
+   "over_perf": 0.326,
+   "vol": 14.7,
+   "actual_counts": {
+    "w": 1.0,
+    "k": 15.0,
+    "sv": 8.0,
+    "ip": 14.7,
+    "er": 14.0,
+    "bb": 8.0,
+    "h_allowed": 18.0
+   },
+   "n_windows": 8,
+   "delta_roto": 0.2
+  },
+  {
+   "name": "Casey Schmitt",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 43,
+   "add_date": "2026-05-05",
+   "actual_sgp": 3.457,
+   "expected_sgp": 0.982,
+   "over_perf": 2.475,
+   "vol": 160.0,
+   "actual_counts": {
+    "r": 17.0,
+    "hr": 8.0,
+    "rbi": 22.0,
+    "sb": 4.0,
+    "ab": 155.0,
+    "h": 42.0,
+    "pa": 160.0
+   },
+   "n_windows": 7,
+   "delta_roto": -1.1,
+   "streak_at_pickup": {
+    "hr": "hot",
+    "r": "neutral",
+    "rbi": "hot",
+    "sb": "neutral",
+    "avg": "neutral"
+   },
+   "n_hot_at_pickup": 2,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 48.0,
+    "prod_per_pa": 0.396,
+    "avg": 0.302
+   },
+   "post_pickup_30d": {
+    "pa": 108.0,
+    "prod_per_pa": 0.38,
+    "avg": 0.25
+   }
+  },
+  {
+   "name": "Braxton Ashcraft",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 43,
+   "add_date": null,
+   "actual_sgp": 4.661,
+   "expected_sgp": 1.795,
+   "over_perf": 2.866,
+   "vol": 47.3,
+   "actual_counts": {
+    "w": 6.0,
+    "k": 59.0,
+    "sv": 0.0,
+    "ip": 47.3,
+    "er": 19.0,
+    "bb": 9.0,
+    "h_allowed": 44.0
+   },
+   "n_windows": 7,
+   "delta_roto": null
+  },
+  {
+   "name": "Ryan Weathers",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 7,
+   "add_date": "2026-05-03",
+   "actual_sgp": 0.391,
+   "expected_sgp": 0.275,
+   "over_perf": 0.116,
+   "vol": 7.0,
+   "actual_counts": {
+    "w": 0.0,
+    "k": 4.0,
+    "sv": 0.0,
+    "ip": 7.0,
+    "er": 0.0,
+    "bb": 3.0,
+    "h_allowed": 4.0
+   },
+   "n_windows": 1,
+   "delta_roto": -4.17
+  },
+  {
+   "name": "Brandon Marsh",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 36,
+   "add_date": "2026-05-18",
+   "actual_sgp": 3.832,
+   "expected_sgp": 1.581,
+   "over_perf": 2.25,
+   "vol": 127.0,
+   "actual_counts": {
+    "r": 20.0,
+    "hr": 9.0,
+    "rbi": 21.0,
+    "sb": 4.0,
+    "ab": 121.0,
+    "h": 38.0,
+    "pa": 127.0
+   },
+   "n_windows": 6,
+   "delta_roto": 2.38,
+   "streak_at_pickup": {
+    "hr": "neutral",
+    "r": "hot",
+    "rbi": "neutral",
+    "sb": "neutral",
+    "avg": "hot"
+   },
+   "n_hot_at_pickup": 2,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 55.0,
+    "prod_per_pa": 0.236,
+    "avg": 0.365
+   },
+   "post_pickup_30d": {
+    "pa": 93.0,
+    "prod_per_pa": 0.376,
+    "avg": 0.314
+   }
+  },
+  {
+   "name": "Max Meyer",
+   "class": "waiver",
+   "player_type": "pitcher",
+   "days_owned": 36,
+   "add_date": "2026-05-24",
+   "actual_sgp": 3.162,
+   "expected_sgp": 1.289,
+   "over_perf": 1.873,
+   "vol": 36.3,
+   "actual_counts": {
+    "w": 4.0,
+    "k": 39.0,
+    "sv": 0.0,
+    "ip": 36.3,
+    "er": 11.0,
+    "bb": 14.0,
+    "h_allowed": 30.0
+   },
+   "n_windows": 6,
+   "delta_roto": 0.13
+  },
+  {
+   "name": "Bryce Eldridge",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 14,
+   "add_date": "2026-06-11",
+   "actual_sgp": 0.388,
+   "expected_sgp": 0.338,
+   "over_perf": 0.051,
+   "vol": 46.0,
+   "actual_counts": {
+    "r": 5.0,
+    "hr": 1.0,
+    "rbi": 2.0,
+    "sb": 0.0,
+    "ab": 40.0,
+    "h": 8.0,
+    "pa": 46.0
+   },
+   "n_windows": 2,
+   "delta_roto": -1.15,
+   "streak_at_pickup": {
+    "hr": "hot",
+    "r": "hot",
+    "rbi": "hot",
+    "sb": "neutral",
+    "avg": "hot"
+   },
+   "n_hot_at_pickup": 4,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 56.0,
+    "prod_per_pa": 0.5,
+    "avg": 0.426
+   },
+   "post_pickup_30d": {
+    "pa": 62.0,
+    "prod_per_pa": 0.194,
+    "avg": 0.241
+   }
+  },
+  {
+   "name": "Paul Goldschmidt",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 7,
+   "add_date": "2026-06-18",
+   "actual_sgp": 0.586,
+   "expected_sgp": 0.252,
+   "over_perf": 0.334,
+   "vol": 26.0,
+   "actual_counts": {
+    "r": 4.0,
+    "hr": 2.0,
+    "rbi": 4.0,
+    "sb": 0.0,
+    "ab": 24.0,
+    "h": 5.0,
+    "pa": 26.0
+   },
+   "n_windows": 1,
+   "delta_roto": 0.17,
+   "streak_at_pickup": {
+    "hr": "hot",
+    "r": "neutral",
+    "rbi": "hot",
+    "sb": "neutral",
+    "avg": "hot"
+   },
+   "n_hot_at_pickup": 3,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 49.0,
+    "prod_per_pa": 0.469,
+    "avg": 0.37
+   },
+   "post_pickup_30d": {
+    "pa": 48.0,
+    "prod_per_pa": 0.271,
+    "avg": 0.196
+   }
+  },
+  {
+   "name": "Sam Antonacci",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 1,
+   "add_date": "2026-06-21",
+   "actual_sgp": 0.0,
+   "expected_sgp": 0.004,
+   "over_perf": -0.004,
+   "vol": 0.0,
+   "actual_counts": {
+    "r": 0.0,
+    "hr": 0.0,
+    "rbi": 0.0,
+    "sb": 0.0,
+    "ab": 0.0,
+    "h": 0.0,
+    "pa": 0.0
+   },
+   "n_windows": 1,
+   "delta_roto": -0.36,
+   "streak_at_pickup": {
+    "hr": "hot",
+    "r": "neutral",
+    "rbi": "neutral",
+    "sb": "neutral",
+    "avg": "neutral"
+   },
+   "n_hot_at_pickup": 1,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 40.0,
+    "prod_per_pa": 0.4,
+    "avg": 0.353
+   },
+   "post_pickup_30d": {
+    "pa": 37.0,
+    "prod_per_pa": 0.324,
+    "avg": 0.281
+   }
+  },
+  {
+   "name": "Teoscar Hern\u00e1ndez",
+   "class": "waiver",
+   "player_type": "hitter",
+   "days_owned": 1,
+   "add_date": "2026-06-25",
+   "actual_sgp": 0.073,
+   "expected_sgp": 0.063,
+   "over_perf": 0.01,
+   "vol": 5.0,
+   "actual_counts": {
+    "r": 1.0,
+    "hr": 0.0,
+    "rbi": 1.0,
+    "sb": 0.0,
+    "ab": 3.0,
+    "h": 0.0,
+    "pa": 5.0
+   },
+   "n_windows": 1,
+   "delta_roto": 1.1,
+   "streak_at_pickup": {
+    "hr": "neutral",
+    "r": "neutral",
+    "rbi": "neutral",
+    "sb": "neutral",
+    "avg": "neutral"
+   },
+   "n_hot_at_pickup": 0,
+   "n_cold_at_pickup": 0,
+   "pre_pickup_14d": {
+    "pa": 0.0,
+    "prod_per_pa": null,
+    "avg": null
+   },
+   "post_pickup_30d": {
+    "pa": 10.0,
+    "prod_per_pa": 0.3,
+    "avg": 0.25
+   }
+  }
+ ],
+ "league_context": {
+  "spoe_total": {
+   "Hello Peanuts!": 78.0,
+   "SkeleThor": 17.0,
+   "Boston Estrellas": 2.0,
+   "Hart of the Order": 1.0,
+   "Work in Progress": -1.0,
+   "Springfield Isotopes": -3.0,
+   "Jon's Underdogs": -10.0,
+   "Spacemen": -25.0,
+   "Tortured Baseball Department": -27.0,
+   "Send in the Cavalli": -32.0
+  },
+  "txn_net_delta_roto": {
+   "Springfield Isotopes": 5.84,
+   "Send in the Cavalli": 2.38,
+   "Tortured Baseball Department": 2.03,
+   "Jon's Underdogs": 0.84,
+   "Hart of the Order": 0.29,
+   "Work in Progress": -2.25,
+   "Boston Estrellas": -2.62,
+   "Hello Peanuts!": -3.47,
+   "Spacemen": -7.68,
+   "SkeleThor": -10.19
+  },
+  "season_fraction": 0.518918918918919
+ }
+}

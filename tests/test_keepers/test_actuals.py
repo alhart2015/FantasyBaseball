@@ -2,6 +2,10 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.keepers.actuals import (
+    HITTER_PT,
+    HITTER_RATES,
+    PITCHER_PT,
+    PITCHER_RATES,
     coerce_numeric,
     innings_to_float,
     normalize_hitting,
@@ -115,3 +119,119 @@ def test_normalize_drops_rows_without_an_mlbam_id() -> None:
         }
     )
     assert list(normalize_hitting(raw).index) == [1]
+
+
+def test_rate_constants_match_the_emitted_column_order() -> None:
+    # A positional zip() over a normalized frame must not mis-pair columns.
+    hitter = pd.DataFrame(
+        {
+            "player.id": [1],
+            "stat.plateAppearances": [600],
+            "stat.atBats": [540],
+            "stat.hits": [162],
+            "stat.runs": [90],
+            "stat.homeRuns": [30],
+            "stat.rbi": [100],
+            "stat.stolenBases": [12],
+        }
+    )
+    pitcher = pd.DataFrame(
+        {
+            "player.id": [7],
+            "stat.inningsPitched": ["180.1"],
+            "stat.earnedRuns": [60],
+            "stat.baseOnBalls": [45],
+            "stat.hits": [150],
+            "stat.strikeOuts": [200],
+            "stat.wins": [15],
+        }
+    )
+    assert list(normalize_hitting(hitter).columns) == [HITTER_PT, *HITTER_RATES]
+    assert list(normalize_pitching(pitcher).columns) == [PITCHER_PT, *PITCHER_RATES]
+
+
+def test_normalize_hitting_covers_every_rate() -> None:
+    raw = pd.DataFrame(
+        {
+            "player.id": [1],
+            "stat.plateAppearances": [600],
+            "stat.atBats": [540],
+            "stat.hits": [162],
+            "stat.runs": [90],
+            "stat.homeRuns": [30],
+            "stat.rbi": [100],
+            "stat.stolenBases": [12],
+        }
+    )
+    row = normalize_hitting(raw).loc[1]
+    assert row["r_pa"] == pytest.approx(90 / 600)
+    assert row["rbi_pa"] == pytest.approx(100 / 600)
+
+
+def test_normalize_pitching_covers_every_rate() -> None:
+    raw = pd.DataFrame(
+        {
+            "player.id": [7],
+            "stat.inningsPitched": ["180.0"],
+            "stat.earnedRuns": [60],
+            "stat.baseOnBalls": [45],
+            "stat.hits": [150],
+            "stat.strikeOuts": [200],
+            "stat.wins": [15],
+        }
+    )
+    row = normalize_pitching(raw).loc[7]
+    assert row["w_ip"] == pytest.approx(15 / 180)
+    assert row["bb_ip"] == pytest.approx(45 / 180)
+    assert row["h_ip"] == pytest.approx(150 / 180)
+
+
+def test_zero_playing_time_yields_nan_on_every_hitter_rate() -> None:
+    raw = pd.DataFrame(
+        {
+            "player.id": [3],
+            "stat.plateAppearances": [0],
+            "stat.atBats": [0],
+            "stat.hits": [0],
+            "stat.runs": [0],
+            "stat.homeRuns": [0],
+            "stat.rbi": [0],
+            "stat.stolenBases": [0],
+        }
+    )
+    out = normalize_hitting(raw)
+    for col in HITTER_RATES:
+        assert pd.isna(out.loc[3, col])
+
+
+def test_zero_innings_yields_nan_on_every_pitcher_rate() -> None:
+    raw = pd.DataFrame(
+        {
+            "player.id": [8],
+            "stat.inningsPitched": ["0.0"],
+            "stat.earnedRuns": [0],
+            "stat.baseOnBalls": [0],
+            "stat.hits": [0],
+            "stat.strikeOuts": [0],
+            "stat.wins": [0],
+        }
+    )
+    out = normalize_pitching(raw)
+    assert out.loc[8, "ip"] == 0.0
+    for col in PITCHER_RATES:
+        assert pd.isna(out.loc[8, col])
+
+
+def test_normalize_pitching_drops_rows_without_an_mlbam_id() -> None:
+    raw = pd.DataFrame(
+        {
+            "player.id": [7, None],
+            "stat.inningsPitched": ["180.0", "20.0"],
+            "stat.earnedRuns": [60, 10],
+            "stat.baseOnBalls": [45, 8],
+            "stat.hits": [150, 22],
+            "stat.strikeOuts": [200, 18],
+            "stat.wins": [15, 1],
+        }
+    )
+    assert list(normalize_pitching(raw).index) == [7]
