@@ -73,6 +73,10 @@ via `pybaseball` + a direct CSV) are unrelated dependencies; separate files keep
 each independently readable and testable and leave obvious homes for #266 to add
 derivation modules (e.g. `keepers/value.py`) beside the ingest without touching
 it. Raw pulls cache to `data/keepers/` (renamed off the old `data/skill_luck/`).
+The cache dir is created at runtime by `fetch_or_cache` and holds fetched CSVs
+(not committed; `data/` is git-untracked and vulture-excluded). The stale
+`data/skill_luck/` cache dir, if present on disk, can be removed -- nothing reads
+it after this reorg.
 
 ### `cache.py` -- plumbing (moved verbatim)
 
@@ -86,9 +90,11 @@ it. Raw pulls cache to `data/keepers/` (renamed off the old `data/skill_luck/`).
 
 - `fetch_mlb_season(cache_dir, year, group, *, fetcher=None) -> pd.DataFrame`
   where `group` is `"hitting"` or `"pitching"`. Paginated season-stats
-  leaderboard (`playerPool="all"`), all pages concatenated.
-- **Fully raw representation:** each split is flattened with `pd.json_normalize`
-  so the frame keeps **every** field the API returns (`player.id`,
+  leaderboard (`playerPool="all"`).
+- **Fully raw representation:** accumulate the raw `splits` from **every page
+  first**, then apply `pd.json_normalize` **once** to the full accumulated list
+  (not per-page-then-concat -- one normalize keeps the column set consistent).
+  The result keeps **every** field the API returns (`player.id`,
   `player.fullName`, all `stat.*`, `team.*`, etc.) -- nothing dropped. This is a
   deliberate change from the old `{mlbam: player.id, **stat}`, which silently
   dropped player name / team; "don't trust decisions to drop columns" (owner)
@@ -96,29 +102,43 @@ it. Raw pulls cache to `data/keepers/` (renamed off the old `data/skill_luck/`).
   for v1; #266 selects what it needs.
 - Pagination and the `fetcher` injection seam (for tests) are preserved; the
   network call is a local import (`requests`) so the module stays import-safe.
+- Cache file: `data/keepers/mlb_{group}_{year}.csv`.
 
 ### `savant.py` -- Baseball Savant pulls, fully raw
 
-Each returns the upstream frame **as-is** -- no rename, no `/100`, no merge:
+Each returns the upstream frame **as-is** -- no rename, no `/100`, no merge.
+Cache files under `data/keepers/`:
 
 - `fetch_batter_expected(cache_dir, year, *, fetcher=None)` ->
-  `pybaseball.statcast_batter_expected_stats(year, minPA=1)`.
+  `pybaseball.statcast_batter_expected_stats(year, minPA=1)`; cache
+  `savant_batter_expected_{year}.csv`.
 - `fetch_batter_barrels(cache_dir, year, *, fetcher=None)` ->
-  `pybaseball.statcast_batter_exitvelo_barrels(year, minBBE=1)`.
+  `pybaseball.statcast_batter_exitvelo_barrels(year, minBBE=1)`; cache
+  `savant_batter_barrels_{year}.csv`.
 - `fetch_pitcher_expected(cache_dir, year, *, fetcher=None)` ->
-  `pybaseball.statcast_pitcher_expected_stats(year, minPA=1)`.
+  `pybaseball.statcast_pitcher_expected_stats(year, minPA=1)`; cache
+  `savant_pitcher_expected_{year}.csv`.
 - `fetch_savant_hr(cache_dir, year, *, fetcher=None)` -> the park-adjusted xHR
-  leaderboard CSV (direct `urllib` fetch, browser UA, utf-8-sig BOM), raw. Uses
-  `tolerate_empty=True` (pre-2016 returns a header-only body).
+  leaderboard CSV (direct `urllib` fetch, browser UA, utf-8-sig BOM), raw; cache
+  `savant_hr_{year}.csv`. Uses `tolerate_empty=True` (pre-2016 returns a
+  header-only body).
 
 Note: `minPA=1` / `minBBE=1` are fetch **parameters** ("return the full
 population," not Savant's default qualified-only filter), not calculations on the
 returned data -- kept so the pulls are maximally complete. `pybaseball` calls are
 local imports.
 
+**mypy under `warn_return_any`:** the fetchers return the untyped `pybaseball`
+frame directly (no more `_rename_strict` laundering), so a bare
+`return statcast_...(...)` annotated `-> pd.DataFrame` would trip
+`warn_return_any = true`. Each fetcher MUST bind the result to a typed local
+first: `result: pd.DataFrame = statcast_...(...); return result` (or `cast`).
+
 ### `__init__.py`
 
-Re-exports `fetch_or_cache` and the five fetchers as the module's public surface.
+Re-exports `fetch_or_cache` and the five fetchers as the module's public surface,
+and defines `__all__` listing them (vulture treats `__all__` names as used --
+part of the dead-code suppression below).
 
 ### Delete set (complete)
 
@@ -166,15 +186,28 @@ New `tests/test_keepers/` uses the `fetcher` injection seam (no real network):
 
 No derivation, join, or shape remains to test.
 
+**Deliberate boundary:** the real network calls (`requests.get`, `urllib`,
+`pybaseball`) are exercised only through the injectable `fetcher` seam and are not
+hit in unit tests -- matching the prior module's approach. Live-pull verification
+is manual/out-of-band, not a CI gate.
+
 ## Gates + config touch-ups
 
-- **mypy:** add `src/fantasy_baseball/keepers/` to `[tool.mypy] files` (the
-  `analysis/` tree is already covered; keep the new module covered).
-- **vulture:** the fetchers have **no in-repo caller until #266**, so vulture will
-  report them as unused. Whitelist `keepers/` (or add the fetcher names to the
-  vulture allowlist) so the "no new dead-code findings" gate passes -- they are
-  intentional public API for #266. Deleting the old modules should otherwise
-  reduce vulture findings.
+- **mypy:** add `src/fantasy_baseball/keepers/` to `[tool.mypy] files` (an explicit
+  allowlist -- the module is unchecked otherwise). Untyped third-party imports are
+  already handled: `pybaseball` by the base config's `ignore_missing_imports = true`,
+  `requests` by the `types-requests` dev dep -- no new override needed. The one
+  real trap is `warn_return_any` on the raw pybaseball returns; handled by the
+  typed-local pattern in the savant section above. (Base `files`-list rules
+  suffice; joining the stricter `analysis.*` override list is optional and not
+  required here.)
+- **vulture:** `[tool.vulture] paths = ["src","scripts"]` already scans `keepers/`,
+  so the fetchers (no caller until #266) WILL be reported as unused. Suppress
+  precisely -- do NOT use a broad `fetch_*` glob (it would silence real dead code
+  elsewhere): (1) `__all__` in `keepers/__init__.py`, and (2) add the exact fetcher
+  names (`fetch_mlb_season`, `fetch_batter_expected`, `fetch_batter_barrels`,
+  `fetch_pitcher_expected`, `fetch_savant_hr`) to `[tool.vulture] ignore_names`.
+  Deleting the old modules otherwise reduces vulture findings.
 - `pytest` / `ruff check` / `ruff format --check` all green.
 
 ## Acceptance (mirrors #265)
