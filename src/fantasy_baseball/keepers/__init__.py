@@ -8,5 +8,18 @@ from __future__ import annotations
 
 from fantasy_baseball.keepers.cache import fetch_or_cache
 from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
+from fantasy_baseball.keepers.savant import (
+    fetch_batter_barrels,
+    fetch_batter_expected,
+    fetch_pitcher_expected,
+    fetch_savant_hr,
+)
 
-__all__ = ["fetch_mlb_season", "fetch_or_cache"]
+__all__ = [
+    "fetch_batter_barrels",
+    "fetch_batter_expected",
+    "fetch_mlb_season",
+    "fetch_or_cache",
+    "fetch_pitcher_expected",
+    "fetch_savant_hr",
+]
