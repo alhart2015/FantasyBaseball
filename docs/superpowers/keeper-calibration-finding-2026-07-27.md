@@ -443,8 +443,8 @@ rows.
    while ranking degrades. Separately, B.2 notes the endpoints do not include the estimator
    `main` actually ships (`analysis/keeper_value.py`, anchor x ratio regressed at 0.6). Both
    checks need VAR, so both are increment 2's.
-7. **Playing time is scored without saves.** `fold.reconstruct_pitcher` emits no `sv` -- spec 5.1
+6. **Playing time is scored without saves.** `fold.reconstruct_pitcher` emits no `sv` -- spec 5.1
    excludes relievers from the out-year ranking because ZiPS populates `SV` in 0 of 1838 rows --
    but `analysis.keeper_value.PITCHER_FIELDS` scores `sv`. A missing column reads as zero saves,
    so increment 2 must supply it or exclude the category explicitly.
-6. Spec 5.1's `role_ip` routing fix, the par curve, and the cross-team table remain increment 2.
+7. Spec 5.1's `role_ip` routing fix, the par curve, and the cross-team table remain increment 2.
