@@ -126,9 +126,17 @@ def test_policy_from_study_rejects_a_report_mixing_fit_settings() -> None:
 
 
 def test_chosen_estimator_name_matches_the_library() -> None:
-    # `policy_from_study` matches report rows on CHOSEN_ESTIMATOR, but the name is
-    # defined by the estimator class. If they drift, the study emits a report the
-    # library cannot read -- and the failure is an empty policy, not an error.
+    """`CHOSEN_ESTIMATOR` and `ShrunkTransfer.name` are two owners of one string.
+
+    Before the constant existed the script derived the name from the class, so
+    they could not drift. Now they can, and this test is what re-closes the gap.
+
+    Drift fails loudly, not silently -- verified: `build_report` raises
+    `KeyError('fitted-k')` looking up the chosen estimator's folds, and
+    `policy_from_study` raises `ValueError("report contains no 'fitted-k' rows")`.
+    The value of this test is converting a run-time break into a build-time one,
+    not preventing a silent wrong answer.
+    """
     from fantasy_baseball.keepers.calibration import ShrunkTransfer
     from fantasy_baseball.keepers.coefficients import CHOSEN_ESTIMATOR
 
