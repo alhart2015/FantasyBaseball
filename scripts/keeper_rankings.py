@@ -1,28 +1,47 @@
-"""Rank keeper candidates by blending 2026 value, true-talent skills and age.
+"""Rank keeper candidates on skill, luck, future and age, then price them in VAR.
 
 Reads what `fetch_keeper_skills.py` cached, computes each player's actual roto
-value (SGP) for the season, and blends the three families in percentile space
-using the weights fitted in `keepers/composite.py`.
+value (SGP) for the season, blends the four families in percentile space using
+the weights fitted in `keepers/composite.py`, then converts that ordinal
+composite into projected value with an error bar via `keepers/projection.py`.
 
-Writes `data/cache/keeper_skills/keeper_rankings_{year}.csv` with, per player:
+Writes `data/cache/keeper_skills/keeper_rankings_{kind}_{year}.csv`:
 
-    value_pct   percentile of actual SGP this season
-    skill_pct   percentile of the true-talent stats
-    age_pct     percentile of age, younger better
-    composite   the fitted blend -- the ranking column
-    reg_gap     value_pct - skill_pct; positive = outran his peripherals
-    zips_pct    percentile of ZiPS out-year projected SGP, UNVALIDATED (below)
+    value_pct   percentile of actual SGP this season (= skill + luck)
+    skill_pct   SKILL   -- percentile of the peripherals
+    luck_pct    LUCK    -- value_pct - skill_pct, the unsupported part of the line
+    future_pct  FUTURE  -- percentile of blended out-year ZiPS projected SGP
+    age_pct     AGE     -- percentile of age, younger better
+    composite   the fitted four-family blend, ordinal within pool
+    proj_sgp    projected 2027 SGP implied by that composite
+    sd          predictive SD of proj_sgp for ONE player, not a group mean
+    proj_var    proj_sgp plus a mean-centred positional scarcity adjustment
+    pos         the position that adjustment came from
 
-Hitters and pitchers are ranked in separate pools, so a percentile compares a
-player to his own kind and never across.
+Rows are ranked by `proj_var`, not by composite. The composite is a within-pool
+percentile and cannot be compared across pools; `proj_var` is in standings-gain
+points, so a catcher and a closer and an outfielder can share one list. Scarcity
+enters as a mean-centred ADJUSTMENT rather than a subtracted floor -- catcher
++1.38, RP +1.66, OF/UTIL -0.88 -- because the draft-time floors are on a
+different scale from this projection. `projection.scarcity_adjustments` argues it.
 
-The ZiPS column is deliberately outside the composite. The out-year files are
-snapshots generated before the season started, so they carry no information
-about it, and there is no historical out-year vintage to backtest a weight
-against. Read it as a second opinion, not as a fitted input.
+Read the ranking in TIERS, not by row. Adjacent players differ by ~0.1 projected
+SGP while the predictive SD for one player is ~4.8, so consecutive ranks are
+close to coin flips; `sd` is there to stop a single-rank gap being read as real.
+
+`--roster` answers the decision directly: P(each of my players finishes among my
+N best). That is joint and set-dependent -- it needs the exact rivals -- so it
+lives there rather than in this pool-wide CSV.
+
+`luck` carries a POSITIVE weight, which the name does not suggest: the gap
+encodes role and durability as well as noise, and forcing it negative collapses
+the fit. For trades read it the other way round. `future` is deliberately
+discounted for staleness -- the out-year files have never seen this season.
+Both are argued in `keepers/composite.py`.
 
 Usage:
     python scripts/keeper_rankings.py
+    python scripts/keeper_rankings.py --roster          # P(top-3) on my roster
     python scripts/keeper_rankings.py --backtest        # regenerate the study
     python scripts/keeper_rankings.py --year 2025
 """
@@ -30,6 +49,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from itertools import product
 from pathlib import Path
@@ -44,13 +64,23 @@ from fantasy_baseball.keepers.actuals import index_by_mlbam, innings_to_float
 from fantasy_baseball.keepers.composite import (
     FITTED_WEIGHTS,
     composite,
+    future_percentile,
+    luck,
     percentile,
-    regression_gap,
     skill_percentile,
+)
+from fantasy_baseball.keepers.positions import load_positions
+from fantasy_baseball.keepers.projection import (
+    expected_sgp,
+    probability_top_n,
+    scarcity_adjustments,
+    sgp_sd,
 )
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
+from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -60,6 +90,10 @@ PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 # Below these a percentile is noise: the skills module regresses nothing, so a
 # 3-inning pitcher can post the league's best ERA-. See its module docstring.
 MIN_PT = {"hitter": 250, "pitcher": 50}
+# Used only when a player is absent from the position map. UTIL and SP are the
+# DEEPEST floors, so an unknown position is charged the harshest replacement
+# level rather than flattered by a scarce one.
+FALLBACK_POS = {"hitter": ["UTIL"], "pitcher": ["P"]}
 BACKTEST_FIT_YEARS = (2022, 2023)
 BACKTEST_HOLDOUT = 2024
 
@@ -166,21 +200,72 @@ def build(year: int, kind: str, denoms, keepers: dict[str, str]) -> pd.DataFrame
     qualified = frame[frame["pt"] >= MIN_PT[kind]].copy()
     qualified["value_pct"] = percentile(qualified["sgp"])
     qualified["skill_pct"] = skill_percentile(qualified, kind)
+    qualified["luck_pct"] = luck(qualified["value_pct"], qualified["skill_pct"])
     qualified["age_pct"] = percentile(qualified["age"], higher_is_better=False)
-    qualified["composite"] = composite(
-        qualified["value_pct"], qualified["skill_pct"], qualified["age_pct"], kind
-    )
-    qualified["reg_gap"] = regression_gap(qualified["value_pct"], qualified["skill_pct"])
 
-    # Rank the projection WITHIN the qualified pool, not within all ~1900 ZiPS
+    # Rank the projections WITHIN the qualified pool, not within all ~1900 ZiPS
     # rows. Most of that file is minor leaguers, so ranking there would put every
     # established regular above the 90th percentile and say nothing.
-    zips = zips_out_year_sgp(year + 1, kind, denoms).reindex(qualified.index)
-    qualified["zips_pct"] = percentile(zips)
+    near = zips_out_year_sgp(year + 1, kind, denoms).reindex(qualified.index)
+    far = zips_out_year_sgp(year + 2, kind, denoms).reindex(qualified.index)
+    qualified["future_pct"] = future_percentile(near, far)
 
+    blended = composite(
+        {
+            "skill": qualified["skill_pct"],
+            "luck": qualified["luck_pct"],
+            "future": qualified["future_pct"],
+            "age": qualified["age_pct"],
+        },
+        kind,
+    )
+    # Re-rank the blend to 0-1. `luck` is a difference centred on zero while the
+    # other three span 0-1, so the raw weighted mean is not on a percentile scale
+    # and would read as if everyone were mid-pack. Ranking is order-preserving,
+    # so this changes only how the number reads.
+    qualified["composite"] = percentile(blended)
+
+    # The composite is ordinal; this is what puts it on a value scale and lets
+    # hitters and pitchers share one list. See `keepers.projection`.
+    qualified["proj_sgp"] = expected_sgp(qualified["composite"], kind)
+    qualified["sd"] = sgp_sd(qualified["composite"], kind)
+
+    # Positional scarcity as a mean-centred ADJUSTMENT, not a subtracted floor --
+    # see `keepers.projection.scarcity_adjustments` for why the raw floors cannot
+    # be differenced against this projection.
+    positions = load_positions()
+    floors = position_aware_replacement_levels(denoms=denoms)
+    adjustments = scarcity_adjustments(floors)
+    # `calculate_var` against the mean-centred table returns proj + adjustment and
+    # picks the position that maximizes it, which is the same best-slot rule the
+    # draft board uses.
+    centred = {position: -value for position, value in adjustments.items()}
+    priced = [
+        calculate_var(
+            pd.Series(
+                {
+                    "total_sgp": proj,
+                    "positions": positions.get(normalize_name(str(name)), FALLBACK_POS[kind]),
+                    "ip": pt,
+                }
+            ),
+            centred,
+            return_position=True,
+            # Route a reliever to the RP floor on his role rather than his
+            # innings: a closer's 45 IP would otherwise read as a failed starter.
+            role_ip=pt if kind == "pitcher" else None,
+        )
+        for name, proj, pt in zip(
+            qualified["name"], qualified["proj_sgp"], qualified["pt"], strict=True
+        )
+    ]
+    qualified["proj_var"] = [var for var, _ in priced]
+    qualified["pos"] = [pos for _, pos in priced]
     qualified["keeper_of"] = [keepers.get(normalize_name(str(n)), "") for n in qualified["name"]]
-    qualified["rank"] = qualified["composite"].rank(ascending=False, method="min").astype(int)
-    return qualified.sort_values("composite", ascending=False)
+
+    ranked = qualified.sort_values("proj_var", ascending=False)
+    ranked["rank"] = range(1, len(ranked) + 1)
+    return ranked
 
 
 # --- backtest -------------------------------------------------------------
@@ -198,16 +283,29 @@ def _transition(year: int, kind: str, denoms) -> pd.DataFrame:
     feat = now[now["pt"] >= MIN_PT[kind]].copy()
     feat["value_pct"] = percentile(feat["sgp"])
     feat["skill_pct"] = skill_percentile(feat, kind)
+    feat["luck_pct"] = luck(feat["value_pct"], feat["skill_pct"])
     feat["age_pct"] = percentile(feat["age"], higher_is_better=False)
+    # The out-year analogue: a projection FOR `year` was built before `year`, so it
+    # sits the same two seasons forward from its data as ZiPS 2027 does from 2026.
+    # Using next year's projection here would flatter `future` badly -- a fresh
+    # projection scores 0.67/0.52 alone against this stale one's 0.52/0.35.
+    feat["future_pct"] = percentile(zips_out_year_sgp(year, kind, denoms).reindex(feat.index))
     # A player who does not appear next season scores 0 rather than dropping
     # out: vanishing is the outcome a keeper decision most wants to avoid.
     feat["target"] = percentile(nxt["sgp"]).reindex(feat.index).fillna(0.0)
     return feat.dropna(subset=["value_pct", "skill_pct", "age_pct"])
 
 
-def _rho(frame: pd.DataFrame, weights: tuple[float, float, float], kind: str) -> float:
+def _rho(frame: pd.DataFrame, weights: tuple[float, float, float, float], kind: str) -> float:
     blended = composite(
-        frame["value_pct"], frame["skill_pct"], frame["age_pct"], kind, weights=weights
+        {
+            "skill": frame["skill_pct"],
+            "luck": frame["luck_pct"],
+            "future": frame["future_pct"],
+            "age": frame["age_pct"],
+        },
+        kind,
+        weights=weights,
     )
     return float(blended.corr(frame["target"], method="spearman"))
 
@@ -220,49 +318,121 @@ def run_backtest(denoms) -> None:
             f"\n{'=' * 70}\n{kind.upper()}  fit={list(BACKTEST_FIT_YEARS)} holdout={BACKTEST_HOLDOUT}"
         )
 
-        grid = [round(i / 10, 1) for i in range(11)]
+        # skill is pinned at 1.0; every other family is measured against it.
         rows = []
-        for w_value, w_skill in product(grid, grid):
-            w_age = round(1.0 - w_value - w_skill, 3)
-            if not 0.0 <= w_age <= 0.5:
-                continue
-            weights = (w_value, w_skill, w_age)
+        for w_luck, w_future, w_age in product(
+            (0.4, 0.6, 0.8, 1.0, 1.2), (0.0, 0.2, 0.4, 0.6, 0.8), (0.0, 0.15, 0.3, 0.45)
+        ):
+            weights = (1.0, w_luck, w_future, w_age)
             rows.append(
                 {
-                    "w_value": w_value,
-                    "w_skill": w_skill,
-                    "w_age": w_age,
+                    "luck": w_luck,
+                    "future": w_future,
+                    "age": w_age,
                     "fit_rho": sum(_rho(f, weights, kind) for f in fit) / len(fit),
                     "holdout_rho": _rho(hold, weights, kind),
                 }
             )
         table = pd.DataFrame(rows).sort_values("fit_rho", ascending=False)
+        print("  skill pinned at 1.0; top blends by fit:")
         print(table.head(5).round(4).to_string(index=False))
         print("\n  baselines (holdout):")
+        shipped = FITTED_WEIGHTS[kind]
         for label, weights in [
-            ("shipped weights", FITTED_WEIGHTS[kind]),
-            ("value only", (1.0, 0.0, 0.0)),
-            ("skill only", (0.0, 1.0, 0.0)),
+            ("shipped", shipped),
+            ("no future", (1.0, shipped[1], 0.0, shipped[3])),
+            ("skill+luck only", (1.0, shipped[1], 0.0, 0.0)),
+            ("skill only", (1.0, 0.0, 0.0, 0.0)),
         ]:
-            print(f"    {label:16s} rho = {_rho(hold, weights, kind):.4f}")
+            print(f"    {label:17s} rho = {_rho(hold, weights, kind):.4f}")
+
+
+def load_roster_names() -> set[str]:
+    """Normalized names on my roster, from the live KV blob.
+
+    Import-local and failure-tolerant, like `keepers.positions`: the rest of this
+    script runs offline, and only this one report needs the network.
+    """
+    try:
+        from fantasy_baseball.data.kv_store import get_kv
+
+        blob = get_kv().get("cache:roster")
+    except Exception:
+        return set()
+    if not blob:
+        return set()
+    payload = json.loads(blob) if isinstance(blob, str) else blob
+    entries = payload.get("_data", payload) if isinstance(payload, dict) else payload
+    if not isinstance(entries, list):
+        return set()
+    return {normalize_name(str(e.get("name", ""))) for e in entries if e.get("name")}
+
+
+def roster_report(year: int, denoms, keepers: dict[str, str], slots: int) -> int:
+    """Score one roster and give each player P(he is among its `slots` best).
+
+    That is the keeper question directly -- "would I be right to keep him" -- and
+    it only means anything against a specific set of rivals, so it is computed
+    here over the roster rather than shipped in the pool-wide CSV.
+    """
+    roster = load_roster_names()
+    if not roster:
+        print("No roster available (needs the live KV blob); nothing to score.")
+        return 1
+
+    scored = []
+    for kind in ("hitter", "pitcher"):
+        table = build(year, kind, denoms, keepers)
+        on_roster = table["name"].map(lambda n: normalize_name(str(n)) in roster)
+        part = table[on_roster].copy()
+        part["kind"] = kind
+        scored.append(part)
+    board = pd.concat(scored).sort_values("proj_var", ascending=False).reset_index(drop=True)
+
+    # `name` collides with the pandas index attribute on itertuples.
+    board["name_display"] = board["name"]
+    board["p_keep"] = probability_top_n(board["proj_var"], board["sd"], board["kind"], slots)
+    missing = sorted(roster - {normalize_name(str(n)) for n in board["name"]})
+
+    print(f"\n=== {len(board)} scoreable players, {slots} keeper slots ===")
+    print(f"{'':1}{'PLAYER':<20}{'POS':>4}{'AGE':>4}{'PROJ VAR':>10}{'+/-SD':>7}{'P KEEP':>8}")
+    print("-" * 54)
+    for row in board.itertuples():
+        mine = "*" if row.keeper_of else " "
+        print(
+            f"{mine}{row.name_display:<20}{row.pos:>4}{row.age:>4}"
+            f"{row.proj_var:>10.2f}{row.sd:>7.2f}{row.p_keep * 100:>7.0f}%"
+        )
+    print(f"\n  P KEEP sums to {board['p_keep'].sum():.2f}, i.e. exactly the {slots} slots.")
+    if missing:
+        print(
+            f"  NOT SCORED ({len(missing)}), below the qualifying floor so they have no "
+            f"percentile: {', '.join(missing)}."
+        )
+        print("  Their absence inflates everyone else's P KEEP -- they are not competing.")
+    return 0
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--year", type=int, help="defaults to config season_year")
     parser.add_argument("--backtest", action="store_true", help="regenerate the weight study")
+    parser.add_argument("--roster", action="store_true", help="score my roster for P(top-N)")
+    parser.add_argument("--slots", type=int, default=3, help="keeper slots, for --roster")
     parser.add_argument("--top", type=int, default=20, help="rows to print per pool")
     args = parser.parse_args()
 
     config = load_config(CONFIG_PATH)
     year = args.year or config.season_year
     denoms = get_sgp_denominators(getattr(config, "sgp_overrides", None))
+    keepers = {normalize_name(k["name"]): k["team"] for k in (config.keepers or [])}
 
     if args.backtest:
         run_backtest(denoms)
         return 0
+    if args.roster:
+        return roster_report(year, denoms, keepers, args.slots)
 
-    keepers = {normalize_name(k["name"]): k["team"] for k in (config.keepers or [])}
     for kind in ("hitter", "pitcher"):
         table = build(year, kind, denoms, keepers)
         out_path = SKILLS_DIR / f"keeper_rankings_{kind}_{year}.csv"
@@ -272,12 +442,14 @@ def main() -> int:
             "name",
             "age",
             "pt",
-            "sgp",
-            "value_pct",
+            "pos",
             "skill_pct",
+            "luck_pct",
+            "future_pct",
             "composite",
-            "reg_gap",
-            "zips_pct",
+            "proj_sgp",
+            "sd",
+            "proj_var",
             "keeper_of",
         ]
         print(

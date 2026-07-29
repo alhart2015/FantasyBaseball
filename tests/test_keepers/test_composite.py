@@ -4,14 +4,26 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.keepers.composite import (
+    FAMILIES,
     FITTED_WEIGHTS,
+    FUTURE_BLEND,
     LOWER_IS_BETTER,
     SKILL_COLUMNS,
     composite,
+    future_percentile,
+    luck,
     percentile,
-    regression_gap,
     skill_percentile,
 )
+
+
+def _fam(skill, luck_, future, age):
+    return {
+        "skill": pd.Series(skill),
+        "luck": pd.Series(luck_),
+        "future": pd.Series(future),
+        "age": pd.Series(age),
+    }
 
 
 def test_percentile_is_zero_to_one_and_ordered():
@@ -90,42 +102,84 @@ def test_skill_percentile_raises_on_a_renamed_column():
 
 
 def test_composite_is_a_weighted_blend_on_the_same_scale():
-    one = pd.Series([1.0])
-    assert composite(one, one, one, "hitter").iloc[0] == pytest.approx(1.0)
-    zero = pd.Series([0.0])
-    assert composite(zero, zero, zero, "pitcher").iloc[0] == pytest.approx(0.0)
+    assert composite(_fam([1.0], [1.0], [1.0], [1.0]), "hitter").iloc[0] == pytest.approx(1.0)
+    assert composite(_fam([0.0], [0.0], [0.0], [0.0]), "pitcher").iloc[0] == pytest.approx(0.0)
 
 
 def test_composite_normalizes_weights_that_do_not_sum_to_one():
-    value, skill, age = pd.Series([1.0]), pd.Series([0.0]), pd.Series([0.0])
-    doubled = composite(value, skill, age, "hitter", weights=(2.0, 0.0, 0.0))
-    assert doubled.iloc[0] == pytest.approx(1.0)
+    out = composite(_fam([1.0], [0.0], [0.0], [0.0]), "hitter", weights=(2.0, 0.0, 0.0, 0.0))
+    assert out.iloc[0] == pytest.approx(1.0)
 
 
-def test_composite_rejects_degenerate_weights():
-    s = pd.Series([0.5])
-    with pytest.raises(ValueError, match="positive"):
-        composite(s, s, s, "hitter", weights=(0.0, 0.0, 0.0))
+def test_composite_rejects_an_unknown_family():
+    with pytest.raises(KeyError, match="peripherals"):
+        composite({"peripherals": pd.Series([0.5])}, "hitter")
 
 
-def test_age_lowers_an_older_players_composite():
-    """Age is the only family where the two players differ."""
-    value = skill = pd.Series([0.9, 0.9])
-    age = pd.Series([1.0, 0.0])  # already a percentile: younger is 1.0
-    out = composite(value, skill, age, "hitter")
+def test_composite_rejects_all_zero_weights():
+    with pytest.raises(ValueError, match="no weighted family"):
+        composite(_fam([0.5], [0.0], [0.0], [0.0]), "hitter", weights=(0, 0, 0, 0))
+
+
+def test_a_missing_family_drops_out_of_the_denominator():
+    """A pool with no out-year projection must stay comparable, not be silently
+    scaled down as though every player projected to zero. With every supplied
+    family at the same level the blend must equal that level either way -- which
+    only holds if the absent family's weight leaves the denominator too."""
+    supplied = {k: pd.Series([0.8]) for k in ("skill", "luck", "future", "age")}
+    full = composite(supplied, "hitter").iloc[0]
+    partial = composite({k: v for k, v in supplied.items() if k != "future"}, "hitter").iloc[0]
+    assert full == pytest.approx(0.8)
+    assert partial == pytest.approx(0.8)
+
+
+def test_a_missing_family_is_not_treated_as_zero():
+    """The failure this guards: keeping the weight but supplying nothing, which
+    would drag every player toward zero and quietly compress the whole pool."""
+    supplied = {"skill": pd.Series([0.8]), "luck": pd.Series([0.0]), "age": pd.Series([0.8])}
+    partial = composite(supplied, "hitter").iloc[0]
+    as_zero = composite({**supplied, "future": pd.Series([0.0])}, "hitter").iloc[0]
+    assert partial > as_zero
+
+
+def test_luck_is_value_minus_skill():
+    assert luck(pd.Series([0.95, 0.40]), pd.Series([0.55, 0.80])).tolist() == pytest.approx(
+        [0.40, -0.40]
+    )
+
+
+def test_luck_carries_a_positive_weight_for_every_position():
+    """Not what the name suggests, and load-bearing: the gap also encodes playing
+    time, and forcing it negative collapses the fit (rho 0.65 -> 0.13)."""
+    for kind, weights in FITTED_WEIGHTS.items():
+        assert weights[FAMILIES.index("luck")] > 0, kind
+
+
+def test_future_blend_favors_the_nearer_year_and_sums_to_one():
+    near, far = FUTURE_BLEND
+    assert near > far
+    assert near + far == pytest.approx(1.0)
+
+
+def test_future_percentile_weights_the_nearer_year_more():
+    """Two players, mirrored projections: the one better in the NEAR year wins."""
+    near = pd.Series([10.0, 5.0])
+    far = pd.Series([5.0, 10.0])
+    out = future_percentile(near, far)
     assert out.iloc[0] > out.iloc[1]
 
 
-def test_fitted_weights_favor_value_and_include_every_family():
-    """Pins the shape the backtest found -- value dominant, age a small
-    adjustment -- so a future edit that inverts it has to be deliberate."""
-    for kind, (w_value, w_skill, w_age) in FITTED_WEIGHTS.items():
-        assert w_value > w_skill >= 0.0, kind
-        assert w_value > w_age >= 0.0, kind
-        assert sum((w_value, w_skill, w_age)) == pytest.approx(1.0), kind
+def test_future_percentile_falls_back_to_the_near_year_when_far_is_missing():
+    """A player the 2028 file does not cover keeps his 2027 standing rather than
+    being dragged toward zero."""
+    near = pd.Series([10.0, 8.0, 6.0])
+    both = future_percentile(near, pd.Series([10.0, 8.0, 6.0]))
+    partial = future_percentile(near, pd.Series([10.0, float("nan"), 6.0]))
+    assert partial.tolist() == pytest.approx(both.tolist())
 
 
-def test_regression_gap_is_positive_when_production_outran_skills():
-    gap = regression_gap(pd.Series([0.95, 0.40]), pd.Series([0.55, 0.80]))
-    assert gap.iloc[0] == pytest.approx(0.40)  # sell high
-    assert gap.iloc[1] == pytest.approx(-0.40)  # buy low
+def test_fitted_weights_have_one_entry_per_family_and_lead_with_skill():
+    for kind, weights in FITTED_WEIGHTS.items():
+        assert len(weights) == len(FAMILIES), kind
+        assert weights[FAMILIES.index("skill")] == max(weights), kind
+        assert weights[FAMILIES.index("future")] > 0, kind

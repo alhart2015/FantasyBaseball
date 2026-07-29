@@ -1,49 +1,83 @@
-"""Blend a season's observed value, true-talent skills and age into one keeper rank.
+"""Rank keeper candidates on four families: skill, luck, future and age.
 
 Pure and I/O-free like the rest of the normalization layer. Everything works in
-PERCENTILE space within a player pool, so hitters and pitchers are ranked against
-their own kind and the inputs -- roto value, rate stats, age -- become comparable
-without inventing a common unit.
+PERCENTILE space within a player pool, so hitters and pitchers rank against their
+own kind and the inputs become comparable without inventing a common unit.
 
-The weights below were fitted, not chosen. `scripts/keeper_rankings.py --backtest`
-regenerates the study: features observed in season T against the SGP percentile
-actually realized in T+1, fit on 2022->2023 and 2023->2024, held out on
-2024->2025. Two findings drive the shape of this module.
+The families
+------------
+**skill** -- the peripherals. Contact quality and expected outcomes for hitters,
+run prevention and pitch-level whiff/called-strike rates for pitchers. Two of the
+inputs (`wrc_plus`, `era_minus`) are production-derived rather than expected, so
+this is better read as "peripherals" than as clean true talent. Removing them was
+tested and made pitchers strictly worse (0.464 -> 0.410 against next-year rate),
+so they stay.
 
-**The weight surface is flat.** On the holdout the fitted blend beats using last
-season's value alone by 0.017 (hitters, rho 0.689 vs 0.672) and 0.015 (pitchers,
-0.470 vs 0.456). Treat these weights as "roughly this shape", not as tuned
-constants; three seasons cannot separate 0.7 from 0.8.
+**luck** -- `value_pct - skill_pct`: the part of a player's roto line his
+peripherals do not support. Note `value = skill + luck` exactly, so {skill, luck}
+spans the same space as {skill, value}; this is a reparameterization chosen for
+what it says, not a new model.
 
-**Skills and value predict DIFFERENT halves of next season, and the split is
-reversed between hitters and pitchers.** Next-year roto value is mostly volume
-(rho 0.95 hitters / 0.88 pitchers against next-year playing time), and last
-season's value is the better predictor of volume. But split out next-year RATE:
+    Its weight is POSITIVE, which is not what the name suggests. Being "lucky"
+    in year T predicts year T+1 because the gap also encodes role and
+    durability: luck -> next-year PLAYING TIME is +0.38, while for pitchers
+    luck -> next-year RATE is -0.04. Forcing a negative weight collapses the fit
+    (rho 0.65 -> 0.13 for hitters). So luck is not a noise term to subtract; it
+    is mostly a volume signal wearing a misleading name. For TRADE decisions
+    read it the other way -- a large positive luck score is the sell-high case,
+    because the rate half of it will not repeat.
 
-    predictor -> next-year RATE      hitters   pitchers
-    last season's roto value           0.514      0.342
-    true-talent skills                 0.381      0.464
+**future** -- percentile of projected SGP from the out-year ZiPS files, blended
+`FUTURE_BLEND` in favour of the nearer year.
 
-and inside the keeper tier (top 60 by last-year value) the pitcher column
-separates completely -- skills 0.511, last-year value -0.015, stable across all
-three seasons. Elite pitcher ERA carries almost no information about next
-season's ERA; the skills carry most of it. Hitters go the other way, with value
-ahead of skills in 3 of 3 seasons.
+**age** -- younger is better. Small but real; the only family that survives
+purely as an adjustment.
 
-That is why :func:`regression_gap` exists and is worth more than the composite
-for trade decisions: it is the part of a player's line his skills do not support.
+Where the weights come from
+---------------------------
+`scripts/keeper_rankings.py --backtest`: features observed in season T against
+the SGP percentile realized in T+1, fit on 2022->2023 and 2023->2024, held out on
+2024->2025. Holdout Spearman:
+
+                            hitters   pitchers
+    shipped weights           0.709      0.495
+    without future            0.689      0.470
+    value + luck only         0.672      0.456
+
+**The future weight is discounted for staleness, deliberately.** A FRESH
+next-season projection (one that has seen season T) is the single strongest
+predictor available -- 0.666 for hitters, 0.520 for pitchers, both beating
+skill+luck -- and would earn a weight near 1.0-2.0. The out-year files are two
+years forward from their information set: ZiPS 2027 was generated 2026-03-25 and
+has never seen 2026. Measuring that same two-years-forward case historically
+(ZiPS for year T predicting T+1) drops it to 0.523 / 0.347 alone and to a best
+weight of ~0.4. That 0.4 is what ships. If a post-season ZiPS 2027 ever lands,
+it is worth roughly triple this.
+
+The fit surface is flat: the top four weight vectors are within 0.002 of each
+other. `future` is set to 0.4 for both types because the fit cannot separate 0.2
+from 0.4 for pitchers (delta 0.0001) and one value for both is the simpler model.
+Read all of these as a shape, not as tuned constants -- two fit seasons cannot
+justify a third decimal.
 """
 
 from __future__ import annotations
 
 import pandas as pd
 
-# (value, skill, age). Age is "younger is better" and is an adjustment, not a
-# driver -- on its own it reaches rho 0.19 for hitters and 0.05 for pitchers.
-FITTED_WEIGHTS: dict[str, tuple[float, float, float]] = {
-    "hitter": (0.7, 0.1, 0.2),
-    "pitcher": (0.7, 0.2, 0.1),
+# Weight per family, in (skill, luck, future, age) order. Not normalized;
+# `composite` divides by the sum.
+FITTED_WEIGHTS: dict[str, tuple[float, float, float, float]] = {
+    "hitter": (1.0, 0.8, 0.4, 0.3),
+    "pitcher": (1.0, 0.6, 0.4, 0.15),
 }
+FAMILIES: tuple[str, ...] = ("skill", "luck", "future", "age")
+
+# Out-year projection blend, nearer year first. The two ZiPS out-years come from
+# one 2026-03-25 model run and correlate 0.96, so the blend lands 0.995
+# correlated with the nearer year alone -- this weighting expresses a preference
+# rather than adding much information.
+FUTURE_BLEND: tuple[float, float] = (2 / 3, 1 / 3)
 
 HITTER_SKILLS = ("barrel_pct", "barrel_pa_pct", "xwoba", "xba", "wrc_plus")
 PITCHER_SKILLS = ("era_minus", "fip", "k_pct", "swstr_pct", "whiff_pct", "csw_pct")
@@ -71,8 +105,8 @@ def percentile(values: pd.Series, *, higher_is_better: bool = True) -> pd.Series
 def skill_percentile(frame: pd.DataFrame, kind: str) -> pd.Series:
     """One skill percentile per player: the mean of each stat's own percentile.
 
-    Equal weights WITHIN the family is deliberate. The backtest weights the three
-    families against each other on three seasons; letting it also tune six
+    Equal weights WITHIN the family is deliberate. The backtest weights the four
+    families against each other on two seasons; letting it also tune six
     within-family weights would fit noise. A player missing one stat is averaged
     over the rest rather than dropped.
     """
@@ -84,28 +118,54 @@ def skill_percentile(frame: pd.DataFrame, kind: str) -> pd.Series:
     return pd.concat(parts, axis=1).mean(axis=1)
 
 
-def composite(
-    value_pct: pd.Series,
-    skill_pct: pd.Series,
-    age_pct: pd.Series,
-    kind: str,
-    weights: tuple[float, float, float] | None = None,
-) -> pd.Series:
-    """Weighted blend of the three families, back on a 0-1 scale."""
-    w_value, w_skill, w_age = weights if weights is not None else FITTED_WEIGHTS[kind]
-    total = w_value + w_skill + w_age
-    if total <= 0:
-        raise ValueError(f"weights must sum to something positive, got {total}")
-    blended = w_value * value_pct + w_skill * skill_pct + w_age * age_pct
-    return blended / total
+def luck(value_pct: pd.Series, skill_pct: pd.Series) -> pd.Series:
+    """The part of a roto line the peripherals do not support.
 
-
-def regression_gap(value_pct: pd.Series, skill_pct: pd.Series) -> pd.Series:
-    """How far a player's roto line ran ahead of the skills behind it.
-
-    Positive means the production outran the peripherals -- a sell-high case, and
-    for a top-tier pitcher a strong one, since last-year value carries no signal
-    about next-year rate up there while the skills carry most of it. Negative is
-    the buy-low mirror.
+    Positive means production outran the peripherals. Carries a positive weight
+    in the composite because it also encodes playing time, and reads as the
+    sell-high signal for trades -- see the module docstring.
     """
     return value_pct - skill_pct
+
+
+def future_percentile(near: pd.Series, far: pd.Series) -> pd.Series:
+    """Percentile of the `FUTURE_BLEND`-weighted out-year projections.
+
+    Blended on the projected-SGP scale before ranking, so the weighting applies
+    to the projections themselves rather than to two separate rankings. A player
+    the far year does not cover falls back to the near year alone rather than
+    being dropped.
+    """
+    w_near, w_far = FUTURE_BLEND
+    blended = w_near * near + w_far * far.reindex(near.index).fillna(near)
+    return percentile(blended)
+
+
+def composite(
+    families: dict[str, pd.Series],
+    kind: str,
+    weights: tuple[float, float, float, float] | None = None,
+) -> pd.Series:
+    """Weighted blend of `FAMILIES`, back on a 0-1 scale.
+
+    Missing families are treated as absent rather than as zero: their weight is
+    dropped from the denominator, so a pool with no out-year projection still
+    produces a comparable composite instead of one silently scaled down.
+    """
+    chosen = weights if weights is not None else FITTED_WEIGHTS[kind]
+    unknown = set(families) - set(FAMILIES)
+    if unknown:
+        raise KeyError(f"unknown families {sorted(unknown)}; expected {list(FAMILIES)}")
+
+    total = 0.0
+    blended: pd.Series | None = None
+    for name, weight in zip(FAMILIES, chosen, strict=True):
+        series = families.get(name)
+        if series is None or weight == 0:
+            continue
+        term = weight * series.fillna(series.mean())
+        blended = term if blended is None else blended + term
+        total += weight
+    if blended is None or total <= 0:
+        raise ValueError("no weighted family supplied; cannot form a composite")
+    return blended / total
