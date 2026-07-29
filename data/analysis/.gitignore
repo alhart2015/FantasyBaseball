@@ -1,8 +1,9 @@
 # data/analysis/ holds both committed deliverables and scratch script output.
-# Default to ignoring, and allow the #266 study's artifacts explicitly -- they
-# are the deliverable, and tests/test_keepers/test_coefficients.py binds the
-# shipped coefficients to them (it SKIPS if they are absent, so untracking them
-# would silently remove the guard rather than fail).
+# Default to ignoring, and allow the #266 study's artifacts explicitly. They are
+# retained as the written record behind docs/superpowers/keeper-calibration-
+# finding-2026-07-27.md; the script that produced them and the test that bound
+# the shipped coefficients to them were removed with the fold, so nothing
+# regenerates or checks these now.
 *
 !.gitignore
 !keeper_calibration_*.csv
