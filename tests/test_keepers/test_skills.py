@@ -289,10 +289,10 @@ def test_league_fip_equals_league_era_whatever_is_missing(blank):
 
     lg_fip, lg_era_minus = _league(out)
     assert lg_era_minus == pytest.approx(100.0)
-    assert lg_fip == pytest.approx(_expected_league_era(pitching, blank))
+    assert lg_fip == pytest.approx(_expected_league_era(pitching))
 
 
-def _expected_league_era(pitching, blank):
+def _expected_league_era(pitching):
     """League ERA over pitchers whose every FIP input is present."""
     frame = pitching.copy()
     cols = ["ER", "HR", "BB", "HBP", "SO"]
