@@ -1,4 +1,23 @@
+import codecs
 import unicodedata
+
+
+def repair_double_encoded(name: str) -> str:
+    """Undo a name whose UTF-8 bytes arrived spelled out as literal escapes.
+
+    Baseball Reference returns roughly 7% of names this way -- "Acu\\xc3\\xb1a"
+    as 17 characters rather than "Acuna" with a tilde. Left alone it survives
+    :func:`normalize_name` as a distinct key (accent-stripping has nothing to
+    strip) and silently matches nothing on the board, so repair must happen
+    before any normalized join. Anything that does not round-trip, including a
+    non-string, is returned unchanged.
+    """
+    if not isinstance(name, str):
+        return name
+    try:
+        return codecs.decode(name, "unicode_escape").encode("latin-1").decode("utf-8")
+    except (UnicodeDecodeError, UnicodeEncodeError):
+        return name
 
 
 def normalize_name(name: str) -> str:

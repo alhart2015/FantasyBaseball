@@ -2,11 +2,15 @@
 
 from __future__ import annotations
 
+import math
+
+import pandas as pd
 import pytest
 
 from fantasy_baseball.data.park_factors import (
     PARK_FACTORS,
     get_park_factor,
+    park_neutral_series,
     park_neutral_value,
 )
 
@@ -107,3 +111,26 @@ def test_park_neutral_handles_degenerate_factor():
     should fall back to the input rather than divide by zero."""
     assert park_neutral_value(0.700, 0.0) == 0.700
     assert park_neutral_value(0.700, -1.0) == 0.700
+
+
+def test_scalar_and_series_agree_across_the_domain():
+    """The shared `_neutralize` only guarantees this if the GUARDS are shared
+    too -- a NaN factor previously took different branches in each."""
+    values = [0.740, 0.0, -0.05, float("nan"), 1e-12]
+    factors = [1.13, 0.92, 1.0, 0.0, -1.0, float("nan")]
+    for value in values:
+        series = park_neutral_series(
+            pd.Series([value] * len(factors)), pd.Series(factors, dtype=float)
+        )
+        for i, factor in enumerate(factors):
+            scalar = park_neutral_value(value, factor)
+            got = series.iloc[i]
+            assert (math.isnan(scalar) and math.isnan(got)) or scalar == pytest.approx(got), (
+                f"value={value} factor={factor}: scalar={scalar} series={got}"
+            )
+
+
+def test_series_leaves_a_non_positive_value_unadjusted():
+    """Below zero the multiplier inverts and Coors would *help* the line."""
+    out = park_neutral_series(pd.Series([-0.5, 0.0]), pd.Series([1.13, 1.13]))
+    assert out.tolist() == [-0.5, 0.0]

@@ -1,4 +1,4 @@
-"""Builders for the four canonical raw frames the keeper loaders consume.
+"""Builders for the canonical raw frames the keeper loaders consume.
 
 These were retyped ~27 times across the keeper test files. Adding one stat to the
 canonical schema meant editing every copy; now it means editing one builder.
@@ -46,6 +46,39 @@ _MLB_PITCHING = {
 }
 
 
+_SAVANT_EXPECTED = {
+    "player_id": 11,
+    "pa": 600,
+    "ba": 0.270,
+    "est_ba": 0.265,
+    "woba": 0.340,
+    "est_woba": 0.350,
+}
+_SAVANT_BARRELS = {"player_id": 11, "brl_percent": 12.0, "brl_pa": 4.9}
+_BREF_BATTING = {"mlbID": 11, "PA": 600, "R": 90, "H": 162, "HR": 30}
+# Counts chosen so the derived rates are round: SwStr% 10.0, CSW% 26.0, Whiff% 20.0.
+_SAVANT_PITCH_MIX = {
+    "player_id": 22,
+    "pitches": 2800,
+    "called_strikes": 448,
+    "whiffs": 280,
+    "swings": 1400,
+}
+# IP is baseball notation carried as a float: 180.1 is 180 1/3 innings.
+_BREF_PITCHING = {
+    "mlbID": 22,
+    "IP": 180.0,
+    "ER": 80,
+    "HR": 20,
+    "BB": 45,
+    "HBP": 5,
+    "SO": 200,
+    "BF": 740,
+    "StL": 0.16,
+    "StS": 0.10,
+}
+
+
 def _frame(defaults: dict[str, Any], overrides: dict[str, Any]) -> pd.DataFrame:
     """One-row frame from `defaults`, with `overrides` applied.
 
@@ -79,6 +112,32 @@ def mlb_pitching(**overrides: Any) -> pd.DataFrame:
     """A raw MLB Stats API pitching split. Innings arrive as a STRING in baseball
     notation, which is why the default is `"180.0"` and not `180.0`."""
     return _frame(_MLB_PITCHING, overrides)
+
+
+def savant_expected(**overrides: Any) -> pd.DataFrame:
+    """A raw Savant expected-stats row (`player_id` + est_* columns)."""
+    return _frame(_SAVANT_EXPECTED, overrides)
+
+
+def savant_barrels(**overrides: Any) -> pd.DataFrame:
+    """A raw Savant exit-velo/barrels row. Rates are percentages on 0-100."""
+    return _frame(_SAVANT_BARRELS, overrides)
+
+
+def savant_pitch_mix(**overrides: Any) -> pd.DataFrame:
+    """A per-pitcher Statcast pitch-outcome count row. `swings` includes whiffs."""
+    return _frame(_SAVANT_PITCH_MIX, overrides)
+
+
+def bref_batting(**overrides: Any) -> pd.DataFrame:
+    """A raw Baseball Reference season batting row."""
+    return _frame(_BREF_BATTING, overrides)
+
+
+def bref_pitching(**overrides: Any) -> pd.DataFrame:
+    """A raw Baseball Reference season pitching row. `StL`/`StS` are shares of
+    total pitches (0-1), and `IP` is baseball notation as a float."""
+    return _frame(_BREF_PITCHING, overrides)
 
 
 def write_zips_vintage(directory: Path, **overrides: Any) -> None:

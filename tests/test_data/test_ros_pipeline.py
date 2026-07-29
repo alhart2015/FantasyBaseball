@@ -1,12 +1,13 @@
 """Tests for blend_and_cache_ros — the Redis-backed ROS projections pipeline."""
 
 import shutil
+from datetime import date
 from pathlib import Path
 
 import pytest
 
 from fantasy_baseball.data import redis_store
-from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros
+from fantasy_baseball.data.ros_pipeline import blend_and_cache_ros, latest_ros_snapshot
 from tests._cache_helpers import unwrap_cache_value
 
 FIXTURES_DIR = Path(__file__).parent.parent / "fixtures"
@@ -434,3 +435,32 @@ def test_blend_and_cache_ros_propagates_cache_write_failure(
 
     with pytest.raises(ConnectionError):
         blend_and_cache_ros(projections_dir, ["steamer"], {"steamer": 1.0}, None, 2026)
+
+
+def _snapshot(root: Path, name: str) -> None:
+    (root / "2026" / "rest_of_season" / name).mkdir(parents=True)
+
+
+def test_latest_snapshot_picked_by_parsed_date_not_string_sort(tmp_path: Path):
+    """An undatable helper dir sorts above every dated one under a raw string
+    sort; it must not shadow a fresh snapshot."""
+    for name in ("2026-06-25", "2026-07-27", "manual-latest"):
+        _snapshot(tmp_path, name)
+    latest, snap = latest_ros_snapshot(tmp_path, 2026)
+    assert latest.name == "2026-07-27"
+    assert snap == date(2026, 7, 27)
+
+
+def test_latest_snapshot_parses_a_dated_suffix(tmp_path: Path):
+    for name in ("2026-06-25", "2026-07-27-manual"):
+        _snapshot(tmp_path, name)
+    assert latest_ros_snapshot(tmp_path, 2026)[0].name == "2026-07-27-manual"
+
+
+def test_latest_snapshot_none_when_root_missing(tmp_path: Path):
+    assert latest_ros_snapshot(tmp_path, 2026) is None
+
+
+def test_latest_snapshot_none_when_nothing_datable(tmp_path: Path):
+    _snapshot(tmp_path, "manual-latest")
+    assert latest_ros_snapshot(tmp_path, 2026) is None
