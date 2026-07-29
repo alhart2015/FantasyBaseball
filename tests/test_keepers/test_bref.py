@@ -10,7 +10,7 @@ def test_batting_raw_passthrough_no_rename(tmp_path: Path):
     raw = pd.DataFrame({"mlbID": [1], "PA": [600], "R": [90], "OPS": [0.800]})
     out = fetch_bref_batting(tmp_path, 2026, fetcher=lambda: raw)
     pd.testing.assert_frame_equal(out, raw)
-    assert (tmp_path / "bref_batting_2026.csv").exists()
+    assert (tmp_path / "bref_batting_2026.v2.csv").exists()
 
 
 def test_pitching_strike_rates_not_converted(tmp_path: Path):
@@ -26,7 +26,7 @@ def test_empty_pull_refuses_to_cache(tmp_path: Path):
     of routing these through fetch_or_cache."""
     with pytest.raises(RuntimeError):
         fetch_bref_pitching(tmp_path, 2026, fetcher=lambda: pd.DataFrame())
-    assert not (tmp_path / "bref_pitching_2026.csv").exists()
+    assert not (tmp_path / "bref_pitching_2026.v2.csv").exists()
 
 
 def test_names_repaired_at_ingest_so_the_cache_is_clean():

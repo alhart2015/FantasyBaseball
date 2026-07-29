@@ -56,12 +56,17 @@ def _bref_pitching(year: int) -> pd.DataFrame:
     return _repair_names(pitching_stats_bref(year))
 
 
+# 2: names repaired at ingest. A v1 cache holds unrepaired names.
+_BREF_VERSION = 2
+
+
 def fetch_bref_batting(
     cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
 ) -> pd.DataFrame:
     return fetch_or_cache(
         cache_dir / f"bref_batting_{year}.csv",
         fetcher or (lambda: _bref_batting(year)),
+        version=_BREF_VERSION,
     )
 
 
@@ -71,4 +76,5 @@ def fetch_bref_pitching(
     return fetch_or_cache(
         cache_dir / f"bref_pitching_{year}.csv",
         fetcher or (lambda: _bref_pitching(year)),
+        version=_BREF_VERSION,
     )

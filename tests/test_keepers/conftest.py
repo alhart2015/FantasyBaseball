@@ -57,6 +57,7 @@ _SAVANT_EXPECTED = {
 _SAVANT_BARRELS = {"player_id": 11, "brl_percent": 12.0, "brl_pa": 4.9}
 _BREF_BATTING = {"mlbID": 11, "PA": 600, "R": 90, "H": 162, "HR": 30}
 # Counts chosen so the derived rates are round: SwStr% 10.0, CSW% 26.0, Whiff% 20.0.
+_STATCAST_PITCH = {"pitcher": 7, "description": "swinging_strike", "game_type": "R"}
 _SAVANT_PITCH_MIX = {
     "player_id": 22,
     "pitches": 2800,
@@ -122,6 +123,11 @@ def savant_expected(**overrides: Any) -> pd.DataFrame:
 def savant_barrels(**overrides: Any) -> pd.DataFrame:
     """A raw Savant exit-velo/barrels row. Rates are percentages on 0-100."""
     return _frame(_SAVANT_BARRELS, overrides)
+
+
+def statcast_pitches(**overrides: Any) -> pd.DataFrame:
+    """Raw pitch-level Statcast rows, as `tally_pitch_outcomes` consumes them."""
+    return _frame(_STATCAST_PITCH, overrides)
 
 
 def savant_pitch_mix(**overrides: Any) -> pd.DataFrame:

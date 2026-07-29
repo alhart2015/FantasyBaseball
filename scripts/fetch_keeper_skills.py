@@ -15,6 +15,11 @@ projection snapshot, which is the only MLBAM->team bridge in the repo; BBRef's
 own `Tm` is an ambiguous city name. Players absent from that snapshot fall back
 to neutral. Pass --no-park to skip the adjustment entirely.
 
+Because that bridge is a snapshot of CURRENT teams, a traded player has his whole
+season corrected by his new park -- a hitter who spent half a year in Coors before
+a July move to Seattle is charged Seattle's factor throughout. Rankings that turn
+on park-extreme mid-season trades should not lean on `wrc_plus`/`era_minus` alone.
+
 Usage:
     python scripts/fetch_keeper_skills.py
     python scripts/fetch_keeper_skills.py --year 2026 --refresh

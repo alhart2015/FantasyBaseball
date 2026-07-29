@@ -13,6 +13,7 @@ table is the streaks pipeline's job (`streaks/data/statcast.py`), not this one's
 from __future__ import annotations
 
 import io
+import logging
 import urllib.request
 from collections.abc import Callable
 from datetime import date
@@ -23,19 +24,43 @@ import pandas as pd
 from fantasy_baseball.keepers.cache import fetch_or_cache
 from fantasy_baseball.utils.time_utils import local_today
 
+logger = logging.getLogger(__name__)
+
 _SAVANT_HR_URL = (
     "https://baseballsavant.mlb.com/leaderboard/home-runs?type=batter&year={year}&min=1&csv=true"
 )
 
-# Statcast `description` values. A missed bunt is a swing and a miss, and Savant
-# counts it as one; a foul tip is contact, so it is a swing but NOT a whiff.
+# Statcast `description` values. A missed bunt is a swing and a miss; a foul tip
+# is contact, so it is a swing but NOT a whiff -- counting it as one would put
+# SwStr% about 1.3 points above Baseball Reference's independent StS.
+# Statcast split balls in play across three descriptions before 2020 and
+# consolidated to `hit_into_play` after; all three are listed because this
+# function is year-parameterized and dropping the old two would silently gut the
+# swing denominator for an earlier season.
 _WHIFF = frozenset({"swinging_strike", "swinging_strike_blocked", "missed_bunt"})
-_CONTACT = frozenset({"foul", "foul_tip", "foul_bunt", "bunt_foul_tip", "hit_into_play"})
+_CONTACT = frozenset(
+    {
+        "foul",
+        "foul_tip",
+        "foul_bunt",
+        "bunt_foul_tip",
+        "hit_into_play",
+        "hit_into_play_score",
+        "hit_into_play_no_out",
+    }
+)
 _SWING = _WHIFF | _CONTACT
 _CALLED_STRIKE = "called_strike"
 
-# Only the two columns the tally needs; statcast() returns 119.
-_PITCH_COLUMNS = ["pitcher", "description"]
+# `statcast()` returns spring training ("S") and postseason ("P") alongside the
+# regular season, and its date window cannot exclude them. Keeping only "R"
+# matters twice over: spring whiff rates run high against non-roster hitters,
+# and it puts these rates on the same regular-season sample as the BBRef stats
+# they sit beside, so comparing a pitcher's K% to his SwStr% stays honest.
+_REGULAR_SEASON = "R"
+
+# Only the columns the tally needs; statcast() returns 119.
+_PITCH_COLUMNS = ["pitcher", "description", "game_type"]
 
 
 def _savant_batter_expected(year: int) -> pd.DataFrame:
@@ -63,12 +88,15 @@ def tally_pitch_outcomes(raw: pd.DataFrame) -> pd.DataFrame:
     """Collapse a pitch-level Statcast frame to per-pitcher outcome counts.
 
     Returns one row per MLBAM `player_id` with `pitches`, `called_strikes`,
-    `whiffs` and `swings` (`swings` includes whiffs). Pure, so the outcome
-    classification is testable without a network pull.
+    `whiffs` and `swings` (`swings` includes whiffs). Regular-season pitches
+    only. Pure, so the outcome classification is testable without a network pull.
     """
     if raw.empty:
         return pd.DataFrame()
-    pitches = raw.loc[raw["pitcher"].notna(), _PITCH_COLUMNS]
+    regular_season = raw["game_type"].eq(_REGULAR_SEASON)
+    pitches = raw.loc[raw["pitcher"].notna() & regular_season, _PITCH_COLUMNS]
+    if pitches.empty:
+        return pd.DataFrame()
     description = pitches["description"]
     tallies = pd.DataFrame(
         {
@@ -94,8 +122,20 @@ def _savant_pitcher_pitch_mix(year: int) -> pd.DataFrame:
     whole range in one call, but it requests a day at a time internally and holds
     every day-frame before concatenating: a full season is ~513k pitches x 119
     columns, ~595 MB concatenated and over 1 GB at peak, to produce ~1.1k x 5.
-    Folding each chunk down first keeps the peak near 40 MB. pybaseball's
-    on-disk HTTP cache is enabled so a re-run only pays for genuinely new days.
+    Folding each chunk down first keeps the peak near 40 MB.
+
+    pybaseball's on-disk cache is deliberately NOT enabled. It would cut a re-run
+    from ~50s to ~17s, but `cache.enable()` writes a machine-global config file
+    that every later pybaseball process reads at import -- including
+    `streaks/data/statcast.py`, which never opted in -- and Statcast day requests
+    are cached for 365 days. A day fetched while games were in progress would be
+    served partial for a year, and `fetch_history.py --force-statcast` would stop
+    forcing anything. A slower pull is worth more than that.
+
+    An empty chunk is skipped, and the count is returned to the caller's log:
+    Savant answering with an empty body is indistinguishable from a genuine off
+    day here, and a silently truncated tally would still be written to the CSV
+    cache and look authoritative.
 
     The window starts wide enough to cover any season's opening day and is
     capped at today, so an in-progress season does not query future dates.
@@ -103,20 +143,30 @@ def _savant_pitcher_pitch_mix(year: int) -> pd.DataFrame:
     # Local, like every other pull here: `streaks.data.statcast` imports
     # pybaseball at module scope, so importing it up top would cost this module
     # its import-safety.
-    import pybaseball
     from pybaseball import statcast
 
     from fantasy_baseball.streaks.data.statcast import chunk_date_range
 
-    pybaseball.cache.enable()
     start = date(year, 3, 1)
     end = min(date(year, 11, 30), local_today())
     tallies = []
+    empty_chunks = 0
     for chunk_start, chunk_end in chunk_date_range(start, end, days=7):
         raw = statcast(start_dt=chunk_start.isoformat(), end_dt=chunk_end.isoformat())
-        if raw is None or raw.empty:
+        tally = tally_pitch_outcomes(raw) if raw is not None and not raw.empty else pd.DataFrame()
+        # An all-spring or all-offseason chunk tallies to a 0x0 frame; concat-ing
+        # those would lose the `player_id` column and blow up the groupby.
+        if tally.empty:
+            empty_chunks += 1
             continue
-        tallies.append(tally_pitch_outcomes(raw))
+        tallies.append(tally)
+    if empty_chunks:
+        logger.info(
+            "pitch mix %d: %d of %d weekly chunks had no regular-season pitches",
+            year,
+            empty_chunks,
+            empty_chunks + len(tallies),
+        )
     if not tallies:
         return pd.DataFrame()
     combined: pd.DataFrame = (
@@ -165,12 +215,17 @@ def fetch_pitcher_expected(
     )
 
 
+# 2: spring training and postseason excluded. A v1 cache mixes them in.
+_PITCH_MIX_VERSION = 2
+
+
 def fetch_pitcher_pitch_mix(
     cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
 ) -> pd.DataFrame:
     return fetch_or_cache(
         cache_dir / f"savant_pitcher_pitch_mix_{year}.csv",
         fetcher or (lambda: _savant_pitcher_pitch_mix(year)),
+        version=_PITCH_MIX_VERSION,
     )
 
 
