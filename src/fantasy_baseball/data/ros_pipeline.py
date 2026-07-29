@@ -73,6 +73,27 @@ def parse_snapshot_date(dir_name: str) -> date | None:
         return None
 
 
+def latest_ros_snapshot(projections_dir: Path, season_year: int) -> tuple[Path, date] | None:
+    """Newest ``rest_of_season`` snapshot dir for ``season_year``, with its date.
+
+    Selects BY PARSED DATE, ignoring any dir whose name has no leading ISO date
+    (a stray/helper dir). A raw string sort would let an undatable name like
+    "manual-latest" sort after the dated dirs and shadow a perfectly fresh
+    snapshot. Returns ``None`` when the root is missing or holds nothing datable,
+    so each caller picks its own failure mode -- the blend pipeline raises, the
+    keeper-skills script falls back to a neutral park adjustment.
+    """
+    ros_root = projections_dir / str(season_year) / "rest_of_season"
+    if not ros_root.is_dir():
+        return None
+    dated = [
+        (p, d)
+        for p in ros_root.iterdir()
+        if p.is_dir() and (d := parse_snapshot_date(p.name)) is not None
+    ]
+    return max(dated, key=lambda pair: pair[1]) if dated else None
+
+
 def ros_snapshot_days_stale(snap: date) -> int:
     """Days a ROS snapshot dated ``snap`` lags today (negative if in the future).
 
@@ -205,18 +226,10 @@ def blend_and_cache_ros(
     ros_root = projections_dir / str(season_year) / "rest_of_season"
     if not ros_root.is_dir():
         raise FileNotFoundError(f"ROS snapshot dir missing: {ros_root}")
-    # Pick the latest snapshot BY PARSED DATE, ignoring any dir whose name has no
-    # leading ISO date (a stray/helper dir). A raw string sort would let an
-    # undatable name like "manual-latest" sort after the dated dirs and shadow a
-    # perfectly fresh snapshot, aborting every blend.
-    dated = [
-        (p, d)
-        for p in ros_root.iterdir()
-        if p.is_dir() and (d := parse_snapshot_date(p.name)) is not None
-    ]
-    if not dated:
+    newest = latest_ros_snapshot(projections_dir, season_year)
+    if newest is None:
         raise FileNotFoundError(f"No datable ROS snapshot dirs under {ros_root}")
-    latest, snap = max(dated, key=lambda pd: pd[1])
+    latest, snap = newest
     snapshot_date = latest.name
     # Refuse to overwrite the last-good Redis blob with a stale snapshot
     # (raises StaleROSSnapshotError). Must run BEFORE any KV read/write below

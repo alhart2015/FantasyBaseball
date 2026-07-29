@@ -28,6 +28,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import logging
 import sys
 from pathlib import Path
 
@@ -38,7 +39,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.park_factors import get_park_factor
-from fantasy_baseball.data.ros_pipeline import parse_snapshot_date
+from fantasy_baseball.data.ros_pipeline import latest_ros_snapshot
 from fantasy_baseball.keepers.actuals import index_by_mlbam
 from fantasy_baseball.keepers.bref import (
     fetch_bref_batting,
@@ -64,23 +65,10 @@ PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 _PARK_STAT = "ops"
 
 
-def latest_ros_dir(year: int) -> Path | None:
-    """Most recent ROS projection snapshot directory for `year`, if any.
-
-    Selects by PARSED date, not by name: a raw string sort would let an undatable
-    helper dir sort above the dated ones and shadow a fresh snapshot. Shares
-    `parse_snapshot_date` with the refresh pipeline so the two cannot disagree
-    about which snapshot is newest.
-    """
-    ros_root = PROJECTIONS_DIR / str(year) / "rest_of_season"
-    if not ros_root.is_dir():
-        return None
-    dated = [
-        (p, d)
-        for p in ros_root.iterdir()
-        if p.is_dir() and (d := parse_snapshot_date(p.name)) is not None
-    ]
-    return max(dated, key=lambda pair: pair[1])[0] if dated else None
+def _first_per_id(frame: pd.DataFrame, id_col: str, column: str) -> pd.Series:
+    """`column` keyed by MLBAM id, first row winning a duplicate."""
+    rows = index_by_mlbam(frame, id_col)
+    return rows.loc[~rows.index.duplicated(keep="first"), column]
 
 
 def build_park_factors(year: int, kind: str) -> pd.Series | None:
@@ -96,9 +84,10 @@ def build_park_factors(year: int, kind: str) -> pd.Series | None:
     is not a projection export; skip it rather than fail, as `summary.crosswalk`
     does.
     """
-    snapshot = latest_ros_dir(year)
-    if snapshot is None:
+    newest = latest_ros_snapshot(PROJECTIONS_DIR, year)
+    if newest is None:
         return None
+    snapshot = newest[0]
     frames = []
     for path in sorted(snapshot.glob(f"*-{kind}.csv")):
         try:
@@ -107,9 +96,8 @@ def build_park_factors(year: int, kind: str) -> pd.Series | None:
             continue
     if not frames:
         return None
-    rows = index_by_mlbam(pd.concat(frames, ignore_index=True), "MLBAMID")
-    teams = rows.loc[~rows.index.duplicated(keep="first"), "Team"]
-    return teams.map(lambda team: get_park_factor(str(team), _PARK_STAT)).rename("park_factor")
+    teams = _first_per_id(pd.concat(frames, ignore_index=True), "MLBAMID", "Team")
+    return teams.map(lambda team: get_park_factor(str(team), _PARK_STAT))
 
 
 def with_names(skills: pd.DataFrame, source: pd.DataFrame) -> pd.DataFrame:
@@ -119,8 +107,7 @@ def with_names(skills: pd.DataFrame, source: pd.DataFrame) -> pd.DataFrame:
     `bref` repairs the double-encoded accents at ingest, so no name handling is
     needed here.
     """
-    rows = index_by_mlbam(source, "mlbID")
-    names = rows.loc[~rows.index.duplicated(keep="first"), "Name"].astype(str)
+    names = _first_per_id(source, "mlbID", "Name").astype(str)
     out = skills.copy()
     out.insert(0, "name", names.reindex(out.index).fillna(""))
     return out
@@ -135,7 +122,10 @@ def main() -> int:
     )
     parser.add_argument("--no-park", action="store_true", help="skip park adjustment")
     args = parser.parse_args()
-    args.year = args.year or load_config(CONFIG_PATH).season_year
+    logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s: %(message)s")
+    config = load_config(CONFIG_PATH)
+    if args.year is None:
+        args.year = config.season_year
 
     raw_dir = args.out / f"raw_{args.year}"
     if args.refresh and raw_dir.exists():

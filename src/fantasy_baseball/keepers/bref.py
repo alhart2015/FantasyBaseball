@@ -16,12 +16,10 @@ decimals, which collapses CSW% to ~19 distinct values across a league of
 pitchers; `skills` ignores those columns and takes the pitch-denominated rates
 from `savant.fetch_pitcher_pitch_mix` instead.
 
-FanGraphs would be the natural source for all of these and is NOT usable: as of
-2026-07 the legacy leaderboard `pybaseball.batting_stats`/`pitching_stats`
-scrape, the `/api/leaders/major-league/data` JSON endpoint, the `/leaders`
-`__NEXT_DATA__` blob, and the Guts! constants page all return 403. Only
-`/projections` still responds, which is why `data/fangraphs_fetch.py` works and
-this module cannot use the same trick.
+FanGraphs would be the natural source and was not usable when this was written:
+its leaderboards, leaders API, and Guts! constants page all returned 403, while
+`/projections` (what `data/fangraphs_fetch.py` uses) still responded. Worth
+re-testing before extending this module.
 
 Note both frames report `IP` in baseball notation (`20.1` == 20 1/3), as a float
 rather than a string -- see `actuals.innings_to_float`.
@@ -30,6 +28,7 @@ rather than a string -- see `actuals.innings_to_float`.
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -58,6 +57,8 @@ def _bref_pitching(year: int) -> pd.DataFrame:
 
 # 2: names repaired at ingest. A v1 cache holds unrepaired names.
 _BREF_VERSION = 2
+# Season-to-date counting stats: a day old is the most staleness worth serving.
+_MAX_AGE = timedelta(days=1)
 
 
 def fetch_bref_batting(
@@ -67,6 +68,7 @@ def fetch_bref_batting(
         cache_dir / f"bref_batting_{year}.csv",
         fetcher or (lambda: _bref_batting(year)),
         version=_BREF_VERSION,
+        max_age=_MAX_AGE,
     )
 
 
@@ -77,4 +79,5 @@ def fetch_bref_pitching(
         cache_dir / f"bref_pitching_{year}.csv",
         fetcher or (lambda: _bref_pitching(year)),
         version=_BREF_VERSION,
+        max_age=_MAX_AGE,
     )

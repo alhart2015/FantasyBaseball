@@ -20,6 +20,8 @@ park-neutral figure.
 
 from __future__ import annotations
 
+from typing import Any
+
 import pandas as pd
 
 PARK_FACTORS: dict[str, dict[str, float]] = {
@@ -67,6 +69,12 @@ def get_park_factor(team_abbrev: str, stat: str) -> float:
     return PARK_FACTORS.get(team_abbrev, NEUTRAL_FACTOR).get(stat, 1.0)
 
 
+def _neutralize(value: Any, home_park_factor: Any) -> Any:
+    """The 50/50 model itself, over scalars or Series. One expression, so the
+    scalar and vectorized entry points cannot drift."""
+    return value * 2.0 / (home_park_factor + 1.0)
+
+
 def park_neutral_value(season_value: float, home_park_factor: float) -> float:
     """Estimate a team's park-neutral version of a season stat.
 
@@ -80,21 +88,21 @@ def park_neutral_value(season_value: float, home_park_factor: float) -> float:
 
         neutral_value = season_value * 2 / (home_pf + 1)
 
-    Returns ``season_value`` unchanged if the park factor is degenerate
-    (<=0), since dividing by something nonpositive would be nonsense.
+    Returns ``season_value`` unchanged when the model does not apply: a
+    degenerate (<=0) park factor, or a non-positive value, where the multiplier
+    inverts and a hitters' park would *help* the line instead of discounting it.
     """
-    if home_park_factor <= 0:
+    if home_park_factor <= 0 or season_value <= 0:
         return season_value
-    return season_value * 2.0 / (home_park_factor + 1.0)
+    return float(_neutralize(season_value, home_park_factor))
 
 
 def park_neutral_series(season_values: pd.Series, home_park_factors: pd.Series) -> pd.Series:
-    """Vectorized :func:`park_neutral_value` over aligned Series.
+    """Vectorized :func:`park_neutral_value`, with the same two escape hatches.
 
-    Same 50/50 home/away model; kept here rather than in the caller so there is
-    one definition of that assumption. A missing or degenerate (<=0) factor
-    leaves the value unadjusted, matching the scalar version.
+    Both live here rather than in a caller so the 50/50 model has one home; a
+    caller that added its own non-positive guard would be a second definition.
     """
     factors = pd.to_numeric(home_park_factors, errors="coerce")
     usable = factors.where(factors > 0, 1.0)
-    return season_values * 2.0 / (usable + 1.0)
+    return _neutralize(season_values, usable).where(season_values > 0, season_values)

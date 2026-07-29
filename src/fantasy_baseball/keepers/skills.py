@@ -15,22 +15,22 @@ Rates are emitted the way they read: `*_pct` columns are percentages on 0-100,
 while `xwoba`/`xba`/`fip` keep their native scale. Missing observations are NaN,
 never 0.0 -- see `actuals.safe_ratio`.
 
-EVERY ROW IS EMITTED AND NOTHING IS REGRESSED TO THE MEAN. A pitcher with a
-third of an inning and no earned runs scores an `era_minus` of 0.0 and sorts
-above every real ace; the 2026 pull has 128 pitchers under 5 IP and 39 hitters
-with a negative `wrc_plus`. That is deliberate -- dropping a 40-IP reliever here
-would be the caller's decision to lose -- but it means `pa` and `ip` are part of
-the output, not decoration. Filter or shrink on them before ranking anything.
+Every row is emitted and nothing is regressed to the mean, so a pitcher with a
+third of a scoreless inning scores an `era_minus` of 0.0 and sorts above every
+real ace. Dropping him here would be the caller's decision to lose, but it means
+`pa` and `ip` are output, not decoration: filter or shrink on them before
+ranking anything.
 
 Park adjustment is optional. `park_factor` is a Series of venue multipliers
-indexed by `mlbam_id` (1.00 neutral, >1.00 inflates the stat); it defaults to
-neutral because neither source frame carries a usable team code -- BBRef's `Tm`
-is an ambiguous city name ("Chicago", "Los Angeles") and is comma-joined for
-traded players. `scripts/fetch_keeper_skills.py` builds the Series from the
-FanGraphs-coded `Team` column in the ROS projection CSVs.
+indexed by `mlbam_id` (1.00 neutral, >1.00 inflates the stat), defaulting to
+neutral because neither source frame carries a usable team code.
+`scripts/fetch_keeper_skills.py` builds it and documents the caveats.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
+from typing import Any
 
 import pandas as pd
 
@@ -44,26 +44,14 @@ from fantasy_baseball.keepers.actuals import (
 )
 
 # wOBA is published on the OBP scale by dividing the raw linear weights by this
-# factor. FanGraphs recomputes it per season in Guts!, which returns 403 (see
-# `bref`), so this is the stable recent-seasons value (2022 ~1.26, 2023 ~1.20,
-# 2024 ~1.24). Park-neutral it is a pure scale term and cannot reorder two
-# hitters at all; with the park adjustment on it interacts with the multiplier
-# and can, but barely -- 1.25 vs 1.15 over 227 qualified 2026 hitters is Kendall
-# tau 0.996, 52 discordant pairs out of 25,651, largest move 4 board spots.
+# factor. FanGraphs recomputes it per season in Guts!, which is unreachable (see
+# `bref`), so this is the stable 2022-24 value. Park-neutral it is a pure scale
+# term and cannot reorder two hitters; with the park adjustment on it interacts
+# with the multiplier and can, but only at the margin.
 WOBA_SCALE = 1.25
 
 HITTER_SKILLS = ("barrel_pct", "barrel_pa_pct", "xwoba", "xba", "wrc_plus")
 PITCHER_SKILLS = ("era_minus", "fip", "k_pct", "swstr_pct", "whiff_pct", "csw_pct")
-
-__all__ = [
-    "HITTER_PT",
-    "HITTER_SKILLS",
-    "PITCHER_PT",
-    "PITCHER_SKILLS",
-    "WOBA_SCALE",
-    "normalize_hitter_skills",
-    "normalize_pitcher_skills",
-]
 
 
 def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -77,24 +65,19 @@ def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
 def _park_neutral(values: pd.Series, park_factor: pd.Series | None) -> pd.Series:
     """Park-neutralize `values`, or return them unchanged when no factor is given.
 
-    Delegates the 50/50 home/away model to `data.park_factors` so this does not
-    become a second definition of what a park factor means. Only `wrc_plus` and
-    `era_minus` are adjusted; `fip` and `k_pct` are deliberately left park-raw,
-    so the two columns sit on different park bases -- comparing a pitcher's ERA-
-    to his FIP reads partly as a park artifact.
+    Only `wrc_plus` and `era_minus` are adjusted; `fip` and `k_pct` are left
+    park-raw, so those columns sit on different park bases -- comparing a
+    pitcher's ERA- to his FIP reads partly as a park artifact.
 
-    The multiplier is only meaningful on a positive rate: below zero it inverts,
-    so a hitter with a sub-.167 wOBA would be *helped* by Coors and *penalized*
-    by Petco. That only arises for a handful of sub-15-PA lines, but it is a
-    sign error rather than a small one, so the adjustment is skipped there.
+    The reindex is required: without it pandas aligns on the union and NaNs out
+    every player missing from the bridge. `park_neutral_series` owns the rest.
     """
     if park_factor is None:
         return values
-    factors = park_factor.reindex(values.index).fillna(1.0)
-    return values.where(values <= 0, park_neutral_series(values, factors))
+    return park_neutral_series(values, park_factor.reindex(values.index))
 
 
-def _fip_core(counts: dict[str, float] | dict[str, pd.Series]) -> float | pd.Series:
+def _fip_core(counts: Mapping[str, Any]) -> Any:
     """The FIP numerator, `13*HR + 3*(BB+HBP) - 2*K`, over scalars or Series.
 
     Shared by the league constant and the per-player rate so the weights are
@@ -173,8 +156,8 @@ def normalize_pitcher_skills(
     `pitching` is `bref.fetch_bref_pitching` and supplies the run- and
     batter-denominated stats (ERA-, FIP, K%); `pitch_mix` is
     `savant.fetch_pitcher_pitch_mix` and supplies the pitch-denominated ones.
-    Each stat has exactly one source: BBRef also publishes `StL`/`StS`, but
-    rounded to two decimals, which is too coarse to rank on, so they are unused.
+    Each stat has exactly one source -- see `bref` for why its own `StL`/`StS`
+    are unused.
 
     Note whiff rate and SwStr% are different stats on different denominators --
     whiffs per SWING (~25%) and per PITCH (~11%) respectively -- and both are

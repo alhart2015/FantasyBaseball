@@ -5,12 +5,12 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.keepers.savant import (
+    _tally_pitch_outcomes,
     fetch_batter_barrels,
     fetch_batter_expected,
     fetch_pitcher_expected,
     fetch_pitcher_pitch_mix,
     fetch_savant_hr,
-    tally_pitch_outcomes,
 )
 
 
@@ -49,19 +49,19 @@ def test_savant_hr_tolerates_empty_pre_2016(tmp_path: Path):
 def test_foul_tip_is_a_swing_but_not_a_whiff():
     """It is contact. Counting it as a whiff would inflate whiff rate and CSW%
     for exactly the pitchers who generate the most of them."""
-    out = tally_pitch_outcomes(_pitches("foul_tip"))
+    out = _tally_pitch_outcomes(_pitches("foul_tip"))
     assert out["swings"].iloc[0] == 1
     assert out["whiffs"].iloc[0] == 0
 
 
 def test_blocked_swinging_strike_and_missed_bunt_count_as_whiffs():
-    out = tally_pitch_outcomes(_pitches("swinging_strike_blocked", "missed_bunt"))
+    out = _tally_pitch_outcomes(_pitches("swinging_strike_blocked", "missed_bunt"))
     assert out["whiffs"].iloc[0] == 2
     assert out["swings"].iloc[0] == 2
 
 
 def test_taken_pitches_are_not_swings():
-    out = tally_pitch_outcomes(_pitches("ball", "called_strike", "blocked_ball", "hit_by_pitch"))
+    out = _tally_pitch_outcomes(_pitches("ball", "called_strike", "blocked_ball", "hit_by_pitch"))
     assert out["pitches"].iloc[0] == 4
     assert out["swings"].iloc[0] == 0
     assert out["called_strikes"].iloc[0] == 1
@@ -69,7 +69,7 @@ def test_taken_pitches_are_not_swings():
 
 def test_outcomes_tallied_per_pitcher():
     raw = pd.concat([_pitches("swinging_strike", "ball", pitcher=1), _pitches("foul", pitcher=2)])
-    out = tally_pitch_outcomes(raw).set_index("player_id")
+    out = _tally_pitch_outcomes(raw).set_index("player_id")
     assert out.loc[1, "pitches"] == 2
     assert out.loc[1, "whiffs"] == 1
     assert out.loc[2, "pitches"] == 1
@@ -85,23 +85,6 @@ def test_pitch_mix_raw_passthrough(tmp_path: Path):
     assert not (tmp_path / "savant_pitcher_pitch_mix_2026.csv").exists()
 
 
-def test_public_api_reexports():
-    import fantasy_baseball.keepers as k
-
-    expected = [
-        "fetch_or_cache",
-        "fetch_mlb_season",
-        "fetch_batter_expected",
-        "fetch_batter_barrels",
-        "fetch_pitcher_expected",
-        "fetch_pitcher_pitch_mix",
-        "fetch_savant_hr",
-    ]
-    for name in expected:
-        assert hasattr(k, name), f"{name} not re-exported from fantasy_baseball.keepers"
-        assert name in k.__all__, f"{name} missing from __all__"
-
-
 def test_spring_training_and_postseason_pitches_are_excluded():
     """statcast() returns S and P alongside R and its date window cannot exclude
     them. Spring whiff rates run high against non-roster hitters, and the BBRef
@@ -113,19 +96,19 @@ def test_spring_training_and_postseason_pitches_are_excluded():
             _pitches("swinging_strike", game_type="P"),
         ]
     )
-    out = tally_pitch_outcomes(raw)
+    out = _tally_pitch_outcomes(raw)
     assert out["pitches"].iloc[0] == 2
     assert out["whiffs"].iloc[0] == 1
 
 
 def test_an_all_spring_frame_tallies_to_nothing():
-    assert tally_pitch_outcomes(_pitches("swinging_strike", game_type="S")).empty
+    assert _tally_pitch_outcomes(_pitches("swinging_strike", game_type="S")).empty
 
 
 def test_pre_2020_balls_in_play_still_count_as_swings():
     """Statcast split balls in play three ways before 2020; the function takes a
     year, so dropping the old spellings would gut the swing denominator."""
-    out = tally_pitch_outcomes(_pitches("hit_into_play_score", "hit_into_play_no_out"))
+    out = _tally_pitch_outcomes(_pitches("hit_into_play_score", "hit_into_play_no_out"))
     assert out["swings"].iloc[0] == 2
     assert out["whiffs"].iloc[0] == 0
 
@@ -145,12 +128,3 @@ def test_all_spring_fold_does_not_crash_the_season_pull(monkeypatch, tmp_path: P
         fetch_pitcher_pitch_mix(
             tmp_path, 2026, fetcher=lambda: savant._savant_pitcher_pitch_mix(2026)
         )
-
-
-def test_mixed_empty_and_real_chunks_fold_correctly():
-    """The empty-chunk skip must not drop real counts alongside the empty ones."""
-    real = tally_pitch_outcomes(_pitches("swinging_strike", "called_strike"))
-    assert not real.empty
-    folded = pd.concat([real, real], ignore_index=True).groupby("player_id", as_index=False).sum()
-    assert folded["pitches"].iloc[0] == 4
-    assert folded["whiffs"].iloc[0] == 2

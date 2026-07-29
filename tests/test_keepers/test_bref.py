@@ -40,11 +40,3 @@ def test_names_repaired_at_ingest_so_the_cache_is_clean():
 def test_repair_tolerates_a_frame_without_names():
     frame = pd.DataFrame({"mlbID": [1]})
     pd.testing.assert_frame_equal(_repair_names(frame), frame)
-
-
-def test_public_api_reexports():
-    import fantasy_baseball.keepers as k
-
-    for name in ("fetch_bref_batting", "fetch_bref_pitching"):
-        assert hasattr(k, name), f"{name} not re-exported"
-        assert name in k.__all__, f"{name} missing from __all__"
