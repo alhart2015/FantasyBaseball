@@ -1,24 +1,26 @@
-"""Keepers: raw data pulls plus the #266 keeper-value derivation built on them.
+"""Keepers: raw data pulls for keeper analysis.
 
-Two layers, deliberately separated:
+**Ingest.** Fetchers return the upstream response fully raw: no derivation,
+rename, or join.
 
-* **Ingest** -- `cache`, `mlb_stats`, `savant`. Fetchers return the upstream
-  response fully raw: no derivation, rename, or join.
-* **Derivation** (#266) -- `actuals` and `vintages` normalize both sides to one
-  canonical rate/playing-time schema, `calibration` runs the study that measures
-  how much of a season's surprise carries forward, `fold` applies it, and
-  `coefficients` holds the shipped result.
+* `cache` -- fetch-on-miss CSV plumbing shared by the pulls below.
+* `mlb_stats` -- MLB Stats API season leaderboards, keyed by MLBAM.
+* `savant` -- Baseball Savant expected stats (xBA/xSLG/xwOBA), exit-velocity and
+  barrel rates, and the park-adjusted xHR leaderboard.
 
-`POLICIES` is the production entry point: it carries the fitted coefficients
-together with the `n0`, gate and ramp width they are conditional on. The fold
-primitives are deliberately NOT re-exported here -- `FoldPolicy.serve_weights`
-composes them, and its docstring says not to assemble them by hand.
+**Normalization.** Two pure, I/O-free helpers that reshape a raw frame to one
+canonical rate/playing-time schema: `actuals` for an MLB season pull, `vintages`
+for a ZiPS export.
+
+The #266 fold -- `fold`, `coefficients`, `calibration` -- was removed along with
+the `analysis/keeper_value.py` metric it was built to replace. The written
+findings and the study's CSV artifacts are retained under `docs/superpowers/` and
+`data/analysis/`; the code is recoverable from git history.
 """
 
 from __future__ import annotations
 
 from fantasy_baseball.keepers.cache import fetch_or_cache
-from fantasy_baseball.keepers.coefficients import POLICIES, FoldPolicy
 from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 from fantasy_baseball.keepers.savant import (
     fetch_batter_barrels,
@@ -28,8 +30,6 @@ from fantasy_baseball.keepers.savant import (
 )
 
 __all__ = [
-    "POLICIES",
-    "FoldPolicy",
     "fetch_batter_barrels",
     "fetch_batter_expected",
     "fetch_mlb_season",
