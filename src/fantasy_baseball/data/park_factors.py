@@ -9,9 +9,18 @@ slowly year-to-year so this hardcoded snapshot is good enough for the
 qualitative color signal on the lineup page. Team abbreviations match
 the FanGraphs-style codes used elsewhere in the project (CHW, KCR,
 SDP, SFG, TBR, WSN, ATH).
+
+Two caveats for quantitative consumers (`keepers/skills.py` ranks on these):
+the values are a 2022-24 average rather than the current season's, and only
+`ops` and `k` exist -- there is no runs factor, so run-prevention stats like
+ERA- use `ops` as a proxy. Both bias toward under-correction, which is the
+safe direction for a ranking; neither is good enough to report as a precise
+park-neutral figure.
 """
 
 from __future__ import annotations
+
+import pandas as pd
 
 PARK_FACTORS: dict[str, dict[str, float]] = {
     "COL": {"ops": 1.13, "k": 0.95},
@@ -77,3 +86,15 @@ def park_neutral_value(season_value: float, home_park_factor: float) -> float:
     if home_park_factor <= 0:
         return season_value
     return season_value * 2.0 / (home_park_factor + 1.0)
+
+
+def park_neutral_series(season_values: pd.Series, home_park_factors: pd.Series) -> pd.Series:
+    """Vectorized :func:`park_neutral_value` over aligned Series.
+
+    Same 50/50 home/away model; kept here rather than in the caller so there is
+    one definition of that assumption. A missing or degenerate (<=0) factor
+    leaves the value unadjusted, matching the scalar version.
+    """
+    factors = pd.to_numeric(home_park_factors, errors="coerce")
+    usable = factors.where(factors > 0, 1.0)
+    return season_values * 2.0 / (usable + 1.0)

@@ -15,6 +15,7 @@ from __future__ import annotations
 import io
 import urllib.request
 from collections.abc import Callable
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -30,11 +31,11 @@ _SAVANT_HR_URL = (
 # counts it as one; a foul tip is contact, so it is a swing but NOT a whiff.
 _WHIFF = frozenset({"swinging_strike", "swinging_strike_blocked", "missed_bunt"})
 _CONTACT = frozenset({"foul", "foul_tip", "foul_bunt", "bunt_foul_tip", "hit_into_play"})
-_CALLED = "called_strike"
+_SWING = _WHIFF | _CONTACT
+_CALLED_STRIKE = "called_strike"
 
-# Wide enough to cover any regular season plus playoffs; empty days cost nothing.
-_SEASON_START = "{year}-03-01"
-_SEASON_END = "{year}-11-30"
+# Only the two columns the tally needs; statcast() returns 119.
+_PITCH_COLUMNS = ["pitcher", "description"]
 
 
 def _savant_batter_expected(year: int) -> pd.DataFrame:
@@ -67,15 +68,15 @@ def tally_pitch_outcomes(raw: pd.DataFrame) -> pd.DataFrame:
     """
     if raw.empty:
         return pd.DataFrame()
-    pitches = raw.loc[raw["pitcher"].notna(), ["pitcher", "description"]]
+    pitches = raw.loc[raw["pitcher"].notna(), _PITCH_COLUMNS]
     description = pitches["description"]
     tallies = pd.DataFrame(
         {
             "player_id": pitches["pitcher"].astype(int),
             "pitches": 1,
-            "called_strikes": description.eq(_CALLED).astype(int),
+            "called_strikes": description.eq(_CALLED_STRIKE).astype(int),
             "whiffs": description.isin(_WHIFF).astype(int),
-            "swings": description.isin(_WHIFF | _CONTACT).astype(int),
+            "swings": description.isin(_SWING).astype(int),
         }
     )
     result: pd.DataFrame = tallies.groupby("player_id", as_index=False).sum()
@@ -89,16 +90,39 @@ def _savant_pitcher_pitch_mix(year: int) -> pd.DataFrame:
     collapses CSW% to ~19 distinct values across a league of pitchers and makes
     it useless as a ranking input; these counts carry full precision.
 
-    The window is capped at today so an in-progress season does not query a
-    future date range.
+    Fetched in weekly chunks and tallied per chunk. `statcast()` would accept the
+    whole range in one call, but it requests a day at a time internally and holds
+    every day-frame before concatenating: a full season is ~513k pitches x 119
+    columns, ~595 MB concatenated and over 1 GB at peak, to produce ~1.1k x 5.
+    Folding each chunk down first keeps the peak near 40 MB. pybaseball's
+    on-disk HTTP cache is enabled so a re-run only pays for genuinely new days.
+
+    The window starts wide enough to cover any season's opening day and is
+    capped at today, so an in-progress season does not query future dates.
     """
+    # Local, like every other pull here: `streaks.data.statcast` imports
+    # pybaseball at module scope, so importing it up top would cost this module
+    # its import-safety.
+    import pybaseball
     from pybaseball import statcast
 
-    end = min(_SEASON_END.format(year=year), local_today().isoformat())
-    raw = statcast(start_dt=_SEASON_START.format(year=year), end_dt=end)
-    if raw is None or raw.empty:
+    from fantasy_baseball.streaks.data.statcast import chunk_date_range
+
+    pybaseball.cache.enable()
+    start = date(year, 3, 1)
+    end = min(date(year, 11, 30), local_today())
+    tallies = []
+    for chunk_start, chunk_end in chunk_date_range(start, end, days=7):
+        raw = statcast(start_dt=chunk_start.isoformat(), end_dt=chunk_end.isoformat())
+        if raw is None or raw.empty:
+            continue
+        tallies.append(tally_pitch_outcomes(raw))
+    if not tallies:
         return pd.DataFrame()
-    return tally_pitch_outcomes(raw)
+    combined: pd.DataFrame = (
+        pd.concat(tallies, ignore_index=True).groupby("player_id", as_index=False).sum()
+    )
+    return combined
 
 
 def _savant_hr(year: int) -> pd.DataFrame:

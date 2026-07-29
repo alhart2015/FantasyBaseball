@@ -35,6 +35,25 @@ def _pitchers(*, pitching=None, pitch_mix=None, park_factor=None) -> pd.DataFram
     )
 
 
+def _two_hitters(*, park_factor=None, **overrides) -> pd.DataFrame:
+    """Two hitters with ids 1 and 2; `overrides` vary only the expected-stats side."""
+    return _hitters(
+        expected=savant_expected(player_id=[1, 2], **overrides),
+        barrels=savant_barrels(player_id=[1, 2]),
+        batting=bref_batting(mlbID=[1, 2]),
+        park_factor=park_factor,
+    )
+
+
+def _two_pitchers(*, park_factor=None, **overrides) -> pd.DataFrame:
+    """Two pitchers with ids 1 and 2; `overrides` vary only the BBRef side."""
+    return _pitchers(
+        pitching=bref_pitching(mlbID=[1, 2], **overrides),
+        pitch_mix=savant_pitch_mix(player_id=[1, 2]),
+        park_factor=park_factor,
+    )
+
+
 # --- hitters ---------------------------------------------------------------
 
 
@@ -60,26 +79,25 @@ def test_lone_hitter_is_league_average():
 
 
 def test_wrc_plus_orders_by_woba():
-    out = _hitters(
-        expected=savant_expected(player_id=[1, 2], woba=[0.400, 0.280]),
-        barrels=savant_barrels(player_id=[1, 2]),
-        batting=bref_batting(mlbID=[1, 2]),
-    )
+    out = _two_hitters(woba=[0.400, 0.280])
     assert out.loc[1, "wrc_plus"] > 100.0 > out.loc[2, "wrc_plus"]
 
 
 def test_hitter_park_factor_deflates_a_hitters_park():
     """Coors-like inflation must lower wRC+ relative to neutral, not raise it."""
-    expected = savant_expected(player_id=[1, 2], woba=[0.400, 0.280])
-    kwargs = dict(
-        expected=expected,
-        barrels=savant_barrels(player_id=[1, 2]),
-        batting=bref_batting(mlbID=[1, 2]),
-    )
-    neutral = _hitters(**kwargs)
-    adjusted = _hitters(**kwargs, park_factor=pd.Series({1: 1.13, 2: 1.00}))
+    neutral = _two_hitters(woba=[0.400, 0.280])
+    adjusted = _two_hitters(woba=[0.400, 0.280], park_factor=pd.Series({1: 1.13, 2: 1.00}))
     assert adjusted.loc[1, "wrc_plus"] < neutral.loc[1, "wrc_plus"]
     assert adjusted.loc[2, "wrc_plus"] == pytest.approx(neutral.loc[2, "wrc_plus"])
+
+
+def test_park_adjustment_assumes_a_half_home_schedule():
+    """Delegates to `park_neutral_value`'s 50/50 model: a hitter takes only half
+    his PA at home, so the correction is value*2/(pf+1), NOT value/pf. Dividing
+    by the raw factor would over-correct every Coors bat by ~6%.
+    """
+    adjusted = _two_hitters(woba=[0.400, 0.400], park_factor=pd.Series({1: 1.13, 2: 1.00}))
+    assert adjusted.loc[1, "wrc_plus"] == pytest.approx(adjusted.loc[2, "wrc_plus"] * 2.0 / 2.13)
 
 
 def test_missing_park_factor_falls_back_to_neutral():
@@ -175,38 +193,25 @@ def test_fip_constant_makes_lone_pitcher_fip_equal_his_era():
 
 
 def test_fip_rewards_strikeouts():
-    out = _pitchers(
-        pitching=bref_pitching(mlbID=[1, 2], SO=[250, 120]),
-        pitch_mix=savant_pitch_mix(player_id=[1, 2]),
-    )
+    out = _two_pitchers(SO=[250, 120])
     assert out.loc[1, "fip"] < out.loc[2, "fip"]
 
 
 def test_era_minus_is_lower_for_better_pitchers():
-    out = _pitchers(
-        pitching=bref_pitching(mlbID=[1, 2], ER=[50, 110]),
-        pitch_mix=savant_pitch_mix(player_id=[1, 2]),
-    )
+    out = _two_pitchers(ER=[50, 110])
     assert out.loc[1, "era_minus"] < 100.0 < out.loc[2, "era_minus"]
 
 
 def test_pitcher_park_factor_deflates_a_hitters_park():
     """Coors inflates runs allowed, so the same ERA there is a BETTER ERA-."""
-    kwargs = dict(
-        pitching=bref_pitching(mlbID=[1, 2], ER=[80, 80]),
-        pitch_mix=savant_pitch_mix(player_id=[1, 2]),
-    )
-    neutral = _pitchers(**kwargs)
-    adjusted = _pitchers(**kwargs, park_factor=pd.Series({1: 1.13, 2: 1.00}))
+    neutral = _two_pitchers(ER=[80, 80])
+    adjusted = _two_pitchers(ER=[80, 80], park_factor=pd.Series({1: 1.13, 2: 1.00}))
     assert adjusted.loc[1, "era_minus"] < neutral.loc[1, "era_minus"]
     assert adjusted.loc[2, "era_minus"] == pytest.approx(neutral.loc[2, "era_minus"])
 
 
 def test_zero_innings_gives_nan_not_zero():
-    out = _pitchers(
-        pitching=bref_pitching(mlbID=[1, 2], IP=[180.0, 0.0]),
-        pitch_mix=savant_pitch_mix(player_id=[1, 2]),
-    )
+    out = _two_pitchers(IP=[180.0, 0.0])
     assert math.isnan(out.loc[2, "era_minus"])
     assert math.isnan(out.loc[2, "fip"])
 

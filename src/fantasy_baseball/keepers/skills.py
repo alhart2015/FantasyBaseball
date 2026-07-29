@@ -27,7 +27,14 @@ from __future__ import annotations
 
 import pandas as pd
 
-from fantasy_baseball.keepers.actuals import index_by_mlbam, innings_to_float, safe_ratio
+from fantasy_baseball.data.park_factors import park_neutral_series
+from fantasy_baseball.keepers.actuals import (
+    HITTER_PT,
+    PITCHER_PT,
+    index_by_mlbam,
+    innings_to_float,
+    safe_ratio,
+)
 
 # wOBA is published on the OBP scale by dividing the raw linear weights by this
 # factor. FanGraphs recomputes it per season in Guts!, which returns 403 (see
@@ -39,8 +46,15 @@ WOBA_SCALE = 1.25
 HITTER_SKILLS = ("barrel_pct", "barrel_pa_pct", "xwoba", "xba", "wrc_plus")
 PITCHER_SKILLS = ("era_minus", "fip", "k_pct", "swstr_pct", "whiff_pct", "csw_pct")
 
-HITTER_PT = "pa"
-PITCHER_PT = "ip"
+__all__ = [
+    "HITTER_PT",
+    "HITTER_SKILLS",
+    "PITCHER_PT",
+    "PITCHER_SKILLS",
+    "WOBA_SCALE",
+    "normalize_hitter_skills",
+    "normalize_pitcher_skills",
+]
 
 
 def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
@@ -51,16 +65,31 @@ def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
     return pd.to_numeric(frame[column], errors="coerce")
 
 
-def _park_series(park_factor: pd.Series | None, index: pd.Index) -> pd.Series:
-    """Align `park_factor` to `index`, defaulting anything missing or nonpositive
-    to neutral. A dropped player must not silently divide a rate by NaN."""
+def _park_neutral(values: pd.Series, park_factor: pd.Series | None) -> pd.Series:
+    """Park-neutralize `values`, or return them unchanged when no factor is given.
+
+    Delegates the 50/50 home/away model to `data.park_factors` so this does not
+    become a second definition of what a park factor means. Only `wrc_plus` and
+    `era_minus` are adjusted: `PARK_FACTORS` also carries a `k` multiplier, but
+    K% here is a component of FIP's own park-blind construction, and adjusting
+    one without the other would make them disagree.
+    """
     if park_factor is None:
-        return pd.Series(1.0, index=index)
-    aligned = pd.to_numeric(park_factor.reindex(index), errors="coerce")
-    return aligned.where(aligned > 0, 1.0)
+        return values
+    return park_neutral_series(values, park_factor.reindex(values.index).fillna(1.0))
 
 
-def league_r_per_pa(batting: pd.DataFrame) -> float:
+def _fip_core(counts: dict[str, float] | dict[str, pd.Series]) -> float | pd.Series:
+    """The FIP numerator, `13*HR + 3*(BB+HBP) - 2*K`, over scalars or Series.
+
+    Shared by the league constant and the per-player rate so the weights are
+    stated once -- the constant is only correct while the two agree, and a
+    single-pitcher test cannot catch them drifting apart.
+    """
+    return 13.0 * counts["HR"] + 3.0 * (counts["BB"] + counts["HBP"]) - 2.0 * counts["SO"]
+
+
+def _league_r_per_pa(batting: pd.DataFrame) -> float:
     """League runs per plate appearance, the denominator wRC+ indexes against."""
     runs = _numeric(batting, "R").sum()
     pa = _numeric(batting, "PA").sum()
@@ -99,10 +128,10 @@ def normalize_hitter_skills(
     if total_pa <= 0:
         raise ValueError("total PA is zero; cannot derive league wOBA")
     lg_woba = float((woba * pa).sum() / total_pa)
-    lg_r_pa = league_r_per_pa(batting)
+    lg_r_pa = _league_r_per_pa(batting)
 
     # wRAA/PA converted to the runs scale, re-centred on league R/PA, then
-    # deflated by the hitter's park before indexing to 100.
+    # park-neutralized before indexing to 100.
     wrc_per_pa = (woba - lg_woba) / WOBA_SCALE + lg_r_pa
 
     return pd.DataFrame(
@@ -112,7 +141,7 @@ def normalize_hitter_skills(
             "barrel_pa_pct": _numeric(brl, "brl_pa").reindex(exp.index),
             "xwoba": _numeric(exp, "est_woba"),
             "xba": _numeric(exp, "est_ba"),
-            "wrc_plus": 100.0 * (wrc_per_pa / _park_series(park_factor, exp.index)) / lg_r_pa,
+            "wrc_plus": 100.0 * _park_neutral(wrc_per_pa, park_factor) / lg_r_pa,
         },
         index=exp.index,
     )
@@ -155,22 +184,16 @@ def normalize_pitcher_skills(
     lg_ip = float(ip.sum())
     if lg_ip <= 0:
         raise ValueError("league IP is zero; cannot derive ERA- or FIP")
-    lg_era = 9.0 * float(counts["ER"].sum()) / lg_ip
-    lg_fip_core = (
-        13.0 * float(counts["HR"].sum())
-        + 3.0 * (float(counts["BB"].sum()) + float(counts["HBP"].sum()))
-        - 2.0 * float(counts["SO"].sum())
-    ) / lg_ip
-    fip_constant = lg_era - lg_fip_core
+    totals = {name: float(series.sum()) for name, series in counts.items()}
+    lg_era = 9.0 * totals["ER"] / lg_ip
+    fip_constant = lg_era - float(_fip_core(totals)) / lg_ip
 
     era = safe_ratio(9.0 * counts["ER"], ip)
-    fip_core = safe_ratio(
-        13.0 * counts["HR"] + 3.0 * (counts["BB"] + counts["HBP"]) - 2.0 * counts["SO"], ip
-    )
+    fip_core = safe_ratio(_fip_core(counts), ip)
     return pd.DataFrame(
         {
             PITCHER_PT: ip,
-            "era_minus": 100.0 * (era / _park_series(park_factor, frame.index)) / lg_era,
+            "era_minus": 100.0 * _park_neutral(era, park_factor) / lg_era,
             "fip": fip_core + fip_constant,
             "k_pct": 100.0 * safe_ratio(counts["SO"], bf),
             "swstr_pct": 100.0 * safe_ratio(whiffs, thrown),

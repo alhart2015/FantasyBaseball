@@ -1,8 +1,9 @@
 from pathlib import Path
 
 import pandas as pd
+import pytest
 
-from fantasy_baseball.keepers.bref import fetch_bref_batting, fetch_bref_pitching
+from fantasy_baseball.keepers.bref import _repair_names, fetch_bref_batting, fetch_bref_pitching
 
 
 def test_batting_raw_passthrough_no_rename(tmp_path: Path):
@@ -23,13 +24,22 @@ def test_pitching_strike_rates_not_converted(tmp_path: Path):
 def test_empty_pull_refuses_to_cache(tmp_path: Path):
     """A blocked/403 pull must not overwrite or create a cache -- the whole point
     of routing these through fetch_or_cache."""
-    try:
+    with pytest.raises(RuntimeError):
         fetch_bref_pitching(tmp_path, 2026, fetcher=lambda: pd.DataFrame())
-    except RuntimeError:
-        pass
-    else:
-        raise AssertionError("expected RuntimeError on empty pull")
     assert not (tmp_path / "bref_pitching_2026.csv").exists()
+
+
+def test_names_repaired_at_ingest_so_the_cache_is_clean():
+    """Repair must happen inside the fetcher: fetch_or_cache persists whatever it
+    returns, so fixing downstream would leave every cached CSV corrupt."""
+    raw = pd.DataFrame({"mlbID": [1, 2], "Name": ["Luisangel Acu\\xc3\\xb1a", "Andrew Abbott"]})
+    out = _repair_names(raw)
+    assert out["Name"].tolist() == ["Luisangel Acu\u00f1a", "Andrew Abbott"]
+
+
+def test_repair_tolerates_a_frame_without_names():
+    frame = pd.DataFrame({"mlbID": [1]})
+    pd.testing.assert_frame_equal(_repair_names(frame), frame)
 
 
 def test_public_api_reexports():

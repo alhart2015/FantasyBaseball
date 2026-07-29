@@ -23,7 +23,6 @@ Usage:
 from __future__ import annotations
 
 import argparse
-import codecs
 import sys
 from pathlib import Path
 
@@ -32,10 +31,10 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.data.park_factors import (
-    NEUTRAL_FACTOR,
-    PARK_FACTORS,
-)
+from fantasy_baseball.config import load_config
+from fantasy_baseball.data.park_factors import get_park_factor
+from fantasy_baseball.data.ros_pipeline import parse_snapshot_date
+from fantasy_baseball.keepers.actuals import index_by_mlbam
 from fantasy_baseball.keepers.bref import (
     fetch_bref_batting,
     fetch_bref_pitching,
@@ -50,23 +49,33 @@ from fantasy_baseball.keepers.skills import (
     normalize_pitcher_skills,
 )
 
-DEFAULT_YEAR = 2026
+CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
 CACHE_DIR = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
 PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 
-# park_factors keys OPS and K separately; a hitter's rate stats track the OPS
-# factor and a pitcher's run prevention tracks it inversely (the same inflated
-# offensive environment), so both sides deflate by the same multiplier.
+# PARK_FACTORS carries `ops` and `k`; there is no runs factor, so the pitcher
+# side uses `ops` as a proxy for the same inflated offensive environment. See
+# that module's docstring for what this costs a quantitative consumer.
 _PARK_STAT = "ops"
 
 
 def latest_ros_dir(year: int) -> Path | None:
-    """Most recent ROS projection snapshot directory for `year`, if any."""
+    """Most recent ROS projection snapshot directory for `year`, if any.
+
+    Selects by PARSED date, not by name: a raw string sort would let an undatable
+    helper dir sort above the dated ones and shadow a fresh snapshot. Shares
+    `parse_snapshot_date` with the refresh pipeline so the two cannot disagree
+    about which snapshot is newest.
+    """
     ros_root = PROJECTIONS_DIR / str(year) / "rest_of_season"
     if not ros_root.is_dir():
         return None
-    dated = sorted(d for d in ros_root.iterdir() if d.is_dir())
-    return dated[-1] if dated else None
+    dated = [
+        (p, d)
+        for p in ros_root.iterdir()
+        if p.is_dir() and (d := parse_snapshot_date(p.name)) is not None
+    ]
+    return max(dated, key=lambda pair: pair[1])[0] if dated else None
 
 
 def build_park_factors(year: int, kind: str) -> pd.Series | None:
@@ -74,53 +83,39 @@ def build_park_factors(year: int, kind: str) -> pd.Series | None:
 
     Returns None when no snapshot exists, which leaves the adjustment neutral
     rather than silently dropping every player from the join.
+
+    All five systems agree on `Team` but cover different player sets -- on the
+    2026-07-27 pitcher snapshot their union reaches 760 of 761 join targets where
+    steamer alone reaches 720 -- so every file is read for coverage, not
+    consensus, and the first row per id wins. A `usecols` mismatch means the file
+    is not a projection export; skip it rather than fail, as `summary.crosswalk`
+    does.
     """
     snapshot = latest_ros_dir(year)
     if snapshot is None:
         return None
-    frames = [
-        pd.read_csv(path)
-        for path in sorted(snapshot.glob(f"*-{kind}.csv"))
-        if path.stat().st_size > 0
-    ]
+    frames = []
+    for path in sorted(snapshot.glob(f"*-{kind}.csv")):
+        try:
+            frames.append(pd.read_csv(path, encoding="utf-8-sig", usecols=["MLBAMID", "Team"]))
+        except (ValueError, FileNotFoundError):
+            continue
     if not frames:
         return None
-    combined = pd.concat(frames, ignore_index=True)
-    if "MLBAMID" not in combined.columns or "Team" not in combined.columns:
-        return None
-    rows = combined.loc[combined["MLBAMID"].notna(), ["MLBAMID", "Team"]].copy()
-    # Systems disagree on nothing here -- Team is the same across all five -- so
-    # the first row per player is as good as any.
-    rows = rows.drop_duplicates(subset="MLBAMID", keep="first")
-    factors = rows["Team"].map(lambda team: PARK_FACTORS.get(str(team), NEUTRAL_FACTOR)[_PARK_STAT])
-    return pd.Series(factors.to_numpy(), index=rows["MLBAMID"].astype(int), name="park_factor")
-
-
-def unescape_name(name: str) -> str:
-    """Repair BBRef's double-encoded accents.
-
-    ~100 of the 1369 names arrive with the UTF-8 bytes spelled out as literal
-    backslash escapes -- "Acu\\xc3\\xb1a" as 17 characters, not "Acuna" with a
-    tilde. Left alone it survives accent-stripped normalization as a distinct
-    name and silently fails to match the board. Anything that does not round-trip
-    is returned untouched.
-    """
-    try:
-        return codecs.decode(name, "unicode_escape").encode("latin-1").decode("utf-8")
-    except (UnicodeDecodeError, UnicodeEncodeError):
-        return name
+    rows = index_by_mlbam(pd.concat(frames, ignore_index=True), "MLBAMID")
+    teams = rows.loc[~rows.index.duplicated(keep="first"), "Team"]
+    return teams.map(lambda team: get_park_factor(str(team), _PARK_STAT)).rename("park_factor")
 
 
 def with_names(skills: pd.DataFrame, source: pd.DataFrame) -> pd.DataFrame:
     """Prepend the player name from a BBRef frame, so the output is readable and
-    joinable to the board without a second lookup. Unmatched ids keep a blank."""
-    rows = source.loc[source["mlbID"].notna(), ["mlbID", "Name"]].drop_duplicates(
-        subset="mlbID", keep="first"
-    )
-    names = pd.Series(
-        [unescape_name(str(n)) for n in rows["Name"]],
-        index=rows["mlbID"].astype(int).to_numpy(),
-    )
+    joinable to the board without a second lookup. Unmatched ids keep a blank.
+
+    `bref` repairs the double-encoded accents at ingest, so no name handling is
+    needed here.
+    """
+    rows = index_by_mlbam(source, "mlbID")
+    names = rows.loc[~rows.index.duplicated(keep="first"), "Name"].astype(str)
     out = skills.copy()
     out.insert(0, "name", names.reindex(out.index).fillna(""))
     return out
@@ -128,13 +123,14 @@ def with_names(skills: pd.DataFrame, source: pd.DataFrame) -> pd.DataFrame:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--year", type=int, default=DEFAULT_YEAR)
+    parser.add_argument("--year", type=int, help="defaults to config season_year")
     parser.add_argument("--out", type=Path, default=CACHE_DIR)
     parser.add_argument(
         "--refresh", action="store_true", help="ignore cached raw pulls and refetch"
     )
     parser.add_argument("--no-park", action="store_true", help="skip park adjustment")
     args = parser.parse_args()
+    args.year = args.year or load_config(CONFIG_PATH).season_year
 
     raw_dir = args.out / f"raw_{args.year}"
     if args.refresh and raw_dir.exists():

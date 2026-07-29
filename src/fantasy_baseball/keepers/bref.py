@@ -2,6 +2,14 @@
 rename, no unit conversion, no merge. pybaseball is imported locally (heavy) so
 the module stays import-safe, matching `savant`.
 
+The one transform applied is repairing `Name`, ~7% of which arrives with its
+UTF-8 bytes spelled out as literal backslash escapes. That is decoding a
+transport defect, not a derivation -- the same class of thing as `savant`
+stripping a `utf-8-sig` BOM -- and it has to happen here rather than in a
+caller: `fetch_or_cache` persists whatever the fetcher returns, so repairing
+downstream would leave every cached CSV corrupt and every other consumer of
+these public fetchers silently failing name joins.
+
 This is the live source for the counting stats behind ERA-, FIP and K%. It also
 publishes called- and swinging-strike rates as `StL`/`StS`, but rounded to two
 decimals, which collapses CSW% to ~19 distinct values across a league of
@@ -27,20 +35,25 @@ from pathlib import Path
 import pandas as pd
 
 from fantasy_baseball.keepers.cache import fetch_or_cache
+from fantasy_baseball.utils.name_utils import repair_double_encoded
+
+
+def _repair_names(frame: pd.DataFrame) -> pd.DataFrame:
+    if "Name" in frame.columns:
+        frame = frame.assign(Name=[repair_double_encoded(n) for n in frame["Name"]])
+    return frame
 
 
 def _bref_batting(year: int) -> pd.DataFrame:
     from pybaseball import batting_stats_bref
 
-    result: pd.DataFrame = batting_stats_bref(year)
-    return result
+    return _repair_names(batting_stats_bref(year))
 
 
 def _bref_pitching(year: int) -> pd.DataFrame:
     from pybaseball import pitching_stats_bref
 
-    result: pd.DataFrame = pitching_stats_bref(year)
-    return result
+    return _repair_names(pitching_stats_bref(year))
 
 
 def fetch_bref_batting(
