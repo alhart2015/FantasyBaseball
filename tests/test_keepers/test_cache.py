@@ -84,3 +84,12 @@ def test_cache_within_max_age_is_served(tmp_path: Path):
 
     out = fetch_or_cache(path, boom, max_age=timedelta(days=1))
     assert out["ip"].tolist() == [10]
+
+
+def test_max_age_zero_always_refetches(tmp_path: Path):
+    """--refresh passes max_age=0. st_mtime resolves finer than time.time()'s
+    tick, so a just-written cache can compute a negative age and be served."""
+    path = tmp_path / "pull.csv"
+    fetch_or_cache(path, lambda: pd.DataFrame({"a": [1]}))
+    out = fetch_or_cache(path, lambda: pd.DataFrame({"a": [2]}), max_age=timedelta(0))
+    assert out["a"].tolist() == [2]

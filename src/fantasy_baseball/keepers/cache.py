@@ -30,8 +30,10 @@ def _read_cached(path: Path, max_age: timedelta | None) -> pd.DataFrame | None:
     if not path.exists():
         return None
     # Epoch arithmetic, not local wall clock: differencing two naive datetimes
-    # shifts the age by an hour across a DST boundary.
-    if max_age is not None and time.time() - path.stat().st_mtime > max_age.total_seconds():
+    # shifts the age by an hour across a DST boundary. `>=` so max_age=0 (the
+    # --refresh path) always refetches -- st_mtime resolves finer than
+    # time.time()'s tick, so a just-written file can compute a negative age.
+    if max_age is not None and time.time() - path.stat().st_mtime >= max_age.total_seconds():
         return None
     df: pd.DataFrame = pd.read_csv(path)
     return df if not df.empty else None

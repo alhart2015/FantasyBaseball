@@ -85,14 +85,24 @@ def _fip_core(counts: Mapping[str, pd.Series]) -> pd.Series:
     return 13.0 * counts["HR"] + 3.0 * (counts["BB"] + counts["HBP"]) - 2.0 * counts["SO"]
 
 
-def _league_ratio(numer: pd.Series, denom: pd.Series, what: str) -> float:
+def _league_ratio(
+    numer: pd.Series, denom: pd.Series, what: str, *, usable: pd.Series | None = None
+) -> float:
     """Sum `numer/denom` over rows where BOTH are present.
 
     `Series.sum()` skips NaN, so summing the two independently would drop a
     row's numerator while keeping its denominator -- one blank `ER` in a BBRef
     frame would then halve league ERA and double every *other* pitcher's ERA-.
+
+    Pass `usable` to force a row set shared with another ratio. League ERA and
+    the FIP constant need it: masking each on its own numerator would put a
+    pitcher's innings into one denominator and not the other, and the constant
+    would absorb the difference -- shifting every *other* pitcher's FIP, which
+    is exactly the "league FIP equals league ERA" invariant it exists to hold.
     """
     both = numer.notna() & denom.notna()
+    if usable is not None:
+        both &= usable
     total = float(denom.where(both).sum())
     if total <= 0:
         raise ValueError(f"league {what} is zero; cannot derive the index")
@@ -183,8 +193,10 @@ def normalize_pitcher_skills(
     bf = _numeric(frame, "BF")
 
     core = _fip_core(counts)
-    lg_era = 9.0 * _league_ratio(counts["ER"], ip, "IP")
-    fip_constant = lg_era - _league_ratio(core, ip, "FIP-weighted IP")
+    # Both constants over the same pitchers -- see `_league_ratio`.
+    complete = counts["ER"].notna() & core.notna()
+    lg_era = 9.0 * _league_ratio(counts["ER"], ip, "IP", usable=complete)
+    fip_constant = lg_era - _league_ratio(core, ip, "IP", usable=complete)
 
     era = safe_ratio(9.0 * counts["ER"], ip)
     fip_rate = safe_ratio(core, ip)

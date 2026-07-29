@@ -250,3 +250,51 @@ def test_nan_runs_do_not_skew_league_r_per_pa():
         batting=bref_batting(mlbID=[1, 2], R=[90, float("nan")]),
     )
     assert dirty.loc[1, "wrc_plus"] == pytest.approx(clean.loc[1, "wrc_plus"])
+
+
+def _heterogeneous_pitchers(**overrides):
+    """Three pitchers with DIFFERENT rates. Identical ones make league-constant
+    bugs cancel to exactly zero, which is how the first NaN test missed one."""
+    return bref_pitching(
+        mlbID=[1, 2, 3],
+        IP=[200.0, 100.0, 100.0],
+        ER=[150, 40, 60],
+        HR=[25, 10, 20],
+        BB=[45, 20, 30],
+        HBP=[5, 2, 3],
+        SO=[200, 120, 80],
+        BF=[800, 400, 400],
+        **overrides,
+    )
+
+
+def _league(out):
+    """IP-weighted league FIP and ERA- over the rows that resolved."""
+    ok = out[["ip", "fip", "era_minus"]].dropna()
+    weight = ok["ip"].sum()
+    return (ok["fip"] * ok["ip"]).sum() / weight, (ok["era_minus"] * ok["ip"]).sum() / weight
+
+
+@pytest.mark.parametrize("blank", [None, "HR", "ER", "SO"])
+def test_league_fip_equals_league_era_whatever_is_missing(blank):
+    """The FIP constant is solved so league FIP == league ERA. That only holds
+    if both constants are masked to the SAME pitchers -- masking each on its own
+    numerator lets one blank count put a pitcher's innings in one denominator
+    and not the other, and the constant silently absorbs the difference."""
+    pitching = _heterogeneous_pitchers()
+    if blank is not None:
+        pitching = pitching.copy()
+        pitching.loc[0, blank] = float("nan")
+    out = normalize_pitcher_skills(pitching, savant_pitch_mix(player_id=[1, 2, 3]))
+
+    lg_fip, lg_era_minus = _league(out)
+    assert lg_era_minus == pytest.approx(100.0)
+    assert lg_fip == pytest.approx(_expected_league_era(pitching, blank))
+
+
+def _expected_league_era(pitching, blank):
+    """League ERA over pitchers whose every FIP input is present."""
+    frame = pitching.copy()
+    cols = ["ER", "HR", "BB", "HBP", "SO"]
+    complete = frame[cols].notna().all(axis=1)
+    return 9.0 * frame.loc[complete, "ER"].sum() / frame.loc[complete, "IP"].sum()

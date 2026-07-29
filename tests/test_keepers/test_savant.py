@@ -149,3 +149,12 @@ def test_every_season_to_date_fetcher_accepts_a_max_age_override():
         params = inspect.signature(fn).parameters
         assert "max_age" in params, f"{fn.__name__} cannot be refreshed or aged out"
         assert params["max_age"].default is not None, f"{fn.__name__} has no staleness guard"
+
+
+def test_package_exports_all_resolve():
+    """Replaces two partial per-module copies; asserts the whole surface."""
+    import fantasy_baseball.keepers as k
+
+    assert k.__all__ == sorted(k.__all__)
+    for name in k.__all__:
+        assert hasattr(k, name), f"{name} in __all__ but not importable"
