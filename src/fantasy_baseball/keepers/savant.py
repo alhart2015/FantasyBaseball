@@ -2,6 +2,12 @@
 xHR via a direct leaderboard CSV). Returned fully raw -- no rename, no percent->share
 conversion, no merge. pybaseball is imported locally (heavy) so the module stays
 import-safe.
+
+`fetch_pitcher_pitch_mix` is the one deliberate exception: it counts pitch outcomes
+per pitcher instead of returning the raw pitch table. That is a pivot, not a rate --
+`skills` still owns every division -- and it is what keeps the cache a ~800-row CSV
+rather than the ~700k-row season of pitches behind it. Persisting the raw pitch
+table is the streaks pipeline's job (`streaks/data/statcast.py`), not this one's.
 """
 
 from __future__ import annotations
@@ -14,10 +20,21 @@ from pathlib import Path
 import pandas as pd
 
 from fantasy_baseball.keepers.cache import fetch_or_cache
+from fantasy_baseball.utils.time_utils import local_today
 
 _SAVANT_HR_URL = (
     "https://baseballsavant.mlb.com/leaderboard/home-runs?type=batter&year={year}&min=1&csv=true"
 )
+
+# Statcast `description` values. A missed bunt is a swing and a miss, and Savant
+# counts it as one; a foul tip is contact, so it is a swing but NOT a whiff.
+_WHIFF = frozenset({"swinging_strike", "swinging_strike_blocked", "missed_bunt"})
+_CONTACT = frozenset({"foul", "foul_tip", "foul_bunt", "bunt_foul_tip", "hit_into_play"})
+_CALLED = "called_strike"
+
+# Wide enough to cover any regular season plus playoffs; empty days cost nothing.
+_SEASON_START = "{year}-03-01"
+_SEASON_END = "{year}-11-30"
 
 
 def _savant_batter_expected(year: int) -> pd.DataFrame:
@@ -39,6 +56,49 @@ def _savant_pitcher_expected(year: int) -> pd.DataFrame:
 
     result: pd.DataFrame = statcast_pitcher_expected_stats(year, minPA=1)
     return result
+
+
+def tally_pitch_outcomes(raw: pd.DataFrame) -> pd.DataFrame:
+    """Collapse a pitch-level Statcast frame to per-pitcher outcome counts.
+
+    Returns one row per MLBAM `player_id` with `pitches`, `called_strikes`,
+    `whiffs` and `swings` (`swings` includes whiffs). Pure, so the outcome
+    classification is testable without a network pull.
+    """
+    if raw.empty:
+        return pd.DataFrame()
+    pitches = raw.loc[raw["pitcher"].notna(), ["pitcher", "description"]]
+    description = pitches["description"]
+    tallies = pd.DataFrame(
+        {
+            "player_id": pitches["pitcher"].astype(int),
+            "pitches": 1,
+            "called_strikes": description.eq(_CALLED).astype(int),
+            "whiffs": description.isin(_WHIFF).astype(int),
+            "swings": description.isin(_WHIFF | _CONTACT).astype(int),
+        }
+    )
+    result: pd.DataFrame = tallies.groupby("player_id", as_index=False).sum()
+    return result
+
+
+def _savant_pitcher_pitch_mix(year: int) -> pd.DataFrame:
+    """Per-pitcher pitch-outcome counts for `year`, from the pitch-level feed.
+
+    Baseball Reference publishes the same rates rounded to two decimals, which
+    collapses CSW% to ~19 distinct values across a league of pitchers and makes
+    it useless as a ranking input; these counts carry full precision.
+
+    The window is capped at today so an in-progress season does not query a
+    future date range.
+    """
+    from pybaseball import statcast
+
+    end = min(_SEASON_END.format(year=year), local_today().isoformat())
+    raw = statcast(start_dt=_SEASON_START.format(year=year), end_dt=end)
+    if raw is None or raw.empty:
+        return pd.DataFrame()
+    return tally_pitch_outcomes(raw)
 
 
 def _savant_hr(year: int) -> pd.DataFrame:
@@ -78,6 +138,15 @@ def fetch_pitcher_expected(
     return fetch_or_cache(
         cache_dir / f"savant_pitcher_expected_{year}.csv",
         fetcher or (lambda: _savant_pitcher_expected(year)),
+    )
+
+
+def fetch_pitcher_pitch_mix(
+    cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
+) -> pd.DataFrame:
+    return fetch_or_cache(
+        cache_dir / f"savant_pitcher_pitch_mix_{year}.csv",
+        fetcher or (lambda: _savant_pitcher_pitch_mix(year)),
     )
 
 
