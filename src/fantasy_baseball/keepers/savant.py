@@ -51,6 +51,9 @@ _CONTACT = frozenset(
 )
 _SWING = _WHIFF | _CONTACT
 
+# Every pull here is season-to-date, so all of them go stale daily.
+_MAX_AGE = timedelta(days=1)
+
 
 def _savant_batter_expected(year: int) -> pd.DataFrame:
     from pybaseball import statcast_batter_expected_stats
@@ -186,20 +189,30 @@ def _savant_hr(year: int) -> pd.DataFrame:
 
 
 def fetch_batter_expected(
-    cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
+    cache_dir: Path,
+    year: int,
+    *,
+    max_age: timedelta | None = _MAX_AGE,
+    fetcher: Callable[[], pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     return fetch_or_cache(
         cache_dir / f"savant_batter_expected_{year}.csv",
         fetcher or (lambda: _savant_batter_expected(year)),
+        max_age=max_age,
     )
 
 
 def fetch_batter_barrels(
-    cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
+    cache_dir: Path,
+    year: int,
+    *,
+    max_age: timedelta | None = _MAX_AGE,
+    fetcher: Callable[[], pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     return fetch_or_cache(
         cache_dir / f"savant_batter_barrels_{year}.csv",
         fetcher or (lambda: _savant_batter_barrels(year)),
+        max_age=max_age,
     )
 
 
@@ -214,14 +227,13 @@ def fetch_pitcher_expected(
 
 # 2: spring training and postseason excluded. A v1 cache mixes them in.
 _PITCH_MIX_VERSION = 2
-_PITCH_MIX_MAX_AGE = timedelta(days=1)
 
 
 def fetch_pitcher_pitch_mix(
     cache_dir: Path,
     year: int,
     *,
-    max_age: timedelta | None = _PITCH_MIX_MAX_AGE,
+    max_age: timedelta | None = _MAX_AGE,
     fetcher: Callable[[], pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     return fetch_or_cache(

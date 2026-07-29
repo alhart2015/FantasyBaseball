@@ -66,12 +66,6 @@ PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 _PARK_STAT = "ops"
 
 
-def _age(max_age: timedelta | None) -> dict[str, timedelta]:
-    """`max_age=` override only when --refresh is set, so each fetcher keeps its
-    own default otherwise."""
-    return {} if max_age is None else {"max_age": max_age}
-
-
 def _first_per_id(frame: pd.DataFrame, id_col: str, column: str) -> pd.Series:
     """`column` keyed by MLBAM id, first row winning a duplicate."""
     rows = index_by_mlbam(frame, id_col)
@@ -136,18 +130,19 @@ def main() -> int:
         args.year = config.season_year
 
     raw_dir = args.out / f"raw_{args.year}"
-    # --refresh treats every cache as stale rather than deleting it up front:
-    # a failed pull then leaves the good cache in place instead of having
-    # already destroyed it (and the ~1-minute Statcast pull with it).
-    max_age = timedelta(0) if args.refresh else None
+    # --refresh treats every cache as stale rather than deleting it up front: a
+    # failed pull then leaves the good cache in place instead of having already
+    # destroyed it (and the ~1-minute Statcast pull with it). An empty dict
+    # leaves each fetcher on its own default.
+    refresh = {"max_age": timedelta(0)} if args.refresh else {}
 
     print(f"Fetching {args.year} raw leaderboards (cache: {raw_dir})...")
-    expected = fetch_batter_expected(raw_dir, args.year)
-    barrels = fetch_batter_barrels(raw_dir, args.year)
-    batting = fetch_bref_batting(raw_dir, args.year, **_age(max_age))
-    pitching = fetch_bref_pitching(raw_dir, args.year, **_age(max_age))
+    expected = fetch_batter_expected(raw_dir, args.year, **refresh)
+    barrels = fetch_batter_barrels(raw_dir, args.year, **refresh)
+    batting = fetch_bref_batting(raw_dir, args.year, **refresh)
+    pitching = fetch_bref_pitching(raw_dir, args.year, **refresh)
     print("  pulling pitch-level Statcast for CSW% (~1 min on a cold cache)...")
-    pitch_mix = fetch_pitcher_pitch_mix(raw_dir, args.year, **_age(max_age))
+    pitch_mix = fetch_pitcher_pitch_mix(raw_dir, args.year, **refresh)
     print(
         f"  savant expected={len(expected)} barrels={len(barrels)} "
         f"pitch_mix={len(pitch_mix)} bref batting={len(batting)} pitching={len(pitching)}"
@@ -157,9 +152,10 @@ def main() -> int:
     pitcher_park = None if args.no_park else build_park_factors(args.year, "pitchers")
     # Check BOTH: a snapshot can land one side and 403 the other, which would
     # park-correct wrc_plus while leaving every era_minus raw, with no signal.
-    for label, factors in (("hitters", hitter_park), ("pitchers", pitcher_park)):
-        if not args.no_park and factors is None:
-            print(f"  WARNING: no {label} team bridge; that side is park-neutral")
+    if not args.no_park:
+        for label, factors in (("hitters", hitter_park), ("pitchers", pitcher_park)):
+            if factors is None:
+                print(f"  WARNING: no {label} team bridge; that side is park-neutral")
 
     hitters = with_names(
         normalize_hitter_skills(expected, barrels, batting, park_factor=hitter_park), batting

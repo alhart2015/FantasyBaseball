@@ -69,9 +69,10 @@ def get_park_factor(team_abbrev: str, stat: str) -> float:
     return PARK_FACTORS.get(team_abbrev, NEUTRAL_FACTOR).get(stat, 1.0)
 
 
-def _is_usable(home_park_factor: float) -> bool:
-    """A factor the model can divide by: positive and not NaN. Shared so the
-    scalar and vectorized paths cannot disagree about a degenerate park."""
+def _is_usable(home_park_factor: Any) -> Any:
+    """A factor the model can divide by: positive, which excludes NaN. Shared,
+    like :func:`_neutralize`, so the two entry points cannot disagree about a
+    degenerate park."""
     return home_park_factor > 0
 
 
@@ -110,5 +111,5 @@ def park_neutral_series(season_values: pd.Series, home_park_factors: pd.Series) 
     caller that added its own non-positive guard would be a second definition.
     """
     factors = pd.to_numeric(home_park_factors, errors="coerce")
-    usable = factors.where(factors.map(_is_usable), 1.0)
+    usable = factors.where(_is_usable(factors), 1.0)
     return _neutralize(season_values, usable).where(season_values > 0, season_values)

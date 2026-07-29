@@ -24,13 +24,15 @@ ranking anything.
 Park adjustment is optional. `park_factor` is a Series of venue multipliers
 indexed by `mlbam_id` (1.00 neutral, >1.00 inflates the stat), defaulting to
 neutral because neither source frame carries a usable team code.
-`scripts/fetch_keeper_skills.py` builds it and documents the caveats.
+`scripts/fetch_keeper_skills.py` builds it and documents the caveats. Only
+`wrc_plus` and `era_minus` are adjusted, so they sit on a different park basis
+than `fip` and `k_pct` -- reading a pitcher's ERA- against his FIP picks up part
+of that difference as a park artifact.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
-from typing import Any
 
 import pandas as pd
 
@@ -65,10 +67,6 @@ def _numeric(frame: pd.DataFrame, column: str) -> pd.Series:
 def _park_neutral(values: pd.Series, park_factor: pd.Series | None) -> pd.Series:
     """Park-neutralize `values`, or return them unchanged when no factor is given.
 
-    Only `wrc_plus` and `era_minus` are adjusted; `fip` and `k_pct` are left
-    park-raw, so those columns sit on different park bases -- comparing a
-    pitcher's ERA- to his FIP reads partly as a park artifact.
-
     The reindex is required: without it pandas aligns on the union and NaNs out
     every player missing from the bridge. `park_neutral_series` owns the rest.
     """
@@ -77,8 +75,8 @@ def _park_neutral(values: pd.Series, park_factor: pd.Series | None) -> pd.Series
     return park_neutral_series(values, park_factor.reindex(values.index))
 
 
-def _fip_core(counts: Mapping[str, Any]) -> Any:
-    """The FIP numerator, `13*HR + 3*(BB+HBP) - 2*K`, over scalars or Series.
+def _fip_core(counts: Mapping[str, pd.Series]) -> pd.Series:
+    """The FIP numerator, `13*HR + 3*(BB+HBP) - 2*K`.
 
     Shared by the league constant and the per-player rate so the weights are
     stated once -- the constant is only correct while the two agree, and a
@@ -99,11 +97,6 @@ def _league_ratio(numer: pd.Series, denom: pd.Series, what: str) -> float:
     if total <= 0:
         raise ValueError(f"league {what} is zero; cannot derive the index")
     return float(numer.where(both).sum()) / total
-
-
-def _league_r_per_pa(batting: pd.DataFrame) -> float:
-    """League runs per plate appearance, the denominator wRC+ indexes against."""
-    return _league_ratio(_numeric(batting, "R"), _numeric(batting, "PA"), "PA")
 
 
 def normalize_hitter_skills(
@@ -132,8 +125,8 @@ def normalize_hitter_skills(
 
     pa = _numeric(exp, "pa")
     woba = _numeric(exp, "woba")
-    lg_woba = _league_ratio(woba * pa, pa, "PA")
-    lg_r_pa = _league_r_per_pa(batting)
+    lg_woba = _league_ratio(woba * pa, pa, "Savant PA")
+    lg_r_pa = _league_ratio(_numeric(batting, "R"), _numeric(batting, "PA"), "BBRef PA")
 
     # wRAA/PA converted to the runs scale, re-centred on league R/PA, then
     # park-neutralized before indexing to 100.
@@ -189,16 +182,17 @@ def normalize_pitcher_skills(
     counts = {name: _numeric(frame, name) for name in ("ER", "HR", "BB", "HBP", "SO")}
     bf = _numeric(frame, "BF")
 
+    core = _fip_core(counts)
     lg_era = 9.0 * _league_ratio(counts["ER"], ip, "IP")
-    fip_constant = lg_era - _league_ratio(_fip_core(counts), ip, "IP")
+    fip_constant = lg_era - _league_ratio(core, ip, "FIP-weighted IP")
 
     era = safe_ratio(9.0 * counts["ER"], ip)
-    fip_core = safe_ratio(_fip_core(counts), ip)
+    fip_rate = safe_ratio(core, ip)
     return pd.DataFrame(
         {
             PITCHER_PT: ip,
             "era_minus": 100.0 * _park_neutral(era, park_factor) / lg_era,
-            "fip": fip_core + fip_constant,
+            "fip": fip_rate + fip_constant,
             "k_pct": 100.0 * safe_ratio(counts["SO"], bf),
             "swstr_pct": 100.0 * safe_ratio(whiffs, thrown),
             "whiff_pct": 100.0 * safe_ratio(whiffs, _numeric(mix, "swings")),

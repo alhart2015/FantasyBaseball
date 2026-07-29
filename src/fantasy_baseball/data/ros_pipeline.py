@@ -73,6 +73,11 @@ def parse_snapshot_date(dir_name: str) -> date | None:
         return None
 
 
+def ros_snapshot_root(projections_dir: Path, season_year: int) -> Path:
+    """Where a season's ``rest_of_season`` snapshot dirs live."""
+    return projections_dir / str(season_year) / "rest_of_season"
+
+
 def latest_ros_snapshot(projections_dir: Path, season_year: int) -> tuple[Path, date] | None:
     """Newest ``rest_of_season`` snapshot dir for ``season_year``, with its date.
 
@@ -83,7 +88,7 @@ def latest_ros_snapshot(projections_dir: Path, season_year: int) -> tuple[Path, 
     so each caller picks its own failure mode -- the blend pipeline raises, the
     keeper-skills script falls back to a neutral park adjustment.
     """
-    ros_root = projections_dir / str(season_year) / "rest_of_season"
+    ros_root = ros_snapshot_root(projections_dir, season_year)
     if not ros_root.is_dir():
         return None
     dated = [
@@ -223,7 +228,7 @@ def blend_and_cache_ros(
             ``ROS_SNAPSHOT_STALE_DAYS``. Nothing is written, so the last-good
             ``cache:ros_projections`` is preserved.
     """
-    ros_root = projections_dir / str(season_year) / "rest_of_season"
+    ros_root = ros_snapshot_root(projections_dir, season_year)
     if not ros_root.is_dir():
         raise FileNotFoundError(f"ROS snapshot dir missing: {ros_root}")
     newest = latest_ros_snapshot(projections_dir, season_year)

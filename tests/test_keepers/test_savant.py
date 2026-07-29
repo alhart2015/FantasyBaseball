@@ -128,3 +128,24 @@ def test_all_spring_fold_does_not_crash_the_season_pull(monkeypatch, tmp_path: P
         fetch_pitcher_pitch_mix(
             tmp_path, 2026, fetcher=lambda: savant._savant_pitcher_pitch_mix(2026)
         )
+
+
+def test_every_season_to_date_fetcher_accepts_a_max_age_override():
+    """--refresh works by passing max_age=0, so a fetcher without the parameter
+    is silently skipped by it -- which is how the two batter leaderboards went
+    un-refreshed while the other three re-pulled."""
+    import inspect
+
+    from fantasy_baseball.keepers import bref
+
+    fetchers = (
+        fetch_batter_expected,
+        fetch_batter_barrels,
+        fetch_pitcher_pitch_mix,
+        bref.fetch_bref_batting,
+        bref.fetch_bref_pitching,
+    )
+    for fn in fetchers:
+        params = inspect.signature(fn).parameters
+        assert "max_age" in params, f"{fn.__name__} cannot be refreshed or aged out"
+        assert params["max_age"].default is not None, f"{fn.__name__} has no staleness guard"

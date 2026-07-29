@@ -79,8 +79,8 @@ def test_cache_within_max_age_is_served(tmp_path: Path):
     path = tmp_path / "pull.csv"
     fetch_or_cache(path, lambda: pd.DataFrame({"ip": [10]}))
 
-    def _boom() -> pd.DataFrame:
+    def boom() -> pd.DataFrame:
         raise AssertionError("should not refetch a fresh cache")
 
-    out = fetch_or_cache(path, _boom, max_age=timedelta(days=1))
+    out = fetch_or_cache(path, boom, max_age=timedelta(days=1))
     assert out["ip"].tolist() == [10]
