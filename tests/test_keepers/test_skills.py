@@ -219,3 +219,34 @@ def test_zero_innings_gives_nan_not_zero():
 def test_zero_league_innings_raises():
     with pytest.raises(ValueError, match="IP is zero"):
         _pitchers(pitching=bref_pitching(IP=0.0))
+
+
+def test_one_nan_count_does_not_rescale_every_other_pitcher():
+    """Series.sum() skips NaN, so summing numerator and denominator separately
+    would drop a pitcher's ER while keeping his IP -- halving league ERA and
+    doubling everyone else's ERA-."""
+    clean = _two_pitchers(ER=[80, 80])
+    dirty = _two_pitchers(ER=[80, float("nan")])
+    assert dirty.loc[1, "era_minus"] == pytest.approx(clean.loc[1, "era_minus"])
+    assert dirty.loc[1, "fip"] == pytest.approx(clean.loc[1, "fip"])
+    assert math.isnan(dirty.loc[2, "era_minus"])
+
+
+def test_one_nan_woba_does_not_rescale_every_other_hitter():
+    clean = _two_hitters(woba=[0.400, 0.320])
+    dirty = _two_hitters(woba=[0.400, float("nan")])
+    assert dirty.loc[1, "wrc_plus"] != pytest.approx(clean.loc[1, "wrc_plus"])  # league changed
+    # ...but the survivor is still measured against a league built from HIS row
+    # alone, so he is exactly average -- not inflated by a mismatched denominator.
+    assert dirty.loc[1, "wrc_plus"] == pytest.approx(100.0)
+
+
+def test_nan_runs_do_not_skew_league_r_per_pa():
+    """R and PA are summed independently unless masked together."""
+    clean = _two_hitters()
+    dirty = _hitters(
+        expected=savant_expected(player_id=[1, 2]),
+        barrels=savant_barrels(player_id=[1, 2]),
+        batting=bref_batting(mlbID=[1, 2], R=[90, float("nan")]),
+    )
+    assert dirty.loc[1, "wrc_plus"] == pytest.approx(clean.loc[1, "wrc_plus"])

@@ -69,6 +69,12 @@ def get_park_factor(team_abbrev: str, stat: str) -> float:
     return PARK_FACTORS.get(team_abbrev, NEUTRAL_FACTOR).get(stat, 1.0)
 
 
+def _is_usable(home_park_factor: float) -> bool:
+    """A factor the model can divide by: positive and not NaN. Shared so the
+    scalar and vectorized paths cannot disagree about a degenerate park."""
+    return home_park_factor > 0
+
+
 def _neutralize(value: Any, home_park_factor: Any) -> Any:
     """The 50/50 model itself, over scalars or Series. One expression, so the
     scalar and vectorized entry points cannot drift."""
@@ -92,7 +98,7 @@ def park_neutral_value(season_value: float, home_park_factor: float) -> float:
     degenerate (<=0) park factor, or a non-positive value, where the multiplier
     inverts and a hitters' park would *help* the line instead of discounting it.
     """
-    if home_park_factor <= 0 or season_value <= 0:
+    if not _is_usable(home_park_factor) or not season_value > 0:
         return season_value
     return float(_neutralize(season_value, home_park_factor))
 
@@ -104,5 +110,5 @@ def park_neutral_series(season_values: pd.Series, home_park_factors: pd.Series) 
     caller that added its own non-positive guard would be a second definition.
     """
     factors = pd.to_numeric(home_park_factors, errors="coerce")
-    usable = factors.where(factors > 0, 1.0)
+    usable = factors.where(factors.map(_is_usable), 1.0)
     return _neutralize(season_values, usable).where(season_values > 0, season_values)

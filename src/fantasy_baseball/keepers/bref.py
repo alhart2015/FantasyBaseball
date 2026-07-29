@@ -62,22 +62,30 @@ _MAX_AGE = timedelta(days=1)
 
 
 def fetch_bref_batting(
-    cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
+    cache_dir: Path,
+    year: int,
+    *,
+    max_age: timedelta | None = _MAX_AGE,
+    fetcher: Callable[[], pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     return fetch_or_cache(
         cache_dir / f"bref_batting_{year}.csv",
         fetcher or (lambda: _bref_batting(year)),
         version=_BREF_VERSION,
-        max_age=_MAX_AGE,
+        max_age=max_age,
     )
 
 
 def fetch_bref_pitching(
-    cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
+    cache_dir: Path,
+    year: int,
+    *,
+    max_age: timedelta | None = _MAX_AGE,
+    fetcher: Callable[[], pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     return fetch_or_cache(
         cache_dir / f"bref_pitching_{year}.csv",
         fetcher or (lambda: _bref_pitching(year)),
         version=_BREF_VERSION,
-        max_age=_MAX_AGE,
+        max_age=max_age,
     )

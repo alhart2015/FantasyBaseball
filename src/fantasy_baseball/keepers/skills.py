@@ -87,13 +87,23 @@ def _fip_core(counts: Mapping[str, Any]) -> Any:
     return 13.0 * counts["HR"] + 3.0 * (counts["BB"] + counts["HBP"]) - 2.0 * counts["SO"]
 
 
+def _league_ratio(numer: pd.Series, denom: pd.Series, what: str) -> float:
+    """Sum `numer/denom` over rows where BOTH are present.
+
+    `Series.sum()` skips NaN, so summing the two independently would drop a
+    row's numerator while keeping its denominator -- one blank `ER` in a BBRef
+    frame would then halve league ERA and double every *other* pitcher's ERA-.
+    """
+    both = numer.notna() & denom.notna()
+    total = float(denom.where(both).sum())
+    if total <= 0:
+        raise ValueError(f"league {what} is zero; cannot derive the index")
+    return float(numer.where(both).sum()) / total
+
+
 def _league_r_per_pa(batting: pd.DataFrame) -> float:
     """League runs per plate appearance, the denominator wRC+ indexes against."""
-    runs = _numeric(batting, "R").sum()
-    pa = _numeric(batting, "PA").sum()
-    if pa <= 0:
-        raise ValueError("league PA is zero; cannot derive wRC+")
-    return float(runs / pa)
+    return _league_ratio(_numeric(batting, "R"), _numeric(batting, "PA"), "PA")
 
 
 def normalize_hitter_skills(
@@ -122,10 +132,7 @@ def normalize_hitter_skills(
 
     pa = _numeric(exp, "pa")
     woba = _numeric(exp, "woba")
-    total_pa = pa.sum()
-    if total_pa <= 0:
-        raise ValueError("total PA is zero; cannot derive league wOBA")
-    lg_woba = float((woba * pa).sum() / total_pa)
+    lg_woba = _league_ratio(woba * pa, pa, "PA")
     lg_r_pa = _league_r_per_pa(batting)
 
     # wRAA/PA converted to the runs scale, re-centred on league R/PA, then
@@ -177,17 +184,13 @@ def normalize_pitcher_skills(
     # BBRef reports IP in baseball notation as a float: 20.1 is 20 1/3, not 20.1.
     ip = frame["IP"].map(innings_to_float)
     # No fillna(0.0): a blank HBP would silently understate FIP by 3*HBP/IP with
-    # nothing to signal it. NaN propagates to that pitcher's fip/era_minus and is
-    # skipped by the league sums, which is the honest split.
+    # nothing to signal it. NaN propagates to that pitcher's own rates, and
+    # `_league_ratio` drops his innings from the constants along with his counts.
     counts = {name: _numeric(frame, name) for name in ("ER", "HR", "BB", "HBP", "SO")}
     bf = _numeric(frame, "BF")
 
-    lg_ip = float(ip.sum())
-    if lg_ip <= 0:
-        raise ValueError("league IP is zero; cannot derive ERA- or FIP")
-    totals = {name: float(series.sum()) for name, series in counts.items()}
-    lg_era = 9.0 * totals["ER"] / lg_ip
-    fip_constant = lg_era - float(_fip_core(totals)) / lg_ip
+    lg_era = 9.0 * _league_ratio(counts["ER"], ip, "IP")
+    fip_constant = lg_era - _league_ratio(_fip_core(counts), ip, "IP")
 
     era = safe_ratio(9.0 * counts["ER"], ip)
     fip_core = safe_ratio(_fip_core(counts), ip)

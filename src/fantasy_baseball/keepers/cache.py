@@ -18,8 +18,9 @@ Two independent kinds of staleness, because they fail differently:
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 
 import pandas as pd
@@ -28,10 +29,10 @@ import pandas as pd
 def _read_cached(path: Path, max_age: timedelta | None) -> pd.DataFrame | None:
     if not path.exists():
         return None
-    if max_age is not None:
-        age = datetime.now() - datetime.fromtimestamp(path.stat().st_mtime)
-        if age > max_age:
-            return None
+    # Epoch arithmetic, not local wall clock: differencing two naive datetimes
+    # shifts the age by an hour across a DST boundary.
+    if max_age is not None and time.time() - path.stat().st_mtime > max_age.total_seconds():
+        return None
     df: pd.DataFrame = pd.read_csv(path)
     return df if not df.empty else None
 

@@ -218,13 +218,17 @@ _PITCH_MIX_MAX_AGE = timedelta(days=1)
 
 
 def fetch_pitcher_pitch_mix(
-    cache_dir: Path, year: int, *, fetcher: Callable[[], pd.DataFrame] | None = None
+    cache_dir: Path,
+    year: int,
+    *,
+    max_age: timedelta | None = _PITCH_MIX_MAX_AGE,
+    fetcher: Callable[[], pd.DataFrame] | None = None,
 ) -> pd.DataFrame:
     return fetch_or_cache(
         cache_dir / f"savant_pitcher_pitch_mix_{year}.csv",
         fetcher or (lambda: _savant_pitcher_pitch_mix(year)),
         version=_PITCH_MIX_VERSION,
-        max_age=_PITCH_MIX_MAX_AGE,
+        max_age=max_age,
     )
 
 
