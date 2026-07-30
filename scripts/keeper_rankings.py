@@ -264,23 +264,6 @@ def _slots_for(positions: dict[str, list[str]], name: str, kind: str) -> list[st
     return [slot for slot in slots if slot in eligible] or FALLBACK_POS[kind]
 
 
-def _role_equivalent_ip(frame: pd.DataFrame, kind: str) -> list[float | None]:
-    """Which replacement floor each pitcher nets against, as a `role_ip`.
-
-    Role comes from START SHARE, which a partial season measures correctly where a
-    to-date innings total does not -- see commit b0d380fa for what passing the
-    innings cost. Expressed against `STARTER_IP_THRESHOLD` rather than as loose
-    round numbers so a recalibration of that bar cannot silently reclassify every
-    starter.
-    """
-    if kind != PlayerType.PITCHER:
-        return [None] * len(frame)
-    share = frame.get("start_share")
-    if share is None:
-        return [None] * len(frame)
-    return [STARTER_IP_THRESHOLD if value >= 0.5 else 0.0 for value in share]
-
-
 def composite_pct(
     frame: pd.DataFrame, kind: str, weights: tuple[float, float, float, float] | None = None
 ) -> pd.Series:
@@ -350,14 +333,9 @@ def build(
             ),
             floors,
             return_position=True,
-            role_ip=role,
         )
-        for name, proj, pt, role in zip(
-            qualified["name"],
-            qualified["proj_sgp"],
-            qualified["pt"],
-            _role_equivalent_ip(qualified, kind),
-            strict=True,
+        for name, proj, pt in zip(
+            qualified["name"], qualified["proj_sgp"], qualified["pt"], strict=True
         )
     ]
     qualified["proj_var"] = [var for var, _ in priced]
@@ -600,7 +578,12 @@ def roster_report(year: int, denoms, keepers: dict[str, str], slots: int) -> int
         part = table[on_roster].copy()
         part["kind"] = kind
         scored.append(part)
-    board = pd.concat(scored).sort_values("proj_var", ascending=False).reset_index(drop=True)
+    board = pd.concat(scored).sort_values("proj_var", ascending=False)
+    # A two-way player qualifies in BOTH pools and would otherwise appear twice,
+    # drawing independent outcomes and competing against himself for the slots --
+    # Ohtani absorbed 0.33 of the 3.00 slot mass for one roster spot. Keep his
+    # better side, which is also the one a keeper decision is about.
+    board = board.drop_duplicates(subset="name", keep="first").reset_index(drop=True)
 
     board["p_keep"] = probability_top_n(board["proj_var"], board["sd"], board["kind"], slots)
     missing = sorted(roster - {normalize_name(str(n)) for n in board["name"]})

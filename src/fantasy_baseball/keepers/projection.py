@@ -127,31 +127,50 @@ def sgp_sd(composite_pct: pd.Series, kind: str) -> pd.Series:
 
 
 def scarcity_floors(floors: dict[str, float]) -> dict[str, float]:
-    """Mean-centre replacement levels so `calculate_var` reports a positive score.
+    """Replacement levels, mean-centred and with SP/RP collapsed.
 
-    This is a DISPLAY offset, not a model decision, and worth being blunt about
-    because the shape invites the opposite reading. Subtracting these gives
-    `projection - level + mean(level)`, i.e. true VAR plus one constant shared by
-    every position, so the ranking, every gap and every P(top-N) are identical to
-    using the floors untouched. All it buys is a column that reads positive.
+    Two separate things, both about keeping this table commensurable with
+    `expected_sgp`.
 
-    The offset exists because the two quantities are on different scales:
+    **SP and RP are merged into one pitcher floor.** `expected_sgp` is fit on the
+    pooled pitcher panel and has no role term, so it predicts the same value for a
+    starter and a reliever at the same composite. Netting that against
+    role-specific floors debits a difference the projection never credited, and
+    measurement shows it lands the wrong way round: against the pooled fit,
+    starters realize about half a point MORE than predicted and relievers about
+    half a point less, widening to +2.2 vs -0.5 in the top composite decile. The
+    RP floor then adds a further ~1.9 to relievers. Compounded, that put the top
+    forty of the pitcher board entirely on RP-classified arms who went on to earn
+    less than the starters below them at every level of the score. Until the
+    projection itself is role-aware, one floor is the only consistent choice.
+
+    **The centring is a DISPLAY offset**, not a model decision, and worth being
+    blunt about because the shape invites the opposite reading. Subtracting these
+    gives `projection - level + mean(level)`, i.e. true VAR plus one constant
+    shared by every position, so the ranking, every gap and every P(top-N) are
+    identical to using the floors untouched. All it buys is a column that reads
+    positive. It exists because the two quantities sit on different scales:
     `sgp.replacement`'s floors are draft-time full-season lines on which an ace
-    projects ~20 SGP, while `expected_sgp` is a regressed, injury-inclusive mean
-    of realized outcomes topping out near 13 (hitters) and 9 (pitchers).
-    Subtracting raw floors puts every pitcher below replacement, which is a
-    statement about the two scales rather than about the pitchers. Centring makes
-    that readable; it does not repair it, and no constant offset could.
+    projects ~20 SGP, while `expected_sgp` tops out near 13 (hitters) and 9
+    (pitchers), so raw subtraction puts every pitcher below replacement -- a
+    statement about the scales, not the pitchers. Centring makes it readable; no
+    constant offset could repair it.
 
-    What the floors DO carry validly is the spread between positions, since a
-    difference survives a change of scale where a level does not. Caveat on the
-    spread itself: it was calibrated on the wider draft-time scale, so against
-    this compressed one it is plausibly too large. Unquantified.
+    What the floors DO carry validly is the spread BETWEEN hitter positions, since
+    a difference survives a change of scale where a level does not. That spread was
+    calibrated on the wider draft-time scale, so against this compressed one it is
+    plausibly too large. Unquantified.
     """
     if not floors:
         return {}
-    average = sum(floors.values()) / len(floors)
-    return {position: level - average for position, level in floors.items()}
+    merged = dict(floors)
+    pitcher_keys = [key for key in ("SP", "RP") if key in merged]
+    if pitcher_keys:
+        pooled = sum(merged[key] for key in pitcher_keys) / len(pitcher_keys)
+        for key in pitcher_keys:
+            merged[key] = pooled
+    average = sum(merged.values()) / len(merged)
+    return {position: level - average for position, level in merged.items()}
 
 
 def sample_outcomes(

@@ -184,3 +184,19 @@ def test_exact_ties_still_credit_exactly_top_n():
     for means in ([10.0] * 4, [10.0, 9.0, 9.0, 1.0]):
         out = probability_top_n(pd.Series(means), zero_spread, kinds, 2)
         assert out.sum() == pytest.approx(2.0)
+
+
+def test_the_two_pitcher_floors_are_merged():
+    """`expected_sgp` has no role term, so netting against role-specific floors
+    debits a difference the projection never credited -- and measurement showed it
+    the wrong way round, putting the whole top of the pitcher board on relievers
+    who then earned less than the starters beneath them."""
+    floors = {"SP": 9.288, "RP": 7.423, "C": 7.696, "OF": 9.964}
+    out = scarcity_floors(floors)
+    assert out["SP"] == pytest.approx(out["RP"])
+
+
+def test_merging_the_pitcher_floors_leaves_the_hitter_spread_alone():
+    floors = {"SP": 9.288, "RP": 7.423, "C": 7.696, "OF": 9.964}
+    out = scarcity_floors(floors)
+    assert out["OF"] - out["C"] == pytest.approx(9.964 - 7.696)
