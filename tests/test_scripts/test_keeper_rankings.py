@@ -79,84 +79,6 @@ def test_dedupe_refuses_a_frame_that_lost_its_id_index():
         _dedupe_two_way(board)
 
 
-def _stub_pool(monkeypatch, *, kind, raw, feat):
-    """Drive `_positional_residuals` off synthetic frames.
-
-    It is the only regenerator of the positional and per-role evidence
-    `projection.scarcity_floors` argues from, and it is otherwise reachable only
-    by running `--study` by hand -- so a renamed BBRef column would break the
-    evidence silently while the pricing it justifies kept working.
-    """
-    monkeypatch.setattr(module, "_raw", lambda year, table: raw)
-    monkeypatch.setattr(module, "_transition", lambda year, k, denoms: feat)
-    monkeypatch.setattr(module, "composite_pct", lambda frame, k, weights=None: frame["c"])
-    monkeypatch.setattr(module, "ALL_TRANSITION_YEARS", (2022,))
-    return module._positional_residuals(kind, None, ({"cj abrams": ["SS"]}, {"SS": -1.0}))
-
-
-def test_pitchers_are_grouped_by_role_not_by_the_single_p_slot(monkeypatch):
-    """Every pitcher shares one slot, so grouping on it would print one row and
-    regenerate nothing. The SP/RP split is what the merged floor is an argument
-    about, so it is what has to come out."""
-    raw = pd.DataFrame(
-        {"mlbID": ["a", "b"], "Name": ["A Starter", "A Closer"], "G": [30, 60], "GS": [30, 0]}
-    )
-    feat = pd.DataFrame(
-        {"c": [0.9, 0.8], "target_sgp": [10.0, 4.0], "pt": [400.0, 400.0]}, index=["a", "b"]
-    )
-    out = _stub_pool(monkeypatch, kind=PlayerType.PITCHER, raw=raw, feat=feat)
-    assert list(out["slot"]) == ["SP", "RP"]
-
-
-def test_a_swingman_at_exactly_half_starts_counts_as_a_starter(monkeypatch):
-    """Pins the >= 0.5 boundary. Role is the axis the merged pitcher floor is an
-    argument about, so a swingman has to land on a stated side of it."""
-    raw = pd.DataFrame({"mlbID": ["a"], "Name": ["A Swingman"], "G": [20], "GS": [10]})
-    feat = pd.DataFrame({"c": [0.5], "target_sgp": [5.0], "pt": [400.0]}, index=["a"])
-    assert list(_stub_pool(monkeypatch, kind=PlayerType.PITCHER, raw=raw, feat=feat)["slot"]) == [
-        "SP"
-    ]
-
-
-def test_a_pitcher_who_never_appeared_is_a_reliever_not_a_nan_group(monkeypatch):
-    """G == 0 divides by zero. Left as NaN the comparison is False anyway, but
-    only by accident -- fillna makes the RP routing the stated behavior."""
-    raw = pd.DataFrame({"mlbID": ["a"], "Name": ["A Ghost"], "G": [0], "GS": [0]})
-    feat = pd.DataFrame({"c": [0.5], "target_sgp": [0.0], "pt": [400.0]}, index=["a"])
-    assert list(_stub_pool(monkeypatch, kind=PlayerType.PITCHER, raw=raw, feat=feat)["slot"]) == [
-        "RP"
-    ]
-
-
-def test_hitters_are_grouped_by_slot_and_credited_from_the_floor(monkeypatch):
-    """The hitter branch is the one whose spread is left in place, so its credit
-    column is what the `resid ~ credit` slope regresses against."""
-    raw = pd.DataFrame({"mlbID": ["a"], "Name": ["CJ Abrams"], "G": [150], "GS": [150]})
-    feat = pd.DataFrame({"c": [0.9], "target_sgp": [12.0], "pt": [400.0]}, index=["a"])
-    out = _stub_pool(monkeypatch, kind=PlayerType.HITTER, raw=raw, feat=feat)
-    assert list(out["slot"]) == ["SS"]
-    assert out["credit"].iloc[0] == 1.0
-    assert bool(out["mapped"].iloc[0])
-
-
-def test_the_study_credits_the_slot_the_board_actually_prices(monkeypatch):
-    """`calculate_var` MAXIMIZES var, so it nets against the lowest eligible floor,
-    not the first token Yahoo lists. Reading `slots[0]` instead mis-partitioned 68
-    of 977 hitter rows -- every 2B/3B player, listed 2B-first but priced at 3B --
-    and moved the per-position means the docstring directs a reader to."""
-    raw = pd.DataFrame({"mlbID": ["a"], "Name": ["Nolan Gorman"], "G": [140], "GS": [140]})
-    feat = pd.DataFrame({"c": [0.6], "target_sgp": [6.0], "pt": [500.0]}, index=["a"])
-    monkeypatch.setattr(module, "_raw", lambda year, table: raw)
-    monkeypatch.setattr(module, "_transition", lambda year, k, denoms: feat)
-    monkeypatch.setattr(module, "composite_pct", lambda frame, k, weights=None: frame["c"])
-    monkeypatch.setattr(module, "ALL_TRANSITION_YEARS", (2022,))
-    out = module._positional_residuals(
-        PlayerType.HITTER, None, ({"nolan gorman": ["2B", "3B"]}, {"2B": 0.4, "3B": 0.1})
-    )
-    assert list(out["slot"]) == ["3B"]
-    assert out["credit"].iloc[0] == pytest.approx(-0.1)
-
-
 def test_every_real_hitter_slot_has_a_floor():
     """The invariant the study's credit column rests on. Drop or rename a floors
     key and `calculate_var` silently falls back for that slot: the table flattens
@@ -182,3 +104,42 @@ def test_an_aggregate_only_slot_is_charged_the_deepest_floor_not_zero():
     assert pos == "UTIL"
     assert var == pytest.approx(-floors["UTIL"])
     assert var < 0.0
+
+
+def test_the_league_loader_unions_my_roster_with_the_opponents(monkeypatch):
+    """`cache:roster` holds only my team and `cache:opp_rosters` only the other
+    nine, so a league report that read either alone would silently drop a team."""
+    monkeypatch.setattr(
+        module,
+        "_as_payload",
+        lambda blob: {"Rivals": [{"name": "Bobby Witt Jr."}]},
+    )
+    monkeypatch.setattr(module, "load_roster_names", lambda: {"juan soto"})
+    rosters = module.load_league_rosters("Mine")
+    assert rosters == {"Rivals": {"bobby witt jr."}, "Mine": {"juan soto"}}
+
+
+def test_an_unreachable_kv_yields_no_league_rather_than_raising(monkeypatch):
+    """The rest of the script runs offline; only this report needs the network, so
+    a dead KV has to degrade to an empty league instead of taking the run down."""
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", boom)
+    assert module.load_league_rosters("Mine") == {}
+
+
+def test_the_data_envelope_is_unwrapped_but_a_bare_payload_survives():
+    """Cache values are sometimes `{"_data": ...}` and sometimes the value itself."""
+    assert module._as_payload('{"_data": [{"name": "A"}]}') == [{"name": "A"}]
+    assert module._as_payload([{"name": "A"}]) == [{"name": "A"}]
+    assert module._as_payload({"Team": [{"name": "A"}]}) == {"Team": [{"name": "A"}]}
+    assert module._as_payload(None) is None
+    assert module._as_payload("") is None
+
+
+def test_names_are_normalized_so_accents_join_the_position_map():
+    assert module._normalized_names([{"name": "Julio Rodríguez"}]) == {"julio rodriguez"}
+    assert module._normalized_names([{"name": ""}, {}]) == set()
+    assert module._normalized_names("not a list") == set()

@@ -126,68 +126,6 @@ def sgp_sd(composite_pct: pd.Series, kind: str) -> pd.Series:
     return intercept + slope * composite_pct
 
 
-def scarcity_floors(floors: dict[str, float]) -> dict[str, float]:
-    """Replacement levels, mean-centred and with SP/RP collapsed.
-
-    Two separate things, both about keeping this table commensurable with
-    `expected_sgp`.
-
-    **SP and RP are merged into one pitcher floor.** `expected_sgp` is fit on the
-    pooled pitcher panel and has no role term, so it predicts the same value for a
-    starter and a reliever at the same composite. Netting that against
-    role-specific floors debits a difference the projection never credited, and
-    measurement shows it lands the wrong way round: starters BEAT the pooled fit
-    and relievers fall short of it, and the gap widens in the top composite decile
-    -- exactly where keeper decisions are made -- while the shallower RP floor
-    credits relievers on top of that. Compounded, that put the top of the pitcher
-    board entirely on RP-classified arms who went on to earn less than the starters
-    below them at every level of the score. Until the projection itself is
-    role-aware, one floor is the only consistent choice. `--study` prints the
-    per-role residual and its top-decile split.
-
-    **The centring is a DISPLAY offset**, not a model decision, and worth being
-    blunt about because the shape invites the opposite reading. Subtracting these
-    gives `projection - level + mean(level)`, i.e. true VAR plus one constant
-    shared by every position, so the ranking, every gap and every P(top-N) are
-    identical to using the floors untouched. All it buys is a column that reads
-    positive. It exists because the two quantities sit on different scales:
-    `sgp.replacement`'s floors are draft-time full-season lines on which an ace
-    projects ~20 SGP, while `expected_sgp` tops out near 13 (hitters) and 9
-    (pitchers), so raw subtraction puts every pitcher below replacement -- a
-    statement about the scales, not the pitchers. Centring makes it readable; no
-    constant offset could repair it.
-
-    What the floors MIGHT carry validly is the spread BETWEEN hitter positions,
-    since a difference survives a change of scale where a level does not. Unlike
-    the pitcher split above there is no measured bias to compound, so the spread is
-    neither confirmed nor contradicted, and it is left alone on that basis.
-
-    `--study` prints the evidence: credit against realized residual per position,
-    plus the regression slope of one on the other. Read the "position known" slope,
-    not the all-rows one -- the latter is dominated by players missing from the
-    position map, who are routed to the harshest adjustment and who mostly left the
-    league, so residual and credit co-move there for a survivorship reason with
-    nothing to do with position scarcity.
-
-    No numbers anywhere in this docstring, deliberately. Three successive attempts
-    to state them here were each wrong in a different way, because nothing
-    regenerated them; `--study` does.
-
-    Still open regardless of that evidence: the spread was calibrated on the wider
-    draft-time scale, so against this compressed one it may simply be too wide.
-    """
-    if not floors:
-        return {}
-    merged = dict(floors)
-    pitcher_keys = [key for key in ("SP", "RP") if key in merged]
-    if pitcher_keys:
-        pooled = sum(merged[key] for key in pitcher_keys) / len(pitcher_keys)
-        for key in pitcher_keys:
-            merged[key] = pooled
-    average = sum(merged.values()) / len(merged)
-    return {position: level - average for position, level in merged.items()}
-
-
 def sample_outcomes(
     means: pd.Series,
     sds: pd.Series,
