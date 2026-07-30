@@ -118,6 +118,30 @@ def test_util_is_priced_at_the_deepest_hitter_floor():
     assert floors["UTIL"] == pytest.approx(8.0)
 
 
+def test_util_floor_can_be_set_by_a_util_only_leftover():
+    """A UTIL-only bat (a DH) who is the best leftover must SET the UTIL floor. The
+    old code maxed over dedicated floors only, so a player eligible for no dedicated
+    slot could never set it, understating UTIL."""
+    values = {0: 10.0, 1: 4.0, 2: 10.0, 3: 9.5, 4: 9.0, 5: 3.0}
+    elig = {0: {"C"}, 1: {"C"}, 2: {"OF"}, 3: {"DH"}, 4: {"DH"}, 5: {"OF"}}
+    floors = _floors(values, elig, {"C": 1, "OF": 1, "UTIL": 1})
+    # Fill: C<-10@0, OF<-10@2, UTIL(flex)<-best remaining hitter = 9.5 DH@3.
+    # Leftovers: 4.0 C@1, 9.0 DH@4, 3.0 OF@5.
+    #   old (max dedicated floors): max(C 4.0, OF 3.0) = 4.0  -- WRONG
+    #   new (best UTIL-eligible leftover): the 9.0 DH@4        -- RIGHT
+    assert floors["UTIL"] == pytest.approx(9.0)
+
+
+def test_util_floor_falls_back_when_no_leftover_qualifies():
+    """With no player left over, UTIL is omitted (nobody to price it) -- exercising
+    the fallback branch."""
+    values = {0: 10.0, 1: 4.0}
+    elig = {0: {"C"}, 1: {"C"}}
+    floors = _floors(values, elig, {"C": 1, "UTIL": 1})
+    # C<-10@0, UTIL(flex)<-4@1. No player is left over, so UTIL has no floor.
+    assert "UTIL" not in floors
+
+
 def test_a_position_with_nobody_left_over_is_omitted_not_guessed():
     floors = _floors({0: 10.0}, {0: {"C"}}, {"C": 1})
     assert "C" not in floors

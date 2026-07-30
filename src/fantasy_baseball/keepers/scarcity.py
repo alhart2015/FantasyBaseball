@@ -184,12 +184,27 @@ def marginal_starter_floors(
             if player not in started and can_fill_slot(eligibility.get(player, ()), slot):
                 floors[slot] = float(ranked.loc[player])
                 break
-    # UTIL is a flex slot so it has no marginal starter of its own, but it IS the
-    # fallback every DH-only bat is priced against. Same rule `sgp.replacement`
-    # uses: the deepest hitter floor, i.e. the position it is easiest to replace at.
-    hitters = {slot: level for slot, level in floors.items() if slot != "P"}
-    if hitters and capacities.get("UTIL", 0) > 0:
-        floors["UTIL"] = max(hitters.values())
+    # UTIL is a flex slot with no dedicated marginal starter, but every DH-only bat
+    # is priced against it, so its floor is the best leftover who can fill UTIL --
+    # found the same way as every dedicated slot. A genuinely UTIL-only player (a real
+    # DH) is eligible for no per-position floor, so the old `max(dedicated)` could
+    # never let him set UTIL even when he was the best hitter starting nowhere. Only
+    # when no UTIL-eligible leftover exists does it fall back to the deepest dedicated
+    # floor.
+    if capacities.get("UTIL", 0) > 0:
+        util_floor = next(
+            (
+                float(ranked.loc[player])
+                for player in ranked.index
+                if player not in started and can_fill_slot(eligibility.get(player, ()), "UTIL")
+            ),
+            None,
+        )
+        if util_floor is None:
+            hitters = [level for slot, level in floors.items() if slot != "P"]
+            util_floor = max(hitters) if hitters else None
+        if util_floor is not None:
+            floors["UTIL"] = util_floor
     return floors
 
 
