@@ -1,71 +1,72 @@
 """Player positions, keyed by normalized name, for netting SGP against the right
 replacement level.
 
-Prefers the live `cache:positions` blob and falls back to the committed
-`data/player_positions.json`. Two shapes have to be reconciled: the cache is
-already keyed by normalized name, the file by display name, and the file spells
-the utility slot `"Util"` where `sgp.replacement` expects `"UTIL"`. An unmatched
-slot is silently skipped by `calculate_var`, so a case mismatch would quietly
-charge a hitter the wrong floor rather than fail.
+Composes three things the repo already owns rather than re-deriving them:
+`data.yahoo_players.load_positions_cache` for the committed JSON,
+`web.season_data.read_cache_dict` for the live blob (via `CacheKey`, so a key typo
+fails loudly), and `models.positions.Position.parse` for the slot tokens -- which
+absorbs both the `"Util"` vs `"UTIL"` Yahoo casing and suffixed slots like
+`"OF2"`. An unmatched slot is silently skipped by `calculate_var`, so normalizing
+here is what stops a hitter being charged the wrong floor.
+
+Only the merge is new: the live blob wins where both know a player, because Yahoo
+eligibility moves during a season and the committed file is a point-in-time cache.
+The file still contributes several hundred names the blob lacks, so both are read.
 """
 
 from __future__ import annotations
 
-import json
+from collections.abc import Mapping
 from pathlib import Path
 
+from fantasy_baseball.data.cache_keys import CacheKey
+from fantasy_baseball.data.yahoo_players import load_positions_cache
+from fantasy_baseball.models.positions import Position
 from fantasy_baseball.utils.name_utils import normalize_name
 
-_LOCAL = Path(__file__).resolve().parents[3] / "data" / "player_positions.json"
+POSITIONS_JSON = Path(__file__).resolve().parents[3] / "data" / "player_positions.json"
 
 
-def _clean(slots: object) -> list[str]:
-    if not isinstance(slots, list):
+def _slots(raw: object) -> list[str]:
+    """Canonical slot names, dropping anything `Position` does not recognize."""
+    if not isinstance(raw, list):
         return []
-    return [str(slot).strip().upper() for slot in slots if str(slot).strip()]
+    out = []
+    for token in raw:
+        try:
+            out.append(Position.parse(str(token)).value)
+        except ValueError:
+            continue
+    return out
+
+
+def _by_normalized_name(source: Mapping[str, object]) -> dict[str, list[str]]:
+    return {
+        normalize_name(str(name)): slots for name, raw in source.items() if (slots := _slots(raw))
+    }
+
+
+def _live_positions() -> Mapping[str, object]:
+    """The live blob, or empty if it is unreachable.
+
+    `read_cache_dict` is imported lazily: it lives in the season-dashboard read
+    path, and importing that at module scope would make this package unusable from
+    an offline analysis script with no credentials, which is the main caller. The
+    committed file already covers most players, so failure here is survivable.
+    """
+    try:
+        from fantasy_baseball.web.season_data import read_cache_dict
+
+        return read_cache_dict(CacheKey.POSITIONS) or {}
+    except Exception:
+        return {}
 
 
 def load_positions(local_path: Path | None = None) -> dict[str, list[str]]:
-    """Map normalized player name -> uppercase eligible slots.
-
-    The live blob wins where both have a player: Yahoo eligibility moves during a
-    season and the committed file is a point-in-time cache.
-    """
+    """Map normalized player name -> canonical eligible slots."""
+    path = local_path if local_path is not None else POSITIONS_JSON
     merged: dict[str, list[str]] = {}
-    path = local_path if local_path is not None else _LOCAL
     if path.is_file():
-        raw = json.loads(path.read_text(encoding="utf-8"))
-        if isinstance(raw, dict):
-            for name, slots in raw.items():
-                cleaned = _clean(slots)
-                if cleaned:
-                    merged[normalize_name(str(name))] = cleaned
-    merged.update(_load_cached())
+        merged.update(_by_normalized_name(load_positions_cache(path)))
+    merged.update(_by_normalized_name(_live_positions()))
     return merged
-
-
-def _load_cached() -> dict[str, list[str]]:
-    """Positions from the KV blob, or nothing if it is unreachable.
-
-    Import-local and failure-tolerant: this module is used by an offline analysis
-    script that must still run with no network and no credentials.
-    """
-    try:
-        from fantasy_baseball.data.kv_store import get_kv
-
-        blob = get_kv().get("cache:positions")
-    except Exception:
-        return {}
-    if not blob:
-        return {}
-    payload = json.loads(blob) if isinstance(blob, str) else blob
-    if isinstance(payload, dict):
-        payload = payload.get("_data", payload)
-    if not isinstance(payload, dict):
-        return {}
-    out: dict[str, list[str]] = {}
-    for name, slots in payload.items():
-        cleaned = _clean(slots)
-        if cleaned:
-            out[normalize_name(str(name))] = cleaned
-    return out

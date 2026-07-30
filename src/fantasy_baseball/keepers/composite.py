@@ -10,8 +10,8 @@ The families
 run prevention and pitch-level whiff/called-strike rates for pitchers. Two of the
 inputs (`wrc_plus`, `era_minus`) are production-derived rather than expected, so
 this is better read as "peripherals" than as clean true talent. Removing them was
-tested and made pitchers strictly worse (0.464 -> 0.410 against next-year rate),
-so they stay.
+tested and made pitchers strictly worse against next-year rate, so they stay --
+`--study` reproduces that comparison.
 
 **luck** -- `value_pct - skill_pct`: the part of a player's roto line his
 peripherals do not support. Note `value = skill + luck` exactly, so {skill, luck}
@@ -19,13 +19,13 @@ spans the same space as {skill, value}; this is a reparameterization chosen for
 what it says, not a new model.
 
     Its weight is POSITIVE, which is not what the name suggests. Being "lucky"
-    in year T predicts year T+1 because the gap also encodes role and
-    durability: luck -> next-year PLAYING TIME is +0.38, while for pitchers
-    luck -> next-year RATE is -0.04. Forcing a negative weight collapses the fit
-    (rho 0.65 -> 0.13 for hitters). So luck is not a noise term to subtract; it
-    is mostly a volume signal wearing a misleading name. For TRADE decisions
-    read it the other way -- a large positive luck score is the sell-high case,
-    because the rate half of it will not repeat.
+    in year T predicts year T+1 because the gap also encodes role and durability:
+    it correlates strongly with next-year PLAYING TIME and, for pitchers, not at
+    all with next-year RATE. Forcing a negative weight collapses the fit. So luck
+    is not a noise term to subtract; it is mostly a volume signal wearing a
+    misleading name. For TRADE decisions read it the other way -- a large positive
+    luck score is the sell-high case, because the rate half will not repeat.
+    `--study` prints all of these correlations.
 
 **future** -- percentile of projected SGP from the out-year ZiPS files, blended
 `FUTURE_BLEND` in favour of the nearer year.
@@ -35,35 +35,34 @@ purely as an adjustment.
 
 Where the weights come from
 ---------------------------
-`scripts/keeper_rankings.py --backtest`: features observed in season T against
-the SGP percentile realized in T+1, fit on 2022->2023 and 2023->2024, held out on
-2024->2025. Holdout Spearman:
+`scripts/keeper_rankings.py --backtest`: features observed in season T against the
+SGP percentile realized in T+1, fit on the earlier transitions and held out on the
+latest. It prints the holdout table for the shipped weights and for the
+value-only, skill-only and no-future baselines -- read it there rather than from a
+cached copy here, which drifts silently and already did once on this branch.
 
-                            hitters   pitchers
-    shipped weights           0.709      0.495
-    without future            0.689      0.470
-    value + luck only         0.672      0.456
+The shape those numbers support: skill leads, luck is close behind, future is a
+real but discounted third, age is a small adjustment. The surface is flat -- the
+top few weight vectors sit within ~0.002 of each other -- so read these as a
+shape and not as tuned constants. Two fit seasons cannot justify a third decimal,
+and `future` is set to 0.4 for both pools because the fit cannot separate 0.2 from
+0.4 for pitchers.
 
 **The future weight is discounted for staleness, deliberately.** A FRESH
 next-season projection (one that has seen season T) is the single strongest
-predictor available -- 0.666 for hitters, 0.520 for pitchers, both beating
-skill+luck -- and would earn a weight near 1.0-2.0. The out-year files are two
-years forward from their information set: ZiPS 2027 was generated 2026-03-25 and
-has never seen 2026. Measuring that same two-years-forward case historically
-(ZiPS for year T predicting T+1) drops it to 0.523 / 0.347 alone and to a best
-weight of ~0.4. That 0.4 is what ships. If a post-season ZiPS 2027 ever lands,
-it is worth roughly triple this.
-
-The fit surface is flat: the top four weight vectors are within 0.002 of each
-other. `future` is set to 0.4 for both types because the fit cannot separate 0.2
-from 0.4 for pitchers (delta 0.0001) and one value for both is the simpler model.
-Read all of these as a shape, not as tuned constants -- two fit seasons cannot
-justify a third decimal.
+predictor available and would earn a weight several times this. The out-year files
+are two years forward from their information set: ZiPS 2027 was generated
+2026-03-25 and has never seen 2026. `--study` measures that same
+two-years-forward case historically, and 0.4 is what it supports. If a
+post-season ZiPS 2027 ever lands, it is worth substantially more.
 """
 
 from __future__ import annotations
 
 import pandas as pd
+
+# The producer of these columns, so the contract is one literal and not two.
+from fantasy_baseball.keepers.skills import HITTER_SKILLS, PITCHER_SKILLS
 
 # Weight per family, in (skill, luck, future, age) order. Not normalized;
 # `composite` divides by the sum.
@@ -79,8 +78,6 @@ FAMILIES: tuple[str, ...] = ("skill", "luck", "future", "age")
 # rather than adding much information.
 FUTURE_BLEND: tuple[float, float] = (2 / 3, 1 / 3)
 
-HITTER_SKILLS = ("barrel_pct", "barrel_pa_pct", "xwoba", "xba", "wrc_plus")
-PITCHER_SKILLS = ("era_minus", "fip", "k_pct", "swstr_pct", "whiff_pct", "csw_pct")
 SKILL_COLUMNS: dict[str, tuple[str, ...]] = {
     "hitter": HITTER_SKILLS,
     "pitcher": PITCHER_SKILLS,

@@ -1,26 +1,17 @@
-import math
-
 import pandas as pd
 import pytest
 
 from fantasy_baseball.keepers.projection import (
-    RESIDUAL_QUANTILE_GRID,
+    RESIDUAL_QUANTILE_LEVELS,
     SGP_FIT,
     SGP_SD_FIT,
     STD_RESIDUAL_QUANTILES,
     expected_sgp,
-    probability_better,
-    probability_better_than_next,
     probability_top_n,
     sample_outcomes,
-    scarcity_adjustments,
+    scarcity_floors,
     sgp_sd,
 )
-
-
-def test_expected_sgp_rises_with_the_composite():
-    out = expected_sgp(pd.Series([0.2, 0.6, 0.95]), "hitter")
-    assert out.is_monotonic_increasing
 
 
 def test_the_fit_is_monotone_for_both_pools():
@@ -32,8 +23,9 @@ def test_the_fit_is_monotone_for_both_pools():
 
 
 def test_hitters_project_above_pitchers_at_the_same_composite():
-    """Structural, not a quirk: hitters reach four counting categories while no
-    pitcher reaches all three of W/K/SV."""
+    """PINS THE SHIPPED FIT, not a derivation -- both sides are constants in the
+    module under test. Update on refit. The gap is structural: hitters reach four
+    counting categories while no pitcher reaches all three of W/K/SV."""
     top = pd.Series([0.95])
     assert expected_sgp(top, "hitter").iloc[0] > expected_sgp(top, "pitcher").iloc[0]
 
@@ -48,84 +40,13 @@ def test_the_error_term_grows_with_the_composite():
 
 
 def test_the_individual_spread_dwarfs_the_gap_it_has_to_resolve():
-    """Why p_next sits near 0.50: one rank of composite is worth far less than the
-    spread on a single player's outcome."""
+    """PINS THE SHIPPED FIT. Why adjacent ranks are coin flips: one rank of
+    composite is worth far less than the spread on one player's outcome."""
     one_rank = (
         expected_sgp(pd.Series([0.90]), "hitter").iloc[0]
         - (expected_sgp(pd.Series([0.895]), "hitter").iloc[0])
     )
     assert sgp_sd(pd.Series([0.90]), "hitter").iloc[0] > 20 * one_rank
-
-
-# --- probability ----------------------------------------------------------
-
-
-def test_equal_players_are_a_coin_flip():
-    assert probability_better(10.0, 4.0, 10.0, 4.0) == pytest.approx(0.5)
-
-
-def test_a_better_mean_raises_the_probability_above_a_half():
-    assert probability_better(14.0, 4.0, 10.0, 4.0) > 0.5
-
-
-def test_the_probability_is_symmetric():
-    forward = probability_better(13.0, 5.0, 10.0, 4.0)
-    reverse = probability_better(10.0, 4.0, 13.0, 5.0)
-    assert forward + reverse == pytest.approx(1.0)
-
-
-def test_a_wider_spread_pulls_a_real_edge_back_toward_a_coin_flip():
-    tight = probability_better(14.0, 1.0, 10.0, 1.0)
-    loose = probability_better(14.0, 9.0, 10.0, 9.0)
-    assert tight > loose > 0.5
-
-
-def test_a_two_sigma_gap_lands_near_the_normal_table():
-    """mean gap == the combined spread, so this must be Phi(1)."""
-    combined = math.hypot(3.0, 4.0)
-    assert probability_better(combined, 3.0, 0.0, 4.0) == pytest.approx(0.8413, abs=5e-4)
-
-
-def test_degenerate_spreads_return_a_coin_flip_not_a_crash():
-    assert probability_better(12.0, 0.0, 8.0, 0.0) == pytest.approx(0.5)
-
-
-def test_probability_better_than_next_pairs_each_row_with_the_one_below():
-    means = pd.Series([20.0, 12.0, 11.9])
-    sds = pd.Series([4.0, 4.0, 4.0])
-    out = probability_better_than_next(means, sds)
-    assert out.iloc[0] > 0.85  # a real gap
-    assert out.iloc[1] == pytest.approx(0.5, abs=0.02)  # effectively tied
-    assert math.isnan(out.iloc[2])  # nobody below the last row
-
-
-def test_probability_better_than_next_keeps_the_callers_index():
-    means = pd.Series([9.0, 8.0], index=[551, 907])
-    out = probability_better_than_next(means, pd.Series([3.0, 3.0], index=[551, 907]))
-    assert out.index.tolist() == [551, 907]
-
-
-# --- scarcity -------------------------------------------------------------
-
-
-def test_scarcity_is_mean_centred_so_it_adds_to_nothing_overall():
-    """Centring is what discards the scale mismatch between the draft-time floors
-    and this projection while keeping the spread between positions."""
-    floors = {"C": 7.70, "SS": 9.51, "OF": 9.96, "RP": 7.42}
-    adj = scarcity_adjustments(floors)
-    assert sum(adj.values()) == pytest.approx(0.0)
-
-
-def test_a_scarce_position_gets_a_positive_adjustment():
-    floors = {"C": 7.70, "OF": 9.96}
-    adj = scarcity_adjustments(floors)
-    assert adj["C"] > 0 > adj["OF"]
-    # The spread between them is preserved exactly.
-    assert adj["C"] - adj["OF"] == pytest.approx(9.96 - 7.70)
-
-
-def test_scarcity_of_an_empty_table_is_empty():
-    assert scarcity_adjustments({}) == {}
 
 
 # --- top-N probability ----------------------------------------------------
@@ -175,6 +96,7 @@ def test_top_n_is_reproducible_and_seed_sensitive():
     args = (pd.Series([12.0, 11.5, 11.0]), pd.Series([5.0] * 3), _kinds(3), 2)
     assert probability_top_n(*args).tolist() == probability_top_n(*args).tolist()
     shifted = probability_top_n(*args, seed=7)
+    assert shifted.tolist() != probability_top_n(*args).tolist()
     assert shifted.sum() == pytest.approx(2.0, abs=1e-9)
 
 
@@ -187,9 +109,13 @@ def test_top_n_keeps_the_callers_index():
 # --- residual sampling ----------------------------------------------------
 
 
-def test_residual_quantiles_line_up_with_their_grid_and_are_sorted():
+def test_residual_quantiles_line_up_with_their_levels_and_are_sorted():
+    """`np.interp` silently misreads a mismatched pair rather than raising."""
+    assert list(RESIDUAL_QUANTILE_LEVELS) == sorted(RESIDUAL_QUANTILE_LEVELS)
+    assert RESIDUAL_QUANTILE_LEVELS[0] == 0.0
+    assert RESIDUAL_QUANTILE_LEVELS[-1] == 1.0
     for pool, quantiles in STD_RESIDUAL_QUANTILES.items():
-        assert len(quantiles) == len(RESIDUAL_QUANTILE_GRID), pool
+        assert len(quantiles) == len(RESIDUAL_QUANTILE_LEVELS), pool
         assert list(quantiles) == sorted(quantiles), pool
 
 
@@ -216,3 +142,34 @@ def test_sampling_recovers_the_mean_and_spread_it_was_given():
     outcomes = sample_outcomes(pd.Series([10.0]), pd.Series([4.0]), _kinds(1), draws=60_000)
     assert outcomes.mean() == pytest.approx(10.0, abs=0.15)
     assert outcomes.std() == pytest.approx(4.0, rel=0.06)
+
+
+# --- positional scarcity --------------------------------------------------
+
+
+def test_centring_leaves_the_ordering_and_every_gap_untouched():
+    """The whole point of being blunt in the docstring: this is a display offset.
+    Subtracting the centred table differs from subtracting the raw floors by one
+    shared constant, so nothing that depends on differences can move."""
+    floors = {"C": 7.70, "SS": 9.51, "OF": 9.96, "RP": 7.42}
+    centred = scarcity_floors(floors)
+    offsets = {pos: floors[pos] - centred[pos] for pos in floors}
+    assert len(set(round(v, 9) for v in offsets.values())) == 1
+
+
+def test_scarcity_is_mean_centred_so_it_adds_to_nothing_overall():
+    floors = {"C": 7.70, "SS": 9.51, "OF": 9.96, "RP": 7.42}
+    assert sum(scarcity_floors(floors).values()) == pytest.approx(0.0)
+
+
+def test_centring_preserves_the_spread_and_only_moves_the_offset():
+    floors = {"C": 7.70, "OF": 9.96}
+    centred = scarcity_floors(floors)
+    # Floor-oriented, so the SCARCE position is the lower number -- `calculate_var`
+    # subtracts these, which is what turns a scarce slot into a bonus.
+    assert centred["C"] < 0 < centred["OF"]
+    assert centred["OF"] - centred["C"] == pytest.approx(9.96 - 7.70)
+
+
+def test_scarcity_of_an_empty_table_is_empty():
+    assert scarcity_floors({}) == {}

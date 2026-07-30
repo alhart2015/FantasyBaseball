@@ -126,7 +126,7 @@ def test_a_missing_family_drops_out_of_the_denominator():
     scaled down as though every player projected to zero. With every supplied
     family at the same level the blend must equal that level either way -- which
     only holds if the absent family's weight leaves the denominator too."""
-    supplied = {k: pd.Series([0.8]) for k in ("skill", "luck", "future", "age")}
+    supplied = {family: pd.Series([0.8]) for family in FAMILIES}
     full = composite(supplied, "hitter").iloc[0]
     partial = composite({k: v for k, v in supplied.items() if k != "future"}, "hitter").iloc[0]
     assert full == pytest.approx(0.8)
