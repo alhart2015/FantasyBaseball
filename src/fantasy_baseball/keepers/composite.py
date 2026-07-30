@@ -118,9 +118,8 @@ def skill_percentile(frame: pd.DataFrame, kind: str) -> pd.Series:
 def luck(value_pct: pd.Series, skill_pct: pd.Series) -> pd.Series:
     """The part of a roto line the peripherals do not support.
 
-    Positive means production outran the peripherals. Carries a positive weight
-    in the composite because it also encodes playing time, and reads as the
-    sell-high signal for trades -- see the module docstring.
+    Positive means production outran them. Why that earns a POSITIVE weight, and
+    why trades read it backwards, is argued once in the module docstring.
     """
     return value_pct - skill_pct
 

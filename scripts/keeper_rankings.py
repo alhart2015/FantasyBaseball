@@ -21,9 +21,8 @@ Writes `data/cache/keeper_skills/keeper_rankings_{kind}_{year}.csv`:
 Rows are ranked by `proj_var`, not by composite. The composite is a within-pool
 percentile and cannot be compared across pools; `proj_var` is in standings-gain
 points, so a catcher and a closer and an outfielder can share one list. The
-positional term is a scarce-position bonus rather than a subtracted floor, for
-scale reasons `projection.scarcity_floors` sets out -- and the offset is cosmetic,
-so it changes no ordering.
+positional term is a scarce-position bonus rather than a subtracted floor; see
+`projection.scarcity_floors`.
 
 Read the ranking in TIERS, not by row. Adjacent players are separated by far less
 than `sd`, so consecutive ranks are close to coin flips; `sd` is there to stop a
@@ -33,11 +32,9 @@ single-rank gap being read as real.
 N best). That is joint and set-dependent -- it needs the exact rivals -- so it
 lives there rather than in this pool-wide CSV.
 
-`luck` carries a POSITIVE weight, which the name does not suggest: the gap
-encodes role and durability as well as noise, and forcing it negative collapses
-the fit. For trades read it the other way round. `future` is deliberately
-discounted for staleness -- the out-year files have never seen this season.
-Both are argued in `keepers/composite.py`.
+`luck` carries a POSITIVE weight and `future` is discounted for staleness. Both
+are counterintuitive and both are argued in `keepers/composite.py`; `--study`
+reproduces the evidence.
 
 Usage:
     python scripts/keeper_rankings.py
@@ -88,10 +85,12 @@ from fantasy_baseball.keepers.projection import (
     sgp_sd,
 )
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.positions import HITTER_ELIGIBLE, PITCHER_ELIGIBLE
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
+from fantasy_baseball.utils.constants import STARTER_IP_THRESHOLD
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -101,13 +100,14 @@ PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 # Below these a percentile is noise: the skills module regresses nothing, so a
 # 3-inning pitcher can post the league's best ERA-. See its module docstring.
 MIN_PT = {"hitter": 250, "pitcher": 50}
-# Used only when a player is absent from the position map. UTIL and SP are the
-# DEEPEST floors, so an unknown position is charged the harshest replacement
-# level rather than flattered by a scarce one.
+# Used only when a player is absent from the position map. UTIL is the deepest
+# hitter floor, so an unknown hitter is charged the harshest replacement level
+# rather than flattered by a scarce one. The pitcher token is inert: role routing
+# supersedes it, so an unknown pitcher is priced by his start share like any other.
 FALLBACK_POS = {"hitter": ["UTIL"], "pitcher": ["P"]}
 POOLS: tuple[str, ...] = (PlayerType.HITTER, PlayerType.PITCHER)
 # Display schema for the per-pool tables; the CSV keeps every column.
-SHOWN = (
+SHOWN = [
     "rank",
     "name",
     "age",
@@ -121,9 +121,11 @@ SHOWN = (
     "sd",
     "proj_var",
     "keeper_of",
-)
+]
 BACKTEST_FIT_YEARS = (2022, 2023)
 BACKTEST_HOLDOUT = 2024
+# The fit and the diagnostics that justify it must cover the same seasons.
+ALL_TRANSITION_YEARS = (*BACKTEST_FIT_YEARS, BACKTEST_HOLDOUT)
 
 
 def _raw(year: int, table: str) -> pd.DataFrame:
@@ -193,13 +195,11 @@ def zips_out_year_sgp(year: int, kind: str, denoms) -> pd.Series:
     `calculate_player_sgp` wants. It also keeps SV, which `keepers.vintages` drops
     -- the reason this does not route through there.
 
-    CAVEAT on the out-years specifically: SV is present as a column but BLANK on
-    every row of the 2027 and 2028 exports, where 2022-2026 all carry it. So a
-    closer's `future_pct` is computed with sv=0 and is understated -- measurably,
-    zeroing SV on the 2026 file costs a 20-save reliever ~0.13 of percentile. The
-    backtest reads the saves-bearing same-year files, so the `future` weight was
-    validated on a slightly richer feature than production gets. Nothing to fix in
-    code; re-check when fresher out-years land.
+    A pitcher export with no saves at all is warned about rather than described in
+    prose: the 2027 and 2028 files ship SV blank on every row where 2022-2026
+    populate it, so a closer's `future_pct` is computed with sv=0 and understated.
+    The check is per file, so it goes quiet by itself once a fresher export lands
+    instead of leaving a stale caveat behind for someone to re-verify by hand.
     """
     directory = PROJECTIONS_DIR / str(year)
     if not directory.is_dir():
@@ -210,6 +210,11 @@ def zips_out_year_sgp(year: int, kind: str, denoms) -> pd.Series:
         return pd.Series(dtype=float)
     lines = index_by_mlbam(frame, "mlbam_id")
     lines["player_type"] = PlayerType.HITTER if kind == "hitter" else PlayerType.PITCHER
+    if kind == PlayerType.PITCHER and not (pd.to_numeric(lines["sv"], errors="coerce") > 0).any():
+        print(
+            f"  WARNING: the {year} ZiPS pitcher export carries no saves, so every"
+            " closer's projected value is understated."
+        )
     return _sgp(lines, denoms)
 
 
@@ -245,13 +250,6 @@ def _qualified_families(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
     return qualified
 
 
-# Full-season innings that stand in for a ROLE, either side of the 100-IP bar
-# `sgp.replacement.role_from_ip` splits on. Not projections -- they exist only to
-# name the role, which is why they are round numbers.
-STARTER_ROLE_IP = 180.0
-RELIEVER_ROLE_IP = 60.0
-
-
 def _slots_for(positions: dict[str, list[str]], name: str, kind: str) -> list[str]:
     """Eligible slots for pricing, constrained to the pool being scored.
 
@@ -259,33 +257,46 @@ def _slots_for(positions: dict[str, list[str]], name: str, kind: str) -> list[st
     the hitter branch and net his pitching projection against the UTIL floor. A
     row is only ever priced against its own pool's floors.
     """
+    eligible = PITCHER_ELIGIBLE if kind == PlayerType.PITCHER else HITTER_ELIGIBLE
     slots = positions.get(normalize_name(str(name)), [])
-    if kind == "pitcher":
-        pitching = [slot for slot in slots if slot in ("P", "SP", "RP")]
-        return pitching or FALLBACK_POS[kind]
-    batting = [slot for slot in slots if slot not in ("P", "SP", "RP")]
-    return batting or FALLBACK_POS[kind]
+    # An allowlist, not a denylist: a bench or IL token is not a position to price
+    # against, and a slot added to the enum lands in the right pool by itself.
+    return [slot for slot in slots if slot in eligible] or FALLBACK_POS[kind]
 
 
 def _role_equivalent_ip(frame: pd.DataFrame, kind: str) -> list[float | None]:
-    """Which replacement floor each pitcher should net against.
+    """Which replacement floor each pitcher nets against, as a `role_ip`.
 
-    `calculate_var` routes SP vs RP off `role_ip`, and its docstring asks for a
-    FULL-SEASON-equivalent figure precisely so a partial line does not flip the
-    role mid-season. Passing the to-date innings -- which is what the frame
-    already holds -- is a no-op, and in late July it put 120 of 198 qualified
-    pitchers on the RP floor, the shallowest of the nine: every starter under 100
-    innings so far was priced as a reliever, worth a spurious ~1.9 SGP against a
-    genuine one.
-
-    Role comes from START SHARE instead, which a partial season measures fine.
+    Role comes from START SHARE, which a partial season measures correctly where a
+    to-date innings total does not -- see commit b0d380fa for what passing the
+    innings cost. Expressed against `STARTER_IP_THRESHOLD` rather than as loose
+    round numbers so a recalibration of that bar cannot silently reclassify every
+    starter.
     """
-    if kind != "pitcher":
+    if kind != PlayerType.PITCHER:
         return [None] * len(frame)
     share = frame.get("start_share")
     if share is None:
         return [None] * len(frame)
-    return [STARTER_ROLE_IP if value >= 0.5 else RELIEVER_ROLE_IP for value in share]
+    return [STARTER_IP_THRESHOLD if value >= 0.5 else 0.0 for value in share]
+
+
+def composite_pct(
+    frame: pd.DataFrame, kind: str, weights: tuple[float, float, float, float] | None = None
+) -> pd.Series:
+    """The composite, re-ranked to 0-1 -- the x-axis everything downstream uses.
+
+    ONE definition on purpose. `projection`'s constants are fitted against this
+    exact quantity by `--fit`, and `expected_sgp`/`sgp_sd` are then applied to it
+    in `build`. Two independent spellings would let the slope and intercept keep
+    being applied to a subtly different variable, moving every proj_sgp, sd,
+    proj_var and p_keep with no test failing.
+
+    The re-rank matters: `luck` is a difference centred on zero while the other
+    three families span 0-1, so the raw weighted mean is not on a percentile scale.
+    Ranking is order-preserving, so it changes only how the number reads.
+    """
+    return percentile(composite(_family_columns(frame), kind, weights=weights))
 
 
 def _family_columns(frame: pd.DataFrame) -> dict[str, pd.Series]:
@@ -319,12 +330,7 @@ def build(
             f"{year + 1}/{year + 2}; `future` cannot be computed"
         )
 
-    blended = composite(_family_columns(qualified), kind)
-    # Re-rank the blend to 0-1. `luck` is a difference centred on zero while the
-    # other three span 0-1, so the raw weighted mean is not on a percentile scale
-    # and would read as if everyone were mid-pack. Ranking is order-preserving,
-    # so this changes only how the number reads.
-    qualified["composite"] = percentile(blended)
+    qualified["composite"] = composite_pct(qualified, kind)
 
     # The composite is ordinal; this is what puts it on a value scale and lets
     # hitters and pitchers share one list. See `keepers.projection`.
@@ -389,7 +395,7 @@ def _transition(year: int, kind: str, denoms) -> pd.DataFrame:
 def _weighted_rho(
     frame: pd.DataFrame, weights: tuple[float, float, float, float], kind: str
 ) -> float:
-    blended = composite(_family_columns(frame), kind, weights=weights)
+    blended = composite_pct(frame, kind, weights=weights)
     return float(blended.corr(frame["target"], method="spearman"))
 
 
@@ -459,7 +465,7 @@ def run_fit(denoms) -> None:
     composite on a value scale. Without this the value half of a two-stage model
     would be unreproducible while the ordinal half is a flag away.
     """
-    seasons = [*BACKTEST_FIT_YEARS, BACKTEST_HOLDOUT]
+    seasons = ALL_TRANSITION_YEARS
     print(f"# Refitted over {', '.join(f'{y}->{y + 1}' for y in seasons)}")
     fit, sd_fit, quantiles = {}, {}, {}
     for kind in POOLS:
@@ -469,7 +475,7 @@ def run_fit(denoms) -> None:
             frames.append(
                 pd.DataFrame(
                     {
-                        "c": percentile(composite(_family_columns(feat), kind)),
+                        "c": composite_pct(feat, kind),
                         "sgp": feat["target_sgp"],
                     }
                 )
@@ -532,7 +538,7 @@ def run_study(denoms) -> None:
     they are is reproduced here, so none of them can drift into being wrong without
     this command disagreeing.
     """
-    seasons = (*BACKTEST_FIT_YEARS, BACKTEST_HOLDOUT)
+    seasons = ALL_TRANSITION_YEARS
     for kind in POOLS:
         frames = [_transition(year, kind, denoms) for year in seasons]
         header = "=" * 66
@@ -652,7 +658,7 @@ def main() -> int:
         table = build(year, kind, denoms, keepers, pricing=pricing)
         out_path = SKILLS_DIR / f"keeper_rankings_{kind}_{year}.csv"
         table.to_csv(out_path)
-        shown = list(SHOWN)
+        shown = SHOWN
         print(
             f"\n=== {kind.upper()} ({len(table)} qualified, >= {MIN_PT[kind]}) -> {out_path.name}"
         )

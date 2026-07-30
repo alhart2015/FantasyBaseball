@@ -168,9 +168,20 @@ def save_positions_cache(positions: dict[str, list[str]], path: Path) -> None:
         json.dump(positions, f, indent=2)
 
 
+# The committed cache; four modules derived this path independently before.
+POSITIONS_JSON = Path(__file__).resolve().parents[3] / "data" / "player_positions.json"
+
+
 def load_positions_cache(path: Path) -> dict[str, list[str]]:
-    """Load position data from a JSON cache file."""
+    """Load position data from a JSON cache file.
+
+    Read as UTF-8 explicitly: a bare ``open`` uses the platform encoding, and on
+    Windows that is cp1252, so one name outside it raises UnicodeDecodeError and
+    takes down every caller. The committed file happens to be pure ASCII only
+    because ``scripts/fetch_positions_mlb.py`` dumps with ``ensure_ascii=True``,
+    which is not a property this loader should depend on.
+    """
     if not path.exists():
         raise FileNotFoundError(f"Position cache not found: {path}")
-    with open(path) as f:
+    with open(path, encoding="utf-8") as f:
         return cast(dict[str, list[str]], json.load(f))

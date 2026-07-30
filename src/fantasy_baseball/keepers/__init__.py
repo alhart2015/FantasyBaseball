@@ -16,10 +16,20 @@ schema: `actuals` for an MLB season pull, `vintages` for a ZiPS export, and
 `skills` for the season-to-date true-talent rates (barrel rate, xwOBA, xBA,
 wRC+; ERA-, FIP, K%, whiff rate, CSW%) that keeper comparisons rank on.
 
+**Scoring.** Where the ranking itself lives, driven by
+`scripts/keeper_rankings.py`.
+
+* `composite` -- blends skill, luck, future and age in percentile space, on
+  weights fitted against realized next-season value. Pure.
+* `projection` -- puts that ordinal composite on an SGP scale with an error bar,
+  and simulates P(a player finishes among a roster's N best). Pure.
+* `positions` -- eligible slots per player, for netting against the right
+  replacement level. The one module here that touches the network, since it
+  prefers the live blob over the committed cache.
+
 The #266 fold -- `fold`, `coefficients`, `calibration` -- was removed along with
-the `analysis/keeper_value.py` metric it was built to replace. The written
-findings and the study's CSV artifacts are retained under `docs/superpowers/` and
-`data/analysis/`; the code is recoverable from git history.
+the `analysis/keeper_value.py` metric it replaced; the findings live in
+`docs/superpowers/` and the code in git history.
 """
 
 from __future__ import annotations
