@@ -448,15 +448,47 @@ PY
 Expected: both pools print `IDENTICAL`. If either DIFFERS, the generalization is not
 inert -- fix before Task 4.
 
-- [ ] **Step 7: Run the existing suite**
+- [ ] **Step 7: Add a cache-free unit test for the new columns**
 
-Run: `pytest tests/test_keepers/ tests/test_scripts/test_keeper_rankings.py -q`
-Expected: PASS (these do not exercise the new columns yet).
+The Step 6 gate needs the skills cache; add a unit test that verifies the wiring
+without it. Append to `tests/test_scripts/test_keeper_rankings.py`:
 
-- [ ] **Step 8: Commit**
+```python
+def test_qualified_families_emits_pt_and_batted_ball_columns():
+    """The column wiring the backtest and board both read. Cache-free so it catches
+    a broken join even when the skills fetch is unavailable."""
+    frame = pd.DataFrame(
+        {
+            "sgp": [20.0, 5.0, 12.0],
+            "age": [25.0, 31.0, 28.0],
+            "pt": [600.0, 550.0, 300.0],  # all above the 250 hitter floor
+            "avg": [0.310, 0.240, 0.250],
+            "xba": [0.250, 0.245, 0.280],  # player 0 overperformed (+.060), player 2 under
+            "barrel_pct": [12.0, 6.0, 9.0],
+            "barrel_pa_pct": [5.0, 3.0, 4.0],
+            "xwoba": [0.380, 0.300, 0.330],
+            "wrc_plus": [150.0, 95.0, 115.0],
+        },
+        index=pd.Index([1, 2, 3], name="mlbam_id"),
+    )
+    out = module._qualified_families(frame, "hitter")
+    assert {"pt_pct", "batted_ball_pct"} <= set(out.columns)
+    # Player 0 overperformed his xBA the most, so he tops batted_ball; player 2 is last.
+    assert out["batted_ball_pct"].idxmax() == 1
+    assert out["batted_ball_pct"].idxmin() == 3
+    # pt is monotone in PA within the pool.
+    assert out.loc[1, "pt_pct"] == pytest.approx(1.0)
+```
+
+- [ ] **Step 8: Run the new test and the existing suite**
+
+Run: `pytest tests/test_scripts/test_keeper_rankings.py -q && pytest tests/test_keepers/ -q`
+Expected: PASS, including the new `test_qualified_families_emits_pt_and_batted_ball_columns`.
+
+- [ ] **Step 9: Commit**
 
 ```bash
-git add scripts/keeper_rankings.py
+git add scripts/keeper_rankings.py tests/test_scripts/test_keeper_rankings.py
 git commit -m "feat(keepers): pt/batted_ball columns + family_order plumbing (inert)"
 ```
 
@@ -587,6 +619,13 @@ def run_backtest(denoms) -> None:
             noise = abs(per_season[0] - per_season[1])  # in-sample rho spread
             shown = " ".join(f"{f}={w:+.2f}" for f, w in zip(family_order, weights, strict=True))
             print(f"  {label:<20}{holdout:>9.4f}{fit_rho:>9.4f}{noise:>9.4f}  {shown}")
+        # Baseline reproduction: baseline evaluated at the SHIPPED weights (not the
+        # grid's best) must reproduce the pre-change --backtest number. If it does
+        # not, the family-machinery generalization changed behaviour.
+        shipped = _weighted_rho(
+            hold, FITTED_WEIGHTS[kind], kind, family_order=CANDIDATES["baseline"]
+        )
+        print(f"  {'baseline@shipped':<20}{shipped:>9.4f}   (must match pre-change run)")
     # The watchlist is a hitter question; build 2026 boards under each candidate's
     # best hitter weights.
     _watchlist_moves(2026, denoms, best_by_pool["hitter"])
@@ -597,14 +636,31 @@ def run_backtest(denoms) -> None:
     )
 ```
 
-- [ ] **Step 4: Run the bake-off**
+- [ ] **Step 4: Capture the pre-change baseline rho for the reproduction guard**
+
+Before trusting the bake-off, record what the pre-change backtest reported for the
+shipped baseline weights. Switch to the base branch, run its `--backtest`, and note
+the per-pool "shipped" holdout rho (both pools). The working tree is clean because
+Tasks 1-3 are committed:
+
+```bash
+git switch feat/273-league-keeper-board
+python scripts/keeper_rankings.py --backtest 2>&1 | grep -A6 "shipped"
+git switch feat/277-decompose-luck
+```
+Record the two `shipped rho = ...` values.
+
+- [ ] **Step 5: Run the bake-off and verify baseline reproduction**
 
 Run: `python scripts/keeper_rankings.py --backtest`
-Expected: two per-pool tables (baseline / A / B) with holdout, fit, noise, and best
-weights, then the hitter watchlist table. No crash. Save the full output to
-`docs/superpowers/keeper-277-bakeoff-<date>.txt` for the verdict (Task 8).
+Expected: two per-pool tables (baseline / A / B) with holdout, fit, noise, best
+weights, a `baseline@shipped` line per pool, then the hitter watchlist table. No
+crash. **The `baseline@shipped` rho for each pool must equal the pre-change value
+from Step 4** (to 4 decimals) -- if not, the generalization is not inert; fix before
+selecting. Save the full output to `docs/superpowers/keeper-277-bakeoff-<date>.txt`
+for the verdict (Task 8).
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add scripts/keeper_rankings.py
