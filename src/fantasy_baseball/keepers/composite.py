@@ -64,13 +64,26 @@ import pandas as pd
 # The producer of these columns, so the contract is one literal and not two.
 from fantasy_baseball.keepers.skills import HITTER_SKILLS, PITCHER_SKILLS
 
-# Weight per family, in (skill, luck, future, age) order. Not normalized;
-# `composite` divides by the sum.
-FITTED_WEIGHTS: dict[str, tuple[float, float, float, float]] = {
+# Weight per family, aligned to `FAMILIES[kind]`. Not normalized; `composite`
+# divides by the sum.
+FITTED_WEIGHTS: dict[str, tuple[float, ...]] = {
     "hitter": (1.0, 0.8, 0.4, 0.3),
     "pitcher": (1.0, 0.6, 0.4, 0.15),
 }
-FAMILIES: tuple[str, ...] = ("skill", "luck", "future", "age")
+# The shipped family set per pool, aligned to FITTED_WEIGHTS. A dict, not one global
+# tuple, because the pools already carry separate weights and fits and a bake-off
+# split verdict (e.g. keep `luck` for hitters, `batted_ball` for pitchers) is a
+# legitimate outcome. `scripts/keeper_rankings.py --backtest` is where the set and
+# weights are chosen; read it there.
+FAMILIES: dict[str, tuple[str, ...]] = {
+    "hitter": ("skill", "luck", "future", "age"),
+    "pitcher": ("skill", "luck", "future", "age"),
+}
+# Every family the model knows how to blend. `family_order` selects a subset per
+# pool; a name outside this set is a typo, not a silent no-op.
+KNOWN_FAMILIES: frozenset[str] = frozenset(
+    {"skill", "luck", "pt", "batted_ball", "future", "age"}
+)
 
 # Out-year projection blend, nearer year first. Both ZiPS out-years come from one
 # 2026-03-25 model run, so they are near-duplicates and the blend is almost
@@ -141,22 +154,27 @@ def future_percentile(near: pd.Series, far: pd.Series) -> pd.Series:
 def composite(
     families: dict[str, pd.Series],
     kind: str,
-    weights: tuple[float, float, float, float] | None = None,
+    weights: tuple[float, ...] | None = None,
+    *,
+    family_order: tuple[str, ...] | None = None,
 ) -> pd.Series:
-    """Weighted blend of `FAMILIES`, back on a 0-1 scale.
+    """Weighted blend of the pool's families, back on a 0-1 scale.
 
-    Missing families are treated as absent rather than as zero: their weight is
-    dropped from the denominator, so a pool with no out-year projection still
-    produces a comparable composite instead of one silently scaled down.
+    `family_order` names the families to blend, in weight order; it defaults to the
+    shipped `FAMILIES[kind]`. Missing families are treated as absent rather than as
+    zero: their weight is dropped from the denominator, so a pool with no out-year
+    projection still produces a comparable composite instead of one silently scaled
+    down.
     """
+    order = family_order if family_order is not None else FAMILIES[kind]
     chosen = weights if weights is not None else FITTED_WEIGHTS[kind]
-    unknown = set(families) - set(FAMILIES)
+    unknown = set(families) - KNOWN_FAMILIES
     if unknown:
-        raise KeyError(f"unknown families {sorted(unknown)}; expected {list(FAMILIES)}")
+        raise KeyError(f"unknown families {sorted(unknown)}; expected {sorted(KNOWN_FAMILIES)}")
 
     total = 0.0
     blended: pd.Series | None = None
-    for name, weight in zip(FAMILIES, chosen, strict=True):
+    for name, weight in zip(order, chosen, strict=True):
         series = families.get(name)
         if series is None or weight == 0:
             continue

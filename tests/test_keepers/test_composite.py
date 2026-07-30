@@ -126,7 +126,7 @@ def test_a_missing_family_drops_out_of_the_denominator():
     scaled down as though every player projected to zero. With every supplied
     family at the same level the blend must equal that level either way -- which
     only holds if the absent family's weight leaves the denominator too."""
-    supplied = {family: pd.Series([0.8]) for family in FAMILIES}
+    supplied = {family: pd.Series([0.8]) for family in FAMILIES["hitter"]}
     full = composite(supplied, "hitter").iloc[0]
     partial = composite({k: v for k, v in supplied.items() if k != "future"}, "hitter").iloc[0]
     assert full == pytest.approx(0.8)
@@ -152,7 +152,7 @@ def test_luck_carries_a_positive_weight_for_every_position():
     """Not what the name suggests, and load-bearing: the gap also encodes playing
     time, and forcing it negative collapses the fit (rho 0.65 -> 0.13)."""
     for kind, weights in FITTED_WEIGHTS.items():
-        assert weights[FAMILIES.index("luck")] > 0, kind
+        assert weights[FAMILIES[kind].index("luck")] > 0, kind
 
 
 def test_future_blend_favors_the_nearer_year_and_sums_to_one():
@@ -180,6 +180,17 @@ def test_future_percentile_falls_back_to_the_near_year_when_far_is_missing():
 
 def test_fitted_weights_have_one_entry_per_family_and_lead_with_skill():
     for kind, weights in FITTED_WEIGHTS.items():
-        assert len(weights) == len(FAMILIES), kind
-        assert weights[FAMILIES.index("skill")] == max(weights), kind
-        assert weights[FAMILIES.index("future")] > 0, kind
+        assert len(weights) == len(FAMILIES[kind]), kind
+        assert weights[FAMILIES[kind].index("skill")] == max(weights), kind
+        assert weights[FAMILIES[kind].index("future")] > 0, kind
+
+
+def test_composite_honors_an_explicit_family_order():
+    fams = {"skill": pd.Series([1.0, 0.0]), "pt": pd.Series([0.0, 1.0])}
+    out = composite(fams, "hitter", weights=(1.0, 1.0), family_order=("skill", "pt"))
+    assert out.tolist() == pytest.approx([0.5, 0.5])
+
+
+def test_composite_rejects_a_family_outside_the_known_universe():
+    with pytest.raises(KeyError, match="peripherals"):
+        composite({"peripherals": pd.Series([0.5])}, "hitter", family_order=("skill",))
