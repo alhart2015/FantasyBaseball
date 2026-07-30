@@ -480,11 +480,14 @@ _FAMILY_GRID: dict[str, tuple[float, ...]] = {
     "future": _GRID_FUTURE,
     "age": _GRID_AGE,
 }
-# The three parameterizations the bake-off compares, per pool.
+# The parameterizations the bake-off compares, per pool. C keeps `luck` but adds a
+# `batted_ball` term free to go negative, so the grid can claw back the batted-ball
+# part `luck` over-includes without dropping luck's PT/role/SB signal.
 CANDIDATES: dict[str, tuple[str, ...]] = {
     "baseline": ("skill", "luck", "future", "age"),
     "A: pt+luck": ("skill", "pt", "luck", "future", "age"),
     "B: pt+batted_ball": ("skill", "pt", "batted_ball", "future", "age"),
+    "C: luck-batted_ball": ("skill", "luck", "batted_ball", "future", "age"),
 }
 # Hitters the bake-off must move the right way: the lucky everyday bats should fall,
 # the genuinely skilled everyday bat (Alvarez) should not.

@@ -108,7 +108,12 @@ def test_composite_is_a_weighted_blend_on_the_same_scale():
 
 
 def test_composite_normalizes_weights_that_do_not_sum_to_one():
-    out = composite(_fam([1.0], [0.0], [0.0], [0.0]), "hitter", weights=(2.0, 0.0, 0.0, 0.0))
+    out = composite(
+        _fam([1.0], [0.0], [0.0], [0.0]),
+        "hitter",
+        weights=(2.0, 0.0, 0.0, 0.0),
+        family_order=("skill", "luck", "future", "age"),
+    )
     assert out.iloc[0] == pytest.approx(1.0)
 
 
@@ -119,7 +124,12 @@ def test_composite_rejects_an_unknown_family():
 
 def test_composite_rejects_all_zero_weights():
     with pytest.raises(ValueError, match="no weighted family"):
-        composite(_fam([0.5], [0.0], [0.0], [0.0]), "hitter", weights=(0, 0, 0, 0))
+        composite(
+            _fam([0.5], [0.0], [0.0], [0.0]),
+            "hitter",
+            weights=(0, 0, 0, 0),
+            family_order=("skill", "luck", "future", "age"),
+        )
 
 
 def test_a_missing_family_drops_out_of_the_denominator():

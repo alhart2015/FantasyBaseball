@@ -67,17 +67,16 @@ from fantasy_baseball.keepers.skills import HITTER_SKILLS, PITCHER_SKILLS
 # Weight per family, aligned to `FAMILIES[kind]`. Not normalized; `composite`
 # divides by the sum.
 FITTED_WEIGHTS: dict[str, tuple[float, ...]] = {
-    "hitter": (1.0, 0.8, 0.4, 0.3),
-    "pitcher": (1.0, 0.6, 0.4, 0.15),
+    "hitter": (1.0, 0.8, -0.2, 0.2, 0.3),
+    "pitcher": (1.0, 0.8, -0.2, 0.2, 0.15),
 }
 # The shipped family set per pool, aligned to FITTED_WEIGHTS. A dict, not one global
-# tuple, because the pools already carry separate weights and fits and a bake-off
-# split verdict (e.g. keep `luck` for hitters, `batted_ball` for pitchers) is a
-# legitimate outcome. `scripts/keeper_rankings.py --backtest` is where the set and
-# weights are chosen; read it there.
+# tuple, because the pools carry separate weights and fits and a bake-off split
+# verdict would be a legitimate outcome. `scripts/keeper_rankings.py --backtest` is
+# where the set and weights are chosen; read it there.
 FAMILIES: dict[str, tuple[str, ...]] = {
-    "hitter": ("skill", "luck", "future", "age"),
-    "pitcher": ("skill", "luck", "future", "age"),
+    "hitter": ("skill", "luck", "batted_ball", "future", "age"),
+    "pitcher": ("skill", "luck", "batted_ball", "future", "age"),
 }
 # Every family the model knows how to blend. `family_order` selects a subset per
 # pool; a name outside this set is a typo, not a silent no-op.
