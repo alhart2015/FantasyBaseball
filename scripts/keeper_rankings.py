@@ -52,12 +52,13 @@ teams, computing each team's P(keep) over ITS OWN roster, never league-wide.
 
 CROSS-POOL CAVEAT for `--league`. `proj_var` is in SGP so a hitter and a pitcher
 CAN share one list, but the two fits regress to their own pool's mean at very
-different rates -- composite 1.0 maps to 13.37 for hitters and 8.92 for pitchers --
-so no pitcher reaches the top of a mixed board. That is a real predictability gap,
-not a scale artifact: top-decile hitters went on to earn 14.42 next season against
-10.10 for pitchers, and pitchers were 4.6% likely to fall to zero against 1.0%.
+different rates, so no pitcher reaches the top of a mixed board. That is a real
+difference in PREDICTABILITY rather than a scale artifact -- top-decile hitters go
+on to earn substantially more than top-decile pitchers, and pitchers are several
+times more likely to collapse to nothing. `--study` prints both, per pool, for the
+same reason the other numbers left this file: nothing here would regenerate them.
 Read a mixed board as expected value only, and read the pitcher list on its own --
-its top twelve span 0.46 SGP against an sd near 5.9, so their ORDER means nothing.
+its top is compressed to a fraction of one sd, so that ORDER means nothing.
 
 `luck` carries a POSITIVE weight and `future` is discounted for staleness. Both
 are counterintuitive and both are argued in `keepers/composite.py`; `--study`
@@ -96,7 +97,7 @@ if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 from fantasy_baseball.config import load_config
-from fantasy_baseball.data.cache_keys import CacheKey
+from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.fangraphs import load_projection_set
 from fantasy_baseball.keepers.actuals import index_by_mlbam, innings_to_float
 from fantasy_baseball.keepers.composite import (
@@ -143,7 +144,8 @@ MIN_PT = {"hitter": 250, "pitcher": 50}
 # Used only when a player is absent from the position map. UTIL is the deepest
 # hitter floor, so an unknown hitter is charged the harshest replacement level
 # rather than flattered by a scarce one. The pitcher token is inert because SP and
-# RP resolve to the same floor -- see `keepers.scarcity`.
+# RP never appear in the credits table at all: it ships a single "P", which
+# `var._pitcher_floor_key` falls back to. See `keepers.scarcity`.
 FALLBACK_POS = {"hitter": ["UTIL"], "pitcher": ["P"]}
 POOLS: tuple[str, ...] = (PlayerType.HITTER, PlayerType.PITCHER)
 # Display schema for the per-pool tables; the CSV keeps every column.
@@ -223,6 +225,13 @@ def season_value(year: int, kind: str, denoms) -> pd.DataFrame:
     return out
 
 
+# `(year, kind)` -> SGP of that ZiPS export. A multi-season run asks for the same
+# export twice, because `year + 2` for one season is `year + 1` for the next, and
+# `load_projection_set` parses BOTH pools' CSVs on every call. Memoizing takes
+# `--scarcity` from 16 loads to 5. Not an `lru_cache`: `denoms` is a dict.
+_OUT_YEAR_CACHE: dict[tuple[int, str], pd.Series] = {}
+
+
 def zips_out_year_sgp(year: int, kind: str, denoms) -> pd.Series:
     """SGP of the ZiPS projection for `year`, indexed by mlbam_id.
 
@@ -237,6 +246,9 @@ def zips_out_year_sgp(year: int, kind: str, denoms) -> pd.Series:
     The check is per file, so it goes quiet by itself once a fresher export lands
     instead of leaving a stale caveat behind for someone to re-verify by hand.
     """
+    cached = _OUT_YEAR_CACHE.get((year, str(kind)))
+    if cached is not None:
+        return cached
     directory = PROJECTIONS_DIR / str(year)
     if not directory.is_dir():
         return pd.Series(dtype=float)
@@ -251,11 +263,13 @@ def zips_out_year_sgp(year: int, kind: str, denoms) -> pd.Series:
             f"  WARNING: the {year} ZiPS pitcher export carries no saves, so every"
             " closer's projected value is understated."
         )
-    return _sgp(lines, denoms)
+    out = _sgp(lines, denoms)
+    _OUT_YEAR_CACHE[(year, str(kind))] = out
+    return out
 
 
-def pricing_table(denoms) -> tuple[dict[str, list[str]], dict[str, float]]:
-    """Positions and mean-centred floors -- neither varies by pool.
+def pricing_table() -> tuple[dict[str, list[str]], dict[str, float]]:
+    """Positions and mean-centred credits -- neither varies by pool or by season.
 
     Hoisted out of `build` so one run makes one position lookup instead of two:
     it is the only network touch in this script.
@@ -324,13 +338,16 @@ def _family_columns(frame: pd.DataFrame) -> dict[str, pd.Series]:
     return {family: frame[f"{family}_pct"] for family in FAMILIES}
 
 
-def build(
-    year: int,
-    kind: str,
-    denoms,
-    keepers: dict[str, str],
-    pricing: tuple[dict[str, list[str]], dict[str, float]] | None = None,
-) -> pd.DataFrame:
+def projected(year: int, kind: str, denoms) -> pd.DataFrame:
+    """Everything up to and including `proj_sgp`/`sd`, with NO positional term.
+
+    Split out because `keepers.scarcity` measures its floors from `proj_sgp`, and
+    `--scarcity` therefore has to score a board WITHOUT consuming the credits it is
+    about to produce. Calling `build` there would be inert today -- pricing is
+    applied after `proj_sgp` is set -- but a reader would have to prove that by
+    hand, and a later edit could make it false. This way the circularity cannot
+    exist. It also skips a per-row pricing loop that is ~90% of a warm build.
+    """
     qualified = _qualified_families(_observed(year, kind, denoms), kind)
 
     # Rank the projections WITHIN the qualified pool, not within all ~1900 ZiPS
@@ -355,24 +372,36 @@ def build(
     # hitters and pitchers share one list. See `keepers.projection`.
     qualified["proj_sgp"] = expected_sgp(qualified["composite"], kind)
     qualified["sd"] = sgp_sd(qualified["composite"], kind)
+    return qualified
+
+
+def build(
+    year: int,
+    kind: str,
+    denoms,
+    keepers: dict[str, str],
+    pricing: tuple[dict[str, list[str]], dict[str, float]] | None = None,
+) -> pd.DataFrame:
+    """`projected` plus the positional adjustment, ranked and labelled."""
+    qualified = projected(year, kind, denoms)
 
     # Mean-centred credits: a display offset only, see `keepers.scarcity`.
-    positions, floors = pricing_table(denoms) if pricing is None else pricing
+    positions, floors = pricing_table() if pricing is None else pricing
     priced = [
         calculate_var(
             pd.Series(
+                # No "ip": the credits table ships a single "P", so
+                # `_pitcher_floor_key` falls back to it and never routes by role.
+                # `keepers.scarcity` records what a future SP/RP split would owe.
                 {
                     "total_sgp": proj,
                     "positions": _slots_for(positions, name, kind),
-                    "ip": pt,
                 }
             ),
             floors,
             return_position=True,
         )
-        for name, proj, pt in zip(
-            qualified["name"], qualified["proj_sgp"], qualified["pt"], strict=True
-        )
+        for name, proj in zip(qualified["name"], qualified["proj_sgp"], strict=True)
     ]
     qualified["proj_var"] = [var for var, _ in priced]
     qualified["pos"] = [pos for _, pos in priced]
@@ -450,8 +479,20 @@ def run_backtest(denoms) -> None:
             print(f"    {label:17s} rho = {_weighted_rho(hold, weights, kind):.4f}")
 
 
-def _as_payload(blob):
-    """Unwrap a KV value: JSON string or dict, with the `_data` envelope removed."""
+def _kv_payload(key: CacheKey):
+    """Unwrapped value for one cache key, or None if the KV is unreachable.
+
+    Import-local and failure-tolerant, like `keepers.positions`: everything else in
+    this script runs offline and only the roster reports need the network. Keyed
+    through `CacheKey` rather than a "cache:..." literal, which is what that enum
+    exists to prevent.
+    """
+    try:
+        from fantasy_baseball.data.kv_store import get_kv
+
+        blob = get_kv().get(redis_key(key))
+    except Exception:
+        return None
     if not blob:
         return None
     payload = json.loads(blob) if isinstance(blob, str) else blob
@@ -467,17 +508,8 @@ def _normalized_names(entries) -> set[str]:
 
 
 def load_roster_names() -> set[str]:
-    """Normalized names on my roster, from the live KV blob.
-
-    Import-local and failure-tolerant, like `keepers.positions`: the rest of this
-    script runs offline, and only this one report needs the network.
-    """
-    try:
-        from fantasy_baseball.data.kv_store import get_kv
-
-        return _normalized_names(_as_payload(get_kv().get("cache:roster")))
-    except Exception:
-        return set()
+    """Normalized names on my roster, from the live KV blob."""
+    return _normalized_names(_kv_payload(CacheKey.ROSTER))
 
 
 def load_league_rosters(my_team: str) -> dict[str, set[str]]:
@@ -487,13 +519,7 @@ def load_league_rosters(my_team: str) -> dict[str, set[str]]:
     nine, so the league is the union. Same import-local, failure-tolerant shape
     as `load_roster_names`: everything else in this script runs offline.
     """
-    try:
-        from fantasy_baseball.data.kv_store import get_kv
-
-        kv = get_kv()
-        opponents = _as_payload(kv.get("cache:opp_rosters"))
-    except Exception:
-        return {}
+    opponents = _kv_payload(CacheKey.OPP_ROSTERS)
     rosters: dict[str, set[str]] = {}
     if isinstance(opponents, dict):
         for team, players in opponents.items():
@@ -625,6 +651,9 @@ def _print_truncation(kind: str, denoms, pool_size: int) -> None:
     )
 
 
+# Extends a season past `ALL_TRANSITION_YEARS` on purpose: measuring a floor
+# needs only that season's own board, not a following season to score against,
+# so 2025 is usable here where the backtest cannot use it.
 SCARCITY_YEARS = (2022, 2023, 2024, 2025)
 
 
@@ -637,26 +666,33 @@ def run_scarcity(denoms) -> None:
     2.18 -- and an average of four seasons is the only defensible summary.
     """
     config = load_config(CONFIG_PATH)
-    positions = load_positions()
+    positions, _ = pricing_table()
     capacities = slot_capacities(config.roster_slots, config.num_teams)
     print(f"  league starting slots (bench and IL excluded): {capacities}")
+    # Which slots belong to which pool is a property of the league, not the season.
+    wanted = {
+        kind: {
+            slot: n
+            for slot, n in capacities.items()
+            if (slot in PITCHER_ELIGIBLE) == (kind == PlayerType.PITCHER)
+        }
+        for kind in POOLS
+    }
 
     per_season = []
     for year in SCARCITY_YEARS:
         floors: dict[str, float] = {}
         for kind in POOLS:
-            board = build(year, kind, denoms, {}, pricing=(positions, credit_levels()))
+            board = projected(year, kind, denoms)
             eligible = {
                 idx: set(_slots_for(positions, name, kind))
                 for idx, name in zip(board.index, board["name"], strict=True)
             }
-            wanted = {
-                slot: n for slot, n in capacities.items() if (slot == "P") == (kind == "pitcher")
-            }
-            floors.update(marginal_starter_floors(board["proj_sgp"], eligible, wanted))
+            floors.update(marginal_starter_floors(board["proj_sgp"], eligible, wanted[kind]))
         per_season.append((year, floors))
 
-    slots = sorted({slot for _, f in per_season for slot in f})
+    seasons = pd.DataFrame({year: floors for year, floors in per_season}).T
+    slots = sorted(seasons.columns)
     print("\n  measured floor per season (on this model's proj_sgp scale):")
     print("    year  " + "".join(f"{slot:>8}" for slot in slots))
     for year, floors in per_season:
@@ -664,15 +700,12 @@ def run_scarcity(denoms) -> None:
             f"    {year}  " + "".join(f"{floors.get(slot, float('nan')):>8.2f}" for slot in slots)
         )
 
-    mean_floor = {
-        slot: sum(f[slot] for _, f in per_season if slot in f)
-        / sum(1 for _, f in per_season if slot in f)
-        for slot in slots
-    }
+    mean_floor = seasons.mean().to_dict()
     fresh = centred_credits(mean_floor)
+    order = sorted(fresh, key=lambda slot: -fresh[slot])
     print("\n  averaged, centred, against what is shipped:")
     print(f"    {'slot':<7}{'floor':>8}{'credit':>9}{'shipped':>10}{'delta':>8}")
-    for slot in sorted(fresh, key=lambda s: -fresh[s]):
+    for slot in order:
         shipped = NATIVE_CREDITS.get(slot, float("nan"))
         print(
             f"    {slot:<7}{mean_floor[slot]:>8.2f}{fresh[slot]:>9.2f}"
@@ -680,9 +713,37 @@ def run_scarcity(denoms) -> None:
         )
     print("\n  paste into keepers/scarcity.py:")
     print("NATIVE_CREDITS: dict[str, float] = {")
-    for slot in sorted(fresh, key=lambda s: -fresh[s]):
+    for slot in order:
         print(f'    "{slot}": {fresh[slot]:.3f},')
     print("}")
+
+
+def _print_cross_pool(denoms) -> None:
+    """Why no pitcher reaches the top of a mixed board.
+
+    Regenerates the CROSS-POOL CAVEAT at the top of this module. The claim it makes
+    is that the hitter/pitcher gap is a difference in PREDICTABILITY rather than a
+    scale artifact, and that is only checkable against realized outcomes.
+    """
+    print("")
+    print("  cross-pool: what a TOP-DECILE composite went on to earn, by pool")
+    print(f"    {'pool':<9}{'n':>5}{'mean':>8}{'sd':>7}{'P(~0)':>8}{'composite 1.0 ->':>19}")
+    for kind in POOLS:
+        realized = pd.concat(
+            [
+                frame.loc[composite_pct(frame, kind) >= 0.9, "target_sgp"]
+                for frame in (_transition(year, kind, denoms) for year in ALL_TRANSITION_YEARS)
+            ]
+        )
+        ceiling = float(expected_sgp(pd.Series([1.0]), kind).iloc[0])
+        print(
+            f"    {kind:<9}{len(realized):>5}{realized.mean():>8.2f}{realized.std():>7.2f}"
+            f"{(realized <= 0.001).mean() * 100:>7.1f}%{ceiling:>19.2f}"
+        )
+    print(
+        "    -> the pitcher shortfall is in REALIZED value, not just in the fitted"
+        " ceiling, so a mixed board is expected value and nothing more."
+    )
 
 
 def run_study(denoms, live_year: int) -> None:
@@ -690,8 +751,10 @@ def run_study(denoms, live_year: int) -> None:
 
     Every claim in `keepers/composite.py` about WHY the families are shaped the way
     they are is reproduced here, so none of them can drift into being wrong without
-    this command disagreeing.
+    this command disagreeing. Same for this module's own two caveats: the mid-season
+    one and the cross-pool one.
     """
+    _print_cross_pool(denoms)
     seasons = ALL_TRANSITION_YEARS
     for kind in POOLS:
         frames = [_transition(year, kind, denoms) for year in seasons]
@@ -747,9 +810,6 @@ def run_study(denoms, live_year: int) -> None:
             scores = [_rho(_variant_percentile(f, columns), f["target_rate"]) for f in frames]
             print(f"    {label:<20} rho = {sum(scores) / len(scores):+.4f}")
 
-        # Does the POSITIONAL credit match what players at that position actually
-        # realize? This is what decides whether the spread is supported.
-
 
 def _dedupe_two_way(board: pd.DataFrame) -> pd.DataFrame:
     """Collapse a two-way player's two pool rows into his better one.
@@ -785,7 +845,7 @@ def _scored_board(year: int, denoms, keepers: dict[str, str], pricing) -> pd.Dat
     """
     scored = []
     for kind in POOLS:
-        part = build(year, kind, denoms, keepers, pricing=pricing).copy()
+        part = build(year, kind, denoms, keepers, pricing=pricing)
         part["kind"] = kind
         scored.append(part)  # index is mlbam_id, and the dedupe below needs it
     return _dedupe_two_way(pd.concat(scored).sort_values("proj_var", ascending=False))
@@ -807,20 +867,20 @@ def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: i
         return 1
 
     owner_of = {name: team for team, names in rosters.items() for name in names}
-    board = _scored_board(year, denoms, keepers, pricing_table(denoms))
-    board["owner"] = board["name"].map(lambda n: owner_of.get(normalize_name(str(n)), ""))
-    rostered = board[board["owner"] != ""].copy()
+    board = _scored_board(year, denoms, keepers, pricing_table())
+    board["owner"] = board["name"].map(lambda n: owner_of.get(normalize_name(str(n))))
+    board = board.dropna(subset=["owner"])
 
-    # P(keep) per team, over that team's full scoreable roster.
-    rostered["p_keep"] = 0.0
-    for team in rosters:
-        rows = rostered["owner"] == team
-        if not rows.any():
-            continue
-        part = rostered[rows]
-        rostered.loc[rows, "p_keep"] = probability_top_n(
-            part["proj_var"], part["sd"], part["kind"], slots
-        )
+    # One grouping, and P(keep) per team over that team's own roster -- never
+    # league-wide. Iterating the frame's groups rather than `rosters` means a team
+    # with nothing scoreable simply has no group, so there is no zero-fill to
+    # initialize and no emptiness guard to forget.
+    by_team: dict[str, pd.DataFrame] = {}
+    for team, group in board.groupby("owner", sort=False):
+        part = group.copy()
+        part["p_keep"] = probability_top_n(part["proj_var"], part["sd"], part["kind"], slots)
+        by_team[str(team)] = part
+    rostered = pd.concat(by_team.values()).sort_values("proj_var", ascending=False)
 
     print(f"\n{'=' * 72}")
     print(f"LEAGUE KEEPER BOARD -- top {top} of {len(rostered)} scoreable rostered players")
@@ -840,10 +900,11 @@ def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: i
     print(f"\n{'=' * 72}")
     print(f"EACH TEAM'S TOP {slots} KEEPER CANDIDATES  (P KEEP is within that roster)")
     print(f"{'=' * 72}")
-    for team in sorted(
-        rosters, key=lambda t: -rostered.loc[rostered["owner"] == t, "proj_var"].head(slots).sum()
-    ):
-        part = rostered[rostered["owner"] == team]
+    # `head(slots)` means "his best" only because each group inherits the board's
+    # descending order through the groupby.
+    strongest = sorted(by_team, key=lambda t: -by_team[t]["proj_var"].head(slots).sum())
+    for team in strongest:
+        part = by_team[team]
         unscored = len(rosters[team]) - len(part)
         mine = " *" if team == config.team_name else "  "
         print(f"\n{mine}{team}  ({len(part)} scoreable, {unscored} below the floor)")
@@ -871,7 +932,7 @@ def roster_report(year: int, denoms, keepers: dict[str, str], slots: int) -> int
         print("No roster available (needs the live KV blob); nothing to score.")
         return 1
 
-    board = _scored_board(year, denoms, keepers, pricing_table(denoms))
+    board = _scored_board(year, denoms, keepers, pricing_table())
     board = board[board["name"].map(lambda n: normalize_name(str(n)) in roster)].copy()
 
     board["p_keep"] = probability_top_n(board["proj_var"], board["sd"], board["kind"], slots)
@@ -936,7 +997,7 @@ def main() -> int:
     if args.roster:
         return roster_report(year, denoms, keepers, args.slots)
 
-    pricing = pricing_table(denoms)
+    pricing = pricing_table()
     for kind in POOLS:
         table = build(year, kind, denoms, keepers, pricing=pricing)
         out_path = SKILLS_DIR / f"keeper_rankings_{kind}_{year}.csv"

@@ -26,6 +26,8 @@ wRC+; ERA-, FIP, K%, whiff rate, CSW%) that keeper comparisons rank on.
 * `positions` -- eligible slots per player, for netting against the right
   replacement level. The one module here that touches the network, since it
   prefers the live blob over the committed cache.
+* `scarcity` -- how much a scarce position is worth, measured on `projection`'s
+  own scale rather than borrowed from the draft board's wider one. Pure.
 
 The #266 fold -- `fold`, `coefficients`, `calibration` -- was removed along with
 the `analysis/keeper_value.py` metric it replaced; the findings live in

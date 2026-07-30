@@ -8,7 +8,6 @@ import pytest
 
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import HITTER_ELIGIBLE, Position
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.var import calculate_var
 from scripts import keeper_rankings as module
 from scripts.keeper_rankings import FALLBACK_POS, _dedupe_two_way, _slots_for
@@ -80,13 +79,12 @@ def test_dedupe_refuses_a_frame_that_lost_its_id_index():
 
 
 def test_every_real_hitter_slot_has_a_floor():
-    """The invariant the study's credit column rests on. Drop or rename a floors
-    key and `calculate_var` silently falls back for that slot: the table flattens
-    and the slope prints ~0.000, which is exactly the conclusion `scarcity_floors`
-    already draws -- so it fails quiet in the direction of the answer we want,
-    with the suite green. DH and IF are excluded deliberately: they are Yahoo
-    aggregates, not scarcity positions, and have no floor by design."""
-    _, floors = module.pricing_table(get_sgp_denominators())
+    """Drop or rename a key in `keepers.scarcity.NATIVE_CREDITS` and
+    `calculate_var` silently falls back for that slot rather than raising, so every
+    player eligible there is quietly repriced against UTIL with the suite green.
+    DH and IF are excluded deliberately: they are Yahoo aggregates, not scarcity
+    positions, and have no floor by design."""
+    _, floors = module.pricing_table()
     real = set(HITTER_ELIGIBLE) - {Position.DH, Position.IF}
     missing = sorted(str(slot) for slot in real - set(floors))
     assert not missing, f"_slots_for can emit {missing}, which no floor prices"
@@ -97,7 +95,7 @@ def test_an_aggregate_only_slot_is_charged_the_deepest_floor_not_zero():
     """IF and DH have no floor, so they must fall through to UTIL -- the harshest
     hitter floor -- rather than scoring as a free 0.0 credit, which would hand an
     unmapped slot the best price on the board."""
-    _, floors = module.pricing_table(get_sgp_denominators())
+    _, floors = module.pricing_table()
     var, pos = calculate_var(
         pd.Series({"total_sgp": 0.0, "positions": [Position.IF], "ip": 0.0}), floors, True
     )
@@ -106,17 +104,39 @@ def test_an_aggregate_only_slot_is_charged_the_deepest_floor_not_zero():
     assert var < 0.0
 
 
+class _FakeKV:
+    """Stands in for the live KV, keyed the way `redis_key` spells it."""
+
+    def __init__(self, values):
+        self.values = values
+        self.asked = []
+
+    def get(self, key):
+        self.asked.append(key)
+        return self.values.get(key)
+
+
+def _fake_kv(monkeypatch, values):
+    kv = _FakeKV(values)
+    monkeypatch.setattr("fantasy_baseball.data.kv_store.get_kv", lambda: kv)
+    return kv
+
+
 def test_the_league_loader_unions_my_roster_with_the_opponents(monkeypatch):
     """`cache:roster` holds only my team and `cache:opp_rosters` only the other
-    nine, so a league report that read either alone would silently drop a team."""
-    monkeypatch.setattr(
-        module,
-        "_as_payload",
-        lambda blob: {"Rivals": [{"name": "Bobby Witt Jr."}]},
+    nine, so a league report that read either alone would silently drop a team.
+    Also pins the KEYS: reading one wrong would return None and lose a roster
+    without raising."""
+    kv = _fake_kv(
+        monkeypatch,
+        {
+            "cache:roster": [{"name": "Juan Soto"}],
+            "cache:opp_rosters": {"Rivals": [{"name": "Bobby Witt Jr."}]},
+        },
     )
-    monkeypatch.setattr(module, "load_roster_names", lambda: {"juan soto"})
     rosters = module.load_league_rosters("Mine")
     assert rosters == {"Rivals": {"bobby witt jr."}, "Mine": {"juan soto"}}
+    assert set(kv.asked) == {"cache:roster", "cache:opp_rosters"}
 
 
 def test_an_unreachable_kv_yields_no_league_rather_than_raising(monkeypatch):
@@ -130,13 +150,19 @@ def test_an_unreachable_kv_yields_no_league_rather_than_raising(monkeypatch):
     assert module.load_league_rosters("Mine") == {}
 
 
-def test_the_data_envelope_is_unwrapped_but_a_bare_payload_survives():
-    """Cache values are sometimes `{"_data": ...}` and sometimes the value itself."""
-    assert module._as_payload('{"_data": [{"name": "A"}]}') == [{"name": "A"}]
-    assert module._as_payload([{"name": "A"}]) == [{"name": "A"}]
-    assert module._as_payload({"Team": [{"name": "A"}]}) == {"Team": [{"name": "A"}]}
-    assert module._as_payload(None) is None
-    assert module._as_payload("") is None
+def test_the_data_envelope_is_unwrapped_but_a_bare_payload_survives(monkeypatch):
+    """A cache value arrives as a JSON string, a dict wrapped in `_data`, or the
+    bare value. All three have to reach the caller as the same thing."""
+    for stored, expected in (
+        ('{"_data": [{"name": "A"}]}', [{"name": "A"}]),
+        ({"_data": [{"name": "A"}]}, [{"name": "A"}]),
+        ([{"name": "A"}], [{"name": "A"}]),
+        ({"Team": [{"name": "A"}]}, {"Team": [{"name": "A"}]}),
+        (None, None),
+        ("", None),
+    ):
+        _fake_kv(monkeypatch, {"cache:roster": stored})
+        assert module._kv_payload(module.CacheKey.ROSTER) == expected
 
 
 def test_names_are_normalized_so_accents_join_the_position_map():

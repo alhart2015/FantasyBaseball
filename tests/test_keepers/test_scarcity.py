@@ -22,9 +22,12 @@ SLOTS = {"C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "OF": 4, "UTIL": 2
 
 def test_bench_and_il_are_not_slots_a_keeper_competes_for():
     """The marginal player is the last one who cracks a LINEUP. Counting bench
-    spots would push replacement deeper and inflate every credit."""
-    caps = slot_capacities(SLOTS, 10)
-    assert "BN" not in caps and "IL" not in caps
+    spots would push replacement deeper and inflate every credit -- and
+    `can_fill_slot` returns True for every bench variant, so one slipping through
+    would absorb players from every position at once."""
+    caps = slot_capacities({**SLOTS, "IL+": 1, "DL": 1}, 10)
+    for benched in ("BN", "IL", "IL+", "DL"):
+        assert benched not in caps
     assert caps["OF"] == 40
     assert caps["C"] == 10
 
@@ -68,6 +71,28 @@ def test_util_does_not_swallow_a_catcher_before_his_own_slot_is_filled():
     # the 10.0 catcher takes C, the 9.9 first baseman takes UTIL, so the 3.0
     # catcher is the one left over
     assert floors["C"] == pytest.approx(3.0)
+
+
+def test_a_yahoo_mixed_case_slot_still_matches():
+    """Yahoo writes "Util", not "UTIL". A bare string compare matches nothing, so
+    the mixed-case player is never seated and turns up as the floor instead --
+    understating it. `can_fill_slot` parses the spelling."""
+    values = {0: 10.0, 1: 9.0, 2: 4.0}
+    elig = {0: {"1B"}, 1: {"Util", "1B"}, 2: {"1B"}}
+    floors = _floors(values, elig, {"1B": 1, "UTIL": 1})
+    # 10.0 takes 1B, the mixed-case 9.0 is absorbed by UTIL, so 4.0 is the leftover
+    assert floors["1B"] == pytest.approx(4.0)
+
+
+def test_a_pitcher_is_not_absorbed_by_a_hitter_flex_slot():
+    """UTIL takes anyone with HITTER eligibility, not anyone at all. If it swallowed
+    the ace, the outfield floor would be measured against a depleted pool."""
+    values = {0: 10.0, 1: 9.0, 2: 8.0}
+    elig = {0: {"P"}, 1: {"OF"}, 2: {"OF"}}
+    floors = _floors(values, elig, {"OF": 1, "UTIL": 1})
+    # OF takes 9.0; UTIL must refuse the 10.0 pitcher and take the 8.0 outfielder,
+    # leaving no outfielder over -- so OF has no floor and the pitcher is untouched
+    assert "OF" not in floors
 
 
 def test_the_infield_flex_slot_accepts_any_infielder():
