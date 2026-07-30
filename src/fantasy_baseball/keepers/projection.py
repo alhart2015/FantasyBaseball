@@ -166,7 +166,9 @@ def scarcity_floors(floors: dict[str, float]) -> dict[str, float]:
     is also the FALLBACK bucket for DH-only and unmapped players rather than a
     real position. Separating those is worth more than a scale factor, and the
     per-slot cells run as low as n=45, which is thin enough that refitting nine
-    adjustments would mostly fit noise.
+    adjustments would mostly fit noise. Rescaling by 0.76 was checked against the
+    shipped board and leaves the top two unchanged, so the overcorrection is not
+    currently deciding anything.
     """
     if not floors:
         return {}
