@@ -954,6 +954,8 @@ def run_study(denoms, live_year: int) -> None:
             ("last-yr value", "value_pct"),
             ("skills", "skill_pct"),
             ("luck", "luck_pct"),
+            ("playing time", "pt_pct"),
+            ("batted-ball", "batted_ball_pct"),
             ("age (younger)", "age_pct"),
             ("future (stale)", "future_pct"),
         ):
