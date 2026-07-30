@@ -208,8 +208,12 @@ def probability_top_n(
     if top_n >= len(means):
         return pd.Series(1.0, index=means.index)
     outcomes = sample_outcomes(means, sds, kinds, draws=draws, seed=seed)
-    # Threshold per simulated season -- the partition idiom from
-    # `simulation._topk_indices`. An exact tie would credit more than `top_n`
-    # players, but the outcomes are continuous so ties are measure-zero.
-    threshold = -np.partition(-outcomes, top_n - 1, axis=0)[top_n - 1]
-    return pd.Series((outcomes >= threshold).mean(axis=1), index=means.index)
+    # `argpartition` selects exactly `top_n` winners per simulated season, the
+    # same idiom as `simulation._topk_indices`. Thresholding on the `top_n`-th
+    # value instead would credit every player tied at the cut, breaking the
+    # sum-to-`top_n` invariant -- only reachable at sd == 0, but the invariant is
+    # documented and worth holding unconditionally.
+    winners = np.argpartition(-outcomes, top_n - 1, axis=0)[:top_n]
+    made_cut = np.zeros(outcomes.shape, dtype=bool)
+    np.put_along_axis(made_cut, winners, True, axis=0)
+    return pd.Series(made_cut.mean(axis=1), index=means.index)

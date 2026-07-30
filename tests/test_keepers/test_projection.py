@@ -173,3 +173,14 @@ def test_centring_preserves_the_spread_and_only_moves_the_offset():
 
 def test_scarcity_of_an_empty_table_is_empty():
     assert scarcity_floors({}) == {}
+
+
+def test_exact_ties_still_credit_exactly_top_n():
+    """Only reachable at sd == 0, but the sum-to-top_n invariant is documented, so
+    it holds unconditionally. Thresholding on the nth value instead of selecting
+    n winners would credit every player tied at the cut."""
+    kinds = _kinds(4)
+    zero_spread = pd.Series([0.0] * 4)
+    for means in ([10.0] * 4, [10.0, 9.0, 9.0, 1.0]):
+        out = probability_top_n(pd.Series(means), zero_spread, kinds, 2)
+        assert out.sum() == pytest.approx(2.0)

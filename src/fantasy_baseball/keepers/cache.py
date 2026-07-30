@@ -26,14 +26,22 @@ from pathlib import Path
 import pandas as pd
 
 
+def _age_seconds(path: Path) -> float:
+    """How old `path` is, never negative.
+
+    Epoch arithmetic rather than differencing two naive datetimes, which shifts
+    the age by an hour across a DST boundary. Clamped at zero because `st_mtime`
+    resolves finer than `time.time()`'s tick (~16ms on Windows), so a file just
+    written computes a NEGATIVE age about 11% of the time -- which would fail an
+    `age >= 0` test and serve a cache the caller asked to treat as stale.
+    """
+    return max(0.0, time.time() - path.stat().st_mtime)
+
+
 def _read_cached(path: Path, max_age: timedelta | None) -> pd.DataFrame | None:
     if not path.exists():
         return None
-    # Epoch arithmetic, not local wall clock: differencing two naive datetimes
-    # shifts the age by an hour across a DST boundary. `>=` so max_age=0 (the
-    # --refresh path) always refetches -- st_mtime resolves finer than
-    # time.time()'s tick, so a just-written file can compute a negative age.
-    if max_age is not None and time.time() - path.stat().st_mtime >= max_age.total_seconds():
+    if max_age is not None and _age_seconds(path) >= max_age.total_seconds():
         return None
     df: pd.DataFrame = pd.read_csv(path)
     return df if not df.empty else None

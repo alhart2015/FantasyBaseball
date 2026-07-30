@@ -93,3 +93,15 @@ def test_max_age_zero_always_refetches(tmp_path: Path):
     fetch_or_cache(path, lambda: pd.DataFrame({"a": [1]}))
     out = fetch_or_cache(path, lambda: pd.DataFrame({"a": [2]}), max_age=timedelta(0))
     assert out["a"].tolist() == [2]
+
+
+def test_max_age_zero_refetches_even_when_the_clock_lags_the_filesystem(tmp_path: Path):
+    """st_mtime resolves finer than time.time()'s tick, so a just-written file
+    computes a negative age ~11% of the time on Windows. Unclamped, `age >= 0` is
+    False for those and --refresh silently serves the cache it was told to ignore.
+    Loops because the failure is probabilistic."""
+    path = tmp_path / "pull.csv"
+    for attempt in range(60):
+        fetch_or_cache(path, lambda: pd.DataFrame({"a": [1]}))
+        out = fetch_or_cache(path, lambda: pd.DataFrame({"a": [2]}), max_age=timedelta(0))
+        assert out["a"].tolist() == [2], f"served a stale cache on attempt {attempt}"
