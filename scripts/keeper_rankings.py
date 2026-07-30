@@ -465,48 +465,116 @@ def _transition(year: int, kind: str, denoms) -> pd.DataFrame:
     return feat.dropna(subset=["value_pct", "skill_pct", "age_pct"])
 
 
+# Weight grids, coarse on purpose -- two fit seasons cannot resolve a finer step.
+# The `mid` grid (luck / batted_ball) spans below zero so a shrunk-to-zero or
+# negative weight is observable; the shipped 0.4 floor would hide it.
+_GRID_MID = (-0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2)
+_GRID_PT = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2)
+_GRID_FUTURE = (0.0, 0.2, 0.4, 0.6, 0.8)
+_GRID_AGE = (0.0, 0.15, 0.3, 0.45)
+_FAMILY_GRID: dict[str, tuple[float, ...]] = {
+    "skill": (1.0,),  # pinned; every other family is measured against it
+    "pt": _GRID_PT,
+    "luck": _GRID_MID,
+    "batted_ball": _GRID_MID,
+    "future": _GRID_FUTURE,
+    "age": _GRID_AGE,
+}
+# The three parameterizations the bake-off compares, per pool.
+CANDIDATES: dict[str, tuple[str, ...]] = {
+    "baseline": ("skill", "luck", "future", "age"),
+    "A: pt+luck": ("skill", "pt", "luck", "future", "age"),
+    "B: pt+batted_ball": ("skill", "pt", "batted_ball", "future", "age"),
+}
+# Hitters the bake-off must move the right way: the lucky everyday bats should fall,
+# the genuinely skilled everyday bat (Alvarez) should not.
+WATCHLIST = ("Ceddanne Rafaela", "Otto Lopez", "Yordan Alvarez")
+
+
 def _weighted_rho(
-    frame: pd.DataFrame, weights: tuple[float, float, float, float], kind: str
+    frame: pd.DataFrame,
+    weights: tuple[float, ...],
+    kind: str,
+    *,
+    family_order: tuple[str, ...] | None = None,
 ) -> float:
-    blended = composite_pct(frame, kind, weights=weights)
+    blended = composite_pct(frame, kind, weights=weights, family_order=family_order)
     return float(blended.corr(frame["target"], method="spearman"))
 
 
+def _best_weights(
+    fit: list[pd.DataFrame], family_order: tuple[str, ...], kind: str
+) -> tuple[tuple[float, ...], list[float]]:
+    """Grid-search the family weights maximizing mean fit rho; skill pinned at 1.0.
+
+    Returns the best weight tuple and the per-fit-season rho at those weights (the
+    latter feeds the noise floor).
+    """
+    axes = [_FAMILY_GRID[f] for f in family_order]
+    best_weights: tuple[float, ...] | None = None
+    best_mean = -2.0
+    for weights in product(*axes):
+        mean = sum(_weighted_rho(f, weights, kind, family_order=family_order) for f in fit) / len(fit)
+        if mean > best_mean:
+            best_weights, best_mean = weights, mean
+    assert best_weights is not None
+    per_season = [_weighted_rho(f, best_weights, kind, family_order=family_order) for f in fit]
+    return best_weights, per_season
+
+
+def _watchlist_moves(year: int, denoms, best: dict[str, tuple[float, ...]]) -> None:
+    """Print each watchlist hitter's board rank under baseline vs each candidate."""
+    pricing = pricing_table(denoms)
+    boards = {
+        label: build(
+            year, "hitter", denoms, {}, pricing=pricing,
+            family_order=CANDIDATES[label], weights=best[label],
+        ).reset_index()
+        for label in CANDIDATES
+    }
+    print(f"\n  hitter watchlist ranks on the {year} board (lower = better):")
+    print("    " + f"{'player':<18}" + "".join(f"{label:>20}" for label in CANDIDATES))
+    for name in WATCHLIST:
+        target = normalize_name(name)
+        cells = []
+        for label in CANDIDATES:
+            board = boards[label]
+            hit = board[board["name"].map(lambda n: normalize_name(str(n))) == target]
+            cells.append(int(hit["rank"].iloc[0]) if len(hit) else -1)
+        print(f"    {name:<18}" + "".join(f"{c:>20}" for c in cells))
+
+
 def run_backtest(denoms) -> None:
+    best_by_pool: dict[str, dict[str, tuple[float, ...]]] = {}
     for kind in POOLS:
         fit = [_transition(y, kind, denoms) for y in BACKTEST_FIT_YEARS]
         hold = _transition(BACKTEST_HOLDOUT, kind, denoms)
-        print(
-            f"\n{'=' * 70}\n{kind.upper()}  fit={list(BACKTEST_FIT_YEARS)} holdout={BACKTEST_HOLDOUT}"
+        print(f"\n{'=' * 70}\n{kind.upper()}  fit={list(BACKTEST_FIT_YEARS)} holdout={BACKTEST_HOLDOUT}")
+        print(f"  {'candidate':<20}{'holdout':>9}{'fit':>9}{'noise':>9}  best weights")
+        best_by_pool[kind] = {}
+        for label, family_order in CANDIDATES.items():
+            weights, per_season = _best_weights(fit, family_order, kind)
+            best_by_pool[kind][label] = weights
+            holdout = _weighted_rho(hold, weights, kind, family_order=family_order)
+            fit_rho = sum(per_season) / len(per_season)
+            noise = abs(per_season[0] - per_season[1])  # in-sample rho spread
+            shown = " ".join(f"{f}={w:+.2f}" for f, w in zip(family_order, weights, strict=True))
+            print(f"  {label:<20}{holdout:>9.4f}{fit_rho:>9.4f}{noise:>9.4f}  {shown}")
+        # Baseline reproduction: baseline at the SHIPPED weights (not the grid best)
+        # must reproduce the pre-change --backtest number, or the family-machinery
+        # generalization changed behaviour.
+        shipped = _weighted_rho(
+            hold, FITTED_WEIGHTS[kind], kind, family_order=CANDIDATES["baseline"]
         )
-
-        # skill is pinned at 1.0; every other family is measured against it.
-        rows = []
-        for w_luck, w_future, w_age in product(
-            (0.4, 0.6, 0.8, 1.0, 1.2), (0.0, 0.2, 0.4, 0.6, 0.8), (0.0, 0.15, 0.3, 0.45)
-        ):
-            weights = (1.0, w_luck, w_future, w_age)
-            rows.append(
-                {
-                    "luck": w_luck,
-                    "future": w_future,
-                    "age": w_age,
-                    "fit_rho": sum(_weighted_rho(f, weights, kind) for f in fit) / len(fit),
-                    "holdout_rho": _weighted_rho(hold, weights, kind),
-                }
-            )
-        table = pd.DataFrame(rows).sort_values("fit_rho", ascending=False)
-        print("  skill pinned at 1.0; top blends by fit:")
-        print(table.head(5).round(4).to_string(index=False))
-        print("\n  baselines (holdout):")
-        shipped = FITTED_WEIGHTS[kind]
-        for label, weights in [
-            ("shipped", shipped),
-            ("no future", (1.0, shipped[1], 0.0, shipped[3])),
-            ("skill+luck only", (1.0, shipped[1], 0.0, 0.0)),
-            ("skill only", (1.0, 0.0, 0.0, 0.0)),
-        ]:
-            print(f"    {label:17s} rho = {_weighted_rho(hold, weights, kind):.4f}")
+        print(f"  {'baseline@shipped':<20}{shipped:>9.4f}   (must match pre-change run)")
+    # The watchlist is a hitter question; build 2026 boards under each candidate's
+    # best hitter weights.
+    _watchlist_moves(2026, denoms, best_by_pool["hitter"])
+    print(
+        "\n  Ship A or B over baseline only if it beats baseline holdout by MORE than"
+        "\n  that pool's noise. Within noise, prefer the sniff-test passer, then A"
+        "\n  (keeps SB/saves), then baseline. Apply by hand; see the spec."
+    )
 
 
 def _kv_payload(key: CacheKey):
