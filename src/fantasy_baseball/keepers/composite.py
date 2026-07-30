@@ -138,6 +138,30 @@ def luck(value_pct: pd.Series, skill_pct: pd.Series) -> pd.Series:
     return value_pct - skill_pct
 
 
+# Columns the batted-ball overperformance is measured from, per pool. Both sides of
+# each difference are park-unadjusted here (only wrc_plus/era_minus are park-adjusted
+# upstream), so the measure carries no park artifact.
+BATTED_BALL_INPUTS: dict[str, tuple[str, str]] = {
+    "hitter": ("avg", "xba"),
+    "pitcher": ("fip", "era"),
+}
+
+
+def batted_ball(frame: pd.DataFrame, kind: str) -> pd.Series:
+    """Rate overperformance the peripherals do not support (higher = luckier).
+
+    `avg - xba` for hitters, `fip - era` for pitchers -- ERA below FIP means the
+    pitcher outran his peripherals. This is the half of `luck` that regresses and
+    should not be rewarded; parameterization B measures it directly instead of
+    letting the `luck` catch-all proxy it. NaN in either input propagates.
+    """
+    produced, expected = BATTED_BALL_INPUTS[kind]
+    missing = [c for c in (produced, expected) if c not in frame.columns]
+    if missing:
+        raise KeyError(f"{kind} batted_ball missing {missing}; got {sorted(frame.columns)}")
+    return frame[produced] - frame[expected]
+
+
 def future_percentile(near: pd.Series, far: pd.Series) -> pd.Series:
     """Percentile of the `FUTURE_BLEND`-weighted out-year projections.
 

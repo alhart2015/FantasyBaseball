@@ -9,6 +9,7 @@ from fantasy_baseball.keepers.composite import (
     FUTURE_BLEND,
     LOWER_IS_BETTER,
     SKILL_COLUMNS,
+    batted_ball,
     composite,
     future_percentile,
     luck,
@@ -194,3 +195,23 @@ def test_composite_honors_an_explicit_family_order():
 def test_composite_rejects_a_family_outside_the_known_universe():
     with pytest.raises(KeyError, match="peripherals"):
         composite({"peripherals": pd.Series([0.5])}, "hitter", family_order=("skill",))
+
+
+def test_batted_ball_is_avg_over_xba_for_hitters():
+    frame = pd.DataFrame({"avg": [0.278, 0.240], "xba": [0.242, 0.250]})
+    out = batted_ball(frame, "hitter")
+    assert out.tolist() == pytest.approx([0.036, -0.010])
+
+
+def test_batted_ball_is_fip_minus_era_for_pitchers():
+    """ERA below FIP means the pitcher outran his peripherals -- luckier, higher."""
+    frame = pd.DataFrame({"fip": [4.20, 3.50], "era": [3.10, 3.60]})
+    out = batted_ball(frame, "pitcher")
+    assert out.tolist() == pytest.approx([1.10, -0.10])
+
+
+def test_batted_ball_keeps_nan_when_an_input_is_missing():
+    frame = pd.DataFrame({"avg": [0.278, float("nan")], "xba": [0.242, 0.250]})
+    out = batted_ball(frame, "hitter")
+    assert out.iloc[0] == pytest.approx(0.036)
+    assert math.isnan(out.iloc[1])
