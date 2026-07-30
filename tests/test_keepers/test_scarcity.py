@@ -132,9 +132,8 @@ def test_util_floor_can_be_set_by_a_util_only_leftover():
     assert floors["UTIL"] == pytest.approx(9.0)
 
 
-def test_util_floor_falls_back_when_no_leftover_qualifies():
-    """With no player left over, UTIL is omitted (nobody to price it) -- exercising
-    the fallback branch."""
+def test_util_floor_omitted_when_no_leftover():
+    """Like any slot, UTIL is omitted when nobody is left over to price it."""
     values = {0: 10.0, 1: 4.0}
     elig = {0: {"C"}, 1: {"C"}}
     floors = _floors(values, elig, {"C": 1, "UTIL": 1})

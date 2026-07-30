@@ -17,6 +17,12 @@ import pandas as pd
 # combined -- the league rosters a single OF slot -- so LF/CF/RF all fold to OF and
 # their games sum before the threshold. DH and any non-fielding token fold to no base
 # slot, so a pure DH is absent here and the caller prices him at UTIL.
+#
+# A generic "OF" token is deliberately NOT mapped. MLB Stats' "OF" is an aggregate of
+# the corners, so folding it in and summing would double-count (a real 7-game OF logged
+# as OF=7 plus LF=4/CF=3 would read as 14 and clear the threshold falsely). No cached
+# 2022-2025 season emits an "OF" token; if one ever does, resolve aggregate-vs-corner
+# semantics before mapping it rather than summing blind.
 GAMES_THRESHOLD = 10
 POSITION_TO_SLOT: dict[str, str] = {
     "C": "C",

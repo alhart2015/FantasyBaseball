@@ -188,9 +188,10 @@ def marginal_starter_floors(
     # is priced against it, so its floor is the best leftover who can fill UTIL --
     # found the same way as every dedicated slot. A genuinely UTIL-only player (a real
     # DH) is eligible for no per-position floor, so the old `max(dedicated)` could
-    # never let him set UTIL even when he was the best hitter starting nowhere. Only
-    # when no UTIL-eligible leftover exists does it fall back to the deepest dedicated
-    # floor.
+    # never let him set UTIL even when he was the best hitter starting nowhere. Like
+    # any slot, UTIL is omitted when nobody is left over to price it -- and since every
+    # dedicated-slot leftover is itself UTIL-eligible, that only happens when no hitter
+    # is left over at all.
     if capacities.get("UTIL", 0) > 0:
         util_floor = next(
             (
@@ -200,9 +201,6 @@ def marginal_starter_floors(
             ),
             None,
         )
-        if util_floor is None:
-            hitters = [level for slot, level in floors.items() if slot != "P"]
-            util_floor = max(hitters) if hitters else None
         if util_floor is not None:
             floors["UTIL"] = util_floor
     return floors
