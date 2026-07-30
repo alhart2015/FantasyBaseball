@@ -100,6 +100,7 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.fangraphs import load_projection_set
 from fantasy_baseball.keepers.actuals import index_by_mlbam, innings_to_float
+from fantasy_baseball.keepers.appearances import season_eligibility
 from fantasy_baseball.keepers.composite import (
     FAMILIES,
     FITTED_WEIGHTS,
@@ -113,6 +114,7 @@ from fantasy_baseball.keepers.composite import (
     percentile,
     skill_percentile,
 )
+from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 from fantasy_baseball.keepers.positions import load_positions
 from fantasy_baseball.keepers.projection import (
     RESIDUAL_QUANTILE_LEVELS,
@@ -656,6 +658,34 @@ def _print_truncation(kind: str, denoms, pool_size: int) -> None:
 # so 2025 is usable here where the backtest cannot use it.
 SCARCITY_YEARS = (2022, 2023, 2024, 2025)
 
+# Hitter base slots the derived source can emit; anything else (a stray "P" on a
+# two-way player's line) is dropped from the hitter pool.
+_HITTER_BASE_SLOTS = frozenset(str(p) for p in HITTER_ELIGIBLE) & frozenset(
+    {"C", "1B", "2B", "3B", "SS", "OF"}
+)
+
+
+def _season_eligibility(year: int, board_index, kind: str) -> tuple[dict[object, set[str]], int]:
+    """Per-season eligibility keyed by the board's MLBAM index, and the count of
+    hitter rows that fell to the DH fallback (for the coverage print).
+
+    Pitchers are `{P}` (the pool has one slot). A hitter with no >= 10-game hitter
+    slot is priced at `{DH}` -- UTIL-only via `can_fill_slot`, matching the old
+    `FALLBACK_POS` intent but derived per season instead of from the 2026 Yahoo map.
+    """
+    if kind == PlayerType.PITCHER:
+        return {idx: {"P"} for idx in board_index}, 0
+    derived = season_eligibility(fetch_mlb_season(SKILLS_DIR, year, "fielding"))
+    eligible: dict[object, set[str]] = {}
+    dh_fallback = 0
+    for idx in board_index:
+        slots = {s for s in derived.get(int(idx), set()) if s in _HITTER_BASE_SLOTS}
+        if not slots:
+            slots = {"DH"}
+            dh_fallback += 1
+        eligible[idx] = slots
+    return eligible, dh_fallback
+
 
 def run_scarcity(denoms) -> None:
     """Re-measure the positional credits and print them paste-ready.
@@ -666,7 +696,6 @@ def run_scarcity(denoms) -> None:
     2.18 -- and an average of four seasons is the only defensible summary.
     """
     config = load_config(CONFIG_PATH)
-    positions, _ = pricing_table()
     capacities = slot_capacities(config.roster_slots, config.num_teams)
     print(f"  league starting slots (bench and IL excluded): {capacities}")
     # Which slots belong to which pool is a property of the league, not the season.
@@ -680,15 +709,18 @@ def run_scarcity(denoms) -> None:
     }
 
     per_season = []
+    coverage: list[tuple[int, int, int]] = []  # (year, hitter_rows, dh_fallback)
     for year in SCARCITY_YEARS:
         floors: dict[str, float] = {}
         for kind in POOLS:
+            # Each season is scored against ITS OWN eligibility (>= 10 games at a
+            # position that season), not the current Yahoo map, which has no history
+            # and routed older seasons' gone-by-now players to UTIL.
             board = projected(year, kind, denoms)
-            eligible = {
-                idx: set(_slots_for(positions, name, kind))
-                for idx, name in zip(board.index, board["name"], strict=True)
-            }
+            eligible, dh_fallback = _season_eligibility(year, board.index, kind)
             floors.update(marginal_starter_floors(board["proj_sgp"], eligible, wanted[kind]))
+            if kind == PlayerType.HITTER:
+                coverage.append((year, len(board), dh_fallback))
         per_season.append((year, floors))
 
     seasons = pd.DataFrame({year: floors for year, floors in per_season}).T
@@ -699,6 +731,11 @@ def run_scarcity(denoms) -> None:
         print(
             f"    {year}  " + "".join(f"{floors.get(slot, float('nan')):>8.2f}" for slot in slots)
         )
+
+    print("\n  hitter map coverage per season (rows priced at a real position vs DH):")
+    print("    year   rows   real    DH")
+    for year, rows, dh in coverage:
+        print(f"    {year}  {rows:>5}  {rows - dh:>5}  {dh:>4}")
 
     mean_floor = seasons.mean().to_dict()
     fresh = centred_credits(mean_floor)
