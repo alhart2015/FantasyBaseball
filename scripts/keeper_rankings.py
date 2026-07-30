@@ -100,6 +100,7 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.data.fangraphs import load_projection_set
 from fantasy_baseball.keepers.actuals import index_by_mlbam, innings_to_float
+from fantasy_baseball.keepers.appearances import season_eligibility
 from fantasy_baseball.keepers.composite import (
     FAMILIES,
     FITTED_WEIGHTS,
@@ -113,6 +114,7 @@ from fantasy_baseball.keepers.composite import (
     percentile,
     skill_percentile,
 )
+from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 from fantasy_baseball.keepers.positions import load_positions
 from fantasy_baseball.keepers.projection import (
     RESIDUAL_QUANTILE_LEVELS,
@@ -657,16 +659,33 @@ def _print_truncation(kind: str, denoms, pool_size: int) -> None:
 SCARCITY_YEARS = (2022, 2023, 2024, 2025)
 
 
+def _season_eligibility(year: int, board_index, kind: str) -> dict[object, set[str]]:
+    """Per-season eligibility keyed by the board's MLBAM index.
+
+    Pitchers are `{P}` (the pool has one slot). A hitter with no >= 10-game hitter
+    slot is priced at `{DH}` -- UTIL-only via `can_fill_slot`, matching the old
+    `FALLBACK_POS` intent but derived per season instead of from the 2026 Yahoo map.
+    `HITTER_ELIGIBLE` drops the pitcher slot a two-way player's line carries.
+    """
+    if kind == PlayerType.PITCHER:
+        return {idx: {"P"} for idx in board_index}
+    derived = season_eligibility(fetch_mlb_season(SKILLS_DIR, year, "fielding"))
+    return {
+        idx: {s for s in derived.get(int(idx), set()) if s in HITTER_ELIGIBLE} or {"DH"}
+        for idx in board_index
+    }
+
+
 def run_scarcity(denoms) -> None:
     """Re-measure the positional credits and print them paste-ready.
 
     The floors `keepers.scarcity` ships are measured, not assumed, so this is what
-    regenerates them. It prints the per-season table as well as the average because
-    the single-season spread is large -- the catcher credit has ranged from 0.50 to
-    2.18 -- and an average of four seasons is the only defensible summary.
+    regenerates them. Each season is scored against its OWN >= 10-game eligibility
+    (`keepers.appearances`), not the current Yahoo map. It prints the per-season
+    centred credit alongside the average because the single-season spread is large,
+    and an average of four seasons is the only defensible summary.
     """
     config = load_config(CONFIG_PATH)
-    positions, _ = pricing_table()
     capacities = slot_capacities(config.roster_slots, config.num_teams)
     print(f"  league starting slots (bench and IL excluded): {capacities}")
     # Which slots belong to which pool is a property of the league, not the season.
@@ -678,17 +697,32 @@ def run_scarcity(denoms) -> None:
         }
         for kind in POOLS
     }
+    # The derived eligibility is fielding-based and records pitchers only as "P" -- it
+    # cannot tell SP from RP (a role, not a fielding position). If the league ever
+    # splits P into SP/RP slots, `_season_eligibility` would seat no pitcher in them
+    # and the pitcher credit would silently vanish, so fail loudly instead of shipping
+    # a table with a hole. A role split needs an IP-based source; see `keepers.scarcity`.
+    split = set(wanted[PlayerType.PITCHER]) - {"P"}
+    if split:
+        raise ValueError(
+            f"pitcher slots {sorted(split)} need a role-based (IP) eligibility source; "
+            "the fielding-derived map yields only 'P'."
+        )
 
     per_season = []
+    coverage: list[tuple[int, int, int]] = []  # (year, hitter_rows, dh_fallback)
     for year in SCARCITY_YEARS:
         floors: dict[str, float] = {}
         for kind in POOLS:
+            # Each season is scored against ITS OWN eligibility (>= 10 games at a
+            # position that season), not the current Yahoo map, which has no history
+            # and routed older seasons' gone-by-now players to UTIL.
             board = projected(year, kind, denoms)
-            eligible = {
-                idx: set(_slots_for(positions, name, kind))
-                for idx, name in zip(board.index, board["name"], strict=True)
-            }
+            eligible = _season_eligibility(year, board.index, kind)
             floors.update(marginal_starter_floors(board["proj_sgp"], eligible, wanted[kind]))
+            if kind == PlayerType.HITTER:
+                dh = sum(1 for slots in eligible.values() if slots == {"DH"})
+                coverage.append((year, len(board), dh))
         per_season.append((year, floors))
 
     seasons = pd.DataFrame({year: floors for year, floors in per_season}).T
@@ -699,6 +733,30 @@ def run_scarcity(denoms) -> None:
         print(
             f"    {year}  " + "".join(f"{floors.get(slot, float('nan')):>8.2f}" for slot in slots)
         )
+
+    print("\n  hitter map coverage per season (rows priced at a real position vs DH):")
+    print("    year   rows   real    DH")
+    for year, rows, dh in coverage:
+        print(f"    {year}  {rows:>5}  {rows - dh:>5}  {dh:>4}")
+
+    # The Yahoo map was complete by construction; a derived fielding pull can be
+    # truncated or stale (an interrupted cache write, a mid-season partial), which
+    # thins every dedicated slot's leftover pool and silently skews the credits. Real
+    # seasons fall back to DH for ~2-3% of the board, so an implausibly high share is a
+    # bad cache -- refuse to emit credits from it rather than let it be pasted.
+    thin = [(year, dh / rows) for year, rows, dh in coverage if rows and dh / rows > 0.25]
+    if thin:
+        detail = ", ".join(f"{year}: {share:.0%} DH" for year, share in thin)
+        raise ValueError(
+            f"fielding coverage is implausibly thin ({detail}); the cached fielding pull "
+            "is likely truncated or stale. Refetch before trusting these credits."
+        )
+
+    print("\n  centred credit per season (the year-to-year spread, as a flag not prose):")
+    print("    year  " + "".join(f"{slot:>8}" for slot in slots))
+    for year, floors in per_season:
+        credits = centred_credits(floors)
+        print(f"    {year}  " + "".join(f"{credits.get(s, float('nan')):>8.2f}" for s in slots))
 
     mean_floor = seasons.mean().to_dict()
     fresh = centred_credits(mean_floor)
@@ -711,11 +769,38 @@ def run_scarcity(denoms) -> None:
             f"    {slot:<7}{mean_floor[slot]:>8.2f}{fresh[slot]:>9.2f}"
             f"{shipped:>10.2f}{fresh[slot] - shipped:>8.2f}"
         )
+    _validate_against_yahoo(denoms)
+
     print("\n  paste into keepers/scarcity.py:")
     print("NATIVE_CREDITS: dict[str, float] = {")
     for slot in order:
         print(f'    "{slot}": {fresh[slot]:.3f},')
     print("}")
+
+
+def _validate_against_yahoo(denoms) -> None:
+    """Sanity-check the 10-game rule against the real Yahoo map, on 2025 (a COMPLETE
+    season -- what Yahoo's 2026 map is largely built from; 2026 is half-played, so a
+    derived-2026 map would spuriously under-match). Bridges the derived map (MLBAM) to
+    Yahoo (name) through the 2025 board's own clean name column."""
+    yahoo, _ = pricing_table()  # normalized-name -> Yahoo slots
+    derived = season_eligibility(fetch_mlb_season(SKILLS_DIR, 2025, "fielding"))
+    board = projected(2025, PlayerType.HITTER, denoms)
+    slots = ("C", "1B", "2B", "3B", "SS", "OF")
+    hit = {s: [0, 0] for s in slots}  # [derived-agrees, yahoo-has]
+    for idx, name in zip(board.index, board["name"], strict=True):
+        y = set(yahoo.get(normalize_name(str(name)), []))
+        d = derived.get(int(idx), set())
+        for s in slots:
+            if s in y:
+                hit[s][1] += 1
+                if s in d:
+                    hit[s][0] += 1
+    print("\n  derived-2025 vs Yahoo-2026 agreement (share of Yahoo's players recovered):")
+    for s in slots:
+        agree, total = hit[s]
+        pct = 100.0 * agree / total if total else float("nan")
+        print(f"    {s:<4} {agree:>4}/{total:<4} = {pct:5.1f}%")
 
 
 def _print_cross_pool(denoms) -> None:

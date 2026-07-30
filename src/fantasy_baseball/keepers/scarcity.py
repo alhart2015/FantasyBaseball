@@ -43,11 +43,11 @@ from fantasy_baseball.utils.constants import compute_starters_per_position
 from fantasy_baseball.utils.positions import can_fill_slot
 
 # Mean-centred credit per slot, measured on `keepers.projection`'s scale over the
-# four COMPLETE seasons 2022-2025 (2026 is partial; including it moves nothing by
-# more than 0.08, since a credit is a difference and the mid-season level shift is
-# common to every slot). Regenerate with `keeper_rankings.py --scarcity`, which also
-# prints the per-season table these average -- the catcher figure ranges 0.50 to
-# 2.18 year to year, so the average is the number to use and no single season is.
+# four COMPLETE seasons 2022-2025, each against its OWN >= 10-game position
+# eligibility (`keepers.appearances`), not the current Yahoo map. Regenerate with
+# `keeper_rankings.py --scarcity`, which prints the per-season centred credit these
+# average -- that is where the year-to-year spread is read; it is deliberately not
+# restated here, because nothing in this file would regenerate a number written in it.
 #
 # One "P" entry by construction: the pool has a single starting slot type, so there
 # is no role split to get wrong here, which is why the table needs no SP/RP merge
@@ -75,14 +75,14 @@ MEASURED_UNDER: dict[str, int] = {
 }
 
 NATIVE_CREDITS: dict[str, float] = {
-    "P": 1.446,
-    "C": 1.176,
-    "1B": -0.347,
-    "SS": -0.405,
-    "3B": -0.455,
-    "2B": -0.465,
-    "OF": -0.465,
-    "UTIL": -0.485,
+    "P": 1.494,
+    "C": 0.576,
+    "1B": -0.125,
+    "2B": -0.336,
+    "3B": -0.357,
+    "SS": -0.389,
+    "OF": -0.417,
+    "UTIL": -0.446,
 }
 
 # `calculate_var` SUBTRACTS what it is handed, so the levels it wants are the
@@ -184,12 +184,25 @@ def marginal_starter_floors(
             if player not in started and can_fill_slot(eligibility.get(player, ()), slot):
                 floors[slot] = float(ranked.loc[player])
                 break
-    # UTIL is a flex slot so it has no marginal starter of its own, but it IS the
-    # fallback every DH-only bat is priced against. Same rule `sgp.replacement`
-    # uses: the deepest hitter floor, i.e. the position it is easiest to replace at.
-    hitters = {slot: level for slot, level in floors.items() if slot != "P"}
-    if hitters and capacities.get("UTIL", 0) > 0:
-        floors["UTIL"] = max(hitters.values())
+    # UTIL is a flex slot with no dedicated marginal starter, but every DH-only bat
+    # is priced against it, so its floor is the best leftover who can fill UTIL --
+    # found the same way as every dedicated slot. A genuinely UTIL-only player (a real
+    # DH) is eligible for no per-position floor, so the old `max(dedicated)` could
+    # never let him set UTIL even when he was the best hitter starting nowhere. Like
+    # any slot, UTIL is omitted when nobody is left over to price it -- and since every
+    # dedicated-slot leftover is itself UTIL-eligible, that only happens when no hitter
+    # is left over at all.
+    if capacities.get("UTIL", 0) > 0:
+        util_floor = next(
+            (
+                float(ranked.loc[player])
+                for player in ranked.index
+                if player not in started and can_fill_slot(eligibility.get(player, ()), "UTIL")
+            ),
+            None,
+        )
+        if util_floor is not None:
+            floors["UTIL"] = util_floor
     return floors
 
 
