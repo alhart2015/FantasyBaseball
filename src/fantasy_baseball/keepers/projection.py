@@ -156,19 +156,27 @@ def scarcity_floors(floors: dict[str, float]) -> dict[str, float]:
     statement about the scales, not the pitchers. Centring makes it readable; no
     constant offset could repair it.
 
-    What the floors DO carry validly is the spread BETWEEN hitter positions, since
-    a difference survives a change of scale where a level does not. Unlike the
-    pitcher split above, that spread has the RIGHT SIGN: regressing each hitter's
-    realized residual against the adjustment he was given returns a slope of 0.76,
-    so the direction is right and the magnitude is roughly 30% too generous. Left
-    as-is rather than rescaled, because the residual structure is confounded --
-    OF and UTIL share the highest floor but measure +0.45 and -1.46, since `UTIL`
-    is also the FALLBACK bucket for DH-only and unmapped players rather than a
-    real position. Separating those is worth more than a scale factor, and the
-    per-slot cells run as low as n=45, which is thin enough that refitting nine
-    adjustments would mostly fit noise. Rescaling by 0.76 was checked against the
-    shipped board and leaves the top two unchanged, so the overcorrection is not
-    currently deciding anything.
+    What the floors MIGHT carry validly is the spread BETWEEN hitter positions,
+    since a difference survives a change of scale where a level does not. Unlike
+    the pitcher split above, there is no measured bias to compound: regressing each
+    hitter's realized residual on the adjustment he received gives a slope of
+    +0.04 (t 0.3) among hitters whose position is actually known, and per position,
+    controlling for composite, nothing reaches |t| = 1.3 except SS -- which is
+    UNDER-credited, the harmless direction.
+
+    A raw regression over the whole panel returns +0.76 instead, and that number is
+    a survivorship artifact rather than evidence for the spread. 308 of 977 rows
+    are players missing from the position map, which routes them to
+    `FALLBACK_POS` and its most negative adjustment; absence from the CURRENT map
+    mostly means they were out of the league by now, which predicts a negative
+    residual directly (mean -1.59 against +0.45 for OF). Residual and adjustment
+    co-move for a reason with nothing to do with position scarcity.
+
+    So the hitter spread is neither confirmed nor contradicted, and the concern
+    that a draft-time-scale spread is too wide for this compressed one stays open.
+    It is left as-is because there is no measurement pointing the other way, and
+    because rescaling it by even the artifactual 0.76 leaves the top of the board
+    unchanged.
     """
     if not floors:
         return {}

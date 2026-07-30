@@ -3,8 +3,10 @@
 `_slots_for` exists because a pitcher was being priced against a hitter floor.
 """
 
+import pandas as pd
+
 from fantasy_baseball.models.player import PlayerType
-from scripts.keeper_rankings import FALLBACK_POS, _slots_for
+from scripts.keeper_rankings import FALLBACK_POS, _dedupe_two_way, _slots_for
 
 POSITIONS = {
     "shohei ohtani": ["UTIL"],
@@ -36,3 +38,28 @@ def test_a_bench_or_il_token_is_not_a_position_to_price_against():
 
 def test_an_unknown_player_falls_back_to_the_deepest_floor():
     assert _slots_for(POSITIONS, "Nobody At All", PlayerType.HITTER) == FALLBACK_POS["hitter"]
+
+
+def _board(ids, names, proj_var):
+    return pd.DataFrame({"name": names, "proj_var": proj_var}, index=pd.Index(ids, name="mlbam_id"))
+
+
+def test_a_two_way_player_collapses_to_his_better_side():
+    board = _board([660271, 660271, 592450], ["Ohtani", "Ohtani", "Judge"], [11.8, 7.8, 10.0])
+    out = _dedupe_two_way(board)
+    assert len(out) == 2
+    assert out.loc[out["name"] == "Ohtani", "proj_var"].tolist() == [11.8]
+
+
+def test_two_different_players_sharing_a_name_both_survive():
+    """2022 had two Will Smiths, two Diego Castillos and two Luis Garcias. A
+    name-keyed drop deletes a real rival, and probability_top_n then spreads the
+    same slot mass over fewer people -- inflating everyone while the sum-to-slots
+    check still passes."""
+    board = _board([519293, 669257], ["Will Smith", "Will Smith"], [9.0, 8.0])
+    assert len(_dedupe_two_way(board)) == 2
+
+
+def test_dedupe_leaves_a_board_with_no_duplicates_alone():
+    board = _board([1, 2, 3], ["A", "B", "C"], [3.0, 2.0, 1.0])
+    assert _dedupe_two_way(board)["name"].tolist() == ["A", "B", "C"]

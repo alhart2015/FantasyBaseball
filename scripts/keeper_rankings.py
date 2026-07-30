@@ -90,7 +90,6 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
-from fantasy_baseball.utils.constants import STARTER_IP_THRESHOLD
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -102,8 +101,8 @@ PROJECTIONS_DIR = PROJECT_ROOT / "data" / "projections"
 MIN_PT = {"hitter": 250, "pitcher": 50}
 # Used only when a player is absent from the position map. UTIL is the deepest
 # hitter floor, so an unknown hitter is charged the harshest replacement level
-# rather than flattered by a scarce one. The pitcher token is inert: role routing
-# supersedes it, so an unknown pitcher is priced by his start share like any other.
+# rather than flattered by a scarce one. The pitcher token is inert because SP and
+# RP resolve to the same floor -- see `projection.scarcity_floors`.
 FALLBACK_POS = {"hitter": ["UTIL"], "pitcher": ["P"]}
 POOLS: tuple[str, ...] = (PlayerType.HITTER, PlayerType.PITCHER)
 # Display schema for the per-pool tables; the CSV keeps every column.
@@ -554,6 +553,23 @@ def run_study(denoms) -> None:
             print(f"    {label:<20} rho = {sum(scores) / len(scores):+.4f}")
 
 
+def _dedupe_two_way(board: pd.DataFrame) -> pd.DataFrame:
+    """Collapse a two-way player's two pool rows into his better one.
+
+    He qualifies in BOTH pools, so without this he appears twice, draws
+    independent outcomes and competes against himself for the keeper slots --
+    Ohtani absorbed 0.33 of the 3.00 slot mass for one roster spot.
+
+    Keyed on MLBAM id, which is the frame's index, NOT on name. 2022 alone had two
+    different Will Smiths and two different Diego Castillos across the pools plus
+    two different Luis Garcias inside one, and a name-keyed drop deletes a real
+    rival: `probability_top_n` then spreads the same slot mass over fewer people,
+    inflating everyone's P KEEP while the sum-to-slots check still passes. Expects
+    `board` already sorted best-first, so `keep="first"` keeps the better side.
+    """
+    return board[~board.index.duplicated(keep="first")].reset_index(drop=True)
+
+
 def roster_report(year: int, denoms, keepers: dict[str, str], slots: int) -> int:
     """Score one roster and give each player P(he is among its `slots` best).
 
@@ -573,13 +589,8 @@ def roster_report(year: int, denoms, keepers: dict[str, str], slots: int) -> int
         on_roster = table["name"].map(lambda n: normalize_name(str(n)) in roster)
         part = table[on_roster].copy()
         part["kind"] = kind
-        scored.append(part)
-    board = pd.concat(scored).sort_values("proj_var", ascending=False)
-    # A two-way player qualifies in BOTH pools and would otherwise appear twice,
-    # drawing independent outcomes and competing against himself for the slots --
-    # Ohtani absorbed 0.33 of the 3.00 slot mass for one roster spot. Keep his
-    # better side, which is also the one a keeper decision is about.
-    board = board.drop_duplicates(subset="name", keep="first").reset_index(drop=True)
+        scored.append(part)  # index is mlbam_id, and the dedupe below needs it
+    board = _dedupe_two_way(pd.concat(scored).sort_values("proj_var", ascending=False))
 
     board["p_keep"] = probability_top_n(board["proj_var"], board["sd"], board["kind"], slots)
     missing = sorted(roster - {normalize_name(str(n)) for n in board["name"]})
