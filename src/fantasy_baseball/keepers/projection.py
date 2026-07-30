@@ -157,9 +157,16 @@ def scarcity_floors(floors: dict[str, float]) -> dict[str, float]:
     constant offset could repair it.
 
     What the floors DO carry validly is the spread BETWEEN hitter positions, since
-    a difference survives a change of scale where a level does not. That spread was
-    calibrated on the wider draft-time scale, so against this compressed one it is
-    plausibly too large. Unquantified.
+    a difference survives a change of scale where a level does not. Unlike the
+    pitcher split above, that spread has the RIGHT SIGN: regressing each hitter's
+    realized residual against the adjustment he was given returns a slope of 0.76,
+    so the direction is right and the magnitude is roughly 30% too generous. Left
+    as-is rather than rescaled, because the residual structure is confounded --
+    OF and UTIL share the highest floor but measure +0.45 and -1.46, since `UTIL`
+    is also the FALLBACK bucket for DH-only and unmapped players rather than a
+    real position. Separating those is worth more than a scale factor, and the
+    per-slot cells run as low as n=45, which is thin enough that refitting nine
+    adjustments would mostly fit noise.
     """
     if not floors:
         return {}

@@ -180,10 +180,6 @@ def season_value(year: int, kind: str, denoms) -> pd.DataFrame:
         },
         index=frame.index,
     )
-    if kind == "pitcher":
-        games = pd.to_numeric(frame["G"], errors="coerce")
-        starts = pd.to_numeric(frame["GS"], errors="coerce")
-        out["start_share"] = (starts / games.where(games > 0)).fillna(0.0)
     return out
 
 
