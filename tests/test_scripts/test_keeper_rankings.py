@@ -7,6 +7,9 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.models.player import PlayerType
+from fantasy_baseball.models.positions import HITTER_ELIGIBLE, Position
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.var import calculate_var
 from scripts import keeper_rankings as module
 from scripts.keeper_rankings import FALLBACK_POS, _dedupe_two_way, _slots_for
 
@@ -98,16 +101,18 @@ def test_pitchers_are_grouped_by_role_not_by_the_single_p_slot(monkeypatch):
     raw = pd.DataFrame(
         {"mlbID": ["a", "b"], "Name": ["A Starter", "A Closer"], "G": [30, 60], "GS": [30, 0]}
     )
-    feat = pd.DataFrame({"c": [0.9, 0.8], "target_sgp": [10.0, 4.0]}, index=["a", "b"])
+    feat = pd.DataFrame(
+        {"c": [0.9, 0.8], "target_sgp": [10.0, 4.0], "pt": [400.0, 400.0]}, index=["a", "b"]
+    )
     out = _stub_pool(monkeypatch, kind=PlayerType.PITCHER, raw=raw, feat=feat)
     assert list(out["slot"]) == ["SP", "RP"]
 
 
 def test_a_swingman_at_exactly_half_starts_counts_as_a_starter(monkeypatch):
-    """Pins the same >= 0.5 boundary `_role_equivalent_ip` uses; the two must not
-    drift apart or the diagnostic stops describing the pricing."""
+    """Pins the >= 0.5 boundary. Role is the axis the merged pitcher floor is an
+    argument about, so a swingman has to land on a stated side of it."""
     raw = pd.DataFrame({"mlbID": ["a"], "Name": ["A Swingman"], "G": [20], "GS": [10]})
-    feat = pd.DataFrame({"c": [0.5], "target_sgp": [5.0]}, index=["a"])
+    feat = pd.DataFrame({"c": [0.5], "target_sgp": [5.0], "pt": [400.0]}, index=["a"])
     assert list(_stub_pool(monkeypatch, kind=PlayerType.PITCHER, raw=raw, feat=feat)["slot"]) == [
         "SP"
     ]
@@ -117,7 +122,7 @@ def test_a_pitcher_who_never_appeared_is_a_reliever_not_a_nan_group(monkeypatch)
     """G == 0 divides by zero. Left as NaN the comparison is False anyway, but
     only by accident -- fillna makes the RP routing the stated behavior."""
     raw = pd.DataFrame({"mlbID": ["a"], "Name": ["A Ghost"], "G": [0], "GS": [0]})
-    feat = pd.DataFrame({"c": [0.5], "target_sgp": [0.0]}, index=["a"])
+    feat = pd.DataFrame({"c": [0.5], "target_sgp": [0.0], "pt": [400.0]}, index=["a"])
     assert list(_stub_pool(monkeypatch, kind=PlayerType.PITCHER, raw=raw, feat=feat)["slot"]) == [
         "RP"
     ]
@@ -127,8 +132,53 @@ def test_hitters_are_grouped_by_slot_and_credited_from_the_floor(monkeypatch):
     """The hitter branch is the one whose spread is left in place, so its credit
     column is what the `resid ~ credit` slope regresses against."""
     raw = pd.DataFrame({"mlbID": ["a"], "Name": ["CJ Abrams"], "G": [150], "GS": [150]})
-    feat = pd.DataFrame({"c": [0.9], "target_sgp": [12.0]}, index=["a"])
+    feat = pd.DataFrame({"c": [0.9], "target_sgp": [12.0], "pt": [400.0]}, index=["a"])
     out = _stub_pool(monkeypatch, kind=PlayerType.HITTER, raw=raw, feat=feat)
     assert list(out["slot"]) == ["SS"]
     assert out["credit"].iloc[0] == 1.0
     assert bool(out["mapped"].iloc[0])
+
+
+def test_the_study_credits_the_slot_the_board_actually_prices(monkeypatch):
+    """`calculate_var` MAXIMIZES var, so it nets against the lowest eligible floor,
+    not the first token Yahoo lists. Reading `slots[0]` instead mis-partitioned 68
+    of 977 hitter rows -- every 2B/3B player, listed 2B-first but priced at 3B --
+    and moved the per-position means the docstring directs a reader to."""
+    raw = pd.DataFrame({"mlbID": ["a"], "Name": ["Nolan Gorman"], "G": [140], "GS": [140]})
+    feat = pd.DataFrame({"c": [0.6], "target_sgp": [6.0], "pt": [500.0]}, index=["a"])
+    monkeypatch.setattr(module, "_raw", lambda year, table: raw)
+    monkeypatch.setattr(module, "_transition", lambda year, k, denoms: feat)
+    monkeypatch.setattr(module, "composite_pct", lambda frame, k, weights=None: frame["c"])
+    monkeypatch.setattr(module, "ALL_TRANSITION_YEARS", (2022,))
+    out = module._positional_residuals(
+        PlayerType.HITTER, None, ({"nolan gorman": ["2B", "3B"]}, {"2B": 0.4, "3B": 0.1})
+    )
+    assert list(out["slot"]) == ["3B"]
+    assert out["credit"].iloc[0] == pytest.approx(-0.1)
+
+
+def test_every_real_hitter_slot_has_a_floor():
+    """The invariant the study's credit column rests on. Drop or rename a floors
+    key and `calculate_var` silently falls back for that slot: the table flattens
+    and the slope prints ~0.000, which is exactly the conclusion `scarcity_floors`
+    already draws -- so it fails quiet in the direction of the answer we want,
+    with the suite green. DH and IF are excluded deliberately: they are Yahoo
+    aggregates, not scarcity positions, and have no floor by design."""
+    _, floors = module.pricing_table(get_sgp_denominators())
+    real = set(HITTER_ELIGIBLE) - {Position.DH, Position.IF}
+    missing = sorted(str(slot) for slot in real - set(floors))
+    assert not missing, f"_slots_for can emit {missing}, which no floor prices"
+    assert set(FALLBACK_POS["hitter"]) <= set(floors)
+
+
+def test_an_aggregate_only_slot_is_charged_the_deepest_floor_not_zero():
+    """IF and DH have no floor, so they must fall through to UTIL -- the harshest
+    hitter floor -- rather than scoring as a free 0.0 credit, which would hand an
+    unmapped slot the best price on the board."""
+    _, floors = module.pricing_table(get_sgp_denominators())
+    var, pos = calculate_var(
+        pd.Series({"total_sgp": 0.0, "positions": [Position.IF], "ip": 0.0}), floors, True
+    )
+    assert pos == "UTIL"
+    assert var == pytest.approx(-floors["UTIL"])
+    assert var < 0.0

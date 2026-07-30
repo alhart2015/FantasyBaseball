@@ -26,13 +26,20 @@ positional term is a scarce-position bonus rather than a subtracted floor; see
 
 MID-SEASON CAVEAT. `proj_sgp`, `sd` and `proj_var` are fitted on COMPLETE seasons,
 so running this partway through one scores a truncated pool against full-season
-constants: fewer players clear MIN_PT, everyone's value percentile is pushed up,
-and the printed absolutes come out systematically LOW, worse the earlier it is
-run. The size of that gap is not stated because nothing here regenerates it and a
-stale figure would read as a correction factor, which it is not. Within-pool
-ORDERING is unaffected, because the truncation is a monotone remap, and both pools
-shift together so cross-pool comparison mostly survives. Compare ranks and gaps
-mid-season; trust the levels only on a finished season.
+constants. Truncation removes the players who have not yet cleared MIN_PT, and
+those are mostly the low-value ones, so a SURVIVOR ranks lower inside the smaller
+pool than he would in the full one and his printed absolutes come out LOW.
+
+The distortion is strongly uneven: it is several times larger mid-board than at
+the top, which means GAPS between tiers are unreliable mid-season as well as
+levels. Only within-pool ORDER survives, and only NEARLY -- not because the
+truncation is a monotone remap, which it is not: `skill_pct` averages several
+per-stat percentiles that each remap differently under a change of pool, so a
+small number of pairs genuinely cross.
+
+`--study` prints all of it -- per-quintile shift and rank correlation, at this
+run's actual pool size -- for the same reason the numbers left this file
+elsewhere: an earlier version of this paragraph had the direction backwards.
 
 Read the ranking in TIERS, not by row. Adjacent players are separated by far less
 than `sd`, so consecutive ranks are close to coin flips; `sd` is there to stop a
@@ -531,17 +538,28 @@ def _positional_residuals(kind: str, denoms, pricing) -> pd.DataFrame:
         by_id = raw["Name"]
         slots = [_slots_for(positions, by_id.get(i, ""), kind) for i in feat.index]
         blended = composite_pct(feat, kind)
+        # Price each row through `calculate_var` rather than reading `slots[0]`.
+        # It MAXIMIZES var, so it nets against the lowest eligible floor, which is
+        # not generally the first token Yahoo lists: 2B/3B players are listed
+        # 2B-first and priced at 3B. Scoring at total_sgp 0 makes the return value
+        # the applied credit itself (0 - floor), so this table cannot partition or
+        # credit differently from the board it is the evidence for -- including for
+        # pitchers, whose "P" is not a floors key at all and routes through
+        # `_pitcher_floor_key`.
+        priced = [
+            calculate_var(pd.Series({"total_sgp": 0.0, "positions": slot, "ip": ip}), floors, True)
+            for slot, ip in zip(slots, feat["pt"], strict=True)
+        ]
         if kind == PlayerType.PITCHER:
-            # Group by ROLE, not by the single "P" slot: the SP/RP split is the
-            # thing `scarcity_floors` merged the two floors over, so it is what
-            # needs regenerating. Role from start share, matching the routing in
-            # `_role_equivalent_ip` so the diagnostic and the pricing agree.
+            # Group by ROLE. `calculate_var` reports every pitcher as "P", so
+            # grouping on what it returns would print one row and regenerate
+            # nothing -- and the SP/RP split is the whole subject of the merge.
             games = pd.to_numeric(raw["G"], errors="coerce").reindex(feat.index)
             starts = pd.to_numeric(raw["GS"], errors="coerce").reindex(feat.index)
             share = (starts / games.where(games > 0)).fillna(0.0)
             group = ["SP" if value >= 0.5 else "RP" for value in share]
         else:
-            group = [slot[0] for slot in slots]
+            group = [pos for _, pos in priced]
         frames.append(
             pd.DataFrame(
                 {
@@ -551,14 +569,59 @@ def _positional_residuals(kind: str, denoms, pricing) -> pd.DataFrame:
                         normalize_name(str(by_id.get(i, ""))) in positions for i in feat.index
                     ],
                     "resid": feat["target_sgp"].to_numpy() - expected_sgp(blended, kind).to_numpy(),
-                    "credit": [-floors.get(slot[0], 0.0) for slot in slots],
+                    "credit": [var for var, _ in priced],
                 }
             )
         )
     return pd.concat(frames, ignore_index=True)
 
 
-def run_study(denoms) -> None:
+def _truncation_shift(kind: str, denoms, year: int, pool_size: int) -> pd.DataFrame:
+    """What running mid-season does to a COMPLETE season's own numbers.
+
+    Simulates the truncation by keeping only the `pool_size` highest-playing-time
+    rows and rebuilding every family from scratch -- which is what a partial season
+    actually does, since each family is a percentile computed WITHIN the pool that
+    cleared MIN_PT. Regenerates the MID-SEASON CAVEAT at the top of this module.
+    """
+    observed = _observed(year, kind, denoms)
+    out_year = zips_out_year_sgp(year, kind, denoms)
+
+    def priced(frame: pd.DataFrame) -> pd.Series:
+        feat = _qualified_families(frame, kind)
+        feat["future_pct"] = percentile(out_year.reindex(feat.index))
+        feat = feat.dropna(subset=["value_pct", "skill_pct", "age_pct"])
+        return expected_sgp(composite_pct(feat, kind), kind)
+
+    both = pd.DataFrame(
+        {"full": priced(observed), "small": priced(observed.nlargest(pool_size, "pt"))}
+    ).dropna()
+    both["delta"] = both["small"] - both["full"]
+    return both
+
+
+def _print_truncation(kind: str, denoms, pool_size: int) -> None:
+    print("")
+    print(f"  truncation to the live pool size ({pool_size} rows), on COMPLETE seasons:")
+    print("   year   n  rho    mean    Q1     Q2     Q3     Q4     Q5   top10")
+    for year in ALL_TRANSITION_YEARS:
+        shift = _truncation_shift(kind, denoms, year, pool_size)
+        if shift.empty:
+            continue
+        quintiles = shift.groupby(pd.qcut(shift["full"], 5, labels=False, duplicates="drop"))
+        cells = "".join(f"{value:>7.2f}" for value in quintiles["delta"].mean())
+        top10 = shift.nlargest(10, "full")["delta"].mean()
+        print(
+            f"   {year} {len(shift):>3} {_rho(shift['full'], shift['small']):.3f}"
+            f"{shift['delta'].mean():>7.2f}{cells}{top10:>7.2f}"
+        )
+    print(
+        "    -> levels come out LOW, and much more so mid-board than at the top, so"
+        " GAPS are distorted too; rho shows order is only NEAR-invariant."
+    )
+
+
+def run_study(denoms, live_year: int) -> None:
     """Print the diagnostics the module docstrings argue from.
 
     Every claim in `keepers/composite.py` about WHY the families are shaped the way
@@ -572,6 +635,10 @@ def run_study(denoms) -> None:
         print("")
         print(header)
         print(f"{kind.upper()}  ({len(frames)} transitions)")
+
+        # Measured, not assumed: the caveat is about THIS run's pool.
+        live = _observed(live_year, kind, denoms)
+        _print_truncation(kind, denoms, int((live["pt"] >= MIN_PT[kind]).sum()))
 
         print("  what predicts next season, split into volume and rate:")
         print(f"    {'predictor':<16}{'-> SGP':>9}{'-> PT':>9}{'-> RATE':>9}")
@@ -736,7 +803,7 @@ def main() -> int:
         run_fit(denoms)
         return 0
     if args.study:
-        run_study(denoms)
+        run_study(denoms, year)
         return 0
     if args.roster:
         return roster_report(year, denoms, keepers, args.slots)
