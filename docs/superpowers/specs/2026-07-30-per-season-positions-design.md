@@ -65,23 +65,31 @@ Outfield is combined: `OF` eligibility is **>= 10 games across LF + CF + RF summ
 because the league rosters one `OF` slot. Base slots only are stored; the existing
 `can_fill_slot` derives the `IF`/`UTIL`/`OF` flex slots from them.
 
-### Data source
+### Data source and fetch boundary
 The MLB Stats fielding leaderboard (`stats=season&group=fielding&playerPool=all`,
 paginated), which returns one row per (player, position) with `games`, keyed by
 **MLBAM id** -- matching the keeper board's index, so no name join is needed for the
 measurement. `keepers/mlb_stats.py`'s `_fetch_mlb_season(group, year)` already
-paginates and caches; it takes a `group` argument, so `'fielding'` reuses it.
+paginates and json-normalizes; the fetch (with the `fetch_or_cache` layer, like the
+hitting/pitching pulls) lives there and returns a raw frame. After json_normalize
+the columns the derivation needs are `player.id` (the MLBAM id, an int),
+`position.abbreviation` (e.g. `"C"`, `"LF"`, `"P"`), and `stat.games` (an int). The
+fetch that Phase 0 caches and Phase 1 exposes is a thin wrapper returning that frame
+for a season.
 
 ### Derivation module
 `keepers/appearances.py` (pure, I/O-free like the rest of the normalization layer):
 
     season_eligibility(fielding: pd.DataFrame) -> dict[int, set[str]]
 
-Group fielding rows by (`player_id`, mapped base slot), sum `games`, keep base slots
-whose summed games >= 10. Mapping: `C->C`, `1B/2B/3B/SS->same`, `LF/CF/RF->OF`,
-`P->P`; `DH` and any other non-fielding token contribute to no base slot. Returns
-MLBAM id -> set of base slots. A player with no >= 10-game base slot is simply absent
-from the dict (the caller supplies the pool fallback).
+Reads `player.id`, `position.abbreviation`, `stat.games` from the raw frame. Group by
+(`player.id`, mapped base slot), sum `stat.games`, keep base slots whose summed games
+>= 10. Mapping: `C->C`, `1B/2B/3B/SS->same`, `LF/CF/RF->OF`, `P->P`; `DH` and any
+other non-fielding token contribute to no base slot. Returns `int` MLBAM id -> set of
+base slots. A player with no >= 10-game base slot is simply absent from the dict (the
+caller supplies the pool fallback). The returned key dtype is `int` to match the
+board's MLBAM index; a str/int mismatch would silently make every join miss, so the
+derivation coerces `player.id` to int and the wiring asserts the index dtype agrees.
 
 ### Wiring into `run_scarcity`
 Replace the per-season `eligible` construction. For season `year`, load
@@ -112,12 +120,21 @@ sentence from `keepers/scarcity.py`; the range is now a flag output, not a liter
 - **per-season coverage**: how many board rows got a real (non-DH) position vs fell
   to the DH fallback, per pool and season, so the contamination cannot recur
   silently.
-- **derived-vs-Yahoo agreement (2026)**: match the 10-game-rule eligibility for 2026
-  against `load_positions()` (the real Yahoo map), bridged name<->MLBAM, and print
-  per-slot agreement. This is a sanity check that the rule reproduces Yahoo, not a
-  tuning step (the threshold is fixed at 10). The 2026 season is partial, so the
-  check is directional; the write-up notes that a player Yahoo lists but who has not
-  yet reached 10 games in 2026 is an expected miss, not a rule error.
+- **derived-vs-Yahoo agreement**: match the 10-game-rule eligibility against
+  `load_positions()` (the real Yahoo map) and print per-slot agreement. The season
+  compared is **2025, not 2026**: Yahoo's 2026 map derives its eligibility largely
+  from the 2025 season, and 2026 is only half-played, so derived-2026 would spuriously
+  under-match (a player Yahoo lists off 2025 who has not yet reached 10 games in 2026
+  is not a rule error). Derived-2025 is a complete season and is the apples-to-apples
+  comparison. The bridge is the **2025 board** (the season being validated), which
+  carries both the MLBAM index and clean player `name`s: map derived-2025 (MLBAM) ->
+  name via that board, then compare to Yahoo (`normalize_name` -> slots); names that
+  do not bridge are counted as unmatched, not dropped. (The raw fielding pull's own
+  `player.fullName` is cp1252-mangled, so the clean board names are used for the
+  bridge, not the fielding frame's.) This is a diagnostic, not a hard gate -- but if a
+  dedicated slot's agreement is grossly low (well under ~80% of Yahoo's players at
+  that slot recovered), that signals a mapping bug to investigate BEFORE reshipping
+  credits, not a number to accept.
 
 ## Requirements
 
@@ -130,8 +147,8 @@ R3. `run_scarcity` scores each season 2022-2025 against its own derived eligibil
 R4. `marginal_starter_floors` sets the UTIL floor from the best UTIL-eligible
     leftover, falling back to `max(dedicated)` only when none exists.
 R5. `--scarcity` prints, per season: floors, centred credits, and coverage
-    (real-position vs DH-fallback counts); and once, the derived-vs-Yahoo 2026
-    agreement.
+    (real-position vs DH-fallback counts); and once, the derived-**2025**-vs-Yahoo
+    agreement (bridged through the 2025 board's MLBAM<->name).
 R6. The "0.50 to 2.18" sentence is removed from `keepers/scarcity.py`.
 R7. `NATIVE_CREDITS` is regenerated from the corrected measurement; `--scarcity`
     reproduces it to delta 0.00 on every slot.
@@ -159,10 +176,12 @@ R10. `pytest -n auto`, `ruff check .`, `ruff format --check .`, `mypy`, `vulture
   the raw pull are irrelevant. Only the 2026 validation touches names -> use
   `normalize_name` for the bridge, and count unbridgeable names as unmatched rather
   than silently dropping them.
-- **Partial 2026 season.** Derived-2026 has fewer 10-game players than a full season;
-  the validation output must say so, so a lower agreement number is not misread as a
-  rule error. The measurement itself uses only complete seasons (2022-2025), so this
-  affects only the validation print.
+- **2026 is deliberately unused for fielding.** The measurement uses complete seasons
+  2022-2025, and the validation uses derived-2025 vs the Yahoo map; nothing needs 2026
+  fielding, so it is not fetched. (The Yahoo 2026 map still comes from
+  `load_positions()`, as today, for the live board.) An implementer must not add a
+  2026 fielding fetch "for completeness" -- a half-season derived map is exactly the
+  misleading artifact the validation-season choice avoids.
 - **Numeric-default trap.** `games` must be read with an explicit missing->skip, not
   `games or 0` semantics that could sink a real 0 (there is no 0-game row, but follow
   the CLAUDE.md rule).
@@ -180,22 +199,34 @@ R10. `pytest -n auto`, `ruff check .`, `ruff format --check .`, `mypy`, `vulture
 - `test_scarcity.py` reviewed and updated deliberately for any assertion the F5/F6
   changes invalidate, with a stated justification (requirement changed, not a
   silent loosening).
+- Before Phase 3 reships `NATIVE_CREDITS`, grep the suite for any test pinning a
+  `NATIVE_CREDITS` literal or a credit-dependent board value (`proj_var`, a named
+  keeper's rank/credit); update each to the regenerated numbers with justification,
+  or confirm none exist. A silently-passing golden test over the old credits would
+  otherwise hide the reship.
+- **Phase 2 no-live-board-change gate.** `marginal_starter_floors` is called only by
+  `run_scarcity`, never by `build`, so wiring the derived eligibility and fixing the
+  UTIL floor must not touch the live board while `NATIVE_CREDITS` is unchanged.
+  Verify: capture the 2026 `build` output CSV before Phase 2 and after, and require
+  `rank`/`composite`/`proj_sgp`/`sd`/`proj_var` identical (the credits literal has not
+  changed yet, so the board must not move until Phase 3).
 - Integration (needs the fielding cache): `run_scarcity` completes, reproduces the
   new `NATIVE_CREDITS` to delta 0.00, and prints coverage + agreement.
 - Full suite + lint/type/dead-code checks (R10).
 
 ## Prerequisites and risks
 
-- **Fielding cache.** The fielding pull must be fetched for 2022-2026 and cached
-  (like the skills cache). If the MLB Stats API is unreachable, the measurement
-  cannot be regenerated -- surface, do not fabricate.
+- **Fielding cache.** The fielding pull must be fetched for **2022-2025** and cached
+  (like the skills cache). 2026 is not fetched (see the edge case). If the MLB Stats
+  API is unreachable, the measurement cannot be regenerated -- surface, do not
+  fabricate.
 - **Credits move the board.** R7 changes every `proj_var`; the catcher-led top order
   will change. This is the intended outcome, but the PR narrative (R9) must be
   updated in the same change so the description never asserts the old numbers.
 
 ## Phasing
 
-- **Phase 0 -- prerequisite.** Fetch and cache MLB Stats fielding for 2022-2026;
+- **Phase 0 -- prerequisite.** Fetch and cache MLB Stats fielding for 2022-2025;
   surface if the API is unreachable.
 - **Phase 1 -- derivation (no behaviour change).** Add the fielding pull to
   `mlb_stats.py` and `keepers/appearances.py::season_eligibility`; unit tests.
