@@ -515,10 +515,13 @@ asserts C is the scarcest positive hitter credit — it must still hold on the n
 numbers (catcher is genuinely scarce); if it does NOT, STOP and investigate rather
 than editing the test.
 
-- [ ] **Step 2: Paste the regenerated `NATIVE_CREDITS`**
+- [ ] **Step 2: Re-confirm the board still matches baseline, THEN paste**
 
-From the Task 4 `--scarcity` output's paste-ready block, replace `NATIVE_CREDITS` in
-`scarcity.py` with the regenerated dict.
+Before reshipping, prove Tasks 3-4 left the live board untouched (only the reship may
+move it): re-run the Task 2 Step 6 gate; expect both pools `IDENTICAL`. Then, from the
+Task 4 `--scarcity` output's paste-ready block, replace `NATIVE_CREDITS` in
+`scarcity.py` with the regenerated dict. (After this paste the board is EXPECTED to
+move — that is finding 1's fix.)
 
 - [ ] **Step 3: Confirm delta 0.00**
 
