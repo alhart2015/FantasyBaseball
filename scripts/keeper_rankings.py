@@ -691,9 +691,10 @@ def run_scarcity(denoms) -> None:
     """Re-measure the positional credits and print them paste-ready.
 
     The floors `keepers.scarcity` ships are measured, not assumed, so this is what
-    regenerates them. It prints the per-season table as well as the average because
-    the single-season spread is large -- the catcher credit has ranged from 0.50 to
-    2.18 -- and an average of four seasons is the only defensible summary.
+    regenerates them. Each season is scored against its OWN >= 10-game eligibility
+    (`keepers.appearances`), not the current Yahoo map. It prints the per-season
+    centred credit alongside the average because the single-season spread is large,
+    and an average of four seasons is the only defensible summary.
     """
     config = load_config(CONFIG_PATH)
     capacities = slot_capacities(config.roster_slots, config.num_teams)
@@ -737,6 +738,12 @@ def run_scarcity(denoms) -> None:
     for year, rows, dh in coverage:
         print(f"    {year}  {rows:>5}  {rows - dh:>5}  {dh:>4}")
 
+    print("\n  centred credit per season (the year-to-year spread, as a flag not prose):")
+    print("    year  " + "".join(f"{slot:>8}" for slot in slots))
+    for year, floors in per_season:
+        credits = centred_credits(floors)
+        print(f"    {year}  " + "".join(f"{credits.get(s, float('nan')):>8.2f}" for s in slots))
+
     mean_floor = seasons.mean().to_dict()
     fresh = centred_credits(mean_floor)
     order = sorted(fresh, key=lambda slot: -fresh[slot])
@@ -748,11 +755,38 @@ def run_scarcity(denoms) -> None:
             f"    {slot:<7}{mean_floor[slot]:>8.2f}{fresh[slot]:>9.2f}"
             f"{shipped:>10.2f}{fresh[slot] - shipped:>8.2f}"
         )
+    _validate_against_yahoo(denoms)
+
     print("\n  paste into keepers/scarcity.py:")
     print("NATIVE_CREDITS: dict[str, float] = {")
     for slot in order:
         print(f'    "{slot}": {fresh[slot]:.3f},')
     print("}")
+
+
+def _validate_against_yahoo(denoms) -> None:
+    """Sanity-check the 10-game rule against the real Yahoo map, on 2025 (a COMPLETE
+    season -- what Yahoo's 2026 map is largely built from; 2026 is half-played, so a
+    derived-2026 map would spuriously under-match). Bridges the derived map (MLBAM) to
+    Yahoo (name) through the 2025 board's own clean name column."""
+    yahoo, _ = pricing_table()  # normalized-name -> Yahoo slots
+    derived = season_eligibility(fetch_mlb_season(SKILLS_DIR, 2025, "fielding"))
+    board = projected(2025, PlayerType.HITTER, denoms)
+    slots = ("C", "1B", "2B", "3B", "SS", "OF")
+    hit = {s: [0, 0] for s in slots}  # [derived-agrees, yahoo-has]
+    for idx, name in zip(board.index, board["name"], strict=True):
+        y = set(yahoo.get(normalize_name(str(name)), []))
+        d = derived.get(int(idx), set())
+        for s in slots:
+            if s in y:
+                hit[s][1] += 1
+                if s in d:
+                    hit[s][0] += 1
+    print("\n  derived-2025 vs Yahoo-2026 agreement (share of Yahoo's players recovered):")
+    for s in slots:
+        agree, total = hit[s]
+        pct = 100.0 * agree / total if total else float("nan")
+        print(f"    {s:<4} {agree:>4}/{total:<4} = {pct:5.1f}%")
 
 
 def _print_cross_pool(denoms) -> None:

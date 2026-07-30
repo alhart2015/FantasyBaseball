@@ -43,11 +43,11 @@ from fantasy_baseball.utils.constants import compute_starters_per_position
 from fantasy_baseball.utils.positions import can_fill_slot
 
 # Mean-centred credit per slot, measured on `keepers.projection`'s scale over the
-# four COMPLETE seasons 2022-2025 (2026 is partial; including it moves nothing by
-# more than 0.08, since a credit is a difference and the mid-season level shift is
-# common to every slot). Regenerate with `keeper_rankings.py --scarcity`, which also
-# prints the per-season table these average -- the catcher figure ranges 0.50 to
-# 2.18 year to year, so the average is the number to use and no single season is.
+# four COMPLETE seasons 2022-2025, each against its OWN >= 10-game position
+# eligibility (`keepers.appearances`), not the current Yahoo map. Regenerate with
+# `keeper_rankings.py --scarcity`, which prints the per-season centred credit these
+# average -- that is where the year-to-year spread is read; it is deliberately not
+# restated here, because nothing in this file would regenerate a number written in it.
 #
 # One "P" entry by construction: the pool has a single starting slot type, so there
 # is no role split to get wrong here, which is why the table needs no SP/RP merge
