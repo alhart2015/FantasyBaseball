@@ -136,13 +136,14 @@ def scarcity_floors(floors: dict[str, float]) -> dict[str, float]:
     pooled pitcher panel and has no role term, so it predicts the same value for a
     starter and a reliever at the same composite. Netting that against
     role-specific floors debits a difference the projection never credited, and
-    measurement shows it lands the wrong way round: against the pooled fit,
-    starters realize about half a point MORE than predicted and relievers about
-    half a point less, widening to +2.2 vs -0.5 in the top composite decile. The
-    RP floor then adds a further ~1.9 to relievers. Compounded, that put the top
-    forty of the pitcher board entirely on RP-classified arms who went on to earn
-    less than the starters below them at every level of the score. Until the
-    projection itself is role-aware, one floor is the only consistent choice.
+    measurement shows it lands the wrong way round: starters BEAT the pooled fit
+    and relievers fall short of it, and the gap widens in the top composite decile
+    -- exactly where keeper decisions are made -- while the shallower RP floor
+    credits relievers on top of that. Compounded, that put the top of the pitcher
+    board entirely on RP-classified arms who went on to earn less than the starters
+    below them at every level of the score. Until the projection itself is
+    role-aware, one floor is the only consistent choice. `--study` prints the
+    per-role residual and its top-decile split.
 
     **The centring is a DISPLAY offset**, not a model decision, and worth being
     blunt about because the shape invites the opposite reading. Subtracting these
@@ -168,9 +169,9 @@ def scarcity_floors(floors: dict[str, float]) -> dict[str, float]:
     league, so residual and credit co-move there for a survivorship reason with
     nothing to do with position scarcity.
 
-    Deliberately no numbers in this paragraph. Three successive attempts to state
-    them here were each wrong in a different way, because nothing regenerated them;
-    the table does.
+    No numbers anywhere in this docstring, deliberately. Three successive attempts
+    to state them here were each wrong in a different way, because nothing
+    regenerated them; `--study` does.
 
     Still open regardless of that evidence: the spread was calibrated on the wider
     draft-time scale, so against this compressed one it may simply be too wide.

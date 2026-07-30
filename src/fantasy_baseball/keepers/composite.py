@@ -42,11 +42,11 @@ value-only, skill-only and no-future baselines -- read it there rather than from
 cached copy here, which drifts silently and already did once on this branch.
 
 The shape those numbers support: skill leads, luck is close behind, future is a
-real but discounted third, age is a small adjustment. The surface is flat -- the
-top few weight vectors sit within ~0.002 of each other -- so read these as a
-shape and not as tuned constants. Two fit seasons cannot justify a third decimal,
-and `future` is set to 0.4 for both pools because the fit cannot separate 0.2 from
-0.4 for pitchers.
+real but discounted third, age is a small adjustment. Read them as that shape and
+not as tuned constants -- the ranked table `--backtest` prints separates its own
+top few candidates by less than it separates the two fit seasons, so a third
+decimal here would be noise. `future` is 0.4 for both pools for the same reason:
+the fit cannot tell 0.2 from 0.4 for pitchers.
 
 **The future weight is discounted for staleness, deliberately.** A FRESH
 next-season projection (one that has seen season T) is the single strongest
@@ -72,10 +72,11 @@ FITTED_WEIGHTS: dict[str, tuple[float, float, float, float]] = {
 }
 FAMILIES: tuple[str, ...] = ("skill", "luck", "future", "age")
 
-# Out-year projection blend, nearer year first. The two ZiPS out-years come from
-# one 2026-03-25 model run and correlate 0.96, so the blend lands 0.995
-# correlated with the nearer year alone -- this weighting expresses a preference
-# rather than adding much information.
+# Out-year projection blend, nearer year first. Both ZiPS out-years come from one
+# 2026-03-25 model run, so they are near-duplicates and the blend is almost
+# perfectly correlated with the nearer year alone: this weighting expresses a
+# preference for the nearer year rather than adding information. `--study` prints
+# both correlations per pool; no numbers here, since nothing would regenerate them.
 FUTURE_BLEND: tuple[float, float] = (2 / 3, 1 / 3)
 
 SKILL_COLUMNS: dict[str, tuple[str, ...]] = {

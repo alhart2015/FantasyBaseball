@@ -27,8 +27,9 @@ positional term is a scarce-position bonus rather than a subtracted floor; see
 MID-SEASON CAVEAT. `proj_sgp`, `sd` and `proj_var` are fitted on COMPLETE seasons,
 so running this partway through one scores a truncated pool against full-season
 constants: fewer players clear MIN_PT, everyone's value percentile is pushed up,
-and the printed absolutes come out systematically LOW -- around 1.6 SGP for
-hitters at the 2026 mid-season point, worse the earlier it is run. Within-pool
+and the printed absolutes come out systematically LOW, worse the earlier it is
+run. The size of that gap is not stated because nothing here regenerates it and a
+stale figure would read as a correction factor, which it is not. Within-pool
 ORDERING is unaffected, because the truncation is a monotone remap, and both pools
 shift together so cross-pool comparison mostly survives. Compare ranks and gaps
 mid-season; trust the levels only on a finished season.
@@ -76,6 +77,7 @@ from fantasy_baseball.keepers.actuals import index_by_mlbam, innings_to_float
 from fantasy_baseball.keepers.composite import (
     FAMILIES,
     FITTED_WEIGHTS,
+    FUTURE_BLEND,
     HITTER_SKILLS,
     LOWER_IS_BETTER,
     PITCHER_SKILLS,
@@ -528,10 +530,22 @@ def _positional_residuals(kind: str, denoms, pricing) -> pd.DataFrame:
         by_id = _raw(year, table).set_index("mlbID")["Name"]
         slots = [_slots_for(positions, by_id.get(i, ""), kind) for i in feat.index]
         blended = composite_pct(feat, kind)
+        if kind == PlayerType.PITCHER:
+            # Group by ROLE, not by the single "P" slot: the SP/RP split is the
+            # thing `scarcity_floors` merged the two floors over, so it is what
+            # needs regenerating. Role from start share, as that fix used.
+            raw = _raw(year, "pitching").set_index("mlbID")
+            games = pd.to_numeric(raw["G"], errors="coerce").reindex(feat.index)
+            starts = pd.to_numeric(raw["GS"], errors="coerce").reindex(feat.index)
+            share = (starts / games.where(games > 0)).fillna(0.0)
+            group = ["SP" if value >= 0.5 else "RP" for value in share]
+        else:
+            group = [slot[0] for slot in slots]
         frames.append(
             pd.DataFrame(
                 {
-                    "slot": [slot[0] for slot in slots],
+                    "slot": group,
+                    "decile": pd.qcut(blended, 10, labels=False, duplicates="drop"),
                     "mapped": [
                         normalize_name(str(by_id.get(i, ""))) in positions for i in feat.index
                     ],
@@ -578,6 +592,16 @@ def run_study(denoms) -> None:
             scores = [_rho(f["skill_pct"] + weight * f["luck_pct"], f["target"]) for f in frames]
             print(f"    w={weight:>5.1f}  rho={sum(scores) / len(scores):+.4f}")
 
+        near = zips_out_year_sgp(2027, kind, denoms)
+        far = zips_out_year_sgp(2028, kind, denoms).reindex(near.index)
+        if near.notna().any() and far.notna().any():
+            blend = FUTURE_BLEND[0] * near + FUTURE_BLEND[1] * far.fillna(near)
+            print(
+                f"  out-year 2027 vs 2028 rho = {_rho(near, far):+.3f}; "
+                f"blend vs 2027 alone = {_rho(blend, near):+.3f}"
+                "  <- why the second year adds little"
+            )
+
         print("  a FRESH next-season projection vs the stale out-year analogue:")
         for label, offset in (("stale (T, shipped)", 0), ("fresh (T+1)", 1)):
             scores = []
@@ -611,6 +635,11 @@ def run_study(denoms) -> None:
             " supported nor contradicted; the all-rows slope is inflated by unmapped"
             " players, who mostly left the league."
         )
+        top = table[table["decile"] == table["decile"].max()]
+        if top["slot"].nunique() > 1:
+            print("    top composite decile only:")
+            for slot, row in top.groupby("slot")["resid"].agg(["mean", "size"]).iterrows():
+                print(f"      {slot:<7}{row['mean']:>8.2f}{int(row['size']):>6}")
 
 
 def _dedupe_two_way(board: pd.DataFrame) -> pd.DataFrame:
