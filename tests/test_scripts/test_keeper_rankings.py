@@ -169,3 +169,29 @@ def test_names_are_normalized_so_accents_join_the_position_map():
     assert module._normalized_names([{"name": "Julio Rodríguez"}]) == {"julio rodriguez"}
     assert module._normalized_names([{"name": ""}, {}]) == set()
     assert module._normalized_names("not a list") == set()
+
+
+def test_qualified_families_emits_pt_and_batted_ball_columns():
+    """The column wiring the backtest and board both read. Cache-free so it catches
+    a broken join even when the skills fetch is unavailable."""
+    frame = pd.DataFrame(
+        {
+            "sgp": [20.0, 5.0, 12.0],
+            "age": [25.0, 31.0, 28.0],
+            "pt": [600.0, 550.0, 300.0],  # all above the 250 hitter floor
+            "avg": [0.310, 0.240, 0.250],
+            "xba": [0.250, 0.245, 0.280],  # player 0 overperformed (+.060), player 2 under
+            "barrel_pct": [12.0, 6.0, 9.0],
+            "barrel_pa_pct": [5.0, 3.0, 4.0],
+            "xwoba": [0.380, 0.300, 0.330],
+            "wrc_plus": [150.0, 95.0, 115.0],
+        },
+        index=pd.Index([1, 2, 3], name="mlbam_id"),
+    )
+    out = module._qualified_families(frame, "hitter")
+    assert {"pt_pct", "batted_ball_pct"} <= set(out.columns)
+    # Player 0 overperformed his xBA the most, so he tops batted_ball; player 2 is last.
+    assert out["batted_ball_pct"].idxmax() == 1
+    assert out["batted_ball_pct"].idxmin() == 3
+    # pt is monotone in PA within the pool.
+    assert out.loc[1, "pt_pct"] == pytest.approx(1.0)

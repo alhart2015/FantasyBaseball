@@ -108,6 +108,7 @@ from fantasy_baseball.keepers.composite import (
     HITTER_SKILLS,
     LOWER_IS_BETTER,
     PITCHER_SKILLS,
+    batted_ball,
     composite,
     future_percentile,
     luck,
@@ -224,6 +225,10 @@ def season_value(year: int, kind: str, denoms) -> pd.DataFrame:
         },
         index=frame.index,
     )
+    # The raw rate the batted-ball family differences against its expected skill
+    # (avg vs xba, era vs fip). Emitted under its real name; neither collides with a
+    # skills column, so `_observed`'s join adds no `_sk` suffix.
+    out["avg" if kind == "hitter" else "era"] = lines["avg" if kind == "hitter" else "era"]
     return out
 
 
@@ -287,17 +292,21 @@ def _observed(year: int, kind: str, denoms) -> pd.DataFrame:
 
 
 def _qualified_families(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
-    """Apply the playing-time floor and build the three same-season families.
+    """Apply the playing-time floor and build the same-season families.
 
-    Shared by the shipped ranking and the backtest that justifies its weights, so
-    the two cannot drift into validating different feature definitions. `future`
-    is left to the caller: the ranking uses out-years, the backtest a stale
-    same-year projection.
+    Computes ALL candidate families (`skill`, `luck`, `pt`, `batted_ball`, `age`);
+    `future` is left to the caller (the ranking uses out-years, the backtest a stale
+    same-year projection). The active pool's `FAMILIES[kind]` selects which ones the
+    composite actually blends, so the ranking and the backtest cannot drift into
+    validating different feature definitions.
     """
     qualified = frame[frame["pt"] >= MIN_PT[kind]].copy()
     qualified["value_pct"] = percentile(qualified["sgp"])
     qualified["skill_pct"] = skill_percentile(qualified, kind)
     qualified["luck_pct"] = luck(qualified["value_pct"], qualified["skill_pct"])
+    qualified["pt_pct"] = percentile(qualified["pt"])
+    # `batted_ball` returns avg-xba / fip-era, both signed higher = luckier already.
+    qualified["batted_ball_pct"] = percentile(batted_ball(qualified, kind))
     qualified["age_pct"] = percentile(qualified["age"], higher_is_better=False)
     return qualified
 
@@ -317,7 +326,11 @@ def _slots_for(positions: dict[str, list[str]], name: str, kind: str) -> list[st
 
 
 def composite_pct(
-    frame: pd.DataFrame, kind: str, weights: tuple[float, float, float, float] | None = None
+    frame: pd.DataFrame,
+    kind: str,
+    weights: tuple[float, ...] | None = None,
+    *,
+    family_order: tuple[str, ...] | None = None,
 ) -> pd.Series:
     """The composite, re-ranked to 0-1 -- the x-axis everything downstream uses.
 
@@ -327,20 +340,29 @@ def composite_pct(
     being applied to a subtly different variable, moving every proj_sgp, sd,
     proj_var and p_keep with no test failing.
 
-    The re-rank matters: `luck` is a difference centred on zero while the other
-    three families span 0-1, so the raw weighted mean is not on a percentile scale.
-    Ranking is order-preserving, so it changes only how the number reads.
+    The re-rank matters: `luck`/`batted_ball` are differences centred on zero while
+    the other families span 0-1, so the raw weighted mean is not on a percentile
+    scale. Ranking is order-preserving, so it changes only how the number reads.
     """
-    return percentile(composite(_family_columns(frame), kind, weights=weights))
+    order = family_order if family_order is not None else FAMILIES[kind]
+    return percentile(
+        composite(_family_columns(frame, order), kind, weights=weights, family_order=order)
+    )
 
 
-def _family_columns(frame: pd.DataFrame) -> dict[str, pd.Series]:
-    """The `{family: series}` mapping `composite` expects, keyed off FAMILIES so a
-    fifth family cannot be wired into one call site and not the other."""
-    return {family: frame[f"{family}_pct"] for family in FAMILIES}
+def _family_columns(frame: pd.DataFrame, family_order: tuple[str, ...]) -> dict[str, pd.Series]:
+    """The `{family: series}` mapping `composite` expects, for the active families."""
+    return {family: frame[f"{family}_pct"] for family in family_order}
 
 
-def projected(year: int, kind: str, denoms) -> pd.DataFrame:
+def projected(
+    year: int,
+    kind: str,
+    denoms,
+    *,
+    family_order: tuple[str, ...] | None = None,
+    weights: tuple[float, ...] | None = None,
+) -> pd.DataFrame:
     """Everything up to and including `proj_sgp`/`sd`, with NO positional term.
 
     Split out because `keepers.scarcity` measures its floors from `proj_sgp`, and
@@ -349,6 +371,9 @@ def projected(year: int, kind: str, denoms) -> pd.DataFrame:
     applied after `proj_sgp` is set -- but a reader would have to prove that by
     hand, and a later edit could make it false. This way the circularity cannot
     exist. It also skips a per-row pricing loop that is ~90% of a warm build.
+
+    `family_order`/`weights` override the shipped blend, for the backtest's
+    candidate boards; the live path leaves them None.
     """
     qualified = _qualified_families(_observed(year, kind, denoms), kind)
 
@@ -368,7 +393,7 @@ def projected(year: int, kind: str, denoms) -> pd.DataFrame:
             f"{year + 1}/{year + 2}; `future` cannot be computed"
         )
 
-    qualified["composite"] = composite_pct(qualified, kind)
+    qualified["composite"] = composite_pct(qualified, kind, weights=weights, family_order=family_order)
 
     # The composite is ordinal; this is what puts it on a value scale and lets
     # hitters and pitchers share one list. See `keepers.projection`.
@@ -383,9 +408,12 @@ def build(
     denoms,
     keepers: dict[str, str],
     pricing: tuple[dict[str, list[str]], dict[str, float]] | None = None,
+    *,
+    family_order: tuple[str, ...] | None = None,
+    weights: tuple[float, ...] | None = None,
 ) -> pd.DataFrame:
     """`projected` plus the positional adjustment, ranked and labelled."""
-    qualified = projected(year, kind, denoms)
+    qualified = projected(year, kind, denoms, family_order=family_order, weights=weights)
 
     # Mean-centred credits: a display offset only, see `keepers.scarcity`.
     positions, floors = pricing_table() if pricing is None else pricing
