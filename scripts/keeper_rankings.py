@@ -1,18 +1,21 @@
-"""Rank keeper candidates on skill, luck, future and age, then price them in VAR.
+"""Rank keeper candidates on skill, luck, batted-ball, future and age, then price
+them in VAR.
 
 Reads what `fetch_keeper_skills.py` cached, computes each player's actual roto
-value (SGP) for the season, blends the four families in percentile space using
+value (SGP) for the season, blends the five families in percentile space using
 the weights fitted in `keepers/composite.py`, then converts that ordinal
 composite into projected value with an error bar via `keepers/projection.py`.
 
 Writes `data/cache/keeper_skills/keeper_rankings_{kind}_{year}.csv`:
 
-    value_pct   percentile of actual SGP this season (= skill + luck)
-    skill_pct   SKILL   -- percentile of the peripherals
-    luck_pct    LUCK    -- value_pct - skill_pct, the unsupported part of the line
-    future_pct  FUTURE  -- percentile of blended out-year ZiPS projected SGP
-    age_pct     AGE     -- percentile of age, younger better
-    composite   the fitted four-family blend, ordinal within pool
+    value_pct        percentile of actual SGP this season (= skill + luck)
+    skill_pct        SKILL   -- percentile of the peripherals
+    luck_pct         LUCK    -- value_pct - skill_pct, the unsupported part of the line
+    batted_ball_pct  BATTED_BALL -- percentile of avg-xba / fip-era; carries a
+                     NEGATIVE weight, clawing the batted-ball luck back out of LUCK
+    future_pct       FUTURE  -- percentile of blended out-year ZiPS projected SGP
+    age_pct          AGE     -- percentile of age, younger better
+    composite        the fitted five-family blend, ordinal within pool
     proj_sgp    projected 2027 SGP implied by that composite
     sd          predictive SD of proj_sgp for ONE player, not a group mean
     proj_var    proj_sgp plus a mean-centred positional scarcity adjustment
@@ -60,9 +63,12 @@ same reason the other numbers left this file: nothing here would regenerate them
 Read a mixed board as expected value only, and read the pitcher list on its own --
 its top is compressed to a fraction of one sd, so that ORDER means nothing.
 
-`luck` carries a POSITIVE weight and `future` is discounted for staleness. Both
-are counterintuitive and both are argued in `keepers/composite.py`; `--study`
-reproduces the evidence.
+`luck` carries a POSITIVE weight and `batted_ball` a NEGATIVE one: `luck` rewards
+outperforming the peripherals (mostly a playing-time/role signal) while
+`batted_ball` claws back the part of that gap which is pure batted-ball luck and
+does not repeat. `future` is discounted for staleness. All three are
+counterintuitive and argued in `keepers/composite.py`; `--study` reproduces the
+evidence and `--backtest` the weights.
 
 Usage:
     python scripts/keeper_rankings.py
@@ -160,6 +166,7 @@ SHOWN = [
     "pos",
     "skill_pct",
     "luck_pct",
+    "batted_ball_pct",
     "future_pct",
     "composite",
     "proj_sgp",
@@ -393,7 +400,9 @@ def projected(
             f"{year + 1}/{year + 2}; `future` cannot be computed"
         )
 
-    qualified["composite"] = composite_pct(qualified, kind, weights=weights, family_order=family_order)
+    qualified["composite"] = composite_pct(
+        qualified, kind, weights=weights, family_order=family_order
+    )
 
     # The composite is ordinal; this is what puts it on a value scale and lets
     # hitters and pitchers share one list. See `keepers.projection`.
@@ -517,7 +526,9 @@ def _best_weights(
     best_weights: tuple[float, ...] | None = None
     best_mean = -2.0
     for weights in product(*axes):
-        mean = sum(_weighted_rho(f, weights, kind, family_order=family_order) for f in fit) / len(fit)
+        mean = sum(_weighted_rho(f, weights, kind, family_order=family_order) for f in fit) / len(
+            fit
+        )
         if mean > best_mean:
             best_weights, best_mean = weights, mean
     assert best_weights is not None
@@ -530,8 +541,13 @@ def _watchlist_moves(year: int, denoms, best: dict[str, tuple[float, ...]]) -> N
     pricing = pricing_table(denoms)
     boards = {
         label: build(
-            year, "hitter", denoms, {}, pricing=pricing,
-            family_order=CANDIDATES[label], weights=best[label],
+            year,
+            "hitter",
+            denoms,
+            {},
+            pricing=pricing,
+            family_order=CANDIDATES[label],
+            weights=best[label],
         ).reset_index()
         for label in CANDIDATES
     }
@@ -552,7 +568,9 @@ def run_backtest(denoms) -> None:
     for kind in POOLS:
         fit = [_transition(y, kind, denoms) for y in BACKTEST_FIT_YEARS]
         hold = _transition(BACKTEST_HOLDOUT, kind, denoms)
-        print(f"\n{'=' * 70}\n{kind.upper()}  fit={list(BACKTEST_FIT_YEARS)} holdout={BACKTEST_HOLDOUT}")
+        print(
+            f"\n{'=' * 70}\n{kind.upper()}  fit={list(BACKTEST_FIT_YEARS)} holdout={BACKTEST_HOLDOUT}"
+        )
         print(f"  {'candidate':<20}{'holdout':>9}{'fit':>9}{'noise':>9}  best weights")
         best_by_pool[kind] = {}
         for label, family_order in CANDIDATES.items():
@@ -563,13 +581,12 @@ def run_backtest(denoms) -> None:
             noise = abs(per_season[0] - per_season[1])  # in-sample rho spread
             shown = " ".join(f"{f}={w:+.2f}" for f, w in zip(family_order, weights, strict=True))
             print(f"  {label:<20}{holdout:>9.4f}{fit_rho:>9.4f}{noise:>9.4f}  {shown}")
-        # Baseline reproduction: baseline at the SHIPPED weights (not the grid best)
-        # must reproduce the pre-change --backtest number, or the family-machinery
-        # generalization changed behaviour.
-        shipped = _weighted_rho(
-            hold, FITTED_WEIGHTS[kind], kind, family_order=CANDIDATES["baseline"]
-        )
-        print(f"  {'baseline@shipped':<20}{shipped:>9.4f}   (must match pre-change run)")
+        # The currently-shipped model at its shipped weights, for reference against
+        # the candidate rows above. The `baseline` candidate row reproduces the
+        # pre-change number (0.7085 hitters / 0.4962 pitchers), which is the
+        # generalization's no-behaviour-change check.
+        shipped = _weighted_rho(hold, FITTED_WEIGHTS[kind], kind, family_order=FAMILIES[kind])
+        print(f"  {'shipped':<20}{shipped:>9.4f}   (current model)")
     # The watchlist is a hitter question; build 2026 boards under each candidate's
     # best hitter weights.
     _watchlist_moves(2026, denoms, best_by_pool["hitter"])

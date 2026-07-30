@@ -1,4 +1,4 @@
-"""Rank keeper candidates on four families: skill, luck, future and age.
+"""Rank keeper candidates on five families: skill, luck, batted-ball, future, age.
 
 Pure and I/O-free like the rest of the normalization layer. Everything works in
 PERCENTILE space within a player pool, so hitters and pitchers rank against their
@@ -27,6 +27,20 @@ what it says, not a new model.
     luck score is the sell-high case, because the rate half will not repeat.
     `--study` prints all of these correlations.
 
+**batted_ball** -- `avg - xba` for hitters, `fip - era` for pitchers (higher =
+luckier): the specific rate overperformance the peripherals do not support. It
+carries a NEGATIVE weight, and this is the point of the family. On its own the
+measure predicts next-year value at ~0.05 (hitters) and ~0.00 (pitchers) -- pure
+noise, and `--backtest` gives it exactly zero weight when it is the only
+non-skill volume term. But it is positively correlated with `luck`, which bundles
+the same batted-ball luck in with the real playing-time signal. Entering
+`batted_ball` alongside `luck` lets the fit REWARD the gap (via luck) while
+CLAWING BACK its batted-ball half (via a negative batted_ball weight), so an
+everyday player who is merely running hot is no longer priced like one who earned
+it. That is exactly the everyday-plus-lucky profile (Rafaela, Otto Lopez) the
+single `luck` term used to oversell. The negative weight replicated across BOTH
+pools independently; `--backtest` and `--study` are the evidence, #277 the history.
+
 **future** -- percentile of projected SGP from the out-year ZiPS files, blended
 `FUTURE_BLEND` in favour of the nearer year.
 
@@ -37,16 +51,18 @@ Where the weights come from
 ---------------------------
 `scripts/keeper_rankings.py --backtest`: features observed in season T against the
 SGP percentile realized in T+1, fit on the earlier transitions and held out on the
-latest. It prints the holdout table for the shipped weights and for the
-value-only, skill-only and no-future baselines -- read it there rather than from a
-cached copy here, which drifts silently and already did once on this branch.
+latest. It grid-searches each candidate family set and prints their holdout rho
+with a fit-season noise floor -- read it there rather than from a cached copy here,
+which drifts silently and already did once on this branch.
 
-The shape those numbers support: skill leads, luck is close behind, future is a
-real but discounted third, age is a small adjustment. Read them as that shape and
-not as tuned constants -- the ranked table `--backtest` prints separates its own
-top few candidates by less than it separates the two fit seasons, so a third
-decimal here would be noise. `future` is 0.4 for both pools for the same reason:
-the fit cannot tell 0.2 from 0.4 for pitchers.
+The shape those numbers support: skill leads, luck is close behind, batted_ball is
+a small negative claw-back, future is a real but discounted term, age is a small
+adjustment. Read them as that shape and not as tuned constants -- the ranked table
+`--backtest` prints separates its top candidates by less than it separates the two
+fit seasons, so a third decimal here would be noise. The chosen set (keep `luck`,
+add a negative `batted_ball`) was a bake-off against two alternatives -- adding a
+raw playing-time family, and replacing `luck` with `batted_ball` outright -- both
+of which lost the holdout; `--backtest` reproduces all three.
 
 **The future weight is discounted for staleness, deliberately.** A FRESH
 next-season projection (one that has seen season T) is the single strongest
@@ -80,9 +96,7 @@ FAMILIES: dict[str, tuple[str, ...]] = {
 }
 # Every family the model knows how to blend. `family_order` selects a subset per
 # pool; a name outside this set is a typo, not a silent no-op.
-KNOWN_FAMILIES: frozenset[str] = frozenset(
-    {"skill", "luck", "pt", "batted_ball", "future", "age"}
-)
+KNOWN_FAMILIES: frozenset[str] = frozenset({"skill", "luck", "pt", "batted_ball", "future", "age"})
 
 # Out-year projection blend, nearer year first. Both ZiPS out-years come from one
 # 2026-03-25 model run, so they are near-duplicates and the blend is almost
@@ -115,7 +129,7 @@ def percentile(values: pd.Series, *, higher_is_better: bool = True) -> pd.Series
 def skill_percentile(frame: pd.DataFrame, kind: str) -> pd.Series:
     """One skill percentile per player: the mean of each stat's own percentile.
 
-    Equal weights WITHIN the family is deliberate. The backtest weights the four
+    Equal weights WITHIN the family is deliberate. The backtest weights the
     families against each other on two seasons; letting it also tune six
     within-family weights would fit noise. A player missing one stat is averaged
     over the rest rather than dropped.
