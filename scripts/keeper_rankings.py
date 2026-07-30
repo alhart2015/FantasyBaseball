@@ -527,14 +527,15 @@ def _positional_residuals(kind: str, denoms, pricing) -> pd.DataFrame:
     for year in ALL_TRANSITION_YEARS:
         feat = _transition(year, kind, denoms)
         table = "batting" if kind == PlayerType.HITTER else "pitching"
-        by_id = _raw(year, table).set_index("mlbID")["Name"]
+        raw = _raw(year, table).set_index("mlbID")
+        by_id = raw["Name"]
         slots = [_slots_for(positions, by_id.get(i, ""), kind) for i in feat.index]
         blended = composite_pct(feat, kind)
         if kind == PlayerType.PITCHER:
             # Group by ROLE, not by the single "P" slot: the SP/RP split is the
             # thing `scarcity_floors` merged the two floors over, so it is what
-            # needs regenerating. Role from start share, as that fix used.
-            raw = _raw(year, "pitching").set_index("mlbID")
+            # needs regenerating. Role from start share, matching the routing in
+            # `_role_equivalent_ip` so the diagnostic and the pricing agree.
             games = pd.to_numeric(raw["G"], errors="coerce").reindex(feat.index)
             starts = pd.to_numeric(raw["GS"], errors="coerce").reindex(feat.index)
             share = (starts / games.where(games > 0)).fillna(0.0)
