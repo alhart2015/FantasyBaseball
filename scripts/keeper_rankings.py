@@ -170,7 +170,7 @@ def season_value(year: int, kind: str, denoms) -> pd.DataFrame:
         ).fillna(0.0)
         lines["player_type"] = PlayerType.PITCHER
 
-    return pd.DataFrame(
+    out = pd.DataFrame(
         {
             "age": pd.to_numeric(frame["Age"], errors="coerce"),
             "pt": pt,
@@ -178,16 +178,28 @@ def season_value(year: int, kind: str, denoms) -> pd.DataFrame:
         },
         index=frame.index,
     )
+    if kind == "pitcher":
+        games = pd.to_numeric(frame["G"], errors="coerce")
+        starts = pd.to_numeric(frame["GS"], errors="coerce")
+        out["start_share"] = (starts / games.where(games > 0)).fillna(0.0)
+    return out
 
 
 def zips_out_year_sgp(year: int, kind: str, denoms) -> pd.Series:
     """SGP of the ZiPS projection for `year`, indexed by mlbam_id.
 
-    `load_projection_set` already resolves the filename variants, strips the BOM,
-    validates the required columns and renames to the lowercase stat-line keys
-    `calculate_player_sgp` wants -- including SV, which is why this does not go
-    through `keepers.vintages` (that decomposition drops it and would leave every
-    closer looking replacement-level).
+    `load_projection_set` resolves the filename variants, strips the BOM, validates
+    the required columns and renames to the lowercase stat-line keys
+    `calculate_player_sgp` wants. It also keeps SV, which `keepers.vintages` drops
+    -- the reason this does not route through there.
+
+    CAVEAT on the out-years specifically: SV is present as a column but BLANK on
+    every row of the 2027 and 2028 exports, where 2022-2026 all carry it. So a
+    closer's `future_pct` is computed with sv=0 and is understated -- measurably,
+    zeroing SV on the 2026 file costs a 20-save reliever ~0.13 of percentile. The
+    backtest reads the saves-bearing same-year files, so the `future` weight was
+    validated on a slightly richer feature than production gets. Nothing to fix in
+    code; re-check when fresher out-years land.
     """
     directory = PROJECTIONS_DIR / str(year)
     if not directory.is_dir():
@@ -233,6 +245,49 @@ def _qualified_families(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
     return qualified
 
 
+# Full-season innings that stand in for a ROLE, either side of the 100-IP bar
+# `sgp.replacement.role_from_ip` splits on. Not projections -- they exist only to
+# name the role, which is why they are round numbers.
+STARTER_ROLE_IP = 180.0
+RELIEVER_ROLE_IP = 60.0
+
+
+def _slots_for(positions: dict[str, list[str]], name: str, kind: str) -> list[str]:
+    """Eligible slots for pricing, constrained to the pool being scored.
+
+    Yahoo lists Ohtani as UTIL, so in the PITCHER pool `calculate_var` would take
+    the hitter branch and net his pitching projection against the UTIL floor. A
+    row is only ever priced against its own pool's floors.
+    """
+    slots = positions.get(normalize_name(str(name)), [])
+    if kind == "pitcher":
+        pitching = [slot for slot in slots if slot in ("P", "SP", "RP")]
+        return pitching or FALLBACK_POS[kind]
+    batting = [slot for slot in slots if slot not in ("P", "SP", "RP")]
+    return batting or FALLBACK_POS[kind]
+
+
+def _role_equivalent_ip(frame: pd.DataFrame, kind: str) -> list[float | None]:
+    """Which replacement floor each pitcher should net against.
+
+    `calculate_var` routes SP vs RP off `role_ip`, and its docstring asks for a
+    FULL-SEASON-equivalent figure precisely so a partial line does not flip the
+    role mid-season. Passing the to-date innings -- which is what the frame
+    already holds -- is a no-op, and in late July it put 120 of 198 qualified
+    pitchers on the RP floor, the shallowest of the nine: every starter under 100
+    innings so far was priced as a reliever, worth a spurious ~1.9 SGP against a
+    genuine one.
+
+    Role comes from START SHARE instead, which a partial season measures fine.
+    """
+    if kind != "pitcher":
+        return [None] * len(frame)
+    share = frame.get("start_share")
+    if share is None:
+        return [None] * len(frame)
+    return [STARTER_ROLE_IP if value >= 0.5 else RELIEVER_ROLE_IP for value in share]
+
+
 def _family_columns(frame: pd.DataFrame) -> dict[str, pd.Series]:
     """The `{family: series}` mapping `composite` expects, keyed off FAMILIES so a
     fifth family cannot be wired into one call site and not the other."""
@@ -244,7 +299,7 @@ def build(
     kind: str,
     denoms,
     keepers: dict[str, str],
-    pricing: dict[str, float] | None = None,
+    pricing: tuple[dict[str, list[str]], dict[str, float]] | None = None,
 ) -> pd.DataFrame:
     qualified = _qualified_families(_observed(year, kind, denoms), kind)
 
@@ -254,6 +309,15 @@ def build(
     near = zips_out_year_sgp(year + 1, kind, denoms).reindex(qualified.index)
     far = zips_out_year_sgp(year + 2, kind, denoms).reindex(qualified.index)
     qualified["future_pct"] = future_percentile(near, far)
+    if qualified["future_pct"].isna().all():
+        # `composite` mean-fills a missing family and the mean of an all-NaN
+        # column is NaN, so this would silently write a CSV of NaN, rank
+        # alphabetically, and hand --roster 100% keep odds to the first three
+        # names. Fail instead.
+        raise FileNotFoundError(
+            f"no {kind} ZiPS out-year projection under {PROJECTIONS_DIR} for "
+            f"{year + 1}/{year + 2}; `future` cannot be computed"
+        )
 
     blended = composite(_family_columns(qualified), kind)
     # Re-rank the blend to 0-1. `luck` is a difference centred on zero while the
@@ -274,18 +338,20 @@ def build(
             pd.Series(
                 {
                     "total_sgp": proj,
-                    "positions": positions.get(normalize_name(str(name)), FALLBACK_POS[kind]),
+                    "positions": _slots_for(positions, name, kind),
                     "ip": pt,
                 }
             ),
             floors,
             return_position=True,
-            # Route a reliever to the RP floor on his role rather than his
-            # innings: a closer's 45 IP would otherwise read as a failed starter.
-            role_ip=pt if kind == "pitcher" else None,
+            role_ip=role,
         )
-        for name, proj, pt in zip(
-            qualified["name"], qualified["proj_sgp"], qualified["pt"], strict=True
+        for name, proj, pt, role in zip(
+            qualified["name"],
+            qualified["proj_sgp"],
+            qualified["pt"],
+            _role_equivalent_ip(qualified, kind),
+            strict=True,
         )
     ]
     qualified["proj_var"] = [var for var, _ in priced]
@@ -542,7 +608,8 @@ def roster_report(year: int, denoms, keepers: dict[str, str], slots: int) -> int
             f"{mine}{row.name:<20}{row.pos:>4}{row.age:>4}"
             f"{row.proj_var:>10.2f}{row.sd:>7.2f}{row.p_keep * 100:>7.0f}%"
         )
-    print(f"\n  P KEEP sums to {board['p_keep'].sum():.2f}, i.e. exactly the {slots} slots.")
+    awarded = min(slots, len(board))
+    print(f"\n  P KEEP sums to {board['p_keep'].sum():.2f}, i.e. exactly the {awarded} slots.")
     if missing:
         print(
             f"  NOT SCORED ({len(missing)}), below the qualifying floor so they have no "
@@ -564,7 +631,7 @@ def main() -> int:
     args = parser.parse_args()
 
     config = load_config(CONFIG_PATH)
-    year = args.year or config.season_year
+    year = config.season_year if args.year is None else args.year
     denoms = get_sgp_denominators(getattr(config, "sgp_overrides", None))
     keepers = {normalize_name(k["name"]): k["team"] for k in (config.keepers or [])}
 

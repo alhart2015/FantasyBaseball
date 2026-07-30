@@ -2,9 +2,8 @@
 replacement level.
 
 Composes three things the repo already owns rather than re-deriving them:
-`data.yahoo_players.load_positions_cache` for the committed JSON,
 `web.season_data.read_cache_dict` for the live blob (via `CacheKey`, so a key typo
-fails loudly), and `models.positions.Position.parse` for the slot tokens -- which
+fails loudly) and `models.positions.Position.parse` for the slot tokens -- which
 absorbs both the `"Util"` vs `"UTIL"` Yahoo casing and suffixed slots like
 `"OF2"`. An unmatched slot is silently skipped by `calculate_var`, so normalizing
 here is what stops a hitter being charged the wrong floor.
@@ -16,11 +15,11 @@ The file still contributes several hundred names the blob lacks, so both are rea
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
 from pathlib import Path
 
 from fantasy_baseball.data.cache_keys import CacheKey
-from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -46,6 +45,20 @@ def _by_normalized_name(source: Mapping[str, object]) -> dict[str, list[str]]:
     }
 
 
+def _local_positions(path: Path) -> Mapping[str, object]:
+    """The committed JSON, read as UTF-8.
+
+    Not `data.yahoo_players.load_positions_cache`: that opens without an explicit
+    encoding, so on Windows a name outside cp1252 raises UnicodeDecodeError and
+    takes the whole ranking down. The committed file is ASCII today only because
+    `scripts/fetch_positions_mlb.py` dumps with `ensure_ascii=True`, which is not a
+    guarantee this module should rely on. A non-dict payload is ignored rather than
+    raising AttributeError.
+    """
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else {}
+
+
 def _live_positions() -> Mapping[str, object]:
     """The live blob, or empty if it is unreachable.
 
@@ -67,6 +80,6 @@ def load_positions(local_path: Path | None = None) -> dict[str, list[str]]:
     path = local_path if local_path is not None else POSITIONS_JSON
     merged: dict[str, list[str]] = {}
     if path.is_file():
-        merged.update(_by_normalized_name(load_positions_cache(path)))
+        merged.update(_by_normalized_name(_local_positions(path)))
     merged.update(_by_normalized_name(_live_positions()))
     return merged

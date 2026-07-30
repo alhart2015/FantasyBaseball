@@ -89,3 +89,23 @@ def test_a_non_list_slot_value_is_ignored(tmp_path, monkeypatch):
     _no_live(monkeypatch)
     path = _write(tmp_path, {"Broken": "C", "Fine": ["C"]})
     assert module.load_positions(path) == {"fine": ["C"]}
+
+
+def test_a_utf8_name_does_not_crash_on_a_cp1252_box(tmp_path, monkeypatch):
+    """`load_positions_cache` opens without an explicit encoding, so on Windows a
+    name outside cp1252 raised UnicodeDecodeError and took the ranking down. The
+    committed file is ASCII only because the fetch script sets ensure_ascii."""
+    _no_live(monkeypatch)
+    path = tmp_path / "player_positions.json"
+    raw = '{"M' + chr(0x14D) + 'netaka Murakami": ["3B"], "Jos' + chr(0xE9) + '": ["3B"]}'
+    path.write_bytes(raw.encode("utf-8"))
+    merged = module.load_positions(path)
+    assert "jose" in merged
+    assert "monetaka murakami" in merged
+
+
+def test_a_top_level_list_is_ignored_not_an_attribute_error(tmp_path, monkeypatch):
+    _no_live(monkeypatch)
+    path = tmp_path / "player_positions.json"
+    path.write_text('[["Otto Lopez", ["2B"]]]', encoding="utf-8")
+    assert module.load_positions(path) == {}
