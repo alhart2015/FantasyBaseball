@@ -24,6 +24,15 @@ points, so a catcher and a closer and an outfielder can share one list. The
 positional term is a scarce-position bonus rather than a subtracted floor; see
 `projection.scarcity_floors`.
 
+MID-SEASON CAVEAT. `proj_sgp`, `sd` and `proj_var` are fitted on COMPLETE seasons,
+so running this partway through one scores a truncated pool against full-season
+constants: fewer players clear MIN_PT, everyone's value percentile is pushed up,
+and the printed absolutes come out systematically LOW -- around 1.6 SGP for
+hitters at the 2026 mid-season point, worse the earlier it is run. Within-pool
+ORDERING is unaffected, because the truncation is a monotone remap, and both pools
+shift together so cross-pool comparison mostly survives. Compare ranks and gaps
+mid-season; trust the levels only on a finished season.
+
 Read the ranking in TIERS, not by row. Adjacent players are separated by far less
 than `sd`, so consecutive ranks are close to coin flips; `sd` is there to stop a
 single-rank gap being read as real.
@@ -504,6 +513,36 @@ def _variant_percentile(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Ser
     return pd.concat(parts, axis=1).mean(axis=1)
 
 
+def _positional_residuals(kind: str, denoms, pricing) -> pd.DataFrame:
+    """Realized residual against `expected_sgp`, per priced position.
+
+    The claims `projection.scarcity_floors` makes about whether the positional
+    spread is supported live here rather than in prose. They were wrong three
+    times as prose, for the same reason each time: nothing regenerated them.
+    """
+    positions, floors = pricing
+    frames = []
+    for year in ALL_TRANSITION_YEARS:
+        feat = _transition(year, kind, denoms)
+        table = "batting" if kind == PlayerType.HITTER else "pitching"
+        by_id = _raw(year, table).set_index("mlbID")["Name"]
+        slots = [_slots_for(positions, by_id.get(i, ""), kind) for i in feat.index]
+        blended = composite_pct(feat, kind)
+        frames.append(
+            pd.DataFrame(
+                {
+                    "slot": [slot[0] for slot in slots],
+                    "mapped": [
+                        normalize_name(str(by_id.get(i, ""))) in positions for i in feat.index
+                    ],
+                    "resid": feat["target_sgp"].to_numpy() - expected_sgp(blended, kind).to_numpy(),
+                    "credit": [-floors.get(slot[0], 0.0) for slot in slots],
+                }
+            )
+        )
+    return pd.concat(frames, ignore_index=True)
+
+
 def run_study(denoms) -> None:
     """Print the diagnostics the module docstrings argue from.
 
@@ -552,6 +591,27 @@ def run_study(denoms) -> None:
             scores = [_rho(_variant_percentile(f, columns), f["target_rate"]) for f in frames]
             print(f"    {label:<20} rho = {sum(scores) / len(scores):+.4f}")
 
+        # Does the POSITIONAL credit match what players at that position actually
+        # realize? This is what decides whether the spread is supported.
+        table = _positional_residuals(kind, denoms, pricing_table(denoms))
+        print("  positional credit vs realized residual:")
+        print(f"    {'slot':<7}{'credit':>8}{'resid':>8}{'n':>6}")
+        grouped = table.groupby("slot").agg(
+            credit=("credit", "first"), resid=("resid", "mean"), n=("resid", "size")
+        )
+        for slot, row in grouped.sort_values("credit").iterrows():
+            print(f"    {slot:<7}{row.credit:>8.2f}{row.resid:>8.2f}{int(row.n):>6}")
+        mapped = table[table["mapped"]]
+        for label, subset in (("all rows", table), ("position known", mapped)):
+            if len(subset) > 2 and subset["credit"].nunique() > 1:
+                slope = float(np.polyfit(subset["credit"], subset["resid"], 1)[0])
+                print(f"    slope(resid ~ credit), {label:<15} {slope:+.3f}  n={len(subset)}")
+        print(
+            "    -> near zero among KNOWN positions means the spread is neither"
+            " supported nor contradicted; the all-rows slope is inflated by unmapped"
+            " players, who mostly left the league."
+        )
+
 
 def _dedupe_two_way(board: pd.DataFrame) -> pd.DataFrame:
     """Collapse a two-way player's two pool rows into his better one.
@@ -560,13 +620,21 @@ def _dedupe_two_way(board: pd.DataFrame) -> pd.DataFrame:
     independent outcomes and competes against himself for the keeper slots --
     Ohtani absorbed 0.33 of the 3.00 slot mass for one roster spot.
 
-    Keyed on MLBAM id, which is the frame's index, NOT on name. 2022 alone had two
+    Keyed on MLBAM id, which is the frame's index, NOT on name. The index name is
+    asserted rather than assumed: adding a `reset_index` anywhere upstream would
+    make every label unique, silently restore the double-count, and leave the
+    tests green, since a synthetic index passes them just as well. 2022 alone had two
     different Will Smiths and two different Diego Castillos across the pools plus
     two different Luis Garcias inside one, and a name-keyed drop deletes a real
     rival: `probability_top_n` then spreads the same slot mass over fewer people,
     inflating everyone's P KEEP while the sum-to-slots check still passes. Expects
     `board` already sorted best-first, so `keep="first"` keeps the better side.
     """
+    if board.index.name != "mlbam_id":
+        raise ValueError(
+            f"expected an mlbam_id index to dedupe on, got {board.index.name!r}; "
+            "a reset_index upstream would silently un-fix the two-way double-count"
+        )
     return board[~board.index.duplicated(keep="first")].reset_index(drop=True)
 
 

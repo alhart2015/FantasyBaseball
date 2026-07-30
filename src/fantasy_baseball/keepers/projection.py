@@ -158,25 +158,22 @@ def scarcity_floors(floors: dict[str, float]) -> dict[str, float]:
 
     What the floors MIGHT carry validly is the spread BETWEEN hitter positions,
     since a difference survives a change of scale where a level does not. Unlike
-    the pitcher split above, there is no measured bias to compound: regressing each
-    hitter's realized residual on the adjustment he received gives a slope of
-    +0.04 (t 0.3) among hitters whose position is actually known, and per position,
-    controlling for composite, nothing reaches |t| = 1.3 except SS -- which is
-    UNDER-credited, the harmless direction.
+    the pitcher split above there is no measured bias to compound, so the spread is
+    neither confirmed nor contradicted, and it is left alone on that basis.
 
-    A raw regression over the whole panel returns +0.76 instead, and that number is
-    a survivorship artifact rather than evidence for the spread. 308 of 977 rows
-    are players missing from the position map, which routes them to
-    `FALLBACK_POS` and its most negative adjustment; absence from the CURRENT map
-    mostly means they were out of the league by now, which predicts a negative
-    residual directly (mean -1.59 against +0.45 for OF). Residual and adjustment
-    co-move for a reason with nothing to do with position scarcity.
+    `--study` prints the evidence: credit against realized residual per position,
+    plus the regression slope of one on the other. Read the "position known" slope,
+    not the all-rows one -- the latter is dominated by players missing from the
+    position map, who are routed to the harshest adjustment and who mostly left the
+    league, so residual and credit co-move there for a survivorship reason with
+    nothing to do with position scarcity.
 
-    So the hitter spread is neither confirmed nor contradicted, and the concern
-    that a draft-time-scale spread is too wide for this compressed one stays open.
-    It is left as-is because there is no measurement pointing the other way, and
-    because rescaling it by even the artifactual 0.76 leaves the top of the board
-    unchanged.
+    Deliberately no numbers in this paragraph. Three successive attempts to state
+    them here were each wrong in a different way, because nothing regenerated them;
+    the table does.
+
+    Still open regardless of that evidence: the spread was calibrated on the wider
+    draft-time scale, so against this compressed one it may simply be too wide.
     """
     if not floors:
         return {}

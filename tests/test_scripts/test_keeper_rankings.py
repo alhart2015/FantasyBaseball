@@ -4,6 +4,7 @@
 """
 
 import pandas as pd
+import pytest
 
 from fantasy_baseball.models.player import PlayerType
 from scripts.keeper_rankings import FALLBACK_POS, _dedupe_two_way, _slots_for
@@ -63,3 +64,12 @@ def test_two_different_players_sharing_a_name_both_survive():
 def test_dedupe_leaves_a_board_with_no_duplicates_alone():
     board = _board([1, 2, 3], ["A", "B", "C"], [3.0, 2.0, 1.0])
     assert _dedupe_two_way(board)["name"].tolist() == ["A", "B", "C"]
+
+
+def test_dedupe_refuses_a_frame_that_lost_its_id_index():
+    """The dedupe's correctness rests on the index being mlbam_id, and a synthetic
+    index passes the tests above just as well -- so a reset_index upstream would
+    silently restore the double-count with everything green."""
+    board = pd.DataFrame({"name": ["A", "A"], "proj_var": [2.0, 1.0]})
+    with pytest.raises(ValueError, match="mlbam_id"):
+        _dedupe_two_way(board)
