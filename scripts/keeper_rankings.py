@@ -243,11 +243,18 @@ def season_value(year: int, kind: str, denoms) -> pd.DataFrame:
     return out
 
 
-# `(year, kind)` -> SGP of that ZiPS export. A multi-season run asks for the same
-# export twice, because `year + 2` for one season is `year + 1` for the next, and
+# `(year, kind, denoms)` -> SGP of that ZiPS export. A multi-season run asks for the
+# same export twice, because `year + 2` for one season is `year + 1` for the next, and
 # `load_projection_set` parses BOTH pools' CSVs on every call. Memoizing takes
-# `--scarcity` from 16 loads to 5. Not an `lru_cache`: `denoms` is a dict.
-_OUT_YEAR_CACHE: dict[tuple[int, str], pd.Series] = {}
+# `--scarcity` from 16 loads to 5. Not an `lru_cache`: `denoms` is a dict. `denoms` IS
+# in the key because the cached SGP is scored through it -- omitting it hands a second
+# call with different denominators (a comparison run, a test) the first call's series.
+_OUT_YEAR_CACHE: dict[tuple[int, str, tuple[tuple[str, float], ...]], pd.Series] = {}
+
+
+def _denoms_key(denoms) -> tuple[tuple[str, float], ...]:
+    """A hashable, order-stable key component for a `denoms` dict."""
+    return tuple(sorted((str(k), float(v)) for k, v in denoms.items()))
 
 
 def zips_out_year_sgp(year: int, kind: str, denoms) -> pd.Series:
@@ -264,7 +271,8 @@ def zips_out_year_sgp(year: int, kind: str, denoms) -> pd.Series:
     The check is per file, so it goes quiet by itself once a fresher export lands
     instead of leaving a stale caveat behind for someone to re-verify by hand.
     """
-    cached = _OUT_YEAR_CACHE.get((year, str(kind)))
+    cache_key = (year, str(kind), _denoms_key(denoms))
+    cached = _OUT_YEAR_CACHE.get(cache_key)
     if cached is not None:
         return cached
     directory = PROJECTIONS_DIR / str(year)
@@ -282,7 +290,7 @@ def zips_out_year_sgp(year: int, kind: str, denoms) -> pd.Series:
             " closer's projected value is understated."
         )
     out = _sgp(lines, denoms)
-    _OUT_YEAR_CACHE[(year, str(kind))] = out
+    _OUT_YEAR_CACHE[cache_key] = out
     return out
 
 
@@ -497,16 +505,26 @@ def build(
     Like `projected`, `family_order`/`weights` are pass-both-or-neither -- `composite`
     rejects one without the other rather than silently blending mismatched defaults.
     """
-    qualified = projected(year, kind, denoms, family_order=family_order, weights=weights)
-
-    # Mean-centred credits: a display offset only, see `keepers.scarcity`.
+    # Mean-centred credits: a display offset only, see `keepers.scarcity`. Resolved (and
+    # guarded) BEFORE the expensive `projected` so a mis-shaped credits table fails fast.
     positions, floors = pricing_table() if pricing is None else pricing
+    # build hands `calculate_var` no "ip"/role_ip: the credits ship a single "P", so
+    # `_pitcher_floor_key` falls back to it and never routes by role. If the table ever
+    # gains SP/RP keys that fallback stops and `role_from_ip(0.0)` routes EVERY starter --
+    # a 200-IP ace included -- to the reliever floor, silently. Fail loud rather than
+    # misprice: an SP/RP split requires build to also pass a full-season-equivalent IP
+    # (see `keepers.scarcity`'s note and `sgp.var.calculate_var`). A raise beats a comment.
+    if {"SP", "RP"} & set(floors):
+        raise ValueError(
+            "keeper credits contain SP/RP floor keys but `build` passes no role_ip; every "
+            "starter would be priced at the RP floor -- pass a full-season-equivalent IP "
+            "(see keepers.scarcity)."
+        )
+
+    qualified = projected(year, kind, denoms, family_order=family_order, weights=weights)
     priced = [
         calculate_var(
             pd.Series(
-                # No "ip": the credits table ships a single "P", so
-                # `_pitcher_floor_key` falls back to it and never routes by role.
-                # `keepers.scarcity` records what a future SP/RP split would owe.
                 {
                     "total_sgp": proj,
                     "positions": _slots_for(positions, name, kind),
@@ -707,11 +725,14 @@ def _kv_payload(key: CacheKey):
         from fantasy_baseball.data.kv_store import get_kv
 
         blob = get_kv().get(redis_key(key))
+        if not blob:
+            return None
+        # Inside the try on purpose: a corrupt blob (truncated / invalid JSON) must
+        # degrade to None like an unreachable KV, not crash the whole report with a
+        # JSONDecodeError -- the caller only knows how to handle "no data".
+        payload = json.loads(blob) if isinstance(blob, str) else blob
     except Exception:
         return None
-    if not blob:
-        return None
-    payload = json.loads(blob) if isinstance(blob, str) else blob
     if isinstance(payload, dict) and "_data" in payload:
         return payload["_data"]
     return payload
@@ -1204,6 +1225,16 @@ def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: i
     if not rosters:
         print("No league rosters available (needs the live KV blobs); nothing to score.")
         return 1
+    # A "LEAGUE KEEPER BOARD" that silently covers only some teams is worse than none:
+    # one present KV blob (e.g. cache:roster without cache:opp_rosters) unions to a
+    # handful of teams and the header still reads "league". Refuse rather than mislead.
+    if len(rosters) < config.num_teams:
+        print(
+            f"partial league: only {len(rosters)} of {config.num_teams} team rosters loaded "
+            f"from the KV ({config.num_teams - len(rosters)} missing) -- the board would omit "
+            "whole teams with no signal. Refresh the roster blobs and retry."
+        )
+        return 1
 
     owner_of = {name: team for team, names in rosters.items() for name in names}
     board = _scored_board(year, denoms, keepers, pricing_table())
@@ -1221,17 +1252,19 @@ def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: i
         part = group.copy()
         part["p_keep"] = probability_top_n(part["proj_var"], part["sd"], part["kind"], slots)
         by_team[str(team)] = part
-    rostered = pd.concat(by_team.values()).sort_values("proj_var", ascending=False)
 
+    # `board` is already proj_var-descending (`_scored_board` sorts, `_dedupe_two_way`
+    # and the owner map/dropna preserve order), so the league table reads it directly;
+    # `by_team` exists only for the per-team p_keep block below.
     print(f"\n{'=' * 72}")
-    print(f"LEAGUE KEEPER BOARD -- top {top} of {len(rostered)} scoreable rostered players")
+    print(f"LEAGUE KEEPER BOARD -- top {top} of {len(board)} scoreable rostered players")
     print(f"{'=' * 72}")
     print(
         f"{'':4}{'PLAYER':<20}{'POS':>4}{'AGE':>4}{'PROJ VAR':>10}"
         f"{'RAW SGP':>9}{'+/-SD':>7}{'OWNER':>30}"
     )
     print("-" * 88)
-    for rank, row in enumerate(rostered.head(top).itertuples(), start=1):
+    for rank, row in enumerate(board.head(top).itertuples(), start=1):
         mine = "*" if row.owner == config.team_name else " "
         print(
             f"{rank:>3}{mine}{row.name:<20}{row.pos:>4}{row.age:>4}"

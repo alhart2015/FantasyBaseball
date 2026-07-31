@@ -5,10 +5,14 @@ catcher credit alone is worth over 1.5 SGP -- so the fill order and the flex-slo
 rules are load-bearing, not bookkeeping.
 """
 
+from pathlib import Path
+
 import pandas as pd
 import pytest
 
+from fantasy_baseball.config import load_config
 from fantasy_baseball.keepers.scarcity import (
+    MEASURED_UNDER,
     NATIVE_CREDITS,
     centred_credits,
     credit_levels,
@@ -18,6 +22,19 @@ from fantasy_baseball.keepers.scarcity import (
 
 # One team's worth, scaled up by `slot_capacities`.
 SLOTS = {"C": 1, "1B": 1, "2B": 1, "3B": 1, "SS": 1, "IF": 1, "OF": 4, "UTIL": 2, "BN": 2, "IL": 2}
+
+
+def test_measured_under_matches_the_live_config_it_documents():
+    """`NATIVE_CREDITS` were measured under `MEASURED_UNDER`'s league shape, and unlike
+    `SGP_FIT` (append-only history, can only go stale) they depend on MUTABLE config:
+    change `roster_slots` or `num_teams` and the credits are not stale but WRONG, with no
+    other signal. `MEASURED_UNDER`'s docstring claims this test enforces that -- so it
+    must actually trip when the live config drifts from the shape the credits assume."""
+    # Anchored to the repo root via __file__, not cwd: the tripwire must bind to the
+    # config, not to where pytest happens to be invoked from.
+    config_path = Path(__file__).resolve().parents[2] / "config" / "league.yaml"
+    cfg = load_config(config_path)
+    assert slot_capacities(cfg.roster_slots, cfg.num_teams) == MEASURED_UNDER
 
 
 def test_bench_and_il_are_not_slots_a_keeper_competes_for():

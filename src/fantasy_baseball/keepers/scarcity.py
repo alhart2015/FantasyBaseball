@@ -11,10 +11,13 @@ qualified pool prices below replacement -- a statement about the two scales, not
 about the players.
 
 Nor is the gap uniform across positions, and no mechanism is asserted for that
-here: `REPLACEMENT_BY_POSITION` is itself calibrated from this league's own
-un-rostered players, so it is NOT blind to how many of each position get started.
-The two tables simply disagree by position, most of all at outfield, and
-`--scarcity` prints the disagreement rather than explaining it.
+here: the draft-time `REPLACEMENT_BY_POSITION` is itself calibrated from this
+league's own un-rostered players, so it is NOT blind to how many of each position
+get started. The two tables simply disagree by position, most of all at outfield.
+That disagreement is the MOTIVATION for this module; `--scarcity` measures and
+prints the NATIVE floors below, not a side-by-side against the draft-time table
+(that comparison column was removed -- regenerate it from `sgp.replacement` if you
+need to see it).
 
 This module measures replacement the other way, natively and on whatever scale it
 is handed: fill every starting slot in the league with the best eligible player,
@@ -178,31 +181,18 @@ def marginal_starter_floors(
 
     floors: dict[str, float] = {}
     for slot in capacities:
-        if slot in FLEX_SLOTS:
+        # A zero-capacity slot is not a slot; and among real slots skip only the non-UTIL
+        # flex aggregate (IF), which no keeper is priced against. UTIL IS priced here --
+        # every DH-only bat lands on it -- floored like any slot (the best leftover who
+        # can fill it), and merely filled last (see `_fill_order`). A genuinely UTIL-only
+        # player (a real DH) is eligible for no per-position slot, so this is the only way
+        # he sets any floor. A slot with no eligible leftover is omitted.
+        if capacities[slot] <= 0 or (slot in FLEX_SLOTS and slot != "UTIL"):
             continue
         for player in ranked.index:
             if player not in started and can_fill_slot(eligibility.get(player, ()), slot):
                 floors[slot] = float(ranked.loc[player])
                 break
-    # UTIL is a flex slot with no dedicated marginal starter, but every DH-only bat
-    # is priced against it, so its floor is the best leftover who can fill UTIL --
-    # found the same way as every dedicated slot. A genuinely UTIL-only player (a real
-    # DH) is eligible for no per-position floor, so the old `max(dedicated)` could
-    # never let him set UTIL even when he was the best hitter starting nowhere. Like
-    # any slot, UTIL is omitted when nobody is left over to price it -- and since every
-    # dedicated-slot leftover is itself UTIL-eligible, that only happens when no hitter
-    # is left over at all.
-    if capacities.get("UTIL", 0) > 0:
-        util_floor = next(
-            (
-                float(ranked.loc[player])
-                for player in ranked.index
-                if player not in started and can_fill_slot(eligibility.get(player, ()), "UTIL")
-            ),
-            None,
-        )
-        if util_floor is not None:
-            floors["UTIL"] = util_floor
     return floors
 
 

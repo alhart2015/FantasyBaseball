@@ -3,6 +3,8 @@
 `_slots_for` exists because a pitcher was being priced against a hitter floor.
 """
 
+from types import SimpleNamespace
+
 import pandas as pd
 import pytest
 
@@ -152,7 +154,8 @@ def test_an_unreachable_kv_yields_no_league_rather_than_raising(monkeypatch):
 
 def test_the_data_envelope_is_unwrapped_but_a_bare_payload_survives(monkeypatch):
     """A cache value arrives as a JSON string, a dict wrapped in `_data`, or the
-    bare value. All three have to reach the caller as the same thing."""
+    bare value. All three have to reach the caller as the same thing. A CORRUPT blob
+    degrades to None (json.loads is inside the try), not a crashed report."""
     for stored, expected in (
         ('{"_data": [{"name": "A"}]}', [{"name": "A"}]),
         ({"_data": [{"name": "A"}]}, [{"name": "A"}]),
@@ -160,6 +163,7 @@ def test_the_data_envelope_is_unwrapped_but_a_bare_payload_survives(monkeypatch)
         ({"Team": [{"name": "A"}]}, {"Team": [{"name": "A"}]}),
         (None, None),
         ("", None),
+        ('{"_data": [1, 2,', None),  # truncated / invalid JSON -> degrade, do not crash
     ):
         _fake_kv(monkeypatch, {"cache:roster": stored})
         assert module._kv_payload(module.CacheKey.ROSTER) == expected
@@ -169,6 +173,34 @@ def test_names_are_normalized_so_accents_join_the_position_map():
     assert module._normalized_names([{"name": "Julio Rodríguez"}]) == {"julio rodriguez"}
     assert module._normalized_names([{"name": ""}, {}]) == set()
     assert module._normalized_names("not a list") == set()
+
+
+def test_build_fails_loud_if_the_credits_table_gains_sp_rp_keys():
+    """build passes calculate_var no role_ip, so if the credits ever split P into SP/RP,
+    role_from_ip(0.0)='RP' would silently price every starter (incl a 200-IP ace) at the
+    reliever floor. Fail loud -- and BEFORE the expensive projected build, so it is fast."""
+    with pytest.raises(ValueError, match="role_ip"):
+        module.build(2026, "hitter", {}, {}, pricing=({}, {"SP": 1.0, "RP": 2.0}))
+
+
+def test_denoms_key_is_order_stable_and_distinguishes_denominators():
+    """The out-year SGP cache keys on denoms because the memoized series is scored THROUGH
+    them; two denominator sets must not collide, and dict order must not matter."""
+    a = module._denoms_key({"R": 30.0, "HR": 12.0})
+    assert a == module._denoms_key({"HR": 12.0, "R": 30.0})  # order-stable
+    assert a != module._denoms_key({"R": 31.0, "HR": 12.0})  # distinguishes a changed value
+
+
+def test_league_report_refuses_a_partial_league_rather_than_mislead(monkeypatch, capsys):
+    """One present KV blob unions to a few teams; a 'LEAGUE KEEPER BOARD' header over a
+    partial league is worse than none. Refuse when fewer than num_teams rosters loaded --
+    before the expensive board build."""
+    monkeypatch.setattr(
+        module, "load_config", lambda _p: SimpleNamespace(team_name="Me", num_teams=10)
+    )
+    monkeypatch.setattr(module, "load_league_rosters", lambda _t: {"Me": {"juan soto"}})
+    assert module.league_report(2026, {}, {}, 3, 20) == 1
+    assert "partial league" in capsys.readouterr().out
 
 
 def test_qualified_families_emits_pt_and_batted_ball_columns():
