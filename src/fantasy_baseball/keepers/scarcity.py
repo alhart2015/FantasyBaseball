@@ -75,14 +75,14 @@ MEASURED_UNDER: dict[str, int] = {
 }
 
 NATIVE_CREDITS: dict[str, float] = {
-    "P": 1.494,
-    "C": 0.576,
-    "1B": -0.125,
-    "2B": -0.336,
-    "3B": -0.357,
-    "SS": -0.389,
-    "OF": -0.417,
-    "UTIL": -0.446,
+    "P": 1.440,
+    "C": 0.298,
+    "1B": -0.169,
+    "SS": -0.208,
+    "OF": -0.285,
+    "2B": -0.327,
+    "3B": -0.345,
+    "UTIL": -0.404,
 }
 
 # `calculate_var` SUBTRACTS what it is handed, so the levels it wants are the

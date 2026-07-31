@@ -9,6 +9,7 @@ from fantasy_baseball.keepers.composite import (
     FUTURE_BLEND,
     LOWER_IS_BETTER,
     SKILL_COLUMNS,
+    batted_ball,
     composite,
     future_percentile,
     luck,
@@ -107,7 +108,12 @@ def test_composite_is_a_weighted_blend_on_the_same_scale():
 
 
 def test_composite_normalizes_weights_that_do_not_sum_to_one():
-    out = composite(_fam([1.0], [0.0], [0.0], [0.0]), "hitter", weights=(2.0, 0.0, 0.0, 0.0))
+    out = composite(
+        _fam([1.0], [0.0], [0.0], [0.0]),
+        "hitter",
+        weights=(2.0, 0.0, 0.0, 0.0),
+        family_order=("skill", "luck", "future", "age"),
+    )
     assert out.iloc[0] == pytest.approx(1.0)
 
 
@@ -118,7 +124,12 @@ def test_composite_rejects_an_unknown_family():
 
 def test_composite_rejects_all_zero_weights():
     with pytest.raises(ValueError, match="no weighted family"):
-        composite(_fam([0.5], [0.0], [0.0], [0.0]), "hitter", weights=(0, 0, 0, 0))
+        composite(
+            _fam([0.5], [0.0], [0.0], [0.0]),
+            "hitter",
+            weights=(0, 0, 0, 0),
+            family_order=("skill", "luck", "future", "age"),
+        )
 
 
 def test_a_missing_family_drops_out_of_the_denominator():
@@ -126,7 +137,7 @@ def test_a_missing_family_drops_out_of_the_denominator():
     scaled down as though every player projected to zero. With every supplied
     family at the same level the blend must equal that level either way -- which
     only holds if the absent family's weight leaves the denominator too."""
-    supplied = {family: pd.Series([0.8]) for family in FAMILIES}
+    supplied = {family: pd.Series([0.8]) for family in FAMILIES["hitter"]}
     full = composite(supplied, "hitter").iloc[0]
     partial = composite({k: v for k, v in supplied.items() if k != "future"}, "hitter").iloc[0]
     assert full == pytest.approx(0.8)
@@ -142,6 +153,17 @@ def test_a_missing_family_is_not_treated_as_zero():
     assert partial > as_zero
 
 
+def test_an_all_nan_family_drops_out_like_a_missing_one():
+    """If a family is all-NaN (e.g. xba unavailable, so batted_ball is all-NaN), it
+    must drop from the denominator like a missing family, not poison the whole blend
+    to NaN via `fillna(series.mean())` where the mean is itself NaN."""
+    supplied = {family: pd.Series([0.8, 0.8]) for family in FAMILIES["hitter"]}
+    supplied["batted_ball"] = pd.Series([float("nan"), float("nan")])
+    out = composite(supplied, "hitter")
+    assert not out.isna().any()
+    assert out.iloc[0] == pytest.approx(0.8)
+
+
 def test_luck_is_value_minus_skill():
     assert luck(pd.Series([0.95, 0.40]), pd.Series([0.55, 0.80])).tolist() == pytest.approx(
         [0.40, -0.40]
@@ -152,7 +174,17 @@ def test_luck_carries_a_positive_weight_for_every_position():
     """Not what the name suggests, and load-bearing: the gap also encodes playing
     time, and forcing it negative collapses the fit (rho 0.65 -> 0.13)."""
     for kind, weights in FITTED_WEIGHTS.items():
-        assert weights[FAMILIES.index("luck")] > 0, kind
+        assert weights[FAMILIES[kind].index("luck")] > 0, kind
+
+
+def test_batted_ball_carries_a_negative_weight_for_every_position():
+    """The entire point of the family: it claws the batted-ball half back out of the
+    positive `luck` weight. A regression to a positive or zero weight -- a copy-paste
+    from the luck slot, or an 'all weights should be positive' cleanup -- would revert
+    #277's demotion of the everyday-plus-lucky bats with every other test still green,
+    since skill==max, future>0 and luck>0 all continue to hold."""
+    for kind, weights in FITTED_WEIGHTS.items():
+        assert weights[FAMILIES[kind].index("batted_ball")] < 0, kind
 
 
 def test_future_blend_favors_the_nearer_year_and_sums_to_one():
@@ -180,6 +212,72 @@ def test_future_percentile_falls_back_to_the_near_year_when_far_is_missing():
 
 def test_fitted_weights_have_one_entry_per_family_and_lead_with_skill():
     for kind, weights in FITTED_WEIGHTS.items():
-        assert len(weights) == len(FAMILIES), kind
-        assert weights[FAMILIES.index("skill")] == max(weights), kind
-        assert weights[FAMILIES.index("future")] > 0, kind
+        assert len(weights) == len(FAMILIES[kind]), kind
+        assert weights[FAMILIES[kind].index("skill")] == max(weights), kind
+        assert weights[FAMILIES[kind].index("future")] > 0, kind
+
+
+def test_composite_honors_an_explicit_family_order():
+    fams = {"skill": pd.Series([1.0, 0.0]), "pt": pd.Series([0.0, 1.0])}
+    out = composite(fams, "hitter", weights=(1.0, 1.0), family_order=("skill", "pt"))
+    assert out.tolist() == pytest.approx([0.5, 0.5])
+
+
+def test_composite_rejects_a_family_outside_the_known_universe():
+    with pytest.raises(KeyError, match="peripherals"):
+        composite({"peripherals": pd.Series([0.5])}, "hitter", family_order=("skill",))
+
+
+def test_composite_rejects_an_unknown_name_in_family_order():
+    """The 'typo not a silent no-op' promise covers `family_order`, not only the
+    families dict: an unknown name there would `.get()` to None and silently drop its
+    weighted slot, shifting every downstream rank with nothing raised."""
+    with pytest.raises(KeyError, match="sklll"):
+        composite(
+            {"skill": pd.Series([0.5])},
+            "hitter",
+            weights=(1.0, 1.0),
+            family_order=("skill", "sklll"),
+        )
+
+
+def test_composite_blends_an_empty_pool_to_an_empty_result():
+    """An empty pool (0 rows) has nothing to fail on and must blend to an empty result,
+    not raise: callers build intentional empty sub-pools (an early-season board, a
+    `--study` truncation) and skip an empty return. #277's all-NaN drop would otherwise
+    drop every vacuously-all-NaN family and hit the 'no weighted family' guard."""
+    empty = {family: pd.Series([], dtype=float) for family in FAMILIES["hitter"]}
+    assert composite(empty, "hitter").empty
+    assert composite(empty, "hitter", strict=True).empty  # strict callers skip empties too
+
+
+def test_strict_raises_on_an_all_nan_family_instead_of_dropping_it():
+    """`strict` is the fit/backtest's guard: their blended number is persisted as
+    constants or decides the shipped model, so a family silently dropped for missing
+    data must fail loud -- while the live board (strict=False) keeps dropping it so an
+    xba or ZiPS outage cannot take the board down."""
+    supplied = {family: pd.Series([0.8, 0.8]) for family in FAMILIES["hitter"]}
+    supplied["batted_ball"] = pd.Series([float("nan"), float("nan")])
+    assert not composite(supplied, "hitter").isna().any()  # default: drops, stays valid
+    with pytest.raises(ValueError, match="batted_ball"):
+        composite(supplied, "hitter", strict=True)
+
+
+def test_batted_ball_is_avg_over_xba_for_hitters():
+    frame = pd.DataFrame({"avg": [0.278, 0.240], "xba": [0.242, 0.250]})
+    out = batted_ball(frame, "hitter")
+    assert out.tolist() == pytest.approx([0.036, -0.010])
+
+
+def test_batted_ball_is_fip_minus_era_for_pitchers():
+    """ERA below FIP means the pitcher outran his peripherals -- luckier, higher."""
+    frame = pd.DataFrame({"fip": [4.20, 3.50], "era": [3.10, 3.60]})
+    out = batted_ball(frame, "pitcher")
+    assert out.tolist() == pytest.approx([1.10, -0.10])
+
+
+def test_batted_ball_keeps_nan_when_an_input_is_missing():
+    frame = pd.DataFrame({"avg": [0.278, float("nan")], "xba": [0.242, 0.250]})
+    out = batted_ball(frame, "hitter")
+    assert out.iloc[0] == pytest.approx(0.036)
+    assert math.isnan(out.iloc[1])

@@ -1,0 +1,28 @@
+
+======================================================================
+HITTER  fit=[2022, 2023] holdout=2024
+  candidate             holdout      fit    noise  best weights
+  baseline               0.7085   0.6770   0.0172  skill=+1.00 luck=+0.80 future=+0.40 age=+0.30
+  A: pt+luck             0.6878   0.6825   0.0217  skill=+1.00 pt=+0.60 luck=+0.80 future=+0.40 age=+0.45
+  B: pt+batted_ball      0.6812   0.6682   0.0073  skill=+1.00 pt=+1.20 batted_ball=+0.00 future=+0.60 age=+0.45
+  C: luck-batted_ball    0.7002   0.6866   0.0241  skill=+1.00 luck=+0.80 batted_ball=-0.20 future=+0.20 age=+0.30
+  shipped                0.7002   (current model)
+
+======================================================================
+PITCHER  fit=[2022, 2023] holdout=2024
+  candidate             holdout      fit    noise  best weights
+  baseline               0.4962   0.4937   0.1427  skill=+1.00 luck=+0.60 future=+0.40 age=+0.15
+  A: pt+luck             0.4905   0.4986   0.1216  skill=+1.00 pt=+0.20 luck=+0.60 future=+0.20 age=+0.15
+  B: pt+batted_ball      0.4932   0.4904   0.1078  skill=+1.00 pt=+0.60 batted_ball=+0.00 future=+0.40 age=+0.15
+  C: luck-batted_ball    0.5094   0.5021   0.1321  skill=+1.00 luck=+0.80 batted_ball=-0.20 future=+0.20 age=+0.15
+  shipped                0.5094   (current model)
+
+  hitter watchlist ranks on the 2026 board (lower = better):
+    player                        baseline          A: pt+luck   B: pt+batted_ball C: luck-batted_ball
+    Ceddanne Rafaela                    31                  36                  72                  50
+    Otto Lopez                          34                  29                  48                  38
+    Yordan Alvarez                      22                  20                  10                  16
+
+  Ship A or B over baseline only if it beats baseline holdout by MORE than
+  that pool's noise. Within noise, prefer the sniff-test passer, then A
+  (keeps SB/saves), then baseline. Apply by hand; see the spec.
