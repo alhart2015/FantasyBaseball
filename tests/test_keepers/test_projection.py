@@ -9,7 +9,6 @@ from fantasy_baseball.keepers.projection import (
     expected_sgp,
     probability_top_n,
     sample_outcomes,
-    scarcity_floors,
     sgp_sd,
 )
 
@@ -145,36 +144,6 @@ def test_sampling_recovers_the_mean_and_spread_it_was_given():
 
 
 # --- positional scarcity --------------------------------------------------
-
-
-def test_centring_leaves_the_ordering_and_every_gap_untouched():
-    """The whole point of being blunt in the docstring: this is a display offset.
-    Subtracting the centred table differs from subtracting the raw floors by one
-    shared constant, so nothing that depends on differences can move."""
-    floors = {"C": 7.70, "SS": 9.51, "OF": 9.96, "RP": 7.42}
-    centred = scarcity_floors(floors)
-    offsets = {pos: floors[pos] - centred[pos] for pos in floors}
-    assert len(set(round(v, 9) for v in offsets.values())) == 1
-
-
-def test_scarcity_is_mean_centred_so_it_adds_to_nothing_overall():
-    floors = {"C": 7.70, "SS": 9.51, "OF": 9.96, "RP": 7.42}
-    assert sum(scarcity_floors(floors).values()) == pytest.approx(0.0)
-
-
-def test_centring_preserves_the_spread_and_only_moves_the_offset():
-    floors = {"C": 7.70, "OF": 9.96}
-    centred = scarcity_floors(floors)
-    # Floor-oriented, so the SCARCE position is the lower number -- `calculate_var`
-    # subtracts these, which is what turns a scarce slot into a bonus.
-    assert centred["C"] < 0 < centred["OF"]
-    assert centred["OF"] - centred["C"] == pytest.approx(9.96 - 7.70)
-
-
-def test_scarcity_of_an_empty_table_is_empty():
-    assert scarcity_floors({}) == {}
-
-
 def test_exact_ties_still_credit_exactly_top_n():
     """Only reachable at sd == 0, but the sum-to-top_n invariant is documented, so
     it holds unconditionally. Thresholding on the nth value instead of selecting
@@ -184,19 +153,3 @@ def test_exact_ties_still_credit_exactly_top_n():
     for means in ([10.0] * 4, [10.0, 9.0, 9.0, 1.0]):
         out = probability_top_n(pd.Series(means), zero_spread, kinds, 2)
         assert out.sum() == pytest.approx(2.0)
-
-
-def test_the_two_pitcher_floors_are_merged():
-    """`expected_sgp` has no role term, so netting against role-specific floors
-    debits a difference the projection never credited -- and measurement showed it
-    the wrong way round, putting the whole top of the pitcher board on relievers
-    who then earned less than the starters beneath them."""
-    floors = {"SP": 9.288, "RP": 7.423, "C": 7.696, "OF": 9.964}
-    out = scarcity_floors(floors)
-    assert out["SP"] == pytest.approx(out["RP"])
-
-
-def test_merging_the_pitcher_floors_leaves_the_hitter_spread_alone():
-    floors = {"SP": 9.288, "RP": 7.423, "C": 7.696, "OF": 9.964}
-    out = scarcity_floors(floors)
-    assert out["OF"] - out["C"] == pytest.approx(9.964 - 7.696)

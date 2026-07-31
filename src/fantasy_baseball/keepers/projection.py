@@ -31,13 +31,13 @@ import pandas as pd
 
 # (intercept, slope) against composite on 0-1.
 SGP_FIT: dict[str, tuple[float, float]] = {
-    "hitter": (0.746, 12.619),
-    "pitcher": (0.584, 8.337),
+    "hitter": (0.73, 12.652),
+    "pitcher": (0.494, 8.516),
 }
 # (intercept, slope) for the residual standard deviation.
 SGP_SD_FIT: dict[str, tuple[float, float]] = {
-    "hitter": (2.676, 2.230),
-    "pitcher": (1.977, 3.909),
+    "hitter": (2.661, 2.247),
+    "pitcher": (1.96, 3.855),
 }
 
 # Empirical distribution of the STANDARDIZED residual, as quantiles at
@@ -69,42 +69,42 @@ RESIDUAL_QUANTILE_LEVELS = (
 )
 STD_RESIDUAL_QUANTILES: dict[str, tuple[float, ...]] = {
     "hitter": (
-        -2.598,
-        -2.101,
-        -1.776,
-        -1.526,
-        -1.217,
-        -0.824,
-        -0.551,
-        -0.316,
-        -0.084,
-        0.189,
-        0.495,
-        0.850,
-        1.371,
-        1.768,
-        2.153,
-        2.468,
-        4.068,
+        -2.678,
+        -2.063,
+        -1.749,
+        -1.550,
+        -1.197,
+        -0.818,
+        -0.576,
+        -0.325,
+        -0.099,
+        0.182,
+        0.490,
+        0.828,
+        1.391,
+        1.710,
+        2.084,
+        2.622,
+        3.823,
     ),
     "pitcher": (
-        -1.672,
-        -1.497,
-        -1.407,
-        -1.310,
-        -1.153,
-        -0.874,
-        -0.624,
-        -0.407,
-        -0.178,
-        0.125,
-        0.446,
-        0.818,
-        1.362,
-        1.812,
-        2.296,
-        2.908,
-        5.244,
+        -1.689,
+        -1.508,
+        -1.422,
+        -1.321,
+        -1.159,
+        -0.861,
+        -0.632,
+        -0.397,
+        -0.145,
+        0.120,
+        0.423,
+        0.864,
+        1.351,
+        1.766,
+        2.338,
+        2.948,
+        6.498,
     ),
 }
 
@@ -124,68 +124,6 @@ def sgp_sd(composite_pct: pd.Series, kind: str) -> pd.Series:
     """
     intercept, slope = SGP_SD_FIT[kind]
     return intercept + slope * composite_pct
-
-
-def scarcity_floors(floors: dict[str, float]) -> dict[str, float]:
-    """Replacement levels, mean-centred and with SP/RP collapsed.
-
-    Two separate things, both about keeping this table commensurable with
-    `expected_sgp`.
-
-    **SP and RP are merged into one pitcher floor.** `expected_sgp` is fit on the
-    pooled pitcher panel and has no role term, so it predicts the same value for a
-    starter and a reliever at the same composite. Netting that against
-    role-specific floors debits a difference the projection never credited, and
-    measurement shows it lands the wrong way round: starters BEAT the pooled fit
-    and relievers fall short of it, and the gap widens in the top composite decile
-    -- exactly where keeper decisions are made -- while the shallower RP floor
-    credits relievers on top of that. Compounded, that put the top of the pitcher
-    board entirely on RP-classified arms who went on to earn less than the starters
-    below them at every level of the score. Until the projection itself is
-    role-aware, one floor is the only consistent choice. `--study` prints the
-    per-role residual and its top-decile split.
-
-    **The centring is a DISPLAY offset**, not a model decision, and worth being
-    blunt about because the shape invites the opposite reading. Subtracting these
-    gives `projection - level + mean(level)`, i.e. true VAR plus one constant
-    shared by every position, so the ranking, every gap and every P(top-N) are
-    identical to using the floors untouched. All it buys is a column that reads
-    positive. It exists because the two quantities sit on different scales:
-    `sgp.replacement`'s floors are draft-time full-season lines on which an ace
-    projects ~20 SGP, while `expected_sgp` tops out near 13 (hitters) and 9
-    (pitchers), so raw subtraction puts every pitcher below replacement -- a
-    statement about the scales, not the pitchers. Centring makes it readable; no
-    constant offset could repair it.
-
-    What the floors MIGHT carry validly is the spread BETWEEN hitter positions,
-    since a difference survives a change of scale where a level does not. Unlike
-    the pitcher split above there is no measured bias to compound, so the spread is
-    neither confirmed nor contradicted, and it is left alone on that basis.
-
-    `--study` prints the evidence: credit against realized residual per position,
-    plus the regression slope of one on the other. Read the "position known" slope,
-    not the all-rows one -- the latter is dominated by players missing from the
-    position map, who are routed to the harshest adjustment and who mostly left the
-    league, so residual and credit co-move there for a survivorship reason with
-    nothing to do with position scarcity.
-
-    No numbers anywhere in this docstring, deliberately. Three successive attempts
-    to state them here were each wrong in a different way, because nothing
-    regenerated them; `--study` does.
-
-    Still open regardless of that evidence: the spread was calibrated on the wider
-    draft-time scale, so against this compressed one it may simply be too wide.
-    """
-    if not floors:
-        return {}
-    merged = dict(floors)
-    pitcher_keys = [key for key in ("SP", "RP") if key in merged]
-    if pitcher_keys:
-        pooled = sum(merged[key] for key in pitcher_keys) / len(pitcher_keys)
-        for key in pitcher_keys:
-            merged[key] = pooled
-    average = sum(merged.values()) / len(merged)
-    return {position: level - average for position, level in merged.items()}
 
 
 def sample_outcomes(
