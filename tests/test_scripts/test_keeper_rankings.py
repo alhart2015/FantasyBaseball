@@ -3,6 +3,7 @@
 `_slots_for` exists because a pitcher was being priced against a hitter floor.
 """
 
+from collections import Counter
 from types import SimpleNamespace
 
 import pandas as pd
@@ -132,12 +133,12 @@ def test_the_league_loader_unions_my_roster_with_the_opponents(monkeypatch):
     kv = _fake_kv(
         monkeypatch,
         {
-            "cache:roster": [{"name": "Juan Soto"}],
-            "cache:opp_rosters": {"Rivals": [{"name": "Bobby Witt Jr."}]},
+            "cache:roster": [{"name": "Juan Soto", "player_type": "hitter"}],
+            "cache:opp_rosters": {"Rivals": [{"name": "Bobby Witt Jr.", "player_type": "hitter"}]},
         },
     )
     rosters = module.load_league_rosters("Mine")
-    assert rosters == {"Rivals": {"bobby witt jr."}, "Mine": {"juan soto"}}
+    assert rosters == {"Rivals": [("bobby witt jr.", "hitter")], "Mine": [("juan soto", "hitter")]}
     assert set(kv.asked) == {"cache:roster", "cache:opp_rosters"}
 
 
@@ -169,10 +170,30 @@ def test_the_data_envelope_is_unwrapped_but_a_bare_payload_survives(monkeypatch)
         assert module._kv_payload(module.CacheKey.ROSTER) == expected
 
 
-def test_names_are_normalized_so_accents_join_the_position_map():
-    assert module._normalized_names([{"name": "Julio Rodríguez"}]) == {"julio rodriguez"}
-    assert module._normalized_names([{"name": ""}, {}]) == set()
-    assert module._normalized_names("not a list") == set()
+def test_roster_entries_disambiguate_by_type_and_keep_duplicate_spots():
+    """Entries key on (normalized_name, player_type) -- names accent-fold to join the board,
+    the type distinguishes a hitter from a same-named pitcher, and it stays a LIST so two
+    same-name same-type spots (two Luis Garcias) are not collapsed (which made unscored
+    go negative). Blank/malformed entries are skipped; a non-list yields []."""
+    assert module._roster_entries([{"name": "Julio Rodríguez", "player_type": "hitter"}]) == [
+        ("julio rodriguez", "hitter")
+    ]
+    # same normalized name, different types -> two distinct keys
+    assert module._roster_entries(
+        [
+            {"name": "Will Smith", "player_type": "hitter"},
+            {"name": "Will Smith", "player_type": "pitcher"},
+        ]
+    ) == [("will smith", "hitter"), ("will smith", "pitcher")]
+    # two same-name same-type spots survive as duplicates (list, not set)
+    assert module._roster_entries(
+        [
+            {"name": "Luis Garcia", "player_type": "pitcher"},
+            {"name": "Luis Garcia", "player_type": "pitcher"},
+        ]
+    ) == [("luis garcia", "pitcher"), ("luis garcia", "pitcher")]
+    assert module._roster_entries([{"name": ""}, {}]) == []
+    assert module._roster_entries("not a list") == []
 
 
 def test_build_fails_loud_if_the_credits_table_gains_sp_rp_keys():
@@ -198,9 +219,371 @@ def test_league_report_refuses_a_partial_league_rather_than_mislead(monkeypatch,
     monkeypatch.setattr(
         module, "load_config", lambda _p: SimpleNamespace(team_name="Me", num_teams=10)
     )
-    monkeypatch.setattr(module, "load_league_rosters", lambda _t: {"Me": {"juan soto"}})
+    monkeypatch.setattr(module, "load_league_rosters", lambda _t: {"Me": [("juan soto", "hitter")]})
     assert module.league_report(2026, {}, {}, 3, 20) == 1
     assert "partial league" in capsys.readouterr().out
+
+
+def _synth_board(rows):
+    """rows: (mlbam_id, name, kind, proj_var). Fills the columns build() adds."""
+    df = pd.DataFrame(
+        {
+            "name": [r[1] for r in rows],
+            "kind": [r[2] for r in rows],
+            "proj_var": [r[3] for r in rows],
+            "proj_sgp": [r[3] + 1.0 for r in rows],
+            "sd": [2.0] * len(rows),
+            "pos": ["C"] * len(rows),
+            "age": [27] * len(rows),
+            "keeper_of": [""] * len(rows),
+        },
+        index=pd.Index([r[0] for r in rows], name="mlbam_id"),
+    )
+    return df.sort_values("proj_var", ascending=False)
+
+
+def test_board_row_keys_join_a_row_to_a_roster_entry_by_name_and_type():
+    """The board carries name + kind (a PlayerType) and no roster id, so a row joins to a
+    roster entry on (normalized_name, str(kind)) -- accent-folded, and typed so a hitter
+    and a same-named pitcher are distinct. #282."""
+    board = _synth_board(
+        [(1, "Julio Rodríguez", PlayerType.HITTER, 9.0), (2, "Will Smith", PlayerType.PITCHER, 8.0)]
+    )
+    assert set(module._board_row_keys(board)) == {
+        ("julio rodriguez", "hitter"),
+        ("will smith", "pitcher"),
+    }
+
+
+def test_below_floor_counts_only_genuinely_unqualified_entries():
+    """The shared below-floor count both reports read. Each roster entry is below the floor
+    iff its (name, type) has no PRE-dedupe board row, so a two-way owner's two entries are
+    both covered, an owned duplicate beyond what the board carries leaves its surplus below
+    the floor, and a collision handing a team extra board rows can never make it negative. #282."""
+    # Two-way owned by one team: both sides on the board -> nothing below the floor.
+    assert (
+        module._below_floor(
+            [("shohei ohtani", "hitter"), ("shohei ohtani", "pitcher")],
+            [("shohei ohtani", "hitter"), ("shohei ohtani", "pitcher")],
+        )
+        == Counter()
+    )
+    # I hold two same-(name, type) players, only one cleared the floor -> the other is below it.
+    assert module._below_floor(
+        [("luis garcia", "pitcher"), ("luis garcia", "pitcher")],
+        [("luis garcia", "pitcher")],
+    ) == Counter({("luis garcia", "pitcher"): 1})
+    # A genuinely-below-floor player (no board row at all) is counted.
+    assert module._below_floor([("some scrub", "hitter")], []) == Counter(
+        {("some scrub", "hitter"): 1}
+    )
+    # More board rows than roster entries (a collision stole another team's row) -> never negative.
+    assert (
+        module._below_floor(
+            [("luis garcia", "pitcher")],
+            [("luis garcia", "pitcher"), ("luis garcia", "pitcher")],
+        )
+        == Counter()
+    )
+    # Asymmetric two-way: I own both Yahoo entries but only his hitter side cleared the floor.
+    # His pitcher side has no board row, yet he is KEPT as a hitter, so the cross-type clause
+    # drops it -- it is not a below-floor spot. (Contrast the same-type Luis Garcia case above,
+    # which IS counted: there the board carries the name only under its OWN type.)
+    assert (
+        module._below_floor(
+            [("shohei ohtani", "hitter"), ("shohei ohtani", "pitcher")],
+            [("shohei ohtani", "hitter")],
+        )
+        == Counter()
+    )
+
+
+def test_roster_report_scores_only_my_side_of_a_shared_name(monkeypatch, capsys):
+    """I roster the hitter Will Smith, not the reliever. The (name, type) filter scores only
+    my hitter -- a bare-name filter would pull in the reliever I don't own and dilute every
+    P(keep). #282."""
+    board = _synth_board(
+        [(1, "Will Smith", PlayerType.HITTER, 10.0), (2, "Will Smith", PlayerType.PITCHER, 9.0)]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(module, "load_roster_keys", lambda: [("will smith", "hitter")])
+    assert module.roster_report(2026, {}, {}, 3) == 0
+    assert "1 scoreable players" in capsys.readouterr().out  # the hitter only, not the reliever
+
+
+def test_league_report_attributes_a_shared_name_and_keeps_a_split_two_way(monkeypatch, capsys):
+    """Two teams roster the same normalized name (hitter on A, pitcher on B); the (name,
+    type) owner map credits each its own instead of handing both to whoever iterates last.
+    A two-way player split across teams (same mlbam, two rows) keeps BOTH rows because the
+    dedupe is per-team, not league-wide -- so all 4 rows survive (the old league-wide dedupe
+    would have collapsed the two-way pair to 3 before ownership). #282."""
+    board = _synth_board(
+        [
+            (1, "Will Smith", PlayerType.HITTER, 10.0),
+            (2, "Will Smith", PlayerType.PITCHER, 9.0),
+            (660271, "Shohei Ohtani", PlayerType.HITTER, 12.0),
+            (660271, "Shohei Ohtani", PlayerType.PITCHER, 11.0),
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module, "load_config", lambda _p: SimpleNamespace(team_name="A", num_teams=2)
+    )
+    monkeypatch.setattr(
+        module,
+        "load_league_rosters",
+        lambda _t: {
+            "A": [("will smith", "hitter"), ("shohei ohtani", "hitter")],
+            "B": [("will smith", "pitcher"), ("shohei ohtani", "pitcher")],
+        },
+    )
+    assert module.league_report(2026, {}, {}, 3, 20) == 0
+    assert "of 4 scoreable rostered players" in capsys.readouterr().out
+
+
+def test_league_report_warns_when_a_name_is_ambiguous_across_teams(monkeypatch, capsys):
+    """Two teams roster the SAME (name, type) -- two same-type players sharing a normalized
+    name, which no id can disambiguate. Rather than silently mis-credit, --league prints a
+    WARNING naming them. #282's residual limit, made loud instead of hidden in a docstring."""
+    board = _synth_board(
+        [
+            (1, "Luis Garcia", PlayerType.PITCHER, 10.0),
+            (2, "Luis Garcia", PlayerType.PITCHER, 9.0),
+            (3, "Bobby Witt Jr.", PlayerType.HITTER, 8.0),  # a hitter so both POOLS are present
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module, "load_config", lambda _p: SimpleNamespace(team_name="A", num_teams=2)
+    )
+    monkeypatch.setattr(
+        module,
+        "load_league_rosters",
+        lambda _t: {
+            "A": [("luis garcia", "pitcher"), ("bobby witt jr.", "hitter")],
+            "B": [("luis garcia", "pitcher")],
+        },
+    )
+    module.league_report(2026, {}, {}, 3, 20)
+    out = capsys.readouterr().out
+    assert "rostered by more than one team" in out
+    assert "luis garcia (pitcher)" in out  # the normalized key, the only form the rosters carry
+
+
+def test_roster_report_does_not_brand_an_owned_two_ways_deduped_side_below_the_floor(
+    monkeypatch, capsys
+):
+    """I roster BOTH sides of a two-way player (Ohtani hitter + pitcher, both above MIN_PT).
+    `_score_roster` collapses him to one keeper candidate, but neither side is below the
+    floor -- both cleared it. NOT SCORED must stay empty, not brand his deliberately-deduped
+    pitcher side as below the qualifying floor. Regression for deriving `missing` from the
+    post-dedupe frame, which the (name, type) re-split reintroduced over the bare-name set. #282."""
+    board = _synth_board(
+        [
+            (660271, "Shohei Ohtani", PlayerType.HITTER, 12.0),
+            (660271, "Shohei Ohtani", PlayerType.PITCHER, 11.0),
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module,
+        "load_roster_keys",
+        lambda: [("shohei ohtani", "hitter"), ("shohei ohtani", "pitcher")],
+    )
+    assert module.roster_report(2026, {}, {}, 3) == 0
+    out = capsys.readouterr().out
+    assert "1 scoreable players" in out  # collapsed to one keeper candidate
+    assert "NOT SCORED" not in out  # ... but neither side is below the floor
+
+
+def test_league_report_does_not_count_an_owned_two_ways_deduped_side_below_the_floor(
+    monkeypatch, capsys
+):
+    """One team owns BOTH sides of a two-way player (both above MIN_PT). His two roster
+    entries collapse to one scored row, yet nothing on that roster is below the floor. The
+    per-team line must read '0 below the floor', not inflate the count by the deduped side.
+    Regression for `len(rosters[team]) - len(part)`, now counted from the pre-dedupe group. #282."""
+    board = _synth_board(
+        [
+            (660271, "Shohei Ohtani", PlayerType.HITTER, 12.0),
+            (660271, "Shohei Ohtani", PlayerType.PITCHER, 11.0),
+            (3, "Bobby Witt Jr.", PlayerType.HITTER, 8.0),
+            (4, "Tarik Skubal", PlayerType.PITCHER, 9.0),
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module, "load_config", lambda _p: SimpleNamespace(team_name="A", num_teams=2)
+    )
+    monkeypatch.setattr(
+        module,
+        "load_league_rosters",
+        lambda _t: {
+            "A": [("shohei ohtani", "hitter"), ("shohei ohtani", "pitcher")],
+            "B": [("bobby witt jr.", "hitter"), ("tarik skubal", "pitcher")],
+        },
+    )
+    assert module.league_report(2026, {}, {}, 3, 20) == 0
+    out = capsys.readouterr().out
+    assert "1 scoreable, 0 below the floor" in out  # A's two entries -> one row, none below
+    assert "below the floor)" in out and "-1 below" not in out
+
+
+def test_roster_report_counts_below_floor_entries_not_distinct_names(monkeypatch, capsys):
+    """I roster two same-(name, type) players (two 'Luis Garcia' pitchers), neither above
+    MIN_PT, so neither reaches the board. NOT SCORED must count 2 ENTRIES via `.total()` --
+    the same view --league reads -- not 1 distinct name, or the two reports would contradict
+    each other about the same roster. The docstring's 'cannot disagree' promise depends on it. #282."""
+    board = _synth_board(
+        [
+            (1, "Bobby Witt Jr.", PlayerType.HITTER, 10.0),  # my one scoreable keeper
+            (
+                2,
+                "Tarik Skubal",
+                PlayerType.PITCHER,
+                9.0,
+            ),  # unowned; only to keep both POOLS present
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module,
+        "load_roster_keys",
+        lambda: [
+            ("bobby witt jr.", "hitter"),
+            ("luis garcia", "pitcher"),
+            ("luis garcia", "pitcher"),  # a distinct second Luis Garcia, also below the floor
+        ],
+    )
+    assert module.roster_report(2026, {}, {}, 3) == 0
+    out = capsys.readouterr().out
+    assert "NOT SCORED (2)" in out  # two entries below the floor, not 1 distinct name
+    assert "luis garcia (pitcher)" in out
+
+
+def test_roster_report_does_not_list_a_two_ways_sub_floor_side_when_he_is_kept_as_the_other(
+    monkeypatch, capsys
+):
+    """A season Ohtani bats but does not pitch: I roster BOTH his Yahoo entries, but only his
+    hitter side clears MIN_PT (no pitcher board row). He is a scored keeper via his hitter side,
+    so his pitcher entry must NOT be listed as 'NOT SCORED / not competing' -- the cross-type
+    clause in `_below_floor` recognizes the two-way player kept via his other side. #282."""
+    board = _synth_board(
+        [
+            (660271, "Shohei Ohtani", PlayerType.HITTER, 12.0),  # only his bat cleared the floor
+            (592450, "Aaron Judge", PlayerType.HITTER, 11.0),
+            (3, "Tarik Skubal", PlayerType.PITCHER, 9.0),  # keeps both POOLS present
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module,
+        "load_roster_keys",
+        lambda: [
+            ("shohei ohtani", "hitter"),
+            ("shohei ohtani", "pitcher"),
+            ("aaron judge", "hitter"),
+        ],
+    )
+    assert module.roster_report(2026, {}, {}, 3) == 0
+    out = capsys.readouterr().out
+    assert "NOT SCORED" not in out  # his pitcher side is not a wasted below-floor spot
+    assert "shohei ohtani (pitcher)" not in out
+
+
+def test_league_report_does_not_count_a_two_ways_sub_floor_side_below_the_floor(
+    monkeypatch, capsys
+):
+    """League side of the same asymmetric two-way case: a team owns both Ohtani entries, only
+    the hitter cleared the floor. His pitcher entry is not a separate below-floor player -- he
+    is kept as a hitter -- so the team's line reads '0 below the floor'. #282."""
+    board = _synth_board(
+        [
+            (660271, "Shohei Ohtani", PlayerType.HITTER, 12.0),
+            (3, "Bobby Witt Jr.", PlayerType.HITTER, 8.0),
+            (4, "Tarik Skubal", PlayerType.PITCHER, 9.0),
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module, "load_config", lambda _p: SimpleNamespace(team_name="A", num_teams=2)
+    )
+    monkeypatch.setattr(
+        module,
+        "load_league_rosters",
+        lambda _t: {
+            "A": [("shohei ohtani", "hitter"), ("shohei ohtani", "pitcher")],
+            "B": [("bobby witt jr.", "hitter"), ("tarik skubal", "pitcher")],
+        },
+    )
+    assert module.league_report(2026, {}, {}, 3, 20) == 0
+    out = capsys.readouterr().out
+    assert "1 scoreable, 0 below the floor" in out  # A: Ohtani the one keeper, none below
+
+
+def test_roster_report_warns_when_a_namesake_dilutes_my_competition(monkeypatch, capsys):
+    """I roster ONE 'Luis Garcia' pitcher; a different 'Luis Garcia' pitcher (distinct id) is
+    also on the board. Set membership cannot tell them apart, so both score into my competition
+    and understate my keeper's P KEEP. --roster must WARN rather than dilute in silence, the same
+    limit --league prints for its cross-team collisions. #282."""
+    board = _synth_board(
+        [
+            (1, "Luis Garcia", PlayerType.PITCHER, 10.0),  # mine
+            (2, "Luis Garcia", PlayerType.PITCHER, 9.0),  # a different Luis Garcia, not mine
+            (3, "Bobby Witt Jr.", PlayerType.HITTER, 8.0),
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module,
+        "load_roster_keys",
+        lambda: [("luis garcia", "pitcher"), ("bobby witt jr.", "hitter")],
+    )
+    assert module.roster_report(2026, {}, {}, 3) == 0
+    out = capsys.readouterr().out
+    assert "unowned namesake" in out
+    assert "luis garcia (pitcher)" in out
+
+
+def test_league_report_does_not_warn_about_a_collision_that_never_reaches_the_board(
+    monkeypatch, capsys
+):
+    """Two teams roster the same (name, type), but that player is below MIN_PT and never
+    reaches the scored board, so his arbitrary ownership corrupts nothing shown. The WARNING
+    must fire only for a collision on an ACTUAL board row -- not for a phantom sub-floor
+    namesake. Regression: the warning was computed from all roster keys before the board even
+    existed, so it named players who never appeared. #282."""
+    board = _synth_board(
+        [
+            (3, "Bobby Witt Jr.", PlayerType.HITTER, 8.0),
+            (4, "Tarik Skubal", PlayerType.PITCHER, 9.0),
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module, "load_config", lambda _p: SimpleNamespace(team_name="A", num_teams=2)
+    )
+    monkeypatch.setattr(
+        module,
+        "load_league_rosters",
+        lambda _t: {
+            "A": [("bobby witt jr.", "hitter"), ("luis garcia", "pitcher")],
+            "B": [("tarik skubal", "pitcher"), ("luis garcia", "pitcher")],
+        },
+    )
+    assert module.league_report(2026, {}, {}, 3, 20) == 0
+    out = capsys.readouterr().out
+    assert "rostered by more than one team" not in out  # the collision never hit the board
 
 
 def test_qualified_families_emits_pt_and_batted_ball_columns():
