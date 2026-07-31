@@ -172,8 +172,8 @@ def test_names_are_normalized_so_accents_join_the_position_map():
 
 
 def test_qualified_families_emits_pt_and_batted_ball_columns():
-    """The column wiring the backtest and board both read. Cache-free so it catches
-    a broken join even when the skills fetch is unavailable."""
+    """The pt/batted_ball column wiring the backtest and board both read. Runs on a
+    synthetic frame, so it pins the family computation without the skills cache."""
     frame = pd.DataFrame(
         {
             "sgp": [20.0, 5.0, 12.0],
@@ -195,3 +195,205 @@ def test_qualified_families_emits_pt_and_batted_ball_columns():
     assert out["batted_ball_pct"].idxmin() == 3
     # pt is monotone in PA within the pool.
     assert out.loc[1, "pt_pct"] == pytest.approx(1.0)
+
+
+def _pct_frame(**all_nan):
+    """A qualified-like frame with every family `_pct` column present and non-NaN,
+    setting the named families all-NaN (e.g. `_pct_frame(future=True)`)."""
+    families = ("skill", "luck", "batted_ball", "future", "age")
+    return pd.DataFrame(
+        {
+            f"{fam}_pct": [float("nan"), float("nan")] if all_nan.get(fam) else [0.3, 0.7]
+            for fam in families
+        }
+    )
+
+
+def test_an_all_nan_mandatory_future_fails_loud_not_silently_dropped():
+    """The live board runs composite strict=False, so an all-NaN family is silently
+    dropped. This guard makes the MANDATORY `future` family's absence a loud, ZiPS-
+    source-pointing failure instead of a valid-looking board that ignores it."""
+    with pytest.raises(FileNotFoundError, match="future"):
+        module._require_mandatory_families(_pct_frame(future=True), None, "hitter", 2026)
+
+
+def test_an_all_nan_mandatory_batted_ball_fails_loud_not_silently_dropped():
+    """Same trap as `future`: an xba/Savant outage makes batted_ball all-NaN, which a
+    silent drop would revert to the pre-#277 blend that over-sells lucky bats. Fail
+    loud, naming the Savant/skills pull, instead of shipping the degraded board."""
+    with pytest.raises(ValueError, match="batted-ball"):
+        module._require_mandatory_families(_pct_frame(batted_ball=True), None, "hitter", 2026)
+
+
+def test_an_all_nan_low_weight_family_still_fails_loud_not_silently_dropped():
+    """Every shipped family is guarded, not just future/batted_ball: `age` carries a
+    small weight but still coerces to all-NaN on a malformed BBRef Age column, and a
+    silent drop would ship a board ranked on the wrong weights. Generic message names
+    the offending family."""
+    with pytest.raises(ValueError, match="age"):
+        module._require_mandatory_families(_pct_frame(age=True), None, "hitter", 2026)
+
+
+def test_a_candidate_board_that_omits_batted_ball_is_not_guarded_for_it():
+    """baseline/A candidates legitimately blend without batted_ball, so its all-NaN
+    column must not fail their boards -- the guard fires only for families the active
+    `family_order` actually uses."""
+    module._require_mandatory_families(
+        _pct_frame(batted_ball=True), ("skill", "luck", "future", "age"), "hitter", 2026
+    )
+
+
+def test_present_mandatory_families_pass_the_guard():
+    module._require_mandatory_families(_pct_frame(), None, "hitter", 2026)
+
+
+def test_the_family_guard_no_ops_on_an_empty_pool():
+    """An empty pool is not a family outage (`.isna().all()` is vacuously True on empty
+    columns). The guard must no-op, not raise about its first family, so intentional
+    empty pools -- an early-season board, a `--study` truncation sub-pool -- flow through
+    as an empty board rather than crashing the study/backtest."""
+    module._require_mandatory_families(_pct_frame().iloc[0:0], None, "hitter", 2026)
+
+
+def test_qualified_families_returns_empty_for_a_below_floor_pool_not_raises():
+    """A pool where nobody clears MIN_PT flows through as an empty frame, not a raise:
+    `--study` builds intentional sub-pools (`nlargest(0)`) it expects to skip, so raising
+    here would defeat `_print_truncation`'s `if shift.empty: continue`. The columns are
+    present (as `_observed` always supplies them) -- only the rows are filtered out."""
+    below_floor = pd.DataFrame(
+        {
+            "pt": [10.0],  # below MIN_PT hitter (250)
+            "sgp": [5.0],
+            "age": [27.0],
+            "avg": [0.250],
+            "xba": [0.245],
+            "barrel_pct": [8.0],
+            "barrel_pa_pct": [4.0],
+            "xwoba": [0.320],
+            "wrc_plus": [100.0],
+        },
+        index=pd.Index([1], name="mlbam_id"),
+    )
+    assert module._qualified_families(below_floor, "hitter").empty
+
+
+def test_an_empty_live_board_fails_loud_not_silently(capsys):
+    """The shared math tolerates empty pools (so diagnostics can build empty sub-pools),
+    but a LIVE board that came back empty -- a broken actuals/skills join, or a season too
+    early for MIN_PT -- must fail rather than write a silent empty CSV read as 'no keepers
+    qualify'. A populated board passes through untouched."""
+    assert module._fail_if_empty_board(pd.DataFrame(), 2026) is True
+    assert "keeper board is empty" in capsys.readouterr().out
+    assert (
+        module._fail_if_empty_board(pd.DataFrame({"name": ["A"], "proj_var": [5.0]}), 2026) is False
+    )
+
+
+def test_a_partial_live_board_missing_a_whole_pool_fails_loud(capsys):
+    """The combined roster/league board merges both pools, so a one-pool join break (drifted
+    mlbam ids on just one side) leaves the merged board non-empty. Without the `pools` check
+    it would silently render a keeper board missing an entire pool -- and unlike the too-early
+    case, a join break hits mid-season, when keeper decisions are made."""
+    hitters_only = pd.DataFrame({"name": ["A"], "proj_var": [5.0], "kind": [PlayerType.HITTER]})
+    assert module._fail_if_empty_board(hitters_only, 2026, module.POOLS) is True
+    assert "pool is empty" in capsys.readouterr().out
+    both = pd.DataFrame(
+        {
+            "name": ["A", "B"],
+            "proj_var": [5.0, 4.0],
+            "kind": [PlayerType.HITTER, PlayerType.PITCHER],
+        }
+    )
+    assert module._fail_if_empty_board(both, 2026, module.POOLS) is False
+
+
+def test_composite_pct_rejects_a_typod_family_order_with_a_clear_message():
+    """The production wrapper materializes `{family}_pct` columns, so a typo'd family_order
+    must be caught BEFORE that -- else `frame['sklll_pct']` raises an opaque pandas KeyError
+    instead of the actionable 'unknown families' message. composite's own guard runs after
+    the column access, too late for this path, so composite_pct checks first."""
+    frame = pd.DataFrame({"skill_pct": [0.3, 0.7]})
+    # Match "unknown families", NOT "sklll": the latter also matches the opaque pandas
+    # `KeyError: 'sklll_pct'` from `_family_columns`, so it would stay green even if the
+    # pre-check were deleted -- failing to pin the actionable-message behavior it guards.
+    with pytest.raises(KeyError, match="unknown families"):
+        module.composite_pct(frame, "hitter", weights=(1.0, 1.0), family_order=("skill", "sklll"))
+
+
+def test_projected_actually_calls_the_mandatory_family_guard(monkeypatch):
+    """The guard only helps if `projected` invokes it. Drive `projected` with a
+    batted_ball column that comes back all-NaN (blank avg) and confirm it raises, so a
+    later edit that deletes or moves the call cannot silently reintroduce the pre-#277
+    over-selling bug with the isolated helper tests still green."""
+    observed = pd.DataFrame(
+        {
+            "sgp": [20.0, 5.0, 12.0],
+            "age": [25.0, 31.0, 28.0],
+            "pt": [600.0, 550.0, 300.0],
+            "avg": [float("nan")] * 3,  # -> batted_ball all-NaN
+            "xba": [0.250, 0.245, 0.280],
+            "barrel_pct": [12.0, 6.0, 9.0],
+            "barrel_pa_pct": [5.0, 3.0, 4.0],
+            "xwoba": [0.380, 0.300, 0.330],
+            "wrc_plus": [150.0, 95.0, 115.0],
+        },
+        index=pd.Index([1, 2, 3], name="mlbam_id"),
+    )
+    monkeypatch.setattr(module, "_observed", lambda year, kind, denoms: observed)
+    monkeypatch.setattr(
+        module,
+        "zips_out_year_sgp",
+        lambda year, kind, denoms: pd.Series([10.0, 8.0, 6.0], index=[1, 2, 3]),
+    )
+    with pytest.raises(ValueError, match="batted-ball"):
+        module.projected(2026, "hitter", {})
+
+
+def test_projected_renders_an_empty_board_for_an_empty_pool(monkeypatch):
+    """An empty pool (nobody cleared MIN_PT -- e.g. `--backtest`'s 2026 watchlist board
+    run before anyone reaches 250 PA) must render an empty board, not crash. Before
+    #277's all-NaN drop `composite` returned empty for empty; this pins that base behavior
+    is restored end to end, so an empty current pool cannot abort `--backtest`/`--study`."""
+    below_floor = pd.DataFrame(
+        {
+            "sgp": [5.0],
+            "age": [27.0],
+            "pt": [10.0],  # below MIN_PT hitter (250) -> empty after the floor
+            "avg": [0.250],
+            "xba": [0.245],
+            "barrel_pct": [8.0],
+            "barrel_pa_pct": [4.0],
+            "xwoba": [0.320],
+            "wrc_plus": [100.0],
+        },
+        index=pd.Index([1], name="mlbam_id"),
+    )
+    monkeypatch.setattr(module, "_observed", lambda year, kind, denoms: below_floor)
+    monkeypatch.setattr(
+        module, "zips_out_year_sgp", lambda year, kind, denoms: pd.Series([10.0], index=[1])
+    )
+    assert module.projected(2026, "hitter", {}).empty
+
+
+def test_season_value_keeps_a_blank_rate_as_nan_not_a_phantom_zero(monkeypatch):
+    """`batted_ball` differences avg against xba, so a blank BA must reach the family as
+    NaN (mean-filled to neutral), NOT the fillna(0.0) `lines` value that would read as a
+    fake .000 -- a phantom 'unlucky' extreme mis-ranking the player to the bottom."""
+    raw = pd.DataFrame(
+        {
+            "mlbID": [1, 2],
+            "PA": [600, 550],
+            "R": [90, 70],
+            "HR": [30, 12],
+            "RBI": [95, 60],
+            "SB": [10, 4],
+            "AB": [540, 500],
+            "BA": ["0.280", ""],  # player 2's rate is blank
+            "Age": [27, 31],
+        }
+    )
+    monkeypatch.setattr(module, "_raw", lambda year, table: raw)
+    monkeypatch.setattr(module, "_sgp", lambda lines, denoms: pd.Series(0.0, index=lines.index))
+    out = module.season_value(2026, "hitter", {})
+    assert out.loc[1, "avg"] == pytest.approx(0.280)
+    assert pd.isna(out.loc[2, "avg"])  # blank -> NaN, not 0.0

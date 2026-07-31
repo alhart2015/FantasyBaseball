@@ -56,8 +56,9 @@ with a fit-season noise floor -- read it there rather than from a cached copy he
 which drifts silently and already did once on this branch.
 
 The shape those numbers support: skill leads, luck is close behind, batted_ball is
-a small negative claw-back, future is a real but discounted term, age is a small
-adjustment. Read them as that shape and not as tuned constants -- the ranked table
+a small negative claw-back, and future (discounted for staleness, below) and age
+are small terms close in size -- close enough that their order flips between the
+pools. Read them as that shape and not as tuned constants -- the ranked table
 `--backtest` prints separates its top candidates by less than it separates the two
 fit seasons, so a third decimal here would be noise. The chosen set (keep `luck`,
 add a negative `batted_ball`) was a bake-off against two alternatives -- adding a
@@ -69,8 +70,10 @@ next-season projection (one that has seen season T) is the single strongest
 predictor available and would earn a weight several times this. The out-year files
 are two years forward from their information set: ZiPS 2027 was generated
 2026-03-25 and has never seen 2026. `--study` measures that same
-two-years-forward case historically, and 0.4 is what it supports. If a
-post-season ZiPS 2027 ever lands, it is worth substantially more.
+two-years-forward case historically, and the discounted `future` weight in
+`FITTED_WEIGHTS` is what the bake-off's holdout settled on -- read the number
+there, not here. If a post-season ZiPS 2027 ever lands, it is worth substantially
+more.
 """
 
 from __future__ import annotations
@@ -97,6 +100,19 @@ FAMILIES: dict[str, tuple[str, ...]] = {
 # Every family the model knows how to blend. `family_order` selects a subset per
 # pool; a name outside this set is a typo, not a silent no-op.
 KNOWN_FAMILIES: frozenset[str] = frozenset({"skill", "luck", "pt", "batted_ball", "future", "age"})
+
+
+def check_known_families(names: set[str]) -> None:
+    """Raise a clear KeyError naming any family outside `KNOWN_FAMILIES`.
+
+    Exported so `keeper_rankings.composite_pct` can reject a typo'd `family_order` with this
+    same actionable message BEFORE it materializes `frame["{typo}_pct"]` (an opaque pandas
+    KeyError). `composite` calls it too, for the direct callers `composite_pct` bypasses.
+    """
+    unknown = names - KNOWN_FAMILIES
+    if unknown:
+        raise KeyError(f"unknown families {sorted(unknown)}; expected {sorted(KNOWN_FAMILIES)}")
+
 
 # Out-year projection blend, nearer year first. Both ZiPS out-years come from one
 # 2026-03-25 model run, so they are near-duplicates and the blend is almost
@@ -151,9 +167,13 @@ def luck(value_pct: pd.Series, skill_pct: pd.Series) -> pd.Series:
     return value_pct - skill_pct
 
 
-# Columns the batted-ball overperformance is measured from, per pool. Both sides of
-# each difference are park-unadjusted here (only wrc_plus/era_minus are park-adjusted
-# upstream), so the measure carries no park artifact.
+# Columns the batted-ball overperformance is measured from, per pool. NB "park-
+# unadjusted" is not "park-neutral": the PRODUCED side (raw avg, era) is park-EXPOSED
+# while the EXPECTED side (xba; fip, mostly) is not, so the gap keeps a repeating park
+# signal, not pure luck -- a Coors bat outruns its xba every year, and batted_ball's
+# negative weight then claws back some of that real, repeating park value along with
+# the luck. Park-adjusting the produced side is a known, unimplemented refinement; the
+# park-adjusted view already lives in `skill` (wrc_plus/era_minus).
 BATTED_BALL_INPUTS: dict[str, tuple[str, str]] = {
     "hitter": ("avg", "xba"),
     "pitcher": ("fip", "era"),
@@ -194,6 +214,7 @@ def composite(
     weights: tuple[float, ...] | None = None,
     *,
     family_order: tuple[str, ...] | None = None,
+    strict: bool = False,
 ) -> pd.Series:
     """Weighted blend of the pool's families, back on a 0-1 scale.
 
@@ -202,18 +223,59 @@ def composite(
     zero: their weight is dropped from the denominator, so a pool with no out-year
     projection still produces a comparable composite instead of one silently scaled
     down.
+
+    `strict` governs the ALL-NaN case only: False DROPS an all-NaN family from the
+    blend, True raises with a generic message. Which callers pass which is NOT the
+    live-vs-offline split you might expect. The live board passes False but does NOT
+    rely on the drop to survive an outage -- `keeper_rankings._require_mandatory_families`
+    runs FIRST and fails loud (with a source-pointing message) on any all-NaN SHIPPED
+    family, so composite's drop is only ever reached for a family that is legitimately
+    absent, never for an xba/ZiPS outage. The offline fit/backtest pass True because
+    their blended number is persisted as constants or decides the shipped model, so a
+    silently-dropped family would corrupt the result. `strict` hardens the all-NaN path
+    only -- a family entirely absent from `families` still drops -- but the strict
+    callers materialize every column, so only all-NaN arises for them.
     """
     order = family_order if family_order is not None else FAMILIES[kind]
     chosen = weights if weights is not None else FITTED_WEIGHTS[kind]
-    unknown = set(families) - KNOWN_FAMILIES
-    if unknown:
-        raise KeyError(f"unknown families {sorted(unknown)}; expected {sorted(KNOWN_FAMILIES)}")
+    # A name outside the known universe -- in EITHER the supplied dict or the requested
+    # `family_order` -- is a typo, not a silent no-op. An unknown `family_order` entry
+    # would otherwise `.get()` to None below and drop its weighted slot with no error,
+    # quietly shifting every downstream rank; catch it here as the comment promises.
+    check_known_families(set(families) | set(order))
+    # `family_order` and `weights` are index-aligned and default independently, so
+    # supplying one without the other zips the shipped weights against a different
+    # family set -- a silent mispairing `strict=True` can't catch when the lengths
+    # happen to match. Reject it here so every caller is covered, not just the wrapper.
+    if (family_order is None) != (weights is None):
+        raise ValueError("pass family_order and weights together, or neither")
+
+    # An empty pool (0 rows) blends to an empty result -- there is nothing to fail on,
+    # and callers build intentional empty sub-pools (a not-yet-populated early-season
+    # board, `--study`'s truncation to a tiny live pool) that expect an empty return to
+    # skip, not a raise. Without this the all-NaN drop below would drop every (vacuously
+    # all-NaN) family and hit the "no weighted family" guard. A NON-empty pool with an
+    # all-NaN family is a different case the loop still handles (drop, or strict-raise).
+    supplied = next((families[n] for n in order if families.get(n) is not None), None)
+    if supplied is not None and supplied.empty:
+        return pd.Series(dtype=float, index=supplied.index)
 
     total = 0.0
     blended: pd.Series | None = None
     for name, weight in zip(order, chosen, strict=True):
         series = families.get(name)
         if series is None or weight == 0:
+            continue
+        # An ALL-NaN family's mean is NaN, so `fillna(mean)` below would leave it NaN
+        # and poison every player's blend (and `total > 0` would not catch it). The
+        # live board drops it -- like a missing family -- to stay valid; a `strict`
+        # caller fails loud rather than persist/decide on a silently-degraded blend.
+        if series.isna().all():
+            if strict:
+                # `isna().all()` is vacuously True on an empty column too, so name which
+                # it is -- an empty panel and an all-NaN family are different bugs.
+                what = "empty" if len(series) == 0 else "entirely NaN"
+                raise ValueError(f"family {name!r} is {what}; the blend cannot use it")
             continue
         term = weight * series.fillna(series.mean())
         blended = term if blended is None else blended + term

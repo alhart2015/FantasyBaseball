@@ -115,6 +115,7 @@ from fantasy_baseball.keepers.composite import (
     LOWER_IS_BETTER,
     PITCHER_SKILLS,
     batted_ball,
+    check_known_families,
     composite,
     future_percentile,
     luck,
@@ -234,8 +235,11 @@ def season_value(year: int, kind: str, denoms) -> pd.DataFrame:
     )
     # The raw rate the batted-ball family differences against its expected skill
     # (avg vs xba, era vs fip). Emitted under its real name; neither collides with a
-    # skills column, so `_observed`'s join adds no `_sk` suffix.
-    out["avg" if kind == "hitter" else "era"] = lines["avg" if kind == "hitter" else "era"]
+    # skills column, so `_observed`'s join adds no `_sk` suffix. Re-derived from the
+    # raw column rather than the fillna(0.0) `lines`: batted_ball must see NaN for a
+    # blank rate so composite mean-fills it to neutral, not to a phantom 0.0 extreme.
+    rate, raw_col = ("avg", "BA") if kind == "hitter" else ("era", "ERA")
+    out[rate] = pd.to_numeric(frame[raw_col], errors="coerce")
     return out
 
 
@@ -307,6 +311,10 @@ def _qualified_families(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
     composite actually blends, so the ranking and the backtest cannot drift into
     validating different feature definitions.
     """
+    # An empty pool (empty actuals/skills join, or MIN_PT filtering everyone out early in
+    # a season) flows through as an empty frame, not a raise: `--study` builds intentional
+    # empty sub-pools it skips, and the live board renders empty. `composite` blends an
+    # empty pool to an empty result; `_require_mandatory_families` no-ops on it.
     qualified = frame[frame["pt"] >= MIN_PT[kind]].copy()
     qualified["value_pct"] = percentile(qualified["sgp"])
     qualified["skill_pct"] = skill_percentile(qualified, kind)
@@ -338,6 +346,7 @@ def composite_pct(
     weights: tuple[float, ...] | None = None,
     *,
     family_order: tuple[str, ...] | None = None,
+    strict: bool = False,
 ) -> pd.Series:
     """The composite, re-ranked to 0-1 -- the x-axis everything downstream uses.
 
@@ -347,19 +356,84 @@ def composite_pct(
     being applied to a subtly different variable, moving every proj_sgp, sd,
     proj_var and p_keep with no test failing.
 
-    The re-rank matters: `luck`/`batted_ball` are differences centred on zero while
-    the other families span 0-1, so the raw weighted mean is not on a percentile
-    scale. Ranking is order-preserving, so it changes only how the number reads.
+    The re-rank matters: `luck` is a difference centred on zero while the other
+    families (including `batted_ball`, which is a percentile) span 0-1, so the raw
+    weighted mean is not on a percentile scale. Ranking is order-preserving, so it
+    changes only how the number reads.
+
+    `strict` forwards to `composite`: the fit/backtest callers pass True so an
+    all-NaN family fails loud instead of being silently dropped from a blend whose
+    number is then persisted as constants or used to decide the shipped model.
     """
+    # `composite` owns the family_order/weights co-supply guard so every caller is
+    # covered; pass the RAW `family_order` (not the resolved `order`) so it sees the
+    # live path's None rather than a defaulted set. `_family_columns` still needs the
+    # resolved order to build the columns.
     order = family_order if family_order is not None else FAMILIES[kind]
+    # Reject a typo'd family_order HERE, before `_family_columns` does `frame["{typo}_pct"]`
+    # and raises an opaque pandas KeyError -- composite's own guard runs after that access.
+    check_known_families(set(order))
     return percentile(
-        composite(_family_columns(frame, order), kind, weights=weights, family_order=order)
+        composite(
+            _family_columns(frame, order),
+            kind,
+            weights=weights,
+            family_order=family_order,
+            strict=strict,
+        )
     )
 
 
 def _family_columns(frame: pd.DataFrame, family_order: tuple[str, ...]) -> dict[str, pd.Series]:
     """The `{family: series}` mapping `composite` expects, for the active families."""
     return {family: frame[f"{family}_pct"] for family in family_order}
+
+
+def _require_mandatory_families(
+    qualified: pd.DataFrame, family_order: tuple[str, ...] | None, kind: str, year: int
+) -> None:
+    """Fail loud if any family the active blend uses arrives entirely NaN.
+
+    The live board runs `composite` with strict=False so a genuinely ABSENT family (a
+    scarcity board built without an out-year term) drops cleanly -- but a family that is
+    present yet all-NaN is a data outage, not an intended omission, and would be SILENTLY
+    DROPPED, shipping a valid-looking board ranked on the wrong weights. Any shipped
+    family can reach here all-NaN: `avg`/`era`/`age` coerce to NaN on a malformed raw
+    column, skills can come back present-but-empty, and `future_pct` reindexes to NaN
+    when the ZiPS out-year files are absent -- so guard them all. `future` and
+    `batted_ball` get source-pointing messages (their absence is the likeliest and its
+    fix specific); the rest fall back to a generic one. `future` all-NaN ignores the
+    out-year projection; `batted_ball` all-NaN reverts to the pre-#277 blend that
+    over-sells lucky everyday bats (Rafaela, Otto Lopez).
+
+    Check only families the active blend uses: a backtest candidate board may
+    legitimately omit one (baseline/A carry no `batted_ball`).
+    """
+    # An EMPTY pool is not a family outage -- there are simply no players (an early-season
+    # board, a `--study` truncation sub-pool). It flows through as an empty board, so
+    # no-op here rather than misfire: `.isna().all()` is vacuously True on empty columns
+    # and would otherwise raise about the first family on every empty pool.
+    if qualified.empty:
+        return
+    order = family_order if family_order is not None else FAMILIES[kind]
+    for family in order:
+        if not qualified[f"{family}_pct"].isna().all():
+            continue
+        if family == "future":
+            raise FileNotFoundError(
+                f"no {kind} ZiPS out-year projection reached the pool for "
+                f"{year + 1}/{year + 2}; `future` is all-NaN -- check the files exist "
+                f"under {PROJECTIONS_DIR} and their mlbam ids match"
+            )
+        if family == "batted_ball":
+            raise ValueError(
+                f"no {kind} batted-ball inputs (avg/xba or fip/era) for {year}; the "
+                "`batted_ball` claw-back cannot be computed -- check the Savant/skills pull"
+            )
+        raise ValueError(
+            f"{kind} family `{family}` is entirely NaN for {year}; the board would "
+            "silently drop it and rank on the wrong weights -- check the source pull"
+        )
 
 
 def projected(
@@ -379,8 +453,9 @@ def projected(
     hand, and a later edit could make it false. This way the circularity cannot
     exist. It also skips a per-row pricing loop that is ~90% of a warm build.
 
-    `family_order`/`weights` override the shipped blend, for the backtest's
-    candidate boards; the live path leaves them None.
+    `family_order`/`weights` override the shipped blend, for the backtest's candidate
+    boards; pass BOTH or NEITHER (`composite` rejects one without the other), and the
+    live path leaves them None.
     """
     qualified = _qualified_families(_observed(year, kind, denoms), kind)
 
@@ -390,15 +465,11 @@ def projected(
     near = zips_out_year_sgp(year + 1, kind, denoms).reindex(qualified.index)
     far = zips_out_year_sgp(year + 2, kind, denoms).reindex(qualified.index)
     qualified["future_pct"] = future_percentile(near, far)
-    if qualified["future_pct"].isna().all():
-        # `composite` mean-fills a missing family and the mean of an all-NaN
-        # column is NaN, so this would silently write a CSV of NaN, rank
-        # alphabetically, and hand --roster 100% keep odds to the first three
-        # names. Fail instead.
-        raise FileNotFoundError(
-            f"no {kind} ZiPS out-year projection under {PROJECTIONS_DIR} for "
-            f"{year + 1}/{year + 2}; `future` cannot be computed"
-        )
+    # The live board's loud all-NaN check, raising a source-pointing message BEFORE
+    # composite runs -- which is why composite_pct below stays strict=False here and is
+    # not redundant with it: composite's own `strict` path is the generic guard the
+    # offline fit/backtest callers use. Each path runs exactly one of the two.
+    _require_mandatory_families(qualified, family_order, kind, year)
 
     qualified["composite"] = composite_pct(
         qualified, kind, weights=weights, family_order=family_order
@@ -421,7 +492,11 @@ def build(
     family_order: tuple[str, ...] | None = None,
     weights: tuple[float, ...] | None = None,
 ) -> pd.DataFrame:
-    """`projected` plus the positional adjustment, ranked and labelled."""
+    """`projected` plus the positional adjustment, ranked and labelled.
+
+    Like `projected`, `family_order`/`weights` are pass-both-or-neither -- `composite`
+    rejects one without the other rather than silently blending mismatched defaults.
+    """
     qualified = projected(year, kind, denoms, family_order=family_order, weights=weights)
 
     # Mean-centred credits: a display offset only, see `keepers.scarcity`.
@@ -508,9 +583,13 @@ def _weighted_rho(
     weights: tuple[float, ...],
     kind: str,
     *,
-    family_order: tuple[str, ...] | None = None,
+    family_order: tuple[str, ...],
 ) -> float:
-    blended = composite_pct(frame, kind, weights=weights, family_order=family_order)
+    # `family_order` is required, not defaulted: `weights` is grid-searched per family
+    # set, so the two are inseparable, and `composite`'s co-supply guard raises on
+    # weights-without-family_order anyway. `strict`: a fit/holdout rho computed with a
+    # family silently dropped would decide the model on the wrong blend.
+    blended = composite_pct(frame, kind, weights=weights, family_order=family_order, strict=True)
     return float(blended.corr(frame["target"], method="spearman"))
 
 
@@ -524,23 +603,33 @@ def _best_weights(
     """
     axes = [_FAMILY_GRID[f] for f in family_order]
     best_weights: tuple[float, ...] | None = None
+    best_per: list[float] = []
     best_mean = -2.0
     for weights in product(*axes):
-        mean = sum(_weighted_rho(f, weights, kind, family_order=family_order) for f in fit) / len(
-            fit
-        )
+        # Keep the winner's per-season rhos as the search goes, rather than re-running
+        # every `_weighted_rho` (blend + re-rank + Spearman) for the winner afterward.
+        per = [_weighted_rho(f, weights, kind, family_order=family_order) for f in fit]
+        mean = sum(per) / len(per)
         if mean > best_mean:
-            best_weights, best_mean = weights, mean
-    assert best_weights is not None
-    per_season = [_weighted_rho(f, best_weights, kind, family_order=family_order) for f in fit]
-    return best_weights, per_season
+            best_weights, best_mean, best_per = weights, mean, per
+    # Not an assert: `python -O` strips those, and a None here (every combo's mean rho
+    # NaN, so `mean > best_mean` never fires -- a degenerate/constant backtest panel)
+    # would fall through into `_weighted_rho(..., weights=None)` and surface as
+    # `composite`'s opaque co-supply error far from the real cause.
+    if best_weights is None:
+        raise ValueError(
+            f"no {kind} weight combination produced a finite fit rho; "
+            "the backtest panel is degenerate (all correlations NaN)"
+        )
+    return best_weights, best_per
 
 
 def _watchlist_moves(year: int, denoms, best: dict[str, tuple[float, ...]]) -> None:
     """Print each watchlist hitter's board rank under baseline vs each candidate."""
-    pricing = pricing_table(denoms)
-    boards = {
-        label: build(
+    pricing = pricing_table()
+    ranks: dict[str, dict[str, int]] = {}
+    for label in CANDIDATES:
+        board = build(
             year,
             "hitter",
             denoms,
@@ -548,19 +637,22 @@ def _watchlist_moves(year: int, denoms, best: dict[str, tuple[float, ...]]) -> N
             pricing=pricing,
             family_order=CANDIDATES[label],
             weights=best[label],
-        ).reset_index()
-        for label in CANDIDATES
-    }
+        )
+        # setdefault keeps the FIRST (higher proj_var) of any two board hitters that
+        # normalize to the same name -- the board is sorted proj_var-descending, so
+        # this tie-breaks by VAR like the old `.iloc[0]` did, not last-write-wins.
+        rank_by_name: dict[str, int] = {}
+        for n, r in zip(board["name"], board["rank"], strict=True):
+            rank_by_name.setdefault(normalize_name(str(n)), int(r))
+        ranks[label] = rank_by_name
     print(f"\n  hitter watchlist ranks on the {year} board (lower = better):")
     print("    " + f"{'player':<18}" + "".join(f"{label:>20}" for label in CANDIDATES))
     for name in WATCHLIST:
         target = normalize_name(name)
-        cells = []
-        for label in CANDIDATES:
-            board = boards[label]
-            hit = board[board["name"].map(lambda n: normalize_name(str(n))) == target]
-            cells.append(int(hit["rank"].iloc[0]) if len(hit) else -1)
-        print(f"    {name:<18}" + "".join(f"{c:>20}" for c in cells))
+        # "n/a", not a number: a watchlist hitter absent from the board (below the PT
+        # floor, or a name mismatch) must not print as a rank under "lower = better".
+        cells = [ranks[label].get(target, "n/a") for label in CANDIDATES]
+        print(f"    {name:<18}" + "".join(f"{c!s:>20}" for c in cells))
 
 
 def run_backtest(denoms) -> None:
@@ -578,7 +670,7 @@ def run_backtest(denoms) -> None:
             best_by_pool[kind][label] = weights
             holdout = _weighted_rho(hold, weights, kind, family_order=family_order)
             fit_rho = sum(per_season) / len(per_season)
-            noise = abs(per_season[0] - per_season[1])  # in-sample rho spread
+            noise = max(per_season) - min(per_season)  # in-sample rho spread
             shown = " ".join(f"{f}={w:+.2f}" for f, w in zip(family_order, weights, strict=True))
             print(f"  {label:<20}{holdout:>9.4f}{fit_rho:>9.4f}{noise:>9.4f}  {shown}")
         # The currently-shipped model at its shipped weights, for reference against
@@ -587,13 +679,19 @@ def run_backtest(denoms) -> None:
         # generalization's no-behaviour-change check.
         shipped = _weighted_rho(hold, FITTED_WEIGHTS[kind], kind, family_order=FAMILIES[kind])
         print(f"  {'shipped':<20}{shipped:>9.4f}   (current model)")
+        # The pure-null floor: skill percentile alone, no volume/luck/future/age term.
+        # A candidate that fails to clear this by more than the pool's noise is buying
+        # nothing the peripherals do not already say.
+        skill_only = _weighted_rho(hold, (1.0,), kind, family_order=("skill",))
+        print(f"  {'skill only':<20}{skill_only:>9.4f}   (null floor)")
     # The watchlist is a hitter question; build 2026 boards under each candidate's
     # best hitter weights.
     _watchlist_moves(2026, denoms, best_by_pool["hitter"])
     print(
-        "\n  Ship A or B over baseline only if it beats baseline holdout by MORE than"
-        "\n  that pool's noise. Within noise, prefer the sniff-test passer, then A"
-        "\n  (keeps SB/saves), then baseline. Apply by hand; see the spec."
+        "\n  Ship a candidate over baseline only if it beats baseline holdout by MORE"
+        "\n  than that pool's noise AND clears the skill-only null floor. C (luck plus a"
+        "\n  negative batted_ball claw-back) is what shipped; A and B are the alternatives"
+        "\n  it won the holdout against. Apply by hand; see the verdict doc."
     )
 
 
@@ -668,7 +766,10 @@ def run_fit(denoms) -> None:
             frames.append(
                 pd.DataFrame(
                     {
-                        "c": composite_pct(feat, kind),
+                        # strict: these constants are pasted into projection.py, so a
+                        # family silently dropped for a bad transition year would be
+                        # baked in permanently rather than noticed.
+                        "c": composite_pct(feat, kind, strict=True),
                         "sgp": feat["target_sgp"],
                     }
                 )
@@ -739,7 +840,7 @@ def _truncation_shift(kind: str, denoms, year: int, pool_size: int) -> pd.DataFr
         feat = _qualified_families(frame, kind)
         feat["future_pct"] = percentile(out_year.reindex(feat.index))
         feat = feat.dropna(subset=["value_pct", "skill_pct", "age_pct"])
-        return expected_sgp(composite_pct(feat, kind), kind)
+        return expected_sgp(composite_pct(feat, kind, strict=True), kind)
 
     both = pd.DataFrame(
         {"full": priced(observed), "small": priced(observed.nlargest(pool_size, "pt"))}
@@ -932,7 +1033,7 @@ def _print_cross_pool(denoms) -> None:
     for kind in POOLS:
         realized = pd.concat(
             [
-                frame.loc[composite_pct(frame, kind) >= 0.9, "target_sgp"]
+                frame.loc[composite_pct(frame, kind, strict=True) >= 0.9, "target_sgp"]
                 for frame in (_transition(year, kind, denoms) for year in ALL_TRANSITION_YEARS)
             ]
         )
@@ -1039,6 +1140,41 @@ def _dedupe_two_way(board: pd.DataFrame) -> pd.DataFrame:
     return board[~board.index.duplicated(keep="first")].reset_index(drop=True)
 
 
+def _fail_if_empty_board(board: pd.DataFrame, year: int, pools: tuple[str, ...] = ()) -> bool:
+    """Print why and return True when a LIVE keeper board is empty or missing a pool.
+
+    The shared math (`composite`, `build`, `_qualified_families`) tolerates an empty pool
+    so the diagnostics can build intentional empty sub-pools -- but an EMPTY live board is
+    either a broken actuals/skills join (a 0-row inner join on an mlbam id mismatch) or a
+    season too early for anyone to clear MIN_PT. Neither is a board to act on, so the
+    live-board commands fail rather than emit a silent empty CSV/report. (Base `feat/273`
+    failed loud here via a vacuous guard; #277's empty-tolerance would otherwise mask it.)
+
+    `pools` guards the COMBINED roster/league board (which carries a `kind` column): if any
+    expected pool contributed ZERO rows it also fails, because a one-pool join break (drifted
+    mlbam ids on just the pitcher side, say) merges a full board with an empty one, and the
+    whole-board `.empty` check above would pass while the report SILENTLY omits an entire
+    pool. Unlike the too-early cause, a join break is not season-gated -- it hits mid-season
+    exactly when decisions are made. The per-kind CSV path checks each pool and passes none.
+    """
+    if board.empty:
+        print(
+            f"no players qualified for {year} (>= the MIN_PT floors); the keeper board is "
+            "empty -- either the season is too early, or the actuals/skills join is broken "
+            "(mlbam id mismatch)."
+        )
+        return True
+    missing = set(pools) - set(board["kind"]) if pools else set()
+    if missing:
+        print(
+            f"the {'/'.join(sorted(str(p) for p in missing))} pool is empty for {year}; a "
+            "partial keeper board would silently omit it -- check that pool's actuals/skills "
+            "join (mlbam id overlap) and its MIN_PT floor."
+        )
+        return True
+    return False
+
+
 def _scored_board(year: int, denoms, keepers: dict[str, str], pricing) -> pd.DataFrame:
     """Both pools on ONE proj_var scale, two-way players collapsed.
 
@@ -1071,6 +1207,8 @@ def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: i
 
     owner_of = {name: team for team, names in rosters.items() for name in names}
     board = _scored_board(year, denoms, keepers, pricing_table())
+    if _fail_if_empty_board(board, year, POOLS):
+        return 1
     board["owner"] = board["name"].map(lambda n: owner_of.get(normalize_name(str(n))))
     board = board.dropna(subset=["owner"])
 
@@ -1136,6 +1274,8 @@ def roster_report(year: int, denoms, keepers: dict[str, str], slots: int) -> int
         return 1
 
     board = _scored_board(year, denoms, keepers, pricing_table())
+    if _fail_if_empty_board(board, year, POOLS):
+        return 1
     board = board[board["name"].map(lambda n: normalize_name(str(n)) in roster)].copy()
 
     board["p_keep"] = probability_top_n(board["proj_var"], board["sd"], board["kind"], slots)
@@ -1203,6 +1343,8 @@ def main() -> int:
     pricing = pricing_table()
     for kind in POOLS:
         table = build(year, kind, denoms, keepers, pricing=pricing)
+        if _fail_if_empty_board(table, year):
+            return 1
         out_path = SKILLS_DIR / f"keeper_rankings_{kind}_{year}.csv"
         table.to_csv(out_path)
         shown = SHOWN
