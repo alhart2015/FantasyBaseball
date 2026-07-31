@@ -132,12 +132,12 @@ def test_the_league_loader_unions_my_roster_with_the_opponents(monkeypatch):
     kv = _fake_kv(
         monkeypatch,
         {
-            "cache:roster": [{"name": "Juan Soto"}],
-            "cache:opp_rosters": {"Rivals": [{"name": "Bobby Witt Jr."}]},
+            "cache:roster": [{"name": "Juan Soto", "player_type": "hitter"}],
+            "cache:opp_rosters": {"Rivals": [{"name": "Bobby Witt Jr.", "player_type": "hitter"}]},
         },
     )
     rosters = module.load_league_rosters("Mine")
-    assert rosters == {"Rivals": {"bobby witt jr."}, "Mine": {"juan soto"}}
+    assert rosters == {"Rivals": [("bobby witt jr.", "hitter")], "Mine": [("juan soto", "hitter")]}
     assert set(kv.asked) == {"cache:roster", "cache:opp_rosters"}
 
 
@@ -169,10 +169,30 @@ def test_the_data_envelope_is_unwrapped_but_a_bare_payload_survives(monkeypatch)
         assert module._kv_payload(module.CacheKey.ROSTER) == expected
 
 
-def test_names_are_normalized_so_accents_join_the_position_map():
-    assert module._normalized_names([{"name": "Julio Rodríguez"}]) == {"julio rodriguez"}
-    assert module._normalized_names([{"name": ""}, {}]) == set()
-    assert module._normalized_names("not a list") == set()
+def test_roster_entries_disambiguate_by_type_and_keep_duplicate_spots():
+    """Entries key on (normalized_name, player_type) -- names accent-fold to join the board,
+    the type distinguishes a hitter from a same-named pitcher, and it stays a LIST so two
+    same-name same-type spots (two Luis Garcias) are not collapsed (which made unscored
+    go negative). Blank/malformed entries are skipped; a non-list yields []."""
+    assert module._roster_entries([{"name": "Julio Rodríguez", "player_type": "hitter"}]) == [
+        ("julio rodriguez", "hitter")
+    ]
+    # same normalized name, different types -> two distinct keys
+    assert module._roster_entries(
+        [
+            {"name": "Will Smith", "player_type": "hitter"},
+            {"name": "Will Smith", "player_type": "pitcher"},
+        ]
+    ) == [("will smith", "hitter"), ("will smith", "pitcher")]
+    # two same-name same-type spots survive as duplicates (list, not set)
+    assert module._roster_entries(
+        [
+            {"name": "Luis Garcia", "player_type": "pitcher"},
+            {"name": "Luis Garcia", "player_type": "pitcher"},
+        ]
+    ) == [("luis garcia", "pitcher"), ("luis garcia", "pitcher")]
+    assert module._roster_entries([{"name": ""}, {}]) == []
+    assert module._roster_entries("not a list") == []
 
 
 def test_build_fails_loud_if_the_credits_table_gains_sp_rp_keys():
@@ -198,9 +218,85 @@ def test_league_report_refuses_a_partial_league_rather_than_mislead(monkeypatch,
     monkeypatch.setattr(
         module, "load_config", lambda _p: SimpleNamespace(team_name="Me", num_teams=10)
     )
-    monkeypatch.setattr(module, "load_league_rosters", lambda _t: {"Me": {"juan soto"}})
+    monkeypatch.setattr(module, "load_league_rosters", lambda _t: {"Me": [("juan soto", "hitter")]})
     assert module.league_report(2026, {}, {}, 3, 20) == 1
     assert "partial league" in capsys.readouterr().out
+
+
+def _synth_board(rows):
+    """rows: (mlbam_id, name, kind, proj_var). Fills the columns build() adds."""
+    df = pd.DataFrame(
+        {
+            "name": [r[1] for r in rows],
+            "kind": [r[2] for r in rows],
+            "proj_var": [r[3] for r in rows],
+            "proj_sgp": [r[3] + 1.0 for r in rows],
+            "sd": [2.0] * len(rows),
+            "pos": ["C"] * len(rows),
+            "age": [27] * len(rows),
+            "keeper_of": [""] * len(rows),
+        },
+        index=pd.Index([r[0] for r in rows], name="mlbam_id"),
+    )
+    return df.sort_values("proj_var", ascending=False)
+
+
+def test_board_row_keys_join_a_row_to_a_roster_entry_by_name_and_type():
+    """The board carries name + kind (a PlayerType) and no roster id, so a row joins to a
+    roster entry on (normalized_name, str(kind)) -- accent-folded, and typed so a hitter
+    and a same-named pitcher are distinct. #282."""
+    board = _synth_board(
+        [(1, "Julio Rodríguez", PlayerType.HITTER, 9.0), (2, "Will Smith", PlayerType.PITCHER, 8.0)]
+    )
+    assert set(module._board_row_keys(board)) == {
+        ("julio rodriguez", "hitter"),
+        ("will smith", "pitcher"),
+    }
+
+
+def test_roster_report_scores_only_my_side_of_a_shared_name(monkeypatch, capsys):
+    """I roster the hitter Will Smith, not the reliever. The (name, type) filter scores only
+    my hitter -- a bare-name filter would pull in the reliever I don't own and dilute every
+    P(keep). #282."""
+    board = _synth_board(
+        [(1, "Will Smith", PlayerType.HITTER, 10.0), (2, "Will Smith", PlayerType.PITCHER, 9.0)]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(module, "load_roster_keys", lambda: [("will smith", "hitter")])
+    assert module.roster_report(2026, {}, {}, 3) == 0
+    assert "1 scoreable players" in capsys.readouterr().out  # the hitter only, not the reliever
+
+
+def test_league_report_attributes_a_shared_name_and_keeps_a_split_two_way(monkeypatch, capsys):
+    """Two teams roster the same normalized name (hitter on A, pitcher on B); the (name,
+    type) owner map credits each its own instead of handing both to whoever iterates last.
+    A two-way player split across teams (same mlbam, two rows) keeps BOTH rows because the
+    dedupe is per-team, not league-wide -- so all 4 rows survive (the old league-wide dedupe
+    would have collapsed the two-way pair to 3 before ownership). #282."""
+    board = _synth_board(
+        [
+            (1, "Will Smith", PlayerType.HITTER, 10.0),
+            (2, "Will Smith", PlayerType.PITCHER, 9.0),
+            (660271, "Shohei Ohtani", PlayerType.HITTER, 12.0),
+            (660271, "Shohei Ohtani", PlayerType.PITCHER, 11.0),
+        ]
+    )
+    monkeypatch.setattr(module, "_scored_board", lambda *a, **k: board)
+    monkeypatch.setattr(module, "pricing_table", lambda: ({}, {}))
+    monkeypatch.setattr(
+        module, "load_config", lambda _p: SimpleNamespace(team_name="A", num_teams=2)
+    )
+    monkeypatch.setattr(
+        module,
+        "load_league_rosters",
+        lambda _t: {
+            "A": [("will smith", "hitter"), ("shohei ohtani", "hitter")],
+            "B": [("will smith", "pitcher"), ("shohei ohtani", "pitcher")],
+        },
+    )
+    assert module.league_report(2026, {}, {}, 3, 20) == 0
+    assert "of 4 scoreable rostered players" in capsys.readouterr().out
 
 
 def test_qualified_families_emits_pt_and_batted_ball_columns():

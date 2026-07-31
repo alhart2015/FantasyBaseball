@@ -738,35 +738,62 @@ def _kv_payload(key: CacheKey):
     return payload
 
 
-def _normalized_names(entries) -> set[str]:
+def _roster_entries(entries) -> list[tuple[str, str]]:
+    """`(normalized_name, player_type)` per roster entry, DUPLICATES preserved.
+
+    A bare normalized name is ambiguous: Yahoo splits a two-way player (Ohtani) into a
+    hitter and a pitcher entry that can sit on different teams, and 2022 alone had a
+    hitter and a pitcher both named `Luis Garcia`. Roster blobs carry `player_type`
+    ('hitter'/'pitcher') but no mlbam_id, so `(name, player_type)` is the only key that
+    joins to the board's `(name, kind)` -- it resolves every cross-TYPE collision. It is a
+    LIST, not a set: two same-name SAME-type spots are distinct roster slots, and
+    collapsing them to one made `unscored` go negative. Residual limit (#282): two
+    same-name same-type players on DIFFERENT teams still cannot be told apart -- the board
+    and roster share no unique id -- but that is rarer than the cross-type case this fixes.
+    """
     if not isinstance(entries, list):
-        return set()
-    return {normalize_name(str(e.get("name", ""))) for e in entries if e.get("name")}
+        return []
+    return [
+        (normalize_name(str(e["name"])), str(e.get("player_type", "")))
+        for e in entries
+        if e.get("name")
+    ]
 
 
-def load_roster_names() -> set[str]:
-    """Normalized names on my roster, from the live KV blob."""
-    return _normalized_names(_kv_payload(CacheKey.ROSTER))
+def load_roster_keys() -> list[tuple[str, str]]:
+    """`(normalized_name, player_type)` entries on my roster, from the live KV blob."""
+    return _roster_entries(_kv_payload(CacheKey.ROSTER))
 
 
-def load_league_rosters(my_team: str) -> dict[str, set[str]]:
-    """Normalized names per team for the WHOLE league, from the live KV blobs.
+def load_league_rosters(my_team: str) -> dict[str, list[tuple[str, str]]]:
+    """`(normalized_name, player_type)` entries per team for the WHOLE league.
 
-    `cache:roster` holds only my team and `cache:opp_rosters` only the other
-    nine, so the league is the union. Same import-local, failure-tolerant shape
-    as `load_roster_names`: everything else in this script runs offline.
+    `cache:roster` holds only my team and `cache:opp_rosters` only the other nine, so the
+    league is the union. Same import-local, failure-tolerant shape as `load_roster_keys`:
+    everything else in this script runs offline.
     """
     opponents = _kv_payload(CacheKey.OPP_ROSTERS)
-    rosters: dict[str, set[str]] = {}
+    rosters: dict[str, list[tuple[str, str]]] = {}
     if isinstance(opponents, dict):
         for team, players in opponents.items():
-            names = _normalized_names(players)
-            if names:
-                rosters[str(team)] = names
-    mine = load_roster_names()
+            keys = _roster_entries(players)
+            if keys:
+                rosters[str(team)] = keys
+    mine = load_roster_keys()
     if mine:
         rosters[my_team] = mine
     return rosters
+
+
+def _board_row_keys(board: pd.DataFrame) -> list[tuple[str, str]]:
+    """`(normalized_name, player_type)` per board row -- the key that joins a board row
+    (indexed by mlbam_id, carrying a `name` and a `kind`) to a roster entry, since the
+    roster blobs carry `player_type` but no mlbam_id. Mirrors `_roster_entries` on the
+    board side; used for ownership, roster filtering, and the not-scored set. See #282.
+    """
+    return [
+        (normalize_name(str(n)), str(k)) for n, k in zip(board["name"], board["kind"], strict=True)
+    ]
 
 
 def run_fit(denoms) -> None:
@@ -1197,18 +1224,23 @@ def _fail_if_empty_board(board: pd.DataFrame, year: int, pools: tuple[str, ...] 
 
 
 def _scored_board(year: int, denoms, keepers: dict[str, str], pricing) -> pd.DataFrame:
-    """Both pools on ONE proj_var scale, two-way players collapsed.
+    """Both pools on ONE proj_var scale, indexed by mlbam_id, proj_var-descending.
 
-    Shared by `--roster` and `--league` so the same player cannot be scored two
-    different ways depending on which report asked. Cross-pool comparison is what
-    `proj_var` exists for; the composite alone could not do it.
+    Shared by `--roster` and `--league` so the same player cannot be scored two different
+    ways depending on which report asked. Cross-pool comparison is what `proj_var` exists
+    for; the composite alone could not do it.
+
+    Two-way players are NOT deduped here: their hitter and pitcher rows share one mlbam_id
+    but can belong to DIFFERENT teams (`--league`), so collapsing before ownership is known
+    deletes one team's copy (#282). Each caller applies `_dedupe_two_way` per roster, after
+    ownership -- within a team for `--league`, over my roster for `--roster`.
     """
     scored = []
     for kind in POOLS:
         part = build(year, kind, denoms, keepers, pricing=pricing)
         part["kind"] = kind
-        scored.append(part)  # index is mlbam_id, and the dedupe below needs it
-    return _dedupe_two_way(pd.concat(scored).sort_values("proj_var", ascending=False))
+        scored.append(part)  # index is mlbam_id, which the per-roster dedupe needs
+    return pd.concat(scored).sort_values("proj_var", ascending=False)
 
 
 def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: int) -> int:
@@ -1236,35 +1268,43 @@ def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: i
         )
         return 1
 
-    owner_of = {name: team for team, names in rosters.items() for name in names}
+    # Owner map keyed on `(normalized_name, player_type)`, NOT a bare name: two teams can
+    # roster the same normalized name (Ohtani hitter here, pitcher there; two Luis Garcias),
+    # and a bare key would hand both board rows to whichever team iterated last (#282).
+    owner_of = {key: team for team, keys in rosters.items() for key in keys}
     board = _scored_board(year, denoms, keepers, pricing_table())
     if _fail_if_empty_board(board, year, POOLS):
         return 1
-    board["owner"] = board["name"].map(lambda n: owner_of.get(normalize_name(str(n))))
+    board["owner"] = [owner_of.get(key) for key in _board_row_keys(board)]
     board = board.dropna(subset=["owner"])
+    if board.empty:
+        print("No rostered players matched the board (roster/board name mismatch).")
+        return 1
 
-    # One grouping, and P(keep) per team over that team's own roster -- never
-    # league-wide. Iterating the frame's groups rather than `rosters` means a team
-    # with nothing scoreable simply has no group, so there is no zero-fill to
-    # initialize and no emptiness guard to forget.
+    # One grouping, and P(keep) per team over that team's own roster -- never league-wide.
+    # Iterating the frame's groups rather than `rosters` means a team with nothing scoreable
+    # simply has no group, so there is no zero-fill to initialize and no emptiness guard to
+    # forget. The two-way dedupe happens HERE, per team: a player's hitter and pitcher rows
+    # can belong to different teams, so collapsing before ownership deletes one team's copy.
     by_team: dict[str, pd.DataFrame] = {}
     for team, group in board.groupby("owner", sort=False):
-        part = group.copy()
+        part = _dedupe_two_way(group.copy())
         part["p_keep"] = probability_top_n(part["proj_var"], part["sd"], part["kind"], slots)
         by_team[str(team)] = part
 
-    # `board` is already proj_var-descending (`_scored_board` sorts, `_dedupe_two_way`
-    # and the owner map/dropna preserve order), so the league table reads it directly;
-    # `by_team` exists only for the per-team p_keep block below.
+    # The league table needs the PER-TEAM-DEDUPED board (a two-way player owned by one team
+    # collapses to his better side), which is the concat of the groups re-sorted -- `board`
+    # itself is no longer deduped now that the dedupe moved into the loop above.
+    rostered = pd.concat(by_team.values()).sort_values("proj_var", ascending=False)
     print(f"\n{'=' * 72}")
-    print(f"LEAGUE KEEPER BOARD -- top {top} of {len(board)} scoreable rostered players")
+    print(f"LEAGUE KEEPER BOARD -- top {top} of {len(rostered)} scoreable rostered players")
     print(f"{'=' * 72}")
     print(
         f"{'':4}{'PLAYER':<20}{'POS':>4}{'AGE':>4}{'PROJ VAR':>10}"
         f"{'RAW SGP':>9}{'+/-SD':>7}{'OWNER':>30}"
     )
     print("-" * 88)
-    for rank, row in enumerate(board.head(top).itertuples(), start=1):
+    for rank, row in enumerate(rostered.head(top).itertuples(), start=1):
         mine = "*" if row.owner == config.team_name else " "
         print(
             f"{rank:>3}{mine}{row.name:<20}{row.pos:>4}{row.age:>4}"
@@ -1301,18 +1341,24 @@ def roster_report(year: int, denoms, keepers: dict[str, str], slots: int) -> int
     it only means anything against a specific set of rivals, so it is computed
     here over the roster rather than shipped in the pool-wide CSV.
     """
-    roster = load_roster_names()
+    roster = load_roster_keys()
     if not roster:
         print("No roster available (needs the live KV blob); nothing to score.")
         return 1
+    roster_set = set(roster)  # membership; the list `roster` keeps duplicate spots for NOT-SCORED
 
     board = _scored_board(year, denoms, keepers, pricing_table())
     if _fail_if_empty_board(board, year, POOLS):
         return 1
-    board = board[board["name"].map(lambda n: normalize_name(str(n)) in roster)].copy()
+    # Filter to MY roster by (normalized_name, player_type), not a bare name: a different
+    # player who shares a normalized name (a reliever "Will Smith" I don't own) must not be
+    # scored into my competing set and dilute every real keeper's P(keep) (#282).
+    board = board[[key in roster_set for key in _board_row_keys(board)]].copy()
+    # Dedupe a two-way player I own to his better side now that `_scored_board` no longer does.
+    board = _dedupe_two_way(board)
 
     board["p_keep"] = probability_top_n(board["proj_var"], board["sd"], board["kind"], slots)
-    missing = sorted(roster - {normalize_name(str(n)) for n in board["name"]})
+    missing = sorted(roster_set - set(_board_row_keys(board)))
 
     print(f"\n=== {len(board)} scoreable players, {slots} keeper slots ===")
     print(f"{'':1}{'PLAYER':<20}{'POS':>4}{'AGE':>4}{'PROJ VAR':>10}{'+/-SD':>7}{'P KEEP':>8}")
@@ -1326,9 +1372,10 @@ def roster_report(year: int, denoms, keepers: dict[str, str], slots: int) -> int
     awarded = min(slots, len(board))
     print(f"\n  P KEEP sums to {board['p_keep'].sum():.2f}, i.e. exactly the {awarded} slots.")
     if missing:
+        shown = ", ".join(f"{name} ({ptype})" for name, ptype in missing)
         print(
             f"  NOT SCORED ({len(missing)}), below the qualifying floor so they have no "
-            f"percentile: {', '.join(missing)}."
+            f"percentile: {shown}."
         )
         print("  Their absence inflates everyone else's P KEEP -- they are not competing.")
     return 0
