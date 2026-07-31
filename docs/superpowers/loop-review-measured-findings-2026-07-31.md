@@ -39,7 +39,9 @@ loop-review runs on this machine, not just the two hand-written case studies alr
 4. **Secondary levers, in order:** H4 (fix-diff scoping after pass 1, supported by the same
    overlap data), then H3 (decay early-exit) and agent-count taper -- both of which change
    the skill's explicit "cost is never a stop condition" stance and so are deliberate policy
-   calls, not silent tweaks.
+   calls, not silent tweaks. And **`/simplify` (Finding 7) is the most cuttable component** --
+   73% apply rate but 2.7x lower yield than the code-review that follows it, ~20% of the
+   machinery's tokens, with one documented regression to its name.
 
 5. **This is the Opus 4.8[1m] baseline.** Opus 5 will need re-measurement before its loop is
    tuned; the *mechanisms* below should transfer, the *magnitudes* will not. The "What to
@@ -220,6 +222,60 @@ matures is a small change with a real payoff. (The verify stage is doing genuine
 passes routinely refuted 1-4 plausible-but-wrong candidates -- so cut finder breadth before
 cutting verification depth.)
 
+## Finding 7 -- /simplify (the first half of every pass) earns little of its keep
+
+`/simplify` is the other half of each pass and was the largest unmeasured corner; it is now
+measured. It fans out into **4 read-only reviewer agents** (reuse / simplification /
+efficiency / altitude). They do **not** edit -- across **140 simplify agents, 139 applied
+zero edits**; they report recommendations and the loop orchestrator applies them in the main
+session. So the right layer to judge them is the orchestrator's edits per invocation, not the
+sub-agent transcripts.
+
+Measured across all main-session transcripts:
+
+| signal | `/simplify` | `/code-review` (runs right after, same pass) |
+|---|---|---|
+| invocations applying >= 1 **code** edit | **73%** (19/26) | 96% (27/28) |
+| pure no-ops (0 code edits) | **27%** | 4% |
+| mean code-edits / invocation | 3.3 | 8.8 |
+| total code-edits driven | 86 | 246 |
+| reviewer agents surfacing a substantive rec | 62% of 140 | -- |
+| cost | ~11M totalTokens-equiv (~20% of machinery) | ~44M |
+
+(Cost method: simplify's billed-proxy `cache_creation + input + output` = 27.5M against 196M
+`cache_read` -- as cache-served as code-review. For the one code-review workflow where both
+numbers exist, billed-proxy 3.24M vs the workflow's own `totalTokens` 1.30M, a 0.40 ratio;
+applying it to simplify's 27.5M gives ~11M `totalTokens`-equivalent, which also matches the
+#280 case study's ~250-350k/pass estimate.)
+
+So they are **not** dead weight -- 86 real cleanups, a recommendation ~62% of the time, cheap
+in output. But the case against them, on the same data:
+
+1. **Lower yield than the tool that immediately follows.** `/code-review` runs right after
+   `/simplify` every pass and does correctness *and* cleanups, out-producing it 2.7x per
+   invocation. #274's own observation: simplify's late findings were "mostly absorbed into the
+   review agent's."
+2. **A quarter of invocations (27%) are pure no-ops** (vs 4% for code-review) -- paying the
+   4-agent fan-out to find nothing.
+3. **Documented harm, not just absence of help.** On `feat/277` pass 7, a simplify **altitude**
+   recommendation relocated an empty-pool guard into `_qualified_families` and crashed
+   `--study`/`--backtest` early-season, reverted the next pass. Simplify *contributed* to the
+   churn there.
+4. Runs the full 4-dimension fan-out every pass regardless of run maturity.
+
+**Remedy (for the Opus 5 loop), in confidence order:** cut `altitude` first (the one dimension
+with a documented regression and the most architectural-opinion surface); run `/simplify` once
+at pass 1 (freshest diff, cleanups most valuable) rather than every pass, which kills the
+no-op tail and the late-pass overlap with code-review; or drop `/simplify` entirely and let
+code-review's cleanup dimension carry quality (it already absorbs most of it) for a real ~20%
+token saving at small yield loss. Keep `reuse` if you keep any dimension -- it is the one most
+orthogonal to code-review's correctness focus (samples show it catching genuine
+drop-in-existing-helper opportunities).
+
+**Confidence caveat:** the "harm" is one well-documented case plus a structural overlap
+argument, **not** a measured harm *rate*. Quantifying reverted-simplify-edits across all runs
+would need per-edit diff tracking not done here.
+
 ---
 
 ## Recommendation, prioritized
@@ -235,19 +291,23 @@ from). In priority order:
    rejected so it is not re-proposed.
 4. **H3 decay early-exit + Finding-6 effort taper.** Real savings on decay-shaped runs;
    changes the "cost never stops the loop" semantics -- make it an explicit user decision.
+5. **Trim `/simplify` (Finding 7).** Cut `altitude`, or run simplify once at pass 1, or drop
+   it entirely. ~20% token saving at small yield loss, since code-review absorbs most of its
+   territory. Also a user-facing behavior change, so pair it with the decision in item 4.
 
 Expected effect: the two churn runs measured here (15.6M tokens combined) are the ones H6+H4
-target directly; the decay-run tails (H3/F6) are a broad but smaller trim.
+target directly; the decay-run tails (H3/F6) are a broad but smaller trim; and dropping or
+front-loading `/simplify` (F7) removes ~20% of the machinery with little yield cost.
 
 ---
 
 ## Measurement gap (be honest about it)
 
-This census covers `/code-review` workflow agents only. The 4 `/simplify` agents per pass are
-not workflow-backed and were not measured here; the #280 case study estimates them at
-~250-350k tokens per pass (~25% on top of the code-review tokens). If `/simplify`'s late-run
-value is in question, measure it directly from the main-session transcript's Agent dispatches
-before cutting it. Nothing in this document's recommendation depends on that number.
+The original gap -- `/simplify` was not workflow-backed and so not in the code-review census --
+is now closed in **Finding 7** (measured from the simplify sub-agent transcripts and the
+orchestrator's per-invocation edits). The residual gap is narrower: the **harm rate** of
+applied simplify edits is not quantified (only one reverted case is documented); measuring it
+would require per-edit diff tracking against the final commit, not done here.
 
 ---
 
@@ -303,6 +363,22 @@ do not grep the transcript.
 per run, take each pass's `result.findings` file set; report the consecutive-pass Jaccard and
 the set of files appearing in >= 2 passes). Churn = high overlap + non-dropping count; decay =
 low overlap + count -> 0.
+
+**D. /simplify measurement** (Finding 7). `/simplify` is NOT workflow-backed, so it leaves
+plain Agent transcripts, not `wf_*.json`:
+
+- Identify simplify sub-agents by their `subagents/*.meta.json` `description` matching
+  `(reuse|simplif|efficien|altitude)` (the 4 dimension reviewers). Count `Edit`/`Write`/
+  `MultiEdit` `tool_use` in each transcript to confirm they apply ~nothing themselves (they
+  report; the orchestrator applies).
+- For real application, parse each MAIN session transcript (`BASE/*.jsonl`) in order: track
+  `Skill` `tool_use` calls (`input.skill` in {`simplify`, `code-review`}) as phase markers and
+  bucket the main agent's own `Edit`/`Write`/`MultiEdit` calls (`.py`, non-`.md`) to the most
+  recent phase. That yields the per-invocation code-edit distribution (73% vs 96% apply rate).
+- For cost, sum `usage.{cache_creation_input_tokens, cache_read_input_tokens, input_tokens,
+  output_tokens}` over the simplify transcripts; billed-proxy = cc + input + output. Convert to
+  `totalTokens`-equivalent with the ~0.40 ratio from any code-review workflow where both the
+  proxy and the reported `totalTokens` exist.
 
 ---
 
