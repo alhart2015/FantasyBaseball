@@ -14,24 +14,23 @@ rename, or join.
 **Normalization.** Pure, I/O-free helpers that reshape a raw frame to a canonical
 schema: `actuals` for an MLB season pull, `vintages` for a ZiPS export, and
 `skills` for the season-to-date true-talent rates (barrel rate, xwOBA, xBA,
-wRC+; ERA-, FIP, K%, whiff rate, CSW%) that keeper comparisons rank on.
+wRC+; ERA-, FIP, K%, whiff rate, CSW%). `scripts/fetch_keeper_skills.py` is the
+entry point that runs the pulls above through these and writes the skills cache.
 
-**Scoring.** Where the ranking itself lives, driven by
-`scripts/keeper_rankings.py`.
+**Lookup.** `positions` -- eligible slots per player. The one module here that
+touches the network, since it prefers the live blob over the committed cache.
 
-* `composite` -- blends skill, luck, future and age in percentile space, on
-  weights fitted against realized next-season value. Pure.
-* `projection` -- puts that ordinal composite on an SGP scale with an error bar,
-  and simulates P(a player finishes among a roster's N best). Pure.
-* `positions` -- eligible slots per player, for netting against the right
-  replacement level. The one module here that touches the network, since it
-  prefers the live blob over the committed cache.
-* `scarcity` -- how much a scarce position is worth, measured on `projection`'s
-  own scale rather than borrowed from the draft board's wider one. Pure.
+**There is deliberately no scoring layer in this package.** Ingest and
+normalization only: nothing here decides what a keeper is worth.
 
-The #266 fold -- `fold`, `coefficients`, `calibration` -- was removed along with
-the `analysis/keeper_value.py` metric it replaced; the findings live in
-`docs/superpowers/` and the code in git history.
+Three successive attempts at that model (`analysis/keeper_value.py`, the #266
+fold, and the `composite`/`projection`/`scarcity` family model) were each torn
+out after drifting from the decision they were meant to inform -- the last one
+shipped a family set that, by its own backtest, scored BELOW the residual it
+replaced. All three are in git history; the findings and backtests are in
+`docs/superpowers/`. Before adding scoring back, read
+`docs/keeper-value-teardown-2026-08-01.md` for what went wrong and which
+constraints any replacement has to satisfy.
 """
 
 from __future__ import annotations
