@@ -148,6 +148,8 @@ def main() -> int:
     parser.add_argument("--no-aging", action="store_true")
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--team", help="restrict the board to one fantasy team")
+    parser.add_argument("--stats", action="store_true", help="show the 2027 roto line")
+    parser.add_argument("--kind", choices=("hitter", "pitcher"), help="restrict to one pool")
     parser.add_argument("--my-team", default="Hart of the Order", help="label for cache:roster")
     args = parser.parse_args()
 
@@ -171,6 +173,10 @@ def main() -> int:
             counting = to_counting(forecast_pool(kind, year, payload, args), kind)
             per_year[year] = sgp_frame(counting, kind, denoms)
             volume[year] = counting[vol_col]
+            if year == 2027:
+                # Keep the volume column: the roto view prints PA/IP as its first
+                # category, so dropping it here would strand that header.
+                roto = counting
         frame = pd.DataFrame(
             {
                 "sgp_2027": per_year[2027],
@@ -189,6 +195,11 @@ def main() -> int:
             level = frame[col].nlargest(ROSTERED[kind]).iloc[-1]
             frame[f"var_{year}"] = frame[col] - level
             print(f"  {kind} {year} replacement level: {level:6.2f} SGP")
+        # The 2027 scored line itself, so a rating can be read against the stats that
+        # produced it. Hitter and pitcher category names differ, so the concat below
+        # leaves the other pool's columns NaN -- which is correct, not a gap.
+        for cat in roto.columns:
+            frame[cat] = roto[cat]
         frame["kind"] = kind
         frame["name"] = _names(payload, kind).reindex(frame.index)
         keys = frame["name"].fillna("").map(normalize_name)
@@ -200,12 +211,37 @@ def main() -> int:
     board = board.sort_values("var_total", ascending=False)
 
     view = board
+    if args.kind:
+        view = view[view["kind"] == args.kind]
     if args.team:
         view = board[board["team"].fillna("").str.lower() == args.team.lower()]
     view = view.head(args.top)
 
     title = f"KEEPER VALUE -- {args.team}" if args.team else "KEEPER VALUE -- full board"
     print(f"\n{'=' * 108}\n{title}  (VAR = SGP above the last rostered player)\n{'=' * 108}")
+    if args.stats:
+        cats = (
+            ["PA", "R", "HR", "RBI", "SB", "AVG"]
+            if args.kind == "hitter"
+            else ["IP", "W", "SV", "K", "ERA", "WHIP"]
+        )
+        print(
+            f"{'#':>3} {'name':<24}"
+            + "".join(f"{c:>8}" for c in cats)
+            + f"{'27 VAR':>9}{'TOTAL':>8}  team"
+        )
+        print("-" * 108)
+        for rank, (_, r) in enumerate(view.iterrows(), start=1):
+            cells = "".join(
+                f"{r[c]:>8.3f}" if c in {"AVG", "ERA", "WHIP"} else f"{r[c]:>8.1f}" for c in cats
+            )
+            team = "" if pd.isna(r["team"]) else str(r["team"])[:18]
+            print(
+                f"{rank:>3} {str(r['name'])[:23]:<24}{cells}{r['var_2027']:>9.2f}"
+                f"{r['var_total']:>8.2f}  {team}"
+            )
+        return 0
+
     print(
         f"{'#':>3} {'name':<24} {'':<2} {'27 PA/IP':>9} {'28 PA/IP':>9} "
         f"{'27 SGP':>8} {'27 VAR':>8} {'28 VAR':>8} {'TOTAL':>8}  team"
