@@ -58,6 +58,7 @@ def decompose_pitchers(df: pd.DataFrame) -> pd.DataFrame:
             PITCHER_PT: ip,
             "k_ip": safe_ratio(frame["SO"].astype(float), ip),
             "w_ip": safe_ratio(frame["W"].astype(float), ip),
+            "sv_ip": safe_ratio(frame["SV"].astype(float), ip),
             "er_ip": safe_ratio(frame["ER"].astype(float), ip),
             "bb_ip": safe_ratio(frame["BB"].astype(float), ip),
             "h_ip": safe_ratio(frame["H"].astype(float), ip),

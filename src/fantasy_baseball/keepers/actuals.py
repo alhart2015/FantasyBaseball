@@ -50,7 +50,12 @@ def innings_to_float(value: object) -> float:
 # `normalize_pitching` emit after the playing-time column, so a positional zip()
 # over a normalized frame cannot silently mis-pair. Enforced by test.
 HITTER_RATES = ("ab_pa", "h_ab", "hr_pa", "r_pa", "rbi_pa", "sb_pa")
-PITCHER_RATES = ("k_ip", "w_ip", "er_ip", "bb_ip", "h_ip")
+# `sv_ip` is a rate only in the mechanical sense that it divides by innings. Saves are
+# a ROLE, not a skill: a pitcher gets them by holding the closer job, so this column
+# behaves nothing like `k_ip`. Kept in the same schema so the 5x5 pitcher categories
+# are all reachable from one frame; consumers that fit persistence must expect it to
+# carry far less of a season's deviation forward than the true rates do.
+PITCHER_RATES = ("k_ip", "w_ip", "sv_ip", "er_ip", "bb_ip", "h_ip")
 HITTER_PT = "pa"
 PITCHER_PT = "ip"
 
@@ -104,13 +109,14 @@ def normalize_pitching(raw: pd.DataFrame) -> pd.DataFrame:
     ip = frame["stat.inningsPitched"].map(innings_to_float)
     num = {
         col: frame[f"stat.{col}"].map(coerce_numeric)
-        for col in ("earnedRuns", "baseOnBalls", "hits", "strikeOuts", "wins")
+        for col in ("earnedRuns", "baseOnBalls", "hits", "strikeOuts", "wins", "saves")
     }
     out = pd.DataFrame(
         {
             PITCHER_PT: ip,
             "k_ip": safe_ratio(num["strikeOuts"], ip),
             "w_ip": safe_ratio(num["wins"], ip),
+            "sv_ip": safe_ratio(num["saves"], ip),
             "er_ip": safe_ratio(num["earnedRuns"], ip),
             "bb_ip": safe_ratio(num["baseOnBalls"], ip),
             "h_ip": safe_ratio(num["hits"], ip),
