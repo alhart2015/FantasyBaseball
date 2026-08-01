@@ -231,9 +231,9 @@ def main() -> int:
             else ["IP", "W", "SV", "K", "ERA", "WHIP"]
         )
         print(
-            f"{'#':>3} {'name':<24}"
+            f"{'#':>3} {'name':<24}{'VALUE':>7}"
             + "".join(f"{c:>8}" for c in cats)
-            + f"{'27 VAR':>9}{'TOTAL':>8}  team"
+            + f"{'27 VAR':>9}  team"
         )
         print("-" * 108)
         for rank, (_, r) in enumerate(view.iterrows(), start=1):
@@ -249,23 +249,25 @@ def main() -> int:
             )
             team = "" if pd.isna(r["team"]) else str(r["team"])[:18]
             print(
-                f"{rank:>3} {str(r['name'])[:23]:<24}{cells}{r['var_2027']:>9.2f}"
-                f"{r['var_total']:>8.2f}  {team}"
+                f"{rank:>3} {str(r['name'])[:23]:<24}{r['var_total']:>7.2f}{cells}"
+                f"{r['var_2027']:>9.2f}  {team}"
             )
         return 0
 
+    # VALUE leads: it is the number the board exists to produce, and everything right
+    # of it is the working that got there.
     print(
-        f"{'#':>3} {'name':<24} {'':<2} {'27 PA/IP':>9} {'28 PA/IP':>9} "
-        f"{'27 SGP':>8} {'27 VAR':>8} {'28 VAR':>8} {'TOTAL':>8}  team"
+        f"{'#':>3} {'name':<24} {'VALUE':>7} {'':<2} {'27 PA/IP':>9} {'28 PA/IP':>9} "
+        f"{'27 SGP':>8} {'27 VAR':>8} {'28 VAR':>8}  team"
     )
     print("-" * 108)
     for rank, (_, r) in enumerate(view.iterrows(), start=1):
         tag = "H" if r["kind"] == "hitter" else "P"
         team = "" if pd.isna(r["team"]) else str(r["team"])[:20]
         print(
-            f"{rank:>3} {str(r['name'])[:23]:<24} {tag:<2} {r['vol_2027']:>9.0f} "
-            f"{r['vol_2028']:>9.0f} {r['sgp_2027']:>8.2f} {r['var_2027']:>8.2f} "
-            f"{r['var_2028']:>8.2f} {r['var_total']:>8.2f}  {team}"
+            f"{rank:>3} {str(r['name'])[:23]:<24} {r['var_total']:>7.2f} {tag:<2} "
+            f"{r['vol_2027']:>9.0f} {r['vol_2028']:>9.0f} {r['sgp_2027']:>8.2f} "
+            f"{r['var_2027']:>8.2f} {r['var_2028']:>8.2f}  {team}"
         )
     print("\n  PA/IP and the counting stats are EXPECTATIONS over every outcome, including")
     print("  the chance of missing time -- NOT a healthy-season line. That is why they sit")
