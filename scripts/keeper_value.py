@@ -149,6 +149,11 @@ def main() -> int:
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--team", help="restrict the board to one fantasy team")
     parser.add_argument("--stats", action="store_true", help="show the 2027 roto line")
+    parser.add_argument(
+        "--per-600",
+        action="store_true",
+        help="rescale the roto line to a common 600 PA (talent, availability removed)",
+    )
     parser.add_argument("--kind", choices=("hitter", "pitcher"), help="restrict to one pool")
     parser.add_argument("--my-team", default="Hart of the Order", help="label for cache:roster")
     args = parser.parse_args()
@@ -232,8 +237,15 @@ def main() -> int:
         )
         print("-" * 108)
         for rank, (_, r) in enumerate(view.iterrows(), start=1):
+            # Per-600 puts every hitter on the same workload, so the line reads as talent
+            # with availability divided out. The RATING is never rescaled -- a keeper slot
+            # bears the missed time, so its value has to.
+            scale = 600.0 / r["PA"] if (args.per_600 and args.kind == "hitter" and r["PA"]) else 1.0
             cells = "".join(
-                f"{r[c]:>8.3f}" if c in {"AVG", "ERA", "WHIP"} else f"{r[c]:>8.1f}" for c in cats
+                f"{r[c]:>8.3f}"
+                if c in {"AVG", "ERA", "WHIP"}
+                else f"{r[c] * (1.0 if c in {'PA', 'IP'} else scale):>8.1f}"
+                for c in cats
             )
             team = "" if pd.isna(r["team"]) else str(r["team"])[:18]
             print(
@@ -255,8 +267,12 @@ def main() -> int:
             f"{r['vol_2028']:>9.0f} {r['sgp_2027']:>8.2f} {r['var_2027']:>8.2f} "
             f"{r['var_2028']:>8.2f} {r['var_total']:>8.2f}  {team}"
         )
-    print("\n  2027 is the validated horizon; 2028 extrapolates a one-year drift term")
-    print("  and therefore runs optimistic on playing time. Replacement is position-blind.")
+    print("\n  PA/IP and the counting stats are EXPECTATIONS over every outcome, including")
+    print("  the chance of missing time -- NOT a healthy-season line. That is why they sit")
+    print("  below ZiPS, which projects a nominal workload. Verified on 2025: unconditional")
+    print("  bias +1% PA, +0% R, -0% RBI, -7% HR. Use --per-600 to divide availability out.")
+    print("  2027 is the validated horizon; 2028 extrapolates a one-year drift term.")
+    print("  Replacement is position-blind.")
     return 0
 
 
