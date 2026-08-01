@@ -203,6 +203,141 @@ def evaluate_shares(
     return {name: rmse(pred, truth_next, weights) for name, pred in endpoints.items()}
 
 
+@dataclass(frozen=True)
+class ReliabilityShare:
+    """A persistence share that scales with how much the gap was measured on.
+
+    **Measured, and NOT adopted.** On leave-one-transition-out this form beats the
+    constant share by at most 0.2% (hitter `pa` +0.1%, `sv_ip` +0.2%, `k_ip` +0.0%),
+    and for `ip`, `w_ip` and `bb_ip` the grid picks `k = 0` outright -- i.e. it asks
+    to BE the constant. The volume-tercile wobble that motivated it was noise. Kept
+    because it is the instrument that produced that negative result and the one to
+    re-run when a fourth transition lands, not because anything ships on it.
+
+    The fitted parameters are nonetheless sensible (hitters `k` of 93-443 PA, right in
+    the known rate-stabilization range), so the form measures something real. It just
+    does not improve the forecast, and per the teardown doc a gain inside the noise
+    floor does not earn a parameter.
+
+    `S(n) = s_max * n / (n + k)`, where `n` is the player's year-Y volume.
+
+    Two parameters, each answering a different question:
+
+    * `k` -- the volume at which HALF of `s_max` is earned. Pure measurement
+      reliability: below it a gap is mostly sampling error, above it mostly real.
+      `k = 0` collapses to a constant share, so the constant model is nested and
+      "did the extra parameter buy anything" is a fair comparison.
+    * `s_max` -- what a PERFECTLY measured gap is worth. Deliberately free rather
+      than pinned at 1.0: a career year can be precisely observed and still regress,
+      because true talent itself reverts. `s_max < 1` is that reversion; `k` is the
+      measurement noise. Pinning `s_max = 1` would force every bit of regression to
+      be explained as measurement error and inflate `k`.
+    """
+
+    column: str
+    s_max: float
+    k: float
+    intercept: float
+    n: int
+    r2: float
+
+    def share_at(self, sample_size: pd.Series) -> pd.Series:
+        """The per-player share implied by each player's own year-Y volume."""
+        return self.s_max * sample_size / (sample_size + self.k)
+
+
+def fit_reliability_share(
+    gap_now: pd.Series,
+    gap_next: pd.Series,
+    sample_size: pd.Series,
+    *,
+    column: str,
+    weights: pd.Series | None = None,
+    k_grid: np.ndarray | None = None,
+) -> ReliabilityShare:
+    """Fit `gap_next = a + s_max * (n/(n+k)) * gap_now` over a grid of `k`.
+
+    `k` enters non-linearly, but `s_max` is linear once `k` is fixed -- so each grid
+    point is one weighted least-squares solve on the shrunken regressor and the best
+    `k` is chosen by weighted SSE. No optimizer, no convergence to babysit, and the
+    whole profile is inspectable.
+
+    The grid spans a wide log range anchored on the data's own scale, so it adapts to
+    PA (hundreds) and IP (tens) without a caller-supplied magic number. `k = 0` is
+    included so a stat with no reliability structure can return the constant fit
+    rather than being forced onto a curve.
+    """
+    frame = pd.DataFrame({"x": gap_now, "y": gap_next, "n": sample_size})
+    frame["w"] = 1.0 if weights is None else weights
+    frame = frame.replace([np.inf, -np.inf], np.nan).dropna()
+    frame = frame.loc[(frame["w"] > 0) & (frame["n"] > 0)]
+    if len(frame) < 4:
+        raise ValueError(f"{column}: need at least 4 usable rows to fit, got {len(frame)}")
+
+    x, y, n, w = (frame[c].to_numpy() for c in ("x", "y", "n", "w"))
+    if k_grid is None:
+        # Cap the grid at a few times the observed spread. Far above it, n/(n+k) is
+        # nearly proportional to n, so `k` and `s_max` trade off almost exactly and the
+        # search wanders to a meaningless corner (s_max of 28 against a k of 17000 --
+        # arithmetically a constant share, dressed up as a curve). Bounding k keeps the
+        # curve genuinely curved ACROSS THE RANGE WE OBSERVE, which is the only range
+        # the parameter is identified over.
+        k_grid = np.concatenate([[0.0], np.geomspace(1.0, 3.0 * float(np.percentile(n, 95)), 150)])
+
+    best: tuple[float, float, float, float] | None = None  # (sse, k, s_max, intercept)
+    wsum = w.sum()
+    ybar = (w * y).sum() / wsum
+    for k in k_grid:
+        z = (n / (n + k)) * x
+        zbar = (w * z).sum() / wsum
+        szz = (w * (z - zbar) ** 2).sum()
+        if szz <= 0:
+            continue
+        s_max = (w * (z - zbar) * (y - ybar)).sum() / szz
+        # A perfectly measured gap cannot carry MORE than itself forward. An s_max above
+        # 1 is the degenerate corner above, not a discovery, so those grid points are
+        # rejected outright rather than clipped -- clipping would keep their (wrong) k.
+        if not 0.0 <= s_max <= 1.0:
+            continue
+        intercept = ybar - s_max * zbar
+        sse = float((w * (y - (intercept + s_max * z)) ** 2).sum())
+        if best is None or sse < best[0]:
+            best = (sse, float(k), float(s_max), float(intercept))
+    if best is None:
+        raise ValueError(
+            f"{column}: no admissible (k, s_max) on the grid -- every candidate implied "
+            f"a share outside [0, 1]"
+        )
+
+    sse, k_hat, s_max, intercept = best
+    ss_tot = (w * (y - ybar) ** 2).sum()
+    return ReliabilityShare(
+        column=column,
+        s_max=s_max,
+        k=k_hat,
+        intercept=intercept,
+        n=len(frame),
+        r2=float(1.0 - sse / ss_tot) if ss_tot > 0 else 0.0,
+    )
+
+
+def apply_reliability_share(
+    projected: pd.Series,
+    gap_now: pd.Series,
+    sample_size: pd.Series,
+    fit: ReliabilityShare,
+) -> pd.Series:
+    """`projection + intercept + S(n) * gap`, with S(n) from each player's own volume.
+
+    This is the form that distinguishes a half-season injured star from a full-season
+    regular: the same raw gap earns a smaller share when it was measured on less
+    playing time. Where the gap is unobserved the projection passes through with the
+    drift only, matching `apply_share`.
+    """
+    share = fit.share_at(sample_size).fillna(0.0)
+    return projected + fit.intercept + share * gap_now.fillna(0.0)
+
+
 def fit_counting_share(
     proj_count: pd.Series,
     obs_count: pd.Series,

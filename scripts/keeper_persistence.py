@@ -40,9 +40,11 @@ from fantasy_baseball.keepers.persistence import (
     HITTER_COUNTING,
     PITCHER_COUNTING,
     Share,
+    apply_reliability_share,
     apply_share,
     evaluate_shares,
     fit_counting_share,
+    fit_reliability_share,
     fit_share,
     gap,
     rmse,
@@ -131,8 +133,14 @@ def build_transition(
     Columns are suffixed `_proj`, `_obs`, `_next`. The filter is deliberately asymmetric:
     `min_pt` on year Y selects the population we would actually consider keeping, while
     `min_next_pt` on Y+1 is only high enough to make a rate meaningful. Requiring a Y+1
-    appearance at all is a SURVIVORSHIP filter -- players who washed out are dropped, and
-    their gaps were the least persistent -- so the counts are reported, not hidden.
+    appearance at all is a SURVIVORSHIP filter, so the counts are reported, not hidden.
+
+    Measured, the filter DEFLATES the volume share rather than inflating it (hitters
+    0.771 -> 0.655, pitchers 0.622 -> 0.446; reproduce with `run_survivorship`). The
+    intuition that wash-outs are players whose good seasons failed to repeat is simply
+    wrong: they are mostly players who ALREADY played less than projected, and who then
+    fall to zero -- a negative gap followed by a larger negative gap, which steepens the
+    slope. `build_volume_transition` is the corrected sample.
     """
     pool = POOLS[kind]
     pt = str(pool["pt"])
@@ -192,11 +200,19 @@ def _fit_column(panel: pd.DataFrame, col: str, pt: str) -> Share:
     )
 
 
-def run_fit(kind: str, panels: dict[tuple[int, int], pd.DataFrame]) -> dict[str, Share]:
+def run_fit(
+    kind: str,
+    panels: dict[tuple[int, int], pd.DataFrame],
+    volume_panels: dict[tuple[int, int], pd.DataFrame],
+) -> dict[str, Share]:
+    """The shipped shares: volume off the survivorship-corrected panel, rates off the
+    survivor panel. Those are different samples on purpose -- see `build_volume_transition`
+    for why volume must count the players who vanished and rates must not."""
     pool = POOLS[kind]
     pt = str(pool["pt"])
     pooled = _pooled(list(panels.values()))
-    fits = {col: _fit_column(pooled, col, pt) for col in (pt, *pool["rates"])}
+    fits = {pt: _fit_column(_pooled(list(volume_panels.values())), pt, pt)}
+    fits.update({col: _fit_column(pooled, col, pt) for col in pool["rates"]})
 
     print(
         f"\n{'=' * 78}\n{kind.upper()}S -- persistence share S, pooled over {len(panels)} transitions"
@@ -344,6 +360,128 @@ def run_vs_fresh(kind: str, args: argparse.Namespace) -> None:
         print(f"{col:<10} {stale:>11.4f} {fitted:>10.4f} {fresh_m:>11.4f} {closed:>11}")
 
 
+def build_volume_transition(year: int, kind: str, *, min_pt: float) -> pd.DataFrame:
+    """Volume panel that KEEPS the players who washed out.
+
+    The rate panels have to drop a player who did not play in Y+1 -- he has no
+    observable rate. Volume has no such excuse: "he took 0 plate appearances" is a
+    real, informative observation, and dropping it biases the volume share DOWNWARD
+    (0.771 -> 0.655 for hitters, 0.622 -> 0.446 for pitchers) while making the drift
+    term far too optimistic. So this panel starts from everyone who qualified in year Y
+    and reindexes Y+1 onto them.
+
+    Absent from the Y+1 file means BELOW its floor (50 PA / 10 IP), not necessarily
+    zero, so filling 0.0 slightly understates those players. That is deliberate and
+    conservative: it errs toward treating a vanished player as vanished, and the
+    alternative (dropping him) errs by pretending he never existed.
+
+    Why the rate fits stay conditional on playing: expected value is volume * rate, so
+    a player who does not play contributes nothing whatever his rate would have been.
+    Pricing the risk of not playing belongs in the VOLUME term -- which is exactly what
+    this panel makes honest -- and "how good is he when he plays" is the right thing
+    for the rate term to answer.
+    """
+    pt = str(POOLS[kind]["pt"])
+    proj = load_rates(year, kind, source="projection")
+    obs = load_rates(year, kind, source="actual")
+    nxt = load_rates(year + 1, kind, source="actual")
+    idx = obs.index[obs[pt] >= min_pt].intersection(proj.index)
+    return pd.DataFrame(
+        {
+            f"{pt}_proj": proj.loc[idx, pt],
+            f"{pt}_obs": obs.loc[idx, pt],
+            f"{pt}_next": nxt[pt].reindex(idx).fillna(0.0),
+        },
+        index=idx,
+    )
+
+
+def run_survivorship(kind: str, args: argparse.Namespace) -> None:
+    """Volume S with and without the players who washed out."""
+    pool = POOLS[kind]
+    pt = str(pool["pt"])
+    min_pt = args.min_pa if kind == "hitter" else args.min_ip
+    min_next = args.min_next_pa if kind == "hitter" else args.min_next_ip
+
+    survivors = _pooled(
+        [build_transition(y, kind, min_pt=min_pt, min_next_pt=min_next)[0] for y, _ in TRANSITIONS]
+    )
+    everyone = _pooled([build_volume_transition(y, kind, min_pt=min_pt) for y, _ in TRANSITIONS])
+    biased, corrected = _fit_column(survivors, pt, pt), _fit_column(everyone, pt, pt)
+
+    print(f"\n{kind.upper()}S -- survivorship correction on the {pt} (volume) share")
+    print(f"{'-' * 78}")
+    print(f"{'sample':<34} {'n':>6} {'S':>8} {'intercept':>11}")
+    print("-" * 78)
+    print(
+        f"{'survivors only (biased)':<34} {biased.n:>6} {biased.share:>8.3f} "
+        f"{biased.intercept:>11.2f}"
+    )
+    print(
+        f"{'all year-Y qualifiers (corrected)':<34} {corrected.n:>6} {corrected.share:>8.3f} "
+        f"{corrected.intercept:>11.2f}"
+    )
+    print(
+        f"\n  bias from dropping wash-outs: S {biased.share - corrected.share:+.3f}, "
+        f"drift {biased.intercept - corrected.intercept:+.1f} {pt}"
+    )
+
+
+def run_reliability(kind: str, args: argparse.Namespace) -> None:
+    """Constant S vs the reliability form S(n) = s_max * n/(n+k), leave-one-out.
+
+    The extra parameter has to pay for itself on held-out data. Where it does not, the
+    constant is the right answer and the tercile wobble was noise.
+    """
+    pool = POOLS[kind]
+    pt = str(pool["pt"])
+    min_pt = args.min_pa if kind == "hitter" else args.min_ip
+    min_next = args.min_next_pa if kind == "hitter" else args.min_next_ip
+
+    rate_panels = {
+        (y, y + 1): build_transition(y, kind, min_pt=min_pt, min_next_pt=min_next)[0]
+        for y, _ in TRANSITIONS
+    }
+    vol_panels = {
+        (y, y + 1): build_volume_transition(y, kind, min_pt=min_pt) for y, _ in TRANSITIONS
+    }
+
+    print(f"\n{kind.upper()}S -- constant S vs reliability S(n) = s_max * n/(n+k)")
+    print(f"{'-' * 78}")
+    print(f"{'column':<10} {'s_max':>7} {'k':>8} {'const RMSE':>11} {'S(n) RMSE':>11}   verdict")
+    print("-" * 78)
+
+    for col in (pt, *pool["rates"]):
+        # The volume column uses the survivorship-corrected panel; rates cannot.
+        panels = vol_panels if col == pt else rate_panels
+        const_err, rel_err, params = [], [], []
+        for held, panel in panels.items():
+            train = _pooled([p for k, p in panels.items() if k != held])
+            g_tr = gap(train[f"{col}_obs"], train[f"{col}_proj"])
+            gn_tr = gap(train[f"{col}_next"], train[f"{col}_proj"])
+            const = fit_share(g_tr, gn_tr, column=col, weights=train[f"{pt}_obs"])
+            rel = fit_reliability_share(
+                g_tr, gn_tr, train[f"{pt}_obs"], column=col, weights=train[f"{pt}_obs"]
+            )
+            params.append((rel.s_max, rel.k))
+            g = gap(panel[f"{col}_obs"], panel[f"{col}_proj"])
+            w, truth = panel[f"{pt}_obs"], panel[f"{col}_next"]
+            const_err.append(rmse(apply_share(panel[f"{col}_proj"], g, const), truth, w))
+            rel_err.append(
+                rmse(
+                    apply_reliability_share(panel[f"{col}_proj"], g, panel[f"{pt}_obs"], rel),
+                    truth,
+                    w,
+                )
+            )
+        c_mean, r_mean = sum(const_err) / len(const_err), sum(rel_err) / len(rel_err)
+        s_max = sum(p[0] for p in params) / len(params)
+        k_hat = sum(p[1] for p in params) / len(params)
+        better = (c_mean - r_mean) / c_mean if c_mean > 0 else 0.0
+        verdict = f"S(n) wins ({better:+.1%})" if r_mean < c_mean else "constant is enough"
+        print(f"{col:<10} {s_max:>7.3f} {k_hat:>8.1f} {c_mean:>11.4f} {r_mean:>11.4f}   {verdict}")
+
+
 def run_terciles(kind: str, panels: dict[tuple[int, int], pd.DataFrame]) -> None:
     """Refit S within playing-time terciles.
 
@@ -390,6 +528,9 @@ def main() -> int:
     parser.add_argument(
         "--vs-fresh", action="store_true", help="score against a real fresh Y+1 projection"
     )
+    parser.add_argument(
+        "--reliability", action="store_true", help="constant S vs S(n)=s_max*n/(n+k)"
+    )
     parser.add_argument("--pool", choices=("hitter", "pitcher"), help="restrict to one pool")
     args = parser.parse_args()
 
@@ -407,14 +548,20 @@ def main() -> int:
             print(
                 f"  {y}->{y1}: {attrition['qualified_year_Y']} qualified, "
                 f"{attrition['survived_to_Y1']} survived ({lost} lost, {pct:.0f}% "
-                f"-- SURVIVORSHIP, inflates S), {attrition['also_projected']} also projected"
+                f"-- rate fits use survivors only), {attrition['also_projected']} also projected"
             )
-        run_fit(kind, panels)
+        volume_panels = {
+            (y, y1): build_volume_transition(y, kind, min_pt=min_pt) for y, y1 in TRANSITIONS
+        }
+        run_fit(kind, panels, volume_panels)
+        run_survivorship(kind, args)
         run_validation(kind, panels)
         if args.counting:
             run_counting(kind, args)
         if args.vs_fresh:
             run_vs_fresh(kind, args)
+        if args.reliability:
+            run_reliability(kind, args)
         if args.terciles:
             run_terciles(kind, panels)
     return 0

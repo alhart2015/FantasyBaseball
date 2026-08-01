@@ -7,10 +7,13 @@ import pytest
 from fantasy_baseball.keepers.persistence import (
     HITTER_COUNTING,
     PITCHER_COUNTING,
+    ReliabilityShare,
     Share,
+    apply_reliability_share,
     apply_share,
     evaluate_shares,
     fit_counting_share,
+    fit_reliability_share,
     fit_share,
     gap,
     rmse,
@@ -169,3 +172,74 @@ def test_counting_maps_cover_the_five_by_five_categories() -> None:
     assert set(PITCHER_COUNTING) == {"W", "SV", "SO"}
     assert set(HITTER_COUNTING.values()) == {"r_pa", "hr_pa", "rbi_pa", "sb_pa"}
     assert set(PITCHER_COUNTING.values()) == {"w_ip", "sv_ip", "k_ip"}
+
+
+def test_fit_reliability_recovers_a_planted_curve() -> None:
+    """Plant gap_next = 0.8 * n/(n+200) * gap_now and see both parameters come back."""
+    rng = np.random.default_rng(0)
+    n = pd.Series(rng.uniform(100, 700, 400))
+    now = pd.Series(rng.normal(0, 1, 400))
+    nxt = 0.8 * (n / (n + 200.0)) * now
+    fit = fit_reliability_share(now, nxt, n, column="hr_pa")
+    assert fit.s_max == pytest.approx(0.8, abs=0.05)
+    assert fit.k == pytest.approx(200.0, rel=0.25)
+    # Not exactly 1.0: the k grid is discrete, so it lands beside 200 rather than on it.
+    assert fit.r2 == pytest.approx(1.0, abs=1e-4)
+
+
+def test_fit_reliability_collapses_to_a_constant_when_there_is_no_curve() -> None:
+    """A truly constant share must return k=0, so the constant model is nested and the
+    'did the extra parameter buy anything' comparison is fair."""
+    rng = np.random.default_rng(1)
+    n = pd.Series(rng.uniform(100, 700, 400))
+    now = pd.Series(rng.normal(0, 1, 400))
+    fit = fit_reliability_share(now, 0.5 * now, n, column="c")
+    assert fit.k == pytest.approx(0.0)
+    assert fit.s_max == pytest.approx(0.5, abs=0.01)
+
+
+def test_fit_reliability_refuses_an_amplifying_share() -> None:
+    """A gap that grows next year implies s_max > 1, which is not a share. Every grid
+    point is inadmissible, so the fit must REFUSE rather than clip -- clipping would
+    keep the bogus k that came with it and quietly return a curve nobody fitted."""
+    rng = np.random.default_rng(2)
+    n = pd.Series(rng.uniform(100, 700, 300))
+    now = pd.Series(rng.normal(0, 1, 300))
+    with pytest.raises(ValueError, match="admissible"):
+        fit_reliability_share(now, 5.0 * now, n, column="c")
+
+
+def test_fit_reliability_refuses_a_negative_share() -> None:
+    """An anti-persisting gap is equally outside [0, 1] and equally not a share."""
+    rng = np.random.default_rng(3)
+    n = pd.Series(rng.uniform(100, 700, 300))
+    now = pd.Series(rng.normal(0, 1, 300))
+    with pytest.raises(ValueError, match="admissible"):
+        fit_reliability_share(now, -0.5 * now, n, column="c")
+
+
+def test_share_at_scales_with_each_players_own_volume() -> None:
+    fit = ReliabilityShare("c", s_max=0.8, k=200.0, intercept=0.0, n=9, r2=0.2)
+    out = fit.share_at(pd.Series([200.0, 600.0]))
+    assert out.iloc[0] == pytest.approx(0.4)  # n == k -> half of s_max
+    assert out.iloc[1] == pytest.approx(0.6)
+    assert out.iloc[1] > out.iloc[0]
+
+
+def test_apply_reliability_share_shrinks_the_low_volume_gap_harder() -> None:
+    """The whole point: the same raw gap is worth less when measured on less playing
+    time -- a half-season star vs a full-season regular."""
+    fit = ReliabilityShare("c", s_max=1.0, k=300.0, intercept=0.0, n=9, r2=0.2)
+    out = apply_reliability_share(
+        pd.Series([100.0, 100.0]), pd.Series([20.0, 20.0]), pd.Series([300.0, 900.0]), fit
+    )
+    assert out.iloc[0] == pytest.approx(110.0)  # half credit
+    assert out.iloc[1] == pytest.approx(115.0)  # three-quarter credit
+
+
+def test_apply_reliability_share_passes_through_an_unobserved_gap() -> None:
+    fit = ReliabilityShare("c", s_max=0.8, k=200.0, intercept=0.5, n=9, r2=0.2)
+    out = apply_reliability_share(
+        pd.Series([10.0, 20.0]), pd.Series([np.nan, 10.0]), pd.Series([600.0, 600.0]), fit
+    )
+    assert out.iloc[0] == pytest.approx(10.5)
