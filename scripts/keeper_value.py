@@ -1,0 +1,214 @@
+"""Rank keeper candidates by forecast SGP value above replacement.
+
+Chains onto `keeper_forecast`: that script turns 2026 into a projected 2027/2028 5x5
+line, this one prices that line in standings gain points and nets it against what a
+roster slot is otherwise worth.
+
+    SGP      counting stats over the league's per-place denominators; AVG/ERA/WHIP
+             priced marginally against a replacement rate, so a rate only counts for
+             as much playing time as it is delivered over.
+    VAR      SGP minus the replacement level -- the last player who would actually be
+             rostered (10 teams x 11 hitters / 9 pitchers).
+
+**2027 is the validated number. 2028 is an extrapolation** -- the persistence fit is a
+ONE-year transition, so its drift term is one year of playing-time attrition. Applying
+it to a two-year horizon understates the decay, which makes 2028 run optimistic on
+volume. It is shown because keepers are held indefinitely and the trajectory matters,
+not because it carries the same weight as 2027.
+
+Replacement here is POSITION-BLIND (one hitter level, one pitcher level). A catcher is
+therefore undervalued and a corner outfielder overvalued relative to a position-aware
+level. That is a known gap, not an oversight.
+
+Usage:
+    python scripts/keeper_value.py                  # full board
+    python scripts/keeper_value.py --team "Hart of the Order"
+    python scripts/keeper_value.py --top 40
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+import pandas as pd
+import yaml
+
+# Player names carry accents (Jesus Luzardo, Cristopher Sanchez) and Windows stdout
+# defaults to cp1252, which mangles them. Reconfigure per the repo ASCII rule's
+# stated exception for data-sourced names.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+
+from keeper_forecast import _names, fetch_blend, forecast_pool, to_counting
+
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.player_value import (
+    REPLACEMENT_AVG,
+    REPLACEMENT_ERA,
+    REPLACEMENT_WHIP,
+    calculate_counting_sgp,
+    calculate_hitting_rate_sgp,
+    calculate_pitching_rate_sgp,
+)
+from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP, Category
+from fantasy_baseball.utils.name_utils import normalize_name
+
+CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
+# 10 teams x the starting slots in config/league.yaml (11 hitters, 9 pitchers). The
+# replacement level is the last man rostered, so this is the depth that defines it.
+ROSTERED = {"hitter": 110, "pitcher": 90}
+
+
+def sgp_frame(counting: pd.DataFrame, kind: str, denoms: dict[Category, float]) -> pd.Series:
+    """Total SGP per player from a forecast counting line."""
+    if kind == "hitter":
+        total = sum(
+            calculate_counting_sgp(counting[cat.value], denoms[cat])
+            for cat in (Category.R, Category.HR, Category.RBI, Category.SB)
+        )
+        # `ab` is not in the counting frame; recover it from PA at the league AB/PA
+        # ratio the forecast itself produced, so the marginal-hits term is scaled by
+        # the at-bats this player is actually forecast to take.
+        ab = counting["PA"] * 0.895
+        return total + calculate_hitting_rate_sgp(
+            player_avg=counting["AVG"],
+            player_ab=ab,  # type: ignore[arg-type]
+            replacement_avg=REPLACEMENT_AVG,
+            sgp_denominator=denoms[Category.AVG],
+            team_ab=DEFAULT_TEAM_AB,
+        )
+    total = sum(
+        calculate_counting_sgp(counting[cat.value if cat is not Category.K else "K"], denoms[cat])
+        for cat in (Category.W, Category.SV, Category.K)
+    )
+    for rate, repl, cat in (
+        ("ERA", REPLACEMENT_ERA, Category.ERA),
+        ("WHIP", REPLACEMENT_WHIP, Category.WHIP),
+    ):
+        total = total + calculate_pitching_rate_sgp(
+            player_rate=counting[rate],
+            player_ip=counting["IP"],
+            replacement_rate=repl,
+            sgp_denominator=denoms[cat],
+            team_ip=DEFAULT_TEAM_IP,
+            innings_divisor=1.0,
+        )
+    return total
+
+
+def fetch_rosters(my_team: str) -> dict[tuple[str, str], str]:
+    """(normalized_name, player_type) -> owning team, from the live roster blobs.
+
+    Keyed on the NAME, not the mlbam id, because roster blobs do not carry one -- see
+    issue #284. Two different players sharing a normalized name and type therefore
+    collapse onto one owner. That residual is irreducible here; the fix is populating
+    mlbam_id at Yahoo ingest, not more matching logic. Unmatched counts are printed so
+    a silent join failure cannot pass for "nobody owns him".
+    """
+    os.environ["RENDER"] = "true"
+    from dotenv import load_dotenv
+
+    load_dotenv(PROJECT_ROOT / ".env")
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
+
+    kv = build_explicit_upstash_kv()
+    owners: dict[tuple[str, str], str] = {}
+    for key, mine in ((CacheKey.OPP_ROSTERS, None), (CacheKey.ROSTER, my_team)):
+        raw = kv.get(f"cache:{key.value}")
+        if raw is None:
+            continue
+        blob = json.loads(raw) if isinstance(raw, str) else raw
+        data = blob.get("_data", blob)
+        # opp_rosters is {team: [players]}; roster is a BARE LIST -- my own team.
+        groups = data.items() if isinstance(data, dict) else [(mine, data)]
+        for team, players in groups:
+            if not isinstance(players, list):
+                continue
+            for p in players:
+                if not isinstance(p, dict) or not p.get("name"):
+                    continue
+                owners[(normalize_name(p["name"]), str(p.get("player_type", "")))] = str(team)
+    return owners
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--min-pa", type=float, default=300)
+    parser.add_argument("--min-ip", type=float, default=50)
+    parser.add_argument("--min-next-pa", type=float, default=250)
+    parser.add_argument("--min-next-ip", type=float, default=50)
+    parser.add_argument("--no-aging", action="store_true")
+    parser.add_argument("--top", type=int, default=30)
+    parser.add_argument("--team", help="restrict the board to one fantasy team")
+    parser.add_argument("--my-team", default="Hart of the Order", help="label for cache:roster")
+    args = parser.parse_args()
+
+    config = yaml.safe_load(CONFIG_PATH.read_text()) or {}
+    denoms = get_sgp_denominators(config.get("sgp_denominators"))
+    print(
+        "SGP denominators:",
+        {k.value: v for k, v in sorted(denoms.items(), key=lambda x: x[0].value)},
+    )
+
+    payload = fetch_blend()
+    owners = fetch_rosters(args.my_team)
+    print(f"  roster entries loaded: {len(owners)} (joined on name+type; no mlbam, #284)")
+
+    rows = []
+    for kind in ("hitter", "pitcher"):
+        per_year = {}
+        for year in (2027, 2028):
+            args.year = year
+            counting = to_counting(forecast_pool(kind, year, payload, args), kind)
+            per_year[year] = sgp_frame(counting, kind, denoms)
+        frame = pd.DataFrame({"sgp_2027": per_year[2027], "sgp_2028": per_year[2028]})
+        # Replacement = the last player who would actually be rostered, per year.
+        for year in (2027, 2028):
+            col = f"sgp_{year}"
+            level = frame[col].nlargest(ROSTERED[kind]).iloc[-1]
+            frame[f"var_{year}"] = frame[col] - level
+            print(f"  {kind} {year} replacement level: {level:6.2f} SGP")
+        frame["kind"] = kind
+        frame["name"] = _names(payload, kind).reindex(frame.index)
+        keys = frame["name"].fillna("").map(normalize_name)
+        frame["team"] = [owners.get((k, kind)) for k in keys]
+        rows.append(frame)
+
+    board = pd.concat(rows)
+    board["var_total"] = board["var_2027"] + board["var_2028"]
+    board = board.sort_values("var_total", ascending=False)
+
+    view = board
+    if args.team:
+        view = board[board["team"].fillna("").str.lower() == args.team.lower()]
+    view = view.head(args.top)
+
+    title = f"KEEPER VALUE -- {args.team}" if args.team else "KEEPER VALUE -- full board"
+    print(f"\n{'=' * 92}\n{title}  (VAR = SGP above the last rostered player)\n{'=' * 92}")
+    print(
+        f"{'#':>3} {'name':<24} {'':<3} {'2027 SGP':>9} {'2027 VAR':>9} "
+        f"{'2028 VAR':>9} {'TOTAL':>8}  team"
+    )
+    print("-" * 92)
+    for rank, (_, r) in enumerate(view.iterrows(), start=1):
+        tag = "H" if r["kind"] == "hitter" else "P"
+        team = "" if pd.isna(r["team"]) else str(r["team"])[:22]
+        print(
+            f"{rank:>3} {str(r['name'])[:23]:<24} {tag:<3} {r['sgp_2027']:>9.2f} "
+            f"{r['var_2027']:>9.2f} {r['var_2028']:>9.2f} {r['var_total']:>8.2f}  {team}"
+        )
+    print("\n  2027 is the validated horizon; 2028 extrapolates a one-year drift term")
+    print("  and therefore runs optimistic on playing time. Replacement is position-blind.")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
