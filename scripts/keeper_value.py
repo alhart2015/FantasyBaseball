@@ -164,12 +164,25 @@ def main() -> int:
 
     rows = []
     for kind in ("hitter", "pitcher"):
-        per_year = {}
+        per_year, volume = {}, {}
+        vol_col = "PA" if kind == "hitter" else "IP"
         for year in (2027, 2028):
             args.year = year
             counting = to_counting(forecast_pool(kind, year, payload, args), kind)
             per_year[year] = sgp_frame(counting, kind, denoms)
-        frame = pd.DataFrame({"sgp_2027": per_year[2027], "sgp_2028": per_year[2028]})
+            volume[year] = counting[vol_col]
+        frame = pd.DataFrame(
+            {
+                "sgp_2027": per_year[2027],
+                "sgp_2028": per_year[2028],
+                # Projected workload behind the 2027 line: PA for hitters, IP for
+                # pitchers. Shown because it is the heaviest single input, and a
+                # rating is not readable without knowing how much playing time it
+                # assumes.
+                "vol_2027": volume[2027],
+                "vol_2028": volume[2028],
+            }
+        )
         # Replacement = the last player who would actually be rostered, per year.
         for year in (2027, 2028):
             col = f"sgp_{year}"
@@ -192,18 +205,19 @@ def main() -> int:
     view = view.head(args.top)
 
     title = f"KEEPER VALUE -- {args.team}" if args.team else "KEEPER VALUE -- full board"
-    print(f"\n{'=' * 92}\n{title}  (VAR = SGP above the last rostered player)\n{'=' * 92}")
+    print(f"\n{'=' * 108}\n{title}  (VAR = SGP above the last rostered player)\n{'=' * 108}")
     print(
-        f"{'#':>3} {'name':<24} {'':<3} {'2027 SGP':>9} {'2027 VAR':>9} "
-        f"{'2028 VAR':>9} {'TOTAL':>8}  team"
+        f"{'#':>3} {'name':<24} {'':<2} {'27 PA/IP':>9} {'28 PA/IP':>9} "
+        f"{'27 SGP':>8} {'27 VAR':>8} {'28 VAR':>8} {'TOTAL':>8}  team"
     )
-    print("-" * 92)
+    print("-" * 108)
     for rank, (_, r) in enumerate(view.iterrows(), start=1):
         tag = "H" if r["kind"] == "hitter" else "P"
-        team = "" if pd.isna(r["team"]) else str(r["team"])[:22]
+        team = "" if pd.isna(r["team"]) else str(r["team"])[:20]
         print(
-            f"{rank:>3} {str(r['name'])[:23]:<24} {tag:<3} {r['sgp_2027']:>9.2f} "
-            f"{r['var_2027']:>9.2f} {r['var_2028']:>9.2f} {r['var_total']:>8.2f}  {team}"
+            f"{rank:>3} {str(r['name'])[:23]:<24} {tag:<2} {r['vol_2027']:>9.0f} "
+            f"{r['vol_2028']:>9.0f} {r['sgp_2027']:>8.2f} {r['var_2027']:>8.2f} "
+            f"{r['var_2028']:>8.2f} {r['var_total']:>8.2f}  {team}"
         )
     print("\n  2027 is the validated horizon; 2028 extrapolates a one-year drift term")
     print("  and therefore runs optimistic on playing time. Replacement is position-blind.")
