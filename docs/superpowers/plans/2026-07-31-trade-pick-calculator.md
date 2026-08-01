@@ -375,23 +375,24 @@ git commit -m "feat(trade-pick): next-year pick value (keeper-round ordinal + pa
 
 - [ ] **Step 1: Write the failing test**
 
-Append to `tests/test_analysis/test_trade_pick.py` (reuse the injury-stress fixtures by importing them):
+Add these names to the **top import block** of `tests/test_analysis/test_trade_pick.py` (created in Task 2) so the file has no mid-file module imports:
 
 ```python
-from fantasy_baseball.analysis.trade_pick import (  # noqa: E402  (grouped with the later imports)
+from fantasy_baseball.analysis.trade_pick import (
     build_replacement_filler,
     build_trade_scenario,
     find_sent_player,
     worst_of_type,
 )
-from fantasy_baseball.models.player import HitterStats, PlayerType  # noqa: E402
-from fantasy_baseball.models.positions import Position  # noqa: E402
+from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
+```
 
+Then append the fixtures and tests:
 
+```python
 def _hit(name, *, r=90, hr=30, rbi=95, sb=12, h=165, ab=560, pa=620, g=155):
     line = {"r": r, "hr": hr, "rbi": rbi, "sb": sb, "h": h, "ab": ab, "pa": pa, "g": g}
-    from fantasy_baseball.models.player import Player
-
     return Player(
         name=name,
         player_type=PlayerType.HITTER,
@@ -432,7 +433,9 @@ def test_worst_of_type_picks_lowest_projection():
 
 
 def test_build_trade_scenario_keeps_sizes_and_moves_player():
-    from test_injury_stress import _synth_inputs  # reuse the 2-team fixture
+    # tests/test_analysis is a package (has __init__.py), so import the sibling
+    # fixture by its package-qualified name, not a bare module name.
+    from tests.test_analysis.test_injury_stress import _synth_inputs
 
     inputs = _synth_inputs()
     user = inputs.user_team_name
@@ -560,6 +563,10 @@ def build_trade_scenario(
     """Team rosters after the trade: user loses `sent` and gains a replacement
     filler (size constant); the partner gains the intact `sent` and drops its
     worst-of-type player (size constant). `inputs.team_rosters` is not mutated.
+
+    If the partner has no droppable player of the sent player's type (none on
+    their roster), nothing is dropped and the partner grows by one -- you cannot
+    drop what does not exist. Accepted (a benched extra body is second-order).
     """
     user = inputs.user_team_name
     filler = build_replacement_filler(sent)
@@ -609,7 +616,8 @@ Append to `tests/test_analysis/test_trade_pick.py`:
 
 ```python
 def test_this_year_impact_star_to_rival_does_not_help_you():
-    from test_injury_stress import _synth_inputs
+    # package-qualified sibling import (tests/test_analysis has __init__.py)
+    from tests.test_analysis.test_injury_stress import _synth_inputs
 
     from fantasy_baseball.analysis.trade_pick import find_sent_player, this_year_impact
 
