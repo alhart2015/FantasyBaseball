@@ -339,16 +339,30 @@ def _prior_pt_percentile(year: int, kind: str) -> pd.Series:
     reads. That also keeps this free of `denoms`, so it cannot fail on a partial
     denominator dict.
     """
-    if not (SKILLS_DIR / f"raw_{year - 1}").exists():
-        return pd.Series(dtype=float)
     table = "batting" if kind == "hitter" else "pitching"
+    # Guard the FILE, not the directory: a half-populated `raw_YYYY/` (batting
+    # fetched, pitching not) otherwise slipped past a directory check and raised
+    # FileNotFoundError inside `_raw` instead of degrading like a missing one.
+    if not (SKILLS_DIR / f"raw_{year - 1}" / f"bref_{table}_{year - 1}.v2.csv").exists():
+        print(
+            f"  WARNING: no cached raw_{year - 1} {table} pull, so the {kind} `durability`"
+            f" family for {year} degrades to current-season playing time only -- its"
+            f" fitted weight assumes the memory term. Fetch it to restore the model."
+        )
+        return pd.Series(dtype=float)
     frame = index_by_mlbam(_raw(year - 1, table), "mlbID")
     pt = (
         pd.to_numeric(frame["PA"], errors="coerce")
         if kind == "hitter"
         else frame["IP"].map(innings_to_float)
     )
-    return percentile(pt)
+    # Blank sub-floor priors rather than scoring them as fragility. A prior season
+    # under the pool's own qualifying floor carries no durability information -- the
+    # player was either not up yet (Stewart, 63 PA) or missed time the current season
+    # may already have disproved (Alvarez, 199 PA in 2025, healthy in 2026).
+    # `composite.durability` sends these to the pool-mean prior. Percentiled BEFORE
+    # masking so the ranking is against everyone who played, not just qualifiers.
+    return percentile(pt).where(pt >= MIN_PT[kind])
 
 
 def _qualified_families(
@@ -384,6 +398,14 @@ def _qualified_families(
     if kind == "hitter":
         qualified["speed_pct"] = percentile(speed(qualified))
     prior = pd.Series(dtype=float) if prior_pt_pct is None else prior_pt_pct
+    # NOT re-percentiled within the qualified pool, though it is tempting: the
+    # pre-MIN_PT base IS the mechanism. Ranking an injury-shortened regular against
+    # everyone who played says "359 PA is still a lot of baseball"; ranking him
+    # against qualifiers only says he is a part-timer, which is the very framing
+    # #288 exists to remove. Re-ranking here was measured and cost the motivating
+    # case most of its fix (Soto 9 -> 18). The price is that this column is
+    # COMPRESSED relative to the other families (sd ~0.11 vs ~0.23-0.29), so its
+    # fitted weight is NOT comparable to theirs -- see the composite docstring.
     qualified["durability_pct"] = durability(all_pt_pct.reindex(qualified.index), prior)
     # `batted_ball` returns avg-xba / fip-era, both signed higher = luckier already.
     qualified["batted_ball_pct"] = percentile(batted_ball(qualified, kind))
@@ -635,7 +657,15 @@ def _transition(year: int, kind: str, denoms) -> pd.DataFrame:
 # The `mid` grid (luck / batted_ball) spans below zero so a shrunk-to-zero or
 # negative weight is observable; the shipped 0.4 floor would hide it.
 _GRID_MID = (-0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2)
-_GRID_PT = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2)
+# Runs well past 1.0 because 1.2 was a CEILING, not an optimum: both the hitter `pt`
+# and `durability` fits pinned to the old top point, so the bake-off was
+# comparing candidates at unequal censoring. Any weight landing on the last
+# grid point should be read as 'at least this', and the grid widened again.
+# `durability` legitimately wants a LARGE weight: its column is compressed
+# (sd ~0.12 vs ~0.23 for the others) because it lives on the pre-MIN_PT base,
+# so the fit buys the spread back through the weight. That is a scale fact,
+# not a claim that availability outranks talent -- see the composite docstring.
+_GRID_PT = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6)
 _GRID_FUTURE = (0.0, 0.2, 0.4, 0.6, 0.8)
 _GRID_AGE = (0.0, 0.15, 0.3, 0.45)
 _FAMILY_GRID: dict[str, tuple[float, ...]] = {

@@ -345,14 +345,31 @@ def test_durability_blends_the_prior_season_in():
     assert out.iloc[0] == pytest.approx(DURABILITY_RECENCY * 0.2 + (1 - DURABILITY_RECENCY) * 1.0)
 
 
-def test_durability_falls_back_to_the_current_season_when_there_is_no_prior():
-    """A rookie is judged on what he has shown, not charged for a career he has not had
-    yet -- Sal Stewart, not a fragile veteran. A missing prior must not read as zero."""
-    current = pd.Series([0.8, 0.3], index=["rookie", "vet"])
-    prior = pd.Series([0.9], index=["vet"])
+def test_durability_falls_back_to_the_pool_mean_prior_not_the_players_own_season():
+    """#288 originally fell back to the player's OWN current season, which made "no MLB
+    time last year" score neutral while "a little MLB time last year" scored badly -- a
+    September call-up was charged for having debuted (Stewart 0.784 vs McGonigle 0.975
+    on the same 2026 workload). A missing prior must read as "no evidence" -- the pool's
+    mean prior -- so it lands BETWEEN a weak prior and a strong one, never at either end.
+
+    Asserted by ordering, not arithmetic: `durability` also rescales the blend to a
+    percentile-like spread, so exact values are not the contract.
+    """
+    current = pd.Series([0.5, 0.5, 0.5], index=["weak", "absent", "strong"])
+    prior = pd.Series([0.2, float("nan"), 0.9], index=["weak", "absent", "strong"])
     out = durability(current, prior)
-    assert out.loc["rookie"] == pytest.approx(0.8)
-    assert out.loc["vet"] > 0.3
+    assert out.loc["weak"] < out.loc["absent"] < out.loc["strong"]
+
+
+def test_durability_never_scores_a_small_prior_below_no_prior_at_all():
+    """The monotonicity the fallback exists to protect. Two players with identical
+    current seasons: one has a weak prior, one has none. The one with SOME evidence
+    must not be ranked below the one with NONE."""
+    current = pd.Series([0.9, 0.9], index=["debuted", "never_up"])
+    prior = pd.Series([float("nan"), float("nan")], index=["debuted", "never_up"])
+    # A sub-floor prior is blanked upstream, so both land in the same fallback.
+    out = durability(current, prior)
+    assert out.loc["debuted"] == pytest.approx(out.loc["never_up"])
 
 
 def test_durability_ignores_prior_rows_for_players_not_in_the_pool():
