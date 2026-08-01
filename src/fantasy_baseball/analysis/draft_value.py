@@ -505,6 +505,34 @@ def build_par_curve(
     return ParCurve(drafted_vars, keeper_par)
 
 
+def projected_par_curve(config: LeagueConfig | None = None) -> ParCurve:
+    """Preseason (full-season, f=1) drafted par curve, standalone.
+
+    Reproduces exactly the setup ``run_draft_value`` runs before its
+    ``par_proj = build_par_curve(typed_picks, bindex, fraction=1.0)``: reproduce
+    the draft-day board, anchor its VAR to the frozen draft-day board
+    (``draft_state_board.json``), reconstruct the draft, index the board, and
+    assign a player_type to every pick. ``run_draft_value`` itself is left
+    unchanged (no behavior-preserving refactor); this repeats the setup so a
+    consumer that needs ONLY the projected par curve (the trade-for-pick
+    calculator) does not also pay for scoring every pick.
+
+    Pure over local files -- projection CSVs, ``player_positions.json``,
+    ``draft_state_board.json``, ``draft_state.json``, ``league.yaml`` -- no
+    KV/Upstash. Raises (via ``_anchor_board_var_to_frozen``) if the frozen board
+    is missing, rather than ship a par curve on the drifted rebuilt VAR.
+    """
+    if config is None:
+        config = load_config(_CONFIG)
+    board, _scale = reproduce_draft_day_board(config)
+    board = _anchor_board_var_to_frozen(board, _frozen_var_by_player_id())
+    state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
+    picks = reconstruct_draft(config, state=state)
+    bindex = _board_index(board)
+    typed_picks = _assign_pick_types(picks, bindex, config.keepers)
+    return build_par_curve(typed_picks, bindex, fraction=1.0)
+
+
 def _hit_line_from(rec: dict[str, Any]) -> dict[str, Any]:
     # A JSON-null on a KV round-trip can land ab=None; calculate_avg guards on
     # denom > 0, which raises TypeError against a literal None, so coerce None->0.
