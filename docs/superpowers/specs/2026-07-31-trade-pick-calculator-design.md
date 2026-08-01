@@ -58,10 +58,14 @@ Two deliverables plus one small refactor:
    construction, the two MC runs, delta extraction, and the pick-value lookup.
 2. **`scripts/trade_pick_calc.py`** -- thin CLI: arg parsing, load state, call
    the library, render an ASCII report.
-3. **`src/fantasy_baseball/analysis/draft_value.py`** -- extract the projected
-   par-curve construction (currently inline in `run_draft_value`) into a public
-   `projected_par_curve(config=None) -> ParCurve` so the calculator can reuse it
-   without duplicating the reproduce-board / anchor / reconstruct steps.
+3. **`src/fantasy_baseball/analysis/draft_value.py`** -- add a public
+   `projected_par_curve(config=None) -> ParCurve` that reproduces the preseason
+   par-curve construction standalone and returns it. `run_draft_value` is **left
+   unmodified** -- no behavior-preserving refactor, so no regression risk to the
+   draft-value metric that feeds the dashboard. The new function repeats the
+   board / anchor / reconstruct / index / assign setup sequence; that duplication
+   is deliberate (de-risking over DRY) and is guarded by a cross-check test (see
+   Testing). A future DRY pass could extract a shared private setup helper.
 
 Invocation:
 
@@ -70,7 +74,9 @@ python scripts/trade_pick_calc.py --send "Julio Rodriguez" --to "SkeleThor" --pi
 ```
 
 Optional flags: `--pick-slot early|mid|late` (narrow within the drafted round),
-`--iterations N` (MC iterations), `--seed N`.
+`--player-type hitter|pitcher` (disambiguate two same-normalized-name roster
+players of different types), `--iterations N` (MC iterations, default 2000),
+`--seed N` (default 42).
 
 ## Component detail
 
@@ -91,20 +97,28 @@ carries `team_rosters` (`dict[str, list[Player]]`), `actual_standings`,
   below). Net: roster size is unchanged; the vacated active slot is filled by the
   best remaining eligible player, and the filler starts only if nothing better is
   available.
-- **Partner roster:** append the intact sent Player (both lines real). The
-  partner's active lineup re-optimizes to include the star, benching their worst
-  active player of that type. The partner must be a real team in
-  `team_rosters` (match by normalized name; error listing valid teams otherwise).
+- **Partner roster:** append the intact sent Player (both lines real), then drop
+  the partner's **worst-projected player of the sent player's type** -- ranked by
+  lowest full-season projected value (the same `calculate_player_sgp` /
+  `to_flat_dict_full_season` value used elsewhere) -- to keep the partner's
+  roster size constant (symmetric with the user-side filler). The drop
+  is second-order -- it removes a benched player, not an active one -- but the
+  rule is stated so the model is not left to planner invention. The partner's
+  active lineup re-optimizes to include the star, benching their next-worst
+  active player of that type. The partner must be a real team in `team_rosters`
+  (match by normalized name; error listing valid teams otherwise).
 
-**Replacement filler.** A synthetic `Player` whose **ROS line and full-season
-line are both replacement-level** at the sent player's position and scaled to the
-sent player's ROS volume (AB for hitters, IP for pitchers). Built from the
-existing `injury_stress._replacement_ros` (ROS line) and
-`simulation._replacement_line` (full-season line) machinery. Both lines must be
-neutralized because the MC reads the ROS-direct hitter path off the rebuilt
-`EffectiveRoster` (ROS line) but the top-k / pitcher path off the flattened
-full-season line -- neutralizing only one would leak the sent player's real
-production on the other path.
+**Replacement filler.** A synthetic `Player` with a **distinct name**
+(`"Replacement (<pos>)"`, so it never aliases the real sent player now on the
+partner and reads clearly in the report), the sent player's **positions**, and
+**both its ROS line and full-season line neutralized to replacement level** at
+the sent player's position, scaled to the sent player's ROS volume (AB for
+hitters, IP for pitchers). Built from the existing
+`injury_stress._replacement_ros` (ROS line) and `simulation._replacement_line`
+(full-season line) machinery. Both lines must be neutralized because the MC reads
+the ROS-direct hitter path off the rebuilt `EffectiveRoster` (ROS line) but the
+top-k / pitcher path off the flattened full-season line -- neutralizing only one
+would leak the sent player's real production on the other path.
 
 **Two MC runs** (`run_scenario` helper, one call per roster set):
 - For each of {baseline rosters, scenario rosters}: rebuild
@@ -113,6 +127,10 @@ production on the other path.
   `simulation.run_ros_monte_carlo(...)` with the same `actual_standings`,
   `fraction_remaining`, `h_slots`, `p_slots`, `user_team_name`, and the **same
   seed** (common random numbers) so the delta isolates the trade, not MC noise.
+- **Defaults:** `n_iterations = 2000` (per-category `first_pct` is noisy at low
+  counts; only two runs are needed, so a higher count than the dashboard's 1000
+  is affordable and stabilizes the per-category deltas), `seed = 42` (matches
+  `injury_stress.SEED`). Both overridable via `--iterations` / `--seed`.
 - `eos_baseline` / `team_sds` are **held fixed** across both runs (reuse
   `McInputs`), mirroring the injury stress-test. First-order effect (Julio's
   production leaving Hart and joining the partner) flows through the rosters and
@@ -123,9 +141,11 @@ production on the other path.
 **Deltas extracted** (`this_year_impact`):
 - Overall: `team_results[user]["first_pct"]` (win%) and `["top3_pct"]`, baseline
   -> scenario.
-- Per-category (all 10): from `category_risk[cat]` -- `first_pct`, `top3_pct`,
-  and `median_pts` -- baseline -> scenario. `category_risk` is already
-  user-only, which is exactly what we want.
+- Per-category (all 10): from `category_risk[cat]` -- `first_pct` and
+  `top3_pct`, baseline -> scenario. `category_risk` is already user-only, which
+  is exactly what we want. (Per-category `median_pts` is available in the same
+  dict but is intentionally **not** reported -- the per-category view is
+  first%/top-3% only, matching the output table.)
 
 ### B. Next-year half (marginal pick value)
 
@@ -136,9 +156,11 @@ that runs the existing pure steps: `reproduce_draft_day_board` ->
 `build_par_curve(typed_picks, bindex, fraction=1.0)`. This is preseason
 (full-season, f=1) VAR, the right horizon for a future draft. It reads only local
 files (projection CSVs, `player_positions.json`, `draft_state_board.json`,
-`draft_state.json`, `league.yaml`) -- no Upstash. To keep one source of truth,
-`run_draft_value` is refactored to call this helper for its `par_proj` (behavior
-identical -- same inputs, same construction).
+`draft_state.json`, `league.yaml`) -- no Upstash. `run_draft_value` is **not
+modified**; `projected_par_curve` re-runs the setup standalone. A cross-check
+test (see Testing) asserts the helper's `drafted_pars` equal the par curve built
+from the same `typed_picks`/`bindex` sequence, so the standalone path cannot
+silently drift from the metric's construction.
 
 **Nominal -> drafted-round -> ordinal mapping** (`pick_value`):
 - `keeper_rounds = len(config.keepers) // config.num_teams` (30 // 10 = 3).
@@ -167,9 +189,13 @@ also the pick's approximate marginal roto-point value next year.
   `sys.stdout.reconfigure(encoding="utf-8", errors="replace")` (player names may
   carry non-ASCII).
 - Parse args, call the library, render an ASCII (cp1252-safe) report with two
-  labeled sections and a one-line framing sentence:
-  "You give up ~X.X win% and ~Y.Y top-3% this year to gain a 2027 R{nominal}
-  pick (drafted round {drafted}) worth ~Z.Z VAR."
+  labeled sections and a one-line, **sign-aware** framing sentence keyed on the
+  win% delta:
+  - loss (delta < 0): "You give up ~X.X win% / ~Y.Y top-3% this year to gain a
+    2027 R{nominal} pick (drafted round {drafted}) worth ~Z.Z VAR."
+  - neutral/gain (delta >= 0): "This year is roughly neutral to positive (+X.X
+    win% / +Y.Y top-3%), and you also gain a 2027 R{nominal} pick worth ~Z.Z
+    VAR." (Signs shown explicitly for both metrics.)
 - The per-category section is a table: category, baseline first%, scenario
   first%, delta, and the same for top-3%.
 
@@ -205,8 +231,11 @@ TRADE-FOR-PICK CALCULATOR
 ------------------------------------------------------------------------
 
 You give up ~4.2 win% / ~2.8 top-3% this year to gain a pick worth ~4.2 VAR.
-MC: n_iter=..., seed=... (common random numbers across both runs).
+MC: n_iter=2000, seed=42 (common random numbers across both runs).
 ```
+
+(The framing line above is the loss case; a non-negative delta uses the
+neutral/gain wording from Component C.)
 
 ## Edge cases and failure modes
 
@@ -214,6 +243,8 @@ MC: n_iter=..., seed=... (common random numbers across both runs).
 - Ambiguous sent player (same normalized name, two types) -> require
   `--player-type`.
 - Partner name not found -> error listing valid team names.
+- Partner resolves to the user's own team (`--to` names your team) -> error (you
+  cannot trade to yourself).
 - Sent player is a pitcher -> filler is a pitcher (both lines neutralized);
   feasibility is judged against `p_slots`. Symmetric to the hitter case.
 - Sent player has no ROS line (already out for the season) -> removing him has
@@ -239,10 +270,13 @@ MC: n_iter=..., seed=... (common random numbers across both runs).
   user's win%).
 - **Fixed eos_baseline / team_sds:** controlled-comparison choice; first-order
   correct, second-order approximate (see A).
-- **Replacement filler keeps roster size constant:** models signing a waiver
-  filler after the trade; it also restores bench injury-insurance depth, which
-  very slightly reduces the measured downside vs playing a man down -- the
-  intended behavior (not overstating the cost).
+- **Roster sizes stay constant on both sides:** the user replaces the sent
+  player with a replacement-level filler (models signing a waiver add; also
+  restores bench injury-insurance depth, which very slightly reduces the measured
+  downside vs playing a man down -- the intended behavior, not overstating the
+  cost). The partner drops its worst-projected player of the sent player's type
+  to fit the star. Both are second-order (they touch benched players), but keep
+  the two teams symmetric and the model explicit.
 - **Pick value from the 2026 curve:** assumes the 2027 value distribution at that
   slot resembles 2026's. Draft value-by-slot curves are stable year to year, but
   this is an estimate, flagged as such.
@@ -256,13 +290,20 @@ fixtures):
   -> error.
 - `pick_value` round-average and early/mid/late slicing over a synthetic
   `ParCurve`; upper-bound clamp when the round exceeds the curve.
-- Replacement filler is fully neutralized: assert the constructed filler's ROS
-  and full-season lines equal the replacement lines, not the sent player's.
+- `projected_par_curve` cross-check: its `drafted_pars` equal a `ParCurve` built
+  inline in the test from the same `typed_picks`/`bindex` (the guard against the
+  standalone setup drifting from the metric's construction).
+- Replacement filler is fully neutralized: assert the constructed filler has a
+  distinct `"Replacement (...)"` name, keeps the sent player's positions, and its
+  ROS **and** full-season lines equal the replacement lines, not the sent
+  player's.
 - Scenario construction: user roster loses the sent player and gains exactly one
-  filler (size unchanged); partner roster gains the intact sent player.
+  filler (size unchanged); partner roster gains the intact sent player and drops
+  its worst-projected player of that type (size unchanged).
 - Monotonic sanity (small synthetic league, common random numbers): removing a
-  positive-value hitter from the user and giving him to a rival does not increase
-  the user's win% (allow a small tolerance).
+  positive-value hitter from the user and giving him to a rival does not raise
+  the user's win% by more than 1.0 pt above baseline (a fixed-seed tolerance
+  band; the expected direction is a decrease).
 
 Then the full end-of-effort gate: `pytest` (relevant subset -- name which),
 `ruff check .`, `ruff format --check .`, `vulture`, and `mypy` if any touched
@@ -271,8 +312,8 @@ file is in `[tool.mypy].files`.
 ## Phasing
 
 Single phase (one PR). Ordered tasks:
-1. `draft_value.projected_par_curve` helper + refactor `run_draft_value` to use
-   it; test.
+1. `draft_value.projected_par_curve` standalone helper (`run_draft_value` left
+   unchanged) + cross-check test.
 2. `analysis/trade_pick.py`: scenario construction + replacement filler; test.
 3. `analysis/trade_pick.py`: two-run MC + delta extraction; test (sanity).
 4. `analysis/trade_pick.py`: `pick_value` / next-year lookup; test.
