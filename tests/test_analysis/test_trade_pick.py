@@ -203,3 +203,20 @@ def test_render_report_is_ascii_and_sign_aware():
         next_year=NextYearValue(5, 3, 2, "round", 4.2, 5.1, 18.4, 11, 20),
     )
     assert "roughly neutral" in render_report(gain)  # non-negative delta framing
+
+
+def test_cli_help_runs():
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    root = Path(__file__).resolve().parents[2]
+    script = root / "scripts" / "trade_pick_calc.py"
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        capture_output=True,
+        text=True,
+        cwd=str(root),
+    )
+    assert result.returncode == 0
+    assert "--send" in result.stdout and "--pick-round" in result.stdout
