@@ -338,6 +338,64 @@ def apply_reliability_share(
     return projected + fit.intercept + share * gap_now.fillna(0.0)
 
 
+def centered_aging(
+    out_year: pd.Series,
+    base: pd.Series,
+    *,
+    weights: pd.Series | None = None,
+) -> pd.Series:
+    """ZiPS's per-player aging view, with its population average removed.
+
+    `out_year - base` between two vintages FROM THE SAME MODEL RUN is pure aging: both
+    saw the same seasons, so the only thing that differs is how ZiPS expects that
+    specific player to develop or decline. That is precisely the per-player resolution
+    a single fitted intercept cannot have.
+
+    **Only the DIFFERENCES are taken, never the level.** The mean is subtracted so this
+    term cannot move the population average, which stays owned by the fitted intercept.
+    That split is not tidiness, it is a correction for a measured defect: ZiPS's out-year
+    holds playing time nearly flat (mean +1.6 PA / -0.9 IP between its 2026 and 2027
+    vintages) while realized volume drifts by -78.7 PA / -26.1 IP. Taking ZiPS's level
+    would make every hitter roughly 79 PA too optimistic. Taking only its spread keeps
+    the part it is good at -- who ages well relative to his peers -- and discards the
+    part it does not model.
+
+    A player absent from the out-year vintage yields NaN, which `fold_forecast` treats
+    as "no differential information" and falls back to the population drift alone.
+    """
+    delta = out_year.subtract(base)
+    usable = delta.replace([np.inf, -np.inf], np.nan).dropna()
+    if usable.empty:
+        return delta
+    if weights is None:
+        mean = float(usable.mean())
+    else:
+        w = weights.reindex(usable.index).fillna(0.0).clip(lower=0.0)
+        mean = float((w * usable).sum() / w.sum()) if w.sum() > 0 else float(usable.mean())
+    return delta - mean
+
+
+def fold_forecast(
+    base_projection: pd.Series,
+    gap_now: pd.Series,
+    fit: Share,
+    aging_centered: pd.Series | None = None,
+) -> pd.Series:
+    """The full forecast: baseline + population drift + per-player aging + kept gap.
+
+        forecast = base + intercept + centered_aging + S * gap
+
+    `base_projection` must be the SAME vintage the gap was measured against, otherwise
+    the drift is counted twice. With `aging_centered` omitted (or NaN for a player) this
+    degrades exactly to `apply_share`, so a missing out-year file costs per-player
+    resolution and nothing else.
+    """
+    folded = apply_share(base_projection, gap_now, fit)
+    if aging_centered is None:
+        return folded
+    return folded + aging_centered.reindex(folded.index).fillna(0.0)
+
+
 def fit_counting_share(
     proj_count: pd.Series,
     obs_count: pd.Series,

@@ -521,8 +521,16 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--min-pa", type=float, default=300, help="year-Y hitter PA floor")
     parser.add_argument("--min-ip", type=float, default=50, help="year-Y pitcher IP floor")
-    parser.add_argument("--min-next-pa", type=float, default=50, help="year-Y+1 hitter PA floor")
-    parser.add_argument("--min-next-ip", type=float, default=20, help="year-Y+1 pitcher IP floor")
+    # Year-Y+1 floors chosen by held-out prediction, not by eye: fit at 50/150/250/350
+    # (hitters) and 20/50/80 (pitchers), each scored on the SAME population of players
+    # who reach real playing time. Pitchers: 50 IP wins on all five rates. Hitters:
+    # converges at 250-350; 250 is best-or-tied on four of six and keeps 81% of the
+    # sample. A LOW floor does not just add noise, it biases the DRIFT -- a 60-PA bad
+    # season is a playing-time outcome the volume term already prices, and letting it
+    # into the rate fit charges the same player twice (h_ab drift -0.0088 at 50 vs
+    # -0.0037 at 250, against a real decline of about -0.0013).
+    parser.add_argument("--min-next-pa", type=float, default=250, help="year-Y+1 hitter PA floor")
+    parser.add_argument("--min-next-ip", type=float, default=50, help="year-Y+1 pitcher IP floor")
     parser.add_argument("--counting", action="store_true", help="add the blended counting fit")
     parser.add_argument("--terciles", action="store_true", help="refit S by volume tercile")
     parser.add_argument(

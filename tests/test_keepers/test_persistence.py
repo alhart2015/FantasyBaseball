@@ -11,10 +11,12 @@ from fantasy_baseball.keepers.persistence import (
     Share,
     apply_reliability_share,
     apply_share,
+    centered_aging,
     evaluate_shares,
     fit_counting_share,
     fit_reliability_share,
     fit_share,
+    fold_forecast,
     gap,
     rmse,
 )
@@ -243,3 +245,61 @@ def test_apply_reliability_share_passes_through_an_unobserved_gap() -> None:
         pd.Series([10.0, 20.0]), pd.Series([np.nan, 10.0]), pd.Series([600.0, 600.0]), fit
     )
     assert out.iloc[0] == pytest.approx(10.5)
+
+
+def test_centered_aging_removes_the_population_mean() -> None:
+    """The out-year term must carry SPREAD only. ZiPS holds playing time nearly flat
+    while realized volume drifts hard, so taking its level would corrupt the forecast;
+    the level stays owned by the fitted intercept."""
+    out = _series([110.0, 120.0, 130.0])
+    base = _series([100.0, 100.0, 100.0])
+    centered = centered_aging(out, base)
+    assert centered.mean() == pytest.approx(0.0)
+    assert list(centered) == pytest.approx([-10.0, 0.0, 10.0])
+
+
+def test_centered_aging_uses_the_supplied_weights_for_the_mean() -> None:
+    out = _series([110.0, 120.0])
+    base = _series([100.0, 100.0])
+    heavy_on_second = centered_aging(out, base, weights=_series([1.0, 999.0]))
+    # Mean pinned near +20, so the second player centres near zero and the first well below.
+    assert heavy_on_second.iloc[1] == pytest.approx(0.0, abs=0.02)
+    assert heavy_on_second.iloc[0] < -9.0
+
+
+def test_centered_aging_keeps_nan_for_a_player_absent_from_the_out_year() -> None:
+    out = pd.Series([110.0, np.nan, 130.0])
+    base = _series([100.0, 100.0, 100.0])
+    centered = centered_aging(out, base)
+    assert pd.isna(centered.iloc[1])
+    # The mean is taken over the observed pair only, so the NaN cannot shift it.
+    assert centered.iloc[0] == pytest.approx(-10.0)
+
+
+def test_centered_aging_survives_an_entirely_missing_out_year() -> None:
+    out = pd.Series([np.nan, np.nan])
+    centered = centered_aging(out, _series([100.0, 100.0]))
+    assert centered.isna().all()
+
+
+def test_fold_forecast_adds_baseline_drift_aging_and_kept_gap() -> None:
+    fit = Share("c", share=0.5, intercept=-10.0, n=9, r2=0.2, stderr=0.01)
+    out = fold_forecast(
+        _series([500.0, 500.0]), _series([100.0, -100.0]), fit, _series([5.0, -5.0])
+    )
+    assert list(out) == pytest.approx([500 - 10 + 5 + 50, 500 - 10 - 5 - 50])
+
+
+def test_fold_forecast_degrades_to_apply_share_without_an_out_year() -> None:
+    """A missing out-year file must cost per-player resolution and nothing else."""
+    fit = Share("c", share=0.5, intercept=-10.0, n=9, r2=0.2, stderr=0.01)
+    projected, gap_now = _series([500.0, 400.0]), _series([100.0, -40.0])
+    assert list(fold_forecast(projected, gap_now, fit)) == pytest.approx(
+        list(apply_share(projected, gap_now, fit))
+    )
+
+
+def test_fold_forecast_treats_a_players_missing_aging_as_no_adjustment() -> None:
+    fit = Share("c", share=0.0, intercept=0.0, n=9, r2=0.2, stderr=0.01)
+    out = fold_forecast(_series([500.0, 500.0]), _series([0.0, 0.0]), fit, pd.Series([np.nan, 7.0]))
+    assert list(out) == pytest.approx([500.0, 507.0])
