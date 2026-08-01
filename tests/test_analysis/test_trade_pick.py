@@ -3,9 +3,15 @@ import pytest
 from fantasy_baseball.analysis.draft_value import ParCurve
 from fantasy_baseball.analysis.trade_pick import (
     NextYearValue,
+    build_replacement_filler,
+    build_trade_scenario,
+    find_sent_player,
     pick_ordinal_range,
     pick_value,
+    worst_of_type,
 )
+from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
 
 
 def _curve(n=200):
@@ -57,3 +63,69 @@ def test_pick_value_round_average_and_early_higher():
     # early third (higher VAR) exceeds the full-round average on a descending curve
     assert nv.early_var > nv.expected_var
     assert nv.keeper_par == 18.0
+
+
+def _hit(name, *, r=90, hr=30, rbi=95, sb=12, h=165, ab=560, pa=620, g=155):
+    line = {"r": r, "hr": hr, "rbi": rbi, "sb": sb, "h": h, "ab": ab, "pa": pa, "g": g}
+    return Player(
+        name=name,
+        player_type=PlayerType.HITTER,
+        positions=[Position.OF],
+        rest_of_season=HitterStats.from_dict(line),
+        full_season_projection=HitterStats.from_dict(line),
+    )
+
+
+def test_find_sent_player_normalized_and_ambiguity():
+    roster = [_hit("Julio Rodriguez"), _hit("Someone Else")]
+    assert find_sent_player(roster, "julio rodriguez").name == "Julio Rodriguez"
+    with pytest.raises(ValueError, match="not on"):
+        find_sent_player(roster, "Nobody Here")
+
+
+def test_replacement_filler_is_neutralized_and_renamed():
+    star = _hit("Julio Rodriguez")
+    filler = build_replacement_filler(star)
+    assert filler.name != star.name
+    assert filler.name.startswith("Replacement")
+    assert filler.positions == star.positions  # can fill the vacated slot
+    # Both lines neutralized below the star's real production (r/hr/rbi drop).
+    for col in ("r", "hr", "rbi"):
+        assert getattr(filler.rest_of_season, col) < getattr(star.rest_of_season, col)
+        assert getattr(filler.full_season_projection, col) < getattr(
+            star.full_season_projection, col
+        )
+
+
+def test_worst_of_type_picks_lowest_projection():
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    good = _hit("Good")
+    bad = _hit("Bad", r=30, hr=2, rbi=25, sb=1, h=80, ab=400, pa=440, g=110)
+    worst = worst_of_type([good, bad], PlayerType.HITTER, get_sgp_denominators(None))
+    assert worst.name == "Bad"
+
+
+def test_build_trade_scenario_keeps_sizes_and_moves_player():
+    # tests/test_analysis is a package (has __init__.py), so import the sibling
+    # fixture by its package-qualified name, not a bare module name.
+    from tests.test_analysis.test_injury_stress import _synth_inputs
+
+    inputs = _synth_inputs()
+    user = inputs.user_team_name
+    partner = "Opp"
+    sent = find_sent_player(inputs.team_rosters[user], "Star")
+    n_user0 = len(inputs.team_rosters[user])
+    n_partner0 = len(inputs.team_rosters[partner])
+
+    scen = build_trade_scenario(inputs, sent, partner)
+
+    # user size unchanged: lost Star, gained exactly one filler
+    assert len(scen[user]) == n_user0
+    assert all(p.name != "Star" for p in scen[user])
+    assert sum(p.name.startswith("Replacement") for p in scen[user]) == 1
+    # partner size unchanged: gained the intact Star, dropped its worst hitter
+    assert len(scen[partner]) == n_partner0
+    assert any(p is sent for p in scen[partner])
+    # inputs.team_rosters is not mutated
+    assert any(p.name == "Star" for p in inputs.team_rosters[user])

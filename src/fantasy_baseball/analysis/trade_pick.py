@@ -8,10 +8,22 @@ ordinal). See docs/superpowers/specs/2026-07-31-trade-pick-calculator-design.md.
 
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass
 
 from fantasy_baseball.analysis.draft_value import ParCurve, projected_par_curve
+from fantasy_baseball.analysis.injury_stress import McInputs, _replacement_ros
 from fantasy_baseball.config import LeagueConfig
+from fantasy_baseball.models.player import (
+    HitterStats,
+    PitcherStats,
+    Player,
+    PlayerType,
+    RankInfo,
+)
+from fantasy_baseball.sgp.player_value import calculate_player_sgp
+from fantasy_baseball.simulation import _replacement_line
+from fantasy_baseball.utils.name_utils import normalize_name
 
 
 def keeper_rounds_for(config: LeagueConfig) -> int:
@@ -129,3 +141,100 @@ def next_year_value(
     """Build the projected par curve and value a nominal-round pick on it."""
     par = projected_par_curve(config)
     return pick_value(par, nominal_round, keeper_rounds_for(config), config.num_teams, pick_slot)
+
+
+def find_sent_player(
+    roster: list[Player], name: str, player_type: str | None = None
+) -> Player:
+    """Locate the player being traded away, by normalized (accent-safe) name.
+
+    When two roster players normalize to the same name and differ in type (a
+    hitter and a pitcher), ``player_type`` disambiguates; without it, an
+    ambiguous match is an error rather than a silent pick.
+    """
+    target = normalize_name(name)
+    matches = [p for p in roster if normalize_name(p.name) == target]
+    if player_type is not None:
+        want = PlayerType(player_type)
+        matches = [p for p in matches if p.player_type == want]
+    if not matches:
+        raise ValueError(f"{name!r} is not on your roster.")
+    if len(matches) > 1:
+        raise ValueError(
+            f"{name!r} is ambiguous on your roster; pass --player-type hitter|pitcher."
+        )
+    return matches[0]
+
+
+def build_replacement_filler(sent: Player) -> Player:
+    """A replacement-level filler for the slot the sent player vacates.
+
+    Distinct name (never aliases the real player now on the partner), the sent
+    player's positions (so it is eligible for the vacated slot), and BOTH its
+    ROS line and full-season line neutralized to replacement level -- the MC
+    reads production off the ROS line (ROS-direct engine) but the full-season
+    line still drives the playing-time-curve shape and the top-k fallback, so
+    neutralize both. The active-lineup selection starts this filler only when no
+    better bench player is available; otherwise it benches.
+    """
+    is_hitter = sent.player_type == PlayerType.HITTER
+    ros_repl = _replacement_ros(sent)  # scaled to the sent player's ROS volume
+    repl_line = _replacement_line(sent.to_flat_dict_full_season(), is_hitter)
+    stats_cls = HitterStats if is_hitter else PitcherStats
+    fs_repl = stats_cls.from_dict(repl_line)  # replacement full-season line
+    pos_label = str(sent.positions[0]) if sent.positions else str(sent.player_type)
+    return dataclasses.replace(
+        sent,
+        name=f"Replacement ({pos_label})",
+        rest_of_season=ros_repl,
+        full_season_projection=fs_repl,
+        preseason=None,
+        current=None,
+        rank=RankInfo(),
+        selected_position=None,
+        fg_id=None,
+        mlbam_id=None,
+        yahoo_id=None,
+    )
+
+
+def worst_of_type(roster: list[Player], ptype: PlayerType, denoms) -> Player | None:
+    """The lowest full-season-projected player of ``ptype``, or None if none exist.
+
+    Ranked by full-season SGP so the partner drops a benched scrub (second-order)
+    to fit the acquired star, keeping the partner's roster size constant. Players
+    without a full-season projection are skipped (they cannot be scored).
+    """
+    cands = [
+        p for p in roster if p.player_type == ptype and p.full_season_projection is not None
+    ]
+    if not cands:
+        return None
+    return min(
+        cands, key=lambda p: calculate_player_sgp(p.full_season_projection, denoms=denoms)
+    )
+
+
+def build_trade_scenario(
+    inputs: McInputs, sent: Player, partner: str
+) -> dict[str, list[Player]]:
+    """Team rosters after the trade: user loses ``sent`` and gains a replacement
+    filler (size constant); the partner gains the intact ``sent`` and drops its
+    worst-of-type player (size constant). ``inputs.team_rosters`` is not mutated.
+
+    If the partner has no droppable player of the sent player's type (none on
+    their roster), nothing is dropped and the partner grows by one -- you cannot
+    drop what does not exist. Accepted (a benched extra body is second-order).
+    """
+    user = inputs.user_team_name
+    filler = build_replacement_filler(sent)
+    new_user = [p for p in inputs.team_rosters[user] if p is not sent] + [filler]
+
+    partner_roster = inputs.team_rosters[partner]
+    drop = worst_of_type(partner_roster, sent.player_type, inputs.denoms)
+    new_partner = [p for p in partner_roster if p is not drop] + [sent]
+
+    scenario = dict(inputs.team_rosters)
+    scenario[user] = new_user
+    scenario[partner] = new_partner
+    return scenario
