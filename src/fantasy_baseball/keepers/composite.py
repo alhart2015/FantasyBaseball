@@ -1,8 +1,8 @@
 """Rank keeper candidates on families that each measure ONE named thing.
 
 Hitters blend skill, speed, playing time, batted-ball, future and age; pitchers
-the same minus speed. There is deliberately no residual family -- see "Why there
-is no `luck` family" below, and #288 for the history.
+the same minus speed, which has no pitcher analogue. There is deliberately no
+residual family -- see "Why there is no `luck` family" below, and #288.
 
 Pure and I/O-free like the rest of the normalization layer. Everything works in
 PERCENTILE space within a player pool, so hitters and pitchers rank against their
@@ -27,13 +27,39 @@ speed 1/6 weight, which measurably fails to remove it from a residual (it moved
 `corr(residual, SB rate)` only from +0.466 to +0.461). `--study` reproduces both
 numbers.
 
-**pt** -- playing time: the volume dimension, on its own axis. This is the
-DURABILITY term. An injury-shortened elite-rate season is now scored as low
-volume against a high rate, rather than being charged as a permanent demerit --
-the Juan Soto case (359 PA on a 96th-percentile skill line) that motivated #288.
-Same-season PT is also the most persistent thing in the whole table: it predicts
-next-year PT at 0.607, above skill (0.464) and rate (0.462). Durability repeats
-better than talent does.
+**pt** -- playing time: the volume dimension, on its own axis.
+
+Percentiled against EVERY player who appeared that season, not against the pool
+that already cleared `MIN_PT`. The base is the whole decision: Aaron Judge's 261
+PA is 0.65 against the league and 0.08 against the 233 players already on the
+board, and the second reading buried one of the best hitters alive at rank 92.
+"How much baseball did he play" is a league-wide question.
+
+The accepted cost is that the qualified pool then compresses into roughly
+[0.53, 0.99], so this column is narrower than the other families (sd ~0.13 vs
+~0.23-0.29) and the fit buys the spread back through a LARGER weight. Read that
+weight as scale, NOT as a claim that volume outranks talent -- multiply by the
+column's spread before comparing it to `skill`. `_GRID_PT` runs well past 1.0 for
+the same reason; it used to stop at 1.2 and the fit pinned to that ceiling, which
+silently compared candidates at unequal censoring.
+
+What this does NOT do is give an injured star his playing time back. Juan Soto
+took 359 PA and is scored as having played less, because he did. What #288 fixes
+is that the old residual charged him TWICE -- once for the volume, and again by
+netting that volume against his peripherals, so his 96th-percentile skill line was
+partly cancelled by his own missed time. He is now charged once. The honest size
+of that fix is small: Soto moves 20 -> 23 and Judge 93 -> 81 against the pre-#288
+model. An earlier cut of this branch reported Soto 20 -> 9, which was an artifact
+of the censored grid holding `pt` at an artificially low weight.
+
+Playing-time MEMORY was tested and is not here. Regressing next-season playing
+time on current plus prior season gives the prior a coefficient of +0.03 (hitters)
+/ +0.08 (pitchers) -- about 3-9% of the current season's -- and entering it as its
+own family peaks at weight 0.1 for +0.0011 holdout, deep inside the noise band.
+A predicted-next-year-PT family built from both correlates with current PT alone
+at 0.999. Last season's playing time tells you almost nothing you do not already
+know from this one. Do not reintroduce it without new evidence; #288 burned three
+commits on the assumption that it mattered.
 
 Why there is no `luck` family
 -----------------------------
@@ -73,28 +99,12 @@ it predicts next-year value at ~0.05 (hitters) and ~0.00 (pitchers) -- pure nois
 part of a good rate that will regress, so an everyday player who is merely
 running hot is not priced like one who earned it (Rafaela, Otto Lopez; #277).
 
-    The shipped hitter weight DELIBERATELY OVERRIDES the grid. Left free, the
-    fit zeroes this family once `durability` absorbs the volume signal -- and
-    the 2026 board then promotes the two luckiest bats on it (Abrams bb=93 to
-    rank 5, Otto bb=97 to rank 26), undoing exactly what #277 shipped to do.
-    Pinning it to -0.2 costs 0.0092 holdout rho against a 0.0126 noise band --
-    less than the panel can resolve -- and restores the demotion (Abrams 10,
-    Otto 39, Rafaela 78). #277 set the precedent for this tiebreak by shipping C
-    over a higher-scoring baseline on the same watchlist grounds. `--backtest`
-    prints the unpinned fit, so the override stays visible rather than hiding
-    in this constant.
-
-    A zero weight would also silently disable this family's `strict` all-NaN
-    guard -- `composite` skips zero-weight families BEFORE the fail-loud check,
-    so a broken xba feed would let `--backtest` decide the model on a degraded
-    blend instead of raising. That is a second, independent reason not to ship
-    the grid's zero here.
-
-    The pitcher pool needs no such override: pinning the same -0.2 there
-    IMPROVES the holdout outright (0.4932 free -> 0.5018 pinned), so the grid's
-    zero was the panel failing to resolve a real effect rather than evidence
-    against one. The negative weight therefore still replicates across both
-    pools as #277 found -- hitters by argument, pitchers on the number.
+    The -0.2 weight is a deliberate override in the hitter pool: left free the
+    grid zeroes it, and the board then promotes the two luckiest bats on it,
+    undoing what #277 shipped for. `--backtest` prints the unpinned fit so the
+    override stays visible instead of hiding in this constant. The pitcher pool
+    needs no argument -- pinning the same -0.2 there improves its holdout
+    outright, so the negative weight replicates across both pools as #277 found.
 
 **future** -- percentile of projected SGP from the out-year ZiPS files, blended
 `FUTURE_BLEND` in favour of the nearer year.
@@ -110,24 +120,23 @@ latest. It grid-searches each candidate family set and prints their holdout rho
 with a fit-season noise floor -- read it there rather than from a cached copy here,
 which drifts silently and already did once on this branch.
 
-The shape those numbers support: skill leads, playing time is close behind, speed
-is roughly half of skill, batted_ball is a small claw-back, and future (discounted
+The shape those numbers support: skill and playing time lead (see `pt` above on
+why its weight is numerically larger without being the bigger term), speed is
+roughly half of skill, batted_ball is a small claw-back, and future (discounted
 for staleness, below) and age are small terms close in size. Read them as that
 shape and not as tuned constants -- the ranked table `--backtest` prints separates
 its top candidates by less than it separates the two fit seasons, so a third
 decimal here would be noise.
 
-**This family set TIED the residual parameterization on the holdout; it did not
-beat it, and that was accepted knowingly.** Candidates span 0.017 (hitters) and
-0.016 (pitchers) against noise bands of 0.015-0.026 and 0.105-0.143, so the panel
-cannot resolve them -- but every candidate clears the skill-only null floor
-comfortably. A tie is the CORRECT outcome by construction: `pt` is precisely what
-the old residual was already proxying, so this re-expresses the same information
-under honest names rather than adding any. It ships on interpretability and on
-having the lowest fit-season noise of any candidate in both pools, not on rho.
-Any future predictive gain has to come from a durability estimator that beats raw
-`pt` -- see #288's open questions. Do not re-litigate this from the rho column
-alone; `--backtest` reproduces the whole table including the residual candidates.
+**This family set does NOT beat the residual it replaces.** Shipped holdout is
+0.6935 (hitters) and 0.5006 (pitchers) against the pre-#288 model's 0.7002 and
+0.5094 -- inside the fit-season noise band in both pools, but consistently a
+little below, not a tie in its favour. Every candidate clears the skill-only null
+floor (0.5184 / 0.2798) comfortably. It ships on interpretability: no term whose
+definition is "whatever is left over", and every weight answering a question
+statable in English. Read the rho column as "cannot be separated", and do not
+upgrade that into a win -- `--backtest` reproduces the whole table, residual
+candidates included.
 
 **The future weight is discounted for staleness, deliberately.** A FRESH
 next-season projection (one that has seen season T) is the single strongest
@@ -150,8 +159,8 @@ from fantasy_baseball.keepers.skills import HITTER_SKILLS, PITCHER_SKILLS
 # Weight per family, aligned to `FAMILIES[kind]`. Not normalized; `composite`
 # divides by the sum.
 FITTED_WEIGHTS: dict[str, tuple[float, ...]] = {
-    "hitter": (1.0, 0.4, 1.0, -0.2, 0.4, 0.45),
-    "pitcher": (1.0, 0.6, -0.2, 0.4, 0.15),
+    "hitter": (1.0, 0.4, 2.2, -0.2, 0.4, 0.45),
+    "pitcher": (1.0, 1.6, -0.2, 0.4, 0.15),
 }
 # The shipped family set per pool, aligned to FITTED_WEIGHTS. A dict, not one global
 # tuple, because the pools carry separate weights and fits and a bake-off split

@@ -1,21 +1,28 @@
-"""Rank keeper candidates on skill, luck, batted-ball, future and age, then price
-them in VAR.
+"""Rank keeper candidates on skill, speed, playing time, batted-ball, future and
+age, then price them in VAR.
 
 Reads what `fetch_keeper_skills.py` cached, computes each player's actual roto
-value (SGP) for the season, blends the five families in percentile space using
-the weights fitted in `keepers/composite.py`, then converts that ordinal
-composite into projected value with an error bar via `keepers/projection.py`.
+value (SGP) for the season, blends the families in percentile space using the
+weights fitted in `keepers/composite.py`, then converts that ordinal composite
+into projected value with an error bar via `keepers/projection.py`. Read that
+module's docstring for WHY the families are shaped this way; this one only says
+what the columns are.
 
 Writes `data/cache/keeper_skills/keeper_rankings_{kind}_{year}.csv`:
 
-    value_pct        percentile of actual SGP this season (= skill + luck)
+    value_pct        percentile of actual SGP this season
     skill_pct        SKILL   -- percentile of the peripherals
-    luck_pct         LUCK    -- value_pct - skill_pct, the unsupported part of the line
-    batted_ball_pct  BATTED_BALL -- percentile of avg-xba / fip-era; carries a
-                     NEGATIVE weight, clawing the batted-ball luck back out of LUCK
+    speed_pct        SPEED   -- SB value per PA; HITTERS ONLY, absent for pitchers
+    pt_pct           PT      -- playing time, percentiled against every player who
+                     appeared (not just those clearing MIN_PT); see composite.py
+    luck_pct         diagnostic ONLY since #288 -- value_pct - skill_pct. Still
+                     computed because `--backtest` bakes the residual
+                     parameterizations off and `--study` decomposes it, but it
+                     ships in NEITHER pool's blend.
+    batted_ball_pct  BATTED_BALL -- percentile of avg-xba / fip-era, NEGATIVE weight
     future_pct       FUTURE  -- percentile of blended out-year ZiPS projected SGP
     age_pct          AGE     -- percentile of age, younger better
-    composite        the fitted five-family blend, ordinal within pool
+    composite        the fitted blend, ordinal within pool
     proj_sgp    projected 2027 SGP implied by that composite
     sd          predictive SD of proj_sgp for ONE player, not a group mean
     proj_var    proj_sgp plus a mean-centred positional scarcity adjustment
@@ -63,10 +70,11 @@ same reason the other numbers left this file: nothing here would regenerate them
 Read a mixed board as expected value only, and read the pitcher list on its own --
 its top is compressed to a fraction of one sd, so that ORDER means nothing.
 
-`luck` carries a POSITIVE weight and `batted_ball` a NEGATIVE one: `luck` rewards
-outperforming the peripherals (mostly a playing-time/role signal) while
-`batted_ball` claws back the part of that gap which is pure batted-ball luck and
-does not repeat. `future` is discounted for staleness. All three are
+`pt` carries the LARGEST weight without being the largest term -- it is
+percentiled against every player who appeared, so within the qualified pool it is
+narrower than the other families and the fit buys that spread back through the
+weight. `batted_ball` carries a NEGATIVE weight, clawing back rate overperformance
+that will not repeat. `future` is discounted for staleness. All three are
 counterintuitive and argued in `keepers/composite.py`; `--study` reproduces the
 evidence and `--backtest` the weights.
 
@@ -169,7 +177,8 @@ SHOWN = [
     "pt",
     "pos",
     "skill_pct",
-    "luck_pct",
+    "speed_pct",
+    "pt_pct",
     "batted_ball_pct",
     "future_pct",
     "composite",
@@ -335,7 +344,17 @@ def _qualified_families(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
     qualified["value_pct"] = percentile(qualified["sgp"])
     qualified["skill_pct"] = skill_percentile(qualified, kind)
     qualified["luck_pct"] = luck(qualified["value_pct"], qualified["skill_pct"])
-    qualified["pt_pct"] = percentile(qualified["pt"])
+    # Ranked against EVERY player who appeared, not just the ones who cleared
+    # MIN_PT. Same playing time, very different number: Aaron Judge's 261 PA is
+    # 0.65 against the league and 0.08 against the 233 players already on the
+    # board. "How much baseball did he play" is a league-wide question, and
+    # ranking an injury-shortened star only against other regulars is what buried
+    # him at rank 92 -- the permanent-demerit behaviour #288 exists to remove.
+    # The cost, accepted deliberately: the qualified pool compresses into roughly
+    # [0.53, 0.99], so this column's blend weight is LARGER than the others' and
+    # is not comparable to them. That is a scale fact, not a claim that volume
+    # outranks talent.
+    qualified["pt_pct"] = percentile(frame["pt"]).reindex(qualified.index)
     # Keyed on the POOL, not on whether the column happens to be there: `speed` is a
     # shipped hitter family, so a hitter frame that cannot supply it has to fail loud
     # here rather than quietly omit `speed_pct` and let `composite` drop the family.
