@@ -118,7 +118,6 @@ from fantasy_baseball.keepers.composite import (
     batted_ball,
     check_known_families,
     composite,
-    durability,
     future_percentile,
     luck,
     percentile,
@@ -319,55 +318,7 @@ def _observed(year: int, kind: str, denoms) -> pd.DataFrame:
     return value.join(skills, how="inner", rsuffix="_sk")
 
 
-def _prior_pt_percentile(year: int, kind: str) -> pd.Series:
-    """PT percentile in `year - 1`, the memory half of the `durability` family.
-
-    Percentiled over EVERY player in that season, deliberately NOT over the
-    `MIN_PT`-qualified pool: a veteran who took 100 PA while hurt has to score
-    genuinely low here. Filtering him out would send him to `durability`'s
-    missing-prior fallback and hand him a clean slate, which is the exact failure
-    the family exists to prevent.
-
-    An uncached prior season returns empty, which degrades the whole pool to
-    current-season-only rather than raising -- the same fallback one player with no
-    prior season gets. `ALL_TRANSITION_YEARS` needs raw_2021 onward for this to
-    bind; without it the family is silently just `pt`.
-
-    Reads playing time straight off the raw pull rather than going through
-    `season_value`: only PT is wanted, and `season_value` would run a per-row SGP
-    apply over a whole extra season per transition to produce columns nothing here
-    reads. That also keeps this free of `denoms`, so it cannot fail on a partial
-    denominator dict.
-    """
-    table = "batting" if kind == "hitter" else "pitching"
-    # Guard the FILE, not the directory: a half-populated `raw_YYYY/` (batting
-    # fetched, pitching not) otherwise slipped past a directory check and raised
-    # FileNotFoundError inside `_raw` instead of degrading like a missing one.
-    if not (SKILLS_DIR / f"raw_{year - 1}" / f"bref_{table}_{year - 1}.v2.csv").exists():
-        print(
-            f"  WARNING: no cached raw_{year - 1} {table} pull, so the {kind} `durability`"
-            f" family for {year} degrades to current-season playing time only -- its"
-            f" fitted weight assumes the memory term. Fetch it to restore the model."
-        )
-        return pd.Series(dtype=float)
-    frame = index_by_mlbam(_raw(year - 1, table), "mlbID")
-    pt = (
-        pd.to_numeric(frame["PA"], errors="coerce")
-        if kind == "hitter"
-        else frame["IP"].map(innings_to_float)
-    )
-    # Blank sub-floor priors rather than scoring them as fragility. A prior season
-    # under the pool's own qualifying floor carries no durability information -- the
-    # player was either not up yet (Stewart, 63 PA) or missed time the current season
-    # may already have disproved (Alvarez, 199 PA in 2025, healthy in 2026).
-    # `composite.durability` sends these to the pool-mean prior. Percentiled BEFORE
-    # masking so the ranking is against everyone who played, not just qualifiers.
-    return percentile(pt).where(pt >= MIN_PT[kind])
-
-
-def _qualified_families(
-    frame: pd.DataFrame, kind: str, prior_pt_pct: pd.Series | None = None
-) -> pd.DataFrame:
+def _qualified_families(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
     """Apply the playing-time floor and build the same-season families.
 
     Computes ALL candidate families (`skill`, `luck`, `pt`, `batted_ball`, `age`);
@@ -380,12 +331,6 @@ def _qualified_families(
     # a season) flows through as an empty frame, not a raise: `--study` builds intentional
     # empty sub-pools it skips, and the live board renders empty. `composite` blends an
     # empty pool to an empty result; `_require_mandatory_families` no-ops on it.
-    # Computed BEFORE the MIN_PT filter and kept on the same all-players base as
-    # `_prior_pt_percentile`, so `durability` blends two commensurable percentiles.
-    # `pt_pct` below is deliberately different: it ranks within the qualified pool,
-    # which is what compresses an injury-shortened star to mid-pack and is the
-    # reason `durability` exists as a separate family rather than a tweak to it.
-    all_pt_pct = percentile(frame["pt"])
     qualified = frame[frame["pt"] >= MIN_PT[kind]].copy()
     qualified["value_pct"] = percentile(qualified["sgp"])
     qualified["skill_pct"] = skill_percentile(qualified, kind)
@@ -397,16 +342,6 @@ def _qualified_families(
     # Pitchers have no analogue and `FAMILIES["pitcher"]` omits it.
     if kind == "hitter":
         qualified["speed_pct"] = percentile(speed(qualified))
-    prior = pd.Series(dtype=float) if prior_pt_pct is None else prior_pt_pct
-    # NOT re-percentiled within the qualified pool, though it is tempting: the
-    # pre-MIN_PT base IS the mechanism. Ranking an injury-shortened regular against
-    # everyone who played says "359 PA is still a lot of baseball"; ranking him
-    # against qualifiers only says he is a part-timer, which is the very framing
-    # #288 exists to remove. Re-ranking here was measured and cost the motivating
-    # case most of its fix (Soto 9 -> 18). The price is that this column is
-    # COMPRESSED relative to the other families (sd ~0.11 vs ~0.23-0.29), so its
-    # fitted weight is NOT comparable to theirs -- see the composite docstring.
-    qualified["durability_pct"] = durability(all_pt_pct.reindex(qualified.index), prior)
     # `batted_ball` returns avg-xba / fip-era, both signed higher = luckier already.
     qualified["batted_ball_pct"] = percentile(batted_ball(qualified, kind))
     qualified["age_pct"] = percentile(qualified["age"], higher_is_better=False)
@@ -544,9 +479,7 @@ def projected(
     boards; pass BOTH or NEITHER (`composite` rejects one without the other), and the
     live path leaves them None.
     """
-    qualified = _qualified_families(
-        _observed(year, kind, denoms), kind, _prior_pt_percentile(year, kind)
-    )
+    qualified = _qualified_families(_observed(year, kind, denoms), kind)
 
     # Rank the projections WITHIN the qualified pool, not within all ~1900 ZiPS
     # rows. Most of that file is minor leaguers, so ranking there would put every
@@ -634,9 +567,7 @@ def build(
 def _transition(year: int, kind: str, denoms) -> pd.DataFrame:
     """Features observed in `year` against the SGP percentile realized in year+1."""
 
-    feat = _qualified_families(
-        _observed(year, kind, denoms), kind, _prior_pt_percentile(year, kind)
-    )
+    feat = _qualified_families(_observed(year, kind, denoms), kind)
     nxt = _observed(year + 1, kind, denoms)
     # The out-year analogue: a projection FOR `year` was built before `year`, so it
     # sits the same two seasons forward from its data as ZiPS 2027 does from 2026.
@@ -658,13 +589,9 @@ def _transition(year: int, kind: str, denoms) -> pd.DataFrame:
 # negative weight is observable; the shipped 0.4 floor would hide it.
 _GRID_MID = (-0.4, -0.2, 0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2)
 # Runs well past 1.0 because 1.2 was a CEILING, not an optimum: both the hitter `pt`
-# and `durability` fits pinned to the old top point, so the bake-off was
-# comparing candidates at unequal censoring. Any weight landing on the last
-# grid point should be read as 'at least this', and the grid widened again.
-# `durability` legitimately wants a LARGE weight: its column is compressed
-# (sd ~0.12 vs ~0.23 for the others) because it lives on the pre-MIN_PT base,
-# so the fit buys the spread back through the weight. That is a scale fact,
-# not a claim that availability outranks talent -- see the composite docstring.
+# fits pinned to the old top point of 1.2, so the bake-off was comparing
+# candidates at unequal censoring. Any weight landing on the last grid point
+# should be read as "at least this", and the grid widened again.
 _GRID_PT = (0.0, 0.2, 0.4, 0.6, 0.8, 1.0, 1.2, 1.4, 1.6, 1.8, 2.0, 2.2, 2.4, 2.6)
 _GRID_FUTURE = (0.0, 0.2, 0.4, 0.6, 0.8)
 _GRID_AGE = (0.0, 0.15, 0.3, 0.45)
@@ -675,7 +602,6 @@ _FAMILY_GRID: dict[str, tuple[float, ...]] = {
     # to shrink to nothing, or to charge for, has to be observable rather than
     # floored out of sight.
     "speed": _GRID_MID,
-    "durability": _GRID_PT,
     "luck": _GRID_MID,
     "batted_ball": _GRID_MID,
     "future": _GRID_FUTURE,
@@ -694,18 +620,7 @@ CANDIDATES: dict[str, tuple[str, ...]] = {
     # in #277 -- kept side by side on purpose so the tie stays visible rather than
     # being re-discovered as a regression. See the composite docstring for why a
     # tie is the correct outcome and why D ships anyway.
-    "D: direct": ("skill", "speed", "pt", "batted_ball", "future", "age"),
-    # E swaps raw `pt` for `durability` -- same set, but the volume term gains a
-    # season of memory. This is the only candidate carrying information the #277
-    # bake-off never had, and the only place a predictive GAIN could come from.
-    "E: durability (shipped)": (
-        "skill",
-        "speed",
-        "durability",
-        "batted_ball",
-        "future",
-        "age",
-    ),
+    "D: direct (shipped)": ("skill", "speed", "pt", "batted_ball", "future", "age"),
 }
 # `speed` has no pitcher analogue; the pool's D collapses to B rather than erroring
 # on a family the frame cannot supply.
@@ -1091,10 +1006,9 @@ def _truncation_shift(kind: str, denoms, year: int, pool_size: int) -> pd.DataFr
     """
     observed = _observed(year, kind, denoms)
     out_year = zips_out_year_sgp(year, kind, denoms)
-    prior = _prior_pt_percentile(year, kind)
 
     def priced(frame: pd.DataFrame) -> pd.Series:
-        feat = _qualified_families(frame, kind, prior)
+        feat = _qualified_families(frame, kind)
         feat["future_pct"] = percentile(out_year.reindex(feat.index))
         feat = feat.dropna(subset=["value_pct", "skill_pct", "age_pct"])
         return expected_sgp(composite_pct(feat, kind, strict=True), kind)

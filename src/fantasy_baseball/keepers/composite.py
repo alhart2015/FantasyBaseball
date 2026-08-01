@@ -150,7 +150,7 @@ from fantasy_baseball.keepers.skills import HITTER_SKILLS, PITCHER_SKILLS
 # Weight per family, aligned to `FAMILIES[kind]`. Not normalized; `composite`
 # divides by the sum.
 FITTED_WEIGHTS: dict[str, tuple[float, ...]] = {
-    "hitter": (1.0, 0.4, 1.0, -0.2, 0.2, 0.45),
+    "hitter": (1.0, 0.4, 1.0, -0.2, 0.4, 0.45),
     "pitcher": (1.0, 0.6, -0.2, 0.4, 0.15),
 }
 # The shipped family set per pool, aligned to FITTED_WEIGHTS. A dict, not one global
@@ -158,13 +158,13 @@ FITTED_WEIGHTS: dict[str, tuple[float, ...]] = {
 # verdict would be a legitimate outcome. `scripts/keeper_rankings.py --backtest` is
 # where the set and weights are chosen; read it there.
 FAMILIES: dict[str, tuple[str, ...]] = {
-    "hitter": ("skill", "speed", "durability", "batted_ball", "future", "age"),
-    "pitcher": ("skill", "durability", "batted_ball", "future", "age"),
+    "hitter": ("skill", "speed", "pt", "batted_ball", "future", "age"),
+    "pitcher": ("skill", "pt", "batted_ball", "future", "age"),
 }
 # Every family the model knows how to blend. `family_order` selects a subset per
 # pool; a name outside this set is a typo, not a silent no-op.
 KNOWN_FAMILIES: frozenset[str] = frozenset(
-    {"skill", "speed", "luck", "pt", "durability", "batted_ball", "future", "age"}
+    {"skill", "speed", "luck", "pt", "batted_ball", "future", "age"}
 )
 
 
@@ -233,91 +233,6 @@ def luck(value_pct: pd.Series, skill_pct: pd.Series) -> pd.Series:
     removed; do not reintroduce it to `FAMILIES` without reading that first.
     """
     return value_pct - skill_pct
-
-
-# How much of `durability` is the current season. Not tuned here and not grid-
-# searched: within-family shape is fixed by argument, between-family weight is what
-# `--backtest` fits (same rule as `skill_percentile`'s equal weighting). 0.75 is
-# ZiPS's OWN revealed recency preference -- regressing its out-year PA on the PA
-# history it had seen recovers lag weights of 0.340 / 0.118, a 0.74 / 0.26 split.
-DURABILITY_RECENCY = 0.75
-
-
-def durability(current_pct: pd.Series, prior_pct: pd.Series) -> pd.Series:
-    """Playing time WITH memory: this season blended with the one before it.
-
-    Raw same-season PT cannot tell "durable for years, hurt this season" from
-    "always fragile" -- it has no memory, and `MIN_PT` compresses the pool so an
-    injury-shortened star lands mid-pack rather than at the bottom. That is the
-    Juan Soto case (#288) and it is why this family exists rather than plain `pt`.
-
-    Both inputs are WITHIN-SEASON percentiles, which is what makes seasons of
-    different length comparable for free: an in-progress season ranks its players
-    against each other exactly as a completed one does, so nothing needs prorating
-    and no COVID-2020 rescale is required if that season is ever pulled in.
-
-    An ABSENT prior falls back to the pool's mean prior, NOT to the player's own
-    current season. Falling back to `current` was a monotonicity violation: it made
-    "no MLB time last year" score neutral while "a little MLB time last year" scored
-    badly, so a September call-up was charged for having debuted. Sal Stewart (463
-    PA in 2026, 63 in 2025) scored 0.784 against Kevin McGonigle's 0.975 on the same
-    2026 workload. No reading of baseball makes 63 PA worse evidence than 0.
-
-    The caller is expected to blank sub-floor priors to NaN so they land in that
-    same fallback -- see `keeper_rankings._prior_pt_percentile`. A prior season
-    below the pool's qualifying floor is not durability evidence: the player was
-    either not up yet, or missed time the current season may already have
-    disproved. Yordan Alvarez (199 PA in 2025, 474 and healthy in 2026) is the
-    case that matters -- charging him for a recovered injury is precisely the
-    permanent-demerit behaviour #288 exists to remove, just re-imposed through the
-    memory half instead of the residual.
-
-    The remaining hole: a veteran who missed ALL of the prior season is absent from
-    that pull and gets the same benefit of the doubt as a rookie. That errs toward
-    not penalizing, which is the safer direction for a keeper board. Closing it
-    needs a tenure signal from T-2. See #288.
-
-    Degenerate case: if NO player in the pool has a usable prior (an uncached prior
-    season), the mean is NaN and the whole pool falls back to its current season --
-    the family degrades to plain playing time rather than raising.
-    """
-    prior = prior_pct.reindex(current_pct.index)
-    pool_mean = prior.mean()
-    prior = prior.fillna(current_pct if pd.isna(pool_mean) else pool_mean)
-    blended = DURABILITY_RECENCY * current_pct + (1.0 - DURABILITY_RECENCY) * prior
-    return _match_spread(blended)
-
-
-# Spread of a uniform 0-1 percentile, which is what every other family is.
-_PERCENTILE_SD = 1.0 / 12.0**0.5
-
-
-def _match_spread(series: pd.Series) -> pd.Series:
-    """Linearly rescale to a percentile-like spread, preserving relative distances.
-
-    `durability` lives on the whole-league playing-time base while the pool it
-    scores has already cleared `MIN_PT`, so among qualifiers it spans only about
-    [0.53, 0.99] -- sd ~0.12 against ~0.23-0.29 for every other family. That
-    compression is not cosmetic: `composite` blends VALUES, so the fit has to buy
-    the missing spread back through the weight. It did, by pinning to whatever the
-    grid's top point was (1.2, then 1.8, then 2.6 as the grid was widened) while
-    holdout rho peaked and then FELL -- the fit-rho criterion was chasing scale
-    rather than signal, and candidates were being compared at unequal censoring.
-
-    Rescaling is LINEAR and therefore model-identical: scaling a column by k and
-    its weight by 1/k is the same blend. Re-ranking would not be -- that was tried
-    and cost the motivating case most of its fix (Soto 9 -> 18), because ranking an
-    injury-shortened regular against qualifiers only is exactly the framing #288
-    removes. This keeps the whole-league base and its relative distances, and only
-    makes the fitted weight mean the same thing the other families' weights mean.
-
-    A degenerate pool (0 or 1 row, or every value identical) has no spread to match
-    and passes through unchanged rather than dividing by zero.
-    """
-    sd = series.std()
-    if not sd or pd.isna(sd):
-        return series
-    return series.mean() + (series - series.mean()) * (_PERCENTILE_SD / sd)
 
 
 def speed(frame: pd.DataFrame) -> pd.Series:

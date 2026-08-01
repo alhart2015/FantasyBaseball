@@ -4,7 +4,6 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.keepers.composite import (
-    DURABILITY_RECENCY,
     FAMILIES,
     FITTED_WEIGHTS,
     FUTURE_BLEND,
@@ -12,7 +11,6 @@ from fantasy_baseball.keepers.composite import (
     SKILL_COLUMNS,
     batted_ball,
     composite,
-    durability,
     future_percentile,
     luck,
     percentile,
@@ -333,50 +331,3 @@ def test_speed_returns_nan_for_zero_playing_time_rather_than_inf():
 def test_speed_names_the_column_it_is_missing():
     with pytest.raises(KeyError, match="sb_sgp"):
         speed(pd.DataFrame({"pt": [500.0]}))
-
-
-def test_durability_blends_the_prior_season_in():
-    """The whole point of the family over raw `pt`: memory. An injury-shortened season
-    for a player with a full one behind him scores above his current playing time."""
-    current = pd.Series([0.2], index=["soto"])
-    prior = pd.Series([1.0], index=["soto"])
-    out = durability(current, prior)
-    assert out.iloc[0] > current.iloc[0]
-    assert out.iloc[0] == pytest.approx(DURABILITY_RECENCY * 0.2 + (1 - DURABILITY_RECENCY) * 1.0)
-
-
-def test_durability_falls_back_to_the_pool_mean_prior_not_the_players_own_season():
-    """#288 originally fell back to the player's OWN current season, which made "no MLB
-    time last year" score neutral while "a little MLB time last year" scored badly -- a
-    September call-up was charged for having debuted (Stewart 0.784 vs McGonigle 0.975
-    on the same 2026 workload). A missing prior must read as "no evidence" -- the pool's
-    mean prior -- so it lands BETWEEN a weak prior and a strong one, never at either end.
-
-    Asserted by ordering, not arithmetic: `durability` also rescales the blend to a
-    percentile-like spread, so exact values are not the contract.
-    """
-    current = pd.Series([0.5, 0.5, 0.5], index=["weak", "absent", "strong"])
-    prior = pd.Series([0.2, float("nan"), 0.9], index=["weak", "absent", "strong"])
-    out = durability(current, prior)
-    assert out.loc["weak"] < out.loc["absent"] < out.loc["strong"]
-
-
-def test_durability_never_scores_a_small_prior_below_no_prior_at_all():
-    """The monotonicity the fallback exists to protect. Two players with identical
-    current seasons: one has a weak prior, one has none. The one with SOME evidence
-    must not be ranked below the one with NONE."""
-    current = pd.Series([0.9, 0.9], index=["debuted", "never_up"])
-    prior = pd.Series([float("nan"), float("nan")], index=["debuted", "never_up"])
-    # A sub-floor prior is blanked upstream, so both land in the same fallback.
-    out = durability(current, prior)
-    assert out.loc["debuted"] == pytest.approx(out.loc["never_up"])
-
-
-def test_durability_ignores_prior_rows_for_players_not_in_the_pool():
-    """The prior season is a whole-league percentile and the current pool is filtered;
-    a stray index would otherwise reindex NaNs across everyone."""
-    current = pd.Series([0.5], index=["a"])
-    prior = pd.Series([0.1, 0.9], index=["a", "retired"])
-    out = durability(current, prior)
-    assert out.index.tolist() == ["a"]
-    assert out.iloc[0] == pytest.approx(DURABILITY_RECENCY * 0.5 + (1 - DURABILITY_RECENCY) * 0.1)
