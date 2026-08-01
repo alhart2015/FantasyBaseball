@@ -139,6 +139,55 @@ def fetch_rosters(my_team: str) -> dict[tuple[str, str], str]:
     return owners
 
 
+def _by_team(board: pd.DataFrame, args: argparse.Namespace) -> int:
+    """Each team's best keeper candidates, weakest team first.
+
+    Sorted on the top-`per_team` total as asked, but the KEEP total (the top
+    `keep_slots`, which is what a team may actually retain) is printed too -- they can
+    disagree, and only the second one is a decision.
+
+    Unrostered players are excluded: a free agent is not anybody's keeper candidate,
+    and leaving them in would invent a team called NaN.
+    """
+    owned = board[board["team"].notna()]
+    rows = []
+    for team, group in owned.groupby("team"):
+        best = group.nlargest(args.per_team, "var_total")
+        rows.append(
+            {
+                "team": str(team),
+                "keep": best["var_total"].head(args.keep_slots).sum(),
+                "shown": best["var_total"].sum(),
+                "players": best,
+            }
+        )
+    rows.sort(key=lambda r: r["shown"])
+
+    print("")
+    print("=" * 100)
+    print(
+        f"KEEPER CANDIDATES BY TEAM -- weakest first "
+        f"(KEEP = best {args.keep_slots}, SHOWN = best {args.per_team})"
+    )
+    print(f"{'=' * 100}")
+    for row in rows:
+        print("")
+        print(
+            f"{row['team']:<26} KEEP {row['keep']:>6.2f}   top-{args.per_team} {row['shown']:>6.2f}"
+        )
+        for slot, (_, r) in enumerate(row["players"].iterrows(), start=1):
+            tag = "H" if r["kind"] == "hitter" else "P"
+            mark = "*" if slot <= args.keep_slots else " "
+            print(
+                f"   {mark}{slot}. {str(r['name'])[:24]:<26} {r['var_total']:>6.2f} {tag}"
+                f"   27 VAR {r['var_2027']:>5.2f}   {r['vol_2027']:>5.0f} {'PA' if tag == 'H' else 'IP'}"
+            )
+    print("")
+    print(f"  * = inside the {args.keep_slots} keeper slots.")
+    print("  Values are expectations including missed time; see the notes on the main board.")
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--min-pa", type=float, default=300)
@@ -155,6 +204,11 @@ def main() -> int:
         help="rescale the roto line to a common 600 PA (talent, availability removed)",
     )
     parser.add_argument("--kind", choices=("hitter", "pitcher"), help="restrict to one pool")
+    parser.add_argument(
+        "--by-team", action="store_true", help="each team's best N, weakest team first"
+    )
+    parser.add_argument("--per-team", type=int, default=5, help="rows per team for --by-team")
+    parser.add_argument("--keep-slots", type=int, default=3, help="keepers allowed per team")
     parser.add_argument("--my-team", default="Hart of the Order", help="label for cache:roster")
     args = parser.parse_args()
 
@@ -214,6 +268,9 @@ def main() -> int:
     board = pd.concat(rows)
     board["var_total"] = board["var_2027"] + board["var_2028"]
     board = board.sort_values("var_total", ascending=False)
+
+    if args.by_team:
+        return _by_team(board, args)
 
     view = board
     if args.kind:
