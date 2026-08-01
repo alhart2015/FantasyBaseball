@@ -133,9 +133,8 @@ def test_build_trade_scenario_keeps_sizes_and_moves_player():
 
 def test_this_year_impact_star_to_rival_does_not_help_you():
     # package-qualified sibling import (tests/test_analysis has __init__.py)
-    from tests.test_analysis.test_injury_stress import _synth_inputs
-
     from fantasy_baseball.analysis.trade_pick import find_sent_player, this_year_impact
+    from tests.test_analysis.test_injury_stress import _synth_inputs
 
     inputs = _synth_inputs()
     sent = find_sent_player(inputs.team_rosters[inputs.user_team_name], "Star")
@@ -148,6 +147,59 @@ def test_this_year_impact_star_to_rival_does_not_help_you():
     # all 10 categories reported
     assert len(impact.categories) == 10
     assert {c.category for c in impact.categories} == {
-        "R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"
+        "R",
+        "HR",
+        "RBI",
+        "SB",
+        "AVG",
+        "W",
+        "K",
+        "SV",
+        "ERA",
+        "WHIP",
     }
     assert impact.n_iter == 300 and impact.seed == 42
+
+
+def test_resolve_partner_normalizes_and_rejects_self_and_unknown():
+    from fantasy_baseball.analysis.trade_pick import resolve_partner
+
+    rosters = {"Hart of the Order": [], "SkeleThor": []}
+    assert resolve_partner(rosters, "skelethor", "Hart of the Order") == "SkeleThor"
+    with pytest.raises(ValueError, match="yourself"):
+        resolve_partner(rosters, "Hart of the Order", "Hart of the Order")
+    with pytest.raises(ValueError, match="not a team"):
+        resolve_partner(rosters, "Nonexistent", "Hart of the Order")
+
+
+def test_render_report_is_ascii_and_sign_aware():
+    from fantasy_baseball.analysis.trade_pick import (
+        CategoryDelta,
+        NextYearValue,
+        ThisYearImpact,
+        TradePickResult,
+        render_report,
+    )
+
+    cats = [
+        CategoryDelta(c, 30.0, 28.0, 80.0, 78.0)
+        for c in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP")
+    ]
+    loss = TradePickResult(
+        sent_name="Julio Rodriguez",
+        partner="SkeleThor",
+        this_year=ThisYearImpact(62.1, 57.9, 91.0, 88.2, cats, 2000, 42),
+        next_year=NextYearValue(5, 3, 2, "round", 4.2, 5.1, 18.4, 11, 20),
+    )
+    out = render_report(loss)
+    assert out.isascii()
+    assert "Julio Rodriguez" in out and "SkeleThor" in out
+    assert "give up" in out  # loss framing (base_win > new_win)
+
+    gain = TradePickResult(
+        sent_name="Spare Part",
+        partner="SkeleThor",
+        this_year=ThisYearImpact(50.0, 50.5, 80.0, 80.0, cats, 2000, 42),
+        next_year=NextYearValue(5, 3, 2, "round", 4.2, 5.1, 18.4, 11, 20),
+    )
+    assert "roughly neutral" in render_report(gain)  # non-negative delta framing

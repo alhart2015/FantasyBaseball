@@ -10,10 +10,16 @@ from __future__ import annotations
 
 import dataclasses
 from dataclasses import dataclass
+from pathlib import Path
 
 from fantasy_baseball.analysis.draft_value import ParCurve, projected_par_curve
-from fantasy_baseball.analysis.injury_stress import McInputs, _replacement_ros
-from fantasy_baseball.config import LeagueConfig
+from fantasy_baseball.analysis.injury_stress import (
+    McInputs,
+    _replacement_ros,
+    load_mc_inputs_from_upstash,
+)
+from fantasy_baseball.config import LeagueConfig, load_config
+from fantasy_baseball.mc_roster import build_effective_rosters
 from fantasy_baseball.models.player import (
     HitterStats,
     PitcherStats,
@@ -21,11 +27,13 @@ from fantasy_baseball.models.player import (
     PlayerType,
     RankInfo,
 )
-from fantasy_baseball.mc_roster import build_effective_rosters
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.simulation import _replacement_line, run_ros_monte_carlo
 from fantasy_baseball.utils.constants import ALL_CATEGORIES
 from fantasy_baseball.utils.name_utils import normalize_name
+
+_REPO_ROOT = Path(__file__).resolve().parents[3]
+_CONFIG_PATH = _REPO_ROOT / "config" / "league.yaml"
 
 
 def keeper_rounds_for(config: LeagueConfig) -> int:
@@ -145,9 +153,7 @@ def next_year_value(
     return pick_value(par, nominal_round, keeper_rounds_for(config), config.num_teams, pick_slot)
 
 
-def find_sent_player(
-    roster: list[Player], name: str, player_type: str | None = None
-) -> Player:
+def find_sent_player(roster: list[Player], name: str, player_type: str | None = None) -> Player:
     """Locate the player being traded away, by normalized (accent-safe) name.
 
     When two roster players normalize to the same name and differ in type (a
@@ -207,19 +213,13 @@ def worst_of_type(roster: list[Player], ptype: PlayerType, denoms) -> Player | N
     to fit the acquired star, keeping the partner's roster size constant. Players
     without a full-season projection are skipped (they cannot be scored).
     """
-    cands = [
-        p for p in roster if p.player_type == ptype and p.full_season_projection is not None
-    ]
+    cands = [p for p in roster if p.player_type == ptype and p.full_season_projection is not None]
     if not cands:
         return None
-    return min(
-        cands, key=lambda p: calculate_player_sgp(p.full_season_projection, denoms=denoms)
-    )
+    return min(cands, key=lambda p: calculate_player_sgp(p.full_season_projection, denoms=denoms))
 
 
-def build_trade_scenario(
-    inputs: McInputs, sent: Player, partner: str
-) -> dict[str, list[Player]]:
+def build_trade_scenario(inputs: McInputs, sent: Player, partner: str) -> dict[str, list[Player]]:
     """Team rosters after the trade: user loses ``sent`` and gains a replacement
     filler (size constant); the partner gains the intact ``sent`` and drops its
     worst-of-type player (size constant). ``inputs.team_rosters`` is not mutated.
@@ -334,3 +334,116 @@ def this_year_impact(
         n_iter=n_iter,
         seed=seed,
     )
+
+
+@dataclass(frozen=True)
+class TradePickResult:
+    sent_name: str
+    partner: str
+    this_year: ThisYearImpact
+    next_year: NextYearValue
+
+
+def resolve_partner(team_rosters: dict[str, list[Player]], to: str, user: str) -> str:
+    """Resolve the trade partner's team name (normalized match). Rejects the
+    user's own team and an unknown name (listing valid teams)."""
+    target = normalize_name(to)
+    if normalize_name(user) == target:
+        raise ValueError("You cannot trade to yourself; pick a different --to team.")
+    for name in team_rosters:
+        if normalize_name(name) == target:
+            return name
+    valid = ", ".join(sorted(t for t in team_rosters if t != user))
+    raise ValueError(f"{to!r} is not a team in this league. Valid partners: {valid}")
+
+
+def compute_trade_pick(
+    send: str,
+    to: str,
+    pick_round: int,
+    *,
+    player_type: str | None = None,
+    pick_slot: str = "round",
+    n_iter: int = 2000,
+    seed: int = 42,
+    config_path: Path | None = None,
+) -> TradePickResult:
+    """Load stored state, compute both halves, and return the combined result."""
+    cfg_path = config_path or _CONFIG_PATH
+    inputs = load_mc_inputs_from_upstash(cfg_path)
+    config = load_config(cfg_path)
+    partner = resolve_partner(inputs.team_rosters, to, inputs.user_team_name)
+    sent = find_sent_player(inputs.team_rosters[inputs.user_team_name], send, player_type)
+    this_year = this_year_impact(inputs, sent, partner, n_iter=n_iter, seed=seed)
+    nxt = next_year_value(config, pick_round, pick_slot)
+    return TradePickResult(sent.name, partner, this_year, nxt)
+
+
+def _kp(x: float) -> str:
+    """Keeper-par render: 'n/a' for NaN, else one-decimal VAR."""
+    return "n/a" if x != x else f"{x:.1f}"
+
+
+def render_report(result: TradePickResult) -> str:
+    ty = result.this_year
+    ny = result.next_year
+    dwin = ty.new_win - ty.base_win
+    dtop3 = ty.new_top3 - ty.base_top3
+    lines: list[str] = []
+    lines.append("=" * 72)
+    lines.append("TRADE-FOR-PICK CALCULATOR")
+    lines.append(f"  Send: {result.sent_name}  ->  {result.partner}")
+    lines.append(
+        f"  For:  2027 Round {ny.nominal_round} pick  "
+        f"(keeper rounds: {ny.keeper_rounds}  ->  drafted round {ny.drafted_round})"
+    )
+    lines.append("=" * 72)
+
+    lines.append("")
+    lines.append(f"1. THIS YEAR WITHOUT {result.sent_name}  (full swing: joins {result.partner})")
+    lines.append("-" * 72)
+    lines.append(f"  Win%   : {ty.base_win:5.1f}%  ->  {ty.new_win:5.1f}%   ({dwin:+.1f})")
+    lines.append(f"  Top-3% : {ty.base_top3:5.1f}%  ->  {ty.new_top3:5.1f}%   ({dtop3:+.1f})")
+    lines.append("")
+    lines.append("  Per-category odds (your team):")
+    lines.append(
+        f"    {'Cat':<5}{'1st base':>9}{'1st new':>9}{'d1st':>7}"
+        f"{'top3 base':>11}{'top3 new':>10}{'dTop3':>8}"
+    )
+    for c in ty.categories:
+        d1 = c.new_first - c.base_first
+        d3 = c.new_top3 - c.base_top3
+        lines.append(
+            f"    {c.category:<5}{c.base_first:>9.1f}{c.new_first:>9.1f}{d1:>+7.1f}"
+            f"{c.base_top3:>11.1f}{c.new_top3:>10.1f}{d3:>+8.1f}"
+        )
+
+    lines.append("")
+    lines.append(f"2. NEXT YEAR -- extra 2027 pick (drafted round {ny.drafted_round})")
+    lines.append("-" * 72)
+    lines.append(f"  Expected pick value : ~{ny.expected_var:.1f} VAR")
+    lines.append(
+        f"  (early in the round : ~{ny.early_var:.1f} VAR ; "
+        f"keeper-average keeper : ~{_kp(ny.keeper_par)} VAR)"
+    )
+    lines.append("  VAR is value above a replacement roster spot, so this is roughly the")
+    lines.append("  pick's marginal roto-point value next year.")
+    lines.append("  Estimate = the 2026 draft-day value distribution at that slot; the")
+    lines.append("  specific 2027 player is unknown.")
+
+    lines.append("")
+    lines.append("-" * 72)
+    if dwin < 0:
+        lines.append(
+            f"You give up ~{abs(dwin):.1f} win% / ~{abs(dtop3):.1f} top-3% this year "
+            f"to gain a pick worth ~{ny.expected_var:.1f} VAR."
+        )
+    else:
+        lines.append(
+            f"This year is roughly neutral to positive ({dwin:+.1f} win% / "
+            f"{dtop3:+.1f} top-3%), and you also gain a pick worth ~{ny.expected_var:.1f} VAR."
+        )
+    lines.append(
+        f"MC: n_iter={ty.n_iter}, seed={ty.seed} (common random numbers across both runs)."
+    )
+    return "\n".join(lines)
