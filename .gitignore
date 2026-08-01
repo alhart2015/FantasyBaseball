@@ -34,6 +34,10 @@ data/cache_archive/
 # Skill/luck data layer cache: MLB Stats API + Savant season pulls (re-fetchable)
 data/skill_luck/
 
+# Playing-time training panel: derived from the cached MLB pulls by
+# scripts/build_pt_panel.py, and the live season moves it every rebuild.
+data/playing_time/
+
 # SQLite databases (populated at runtime)
 data/*.db
 

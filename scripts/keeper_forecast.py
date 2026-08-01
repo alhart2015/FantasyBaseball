@@ -47,12 +47,23 @@ from fantasy_baseball.keepers.actuals import (
     PITCHER_RATES,
 )
 from fantasy_baseball.keepers.blend import parse_blend
+
+PT_PANEL = PROJECT_ROOT / "data" / "playing_time" / "hitter_pt_panel_2010_2026.csv"
+
 from fantasy_baseball.keepers.persistence import (
     Share,
     centered_aging,
     fit_share,
     fold_forecast,
     gap,
+)
+from fantasy_baseball.keepers.playing_time import (
+    PA_FEATURES as PA_COLS,
+)
+from fantasy_baseball.keepers.playing_time import (
+    build_features,
+    fit_curve,
+    lag_panel,
 )
 from fantasy_baseball.keepers.vintages import load_vintage
 
@@ -86,6 +97,49 @@ def fetch_blend() -> dict:
         f"(written {str(meta.get('_written_at', '?'))[:10]})"
     )
     return payload
+
+
+def hitter_pa_forecast(target_year: int, observed_pa: pd.Series) -> pd.Series | None:
+    """Projected `target_year` PA from each hitter's own multi-year history.
+
+    Supersedes the one-year gap term for hitters. `observed_pa` is the CURRENT season's
+    full-season blend, used as the first lag; the two older lags and age come from the
+    2010-present panel. Returns None when the panel is absent, so the caller falls back
+    to the gap model rather than failing.
+
+    For a two-years-out target the curve is applied twice -- its own output feeds back
+    as the first lag, with the older lags shifted along. That is an extrapolation: the
+    curve was fit one year ahead, and iterating it compounds its error.
+    """
+    if not PT_PANEL.exists():
+        return None
+    panel = pd.read_csv(PT_PANEL)
+    rows = lag_panel(panel, min_recent=300.0)
+    curve = fit_curve(rows[list(PA_COLS)], rows["target"])
+    latest = int(panel.loc[~panel["partial_season"].astype(bool), "season"].max())
+
+    def series_for(year: int, column: str) -> pd.Series:
+        sub = panel.loc[panel["season"] == year].set_index("mlbam_id")[column]
+        return sub.loc[~sub.index.duplicated()]
+
+    # Lags relative to BASE_YEAR: the live blend is the base year's line, and the panel
+    # supplies the two seasons before it.
+    pa2 = series_for(BASE_YEAR - 1, "pa").reindex(observed_pa.index)
+    pa3 = series_for(BASE_YEAR - 2, "pa").reindex(observed_pa.index)
+    age = series_for(latest, "age").reindex(observed_pa.index) + (target_year - latest)
+    ssd = series_for(latest, "seasons_since_debut").reindex(observed_pa.index) + (
+        target_year - latest
+    )
+    # One application of the curve per year from the base season to the target. `age`
+    # and `ssd` above are advanced to the TARGET year, so each step walks them back to
+    # the season it is actually projecting: for a 2028 target, step 0 projects 2027.
+    pa1, projected = observed_pa, None
+    steps = target_year - BASE_YEAR
+    for step in range(steps):
+        back = steps - step - 1
+        projected = curve.predict(build_features(pa1, pa2, pa3, age - back, ssd - back))
+        pa1, pa2, pa3 = projected, pa1, pa2
+    return projected
 
 
 def _dedupe(frame: pd.DataFrame, pt: str) -> pd.DataFrame:
@@ -142,6 +196,9 @@ def forecast_pool(
     idx = observed.index[observed[pt] >= floor].intersection(base.index)
 
     result = pd.DataFrame(index=idx)
+    # Hitter volume comes from the multi-year curve, not the one-year gap term. Pitchers
+    # have no panel yet and keep the gap model -- see keepers/playing_time.py.
+    curve_pa = hitter_pa_forecast(target_year, observed.loc[idx, pt]) if kind == "hitter" else None
     for col in columns:
         g = gap(observed.loc[idx, col], base.loc[idx, col])
         aging = None
@@ -149,7 +206,10 @@ def forecast_pool(
             aging = centered_aging(
                 out[col].reindex(idx), base.loc[idx, col], weights=observed.loc[idx, pt]
             )
-        result[col] = fold_forecast(base.loc[idx, col], g, shares[col], aging)
+        if col == pt and curve_pa is not None:
+            result[col] = curve_pa.reindex(idx)
+        else:
+            result[col] = fold_forecast(base.loc[idx, col], g, shares[col], aging)
         result[f"{col}_gap"] = g
     # A rate cannot go negative, and neither can volume. The linear fold can push a
     # near-zero rate under zero for a player whose 2026 collapsed; clip rather than
