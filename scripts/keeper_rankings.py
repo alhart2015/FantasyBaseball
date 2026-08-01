@@ -1447,7 +1447,9 @@ def _scored_board(year: int, denoms, keepers: dict[str, str], pricing) -> pd.Dat
     return pd.concat(scored).sort_values("proj_var", ascending=False)
 
 
-def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: int) -> int:
+def league_report(
+    year: int, denoms, keepers: dict[str, str], slots: int, top: int, per_team: int = 5
+) -> int:
     """The league-wide keeper board, then each team's best `slots` candidates.
 
     P(keep) is deliberately NOT computed over the league: it is the probability a
@@ -1531,6 +1533,9 @@ def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: i
     # collapses to his better side), which is the concat of the groups re-sorted -- `board`
     # itself is no longer deduped now that the dedupe moved into the loop above.
     rostered = pd.concat(by_team.values()).sort_values("proj_var", ascending=False)
+    # The league-wide rank, attached once so the per-team blocks below cite the SAME
+    # number this board prints instead of recomputing an ordering that could diverge.
+    rostered["overall"] = range(1, len(rostered) + 1)
     print(f"\n{'=' * 72}")
     print(f"LEAGUE KEEPER BOARD -- top {top} of {len(rostered)} scoreable rostered players")
     print(f"{'=' * 72}")
@@ -1547,20 +1552,28 @@ def league_report(year: int, denoms, keepers: dict[str, str], slots: int, top: i
         )
 
     print(f"\n{'=' * 72}")
-    print(f"EACH TEAM'S TOP {slots} KEEPER CANDIDATES  (P KEEP is within that roster)")
+    print(
+        f"EACH TEAM'S TOP {per_team} KEEPER CANDIDATES  "
+        f"(P KEEP is P(top {slots}) within that roster)"
+    )
     print(f"{'=' * 72}")
-    # `head(slots)` means "his best" only because each group inherits the board's
-    # descending order through the groupby.
+    # `per_team` is a DISPLAY count; `slots` is the league's keeper allowance. They are
+    # independent -- you want to see the near-misses without changing the probability
+    # they are being scored against. Ranking teams still uses `slots`, because that is
+    # what a team actually gets to keep.
     strongest = sorted(by_team, key=lambda t: -by_team[t]["proj_var"].head(slots).sum())
     for team in strongest:
-        part = by_team[team]
+        # Sliced from `rostered`, not `by_team`, so each row carries `overall`. The
+        # slice inherits the board's descending order, so `head` is still "his best".
+        part = rostered[rostered["owner"] == team]
         unscored = unscored_by_team[team]
         mine = " *" if team == config.team_name else "  "
         print(f"\n{mine}{team}  ({len(part)} scoreable, {unscored} below the floor)")
-        for row in part.head(slots).itertuples():
+        print(f"      {'#':>4}  {'PLAYER':<22}{'POS':>4}{'AGE':>4}{'PROJ VAR':>10}{'P KEEP':>8}")
+        for row in part.head(per_team).itertuples():
             print(
-                f"      {row.name:<22}{row.pos:>4}{row.age:>4}"
-                f"{row.proj_var:>9.2f}{row.p_keep * 100:>7.0f}%"
+                f"      {row.overall:>4}  {row.name:<22}{row.pos:>4}{row.age:>4}"
+                f"{row.proj_var:>10.2f}{row.p_keep * 100:>7.0f}%"
             )
     print(
         "\n  A player below the qualifying floor has no percentile and is not"
@@ -1653,6 +1666,12 @@ def main() -> int:
         "--slots", type=int, default=3, help="keeper slots, for --roster and --league"
     )
     parser.add_argument("--top", type=int, default=20, help="rows to print per pool")
+    parser.add_argument(
+        "--per-team",
+        type=int,
+        default=5,
+        help="candidates shown per team in --league; independent of --slots",
+    )
     args = parser.parse_args()
 
     config = load_config(CONFIG_PATH)
@@ -1673,7 +1692,7 @@ def main() -> int:
         run_study(denoms, year)
         return 0
     if args.league:
-        return league_report(year, denoms, keepers, args.slots, args.top)
+        return league_report(year, denoms, keepers, args.slots, args.top, args.per_team)
     if args.roster:
         return roster_report(year, denoms, keepers, args.slots)
 
