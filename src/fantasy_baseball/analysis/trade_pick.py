@@ -11,6 +11,7 @@ from __future__ import annotations
 import dataclasses
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from fantasy_baseball.analysis.draft_value import ParCurve, projected_par_curve
 from fantasy_baseball.analysis.injury_stress import (
@@ -29,7 +30,7 @@ from fantasy_baseball.models.player import (
 )
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.simulation import _replacement_line, run_ros_monte_carlo
-from fantasy_baseball.utils.constants import ALL_CATEGORIES
+from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
 from fantasy_baseball.utils.name_utils import normalize_name
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
@@ -206,7 +207,9 @@ def build_replacement_filler(sent: Player) -> Player:
     )
 
 
-def worst_of_type(roster: list[Player], ptype: PlayerType, denoms) -> Player | None:
+def worst_of_type(
+    roster: list[Player], ptype: PlayerType, denoms: dict[Category, float]
+) -> Player | None:
     """The lowest full-season-projected player of ``ptype``, or None if none exist.
 
     Ranked by full-season SGP so the partner drops a benched scrub (second-order)
@@ -264,7 +267,7 @@ class ThisYearImpact:
 
 def run_scenario(
     inputs: McInputs, team_rosters: dict[str, list[Player]], n_iter: int, seed: int
-) -> dict:
+) -> dict[str, Any]:
     """Rebuild effective rosters for ``team_rosters`` and run the ROS Monte Carlo.
 
     eos_baseline / team_sds are held fixed (reused from ``inputs``), mirroring the
