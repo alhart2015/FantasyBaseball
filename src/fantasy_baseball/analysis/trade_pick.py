@@ -21,8 +21,10 @@ from fantasy_baseball.models.player import (
     PlayerType,
     RankInfo,
 )
+from fantasy_baseball.mc_roster import build_effective_rosters
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.simulation import _replacement_line
+from fantasy_baseball.simulation import _replacement_line, run_ros_monte_carlo
+from fantasy_baseball.utils.constants import ALL_CATEGORIES
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -238,3 +240,97 @@ def build_trade_scenario(
     scenario[user] = new_user
     scenario[partner] = new_partner
     return scenario
+
+
+@dataclass(frozen=True)
+class CategoryDelta:
+    category: str
+    base_first: float
+    new_first: float
+    base_top3: float
+    new_top3: float
+
+
+@dataclass(frozen=True)
+class ThisYearImpact:
+    base_win: float
+    new_win: float
+    base_top3: float
+    new_top3: float
+    categories: list[CategoryDelta]
+    n_iter: int
+    seed: int
+
+
+def run_scenario(
+    inputs: McInputs, team_rosters: dict[str, list[Player]], n_iter: int, seed: int
+) -> dict:
+    """Rebuild effective rosters for ``team_rosters`` and run the ROS Monte Carlo.
+
+    eos_baseline / team_sds are held fixed (reused from ``inputs``), mirroring the
+    injury stress-test: the first-order roster change flows through the rebuilt
+    effective rosters and the MC scoring, while the league-context scaffolding
+    stays constant so the baseline-vs-scenario delta is controlled.
+    """
+    eff = build_effective_rosters(
+        team_rosters,
+        inputs.eos_baseline,
+        inputs.team_sds,
+        inputs.fraction_remaining,
+        denoms=inputs.denoms,
+    )
+    return run_ros_monte_carlo(
+        team_rosters=team_rosters,
+        actual_standings=inputs.actual_standings,
+        fraction_remaining=inputs.fraction_remaining,
+        h_slots=inputs.h_slots,
+        p_slots=inputs.p_slots,
+        user_team_name=inputs.user_team_name,
+        n_iterations=n_iter,
+        seed=seed,
+        effective_rosters=eff,
+    )
+
+
+def this_year_impact(
+    inputs: McInputs,
+    sent: Player,
+    partner: str,
+    *,
+    n_iter: int = 2000,
+    seed: int = 42,
+) -> ThisYearImpact:
+    """Baseline vs post-trade ROS MC for the user, with common random numbers.
+
+    Full swing: the sent player leaves the user (replaced by a bench-or-
+    replacement filler) and joins the partner. Reports the user's overall win%
+    and top-3% and per-category first%/top-3%.
+    """
+    user = inputs.user_team_name
+    base = run_scenario(inputs, inputs.team_rosters, n_iter, seed)
+    scen_rosters = build_trade_scenario(inputs, sent, partner)
+    scen = run_scenario(inputs, scen_rosters, n_iter, seed)
+
+    br = base["team_results"][user]
+    sr = scen["team_results"][user]
+    bcat = base["category_risk"]
+    scat = scen["category_risk"]
+    categories = [
+        CategoryDelta(
+            category=c.value,
+            base_first=bcat[c.value]["first_pct"],
+            new_first=scat[c.value]["first_pct"],
+            base_top3=bcat[c.value]["top3_pct"],
+            new_top3=scat[c.value]["top3_pct"],
+        )
+        for c in ALL_CATEGORIES
+    ]
+    return ThisYearImpact(
+        base_win=br["first_pct"],
+        new_win=sr["first_pct"],
+        base_top3=br["top3_pct"],
+        new_top3=sr["top3_pct"],
+        categories=categories,
+        n_iter=n_iter,
+        seed=seed,
+    )

@@ -129,3 +129,25 @@ def test_build_trade_scenario_keeps_sizes_and_moves_player():
     assert any(p is sent for p in scen[partner])
     # inputs.team_rosters is not mutated
     assert any(p.name == "Star" for p in inputs.team_rosters[user])
+
+
+def test_this_year_impact_star_to_rival_does_not_help_you():
+    # package-qualified sibling import (tests/test_analysis has __init__.py)
+    from tests.test_analysis.test_injury_stress import _synth_inputs
+
+    from fantasy_baseball.analysis.trade_pick import find_sent_player, this_year_impact
+
+    inputs = _synth_inputs()
+    sent = find_sent_player(inputs.team_rosters[inputs.user_team_name], "Star")
+    # small n_iter for speed; common random numbers keep the delta meaningful
+    impact = this_year_impact(inputs, sent, "Opp", n_iter=300, seed=42)
+
+    # trading your star to the only rival must not raise your win% by more than a
+    # 1.0 pt fixed-seed tolerance band (expected direction is a decrease).
+    assert impact.new_win <= impact.base_win + 1.0
+    # all 10 categories reported
+    assert len(impact.categories) == 10
+    assert {c.category for c in impact.categories} == {
+        "R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP"
+    }
+    assert impact.n_iter == 300 and impact.seed == 42
