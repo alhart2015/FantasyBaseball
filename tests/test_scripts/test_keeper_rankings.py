@@ -9,9 +9,11 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
+from fantasy_baseball.keepers.composite import KNOWN_FAMILIES
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import HITTER_ELIGIBLE, Position
 from fantasy_baseball.sgp.var import calculate_var
+from fantasy_baseball.utils.constants import Category
 from scripts import keeper_rankings as module
 from scripts.keeper_rankings import FALLBACK_POS, _dedupe_two_way, _slots_for
 
@@ -202,6 +204,11 @@ def test_build_fails_loud_if_the_credits_table_gains_sp_rp_keys():
     reliever floor. Fail loud -- and BEFORE the expensive projected build, so it is fast."""
     with pytest.raises(ValueError, match="role_ip"):
         module.build(2026, "hitter", {}, {}, pricing=({}, {"SP": 1.0, "RP": 2.0}))
+
+
+# `season_value` divides SB by its denominator to build the `speed` family numerator,
+# so a hitter pool needs this key even when `_sgp` itself is patched out.
+_DENOMS = {Category.SB: 20.0}
 
 
 def test_denoms_key_is_order_stable_and_distinguishes_denominators():
@@ -600,6 +607,7 @@ def test_qualified_families_emits_pt_and_batted_ball_columns():
             "barrel_pa_pct": [5.0, 3.0, 4.0],
             "xwoba": [0.380, 0.300, 0.330],
             "wrc_plus": [150.0, 95.0, 115.0],
+            "sb_sgp": [1.5, 0.2, 0.8],
         },
         index=pd.Index([1, 2, 3], name="mlbam_id"),
     )
@@ -615,7 +623,12 @@ def test_qualified_families_emits_pt_and_batted_ball_columns():
 def _pct_frame(**all_nan):
     """A qualified-like frame with every family `_pct` column present and non-NaN,
     setting the named families all-NaN (e.g. `_pct_frame(future=True)`)."""
-    families = ("skill", "luck", "batted_ball", "future", "age")
+    # Derived, not a hardcoded copy: this tuple drifted silently when #288 swapped
+    # `luck` for `speed`/`durability`, and a stale one would let the guard go untested
+    # for exactly the families it protects. KNOWN_FAMILIES rather than FAMILIES because
+    # the guard is also exercised with `--backtest` candidate orders, which blend
+    # families (`luck`) the shipped set no longer carries.
+    families = sorted(KNOWN_FAMILIES)
     return pd.DataFrame(
         {
             f"{fam}_pct": [float("nan"), float("nan")] if all_nan.get(fam) else [0.3, 0.7]
@@ -686,6 +699,7 @@ def test_qualified_families_returns_empty_for_a_below_floor_pool_not_raises():
             "barrel_pa_pct": [4.0],
             "xwoba": [0.320],
             "wrc_plus": [100.0],
+            "sb_sgp": [0.5],
         },
         index=pd.Index([1], name="mlbam_id"),
     )
@@ -751,6 +765,7 @@ def test_projected_actually_calls_the_mandatory_family_guard(monkeypatch):
             "barrel_pa_pct": [5.0, 3.0, 4.0],
             "xwoba": [0.380, 0.300, 0.330],
             "wrc_plus": [150.0, 95.0, 115.0],
+            "sb_sgp": [1.5, 0.2, 0.8],
         },
         index=pd.Index([1, 2, 3], name="mlbam_id"),
     )
@@ -761,7 +776,7 @@ def test_projected_actually_calls_the_mandatory_family_guard(monkeypatch):
         lambda year, kind, denoms: pd.Series([10.0, 8.0, 6.0], index=[1, 2, 3]),
     )
     with pytest.raises(ValueError, match="batted-ball"):
-        module.projected(2026, "hitter", {})
+        module.projected(2026, "hitter", _DENOMS)
 
 
 def test_projected_renders_an_empty_board_for_an_empty_pool(monkeypatch):
@@ -780,6 +795,7 @@ def test_projected_renders_an_empty_board_for_an_empty_pool(monkeypatch):
             "barrel_pa_pct": [4.0],
             "xwoba": [0.320],
             "wrc_plus": [100.0],
+            "sb_sgp": [0.5],
         },
         index=pd.Index([1], name="mlbam_id"),
     )
@@ -787,7 +803,7 @@ def test_projected_renders_an_empty_board_for_an_empty_pool(monkeypatch):
     monkeypatch.setattr(
         module, "zips_out_year_sgp", lambda year, kind, denoms: pd.Series([10.0], index=[1])
     )
-    assert module.projected(2026, "hitter", {}).empty
+    assert module.projected(2026, "hitter", _DENOMS).empty
 
 
 def test_season_value_keeps_a_blank_rate_as_nan_not_a_phantom_zero(monkeypatch):
@@ -809,6 +825,6 @@ def test_season_value_keeps_a_blank_rate_as_nan_not_a_phantom_zero(monkeypatch):
     )
     monkeypatch.setattr(module, "_raw", lambda year, table: raw)
     monkeypatch.setattr(module, "_sgp", lambda lines, denoms: pd.Series(0.0, index=lines.index))
-    out = module.season_value(2026, "hitter", {})
+    out = module.season_value(2026, "hitter", _DENOMS)
     assert out.loc[1, "avg"] == pytest.approx(0.280)
     assert pd.isna(out.loc[2, "avg"])  # blank -> NaN, not 0.0

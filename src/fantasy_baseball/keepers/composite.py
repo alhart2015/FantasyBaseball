@@ -1,4 +1,8 @@
-"""Rank keeper candidates on five families: skill, luck, batted-ball, future, age.
+"""Rank keeper candidates on families that each measure ONE named thing.
+
+Hitters blend skill, speed, playing time, batted-ball, future and age; pitchers
+the same minus speed. There is deliberately no residual family -- see "Why there
+is no `luck` family" below, and #288 for the history.
 
 Pure and I/O-free like the rest of the normalization layer. Everything works in
 PERCENTILE space within a player pool, so hitters and pitchers rank against their
@@ -13,33 +17,84 @@ this is better read as "peripherals" than as clean true talent. Removing them wa
 tested and made pitchers strictly worse against next-year rate, so they stay --
 `--study` reproduces that comparison.
 
-**luck** -- `value_pct - skill_pct`: the part of a player's roto line his
-peripherals do not support. Note `value = skill + luck` exactly, so {skill, luck}
-spans the same space as {skill, value}; this is a reparameterization chosen for
-what it says, not a new model.
+**speed** -- SB value per plate appearance. HITTERS ONLY; there is no pitcher
+analogue and `FAMILIES["pitcher"]` omits it. The peripherals carry no speed input
+at all (`corr(SB rate, skill_pct)` is NEGATIVE, about -0.13), so without this
+family the entire roto value of a player's legs is invisible to `skill` and lands
+in whatever residual term exists. It is its own family and not a sixth
+`SKILL_COLUMNS` entry on purpose: equal weighting within the skill family gives
+speed 1/6 weight, which measurably fails to remove it from a residual (it moved
+`corr(residual, SB rate)` only from +0.466 to +0.461). `--study` reproduces both
+numbers.
 
-    Its weight is POSITIVE, which is not what the name suggests. Being "lucky"
-    in year T predicts year T+1 because the gap also encodes role and durability:
-    it correlates strongly with next-year PLAYING TIME and, for pitchers, not at
-    all with next-year RATE. Forcing a negative weight collapses the fit. So luck
-    is not a noise term to subtract; it is mostly a volume signal wearing a
-    misleading name. For TRADE decisions read it the other way -- a large positive
-    luck score is the sell-high case, because the rate half will not repeat.
-    `--study` prints all of these correlations.
+**pt** -- playing time: the volume dimension, on its own axis. This is the
+DURABILITY term. An injury-shortened elite-rate season is now scored as low
+volume against a high rate, rather than being charged as a permanent demerit --
+the Juan Soto case (359 PA on a 96th-percentile skill line) that motivated #288.
+Same-season PT is also the most persistent thing in the whole table: it predicts
+next-year PT at 0.607, above skill (0.464) and rate (0.462). Durability repeats
+better than talent does.
+
+Why there is no `luck` family
+-----------------------------
+`luck = value_pct - skill_pct` was a RESIDUAL, not a measurement: whatever roto
+production the peripherals failed to explain. Because `value_pct` is a counting
+total and `skill_pct` is a rate, its single largest component was the leftover
+volume dimension. Measured against it (hitters, mean rho over three transitions):
+
+    playing time            +0.662
+    SB rate                 +0.466
+    R rate                  +0.284
+    batted-ball (avg-xba)   +0.251   <- the only part that is actually luck
+    RBI rate                +0.031
+    HR rate                 -0.083
+
+The BABIP-type luck the name implies was the THIRD largest component. Its famously
+counter-intuitive POSITIVE weight was therefore not paying for luck; it was paying
+for durability and stolen bases, both of which repeat. Giving those two their own
+families says the same thing without the false name.
+
+Cleaning the residual rather than removing it does not work. Redefining it against
+a rate (`rate_pct - skill_pct`, both PT-neutral) does purge playing time
+(+0.662 -> +0.179), but what surfaces underneath is lineup context (R rate +0.562,
+RBI +0.374) -- a team property that does not travel with a traded player -- and the
+cleaned residual still predicts next season (0.279). It still holds signal we
+cannot name, so there is no residual at all.
+
+    For TRADE decisions the old sell-high read now comes from `batted_ball`
+    directly: a large positive batted-ball score is the rate overperformance that
+    will not repeat. That reading used to be smuggled through `luck`.
 
 **batted_ball** -- `avg - xba` for hitters, `fip - era` for pitchers (higher =
-luckier): the specific rate overperformance the peripherals do not support. It
-carries a NEGATIVE weight, and this is the point of the family. On its own the
-measure predicts next-year value at ~0.05 (hitters) and ~0.00 (pitchers) -- pure
-noise, and `--backtest` gives it exactly zero weight when it is the only
-non-skill volume term. But it is positively correlated with `luck`, which bundles
-the same batted-ball luck in with the real playing-time signal. Entering
-`batted_ball` alongside `luck` lets the fit REWARD the gap (via luck) while
-CLAWING BACK its batted-ball half (via a negative batted_ball weight), so an
-everyday player who is merely running hot is no longer priced like one who earned
-it. That is exactly the everyday-plus-lucky profile (Rafaela, Otto Lopez) the
-single `luck` term used to oversell. The negative weight replicated across BOTH
-pools independently; `--backtest` and `--study` are the evidence, #277 the history.
+luckier): the specific rate overperformance the peripherals do not support. This
+is the direct measurement of the component `luck` was misnamed after. On its own
+it predicts next-year value at ~0.05 (hitters) and ~0.00 (pitchers) -- pure noise
+-- so it earns its place as a CLAW-BACK, not as a predictor: it subtracts the
+part of a good rate that will regress, so an everyday player who is merely
+running hot is not priced like one who earned it (Rafaela, Otto Lopez; #277).
+
+    The shipped hitter weight DELIBERATELY OVERRIDES the grid. Left free, the
+    fit zeroes this family once `durability` absorbs the volume signal -- and
+    the 2026 board then promotes the two luckiest bats on it (Abrams bb=93 to
+    rank 5, Otto bb=97 to rank 26), undoing exactly what #277 shipped to do.
+    Pinning it to -0.2 costs 0.0092 holdout rho against a 0.0126 noise band --
+    less than the panel can resolve -- and restores the demotion (Abrams 10,
+    Otto 39, Rafaela 78). #277 set the precedent for this tiebreak by shipping C
+    over a higher-scoring baseline on the same watchlist grounds. `--backtest`
+    prints the unpinned fit, so the override stays visible rather than hiding
+    in this constant.
+
+    A zero weight would also silently disable this family's `strict` all-NaN
+    guard -- `composite` skips zero-weight families BEFORE the fail-loud check,
+    so a broken xba feed would let `--backtest` decide the model on a degraded
+    blend instead of raising. That is a second, independent reason not to ship
+    the grid's zero here.
+
+    The pitcher pool needs no such override: pinning the same -0.2 there
+    IMPROVES the holdout outright (0.4932 free -> 0.5018 pinned), so the grid's
+    zero was the panel failing to resolve a real effect rather than evidence
+    against one. The negative weight therefore still replicates across both
+    pools as #277 found -- hitters by argument, pitchers on the number.
 
 **future** -- percentile of projected SGP from the out-year ZiPS files, blended
 `FUTURE_BLEND` in favour of the nearer year.
@@ -55,15 +110,24 @@ latest. It grid-searches each candidate family set and prints their holdout rho
 with a fit-season noise floor -- read it there rather than from a cached copy here,
 which drifts silently and already did once on this branch.
 
-The shape those numbers support: skill leads, luck is close behind, batted_ball is
-a small negative claw-back, and future (discounted for staleness, below) and age
-are small terms close in size -- close enough that their order flips between the
-pools. Read them as that shape and not as tuned constants -- the ranked table
-`--backtest` prints separates its top candidates by less than it separates the two
-fit seasons, so a third decimal here would be noise. The chosen set (keep `luck`,
-add a negative `batted_ball`) was a bake-off against two alternatives -- adding a
-raw playing-time family, and replacing `luck` with `batted_ball` outright -- both
-of which lost the holdout; `--backtest` reproduces all three.
+The shape those numbers support: skill leads, playing time is close behind, speed
+is roughly half of skill, batted_ball is a small claw-back, and future (discounted
+for staleness, below) and age are small terms close in size. Read them as that
+shape and not as tuned constants -- the ranked table `--backtest` prints separates
+its top candidates by less than it separates the two fit seasons, so a third
+decimal here would be noise.
+
+**This family set TIED the residual parameterization on the holdout; it did not
+beat it, and that was accepted knowingly.** Candidates span 0.017 (hitters) and
+0.016 (pitchers) against noise bands of 0.015-0.026 and 0.105-0.143, so the panel
+cannot resolve them -- but every candidate clears the skill-only null floor
+comfortably. A tie is the CORRECT outcome by construction: `pt` is precisely what
+the old residual was already proxying, so this re-expresses the same information
+under honest names rather than adding any. It ships on interpretability and on
+having the lowest fit-season noise of any candidate in both pools, not on rho.
+Any future predictive gain has to come from a durability estimator that beats raw
+`pt` -- see #288's open questions. Do not re-litigate this from the rho column
+alone; `--backtest` reproduces the whole table including the residual candidates.
 
 **The future weight is discounted for staleness, deliberately.** A FRESH
 next-season projection (one that has seen season T) is the single strongest
@@ -86,20 +150,22 @@ from fantasy_baseball.keepers.skills import HITTER_SKILLS, PITCHER_SKILLS
 # Weight per family, aligned to `FAMILIES[kind]`. Not normalized; `composite`
 # divides by the sum.
 FITTED_WEIGHTS: dict[str, tuple[float, ...]] = {
-    "hitter": (1.0, 0.8, -0.2, 0.2, 0.3),
-    "pitcher": (1.0, 0.8, -0.2, 0.2, 0.15),
+    "hitter": (1.0, 0.4, 1.2, -0.2, 0.4, 0.45),
+    "pitcher": (1.0, 0.6, -0.2, 0.4, 0.15),
 }
 # The shipped family set per pool, aligned to FITTED_WEIGHTS. A dict, not one global
 # tuple, because the pools carry separate weights and fits and a bake-off split
 # verdict would be a legitimate outcome. `scripts/keeper_rankings.py --backtest` is
 # where the set and weights are chosen; read it there.
 FAMILIES: dict[str, tuple[str, ...]] = {
-    "hitter": ("skill", "luck", "batted_ball", "future", "age"),
-    "pitcher": ("skill", "luck", "batted_ball", "future", "age"),
+    "hitter": ("skill", "speed", "durability", "batted_ball", "future", "age"),
+    "pitcher": ("skill", "pt", "batted_ball", "future", "age"),
 }
 # Every family the model knows how to blend. `family_order` selects a subset per
 # pool; a name outside this set is a typo, not a silent no-op.
-KNOWN_FAMILIES: frozenset[str] = frozenset({"skill", "luck", "pt", "batted_ball", "future", "age"})
+KNOWN_FAMILIES: frozenset[str] = frozenset(
+    {"skill", "speed", "luck", "pt", "durability", "batted_ball", "future", "age"}
+)
 
 
 def check_known_families(names: set[str]) -> None:
@@ -161,10 +227,66 @@ def skill_percentile(frame: pd.DataFrame, kind: str) -> pd.Series:
 def luck(value_pct: pd.Series, skill_pct: pd.Series) -> pd.Series:
     """The part of a roto line the peripherals do not support.
 
-    Positive means production outran them. Why that earns a POSITIVE weight, and
-    why trades read it backwards, is argued once in the module docstring.
+    NOT a shipped family since #288 -- kept because `--backtest` still bakes the
+    residual parameterizations off against the current one and `--study` prints
+    what this term was actually made of. See the module docstring for why it was
+    removed; do not reintroduce it to `FAMILIES` without reading that first.
     """
     return value_pct - skill_pct
+
+
+# How much of `durability` is the current season. Not tuned here and not grid-
+# searched: within-family shape is fixed by argument, between-family weight is what
+# `--backtest` fits (same rule as `skill_percentile`'s equal weighting). 0.75 is
+# ZiPS's OWN revealed recency preference -- regressing its out-year PA on the PA
+# history it had seen recovers lag weights of 0.340 / 0.118, a 0.74 / 0.26 split.
+DURABILITY_RECENCY = 0.75
+
+
+def durability(current_pct: pd.Series, prior_pct: pd.Series) -> pd.Series:
+    """Playing time WITH memory: this season blended with the one before it.
+
+    Raw same-season PT cannot tell "durable for years, hurt this season" from
+    "always fragile" -- it has no memory, and `MIN_PT` compresses the pool so an
+    injury-shortened star lands mid-pack rather than at the bottom. That is the
+    Juan Soto case (#288) and it is why this family exists rather than plain `pt`.
+
+    Both inputs are WITHIN-SEASON percentiles, which is what makes seasons of
+    different length comparable for free: an in-progress season ranks its players
+    against each other exactly as a completed one does, so nothing needs prorating
+    and no COVID-2020 rescale is required if that season is ever pulled in.
+
+    A missing prior season falls back to the current one -- a rookie is judged on
+    what he has shown, not charged for a career he has not had yet. The known cost:
+    a veteran who missed ALL of the prior season does not appear in it either, so
+    he gets the same benefit of the doubt. That errs toward not penalizing, which
+    is the safer direction for a keeper board, but it is a real hole -- closing it
+    needs a tenure signal from T-2. See #288.
+    """
+    return DURABILITY_RECENCY * current_pct + (1.0 - DURABILITY_RECENCY) * prior_pct.reindex(
+        current_pct.index
+    ).fillna(current_pct)
+
+
+def speed(frame: pd.DataFrame) -> pd.Series:
+    """SB value per plate appearance -- the speed skill the peripherals omit.
+
+    Takes `sb_sgp` pre-computed rather than dividing SB by a denominator here, so
+    this module stays free of the SGP denominators like the rest of the
+    normalization layer. The SGP conversion is a division by a positive constant
+    and this family is consumed through `percentile`, so it is rank-invariant --
+    it buys unit consistency with the rest of the model, not a different ranking.
+
+    Hitters only. `FAMILIES["pitcher"]` omits the family, so a pitcher pool never
+    reaches here; the KeyError is for a caller that asks anyway.
+    """
+    missing = [c for c in ("sb_sgp", "pt") if c not in frame.columns]
+    if missing:
+        raise KeyError(f"speed missing {missing}; got {sorted(frame.columns)}")
+    # `where` not a bare divide: a 0-PT row is undefined speed, and NaN is what
+    # `composite` mean-fills to neutral. Dividing would emit inf and poison the
+    # percentile for the whole pool.
+    return frame["sb_sgp"] / frame["pt"].where(frame["pt"] > 0)
 
 
 # Columns the batted-ball overperformance is measured from, per pool. NB "park-

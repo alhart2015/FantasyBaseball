@@ -118,10 +118,12 @@ from fantasy_baseball.keepers.composite import (
     batted_ball,
     check_known_families,
     composite,
+    durability,
     future_percentile,
     luck,
     percentile,
     skill_percentile,
+    speed,
 )
 from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 from fantasy_baseball.keepers.positions import load_positions
@@ -143,6 +145,7 @@ from fantasy_baseball.models.positions import HITTER_ELIGIBLE, PITCHER_ELIGIBLE
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.var import calculate_var
+from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
@@ -241,6 +244,11 @@ def season_value(year: int, kind: str, denoms) -> pd.DataFrame:
     # blank rate so composite mean-fills it to neutral, not to a phantom 0.0 extreme.
     rate, raw_col = ("avg", "BA") if kind == "hitter" else ("era", "ERA")
     out[rate] = pd.to_numeric(frame[raw_col], errors="coerce")
+    # The `speed` family's numerator, converted here because this is where `denoms`
+    # lives; `composite.speed` divides it by PT. Hitters only -- there is no pitcher
+    # analogue, and `FAMILIES["pitcher"]` omits the family.
+    if kind == "hitter":
+        out["sb_sgp"] = lines["sb"] / denoms[Category.SB]
     return out
 
 
@@ -311,7 +319,41 @@ def _observed(year: int, kind: str, denoms) -> pd.DataFrame:
     return value.join(skills, how="inner", rsuffix="_sk")
 
 
-def _qualified_families(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
+def _prior_pt_percentile(year: int, kind: str) -> pd.Series:
+    """PT percentile in `year - 1`, the memory half of the `durability` family.
+
+    Percentiled over EVERY player in that season, deliberately NOT over the
+    `MIN_PT`-qualified pool: a veteran who took 100 PA while hurt has to score
+    genuinely low here. Filtering him out would send him to `durability`'s
+    missing-prior fallback and hand him a clean slate, which is the exact failure
+    the family exists to prevent.
+
+    An uncached prior season returns empty, which degrades the whole pool to
+    current-season-only rather than raising -- the same fallback one player with no
+    prior season gets. `ALL_TRANSITION_YEARS` needs raw_2021 onward for this to
+    bind; without it the family is silently just `pt`.
+
+    Reads playing time straight off the raw pull rather than going through
+    `season_value`: only PT is wanted, and `season_value` would run a per-row SGP
+    apply over a whole extra season per transition to produce columns nothing here
+    reads. That also keeps this free of `denoms`, so it cannot fail on a partial
+    denominator dict.
+    """
+    if not (SKILLS_DIR / f"raw_{year - 1}").exists():
+        return pd.Series(dtype=float)
+    table = "batting" if kind == "hitter" else "pitching"
+    frame = index_by_mlbam(_raw(year - 1, table), "mlbID")
+    pt = (
+        pd.to_numeric(frame["PA"], errors="coerce")
+        if kind == "hitter"
+        else frame["IP"].map(innings_to_float)
+    )
+    return percentile(pt)
+
+
+def _qualified_families(
+    frame: pd.DataFrame, kind: str, prior_pt_pct: pd.Series | None = None
+) -> pd.DataFrame:
     """Apply the playing-time floor and build the same-season families.
 
     Computes ALL candidate families (`skill`, `luck`, `pt`, `batted_ball`, `age`);
@@ -324,11 +366,25 @@ def _qualified_families(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
     # a season) flows through as an empty frame, not a raise: `--study` builds intentional
     # empty sub-pools it skips, and the live board renders empty. `composite` blends an
     # empty pool to an empty result; `_require_mandatory_families` no-ops on it.
+    # Computed BEFORE the MIN_PT filter and kept on the same all-players base as
+    # `_prior_pt_percentile`, so `durability` blends two commensurable percentiles.
+    # `pt_pct` below is deliberately different: it ranks within the qualified pool,
+    # which is what compresses an injury-shortened star to mid-pack and is the
+    # reason `durability` exists as a separate family rather than a tweak to it.
+    all_pt_pct = percentile(frame["pt"])
     qualified = frame[frame["pt"] >= MIN_PT[kind]].copy()
     qualified["value_pct"] = percentile(qualified["sgp"])
     qualified["skill_pct"] = skill_percentile(qualified, kind)
     qualified["luck_pct"] = luck(qualified["value_pct"], qualified["skill_pct"])
     qualified["pt_pct"] = percentile(qualified["pt"])
+    # Keyed on the POOL, not on whether the column happens to be there: `speed` is a
+    # shipped hitter family, so a hitter frame that cannot supply it has to fail loud
+    # here rather than quietly omit `speed_pct` and let `composite` drop the family.
+    # Pitchers have no analogue and `FAMILIES["pitcher"]` omits it.
+    if kind == "hitter":
+        qualified["speed_pct"] = percentile(speed(qualified))
+    prior = pd.Series(dtype=float) if prior_pt_pct is None else prior_pt_pct
+    qualified["durability_pct"] = durability(all_pt_pct.reindex(qualified.index), prior)
     # `batted_ball` returns avg-xba / fip-era, both signed higher = luckier already.
     qualified["batted_ball_pct"] = percentile(batted_ball(qualified, kind))
     qualified["age_pct"] = percentile(qualified["age"], higher_is_better=False)
@@ -466,7 +522,9 @@ def projected(
     boards; pass BOTH or NEITHER (`composite` rejects one without the other), and the
     live path leaves them None.
     """
-    qualified = _qualified_families(_observed(year, kind, denoms), kind)
+    qualified = _qualified_families(
+        _observed(year, kind, denoms), kind, _prior_pt_percentile(year, kind)
+    )
 
     # Rank the projections WITHIN the qualified pool, not within all ~1900 ZiPS
     # rows. Most of that file is minor leaguers, so ranking there would put every
@@ -554,7 +612,9 @@ def build(
 def _transition(year: int, kind: str, denoms) -> pd.DataFrame:
     """Features observed in `year` against the SGP percentile realized in year+1."""
 
-    feat = _qualified_families(_observed(year, kind, denoms), kind)
+    feat = _qualified_families(
+        _observed(year, kind, denoms), kind, _prior_pt_percentile(year, kind)
+    )
     nxt = _observed(year + 1, kind, denoms)
     # The out-year analogue: a projection FOR `year` was built before `year`, so it
     # sits the same two seasons forward from its data as ZiPS 2027 does from 2026.
@@ -581,6 +641,11 @@ _GRID_AGE = (0.0, 0.15, 0.3, 0.45)
 _FAMILY_GRID: dict[str, tuple[float, ...]] = {
     "skill": (1.0,),  # pinned; every other family is measured against it
     "pt": _GRID_PT,
+    # Spans below zero like the other mid grids: a speed family that the fit wants
+    # to shrink to nothing, or to charge for, has to be observable rather than
+    # floored out of sight.
+    "speed": _GRID_MID,
+    "durability": _GRID_PT,
     "luck": _GRID_MID,
     "batted_ball": _GRID_MID,
     "future": _GRID_FUTURE,
@@ -594,7 +659,27 @@ CANDIDATES: dict[str, tuple[str, ...]] = {
     "A: pt+luck": ("skill", "pt", "luck", "future", "age"),
     "B: pt+batted_ball": ("skill", "pt", "batted_ball", "future", "age"),
     "C: luck-batted_ball": ("skill", "luck", "batted_ball", "future", "age"),
+    # D is what SHIPS (#288): no residual, every family measuring one named thing.
+    # For pitchers `speed` drops out and D is literally B, which lost this holdout
+    # in #277 -- kept side by side on purpose so the tie stays visible rather than
+    # being re-discovered as a regression. See the composite docstring for why a
+    # tie is the correct outcome and why D ships anyway.
+    "D: direct": ("skill", "speed", "pt", "batted_ball", "future", "age"),
+    # E swaps raw `pt` for `durability` -- same set, but the volume term gains a
+    # season of memory. This is the only candidate carrying information the #277
+    # bake-off never had, and the only place a predictive GAIN could come from.
+    "E: durability (shipped)": (
+        "skill",
+        "speed",
+        "durability",
+        "batted_ball",
+        "future",
+        "age",
+    ),
 }
+# `speed` has no pitcher analogue; the pool's D collapses to B rather than erroring
+# on a family the frame cannot supply.
+CANDIDATE_FAMILY_SKIP: dict[str, frozenset[str]] = {"pitcher": frozenset({"speed"})}
 # Hitters the bake-off must move the right way: the lucky everyday bats should fall,
 # the genuinely skilled everyday bat (Alvarez) should not.
 WATCHLIST = ("Ceddanne Rafaela", "Otto Lopez", "Yordan Alvarez")
@@ -687,7 +772,23 @@ def run_backtest(denoms) -> None:
         )
         print(f"  {'candidate':<20}{'holdout':>9}{'fit':>9}{'noise':>9}  best weights")
         best_by_pool[kind] = {}
-        for label, family_order in CANDIDATES.items():
+        skip = CANDIDATE_FAMILY_SKIP.get(kind, frozenset())
+        seen: set[tuple[str, ...]] = set()
+        for label, requested in CANDIDATES.items():
+            family_order = tuple(f for f in requested if f not in skip)
+            # Dropping `speed` makes pitcher-D identical to B. Say so in the table
+            # instead of grid-searching the same family set twice -- the identity is
+            # the point (#277 already held this holdout against it) and a silently
+            # duplicated row would read as two independent results.
+            if family_order in seen:
+                same = next(
+                    k
+                    for k, v in CANDIDATES.items()
+                    if tuple(f for f in v if f not in skip) == family_order and k != label
+                )
+                print(f"  {label:<20}{'':>27}  == {same} here ({'/'.join(sorted(skip))} n/a)")
+                continue
+            seen.add(family_order)
             weights, per_season = _best_weights(fit, family_order, kind)
             best_by_pool[kind][label] = weights
             holdout = _weighted_rho(hold, weights, kind, family_order=family_order)
@@ -710,10 +811,17 @@ def run_backtest(denoms) -> None:
     # best hitter weights.
     _watchlist_moves(2026, denoms, best_by_pool["hitter"])
     print(
-        "\n  Ship a candidate over baseline only if it beats baseline holdout by MORE"
-        "\n  than that pool's noise AND clears the skill-only null floor. C (luck plus a"
-        "\n  negative batted_ball claw-back) is what shipped; A and B are the alternatives"
-        "\n  it won the holdout against. Apply by hand; see the verdict doc."
+        "\n  Rho cannot separate these: the candidates span less than the fit-season"
+        "\n  noise in both pools, though all of them clear the skill-only null floor."
+        "\n  D (no residual; every family measures one named thing) is what SHIPS, and"
+        "\n  it TIED rather than won -- for pitchers it is literally B, which lost this"
+        "\n  holdout in #277. That is the correct outcome by construction: `pt` is what"
+        "\n  the `luck` residual was already proxying, so D re-expresses the same"
+        "\n  information under honest names. It ships on interpretability and on having"
+        "\n  the lowest fit-season noise, not on rho -- see #288 and the composite"
+        "\n  docstring before re-litigating from the holdout column alone. A predictive"
+        "\n  gain has to come from a durability estimator that beats raw `pt`."
+        "\n  Weights are applied by hand to `composite.FITTED_WEIGHTS`."
     )
 
 
@@ -953,9 +1061,10 @@ def _truncation_shift(kind: str, denoms, year: int, pool_size: int) -> pd.DataFr
     """
     observed = _observed(year, kind, denoms)
     out_year = zips_out_year_sgp(year, kind, denoms)
+    prior = _prior_pt_percentile(year, kind)
 
     def priced(frame: pd.DataFrame) -> pd.Series:
-        feat = _qualified_families(frame, kind)
+        feat = _qualified_families(frame, kind, prior)
         feat["future_pct"] = percentile(out_year.reindex(feat.index))
         feat = feat.dropna(subset=["value_pct", "skill_pct", "age_pct"])
         return expected_sgp(composite_pct(feat, kind, strict=True), kind)
@@ -1192,21 +1301,46 @@ def run_study(denoms, live_year: int) -> None:
         for label, column in (
             ("last-yr value", "value_pct"),
             ("skills", "skill_pct"),
-            ("luck", "luck_pct"),
+            ("speed", "speed_pct"),
+            ("luck (dropped)", "luck_pct"),
             ("playing time", "pt_pct"),
             ("batted-ball", "batted_ball_pct"),
             ("age (younger)", "age_pct"),
             ("future (stale)", "future_pct"),
         ):
+            if not any(column in f.columns for f in frames):
+                continue  # `speed` in the pitcher pool
             cells = [
                 _mean_rho(frames, column, target)
                 for target in ("target", "target_pt", "target_rate")
             ]
             print(f"    {label:<16}" + "".join(f"{c:>9.3f}" for c in cells))
 
-        print("  luck needs a POSITIVE weight (composite = skill + w*luck -> next SGP):")
+        # The #288 argument-of-record: `luck` was a residual whose largest component
+        # was volume, not luck. Printed rather than asserted so the composite
+        # docstring's table cannot drift away from the data.
+        print("  what the DROPPED `luck` residual was actually made of:")
+        for label, column in (
+            ("playing time", "pt_pct"),
+            ("speed", "speed_pct"),
+            ("batted-ball", "batted_ball_pct"),
+            ("age (younger)", "age_pct"),
+        ):
+            if not any(column in f.columns for f in frames):
+                continue
+            print(f"    {label:<16}{_mean_rho(frames, column, 'luck_pct'):>9.3f}")
+
+        # Kept after #288 dropped the family: this is WHY the residual read as
+        # signal, and the next block shows `pt` doing the same job under its own
+        # name. Delete either and the docstring's argument stops being checkable.
+        print("  the dropped `luck` wanted a POSITIVE weight (skill + w*luck -> next SGP):")
         for weight in (-1.0, -0.5, 0.0, 0.5, 1.0):
             scores = [_rho(f["skill_pct"] + weight * f["luck_pct"], f["target"]) for f in frames]
+            print(f"    w={weight:>5.1f}  rho={sum(scores) / len(scores):+.4f}")
+
+        print("  ...and `pt` earns it under its own name (skill + w*pt -> next SGP):")
+        for weight in (-1.0, -0.5, 0.0, 0.5, 1.0):
+            scores = [_rho(f["skill_pct"] + weight * f["pt_pct"], f["target"]) for f in frames]
             print(f"    w={weight:>5.1f}  rho={sum(scores) / len(scores):+.4f}")
 
         near = zips_out_year_sgp(2027, kind, denoms)

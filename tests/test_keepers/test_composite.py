@@ -4,6 +4,7 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.keepers.composite import (
+    DURABILITY_RECENCY,
     FAMILIES,
     FITTED_WEIGHTS,
     FUTURE_BLEND,
@@ -11,10 +12,12 @@ from fantasy_baseball.keepers.composite import (
     SKILL_COLUMNS,
     batted_ball,
     composite,
+    durability,
     future_percentile,
     luck,
     percentile,
     skill_percentile,
+    speed,
 )
 
 
@@ -170,11 +173,24 @@ def test_luck_is_value_minus_skill():
     )
 
 
-def test_luck_carries_a_positive_weight_for_every_position():
-    """Not what the name suggests, and load-bearing: the gap also encodes playing
-    time, and forcing it negative collapses the fit (rho 0.65 -> 0.13)."""
-    for kind, weights in FITTED_WEIGHTS.items():
-        assert weights[FAMILIES[kind].index("luck")] > 0, kind
+def test_no_residual_family_ships():
+    """#288 removed `luck` because it was a RESIDUAL, not a measurement: its largest
+    component was playing time (+0.66) and only its third was actual batted-ball luck
+    (+0.25), so its famous positive weight was paying for durability and steals under a
+    false name. Those have their own families now. Reintroducing a
+    whatever-is-left-over term would silently start paying for lineup context again --
+    R/RBI rate, a team property that does not travel with a traded player."""
+    for kind, families in FAMILIES.items():
+        assert "luck" not in families, kind
+
+
+def test_luck_survives_as_a_diagnostic_even_though_it_does_not_ship():
+    """`--backtest` bakes the residual parameterizations off against the shipped one and
+    `--study` prints what the residual was made of. Deleting the function would make the
+    composite docstring's central argument unreproducible, which is how it drifts."""
+    value = pd.Series([0.9, 0.5, 0.2])
+    skill = pd.Series([0.5, 0.5, 0.5])
+    assert luck(value, skill).tolist() == pytest.approx([0.4, 0.0, -0.3])
 
 
 def test_batted_ball_carries_a_negative_weight_for_every_position():
@@ -182,7 +198,10 @@ def test_batted_ball_carries_a_negative_weight_for_every_position():
     positive `luck` weight. A regression to a positive or zero weight -- a copy-paste
     from the luck slot, or an 'all weights should be positive' cleanup -- would revert
     #277's demotion of the everyday-plus-lucky bats with every other test still green,
-    since skill==max, future>0 and luck>0 all continue to hold."""
+    since future>0 and the family/weight alignment all continue to hold. The hitter
+    weight is a deliberate override of the grid, which zeroes this family once
+    `durability` absorbs the volume signal; see the composite docstring for the cost
+    (0.0092 rho, inside the noise band) and the reason."""
     for kind, weights in FITTED_WEIGHTS.items():
         assert weights[FAMILIES[kind].index("batted_ball")] < 0, kind
 
@@ -210,10 +229,21 @@ def test_future_percentile_falls_back_to_the_near_year_when_far_is_missing():
     assert partial.tolist() == pytest.approx(both.tolist())
 
 
-def test_fitted_weights_have_one_entry_per_family_and_lead_with_skill():
+def test_fitted_weights_align_with_their_families_and_pin_skill_at_one():
+    """`skill` is the unit every other family is measured in -- `_FAMILY_GRID` pins it
+    at 1.0 and grid-searches the rest against it -- so a value other than 1.0 means the
+    constants drifted from the fit that produced them.
+
+    It is deliberately NOT asserted to be the LARGEST weight any more. Hitter
+    `durability` fits above it (1.2), which is #288's central finding rather than a
+    bug: playing time predicts next-year playing time at 0.607 against skill's 0.464,
+    so availability repeats better than talent does. Capping durability at 1.0 to keep
+    skill on top was measured and costs 0.0012 rho -- unmeasurable against a 0.0126
+    noise band -- so this asserts what the grid actually guarantees instead of an
+    aesthetic the data does not support."""
     for kind, weights in FITTED_WEIGHTS.items():
         assert len(weights) == len(FAMILIES[kind]), kind
-        assert weights[FAMILIES[kind].index("skill")] == max(weights), kind
+        assert weights[FAMILIES[kind].index("skill")] == 1.0, kind
         assert weights[FAMILIES[kind].index("future")] > 0, kind
 
 
@@ -281,3 +311,55 @@ def test_batted_ball_keeps_nan_when_an_input_is_missing():
     out = batted_ball(frame, "hitter")
     assert out.iloc[0] == pytest.approx(0.036)
     assert math.isnan(out.iloc[1])
+
+
+def test_speed_is_per_opportunity_not_a_raw_total():
+    """The family exists because the peripherals carry no speed input. It has to be a
+    RATE: a full-time player with the same steal rate as a part-timer is not faster,
+    and a raw total would just re-import the playing-time signal `durability` owns."""
+    frame = pd.DataFrame({"sb_sgp": [10.0, 5.0], "pt": [600.0, 300.0]})
+    assert speed(frame).tolist() == pytest.approx([10 / 600, 5 / 300])
+
+
+def test_speed_returns_nan_for_zero_playing_time_rather_than_inf():
+    """An inf would survive `percentile` and pin that player to the top of the family,
+    where NaN is mean-filled to neutral. A 0-PT row is undefined speed, not elite."""
+    frame = pd.DataFrame({"sb_sgp": [1.0, 0.0], "pt": [500.0, 0.0]})
+    out = speed(frame)
+    assert math.isnan(out.iloc[1])
+    assert not math.isinf(out.iloc[1])
+
+
+def test_speed_names_the_column_it_is_missing():
+    with pytest.raises(KeyError, match="sb_sgp"):
+        speed(pd.DataFrame({"pt": [500.0]}))
+
+
+def test_durability_blends_the_prior_season_in():
+    """The whole point of the family over raw `pt`: memory. An injury-shortened season
+    for a player with a full one behind him scores above his current playing time."""
+    current = pd.Series([0.2], index=["soto"])
+    prior = pd.Series([1.0], index=["soto"])
+    out = durability(current, prior)
+    assert out.iloc[0] > current.iloc[0]
+    assert out.iloc[0] == pytest.approx(DURABILITY_RECENCY * 0.2 + (1 - DURABILITY_RECENCY) * 1.0)
+
+
+def test_durability_falls_back_to_the_current_season_when_there_is_no_prior():
+    """A rookie is judged on what he has shown, not charged for a career he has not had
+    yet -- Sal Stewart, not a fragile veteran. A missing prior must not read as zero."""
+    current = pd.Series([0.8, 0.3], index=["rookie", "vet"])
+    prior = pd.Series([0.9], index=["vet"])
+    out = durability(current, prior)
+    assert out.loc["rookie"] == pytest.approx(0.8)
+    assert out.loc["vet"] > 0.3
+
+
+def test_durability_ignores_prior_rows_for_players_not_in_the_pool():
+    """The prior season is a whole-league percentile and the current pool is filtered;
+    a stray index would otherwise reindex NaNs across everyone."""
+    current = pd.Series([0.5], index=["a"])
+    prior = pd.Series([0.1, 0.9], index=["a", "retired"])
+    out = durability(current, prior)
+    assert out.index.tolist() == ["a"]
+    assert out.iloc[0] == pytest.approx(DURABILITY_RECENCY * 0.5 + (1 - DURABILITY_RECENCY) * 0.1)
