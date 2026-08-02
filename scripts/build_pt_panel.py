@@ -55,16 +55,51 @@ def _live_seasons(years: range) -> list[int]:
     return [y for y in years if y >= dt.date.today().year]
 
 
-def _default_end() -> int:
+# A regular season is comfortably finished by this date, so a cache file written
+# before it cannot hold a complete season.
+_SEASON_OVER = (11, 1)
+_OPENING_DAY_MONTH = 4
+
+
+def _default_end(today: dt.date | None = None) -> int:
     """Last season that could plausibly have data.
 
-    January-to-March, the current calendar year has no leaderboard at all, and keeper
+    January-to-March the current calendar year has no leaderboard at all, and keeper
     work happens precisely in that window -- so defaulting to `today().year` made the
     documented bare invocation fail exactly when the tool matters most. Before opening
     day, fall back to the previous season.
     """
-    today = dt.date.today()
-    return today.year if today.month >= 4 else today.year - 1
+    today = today or dt.date.today()
+    return today.year if today.month >= _OPENING_DAY_MONTH else today.year - 1
+
+
+def _captured_while_live(year: int, written_on: dt.date) -> bool:
+    """Was a cache file for `year` written before that season finished?
+
+    This is the question the calendar cannot answer on its own. A season fetched in
+    August is a two-thirds snapshot, but by the NEXT run it is no longer "live", so a
+    check against today's date would serve it from cache and train it as a completed
+    year -- a fabricated league-wide collapse season that deflates every volume
+    coefficient. Comparing the file's own vintage to the season's end is the only
+    signal that survives into later runs.
+    """
+    return written_on < dt.date(year, *_SEASON_OVER)
+
+
+def _stale_live_caches(
+    years: range, groups: tuple[str, ...] = ("hitting", "pitching")
+) -> list[int]:
+    """Seasons whose cached leaderboard was captured before that season ended."""
+    stale = set()
+    for year in years:
+        for group in groups:
+            path = RAW_DIR / f"mlb_{group}_{year}.csv"
+            if not path.exists():
+                continue
+            written = dt.date.fromtimestamp(path.stat().st_mtime)
+            if _captured_while_live(year, written):
+                stale.add(year)
+    return sorted(stale)
 
 
 def _fetch_seasons(years: range, group: str, *, refresh: list[int]) -> dict[int, pd.DataFrame]:
@@ -98,11 +133,15 @@ def main() -> int:
     partial = _live_seasons(years)
     refresh = partial if args.refresh else []
 
-    # A season cached WHILE LIVE is a partial snapshot. On a later run it is no longer
-    # in `partial`, so without this it would be served from cache and trained on as a
-    # complete year -- a fake league-wide collapse season. Force a re-fetch of every
-    # season at or after the newest one the cache was built from.
-    refresh = sorted(set(refresh) | set(_live_seasons(years)))
+    # A season cached WHILE LIVE is a partial snapshot, and by the next run it is no
+    # longer in `partial` -- so it would be served from cache and trained as a COMPLETE
+    # year. The previous guard unioned in `_live_seasons`, which is what `partial`
+    # already is, so it was a no-op for exactly the case it described. Ask the cache
+    # files their own vintage instead.
+    stale = _stale_live_caches(years)
+    if stale:
+        logger.info("re-fetching %s: cached while the season was still live", stale)
+    refresh = sorted(set(refresh) | set(stale))
     hitting = _fetch_seasons(years, "hitting", refresh=refresh)
     pitching = _fetch_seasons(years, "pitching", refresh=refresh)
 
