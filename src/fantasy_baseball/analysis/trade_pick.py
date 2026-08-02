@@ -572,8 +572,12 @@ def render_report(result: TradePickResult) -> str:
     lines.append("")
     lines.append("-" * 72)
     if dwin < 0:
+        # dtop3 stays SIGNED: it moves independently of win%, and often the other
+        # way (trading a high-variance star lowers the ceiling and raises the
+        # floor). abs() here read a top-3 GAIN as a loss, contradicting the signed
+        # per-category table above in the one line a user acts on.
         lines.append(
-            f"You give up ~{abs(dwin):.1f} win% / ~{abs(dtop3):.1f} top-3% this year "
+            f"You give up ~{abs(dwin):.1f} win% ({dtop3:+.1f} top-3%) this year "
             f"for pick value worth ~{result.net_pick_var:+.2f} VAR."
         )
     else:

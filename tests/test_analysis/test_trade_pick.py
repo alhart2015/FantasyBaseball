@@ -252,6 +252,39 @@ def test_render_report_is_ascii_and_sign_aware():
     assert "roughly neutral" in render_report(gain)  # non-negative delta framing
 
 
+def test_verdict_line_does_not_report_a_top3_gain_as_a_loss():
+    """dtop3 was wrapped in abs() inside the loss branch, so a trade that costs
+    win% while RAISING top-3% read as costing top-3% too -- contradicting the
+    signed per-category table right above it, in the one line a user acts on.
+
+    Trading a high-variance star for steadier production does exactly this:
+    lower ceiling (win%), higher floor (top-3%).
+    """
+    from fantasy_baseball.analysis.trade_pick import (
+        CategoryDelta,
+        NextYearValue,
+        ThisYearImpact,
+        TradePickResult,
+        render_report,
+    )
+
+    cats = [
+        CategoryDelta(c, 30.0, 28.0, 80.0, 81.4)
+        for c in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP")
+    ]
+    result = TradePickResult(
+        sent_name="Julio Rodriguez",
+        partner="SkeleThor",
+        # win% falls 62.1 -> 57.9 while top-3% RISES 88.2 -> 89.6
+        this_year=ThisYearImpact(62.1, 57.9, 88.2, 89.6, cats, 2000, 42),
+        next_year=NextYearValue(5, 3, 2, "round", 4.2, 5.1, 18.4, 11, 20),
+    )
+    verdict = render_report(result).splitlines()[-2]
+    assert "4.2 win%" in verdict  # the real loss, still stated as a loss
+    assert "+1.4 top-3%" in verdict  # the top-3 GAIN, signed
+    assert "~1.4 top-3%" not in verdict  # the old bare rendering, which read as a loss
+
+
 def test_cli_help_runs():
     import subprocess
     import sys
