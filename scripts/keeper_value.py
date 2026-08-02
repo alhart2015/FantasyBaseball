@@ -221,6 +221,9 @@ def main() -> int:
     parser.add_argument("--min-next-pa", type=float, default=250)
     parser.add_argument("--min-next-ip", type=float, default=50)
     parser.add_argument("--no-aging", action="store_true")
+    parser.add_argument(
+        "--no-exit-rows", action="store_true", help="ablate the survivorship correction"
+    )
     parser.add_argument("--top", type=int, default=30)
     parser.add_argument("--team", help="restrict the board to one fantasy team")
     parser.add_argument("--stats", action="store_true", help="show the 2027 roto line")

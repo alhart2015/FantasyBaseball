@@ -114,8 +114,19 @@ def fetch_blend() -> dict:
     return payload
 
 
+# Volume floor for FITTING the curve. Deliberately a constant and deliberately NOT
+# --min-pa/--min-ip: those select which players the board DISPLAYS, and the training
+# population must not move with them. A review flagged the two as "desynced" and
+# threading the display floor through here was measured to be actively harmful --
+# at a 650 PA floor the `role` coefficient inverts to -58.6 and at 700 `vol1` goes
+# negative, i.e. more playing time last year predicts less next year. Raising the
+# floor also strips out the injury-shortened seasons `shortfall` and `role` exist to
+# handle. The separation is the design; do not couple them again.
+TRAIN_FLOOR = {"hitter": 300.0, "pitcher": 50.0}
+
+
 def volume_forecast(
-    kind: str, target_year: int, observed: pd.Series, floor: float
+    kind: str, target_year: int, observed: pd.Series, include_exits: bool = True
 ) -> pd.Series | None:
     """Projected `target_year` PA (hitters) or IP (pitchers) from career history.
 
@@ -134,9 +145,7 @@ def volume_forecast(
         return None
     print(f"  {kind} playing-time panel: {path.name}")
     panel = pd.read_csv(path)
-    # Same floor the caller scores on, so the fit population and the prediction
-    # population cannot desync when --min-pa/--min-ip is passed.
-    rows = lag_panel(panel, kind, min_recent=floor)
+    rows = lag_panel(panel, kind, min_recent=TRAIN_FLOOR[kind], include_exits=include_exits)
     curve = fit_curve(rows[list(FEATURES[kind])], rows["target"], kind)
     latest = int(panel.loc[~panel["partial_season"].astype(bool), "season"].max())
     volume = "pa" if kind == "hitter" else "ip"
@@ -238,7 +247,9 @@ def forecast_pool(
     result = pd.DataFrame(index=idx)
     # Volume comes from the multi-year career curve for BOTH pools now, not the
     # one-year gap term. Falls back to the gap model if a panel is missing.
-    curve_volume = volume_forecast(kind, target_year, observed.loc[idx, pt], floor)
+    curve_volume = volume_forecast(
+        kind, target_year, observed.loc[idx, pt], not getattr(args, "no_exit_rows", False)
+    )
     for col in columns:
         g = gap(observed.loc[idx, col], base.loc[idx, col])
         aging = None
@@ -319,6 +330,11 @@ def main() -> int:
     parser.add_argument("--min-next-pa", type=float, default=250)
     parser.add_argument("--min-next-ip", type=float, default=50)
     parser.add_argument("--no-aging", action="store_true", help="ablate the out-year term")
+    parser.add_argument(
+        "--no-exit-rows",
+        action="store_true",
+        help="ablate the survivorship correction: do not train on career endings",
+    )
     parser.add_argument("--players", help="comma-separated names to show")
     parser.add_argument("--top", type=int, default=15)
     parser.add_argument("--pool", choices=("hitter", "pitcher"))

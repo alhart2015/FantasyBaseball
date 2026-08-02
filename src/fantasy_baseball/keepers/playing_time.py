@@ -25,13 +25,18 @@ same term carries something even more basic -- innings per appearance is what ma
 starter a starter -- which is why `start_share` joins it there: innings-per-appearance
 alone cannot separate a swingman from a short starter.
 
-Measured, holdout RMSE (leave-one-season-out), vs a one-lag model:
+Measured, holdout RMSE (leave-one-season-out) against a one-lag model, on the
+EXIT-CORRECTED population (see `include_exits` in `lag_panel`):
 
-    hitters    all 159.3 -> 155.9 (t=5.5)   injured 179.6 -> 166.8 (t=5.0)
-    pitchers   all  47.6 ->  46.7 (t=4.9)   durable  57.7 ->  57.0 (t=3.1)
+    hitters    all 175.3 -> 164.6 (t=9.8)   injured 214.9 -> 184.8 (t=5.4)
+    pitchers   all  49.9 ->  49.0 (t=5.4)   durable  60.0 ->  59.3 (t=2.9)
 
 Role helps injured hitters most and durable PITCHERS most, which is the right shape:
 for a pitcher, role is not a nuance, it is the whole starter/reliever distinction.
+
+(An earlier revision quoted 159.3 -> 155.9 and 47.6 -> 46.7. Those were measured on the
+survivor-only population, which excludes career endings and so understates the error
+every model makes on it. Same comparison, honester denominator.)
 
 **`shortfall` earns its place by removing a bias, not by adding accuracy.** It is
 `max(0, best_of_the_two_prior_seasons - volume(-1))`: how far below his own norm a
@@ -199,7 +204,11 @@ def fit_curve(features: pd.DataFrame, target: pd.Series, kind: str = "hitter") -
 
 
 def lag_panel(
-    panel: pd.DataFrame, kind: str = "hitter", *, min_recent: float = 0.0
+    panel: pd.DataFrame,
+    kind: str = "hitter",
+    *,
+    min_recent: float = 0.0,
+    include_exits: bool = True,
 ) -> pd.DataFrame:
     """Reshape a per-player-per-season panel into (features, target) rows.
 
@@ -209,6 +218,18 @@ def lag_panel(
     In-progress seasons (`partial_season`) are dropped as TARGETS -- training on a
     two-thirds-complete year as though it were finished would teach the curve that
     everyone collapses. They remain available to the caller as features.
+
+    `include_exits` controls whether a career ENDING trains. The panel spans
+    first-observed to last-observed season, so the year after a player's final one has
+    no row, his age is NaN, and he is dropped -- meaning the curve learns
+    `E[volume | he plays again]` and over-forecasts exactly the aging and marginal
+    players a keeper decision has to price. With it on, that season's age is derived
+    from the prior one and the exit trains as `target = 0`, matching the survivorship
+    correction `build_volume_transition` already applies to the persistence share.
+
+    Only ONE exit row per career is added, and that falls out of `min_recent` rather
+    than needing a rule: the season after the exit has `vol1 = 0`, which fails the
+    floor. Long-retired players therefore contribute no tail of zeros.
     """
     if kind not in FEATURES:
         raise ValueError(f"kind must be 'hitter' or 'pitcher', got {kind!r}")
@@ -242,11 +263,14 @@ def lag_panel(
         lags = [season - 1, season - 2, season - 3]
         if not all(lag in wide.columns for lag in lags):
             continue
+        age = ages[season]
+        if include_exits:
+            age = age.fillna(ages[lags[0]] + 1)
         built = build_features(
             wide[lags[0]],
             wide[lags[1]],
             wide[lags[2]],
-            ages[season],
+            age,
             role[lags[0]],
             kind,
             None if starts is None else starts[lags[0]],
