@@ -195,6 +195,86 @@ def test_the_bootstrap_is_reproducible() -> None:
     )
 
 
+def test_track_record_matching_separates_a_breakout_from_a_steady_producer() -> None:
+    # The whole point of #305: matched on the current season alone these two draw the
+    # same cohort, and a 4 -> 13 breakout is priced as if it were a proven 13.
+    panel = _panel(
+        _career(1, 2010, 24, [4.0, 13.0, 6.0])  # broke out, gave it back
+        + _career(2, 2010, 24, [13.0, 13.0, 12.0])  # was always this good
+    )
+    plain = comp_trajectory(panel, kind="hitter", age=25, sgp=13.0, horizons=(1,))
+    assert plain.n_comps == 2
+    assert plain.path[0].mean == pytest.approx(9.0)  # 6 and 12 averaged together
+
+    breakout = comp_trajectory(
+        panel, kind="hitter", age=25, sgp=13.0, prior_sgp=4.0, prior_band=2.0, horizons=(1,)
+    )
+    steady = comp_trajectory(
+        panel, kind="hitter", age=25, sgp=13.0, prior_sgp=13.0, prior_band=2.0, horizons=(1,)
+    )
+    assert breakout.path[0].mean == pytest.approx(6.0)
+    assert steady.path[0].mean == pytest.approx(12.0)
+
+
+def test_a_comp_absent_the_prior_year_has_a_prior_of_zero() -> None:
+    # Not playing is an observation, and for a young player the normal one -- the same
+    # convention the forward path uses. Excluding him would bias the young end toward
+    # late debuts.
+    panel = _panel([*_career(1, 2010, 24, [5.0]), (2, 2011, 25, 13.0), (2, 2012, 26, 10.0)])
+    traj = comp_trajectory(
+        panel, kind="hitter", age=25, sgp=13.0, prior_sgp=0.0, prior_band=1.0, horizons=(1,)
+    )
+    assert traj.n_comps == 1
+    assert list(traj.comps["mlbam_id"]) == [2]
+    assert traj.comps.loc[0, "sgp_prior"] == pytest.approx(0.0)
+
+
+def test_a_prior_season_before_the_panel_begins_is_censored_not_zeroed() -> None:
+    # Mirrors the forward censoring: "we cannot see it" must never be scored as "he did
+    # not play". The 2010 season's prior is 2009, outside the panel.
+    panel = _panel(_career(1, 2010, 25, [13.0, 9.0]) + _career(2, 2012, 25, [13.0, 9.0]))
+    traj = comp_trajectory(
+        panel, kind="hitter", age=25, sgp=13.0, prior_sgp=0.0, prior_band=1.0, horizons=(1,)
+    )
+    assert list(traj.comps["mlbam_id"]) == [2]  # the 2010 comp is dropped, not matched at 0
+
+
+def test_prior_band_defaults_to_the_current_season_band() -> None:
+    panel = _panel(_career(1, 2010, 24, [11.0, 13.0, 9.0]) + _career(2, 2010, 24, [4.0, 13.0, 5.0]))
+    traj = comp_trajectory(
+        panel, kind="hitter", age=25, sgp=13.0, band=2.5, prior_sgp=13.0, horizons=(1,)
+    )
+    assert list(traj.comps["mlbam_id"]) == [1]  # prior 11.0 is inside +/-2.5, 4.0 is not
+
+
+def test_mean_prior_is_reported_in_both_modes() -> None:
+    # In plain mode it is free, and reading it says what track record the cohort had.
+    panel = _panel(_career(1, 2010, 24, [8.0, 13.0, 9.0]))
+    plain = comp_trajectory(panel, kind="hitter", age=25, sgp=13.0, horizons=(1,))
+    assert plain.prior_sgp is None
+    assert plain.mean_prior == pytest.approx(8.0)
+
+
+def test_prior_band_without_prior_sgp_is_rejected() -> None:
+    with pytest.raises(ValueError, match="no effect without prior_sgp"):
+        comp_trajectory(
+            _panel(_career(1, 2010, 25, [13.0])), kind="hitter", age=25, sgp=13.0, prior_band=2.0
+        )
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0])
+def test_rejects_a_non_positive_prior_band(bad: float) -> None:
+    with pytest.raises(ValueError, match="prior_band"):
+        comp_trajectory(
+            _panel(_career(1, 2010, 25, [13.0])),
+            kind="hitter",
+            age=25,
+            sgp=13.0,
+            prior_sgp=5.0,
+            prior_band=bad,
+        )
+
+
 @pytest.mark.parametrize("band", [0.0, -1.0])
 def test_rejects_a_non_positive_band(band: float) -> None:
     with pytest.raises(ValueError, match="band"):

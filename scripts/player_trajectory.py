@@ -50,6 +50,10 @@ from fantasy_baseball.utils.name_utils import normalize_name
 
 PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
 
+#: Below this many comps the path is directional at best. Not a statistical threshold --
+#: a floor at which the printed precision stops being honest.
+THIN_COMPS = 20
+
 
 @lru_cache(maxsize=1)
 def _people() -> pd.DataFrame:
@@ -167,16 +171,48 @@ def _resolve_player(
     return resolved
 
 
+def _prior_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> float:
+    """The player's own SGP in the season before the one being scored.
+
+    Explicit --prior-sgp wins. Otherwise it is read off the panel, and a player who was
+    not in the league that year scores 0 -- the same convention comps get, and for a
+    young player the normal case rather than an error.
+    """
+    if args.prior_sgp is not None:
+        return args.prior_sgp
+    rows = panel[panel["mlbam_id"] == mlbam_id]
+    current = int(rows["season"].max())
+    previous = rows[rows["season"] == current - 1]
+    prior = float(previous["sgp"].sum()) if not previous.empty else 0.0
+    print(f"  prior season ({current - 1}): {prior:.1f} SGP")
+    return prior
+
+
 def render(traj: Trajectory, show_comps: int) -> None:
     span = f"{traj.seasons[0]}-{traj.seasons[1]}" if traj.seasons else "n/a"
     print(f"\n{traj.kind.upper()}: {traj.sgp:.1f} SGP in an age-{traj.age} season")
+    if traj.prior_sgp is not None:
+        print(f"  matched on TRACK RECORD: {traj.prior_sgp:.1f} -> {traj.sgp:.1f} SGP")
     # `n_comps` and `span` describe the NEAREST horizon's cohort; later horizons see
     # fewer, which is why the per-row n is printed rather than left to this header.
     print(f"  {traj.n_comps} comps at +1 within +/-{traj.band} SGP, age-{traj.age} seasons {span}")
     if traj.n_comps == 0:
-        print("  NO COMPS -- widen --band or check the age")
+        print("  NO COMPS -- widen --band/--prior-band or check the age")
         return
-    print(f"  comps started from {traj.mean_start:.1f} SGP on average")
+    print(
+        f"  comps started from {traj.mean_start:.1f} SGP on average, "
+        f"after {traj.mean_prior:.1f} the year before"
+    )
+    if traj.n_comps < THIN_COMPS:
+        # A handful of comps still prints a mean and a standard error, and those look
+        # exactly as authoritative as the ones backed by 150. Track-record matching is
+        # where this bites: adding a second hard band cut Soto's cohort from 185 to 2.
+        print(
+            f"  *** THIN: {traj.n_comps} comps. The bootstrap SE below describes the"
+            " spread of this handful, NOT how well the path is known. Widen"
+            f"{' --prior-band' if traj.prior_sgp is not None else ''} --band, or read"
+            " it as directional only. ***"
+        )
 
     print("\n   age   exp SGP    +/-SE    median   still playing   if still playing")
     for p in traj.path:
@@ -217,6 +253,26 @@ def main() -> int:
     parser.add_argument("--age", type=int, help="the player's age in the season he is producing")
     parser.add_argument("--sgp", type=float, help="full-season SGP pace")
     parser.add_argument("--band", type=float, default=DEFAULT_BAND, help="comp width in SGP")
+    parser.add_argument(
+        "--match",
+        choices=("current", "track"),
+        default="current",
+        help=(
+            "'current' (default) matches comps on this season alone; 'track' also "
+            "requires them to have produced near the player's PRIOR season, so a "
+            "breakout and a steady producer stop drawing the same cohort (#305)"
+        ),
+    )
+    parser.add_argument(
+        "--prior-sgp",
+        type=float,
+        help="prior-season SGP for --match track; looked up automatically with --player",
+    )
+    parser.add_argument(
+        "--prior-band",
+        type=float,
+        help="comp width on the prior season (defaults to --band)",
+    )
     parser.add_argument("--horizon", type=int, default=5, help="years forward to project")
     parser.add_argument("--show-comps", type=int, default=0, metavar="N")
     parser.add_argument(
@@ -272,8 +328,9 @@ def main() -> int:
                 pool,
                 age if args.age is None else args.age,
                 sgp if args.sgp is None else args.sgp,
+                _prior_for(live[pool], pid, args) if args.match == "track" else None,
             )
-            for pool, _, age, sgp in _resolve_player(args.player, live, calendar, args.mlbam_id)
+            for pool, pid, age, sgp in _resolve_player(args.player, live, calendar, args.mlbam_id)
         ]
         if args.sgp is not None:
             # The looked-up pace was printed above but is not what gets scored; say so
@@ -281,15 +338,19 @@ def main() -> int:
             # which one drove the table.
             print(f"  (--sgp {args.sgp} overrides the pace above)")
     else:
-        queries = [(args.pool, args.age, args.sgp)]
+        if args.match == "track" and args.prior_sgp is None:
+            parser.error("--match track needs --prior-sgp when not using --player")
+        queries = [(args.pool, args.age, args.sgp, args.prior_sgp)]
 
-    for pool, age, sgp in queries:
+    for pool, age, sgp, prior in queries:
         traj = comp_trajectory(
             load(pool, False),
             kind=pool,
             age=age,
             sgp=sgp,
             band=args.band,
+            prior_sgp=prior,
+            prior_band=args.prior_band,
             horizons=tuple(range(1, args.horizon + 1)),
         )
         render(traj, args.show_comps)
