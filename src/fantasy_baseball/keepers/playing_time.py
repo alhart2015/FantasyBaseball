@@ -301,11 +301,15 @@ def lag_panel(
     needed = ["mlbam_id", "season", volume, appearances, "age", "scheduled_games"]
     if kind == "pitcher":
         needed.append("starts")
-    for col in needed:
+    # `partial_season` is listed because the code below calls .astype on it: a bare
+    # `.get(col, False)` default returns a bool, and `False.astype` is an opaque
+    # AttributeError from deep inside the function rather than a KeyError naming the
+    # column, which is what every other required column produces.
+    for col in (*needed, "partial_season"):
         if col not in panel.columns:
             raise KeyError(f"panel missing {col!r}; got {sorted(panel.columns)}")
 
-    frame = panel.loc[~panel.get("partial_season", False).astype(bool)].copy()
+    frame = panel.loc[~panel["partial_season"].astype(bool)].copy()
     vol = frame[volume].fillna(0.0)
     app = frame[appearances].fillna(0.0)
     frame["_vol"] = normalize_to_full_season(vol, frame["scheduled_games"])

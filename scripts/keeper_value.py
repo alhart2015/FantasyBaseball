@@ -10,11 +10,12 @@ roster slot is otherwise worth.
     VAR      SGP minus the replacement level -- the last player who would actually be
              rostered (10 teams x 11 hitters / 9 pitchers).
 
-**2027 is the validated number. 2028 is an extrapolation** -- the persistence fit is a
-ONE-year transition, so its drift term is one year of playing-time attrition. Applying
-it to a two-year horizon understates the decay, which makes 2028 run optimistic on
-volume. It is shown because keepers are held indefinitely and the trajectory matters,
-not because it carries the same weight as 2027.
+**2027 is the validated number. 2028 is an extrapolation.** Volume iterates the
+playing-time curve twice, with age advanced each step, which is the right shape. The
+RATES do not: the persistence fit is a ONE-year transition and its share is applied
+once, so 2028's rates are effectively 2027's and a 2026 breakout is over-credited
+against a steady veteran. It is shown because keepers are held indefinitely and the
+trajectory matters, not because it carries the same weight as 2027.
 
 Replacement is POSITION-AWARE, reusing `sgp/replacement.py`'s empirical waiver floors
 rather than one level per pool -- the same floors the draft board nets against, so a
@@ -191,8 +192,11 @@ def _by_team(board: pd.DataFrame, args: argparse.Namespace) -> int:
 
     print("")
     print("=" * 100)
+    # Name the restriction: under --kind the KEEP total counts one pool only, and a
+    # reader comparing teams would otherwise take it for the whole retainable roster.
+    scope = f" -- {args.kind.upper()}S ONLY" if args.kind else ""
     print(
-        f"KEEPER CANDIDATES BY TEAM -- weakest first "
+        f"KEEPER CANDIDATES BY TEAM{scope} -- weakest first "
         f"(KEEP = best {args.keep_slots}, SHOWN = best {args.per_team})"
     )
     print(f"{'=' * 100}")
@@ -413,8 +417,9 @@ def main() -> int:
     print("\n  PA/IP and the counting stats are EXPECTATIONS over every outcome, including")
     print("  the chance of missing time -- NOT a healthy-season line. That is why they sit")
     print("  below ZiPS, which projects a nominal workload. Verified on 2025: unconditional")
-    print("  bias +1% PA, +0% R, -0% RBI, -7% HR. Use --per-600 to divide availability out.")
-    print("  2027 is the validated horizon; 2028 extrapolates a one-year drift term.")
+    print("  bias PA +1%, R +0%, RBI -0%, HR -7%, SB +14%. Use --per-600 to divide out.")
+    print("  2027 is the validated horizon. 2028 iterates the VOLUME curve twice but")
+    print("  applies the one-year RATE share once, so its rates are effectively 2027's.")
     return 0
 
 

@@ -106,10 +106,24 @@ def _fetch_seasons(years: range, group: str, *, refresh: list[int]) -> dict[int,
     frames: dict[int, pd.DataFrame] = {}
     for year in years:
         path = RAW_DIR / f"mlb_{group}_{year}.csv"
+        keep = None
         if year in refresh and path.exists():
-            logger.info("refresh: dropping cached %s", path.name)
-            path.unlink()
-        frames[year] = fetch_mlb_season(RAW_DIR, year, group)
+            # Move aside rather than delete: the fetch can fail (statsapi down, rate
+            # limited) and live seasons now refresh on EVERY run, so unlinking first
+            # would destroy the only local snapshot and leave the panel unbuildable.
+            # `fetch_keeper_skills.py` takes the same precaution for the same reason.
+            keep = path.with_suffix(".csv.prev")
+            logger.info("refresh: setting aside cached %s", path.name)
+            path.replace(keep)
+        try:
+            frames[year] = fetch_mlb_season(RAW_DIR, year, group)
+        except Exception:
+            if keep is not None:
+                logger.warning("fetch failed for %s %d; restoring the cached copy", group, year)
+                keep.replace(path)
+            raise
+        if keep is not None:
+            keep.unlink(missing_ok=True)
         logger.info("%s %d: %d rows", group, year, len(frames[year]))
     return frames
 
@@ -159,9 +173,13 @@ def main() -> int:
     # players who had debuted since -- leaving them without a birth date, hence without
     # an age, hence unscoreable. Unlinking mirrors what _fetch_seasons does.
     tag = f"all_{args.start}_{args.end}"
-    if args.refresh:
-        stale = RAW_DIR / f"mlb_people_{tag}.csv"
-        stale.unlink(missing_ok=True)
+    # The people cache must follow the SAME invalidation rule as the leaderboards. Tying
+    # it to --refresh alone meant a bare rerun re-fetched the live season, discovered
+    # players who had debuted since, then served them from a frozen people file with no
+    # birth date -- hence no age, hence a NaN forecast. That is the ageless-player bug
+    # this branch has now fixed twice; here it would have returned on the DEFAULT path.
+    if refresh:
+        (RAW_DIR / f"mlb_people_{tag}.csv").unlink(missing_ok=True)
     people = fetch_mlb_people(RAW_DIR, ids, tag)
 
     PANEL_DIR.mkdir(parents=True, exist_ok=True)

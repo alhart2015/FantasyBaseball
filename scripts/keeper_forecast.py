@@ -63,18 +63,24 @@ def _panel_path(kind: str) -> Path | None:
     silently fall back to the one-year gap volume model this curve replaced.
     """
 
-    def span(path: Path) -> tuple[int, int]:
+    def span(path: Path) -> tuple[int, int] | None:
         # `{kind}_pt_panel_{start}_{end}.csv`. Sorting the raw filename compares START
         # first, so `_2015_2026` beat `_2010_2026` -- it picked max(start, end), not
         # newest. Rank on the parsed END year, then on the widest window.
         try:
             start, end = (int(x) for x in path.stem.rsplit("_", 2)[-2:])
         except ValueError:
-            return (-1, 0)
+            return None
         return (end, -start)
 
-    matches = sorted(PT_PANEL_DIR.glob(f"{kind}_pt_panel_*.csv"), key=span)
-    return matches[-1] if matches else None
+    # EXCLUDED, not merely ranked low: a stray backup or a partial write would still be
+    # returned by matches[-1] when it is the only file present, and then read as a panel.
+    candidates = [
+        (key, path)
+        for path in PT_PANEL_DIR.glob(f"{kind}_pt_panel_*.csv")
+        if (key := span(path)) is not None
+    ]
+    return max(candidates)[1] if candidates else None
 
 
 from fantasy_baseball.keepers.persistence import (
