@@ -37,6 +37,9 @@ from pathlib import Path
 
 import pandas as pd
 
+# Accented names (Sanchez, Luzardo) mangle under the cp1252 Windows default.
+sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
@@ -48,7 +51,10 @@ from fantasy_baseball.keepers.actuals import (
 )
 from fantasy_baseball.keepers.blend import parse_blend
 
-PT_PANEL = PROJECT_ROOT / "data" / "playing_time" / "hitter_pt_panel_2010_2026.csv"
+PT_PANELS = {
+    "hitter": PROJECT_ROOT / "data" / "playing_time" / "hitter_pt_panel_2010_2026.csv",
+    "pitcher": PROJECT_ROOT / "data" / "playing_time" / "pitcher_pt_panel_2010_2026.csv",
+}
 
 from fantasy_baseball.keepers.persistence import (
     Share,
@@ -58,13 +64,11 @@ from fantasy_baseball.keepers.persistence import (
     gap,
 )
 from fantasy_baseball.keepers.playing_time import (
-    PA_FEATURES as PA_COLS,
-)
-from fantasy_baseball.keepers.playing_time import (
+    FEATURES,
     build_features,
     fit_curve,
     lag_panel,
-    plate_appearances_per_game,
+    per_appearance,
 )
 from fantasy_baseball.keepers.vintages import load_vintage
 
@@ -100,52 +104,57 @@ def fetch_blend() -> dict:
     return payload
 
 
-def hitter_pa_forecast(target_year: int, observed_pa: pd.Series) -> pd.Series | None:
-    """Projected `target_year` PA from each hitter's own multi-year history.
+def volume_forecast(kind: str, target_year: int, observed: pd.Series) -> pd.Series | None:
+    """Projected `target_year` PA (hitters) or IP (pitchers) from career history.
 
-    Supersedes the one-year gap term for hitters. `observed_pa` is the CURRENT season's
-    full-season blend, used as the first lag; the two older lags and age come from the
+    Supersedes the one-year gap term for both pools. `observed` is the CURRENT season's
+    full-season blend, used as the first lag; the older lags, age and role come from the
     2010-present panel. Returns None when the panel is absent, so the caller falls back
     to the gap model rather than failing.
 
-    For a two-years-out target the curve is applied twice -- its own output feeds back
-    as the first lag, with the older lags shifted along. That is an extrapolation: the
-    curve was fit one year ahead, and iterating it compounds its error.
+    For a two-years-out target the curve is applied twice, its own output feeding back
+    as the first lag. That is an extrapolation: the curve was fit one year ahead, and
+    iterating it compounds its error.
     """
-    if not PT_PANEL.exists():
+    path = PT_PANELS[kind]
+    if not path.exists():
         return None
-    panel = pd.read_csv(PT_PANEL)
-    rows = lag_panel(panel, min_recent=300.0)
-    curve = fit_curve(rows[list(PA_COLS)], rows["target"])
+    panel = pd.read_csv(path)
+    rows = lag_panel(panel, kind, min_recent=300.0 if kind == "hitter" else 50.0)
+    curve = fit_curve(rows[list(FEATURES[kind])], rows["target"], kind)
     latest = int(panel.loc[~panel["partial_season"].astype(bool), "season"].max())
+    volume = "pa" if kind == "hitter" else "ip"
 
     def series_for(year: int, column: str) -> pd.Series:
         sub = panel.loc[panel["season"] == year].set_index("mlbam_id")[column]
-        return sub.loc[~sub.index.duplicated()]
+        return sub.loc[~sub.index.duplicated()].reindex(observed.index)
 
-    # Lags relative to BASE_YEAR: the live blend is the base year's line, and the panel
-    # supplies the two seasons before it.
-    pa2 = series_for(BASE_YEAR - 1, "pa").reindex(observed_pa.index)
-    pa3 = series_for(BASE_YEAR - 2, "pa").reindex(observed_pa.index)
-    age = series_for(latest, "age").reindex(observed_pa.index) + (target_year - latest)
-    # Role comes from the base season's PARTIAL panel row, not from the blend. The blend
-    # carries full-season PA but its `g` field is rest-of-season games, so pa/g off the
-    # blend is nonsense (600+ PA over 46 games). PA-per-game is a rate, so two thirds of
-    # a season measures it perfectly well.
-    ppg1 = plate_appearances_per_game(
-        series_for(BASE_YEAR, "pa").reindex(observed_pa.index).fillna(0.0),
-        series_for(BASE_YEAR, "games").reindex(observed_pa.index).fillna(0.0),
-    )
+    vol2 = series_for(BASE_YEAR - 1, volume)
+    vol3 = series_for(BASE_YEAR - 2, volume)
+    age = series_for(latest, "age") + (target_year - latest)
+    # Role comes from the base season's PARTIAL panel row, not the blend. The blend
+    # carries full-season volume but its `g` field is REST-OF-SEASON games, so volume/g
+    # off the blend is nonsense (600+ PA over 46 games). A per-appearance rate is
+    # readable off two thirds of a season anyway.
+    base_vol = series_for(BASE_YEAR, volume).fillna(0.0)
+    base_app = series_for(BASE_YEAR, "games").fillna(0.0)
+    role = per_appearance(base_vol, base_app, kind)
+    start_share = None
+    if kind == "pitcher":
+        starts = series_for(BASE_YEAR, "starts").fillna(0.0)
+        start_share = (starts / base_app.where(base_app > 0)).fillna(0.0)
+
     # One application of the curve per year from the base season to the target. `age` is
-    # advanced to the TARGET year, so each step walks it back to the season it is
-    # actually projecting: for a 2028 target, step 0 projects 2027. Role is carried
-    # forward unchanged -- a batting-order slot is far stickier than a workload, and
-    # projecting a change in it would be inventing information.
-    pa1, projected = observed_pa, None
+    # advanced to the TARGET year, so each step walks it back to the season it actually
+    # projects: for a 2028 target, step 0 projects 2027. Role and start share carry
+    # forward unchanged -- a batting-order slot or a rotation job is far stickier than a
+    # workload, and projecting a change in either would be inventing information.
+    vol1, projected = observed, None
     steps = target_year - BASE_YEAR
     for step in range(steps):
-        projected = curve.predict(build_features(pa1, pa2, pa3, age - (steps - step - 1), ppg1))
-        pa1, pa2, pa3 = projected, pa1, pa2
+        built = build_features(vol1, vol2, vol3, age - (steps - step - 1), role, kind, start_share)
+        projected = curve.predict(built)
+        vol1, vol2, vol3 = projected, vol1, vol2
     return projected
 
 
@@ -203,9 +212,9 @@ def forecast_pool(
     idx = observed.index[observed[pt] >= floor].intersection(base.index)
 
     result = pd.DataFrame(index=idx)
-    # Hitter volume comes from the multi-year curve, not the one-year gap term. Pitchers
-    # have no panel yet and keep the gap model -- see keepers/playing_time.py.
-    curve_pa = hitter_pa_forecast(target_year, observed.loc[idx, pt]) if kind == "hitter" else None
+    # Volume comes from the multi-year career curve for BOTH pools now, not the
+    # one-year gap term. Falls back to the gap model if a panel is missing.
+    curve_volume = volume_forecast(kind, target_year, observed.loc[idx, pt])
     for col in columns:
         g = gap(observed.loc[idx, col], base.loc[idx, col])
         aging = None
@@ -213,8 +222,8 @@ def forecast_pool(
             aging = centered_aging(
                 out[col].reindex(idx), base.loc[idx, col], weights=observed.loc[idx, pt]
             )
-        if col == pt and curve_pa is not None:
-            result[col] = curve_pa.reindex(idx)
+        if col == pt and curve_volume is not None:
+            result[col] = curve_volume.reindex(idx)
         else:
             result[col] = fold_forecast(base.loc[idx, col], g, shares[col], aging)
         result[f"{col}_gap"] = g

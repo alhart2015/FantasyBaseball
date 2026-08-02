@@ -36,7 +36,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.keepers.mlb_stats import fetch_mlb_people, fetch_mlb_season
-from fantasy_baseball.pt_model.panel import build_hitter_panel
+from fantasy_baseball.pt_model.panel import build_hitter_panel, build_pitcher_panel
 
 RAW_DIR = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
 PANEL_DIR = PROJECT_ROOT / "data" / "playing_time"
@@ -87,26 +87,36 @@ def main() -> int:
     refresh = partial if args.refresh else []
 
     hitting = _fetch_seasons(years, "hitting", refresh=refresh)
-    _fetch_seasons(years, "pitching", refresh=refresh)
+    pitching = _fetch_seasons(years, "pitching", refresh=refresh)
 
-    ids = sorted({int(i) for f in hitting.values() for i in f["player.id"].dropna()})
-    logger.info("distinct hitters %d-%d: %d", args.start, args.end, len(ids))
-    people = fetch_mlb_people(RAW_DIR, ids, f"{args.start}_{args.end}")
+    # Ids from BOTH leaderboards. Taking them from hitting alone left 13% of pitcher
+    # seasons with no birth date and therefore no age -- under the universal DH most
+    # pitchers never take a plate appearance, so they simply are not in the hitting
+    # pull. Age is a real feature of the curve, so those rows predicted NaN.
+    ids = sorted(
+        {int(i) for f in hitting.values() for i in f["player.id"].dropna()}
+        | {int(i) for f in pitching.values() for i in f["player.id"].dropna()}
+    )
+    logger.info("distinct players %d-%d: %d", args.start, args.end, len(ids))
+    people = fetch_mlb_people(RAW_DIR, ids, f"all_{args.start}_{args.end}")
 
-    panel = build_hitter_panel(hitting, people, partial_seasons=partial)
     PANEL_DIR.mkdir(parents=True, exist_ok=True)
-    out = PANEL_DIR / f"hitter_pt_panel_{args.start}_{args.end}.csv"
-    panel.to_csv(out, index=False)
-
-    observed = int(panel["observed"].sum())
-    logger.info("")
-    logger.info("wrote %s", out.relative_to(PROJECT_ROOT))
-    logger.info("  rows          %d", len(panel))
-    logger.info("  observed      %d", observed)
-    logger.info("  absent (NaN)  %d", len(panel) - observed)
-    logger.info("  players       %d", panel["mlbam_id"].nunique())
-    logger.info("  partial-year  %d", int(panel["partial_season"].sum()))
-    logger.info("  no birth date %d", int(panel["age"].isna().sum()))
+    for label, seasons, builder in (
+        ("hitter", hitting, build_hitter_panel),
+        ("pitcher", pitching, build_pitcher_panel),
+    ):
+        panel = builder(seasons, people, partial_seasons=partial)
+        out = PANEL_DIR / f"{label}_pt_panel_{args.start}_{args.end}.csv"
+        panel.to_csv(out, index=False)
+        observed = int(panel["observed"].sum())
+        logger.info("")
+        logger.info("wrote %s", out.relative_to(PROJECT_ROOT))
+        logger.info("  rows          %d", len(panel))
+        logger.info("  observed      %d", observed)
+        logger.info("  absent (NaN)  %d", len(panel) - observed)
+        logger.info("  players       %d", panel["mlbam_id"].nunique())
+        logger.info("  partial-year  %d", int(panel["partial_season"].sum()))
+        logger.info("  no birth date %d", int(panel["age"].isna().sum()))
     return 0
 
 

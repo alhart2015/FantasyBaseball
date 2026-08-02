@@ -45,16 +45,18 @@ absorbed, because each would otherwise read as a playing-time signal:
 
 from __future__ import annotations
 
-from collections.abc import Collection, Mapping
+from collections.abc import Callable, Collection, Mapping
 
 import numpy as np
 import pandas as pd
 
 from fantasy_baseball.keepers.actuals import (
     HITTER_RATES,
+    PITCHER_RATES,
     coerce_numeric,
     index_by_mlbam,
     normalize_hitting,
+    normalize_pitching,
 )
 
 # The panel's column order, which is also its schema. Consumers select by name, but
@@ -75,6 +77,27 @@ HITTER_PANEL_COLUMNS: tuple[str, ...] = (
     "seasons_since_debut",
     "history_truncated",
     *HITTER_RATES,
+)
+
+# Same shape for pitchers, with innings for plate appearances and `starts` added:
+# innings-per-appearance alone cannot separate a swingman from a short starter.
+PITCHER_PANEL_COLUMNS: tuple[str, ...] = (
+    "mlbam_id",
+    "season",
+    "observed",
+    "partial_season",
+    "scheduled_games",
+    "ip",
+    "games",
+    "starts",
+    "age",
+    "primary_position",
+    "is_pitcher",
+    "birth_date",
+    "debut_date",
+    "seasons_since_debut",
+    "history_truncated",
+    *PITCHER_RATES,
 )
 
 # Age reference date. MLB's convention, and what `stat.age` reports.
@@ -112,6 +135,25 @@ def _observed_season(raw: pd.DataFrame, year: int) -> pd.DataFrame:
         # keeping both would double a player's weight in every fit downstream.
         raise ValueError(f"{year}: duplicate mlbam ids in season frame: {sorted(set(duplicated))}")
     out = rates.join(games.rename("games"))
+    out.insert(0, "season", year)
+    return out.reset_index()
+
+
+def _observed_pitching_season(raw: pd.DataFrame, year: int) -> pd.DataFrame:
+    """One raw season frame -> observed rows: ip, games, starts, and the rate line.
+
+    `games` is APPEARANCES, and `starts` rides along because innings-per-appearance
+    alone cannot separate a swingman from a short starter. Both are what the pitcher
+    analogue of PA-per-game is built from.
+    """
+    rates = normalize_pitching(raw)
+    indexed = index_by_mlbam(raw, "player.id")
+    games = indexed["stat.gamesPitched"].map(coerce_numeric)
+    starts = indexed["stat.gamesStarted"].map(coerce_numeric)
+    duplicated = rates.index[rates.index.duplicated()]
+    if len(duplicated) > 0:
+        raise ValueError(f"{year}: duplicate mlbam ids in season frame: {sorted(set(duplicated))}")
+    out = rates.join(games.rename("games")).join(starts.rename("starts"))
     out.insert(0, "season", year)
     return out.reset_index()
 
@@ -173,6 +215,50 @@ def build_hitter_panel(
         ordered by id then season, with `HITTER_PANEL_COLUMNS`. Unobserved seasons
         carry NaN for every stat column and `observed = False`.
     """
+    return _build_panel(
+        seasons,
+        people,
+        partial_seasons=partial_seasons,
+        observed_season=_observed_season,
+        volume="pa",
+        columns=HITTER_PANEL_COLUMNS,
+    )
+
+
+def build_pitcher_panel(
+    seasons: Mapping[int, pd.DataFrame],
+    people: pd.DataFrame,
+    *,
+    partial_seasons: Collection[int] = (),
+) -> pd.DataFrame:
+    """Assemble the pitcher playing-time panel.
+
+    Identical in shape and in every representation decision to `build_hitter_panel`
+    (see the module docstring) -- innings replace plate appearances, and `games` counts
+    APPEARANCES rather than games played. `starts` rides along because the pitcher
+    analogue of role is innings-per-appearance, which needs the start share to separate
+    a swingman from a short starter.
+    """
+    return _build_panel(
+        seasons,
+        people,
+        partial_seasons=partial_seasons,
+        observed_season=_observed_pitching_season,
+        volume="ip",
+        columns=PITCHER_PANEL_COLUMNS,
+    )
+
+
+def _build_panel(
+    seasons: Mapping[int, pd.DataFrame],
+    people: pd.DataFrame,
+    *,
+    partial_seasons: Collection[int],
+    observed_season: Callable[[pd.DataFrame, int], pd.DataFrame],
+    volume: str,
+    columns: tuple[str, ...],
+) -> pd.DataFrame:
+    """Shared assembly. `volume` is the column whose NaN defines `observed`."""
     if not seasons:
         raise ValueError("no season frames supplied; cannot build a panel")
     unknown_partial = sorted(set(partial_seasons) - set(seasons))
@@ -182,7 +268,7 @@ def build_hitter_panel(
         raise ValueError(f"partial_seasons not present in seasons: {unknown_partial}")
 
     observed = pd.concat(
-        [_observed_season(raw, year) for year, raw in sorted(seasons.items())],
+        [observed_season(raw, year) for year, raw in sorted(seasons.items())],
         ignore_index=True,
     )
     full = (
@@ -191,8 +277,8 @@ def build_hitter_panel(
         .sort_index()
     )
     panel = full.reset_index()
-    # `pa` is NaN exactly on the reindexed-in rows, which is what defines `observed`.
-    panel["observed"] = panel["pa"].notna()
+    # The volume column is NaN exactly on the reindexed-in rows, which defines `observed`.
+    panel["observed"] = panel[volume].notna()
     panel["partial_season"] = panel["season"].isin(set(partial_seasons))
     panel["scheduled_games"] = (
         panel["season"].map(_SHORTENED_SEASONS).fillna(_FULL_SEASON_GAMES).astype(int)
@@ -214,4 +300,4 @@ def build_hitter_panel(
     # to tell those apart from a true rookie season.
     panel["history_truncated"] = debut_year < min(seasons)
 
-    return panel.loc[:, list(HITTER_PANEL_COLUMNS)]
+    return panel.loc[:, list(columns)]
