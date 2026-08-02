@@ -46,6 +46,7 @@ from fantasy_baseball.trajectory.panel import (
     prorate_partial,
     season_elapsed_fraction,
 )
+from fantasy_baseball.trajectory.shape import shape_trajectory
 from fantasy_baseball.utils.name_utils import normalize_name
 
 PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
@@ -191,6 +192,28 @@ def _prior_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> 
 def render(traj: Trajectory, show_comps: int) -> None:
     span = f"{traj.seasons[0]}-{traj.seasons[1]}" if traj.seasons else "n/a"
     print(f"\n{traj.kind.upper()}: {traj.sgp:.1f} SGP in an age-{traj.age} season")
+    if traj.mode == "shape":
+        # A fitted prediction, not an average over a handful of careers: `n` counts the
+        # rows the relationship was fit on, and nothing was excluded on a cliff.
+        print(f"  SHAPE: {traj.prior_sgp:.1f} last year -> {traj.sgp:.1f} now")
+        print(f"  fit on {traj.n_comps} weighted seasons, {span}")
+        print(
+            f"  their average shape: {traj.mean_prior:.1f} -> {traj.mean_start:.1f} SGP "
+            "(kernel-weighted)"
+        )
+        print("\n   age    pred   +/-SE   median   sample still playing   sample if playing")
+        for p in traj.path:
+            if p.n == 0:
+                print(f"   {p.age:3d}        --      --       --      (not yet observable)")
+                continue
+            print(
+                f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}  {p.median:7.2f}"
+                f"      {p.survivors:4d}/{p.n} ({p.survival:4.0%})       {p.mean_if_survived:6.2f}"
+            )
+        covered = len(traj.observable)
+        print(f"\n   total over {covered} years: {traj.total:.1f} SGP")
+        return
+
     if traj.prior_sgp is not None:
         print(f"  matched on TRACK RECORD: {traj.prior_sgp:.1f} -> {traj.sgp:.1f} SGP")
     # `n_comps` and `span` describe the NEAREST horizon's cohort; later horizons see
@@ -255,12 +278,14 @@ def main() -> int:
     parser.add_argument("--band", type=float, default=DEFAULT_BAND, help="comp width in SGP")
     parser.add_argument(
         "--match",
-        choices=("current", "track"),
+        choices=("current", "track", "shape"),
         default="current",
         help=(
             "'current' (default) matches comps on this season alone; 'track' also "
             "requires them to have produced near the player's PRIOR season, so a "
-            "breakout and a steady producer stop drawing the same cohort (#305)"
+            "breakout and a steady producer stop drawing the same cohort (#305); "
+            "'shape' fits forward SGP on both anchors with kernel-weighted age and "
+            "level, excluding nobody on a cliff (#310)"
         ),
     )
     parser.add_argument(
@@ -275,6 +300,11 @@ def main() -> int:
     )
     parser.add_argument("--horizon", type=int, default=5, help="years forward to project")
     parser.add_argument("--show-comps", type=int, default=0, metavar="N")
+    parser.add_argument(
+        "--show-anchors",
+        action="store_true",
+        help="with --match shape, print the fitted coefficients behind each prediction",
+    )
     parser.add_argument(
         "--no-era-adjust",
         action="store_true",
@@ -328,7 +358,7 @@ def main() -> int:
                 pool,
                 age if args.age is None else args.age,
                 sgp if args.sgp is None else args.sgp,
-                _prior_for(live[pool], pid, args) if args.match == "track" else None,
+                _prior_for(live[pool], pid, args) if args.match in ("track", "shape") else None,
             )
             for pool, pid, age, sgp in _resolve_player(args.player, live, calendar, args.mlbam_id)
         ]
@@ -338,21 +368,40 @@ def main() -> int:
             # which one drove the table.
             print(f"  (--sgp {args.sgp} overrides the pace above)")
     else:
-        if args.match == "track" and args.prior_sgp is None:
-            parser.error("--match track needs --prior-sgp when not using --player")
+        if args.match in ("track", "shape") and args.prior_sgp is None:
+            parser.error(f"--match {args.match} needs --prior-sgp when not using --player")
         queries = [(args.pool, args.age, args.sgp, args.prior_sgp)]
 
+    horizons = tuple(range(1, args.horizon + 1))
     for pool, age, sgp, prior in queries:
-        traj = comp_trajectory(
-            load(pool, False),
-            kind=pool,
-            age=age,
-            sgp=sgp,
-            band=args.band,
-            prior_sgp=prior,
-            prior_band=args.prior_band,
-            horizons=tuple(range(1, args.horizon + 1)),
-        )
+        if args.match == "shape":
+            traj, anchors = shape_trajectory(
+                load(pool, False),
+                kind=pool,
+                age=age,
+                sgp=sgp,
+                peak=prior,
+                horizons=horizons,
+            )
+            if args.show_anchors:
+                print("\n   fitted anchors (forward = intercept + a*now + b*last year):")
+                print("     h  intercept   a(now)  b(last)   n_fit   n_eff")
+                for a in anchors:
+                    print(
+                        f"     {a.horizon}   {a.intercept:8.2f} {a.on_down:8.3f} "
+                        f"{a.on_peak:8.3f} {a.n_fit:7d} {a.n_effective:7.0f}"
+                    )
+        else:
+            traj = comp_trajectory(
+                load(pool, False),
+                kind=pool,
+                age=age,
+                sgp=sgp,
+                band=args.band,
+                prior_sgp=prior,
+                prior_band=args.prior_band,
+                horizons=horizons,
+            )
         render(traj, args.show_comps)
     return 0
 

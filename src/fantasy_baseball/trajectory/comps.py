@@ -81,6 +81,11 @@ class Trajectory:
     seasons: tuple[int, int] | None
     path: tuple[PathPoint, ...]
     comps: pd.DataFrame = field(repr=False)
+    #: Which matcher produced this -- "current", "track" (comps.comp_trajectory) or
+    #: "shape" (shape.shape_trajectory). In "shape" the numbers are a fitted prediction
+    #: rather than an average over comps, so `PathPoint.n` counts FITTING rows and
+    #: `band` does not apply.
+    mode: str = "current"
 
     @property
     def observable(self) -> tuple[PathPoint, ...]:
@@ -244,4 +249,5 @@ def comp_trajectory(
         else None,
         path=tuple(path),
         comps=comps,
+        mode="track" if prior_sgp is not None else "current",
     )

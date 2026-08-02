@@ -1,0 +1,241 @@
+"""Trajectory by SHAPE: learn from players whose career took a similar turn (#310).
+
+`comps.comp_trajectory` matches on LEVEL -- same age, same current SGP, optionally the
+same prior SGP -- and everything inside the band counts equally while everything outside
+counts zero. For a star having a down year that is close to unusable. Soto at 21.5 ->
+12.9 draws two comps, Johnny Damon and Darin Erstad, because a 27-year-old who was elite
+and then fell 40% is a rare and specific box. Pujols misses the ceiling by 0.4 SGP and
+contributes nothing.
+
+The players you would actually reason from -- A-Rod, Trout, Cabrera, Harper, Pujols --
+are excluded for a subtler reason: at 27 they all STAYED elite, so they are not comps for
+a collapse. But ask the question by shape instead of by level and the pool is there. Of
+elite (prior >= 16 SGP) age-25-30 seasons, 87 dropped to 45-75% of the year before --
+Matt Kemp, Vlad Guerrero, Mookie Betts, Yelich, Machado, Jose Ramirez. They bounce: year
+one averages 1.11x the down year, settling near 0.69x of the prior peak.
+
+So this module does two things differently.
+
+**A career is summarised by two anchors, not one level.** How good was he last year
+(`peak`) and what is he doing now (`down`)? Both carry signal and their relative weight
+is FIT, not chosen -- a weighted least squares of forward SGP on both, per horizon. That
+is what converts a comp's future onto the query player's scale, the step level matching
+cannot do at all.
+
+**Nothing is excluded on a cliff.** Age contributes on a triangular kernel out to
+`AGE_WINDOW` years, and peak level likewise, so a 26-year-old with an identical profile
+informs a 27-year-old query instead of being discarded. Weight decays; it never jumps.
+
+The output is a prediction rather than an average over a handful of careers, so
+`PathPoint.n` counts FITTING rows and `survivors` describes that sample's attrition, not
+a cohort of the query's own comps. `render` labels them accordingly.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+
+import numpy as np
+import pandas as pd
+
+from .comps import PathPoint, Trajectory
+
+#: Age contributes on a triangular kernel this many years either side. Ages 25-30 age
+#: similarly enough to pool; beyond that the shape itself changes.
+AGE_WINDOW = 2
+
+#: Peak-level kernel half-width, in SGP. Wide, because `peak` is also a regressor and
+#: the linear term carries level -- this only keeps the fit LOCAL enough that one
+#: straight line does not have to serve fringe and elite players at once.
+PEAK_BAND = 8.0
+
+BOOTSTRAP_DRAWS = 1000
+
+
+@dataclass(frozen=True)
+class Anchors:
+    """The fitted `forward = intercept + a*down + b*peak` for one horizon."""
+
+    horizon: int
+    intercept: float
+    on_down: float
+    on_peak: float
+    n_fit: int
+    #: Kish effective sample size, `(sum w)^2 / sum(w^2)`. The raw row count overstates
+    #: support when most rows carry a small kernel weight.
+    n_effective: float
+
+
+def _triangular(distance: np.ndarray, width: float) -> np.ndarray:
+    """1.0 at zero distance, tapering linearly to 0 at `width`, never negative."""
+    clipped: np.ndarray = np.clip(1.0 - np.abs(distance) / width, 0.0, None)
+    return clipped
+
+
+def _weighted_least_squares(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> np.ndarray:
+    """Solve for [intercept, a, b] with weights `w`. `x` is (n, 2): down, peak."""
+    design = np.column_stack([np.ones(len(x)), x])
+    root = np.sqrt(w)[:, None]
+    coefficients: np.ndarray
+    coefficients, *_ = np.linalg.lstsq(design * root, y * np.sqrt(w), rcond=None)
+    return coefficients
+
+
+def build_history(panel: pd.DataFrame) -> pd.DataFrame:
+    """One row per season that has an OBSERVABLE prior, carrying both anchors.
+
+    A season whose predecessor falls before the panel begins is dropped rather than
+    given a prior of 0 -- the same censoring the forward path uses, for the same reason:
+    "we cannot see it" must never be scored as "he did not play". A player who was
+    genuinely out of the league keeps his 0, which is a real observation.
+    """
+    panel = panel.sort_values(["mlbam_id", "season"])
+    first = int(panel["season"].min())
+    index = panel.set_index(["mlbam_id", "season"])["sgp"]
+    if index.index.has_duplicates:
+        index = index.groupby(level=[0, 1]).sum()
+
+    history = panel.copy()
+    history["peak"] = [
+        float(index.get((pid, season - 1), 0.0)) if season - 1 >= first else float("nan")
+        for pid, season in zip(history["mlbam_id"], history["season"], strict=True)
+    ]
+    return history.dropna(subset=["peak"]).rename(columns={"sgp": "down"})
+
+
+def shape_trajectory(
+    panel: pd.DataFrame,
+    *,
+    kind: str,
+    age: int,
+    sgp: float,
+    peak: float,
+    horizons: tuple[int, ...] = (1, 2, 3, 4, 5),
+    age_window: int = AGE_WINDOW,
+    peak_band: float = PEAK_BAND,
+    last_complete_season: int | None = None,
+    seed: int = 0,
+    bootstrap_draws: int = BOOTSTRAP_DRAWS,
+) -> tuple[Trajectory, tuple[Anchors, ...]]:
+    """Forward path for a player at `age`, now producing `sgp`, who produced `peak`.
+
+    Returns the trajectory and the fitted anchors, so the coefficients that produced
+    each number can be read rather than trusted.
+    """
+    if peak_band <= 0:
+        raise ValueError(f"peak_band must be positive, got {peak_band}")
+    if age_window < 1:
+        raise ValueError(f"age_window must be at least 1, got {age_window}")
+    if not horizons:
+        raise ValueError("horizons must not be empty")
+
+    horizons = tuple(sorted(horizons))
+    last = last_complete_season if last_complete_season is not None else int(panel["season"].max())
+    history = build_history(panel)
+    index = panel.set_index(["mlbam_id", "season"])["sgp"]
+    if index.index.has_duplicates:
+        index = index.groupby(level=[0, 1]).sum()
+
+    # Weight once: the kernels describe the QUERY's neighbourhood and do not move with
+    # the horizon. `age_window + 1` so a player exactly `age_window` years away still
+    # carries weight rather than sitting exactly on zero.
+    weights = _triangular(history["age"].to_numpy(dtype=float) - age, age_window + 1) * _triangular(
+        history["peak"].to_numpy(dtype=float) - peak, peak_band
+    )
+    usable = weights > 0
+    history, weights = history[usable].reset_index(drop=True), weights[usable]
+
+    rng = np.random.default_rng(seed)
+    path, anchors, rows = [], [], []
+    for h in horizons:
+        observable = (history["season"] + h <= last).to_numpy()
+        forward = np.array(
+            [
+                float(index.get((pid, season + h), 0.0))
+                for pid, season in zip(history["mlbam_id"], history["season"], strict=True)
+            ]
+        )
+        y, x, w = (
+            forward[observable],
+            history.loc[observable, ["down", "peak"]].to_numpy(dtype=float),
+            weights[observable],
+        )
+
+        if len(y) < 3 or w.sum() <= 0:
+            path.append(_empty_point(h, age))
+            anchors.append(Anchors(h, float("nan"), float("nan"), float("nan"), len(y), 0.0))
+            continue
+
+        coefficients = _weighted_least_squares(x, y, w)
+        query = np.array([1.0, sgp, peak])
+        predicted = float(query @ coefficients)
+
+        # Bootstrap the FIT, not the outcomes: resample rows, refit, re-predict. That is
+        # the uncertainty in the relationship, which is what an SE on a prediction means.
+        draws = np.empty(bootstrap_draws)
+        for i in range(bootstrap_draws):
+            pick = rng.integers(0, len(y), len(y))
+            draws[i] = query @ _weighted_least_squares(x[pick], y[pick], w[pick])
+
+        residuals = y - np.column_stack([np.ones(len(x)), x]) @ coefficients
+        survived = y > 0
+        path.append(
+            PathPoint(
+                horizon=h,
+                age=age + h,
+                mean=predicted,
+                se=float(draws.std(ddof=1)),
+                median=float(predicted + np.median(residuals)),
+                n=len(y),
+                survivors=int(survived.sum()),
+                mean_if_survived=float(y[survived].mean()) if survived.any() else float("nan"),
+            )
+        )
+        anchors.append(
+            Anchors(
+                horizon=h,
+                intercept=float(coefficients[0]),
+                on_down=float(coefficients[1]),
+                on_peak=float(coefficients[2]),
+                n_fit=len(y),
+                n_effective=float(w.sum() ** 2 / np.square(w).sum()),
+            )
+        )
+        rows.append({"horizon": h, "predicted": predicted})
+
+    return (
+        Trajectory(
+            kind=kind,
+            age=age,
+            sgp=sgp,
+            band=float("nan"),  # no band: weight decays, nothing is excluded on a cliff
+            prior_sgp=peak,
+            n_comps=len(history),
+            mean_start=float(np.average(history["down"], weights=weights))
+            if len(history)
+            else float("nan"),
+            mean_prior=float(np.average(history["peak"], weights=weights))
+            if len(history)
+            else float("nan"),
+            seasons=(int(history["season"].min()), int(history["season"].max()))
+            if len(history)
+            else None,
+            path=tuple(path),
+            comps=pd.DataFrame(rows),
+            mode="shape",
+        ),
+        tuple(anchors),
+    )
+
+
+def _empty_point(horizon: int, age: int) -> PathPoint:
+    return PathPoint(
+        horizon=horizon,
+        age=age + horizon,
+        mean=float("nan"),
+        se=float("nan"),
+        median=float("nan"),
+        n=0,
+        survivors=0,
+        mean_if_survived=float("nan"),
+    )
