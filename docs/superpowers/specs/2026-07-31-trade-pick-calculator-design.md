@@ -89,6 +89,19 @@ carries `team_rosters` (`dict[str, list[Player]]`), `actual_standings`,
 `user_team_name`.
 
 **Scenario construction** (`build_trade_scenario`):
+
+> **Superseded 2026-08-02 (code review of PR #287).** The "drop, then append"
+> wording below is no longer what the code does, and following it reintroduces two
+> real bugs. Both rosters are now rebuilt by substituting the incoming body AT THE
+> OUTGOING BODY'S INDEX -- appending reorders the hitter/pitcher sublists the MC
+> indexes its random draws by, which destroys the common random numbers the paired
+> delta depends on. And every body that changes teams is re-slotted via
+> `place_in_slot`: `selected_position` belongs to the roster SPOT, but
+> `scoring._classify_roster` reads each body's active/il/bench bucket off it, so a
+> body that keeps its old team's slot silently changes bucket. Nor does the active
+> lineup "re-optimize" as described below -- the ROS-direct engine takes the active
+> set straight from the slots. See `place_in_slot`'s docstring for the invariant.
+
 - Locate the sent player on the user's roster by normalized name. If more than
   one roster player normalizes to the same name AND they are different player
   types, require `--player-type hitter|pitcher` to disambiguate; otherwise error.
