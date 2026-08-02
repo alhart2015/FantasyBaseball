@@ -597,3 +597,33 @@ def test_parse_full_season_lines_namesake_keeps_higher_volume():
     }
     _by_mlbam, by_name = parse_full_season_lines(payload)
     assert by_name[rank_key("Mason Miller", "pitcher")]["ip"] == 180  # higher-volume wins
+
+
+def test_projected_par_curve_matches_inline_construction():
+    import json
+    import math
+
+    from fantasy_baseball.analysis import draft_value as dv
+    from fantasy_baseball.config import load_config
+
+    par = dv.projected_par_curve()
+    # non-empty and sorted descending (par_for_slot(k) = k-th best drafted VAR)
+    assert len(par.drafted_pars) > 0
+    assert par.drafted_pars == sorted(par.drafted_pars, reverse=True)
+
+    # cross-check: the standalone helper reproduces the exact same curve the
+    # metric builds inline, guarding against setup-sequence drift (anchor before
+    # board index, fraction=1.0, keepers passed to _assign_pick_types).
+    config = load_config(dv._CONFIG)
+    board, _scale = dv.reproduce_draft_day_board(config)
+    board = dv._anchor_board_var_to_frozen(board, dv._frozen_var_by_player_id())
+    state = json.loads(dv._DRAFT_STATE.read_text(encoding="utf-8"))
+    picks = dv.reconstruct_draft(config, state=state)
+    bindex = dv._board_index(board)
+    typed = dv._assign_pick_types(picks, bindex, config.keepers)
+    expected = dv.build_par_curve(typed, bindex, fraction=1.0)
+
+    assert par.drafted_pars == expected.drafted_pars
+    assert (math.isnan(par.keeper_par) and math.isnan(expected.keeper_par)) or (
+        par.keeper_par == expected.keeper_par
+    )
