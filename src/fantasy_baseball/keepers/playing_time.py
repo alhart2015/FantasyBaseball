@@ -78,6 +78,7 @@ Pure and I/O-free. `scripts/build_pt_panel.py` produces the panels this consumes
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -155,6 +156,50 @@ def per_appearance(volume: pd.Series, appearances: pd.Series, kind: str) -> pd.S
         raise ValueError(f"kind must be 'hitter' or 'pitcher', got {kind!r}")
     rate = volume.divide(appearances.where(appearances > 0))
     return rate.fillna(0.0).clip(upper=_MAX_ROLE[kind])
+
+
+def carry_forward_role(
+    volumes: Sequence[pd.Series],
+    appearances: Sequence[pd.Series],
+    kind: str,
+    starts: Sequence[pd.Series] | None = None,
+) -> tuple[pd.Series, pd.Series | None]:
+    """Role (and, for pitchers, start share) from the most recent OBSERVED season.
+
+    `volumes`/`appearances`/`starts` are ordered newest-first: the base season, then the
+    one before it, and so on. A player with no row in the base season falls back to the
+    next season that has one, because a batting-order slot or a rotation job is sticky
+    -- far more so than a workload. Nothing observed anywhere yields 0.0.
+
+    **Both terms are returned together, and that is the point.** For pitchers they are
+    one near-collinear joint term (VIF ~35): the prediction is a large positive `role`
+    minus a large negative `start_share`, so advancing one without the other is not a
+    partial fix, it is a wrong answer. Carrying role forward while leaving start_share
+    pinned to the base year gave a rehabbing starter his full starter credit with none
+    of the offset -- about +29 IP, a 25-30% inflation. Returning a tuple makes the two
+    impossible to separate at a call site.
+    """
+    if len(volumes) != len(appearances):
+        raise ValueError("volumes and appearances must be the same length")
+    if kind == "pitcher" and starts is None:
+        raise ValueError("pitcher carry-forward requires starts")
+    if starts is not None and len(starts) != len(volumes):
+        raise ValueError("starts must be the same length as volumes")
+
+    role: pd.Series | None = None
+    share: pd.Series | None = None
+    for step, (vol, app) in enumerate(zip(volumes, appearances, strict=True)):
+        observed = vol.notna()
+        step_role = per_appearance(vol, app, kind).where(observed)
+        role = step_role if role is None else role.fillna(step_role)
+        if starts is not None:
+            apps = app.where(app > 0)
+            # Sourced from the SAME season index as the role above, never the base year.
+            step_share = (starts[step] / apps).where(observed)
+            share = step_share if share is None else share.fillna(step_share)
+    if role is None:
+        raise ValueError("no seasons supplied")
+    return role.fillna(0.0), None if share is None else share.fillna(0.0)
 
 
 def build_features(

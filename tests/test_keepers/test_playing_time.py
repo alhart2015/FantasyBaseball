@@ -10,6 +10,7 @@ from fantasy_baseball.keepers.playing_time import (
     PITCHER_FEATURES,
     PlayingTimeCurve,
     build_features,
+    carry_forward_role,
     fit_curve,
     lag_panel,
     normalize_to_full_season,
@@ -289,3 +290,43 @@ def test_a_still_active_player_gets_no_spurious_exit_row() -> None:
     than an ending; inventing a zero for him would be a fabricated retirement."""
     out = lag_panel(_panel_with_a_career_ending(), min_recent=300.0)
     assert not ((out["mlbam_id"] == 1) & (out["target"] == 0.0)).any()
+
+
+def test_carry_forward_returns_role_and_start_share_together() -> None:
+    """They are ONE joint term (VIF ~35), so they must advance in lockstep. Carrying
+    role forward while leaving start_share at the base year gave a rehabbing starter
+    his full starter credit with none of the offsetting term -- about +29 IP."""
+    absent = pd.Series([np.nan], index=[1])
+    prior_ip, prior_g, prior_gs = _s([180.0]), _s([31.0]), _s([29.0])
+    prior_ip.index = prior_g.index = prior_gs.index = [1]
+    role, start_share = carry_forward_role(
+        volumes=[absent, prior_ip],
+        appearances=[absent, prior_g],
+        kind="pitcher",
+        starts=[absent, prior_gs],
+    )
+    assert role.loc[1] == pytest.approx(180.0 / 31.0)
+    assert start_share is not None
+    # The partner must come from the SAME season the role did, not default to 0.
+    assert start_share.loc[1] == pytest.approx(29.0 / 31.0)
+
+
+def test_carry_forward_prefers_the_most_recent_observed_season() -> None:
+    base_ip = pd.Series([120.0], index=[1])
+    older_ip = pd.Series([180.0], index=[1])
+    g = pd.Series([30.0], index=[1])
+    role, _ = carry_forward_role([base_ip, older_ip], [g, g], "pitcher", starts=[g, g])
+    assert role.loc[1] == pytest.approx(120.0 / 30.0)  # base year wins
+
+
+def test_carry_forward_falls_back_to_zero_when_nothing_is_observed() -> None:
+    absent = pd.Series([np.nan], index=[1])
+    role, start_share = carry_forward_role([absent], [absent], "pitcher", starts=[absent])
+    assert role.loc[1] == 0.0
+    assert start_share is not None and start_share.loc[1] == 0.0
+
+
+def test_carry_forward_omits_start_share_for_hitters() -> None:
+    role, start_share = carry_forward_role([_s([600.0])], [_s([145.0])], "hitter")
+    assert start_share is None
+    assert role.iloc[0] == pytest.approx(600.0 / 145.0)

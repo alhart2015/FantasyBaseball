@@ -87,9 +87,9 @@ from fantasy_baseball.keepers.persistence import (
 from fantasy_baseball.keepers.playing_time import (
     FEATURES,
     build_features,
+    carry_forward_role,
     fit_curve,
     lag_panel,
-    per_appearance,
 )
 from fantasy_baseball.keepers.vintages import load_vintage
 
@@ -180,25 +180,17 @@ def volume_forecast(
     # carries full-season volume but its `g` field is REST-OF-SEASON games, so volume/g
     # off the blend is nonsense (600+ PA over 46 games). A per-appearance rate is
     # readable off two thirds of a season anyway.
-    # Role from the base season, falling back to the most recent season that HAS a row.
-    # A blanket fillna(0) here turned "no panel row" into role = 0 -- the single
-    # strongest negative signal in the model -- and produced a plausible-looking but
-    # badly deflated forecast instead of tripping the fallback. A batting-order slot or
-    # a rotation job is sticky, so the previous season's role is the honest stand-in.
-    role = per_appearance(
-        series_for(BASE_YEAR, volume), series_for(BASE_YEAR, "games"), kind
-    ).where(series_for(BASE_YEAR, volume).notna())
-    for back in (1, 2):
-        prior = per_appearance(
-            series_for(BASE_YEAR - back, volume), series_for(BASE_YEAR - back, "games"), kind
-        ).where(series_for(BASE_YEAR - back, volume).notna())
-        role = role.fillna(prior)
-    role = role.fillna(0.0)
-    start_share = None
-    if kind == "pitcher":
-        apps = series_for(BASE_YEAR, "games")
-        starts = series_for(BASE_YEAR, "starts")
-        start_share = (starts / apps.where(apps > 0)).fillna(0.0)
+    # Role, and for pitchers its inseparable partner, from the most recent season that
+    # HAS a panel row. A blanket fillna(0) turned "no row" into role = 0, the single
+    # strongest negative signal in the model. `carry_forward_role` advances BOTH terms
+    # off the same season -- carrying only one is a wrong answer, not a partial fix.
+    seasons = [BASE_YEAR, BASE_YEAR - 1, BASE_YEAR - 2]
+    role, start_share = carry_forward_role(
+        volumes=[series_for(y, volume) for y in seasons],
+        appearances=[series_for(y, "games") for y in seasons],
+        kind=kind,
+        starts=[series_for(y, "starts") for y in seasons] if kind == "pitcher" else None,
+    )
 
     # One application of the curve per year from the base season to the target. `age` is
     # advanced to the TARGET year, so each step walks it back to the season it actually
