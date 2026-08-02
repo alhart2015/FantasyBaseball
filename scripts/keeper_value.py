@@ -16,9 +16,15 @@ it to a two-year horizon understates the decay, which makes 2028 run optimistic 
 volume. It is shown because keepers are held indefinitely and the trajectory matters,
 not because it carries the same weight as 2027.
 
-Replacement here is POSITION-BLIND (one hitter level, one pitcher level). A catcher is
-therefore undervalued and a corner outfielder overvalued relative to a position-aware
-level. That is a known gap, not an oversight.
+Replacement is POSITION-AWARE, reusing `sgp/replacement.py`'s empirical waiver floors
+rather than one level per pool -- the same floors the draft board nets against, so a
+keeper and a draft pick are priced on one scale. Scarcity is real and large: the
+catcher floor is 7.70 SGP against an outfielder's 9.96, so a catcher earns a 2.3 SGP
+credit for being hard to replace. Pitchers route to an SP or RP floor by projected
+innings (9.29 vs 7.42), which is what stops a 52-inning closer being measured against
+a 160-inning starter. `sgp/var.py` credits a multi-eligible player at his scarcest
+slot and falls back to UTIL -- defined as the HIGHEST hitter floor, so an uncovered
+player gets no scarcity credit rather than an invented one.
 
 Usage:
     python scripts/keeper_value.py                  # full board
@@ -48,6 +54,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from keeper_forecast import _names, fetch_blend, forecast_pool, to_counting
 
+from fantasy_baseball.keepers.positions import load_positions
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_AVG,
@@ -57,13 +64,32 @@ from fantasy_baseball.sgp.player_value import (
     calculate_hitting_rate_sgp,
     calculate_pitching_rate_sgp,
 )
+from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP, Category
 from fantasy_baseball.utils.name_utils import normalize_name
 
 CONFIG_PATH = PROJECT_ROOT / "config" / "league.yaml"
-# 10 teams x the starting slots in config/league.yaml (11 hitters, 9 pitchers). The
-# replacement level is the last man rostered, so this is the depth that defines it.
-ROSTERED = {"hitter": 110, "pitcher": 90}
+
+
+# Empirical per-position waiver floors, shared with the draft board. Pure in the
+# league's denominators, so this is a module-level constant rather than a per-run fit.
+LEVELS: dict[str, float] = {}
+
+
+def _eligibility(names: pd.Series, kind: str) -> pd.Series:
+    """Eligible slots per player, for netting against the right replacement level.
+
+    Pitchers are a single "P" slot in this league, so `calculate_var` routes them to
+    the SP or RP floor by projected innings. A hitter the position cache does not cover
+    falls back to UTIL, which `position_aware_replacement_levels` defines as the
+    HIGHEST hitter floor -- the conservative choice, since it assumes no scarcity
+    credit rather than inventing one.
+    """
+    if kind == "pitcher":
+        return pd.Series([["P"]] * len(names), index=names.index)
+    positions = load_positions()
+    return names.fillna("").map(lambda n: positions.get(normalize_name(n)) or ["UTIL"])
 
 
 def sgp_frame(counting: pd.DataFrame, kind: str, denoms: dict[Category, float]) -> pd.Series:
@@ -225,6 +251,9 @@ def main() -> int:
         {k.value: v for k, v in sorted(denoms.items(), key=lambda x: x[0].value)},
     )
 
+    LEVELS.update(position_aware_replacement_levels(denoms))
+    print("replacement floors:", {k: round(v, 2) for k, v in sorted(LEVELS.items())})
+
     payload = fetch_blend()
     owners = fetch_rosters(args.my_team)
     print(f"  roster entries loaded: {len(owners)} (joined on name+type; no mlbam, #284)")
@@ -254,19 +283,38 @@ def main() -> int:
                 "vol_2028": volume[2028],
             }
         )
-        # Replacement = the last player who would actually be rostered, per year.
+        # VAR against the POSITION-AWARE empirical floors, not one constant per pool.
+        # `sgp/replacement.py` already owns these (per hitter position, plus an SP/RP
+        # split), and `calculate_var` already credits a multi-eligible player at his
+        # scarcest slot and falls back to UTIL for DH-only bats. Reusing both keeps one
+        # definition of replacement across the draft board and this one.
+        frame["name"] = _names(payload, kind).reindex(frame.index)
+        eligible = _eligibility(frame["name"], kind)
         for year in (2027, 2028):
             col = f"sgp_{year}"
-            level = frame[col].nlargest(ROSTERED[kind]).iloc[-1]
-            frame[f"var_{year}"] = frame[col] - level
-            print(f"  {kind} {year} replacement level: {level:6.2f} SGP")
+            var_input = pd.DataFrame(
+                {
+                    "total_sgp": frame[col],
+                    "positions": eligible,
+                    # Routes a pitcher to the SP or RP floor. Full-season projected IP,
+                    # so the role cannot flip on a partial line.
+                    "ip": frame[f"vol_{year}"] if kind == "pitcher" else 0.0,
+                }
+            )
+            frame[f"var_{year}"] = var_input.apply(
+                lambda r: calculate_var(r, LEVELS), axis=1
+            ).astype(float)
+        used = sorted({p for slots in eligible for p in slots})
+        print(
+            f"  {kind} floors used: "
+            + ", ".join(f"{p} {LEVELS[p]:.2f}" for p in used if p in LEVELS)
+        )
         # The 2027 scored line itself, so a rating can be read against the stats that
         # produced it. Hitter and pitcher category names differ, so the concat below
         # leaves the other pool's columns NaN -- which is correct, not a gap.
         for cat in roto.columns:
             frame[cat] = roto[cat]
         frame["kind"] = kind
-        frame["name"] = _names(payload, kind).reindex(frame.index)
         keys = frame["name"].fillna("").map(normalize_name)
         frame["team"] = [owners.get((k, kind)) for k in keys]
         rows.append(frame)
@@ -352,7 +400,6 @@ def main() -> int:
     print("  below ZiPS, which projects a nominal workload. Verified on 2025: unconditional")
     print("  bias +1% PA, +0% R, -0% RBI, -7% HR. Use --per-600 to divide availability out.")
     print("  2027 is the validated horizon; 2028 extrapolates a one-year drift term.")
-    print("  Replacement is position-blind.")
     return 0
 
 
