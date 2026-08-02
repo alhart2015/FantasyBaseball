@@ -205,6 +205,12 @@ def main() -> int:
     )
     parser.add_argument("--kind", choices=("hitter", "pitcher"), help="restrict to one pool")
     parser.add_argument(
+        "--sort",
+        choices=("var", "sgp"),
+        default="var",
+        help="rank by value above replacement (default) or by raw SGP",
+    )
+    parser.add_argument(
         "--by-team", action="store_true", help="each team's best N, weakest team first"
     )
     parser.add_argument("--per-team", type=int, default=5, help="rows per team for --by-team")
@@ -267,7 +273,17 @@ def main() -> int:
 
     board = pd.concat(rows)
     board["var_total"] = board["var_2027"] + board["var_2028"]
-    board = board.sort_values("var_total", ascending=False)
+    # Raw SGP, for comparison. Subtracting a replacement level is a CONSTANT per pool,
+    # so it cannot reorder players within a pool -- VAR and raw SGP rank hitters
+    # identically. The only thing replacement changes is where pitchers sit relative to
+    # hitters, because the two pools subtract different constants.
+    board["sgp_total"] = board["sgp_2027"] + board["sgp_2028"]
+    board = board.sort_values("var_total" if args.sort == "var" else "sgp_total", ascending=False)
+    # Ranked here, before any slicing: the index is NOT unique (a two-way player carries
+    # one mlbam id in both pools), so reindexing a slice back against the board raises.
+    # Ranks stay float because an unscoreable player is NaN, and int() on that raises.
+    board["_var_rank"] = board["var_total"].rank(ascending=False, method="min")
+    board["_sgp_rank"] = board["sgp_total"].rank(ascending=False, method="min")
 
     if args.by_team:
         return _by_team(board, args)
@@ -314,17 +330,22 @@ def main() -> int:
     # VALUE leads: it is the number the board exists to produce, and everything right
     # of it is the working that got there.
     print(
-        f"{'#':>3} {'name':<24} {'VALUE':>7} {'':<2} {'27 PA/IP':>9} {'28 PA/IP':>9} "
-        f"{'27 SGP':>8} {'27 VAR':>8} {'28 VAR':>8}  team"
+        f"{'#':>3} {'name':<24} {'VALUE':>7} {'rawSGP':>8} {'':<2} {'27 PA/IP':>9} "
+        f"{'VARrk':>6} {'SGPrk':>6} {'move':>6}  team"
     )
     print("-" * 108)
     for rank, (_, r) in enumerate(view.iterrows(), start=1):
         tag = "H" if r["kind"] == "hitter" else "P"
         team = "" if pd.isna(r["team"]) else str(r["team"])[:20]
+        vr, sr = r["_var_rank"], r["_sgp_rank"]
+        ranks = (
+            f"{'-':>6}{'-':>6}{'-':>6}"
+            if pd.isna(vr) or pd.isna(sr)
+            else f"{int(vr):>6}{int(sr):>6}{int(sr) - int(vr):>+6}"
+        )
         print(
-            f"{rank:>3} {str(r['name'])[:23]:<24} {r['var_total']:>7.2f} {tag:<2} "
-            f"{r['vol_2027']:>9.0f} {r['vol_2028']:>9.0f} {r['sgp_2027']:>8.2f} "
-            f"{r['var_2027']:>8.2f} {r['var_2028']:>8.2f}  {team}"
+            f"{rank:>3} {str(r['name'])[:23]:<24} {r['var_total']:>7.2f} "
+            f"{r['sgp_total']:>8.2f} {tag:<2} {r['vol_2027']:>9.0f} {ranks}  {team}"
         )
     print("\n  PA/IP and the counting stats are EXPECTATIONS over every outcome, including")
     print("  the chance of missing time -- NOT a healthy-season line. That is why they sit")
