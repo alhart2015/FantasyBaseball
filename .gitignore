@@ -38,6 +38,11 @@ data/skill_luck/
 # scripts/build_pt_panel.py, and the live season moves it every rebuild.
 data/playing_time/
 
+# Trajectory comp panel: same generator, wider span, deliberately kept out of
+# data/playing_time/ so it cannot become the keeper curve's training set. 8.3 MB of
+# regenerable CSV that would otherwise re-diff on every rebuild.
+data/trajectory/
+
 # SQLite databases (populated at runtime)
 data/*.db
 
