@@ -306,7 +306,13 @@ def run_counting(kind: str, args: argparse.Namespace) -> None:
     }
     rate_pooled = _pooled(list(rate_panels.values()))
     pt = str(pool["pt"])
-    vol_fit = _fit_column(rate_pooled, pt, pt)
+    # Volume off the SURVIVORSHIP-CORRECTED panel, matching run_fit and run_validation.
+    # Scoring it on the survivor-only rate panel printed 0.655/0.446 under a column
+    # headed "S(volume)" while the pipeline ships 0.771/0.622 -- one run, two different
+    # numbers for the same quantity under the same name.
+    vol_fit = _fit_column(
+        _pooled([build_volume_transition(y, kind, min_pt=min_pt) for y, _ in TRANSITIONS]), pt, pt
+    )
 
     for stat, rate_col in pool["counting"].items():  # type: ignore[union-attr]
         counting = fit_counting_share(

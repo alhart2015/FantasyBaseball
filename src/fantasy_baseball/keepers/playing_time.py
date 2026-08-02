@@ -17,6 +17,14 @@ One curve shape serves both pools, fit on 2010-2025:
 `volume` is PA for hitters and IP for pitchers; `role` is the per-appearance rate --
 PA per game played, or innings per appearance.
 
+For pitchers, read `role` and `start_share` as ONE joint term, never separately. A
+starter has both a high per-appearance rate and a start share near 1, so the pair is
+near-collinear (VIF ~35) and the fit resolves it as a large positive role coefficient
+minus a large negative start_share. The sum is stable and the prediction is fine, but
+neither number means anything alone, and an off-diagonal pitcher -- an opener, a bulk
+reliever, a swingman -- can swing tens of innings on which side of that cancellation
+he lands.
+
 **`role` is what separates an injury from a job.** Two hitters both land on 360 PA:
 one played 84 games batting second (4.3 PA/game, hurt), the other 140 games in a
 platoon (2.6 PA/game, healthy but marginal). Season volume alone cannot tell them
@@ -38,14 +46,21 @@ for a pitcher, role is not a nuance, it is the whole starter/reliever distinctio
 survivor-only population, which excludes career endings and so understates the error
 every model makes on it. Same comparison, honester denominator.)
 
-**`shortfall` earns its place by removing a bias, not by adding accuracy.** It is
-`max(0, best_of_the_two_prior_seasons - volume(-1))`: how far below his own norm a
-player fell. One-sided on purpose -- losing 250 PA to a hamstring says something very
-different than gaining 250 off a breakout. Once `role` is present it adds nothing to
-RMSE, but dropping it leaves a SIGNIFICANT -26 PA under-forecast on injury-shortened
-hitters (t=-2.6) and a -15 IP one on pitchers; with it, both fall inside noise.
-Accuracy and calibration disagreed and calibration won -- a systematic error against
-one identifiable class of player mis-ranks all of them together.
+**`shortfall` is HITTERS ONLY, and earns its place there by removing a bias rather
+than by adding accuracy.** It is `max(0, best_of_the_two_prior_seasons - volume(-1))`:
+how far below his own norm a player fell. One-sided on purpose -- losing 250 PA to a
+hamstring says something very different than gaining 250 off a breakout. On the
+exit-corrected fit it costs nothing in RMSE (164.63 with, 164.60 without) but takes the
+injury-shortened-hitter bias from -24.8 PA (t=-1.99, significant) to -17.0 (t=-1.36,
+noise). Accuracy and calibration disagreed and calibration won: a systematic error
+against one identifiable class mis-ranks all of them together.
+
+It was DROPPED for pitchers. On the survivor-only fit it removed a -15 IP bias there,
+which is what justified it; the exit correction removes that bias by itself, leaving
+the term with a NEGATIVE coefficient (-0.026 -- it would subtract from a pitcher who
+fell short of his own norm, the opposite of the mechanism) and no measurable job:
+RMSE 48.95 with against 48.94 without, injured bias +4.3 against +5.1, both inside
+noise. A parameter with a nonsensical sign that buys nothing does not ship.
 
 Tested and dropped, so they are not retried: the second volume lag (adds nothing once
 lags 1 and 3 are in), debut flags (`role` already tells a real rookie job from a
@@ -71,7 +86,7 @@ import pandas as pd
 # Feature order is coefficient order; a positional zip must not silently mis-pair, so
 # these tuples are the single source of truth. `start_share` is pitcher-only.
 HITTER_FEATURES: tuple[str, ...] = ("vol1", "vol3", "age", "role", "shortfall")
-PITCHER_FEATURES: tuple[str, ...] = (*HITTER_FEATURES, "start_share")
+PITCHER_FEATURES: tuple[str, ...] = ("vol1", "vol3", "age", "role", "start_share")
 FEATURES: dict[str, tuple[str, ...]] = {
     "hitter": HITTER_FEATURES,
     "pitcher": PITCHER_FEATURES,
@@ -106,11 +121,13 @@ class PlayingTimeCurve:
         }
 
     def predict(self, features: pd.DataFrame) -> pd.Series:
-        """Projected next-season volume, floored at zero.
+        """Projected next-season volume; NaN where the linear form goes negative.
 
-        A player cannot take negative plate appearances or throw negative innings; the
-        linear form can produce one for an old player with almost no recent history,
-        and a negative volume would flip the sign of every counting stat built on it.
+        A player cannot take negative plate appearances or throw negative innings, and
+        a negative volume would flip the sign of every counting stat built on it. This
+        returns NaN rather than clipping to 0 so the CALLER can fall back to another
+        estimator: a hard 0 looks like a real forecast and silently prints a zeroed
+        line, where NaN is a signal the curve could not score this player.
         """
         missing = [c for c in self.features if c not in features.columns]
         if missing:
@@ -118,7 +135,7 @@ class PlayingTimeCurve:
         out = pd.Series(self.intercept, index=features.index, dtype=float)
         for name, beta in zip(self.features, self.coefficients, strict=True):
             out = out + beta * features[name].astype(float)
-        return out.clip(lower=0.0)
+        return out.where(out > 0.0)
 
 
 def normalize_to_full_season(volume: pd.Series, scheduled_games: pd.Series) -> pd.Series:
@@ -227,9 +244,11 @@ def lag_panel(
     from the prior one and the exit trains as `target = 0`, matching the survivorship
     correction `build_volume_transition` already applies to the persistence share.
 
-    Only ONE exit row per career is added, and that falls out of `min_recent` rather
-    than needing a rule: the season after the exit has `vol1 = 0`, which fails the
-    floor. Long-retired players therefore contribute no tail of zeros.
+    Only ONE exit row per career is added. The guard is the age derivation itself, NOT
+    `min_recent`: the season AFTER the exit has no lag row to derive an age from, so it
+    drops on the `age.notna()` filter below. `min_recent` also excludes it at the
+    300/50 floors the scripts pass, but it is 0.0 by default here and cannot be relied
+    on. Long-retired players therefore contribute no tail of zeros either way.
     """
     if kind not in FEATURES:
         raise ValueError(f"kind must be 'hitter' or 'pitcher', got {kind!r}")

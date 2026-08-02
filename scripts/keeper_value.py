@@ -324,10 +324,11 @@ def main() -> int:
 
     board = pd.concat(rows)
     board["var_total"] = board["var_2027"] + board["var_2028"]
-    # Raw SGP, for comparison. Subtracting a replacement level is a CONSTANT per pool,
-    # so it cannot reorder players within a pool -- VAR and raw SGP rank hitters
-    # identically. The only thing replacement changes is where pitchers sit relative to
-    # hitters, because the two pools subtract different constants.
+    # Raw SGP, for comparison. Replacement is POSITION-aware, so this is not a single
+    # constant per pool and it absolutely can reorder within one: the hitter floors span
+    # 2.27 SGP (C 7.70 to OF 9.96), which is what moves catchers 14-20 places between
+    # the two rankings. It WAS one constant per pool before c88f6167; that is where the
+    # old "cannot reorder within a pool" claim came from, and it is no longer true.
     board["sgp_total"] = board["sgp_2027"] + board["sgp_2028"]
     board = board.sort_values("var_total" if args.sort == "var" else "sgp_total", ascending=False)
     # Ranked here, before any slicing: the index is NOT unique (a two-way player carries
@@ -336,12 +337,16 @@ def main() -> int:
     board["_var_rank"] = board["var_total"].rank(ascending=False, method="min")
     board["_sgp_rank"] = board["sgp_total"].rank(ascending=False, method="min")
 
-    if args.by_team:
-        return _by_team(board, args)
-
     view = board
     if args.kind:
         view = view[view["kind"] == args.kind]
+    # --by-team must see the SAME filtered view, not the raw board: returning before
+    # these lines silently dropped a co-supplied --kind or --team and counted the
+    # wrong pool toward each team's keeper total.
+    if args.by_team:
+        if args.team:
+            view = view[view["team"].fillna("").str.lower() == args.team.lower()]
+        return _by_team(view, args)
     if args.team:
         # Narrows `view`, NOT `board`: restarting from the board here silently threw
         # away a --kind filter applied on the line above.

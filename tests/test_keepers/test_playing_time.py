@@ -128,14 +128,16 @@ def test_fit_curve_raises_rather_than_fitting_an_underdetermined_system() -> Non
         fit_curve(features, _s([1.0, 2.0]))
 
 
-def test_predict_never_returns_negative_playing_time() -> None:
-    """The linear form can go negative for an old player with almost no recent history,
-    and a negative volume would flip the sign of every counting stat built on it."""
+def test_predict_returns_nan_rather_than_clipping_a_negative_to_zero() -> None:
+    """Changed deliberately: it used to clip to 0.0, which looks like a real forecast
+    and prints a zeroed counting line. NaN is a signal, so the caller's per-player
+    fallback to the gap model can actually fire."""
     curve = PlayingTimeCurve(
         kind="hitter", intercept=0.0, coefficients=(0.0, 0.0, -99.0, 0.0, 0.0), n=9, rmse=1.0
     )
     out = curve.predict(build_features(_s([0.0]), _s([600.0]), _s([600.0]), _s([40.0]), _s([0.0])))
-    assert (out >= 0).all()
+    assert out.isna().all()
+    assert not (out <= 0).any()  # never a hard zero masquerading as a forecast
 
 
 def test_predict_rejects_a_frame_missing_a_feature() -> None:
@@ -146,7 +148,7 @@ def test_predict_rejects_a_frame_missing_a_feature() -> None:
 
 def test_as_dict_pairs_every_coefficient_with_its_feature() -> None:
     curve = PlayingTimeCurve(
-        kind="pitcher", intercept=1.0, coefficients=(2.0, 3.0, 4.0, 5.0, 6.0, 7.0), n=9, rmse=1.0
+        kind="pitcher", intercept=1.0, coefficients=(2.0, 3.0, 4.0, 5.0, 6.0), n=9, rmse=1.0
     )
     assert curve.as_dict() == {
         "intercept": 1.0,
@@ -154,9 +156,16 @@ def test_as_dict_pairs_every_coefficient_with_its_feature() -> None:
         "vol3": 3.0,
         "age": 4.0,
         "role": 5.0,
-        "shortfall": 6.0,
-        "start_share": 7.0,
+        "start_share": 6.0,
     }
+
+
+def test_shortfall_is_hitters_only() -> None:
+    """Dropped for pitchers: on the exit-corrected fit it takes a NEGATIVE coefficient
+    (it would subtract from a pitcher who fell short of his own norm) and buys nothing
+    -- RMSE 48.95 with against 48.94 without."""
+    assert "shortfall" in HITTER_FEATURES
+    assert "shortfall" not in PITCHER_FEATURES
 
 
 def _panel(kind: str = "hitter") -> pd.DataFrame:
@@ -215,3 +224,68 @@ def test_lag_panel_raises_on_a_panel_missing_a_required_column() -> None:
             lag_panel(_panel().drop(columns=[col]))
     with pytest.raises(KeyError, match="starts"):
         lag_panel(_panel("pitcher").drop(columns=["starts"]), "pitcher")
+
+
+def _panel_with_a_career_ending() -> pd.DataFrame:
+    """Player 1 plays 2018-2023; player 2 RETIRES after 2020 and has no later rows."""
+    rows = []
+    for season in range(2018, 2024):
+        rows.append(
+            {
+                "mlbam_id": 1,
+                "season": season,
+                "pa": 600.0,
+                "games": 145.0,
+                "age": 24 + (season - 2018),
+                "scheduled_games": 162,
+                "partial_season": False,
+            }
+        )
+        if season <= 2020:
+            rows.append(
+                {
+                    "mlbam_id": 2,
+                    "season": season,
+                    "pa": 500.0,
+                    "games": 130.0,
+                    "age": 34 + (season - 2018),
+                    "scheduled_games": 162,
+                    "partial_season": False,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
+def test_include_exits_trains_the_career_ending_as_zero() -> None:
+    """Without this the curve learns E[volume | he plays again] and over-forecasts the
+    aging and marginal players a keeper decision has to price."""
+    out = lag_panel(_panel_with_a_career_ending(), min_recent=300.0)
+    exit_rows = out[(out["mlbam_id"] == 2) & (out["target"] == 0.0)]
+    assert len(exit_rows) == 1
+    assert exit_rows.iloc[0]["season"] == 2021  # the year after his last
+
+
+def test_exactly_one_exit_row_per_career() -> None:
+    """The season AFTER the exit has no lag row to derive an age from, so it drops --
+    long-retired players must not contribute a tail of zeros."""
+    out = lag_panel(_panel_with_a_career_ending(), min_recent=300.0)
+    assert len(out[(out["mlbam_id"] == 2) & (out["target"] == 0.0)]) == 1
+    assert 2022 not in set(out[out["mlbam_id"] == 2]["season"])
+
+
+def test_the_exit_rows_age_is_derived_from_the_prior_season() -> None:
+    out = lag_panel(_panel_with_a_career_ending(), min_recent=300.0)
+    row = out[(out["mlbam_id"] == 2) & (out["season"] == 2021)].iloc[0]
+    assert row["age"] == pytest.approx(37.0)  # 36 in his final 2020 season, plus one
+
+
+def test_include_exits_false_drops_the_career_ending_entirely() -> None:
+    out = lag_panel(_panel_with_a_career_ending(), min_recent=300.0, include_exits=False)
+    assert 2021 not in set(out[out["mlbam_id"] == 2]["season"])
+
+
+def test_a_still_active_player_gets_no_spurious_exit_row() -> None:
+    """Player 1's last season is the panel's last, which is an unfinished career rather
+    than an ending; inventing a zero for him would be a fabricated retirement."""
+    out = lag_panel(_panel_with_a_career_ending(), min_recent=300.0)
+    assert not ((out["mlbam_id"] == 1) & (out["target"] == 0.0)).any()

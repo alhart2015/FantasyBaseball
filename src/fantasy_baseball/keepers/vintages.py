@@ -11,6 +11,7 @@ loader's own fallback behaviour.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import pandas as pd
@@ -21,6 +22,8 @@ from fantasy_baseball.keepers.actuals import (
     index_by_mlbam,
     safe_ratio,
 )
+
+logger = logging.getLogger(__name__)
 
 
 def _find(directory: Path, player_type: str) -> Path:
@@ -68,10 +71,30 @@ def decompose_pitchers(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def load_vintage(year: int, projections_root: Path, player_type: str) -> pd.DataFrame:
-    """One decomposed ZiPS vintage frame. Reads only the file it returns."""
+    """One decomposed ZiPS vintage frame. Reads only the file it returns.
+
+    Warns on a wholly-empty column. The 2027/2028 ZiPS exports carry `SV` with 0 of
+    1838 rows populated, so `sv_ip` is all-NaN and every downstream consumer silently
+    degrades -- `centered_aging` finds nothing usable and the aging term becomes a
+    no-op for saves, the one category that most distinguishes a closer. Nothing is
+    raised, because the rest of the vintage is fine and the caller has a sane
+    fallback; but it must not pass unremarked.
+    """
     if player_type not in {"hitter", "pitcher"}:
         raise ValueError(f"player_type must be 'hitter' or 'pitcher', got {player_type!r}")
     directory = projections_root / str(year)
-    if player_type == "hitter":
-        return decompose_hitters(pd.read_csv(_find(directory, "hitters")))
-    return decompose_pitchers(pd.read_csv(_find(directory, "pitchers")))
+    frame = (
+        decompose_hitters(pd.read_csv(_find(directory, "hitters")))
+        if player_type == "hitter"
+        else decompose_pitchers(pd.read_csv(_find(directory, "pitchers")))
+    )
+    empty = [c for c in frame.columns if frame[c].isna().all()]
+    if empty:
+        logger.warning(
+            "ZiPS %d %s vintage has no data at all for %s; every consumer of those "
+            "columns degrades silently",
+            year,
+            player_type,
+            ", ".join(empty),
+        )
+    return frame

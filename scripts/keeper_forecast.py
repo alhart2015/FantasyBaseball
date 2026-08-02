@@ -62,7 +62,18 @@ def _panel_path(kind: str) -> Path | None:
     `_2010_2026.csv` would be orphaned by the next rebuild and the board would
     silently fall back to the one-year gap volume model this curve replaced.
     """
-    matches = sorted(PT_PANEL_DIR.glob(f"{kind}_pt_panel_*.csv"))
+
+    def span(path: Path) -> tuple[int, int]:
+        # `{kind}_pt_panel_{start}_{end}.csv`. Sorting the raw filename compares START
+        # first, so `_2015_2026` beat `_2010_2026` -- it picked max(start, end), not
+        # newest. Rank on the parsed END year, then on the widest window.
+        try:
+            start, end = (int(x) for x in path.stem.rsplit("_", 2)[-2:])
+        except ValueError:
+            return (-1, 0)
+        return (end, -start)
+
+    matches = sorted(PT_PANEL_DIR.glob(f"{kind}_pt_panel_*.csv"), key=span)
     return matches[-1] if matches else None
 
 
@@ -169,13 +180,25 @@ def volume_forecast(
     # carries full-season volume but its `g` field is REST-OF-SEASON games, so volume/g
     # off the blend is nonsense (600+ PA over 46 games). A per-appearance rate is
     # readable off two thirds of a season anyway.
-    base_vol = series_for(BASE_YEAR, volume).fillna(0.0)
-    base_app = series_for(BASE_YEAR, "games").fillna(0.0)
-    role = per_appearance(base_vol, base_app, kind)
+    # Role from the base season, falling back to the most recent season that HAS a row.
+    # A blanket fillna(0) here turned "no panel row" into role = 0 -- the single
+    # strongest negative signal in the model -- and produced a plausible-looking but
+    # badly deflated forecast instead of tripping the fallback. A batting-order slot or
+    # a rotation job is sticky, so the previous season's role is the honest stand-in.
+    role = per_appearance(
+        series_for(BASE_YEAR, volume), series_for(BASE_YEAR, "games"), kind
+    ).where(series_for(BASE_YEAR, volume).notna())
+    for back in (1, 2):
+        prior = per_appearance(
+            series_for(BASE_YEAR - back, volume), series_for(BASE_YEAR - back, "games"), kind
+        ).where(series_for(BASE_YEAR - back, volume).notna())
+        role = role.fillna(prior)
+    role = role.fillna(0.0)
     start_share = None
     if kind == "pitcher":
-        starts = series_for(BASE_YEAR, "starts").fillna(0.0)
-        start_share = (starts / base_app.where(base_app > 0)).fillna(0.0)
+        apps = series_for(BASE_YEAR, "games")
+        starts = series_for(BASE_YEAR, "starts")
+        start_share = (starts / apps.where(apps > 0)).fillna(0.0)
 
     # One application of the curve per year from the base season to the target. `age` is
     # advanced to the TARGET year, so each step walks it back to the season it actually
@@ -259,6 +282,14 @@ def forecast_pool(
             )
         folded = fold_forecast(base.loc[idx, col], g, shares[col], aging)
         if col == pt and curve_volume is not None:
+            fell_back = int(curve_volume.reindex(idx).isna().sum())
+            if fell_back:
+                # Silence here would let a board built entirely by the gap model print
+                # a reassuring "playing-time panel: <file>" line and look healthy.
+                print(
+                    f"  WARNING: {fell_back} of {len(idx)} {kind}s could not be scored by "
+                    f"the playing-time curve; they fall back to the gap model"
+                )
             # Per-player fallback, not all-or-nothing: a player the curve cannot score
             # (missing lags, missing age) must not land a NaN in the counting line and
             # vanish from the board without a word.

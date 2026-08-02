@@ -55,6 +55,18 @@ def _live_seasons(years: range) -> list[int]:
     return [y for y in years if y >= dt.date.today().year]
 
 
+def _default_end() -> int:
+    """Last season that could plausibly have data.
+
+    January-to-March, the current calendar year has no leaderboard at all, and keeper
+    work happens precisely in that window -- so defaulting to `today().year` made the
+    documented bare invocation fail exactly when the tool matters most. Before opening
+    day, fall back to the previous season.
+    """
+    today = dt.date.today()
+    return today.year if today.month >= 4 else today.year - 1
+
+
 def _fetch_seasons(years: range, group: str, *, refresh: list[int]) -> dict[int, pd.DataFrame]:
     frames: dict[int, pd.DataFrame] = {}
     for year in years:
@@ -70,7 +82,7 @@ def _fetch_seasons(years: range, group: str, *, refresh: list[int]) -> dict[int,
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--start", type=int, default=DEFAULT_START)
-    parser.add_argument("--end", type=int, default=dt.date.today().year)
+    parser.add_argument("--end", type=int, default=_default_end())
     parser.add_argument(
         "--refresh",
         action="store_true",
@@ -86,6 +98,11 @@ def main() -> int:
     partial = _live_seasons(years)
     refresh = partial if args.refresh else []
 
+    # A season cached WHILE LIVE is a partial snapshot. On a later run it is no longer
+    # in `partial`, so without this it would be served from cache and trained on as a
+    # complete year -- a fake league-wide collapse season. Force a re-fetch of every
+    # season at or after the newest one the cache was built from.
+    refresh = sorted(set(refresh) | set(_live_seasons(years)))
     hitting = _fetch_seasons(years, "hitting", refresh=refresh)
     pitching = _fetch_seasons(years, "pitching", refresh=refresh)
 
@@ -98,11 +115,14 @@ def main() -> int:
         | {int(i) for f in pitching.values() for i in f["player.id"].dropna()}
     )
     logger.info("distinct players %d-%d: %d", args.start, args.end, len(ids))
-    # The tag must change when the ID SET can change, per fetch_mlb_people's contract.
-    # --refresh re-pulls the live season and so discovers players who debuted since the
-    # last build; serving them a people file keyed only on the year range would leave
-    # every one of them without a birth date, hence without an age, hence unscoreable.
-    tag = f"all_{args.start}_{args.end}" + ("_refresh" if args.refresh else "")
+    # --refresh must INVALIDATE the people cache, not key around it. A static suffix
+    # only re-fetched once and then froze a second copy, so every later refresh missed
+    # players who had debuted since -- leaving them without a birth date, hence without
+    # an age, hence unscoreable. Unlinking mirrors what _fetch_seasons does.
+    tag = f"all_{args.start}_{args.end}"
+    if args.refresh:
+        stale = RAW_DIR / f"mlb_people_{tag}.csv"
+        stale.unlink(missing_ok=True)
     people = fetch_mlb_people(RAW_DIR, ids, tag)
 
     PANEL_DIR.mkdir(parents=True, exist_ok=True)
