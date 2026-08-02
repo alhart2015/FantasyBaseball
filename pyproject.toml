@@ -91,6 +91,7 @@ files = [
     "src/fantasy_baseball/mc_selection.py",
     "src/fantasy_baseball/models/",
     "src/fantasy_baseball/pt_model/",
+    "src/fantasy_baseball/trajectory/",
     "src/fantasy_baseball/scoring.py",
     "src/fantasy_baseball/sgp/",
     "src/fantasy_baseball/simulation.py",

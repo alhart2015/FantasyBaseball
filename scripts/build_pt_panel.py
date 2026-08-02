@@ -45,6 +45,49 @@ DEFAULT_START = 2010
 logger = logging.getLogger(__name__)
 
 
+def _anchor(out_dir: Path) -> Path:
+    """Resolve a relative --out-dir against the REPO, not the cwd.
+
+    Before this flag existed the destination was always `PROJECT_ROOT/data/playing_time`
+    whatever directory you ran from. Taking argv's Path verbatim quietly made
+    `--out-dir data/trajectory` mean `<cwd>/data/trajectory`, so running the documented
+    command from `scripts/` wrote panels that every consumer -- all of which resolve
+    from `__file__` -- would never look at, while still reporting success. An absolute
+    path is honoured as given.
+    """
+    return out_dir if out_dir.is_absolute() else PROJECT_ROOT / out_dir
+
+
+def _would_narrow(out_dir: Path, start: int, end: int) -> tuple[Path, int, int] | None:
+    """The existing panel a (start, end) build would outrank while covering less history.
+
+    Returns `(path, its_start, its_end)` for the widest such casualty, or None. Both
+    `_panel_path` implementations rank on `(end, -start)`, so a later end year wins
+    outright -- a newer panel that begins later silently retires the early seasons of
+    the one it displaces.
+    """
+    worst: tuple[Path, int, int] | None = None
+    for path in out_dir.glob("*_pt_panel_*.csv"):
+        try:
+            its_start, its_end = (int(x) for x in path.stem.rsplit("_", 2)[-2:])
+        except ValueError:
+            continue
+        outranks = (end, -start) > (its_end, -its_start)
+        if outranks and its_start < start and (worst is None or its_start < worst[1]):
+            worst = (path, its_start, its_end)
+    return worst
+
+
+def _display_path(path: Path) -> Path:
+    """Repo-relative if it is inside the repo, absolute otherwise. --out-dir may point
+    anywhere, and a plain relative_to raises on a path outside the repo. `walk_up=True`
+    would do this but is 3.12+, and this project supports 3.11."""
+    try:
+        return path.resolve().relative_to(PROJECT_ROOT)
+    except ValueError:
+        return path
+
+
 def _live_seasons(years: range) -> list[int]:
     """Years that may still be in progress.
 
@@ -137,11 +180,77 @@ def main() -> int:
         action="store_true",
         help="re-fetch the live season(s); completed seasons are immutable and kept",
     )
+    parser.add_argument(
+        "--out-dir",
+        type=Path,
+        default=PANEL_DIR,
+        help=(
+            "where to write the panels (default data/playing_time/). Point a WIDER "
+            "span somewhere else: keeper_forecast._panel_path globs data/playing_time/ "
+            "and ranks on (end, -start), so a 2000-2026 panel dropped in beside the "
+            "2010-2026 one silently becomes the playing-time curve's training set."
+        ),
+    )
+    parser.add_argument(
+        "--allow-narrowing",
+        action="store_true",
+        help=(
+            "permit writing a panel that outranks a wider one already in --out-dir, "
+            "retiring its early seasons. Refused by default."
+        ),
+    )
+    parser.add_argument(
+        "--allow-keeper-dir",
+        action="store_true",
+        help=(
+            f"permit writing a pre-{DEFAULT_START} panel into data/playing_time/, "
+            "retraining the keeper playing-time curve on it. Refused by default."
+        ),
+    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     if args.end < args.start:
         parser.error(f"--end {args.end} precedes --start {args.start}")
+
+    args.out_dir = _anchor(args.out_dir)
+
+    # The whole point of --out-dir is keeping a wider panel AWAY from the keeper model's
+    # directory, where _panel_path ranks on (end, -start) and would adopt it as the
+    # playing-time curve's training set. Forgetting the flag is the one way back in, so
+    # this REFUSES rather than warns: a warning scrolls past in a log, and by the time
+    # anyone notices, the keeper forecast has silently changed underneath them. The
+    # ordinary keeper rebuild (default --start, default --out-dir) never trips it.
+    if (
+        args.out_dir.resolve() == PANEL_DIR.resolve()
+        and args.start < DEFAULT_START
+        and not args.allow_keeper_dir
+    ):
+        parser.error(
+            f"--start {args.start} predates the keeper model's {DEFAULT_START} baseline "
+            f"and would write into {PANEL_DIR.name}/, where keeper_forecast._panel_path "
+            "prefers the widest span -- silently retraining the playing-time curve. "
+            "Pass --out-dir to keep it separate, or --allow-keeper-dir if retraining "
+            "the keeper curve on a wider panel is genuinely what you want."
+        )
+
+    # The mirror hazard, and it bites the trajectory model rather than the keeper one:
+    # BOTH _panel_path implementations rank on (end, -start), so a narrower-but-newer
+    # panel outranks a wider one in whatever directory it lands in. Writing 2010-2027
+    # into data/trajectory/ would silently retire the 2000-2009 comps -- the widest part
+    # of the pool that directory exists to hold -- with nothing on screen but a season
+    # span in a header line.
+    narrowed = _would_narrow(args.out_dir, args.start, args.end)
+    if narrowed and not args.allow_narrowing:
+        existing, start, end = narrowed
+        parser.error(
+            f"a {args.start}-{args.end} panel would outrank {existing.name} "
+            f"({start}-{end}) in {args.out_dir.name}/ while dropping its "
+            f"{args.start - start} earliest seasons ({start}-{args.start - 1}), because "
+            "_panel_path prefers the newest end year. Every later read would silently "
+            f"lose them. Widen --start to {start}, write elsewhere with --out-dir, or "
+            "pass --allow-narrowing."
+        )
 
     years = range(args.start, args.end + 1)
     partial = _live_seasons(years)
@@ -182,17 +291,17 @@ def main() -> int:
         (RAW_DIR / f"mlb_people_{tag}.csv").unlink(missing_ok=True)
     people = fetch_mlb_people(RAW_DIR, ids, tag)
 
-    PANEL_DIR.mkdir(parents=True, exist_ok=True)
+    args.out_dir.mkdir(parents=True, exist_ok=True)
     for label, seasons, builder in (
         ("hitter", hitting, build_hitter_panel),
         ("pitcher", pitching, build_pitcher_panel),
     ):
         panel = builder(seasons, people, partial_seasons=partial)
-        out = PANEL_DIR / f"{label}_pt_panel_{args.start}_{args.end}.csv"
+        out = args.out_dir / f"{label}_pt_panel_{args.start}_{args.end}.csv"
         panel.to_csv(out, index=False)
         observed = int(panel["observed"].sum())
         logger.info("")
-        logger.info("wrote %s", out.relative_to(PROJECT_ROOT))
+        logger.info("wrote %s", _display_path(out))
         logger.info("  rows          %d", len(panel))
         logger.info("  observed      %d", observed)
         logger.info("  absent (NaN)  %d", len(panel) - observed)
