@@ -2,7 +2,14 @@
 """CLI for the trade-for-future-pick calculator.
 
 Usage:
+    # sell a player for a pick
     python scripts/trade_pick_calc.py --send "Julio Rodriguez" --to "SkeleThor" --pick-round 5
+    # swap players and picks
+    python scripts/trade_pick_calc.py --send "Julio Rodriguez" --to "SkeleThor" \
+        --receive "Kyle Tucker" --pick-round 5 --send-pick-round 12
+    # straight player-for-player, no draft capital
+    python scripts/trade_pick_calc.py --send "Julio Rodriguez" --to "SkeleThor" \
+        --receive "Kyle Tucker"
 
 Reads stored (last-refresh) state from Upstash; run a dashboard refresh first if
 the state is stale. See docs/superpowers/specs/2026-07-31-trade-pick-calculator-design.md.
@@ -58,8 +65,10 @@ def main() -> int:
     parser.add_argument(
         "--pick-round",
         type=int,
-        required=True,
-        help="Nominal round of the pick you receive (keeper rounds are subtracted).",
+        default=None,
+        help="Nominal round of a pick you RECEIVE (keeper rounds are subtracted). "
+        "Omit for a straight player-for-player swap; at least one of --receive "
+        "or --pick-round is required.",
     )
     parser.add_argument(
         "--player-type",

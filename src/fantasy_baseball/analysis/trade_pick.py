@@ -424,17 +424,20 @@ class TradePickResult:
     sent_name: str
     partner: str
     this_year: ThisYearImpact
-    next_year: NextYearValue
+    # Both picks are optional and independent: a trade can buy a pick, sell one,
+    # swap two, or involve no draft capital at all (a straight player-for-player
+    # swap). `None` means that leg is not part of the deal -- the report must then
+    # say nothing about it rather than invent one.
+    next_year: NextYearValue | None = None
     received_name: str | None = None
-    # The pick going the OTHER way, when the trade swaps picks rather than buying
-    # one. `net_pick_var` is what the swap is actually worth: incoming minus
-    # outgoing. Without an outgoing pick it is just `next_year.expected_var`.
     sent_pick: NextYearValue | None = None
 
     @property
     def net_pick_var(self) -> float:
+        """Incoming pick value minus outgoing. 0.0 when no picks change hands."""
+        got = self.next_year.expected_var if self.next_year is not None else 0.0
         out = self.sent_pick.expected_var if self.sent_pick is not None else 0.0
-        return self.next_year.expected_var - out
+        return got - out
 
 
 def resolve_partner(team_rosters: dict[str, list[Player]], to: str, user: str) -> str:
@@ -453,7 +456,7 @@ def resolve_partner(team_rosters: dict[str, list[Player]], to: str, user: str) -
 def compute_trade_pick(
     send: str,
     to: str,
-    pick_round: int,
+    pick_round: int | None = None,
     *,
     receive: str | None = None,
     send_pick_round: int | None = None,
@@ -470,7 +473,17 @@ def compute_trade_pick(
     two-way swap rather than a player-for-pick sale. `send_pick_round` names a
     pick going the other way, so the reported next-year value is the NET of the
     two picks instead of the gross value of the one received.
+
+    `pick_round` is optional: a straight player-for-player swap involves no draft
+    capital, and forcing a round on it would have the report credit the deal with
+    VAR that does not exist. Something has to come back, though -- a player, a
+    pick, or both.
     """
+    if receive is None and pick_round is None:
+        raise ValueError(
+            "This trade has nothing coming back. Pass --receive (a player), "
+            "--pick-round (a pick), or both."
+        )
     cfg_path = config_path or _CONFIG_PATH
     inputs = load_mc_inputs_from_upstash(cfg_path)
     config = load_config(cfg_path)
@@ -482,8 +495,13 @@ def compute_trade_pick(
         else None
     )
     this_year = this_year_impact(inputs, sent, partner, received=got, n_iter=n_iter, seed=seed)
-    nxt = next_year_value(config, pick_round, pick_slot)
-    out_pick = next_year_value(config, send_pick_round, pick_slot) if send_pick_round else None
+    # `is not None`, not truthiness: round 0 is falsy but is not "no pick", and
+    # silently dropping that leg would mis-state the net. It is not a legal round
+    # either, so let pick_ordinal_range reject it loudly.
+    nxt = next_year_value(config, pick_round, pick_slot) if pick_round is not None else None
+    out_pick = (
+        next_year_value(config, send_pick_round, pick_slot) if send_pick_round is not None else None
+    )
     return TradePickResult(
         sent.name,
         partner,
@@ -502,18 +520,25 @@ def _kp(x: float) -> str:
 def render_report(result: TradePickResult) -> str:
     ty = result.this_year
     ny = result.next_year
+    sp = result.sent_pick
     dwin = ty.new_win - ty.base_win
     dtop3 = ty.new_top3 - ty.base_top3
     lines: list[str] = []
     lines.append("=" * 72)
     lines.append("TRADE CALCULATOR")
-    out_pick = f" + 2027 R{result.sent_pick.nominal_round} pick" if result.sent_pick else ""
-    lines.append(f"  Send:    {result.sent_name}{out_pick}  ->  {result.partner}")
-    got = f"{result.received_name} + " if result.received_name else ""
-    lines.append(
-        f"  Receive: {got}2027 Round {ny.nominal_round} pick  "
-        f"(keeper rounds: {ny.keeper_rounds}  ->  drafted round {ny.drafted_round})"
+    send_parts = [result.sent_name]
+    if sp:
+        send_parts.append(f"2027 R{sp.nominal_round} pick")
+    lines.append(f"  Send:    {' + '.join(send_parts)}  ->  {result.partner}")
+    recv_parts = []
+    if result.received_name:
+        recv_parts.append(result.received_name)
+    if ny:
+        recv_parts.append(f"2027 Round {ny.nominal_round} pick")
+    keeper_note = (
+        f"  (keeper rounds: {ny.keeper_rounds}  ->  drafted round {ny.drafted_round})" if ny else ""
     )
+    lines.append(f"  Receive: {' + '.join(recv_parts)}{keeper_note}")
     lines.append("=" * 72)
 
     lines.append("")
@@ -541,49 +566,64 @@ def render_report(result: TradePickResult) -> str:
             f"{c.base_top3:>11.1f}{c.new_top3:>10.1f}{d3:>+8.1f}"
         )
 
-    lines.append("")
-    label = (
-        "pick swap" if result.sent_pick else f"extra 2027 pick (drafted round {ny.drafted_round})"
-    )
-    lines.append(f"2. NEXT YEAR -- {label}")
-    lines.append("-" * 72)
-    if result.sent_pick:
-        sp = result.sent_pick
-        lines.append(
-            f"  Receive R{ny.nominal_round} (drafted {ny.drafted_round}) : "
-            f"~{ny.expected_var:.2f} VAR"
-        )
-        lines.append(
-            f"  Send    R{sp.nominal_round} (drafted {sp.drafted_round}) : "
-            f"~{sp.expected_var:.2f} VAR"
-        )
-        lines.append(f"  NET pick value      : ~{result.net_pick_var:+.2f} VAR")
-    else:
-        lines.append(f"  Expected pick value : ~{ny.expected_var:.1f} VAR")
-    lines.append(
-        f"  (early in the round : ~{ny.early_var:.1f} VAR ; "
-        f"keeper-average keeper : ~{_kp(ny.keeper_par)} VAR)"
-    )
-    lines.append("  VAR is value above a replacement roster spot, so this is roughly the")
-    lines.append("  pick's marginal roto-point value next year.")
-    lines.append("  Estimate = the 2026 draft-day value distribution at that slot; the")
-    lines.append("  specific 2027 player is unknown.")
+    # Section 2 exists only if draft capital actually moves. A straight
+    # player-for-player swap has none, and printing a pick section anyway would
+    # credit the deal with VAR that is not in it.
+    if ny or sp:
+        lines.append("")
+        if ny and sp:
+            label = "pick swap"
+        elif ny:
+            label = f"extra 2027 pick (drafted round {ny.drafted_round})"
+        else:
+            assert sp is not None  # the enclosing `if ny or sp` and `elif ny` leave only this
+            label = f"2027 pick given up (drafted round {sp.drafted_round})"
+        lines.append(f"2. NEXT YEAR -- {label}")
+        lines.append("-" * 72)
+        if ny and sp:
+            lines.append(
+                f"  Receive R{ny.nominal_round} (drafted {ny.drafted_round}) : "
+                f"~{ny.expected_var:.2f} VAR"
+            )
+        if sp:
+            lines.append(
+                f"  Send    R{sp.nominal_round} (drafted {sp.drafted_round}) : "
+                f"~{sp.expected_var:.2f} VAR"
+            )
+            lines.append(f"  NET pick value      : ~{result.net_pick_var:+.2f} VAR")
+        elif ny:
+            lines.append(f"  Expected pick value : ~{ny.expected_var:.1f} VAR")
+        if ny:
+            lines.append(
+                f"  (early in the round : ~{ny.early_var:.1f} VAR ; "
+                f"keeper-average keeper : ~{_kp(ny.keeper_par)} VAR)"
+            )
+        lines.append("  VAR is value above a replacement roster spot, so this is roughly the")
+        lines.append("  pick's marginal roto-point value next year.")
+        lines.append("  Estimate = the 2026 draft-day value distribution at that slot; the")
+        lines.append("  specific 2027 player is unknown.")
 
     lines.append("")
     lines.append("-" * 72)
+    # NET, never the gross incoming pick: a swap that receives 3.76 and sends 1.12
+    # is worth 2.64, and the verdict is the one line a user decides on.
+    pick_clause = f" for pick value worth ~{result.net_pick_var:+.2f} VAR" if (ny or sp) else ""
     if dwin < 0:
         # dtop3 stays SIGNED: it moves independently of win%, and often the other
         # way (trading a high-variance star lowers the ceiling and raises the
         # floor). abs() here read a top-3 GAIN as a loss, contradicting the signed
         # per-category table above in the one line a user acts on.
         lines.append(
-            f"You give up ~{abs(dwin):.1f} win% ({dtop3:+.1f} top-3%) this year "
-            f"for pick value worth ~{result.net_pick_var:+.2f} VAR."
+            f"You give up ~{abs(dwin):.1f} win% ({dtop3:+.1f} top-3%) this year{pick_clause}."
         )
     else:
+        neutral = (
+            f"This year is roughly neutral to positive ({dwin:+.1f} win% / {dtop3:+.1f} top-3%)"
+        )
         lines.append(
-            f"This year is roughly neutral to positive ({dwin:+.1f} win% / "
-            f"{dtop3:+.1f} top-3%), and pick value is worth ~{result.net_pick_var:+.2f} VAR."
+            f"{neutral}, and pick value is worth ~{result.net_pick_var:+.2f} VAR."
+            if (ny or sp)
+            else f"{neutral}."
         )
     lines.append(
         f"MC: n_iter={ty.n_iter}, seed={ty.seed} (common random numbers across both runs)."

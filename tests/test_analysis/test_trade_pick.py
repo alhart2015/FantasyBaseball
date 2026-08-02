@@ -285,6 +285,162 @@ def test_verdict_line_does_not_report_a_top3_gain_as_a_loss():
     assert "~1.4 top-3%" not in verdict  # the old bare rendering, which read as a loss
 
 
+# ---------------------------------------------------------------------------
+# render_report's two-way branches. The report is the entire product surface --
+# every number a user acts on is a formatted string from this function -- and
+# the branches the two-way extension added had no coverage at all.
+# ---------------------------------------------------------------------------
+
+
+def _result(**kw):
+    from fantasy_baseball.analysis.trade_pick import (
+        CategoryDelta,
+        ThisYearImpact,
+        TradePickResult,
+    )
+
+    cats = [
+        CategoryDelta(c, 30.0, 28.0, 80.0, 78.0)
+        for c in ("R", "HR", "RBI", "SB", "AVG", "W", "K", "SV", "ERA", "WHIP")
+    ]
+    kw.setdefault("this_year", ThisYearImpact(62.1, 57.9, 91.0, 88.2, cats, 2000, 42))
+    kw.setdefault("sent_name", "Julio Rodriguez")
+    kw.setdefault("partner", "SkeleThor")
+    kw.setdefault("next_year", None)
+    return TradePickResult(**kw)
+
+
+def test_render_report_two_way_pick_swap_shows_both_picks_and_the_net():
+    from fantasy_baseball.analysis.trade_pick import NextYearValue, render_report
+
+    out = render_report(
+        _result(
+            received_name="Kyle Tucker",
+            next_year=NextYearValue(5, 3, 2, "round", 3.76, 4.2, 5.6, 11, 20),
+            sent_pick=NextYearValue(12, 3, 9, "round", 1.12, 1.5, 5.6, 81, 90),
+        )
+    )
+    assert out.isascii()
+    assert "Send:    Julio Rodriguez + 2027 R12 pick  ->  SkeleThor" in out
+    assert "Receive: Kyle Tucker + 2027 Round 5 pick" in out
+    # Both legs of the swap, and the NET -- quoting the gross 3.76 alone would
+    # overstate a swap that only nets +2.64.
+    assert "~3.76 VAR" in out and "~1.12 VAR" in out
+    assert "~+2.64 VAR" in out
+    assert "pick swap" in out
+
+
+def test_render_report_two_way_verdict_quotes_net_not_gross():
+    from fantasy_baseball.analysis.trade_pick import NextYearValue, render_report
+
+    out = render_report(
+        _result(
+            received_name="Kyle Tucker",
+            next_year=NextYearValue(5, 3, 2, "round", 3.76, 4.2, 5.6, 11, 20),
+            sent_pick=NextYearValue(12, 3, 9, "round", 1.12, 1.5, 5.6, 81, 90),
+        )
+    )
+    verdict = out.splitlines()[-2]
+    assert "+2.64 VAR" in verdict
+    assert "3.76" not in verdict  # the gross value of the incoming pick alone
+
+
+def test_render_report_one_way_wording_does_not_leak_into_a_two_way_run():
+    from fantasy_baseball.analysis.trade_pick import NextYearValue, render_report
+
+    two_way = render_report(
+        _result(
+            received_name="Kyle Tucker",
+            next_year=NextYearValue(5, 3, 2, "round", 3.76, 4.2, 5.6, 11, 20),
+        )
+    )
+    assert "Julio Rodriguez out, Kyle Tucker in" in two_way
+    assert "THIS YEAR WITHOUT" not in two_way  # the player-for-pick framing
+
+    one_way = render_report(
+        _result(next_year=NextYearValue(5, 3, 2, "round", 3.76, 4.2, 5.6, 11, 20))
+    )
+    assert "THIS YEAR WITHOUT Julio Rodriguez" in one_way
+    assert " in (swap with" not in one_way
+
+
+def test_render_report_player_for_player_invents_no_pick():
+    """A straight swap involves no draft capital, so the report must not mention
+    any -- and must not credit the deal with pick value in the verdict."""
+    from fantasy_baseball.analysis.trade_pick import render_report
+
+    out = render_report(_result(received_name="Kyle Tucker"))
+    assert "2027" not in out
+    assert "NEXT YEAR" not in out
+    assert "VAR" not in out
+    assert "Receive: Kyle Tucker" in out
+    verdict = out.splitlines()[-2]
+    assert "give up" in verdict and "win%" in verdict
+
+
+def test_render_report_handles_a_pick_going_out_with_none_coming_back():
+    from fantasy_baseball.analysis.trade_pick import NextYearValue, render_report
+
+    out = render_report(
+        _result(
+            received_name="Kyle Tucker",
+            sent_pick=NextYearValue(12, 3, 9, "round", 1.12, 1.5, 5.6, 81, 90),
+        )
+    )
+    assert "Send:    Julio Rodriguez + 2027 R12 pick" in out
+    assert "Receive: Kyle Tucker" in out
+    assert "Round 5" not in out
+    assert "~-1.12 VAR" in out  # net is the outgoing pick, negative
+
+
+def test_net_pick_var_is_zero_when_no_picks_change_hands():
+    assert _result(received_name="Kyle Tucker").net_pick_var == 0.0
+
+
+def test_net_pick_var_is_negative_when_only_a_pick_goes_out():
+    from fantasy_baseball.analysis.trade_pick import NextYearValue
+
+    r = _result(sent_pick=NextYearValue(12, 3, 9, "round", 1.12, 1.5, 5.6, 81, 90))
+    assert r.net_pick_var == pytest.approx(-1.12)
+
+
+def test_compute_trade_pick_requires_something_coming_back():
+    from fantasy_baseball.analysis.trade_pick import compute_trade_pick
+
+    with pytest.raises(ValueError, match="nothing coming back"):
+        compute_trade_pick(send="Julio Rodriguez", to="SkeleThor")
+
+
+def test_round_zero_is_rejected_rather_than_valued():
+    with pytest.raises(ValueError, match="keeper round"):
+        pick_ordinal_range(0, 3, 10, 200)
+
+
+def test_a_zero_send_pick_round_is_not_silently_dropped(monkeypatch):
+    """`if send_pick_round` treated 0 as absent -- the falsy-numeric trap CLAUDE.md
+    calls out. Round 0 is not a real round, so it has to reach validation and
+    error, not vanish and quietly change the reported NET pick value.
+    """
+    from fantasy_baseball.analysis import trade_pick as tp
+    from tests.test_analysis.test_injury_stress import _synth_inputs
+
+    inputs = _synth_inputs()
+    monkeypatch.setattr(tp, "load_mc_inputs_from_upstash", lambda p: inputs)
+    monkeypatch.setattr(tp, "load_config", lambda p: object())
+    monkeypatch.setattr(tp, "this_year_impact", lambda *a, **k: None)
+    seen = []
+
+    def fake_next_year_value(config, nominal_round, pick_slot="round"):
+        seen.append(nominal_round)
+        raise ValueError(f"Round {nominal_round} is a keeper round")
+
+    monkeypatch.setattr(tp, "next_year_value", fake_next_year_value)
+
+    with pytest.raises(ValueError, match="Round 0"):
+        tp.compute_trade_pick(send="Star", to="Opp", receive="O0", send_pick_round=0)
+    assert seen == [0]  # reached valuation rather than being dropped as falsy
+
+
 def test_cli_help_runs():
     import subprocess
     import sys
