@@ -280,8 +280,16 @@ def build_trade_scenario(
     Every body that changes teams is re-slotted into the spot it fills, via
     :func:`place_in_slot` -- see there for why carrying a slot across a trade is
     not safe.
+
+    Both rosters are rebuilt by substituting the new body AT THE OUTGOING BODY'S
+    INDEX, never by filtering and appending. The MC draws each team's per-player
+    randomness as one block indexed by list position, so removing a player from
+    the middle of a roster and appending his replacement at the end re-rolls
+    every player after him -- which silently destroys the common random numbers
+    :func:`this_year_impact` relies on to make its paired delta meaningful.
     """
     user = inputs.user_team_name
+    user_roster = inputs.team_rosters[user]
     partner_roster = inputs.team_rosters[partner]
 
     if received is not None:
@@ -294,15 +302,20 @@ def build_trade_scenario(
             )
         into_user = place_in_slot(received, sent.selected_position)
         into_partner = place_in_slot(sent, received.selected_position)
-        new_user = [p for p in inputs.team_rosters[user] if p is not sent] + [into_user]
-        new_partner = [p for p in partner_roster if p is not received] + [into_partner]
+        out_of_partner: Player | None = received
     else:
-        new_user = [p for p in inputs.team_rosters[user] if p is not sent] + [
-            build_replacement_filler(sent)
-        ]
+        into_user = build_replacement_filler(sent)
         drop = worst_of_type(partner_roster, sent.player_type, inputs.denoms)
         into_partner = place_in_slot(sent, drop.selected_position if drop else Position.BN)
-        new_partner = [p for p in partner_roster if p is not drop] + [into_partner]
+        out_of_partner = drop
+
+    new_user = [into_user if p is sent else p for p in user_roster]
+    if out_of_partner is None:
+        # Nothing to drop: the partner genuinely grows by one. Appending keeps
+        # every existing body at its own index, so only the new tail differs.
+        new_partner = [*partner_roster, into_partner]
+    else:
+        new_partner = [into_partner if p is out_of_partner else p for p in partner_roster]
 
     scenario = dict(inputs.team_rosters)
     scenario[user] = new_user

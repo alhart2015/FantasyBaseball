@@ -1,6 +1,7 @@
 import dataclasses
 import math
 
+import numpy as np
 import pytest
 
 from fantasy_baseball.analysis.draft_value import ParCurve
@@ -14,10 +15,12 @@ from fantasy_baseball.analysis.trade_pick import (
     run_scenario,
     worst_of_type,
 )
+from fantasy_baseball.mc_roster import build_effective_rosters
 from fantasy_baseball.models.player import HitterStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.standings import CategoryStats
 from fantasy_baseball.scoring import _classify_roster, build_team_sds
+from fantasy_baseball.simulation import simulate_remaining_season_batch
 
 
 def _reslot(inputs, team, name, slot):
@@ -526,8 +529,54 @@ def test_a_materially_null_trade_moves_the_win_pct_by_exactly_zero():
     assert scen["team_results"][partner]["first_pct"] == base["team_results"][partner]["first_pct"]
 
 
-def test_untouched_teams_are_bit_identical_across_the_paired_runs():
-    """A third team's numbers must not move at all when two OTHER teams trade."""
+@pytest.mark.parametrize("two_way", [False, True])
+def test_scenario_rosters_consume_the_rng_identically(two_way):
+    """The structural invariant behind the report's common-random-numbers claim.
+
+    ``simulate_remaining_season_batch`` walks ``team_rosters`` in dict order and
+    draws one ``rng.random((n_iter, n_players))`` block per team per player type,
+    so the baseline and scenario runs stay on the same stream only if EVERY team
+    keeps its dict position, its length, and its hitter/pitcher split -- and stay
+    aligned player-for-player only if the bucket counts hold too (the ROS-direct
+    engine sizes its draw off the active + IL bodies). Assert all of it.
+
+    Not asserted, because it is false and should be: that an untouched team's
+    ``first_pct`` is unchanged. That is a RANKING against the other teams, and
+    two rivals trading really does move everyone else's placement.
+    """
+    from tests.test_analysis.test_injury_stress import _mk_hitter, _mk_pitcher, _synth_inputs
+
+    base_inputs = _synth_inputs()
+    third = [_mk_hitter(f"T{i}", str(90 + i)) for i in range(13)] + [
+        _mk_pitcher(f"S{i}", str(110 + i)) for i in range(9)
+    ]
+    rosters = {**base_inputs.team_rosters, "Third": third}
+    inputs = dataclasses.replace(
+        base_inputs,
+        team_rosters=rosters,
+        actual_standings={t: {} for t in rosters},
+        eos_baseline={t: CategoryStats() for t in rosters},
+        team_sds=build_team_sds(rosters, math.sqrt(base_inputs.fraction_remaining)),
+    )
+    sent = find_sent_player(inputs.team_rosters["Me"], "Star")
+    received = find_sent_player(inputs.team_rosters["Opp"], "O4") if two_way else None
+
+    scen = build_trade_scenario(inputs, sent, "Opp", received=received)
+
+    assert list(scen) == list(inputs.team_rosters)  # dict order drives draw order
+    for team, before in inputs.team_rosters.items():
+        after = scen[team]
+        assert len(after) == len(before), team
+        assert [p.player_type for p in after] == [p.player_type for p in before], team
+        assert _buckets(after) == _buckets(before), team
+
+
+def test_untouched_team_keeps_its_own_simulated_production():
+    """The other half of the claim: a third team's raw draws are untouched.
+
+    Its placement moves (two rivals traded), but the randomness it is handed must
+    not, so its own category totals have to come out bit-identical.
+    """
     from tests.test_analysis.test_injury_stress import _mk_hitter, _mk_pitcher, _synth_inputs
 
     base_inputs = _synth_inputs()
@@ -544,7 +593,27 @@ def test_untouched_teams_are_bit_identical_across_the_paired_runs():
     )
     sent = find_sent_player(inputs.team_rosters["Me"], "Star")
 
-    base = run_scenario(inputs, inputs.team_rosters, 200, 42)
-    scen = run_scenario(inputs, build_trade_scenario(inputs, sent, "Opp"), 200, 42)
+    def totals(team_rosters):
+        eff = build_effective_rosters(
+            team_rosters,
+            inputs.eos_baseline,
+            inputs.team_sds,
+            inputs.fraction_remaining,
+            denoms=inputs.denoms,
+        )
+        return simulate_remaining_season_batch(
+            inputs.actual_standings,
+            {t: [p.to_flat_dict() for p in r] for t, r in team_rosters.items()},
+            inputs.fraction_remaining,
+            np.random.default_rng(42),
+            inputs.h_slots,
+            inputs.p_slots,
+            120,
+            effective_rosters=eff,
+        )
 
-    assert scen["team_results"]["Third"] == base["team_results"]["Third"]
+    base = totals(inputs.team_rosters)
+    scen = totals(build_trade_scenario(inputs, sent, "Opp"))
+
+    for cat, arr in base["Third"].items():
+        assert np.array_equal(arr, scen["Third"][cat]), cat
