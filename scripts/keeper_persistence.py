@@ -230,12 +230,27 @@ def run_fit(
     return fits
 
 
-def run_validation(kind: str, panels: dict[tuple[int, int], pd.DataFrame]) -> None:
+def run_validation(
+    kind: str,
+    panels: dict[tuple[int, int], pd.DataFrame],
+    volume_panels: dict[tuple[int, int], pd.DataFrame],
+) -> None:
     """Leave-one-transition-out: fit on the others, score on the held-out one.
 
     With three transitions this is three folds. Reported per fold rather than averaged,
     because the spread ACROSS folds is the noise floor -- a difference between models
     smaller than the spread between folds is not a difference.
+
+    The volume column is validated on the SURVIVORSHIP-CORRECTED panel, matching what
+    `run_fit` ships. Folding it over the survivor-only rate panels validated a share
+    the pipeline never uses (0.42-0.59 against a shipped 0.771) and stamped a verdict
+    on the wrong estimator.
+
+    **The folds are not independent.** With three consecutive transitions, T1's response
+    is built from the same realized season that forms T2's regressor, and the same
+    players recur in every fold, so shared sampling noise flows between train and test.
+    Read these numbers as an UPPER BOUND on out-of-sample skill, not a clean estimate.
+    Fixing that needs more seasons, not different code.
     """
     pool = POOLS[kind]
     pt = str(pool["pt"])
@@ -247,8 +262,11 @@ def run_validation(kind: str, panels: dict[tuple[int, int], pd.DataFrame]) -> No
     )
     print("-" * 78)
     for col in columns:
-        for held, panel in panels.items():
-            train = _pooled([p for k, p in panels.items() if k != held])
+        # Volume off the corrected panel, rates off the survivor panel -- the same
+        # split `run_fit` ships. See `build_volume_transition` for why they differ.
+        source = volume_panels if col == pt else panels
+        for held, panel in source.items():
+            train = _pooled([p for k, p in source.items() if k != held])
             fit = _fit_column(train, col, pt)
             scores = evaluate_shares(
                 panel[f"{col}_proj"],
@@ -563,7 +581,7 @@ def main() -> int:
         }
         run_fit(kind, panels, volume_panels)
         run_survivorship(kind, args)
-        run_validation(kind, panels)
+        run_validation(kind, panels, volume_panels)
         if args.counting:
             run_counting(kind, args)
         if args.vs_fresh:
