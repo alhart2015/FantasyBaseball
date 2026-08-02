@@ -28,6 +28,7 @@ from fantasy_baseball.models.player import (
     PlayerType,
     RankInfo,
 )
+from fantasy_baseball.models.positions import IL_SLOTS, Position
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.simulation import _replacement_line, run_ros_monte_carlo
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category
@@ -175,6 +176,32 @@ def find_sent_player(roster: list[Player], name: str, player_type: str | None = 
     return matches[0]
 
 
+def place_in_slot(incoming: Player, slot: Position | None) -> Player:
+    """Copy of ``incoming`` sitting in the roster spot ``slot``.
+
+    A trade moves ``Player`` objects between rosters, and ``selected_position``
+    is a property of the roster SPOT, not of the player -- but
+    ``scoring._classify_roster`` reads each body's bucket (active / il / bench)
+    straight off that field, and only active + IL bodies are simulated (healthy
+    bench pitchers are dropped from the MC outright). So a body that keeps the
+    slot it held on its old team silently changes bucket on its new one, which
+    invents or deletes lineup production the trade never touched. Every body
+    that changes rosters goes through here.
+
+    Health, unlike the slot, belongs to the player, so the transplant never
+    changes it: an injured body always lands on the IL and a healthy body never
+    does. That guard has to run in BOTH directions, because ``is_on_il()`` reads
+    status OR slot -- a player whose only IL signal is his old IL slot would be
+    silently healed by a move to an active spot, and a healthy player dropped
+    into a vacated IL slot would be silently injured.
+    """
+    if incoming.is_on_il():
+        slot = slot if slot in IL_SLOTS else Position.IL
+    elif slot in IL_SLOTS:
+        slot = Position.BN
+    return dataclasses.replace(incoming, selected_position=slot)
+
+
 def build_replacement_filler(sent: Player) -> Player:
     """A replacement-level filler for the slot the sent player vacates.
 
@@ -183,8 +210,12 @@ def build_replacement_filler(sent: Player) -> Player:
     ROS line and full-season line neutralized to replacement level -- the MC
     reads production off the ROS line (ROS-direct engine) but the full-season
     line still drives the playing-time-curve shape and the top-k fallback, so
-    neutralize both. The active-lineup selection starts this filler only when no
-    better bench player is available; otherwise it benches.
+    neutralize both.
+
+    The filler inherits the vacated SLOT (via :func:`place_in_slot`) but not the
+    sent player's ``status``: a body plucked off waivers is healthy even when the
+    player it replaces was hurt, and inheriting an IL status would have the
+    filler simulated as injured -- production the user would actually have.
     """
     is_hitter = sent.player_type == PlayerType.HITTER
     ros_repl = _replacement_ros(sent)  # scaled to the sent player's ROS volume
@@ -192,7 +223,7 @@ def build_replacement_filler(sent: Player) -> Player:
     stats_cls = HitterStats if is_hitter else PitcherStats
     fs_repl = stats_cls.from_dict(repl_line)  # replacement full-season line
     pos_label = str(sent.positions[0]) if sent.positions else str(sent.player_type)
-    return dataclasses.replace(
+    filler = dataclasses.replace(
         sent,
         name=f"Replacement ({pos_label})",
         rest_of_season=ros_repl,
@@ -200,11 +231,13 @@ def build_replacement_filler(sent: Player) -> Player:
         preseason=None,
         current=None,
         rank=RankInfo(),
+        status="",
         selected_position=None,
         fg_id=None,
         mlbam_id=None,
         yahoo_id=None,
     )
+    return place_in_slot(filler, sent.selected_position)
 
 
 def worst_of_type(
@@ -240,7 +273,13 @@ def build_trade_scenario(
 
     In the pick case, if the partner has no droppable player of the sent player's
     type, nothing is dropped and the partner grows by one -- you cannot drop what
-    does not exist. Accepted (a benched extra body is second-order).
+    does not exist. The extra body is BENCHED (accepted as second-order) rather
+    than left in the active slot it held on the user's roster, which would hand
+    the partner a lineup spot the trade did not create.
+
+    Every body that changes teams is re-slotted into the spot it fills, via
+    :func:`place_in_slot` -- see there for why carrying a slot across a trade is
+    not safe.
     """
     user = inputs.user_team_name
     partner_roster = inputs.team_rosters[partner]
@@ -253,14 +292,17 @@ def build_trade_scenario(
                 f"{received.name!r} is not on {partner!r}'s roster; a two-way trade has "
                 "to move a player who is actually there"
             )
-        new_user = [p for p in inputs.team_rosters[user] if p is not sent] + [received]
-        new_partner = [p for p in partner_roster if p is not received] + [sent]
+        into_user = place_in_slot(received, sent.selected_position)
+        into_partner = place_in_slot(sent, received.selected_position)
+        new_user = [p for p in inputs.team_rosters[user] if p is not sent] + [into_user]
+        new_partner = [p for p in partner_roster if p is not received] + [into_partner]
     else:
         new_user = [p for p in inputs.team_rosters[user] if p is not sent] + [
             build_replacement_filler(sent)
         ]
         drop = worst_of_type(partner_roster, sent.player_type, inputs.denoms)
-        new_partner = [p for p in partner_roster if p is not drop] + [sent]
+        into_partner = place_in_slot(sent, drop.selected_position if drop else Position.BN)
+        new_partner = [p for p in partner_roster if p is not drop] + [into_partner]
 
     scenario = dict(inputs.team_rosters)
     scenario[user] = new_user
