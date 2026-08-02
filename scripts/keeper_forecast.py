@@ -64,6 +64,7 @@ from fantasy_baseball.keepers.playing_time import (
     build_features,
     fit_curve,
     lag_panel,
+    plate_appearances_per_game,
 )
 from fantasy_baseball.keepers.vintages import load_vintage
 
@@ -127,17 +128,23 @@ def hitter_pa_forecast(target_year: int, observed_pa: pd.Series) -> pd.Series | 
     pa2 = series_for(BASE_YEAR - 1, "pa").reindex(observed_pa.index)
     pa3 = series_for(BASE_YEAR - 2, "pa").reindex(observed_pa.index)
     age = series_for(latest, "age").reindex(observed_pa.index) + (target_year - latest)
-    ssd = series_for(latest, "seasons_since_debut").reindex(observed_pa.index) + (
-        target_year - latest
+    # Role comes from the base season's PARTIAL panel row, not from the blend. The blend
+    # carries full-season PA but its `g` field is rest-of-season games, so pa/g off the
+    # blend is nonsense (600+ PA over 46 games). PA-per-game is a rate, so two thirds of
+    # a season measures it perfectly well.
+    ppg1 = plate_appearances_per_game(
+        series_for(BASE_YEAR, "pa").reindex(observed_pa.index).fillna(0.0),
+        series_for(BASE_YEAR, "games").reindex(observed_pa.index).fillna(0.0),
     )
-    # One application of the curve per year from the base season to the target. `age`
-    # and `ssd` above are advanced to the TARGET year, so each step walks them back to
-    # the season it is actually projecting: for a 2028 target, step 0 projects 2027.
+    # One application of the curve per year from the base season to the target. `age` is
+    # advanced to the TARGET year, so each step walks it back to the season it is
+    # actually projecting: for a 2028 target, step 0 projects 2027. Role is carried
+    # forward unchanged -- a batting-order slot is far stickier than a workload, and
+    # projecting a change in it would be inventing information.
     pa1, projected = observed_pa, None
     steps = target_year - BASE_YEAR
     for step in range(steps):
-        back = steps - step - 1
-        projected = curve.predict(build_features(pa1, pa2, pa3, age - back, ssd - back))
+        projected = curve.predict(build_features(pa1, pa2, pa3, age - (steps - step - 1), ppg1))
         pa1, pa2, pa3 = projected, pa1, pa2
     return projected
 
