@@ -32,10 +32,29 @@ from fantasy_baseball.analysis.trade_pick import (
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Show the two-sided impact of trading a player for a next-year draft pick."
+        description="Show the two-sided impact of a trade: this year's win odds and next year's pick value."
     )
     parser.add_argument("--send", required=True, help="Player you trade away (on your roster).")
     parser.add_argument("--to", required=True, help="Trade partner's team name.")
+    parser.add_argument(
+        "--receive",
+        default=None,
+        help="Player coming back (on the partner's roster). Makes this a two-way swap: "
+        "the real incoming player fills the slot instead of a replacement-level filler.",
+    )
+    parser.add_argument(
+        "--send-pick-round",
+        type=int,
+        default=None,
+        help="Nominal round of a pick you GIVE UP, if the trade swaps picks. The report "
+        "then shows the NET pick value rather than the gross value of the one received.",
+    )
+    parser.add_argument(
+        "--receive-player-type",
+        choices=["hitter", "pitcher"],
+        default=None,
+        help="Disambiguate a same-named player on the partner's roster.",
+    )
     parser.add_argument(
         "--pick-round",
         type=int,
@@ -65,6 +84,9 @@ def main() -> int:
             send=args.send,
             to=args.to,
             pick_round=args.pick_round,
+            receive=args.receive,
+            send_pick_round=args.send_pick_round,
+            receive_player_type=args.receive_player_type,
             player_type=args.player_type,
             pick_slot=args.pick_slot,
             n_iter=args.iterations,

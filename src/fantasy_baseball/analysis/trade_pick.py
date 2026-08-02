@@ -222,22 +222,45 @@ def worst_of_type(
     return min(cands, key=lambda p: calculate_player_sgp(p.full_season_projection, denoms=denoms))
 
 
-def build_trade_scenario(inputs: McInputs, sent: Player, partner: str) -> dict[str, list[Player]]:
-    """Team rosters after the trade: user loses ``sent`` and gains a replacement
-    filler (size constant); the partner gains the intact ``sent`` and drops its
-    worst-of-type player (size constant). ``inputs.team_rosters`` is not mutated.
+def build_trade_scenario(
+    inputs: McInputs, sent: Player, partner: str, received: Player | None = None
+) -> dict[str, list[Player]]:
+    """Team rosters after the trade. ``inputs.team_rosters`` is not mutated.
 
-    If the partner has no droppable player of the sent player's type (none on
-    their roster), nothing is dropped and the partner grows by one -- you cannot
-    drop what does not exist. Accepted (a benched extra body is second-order).
+    Two shapes, and the difference matters:
+
+    * **Player for player** (``received`` supplied). Each side gives one and gets
+      one, so sizes hold on their own -- no filler is invented and nothing is
+      dropped. This is the honest model of a real swap: the incoming player IS
+      the replacement for the vacated slot, and modelling him as a generic filler
+      would understate a good return and overstate a bad one.
+    * **Player for a pick** (``received`` omitted). The user has a hole, so a
+      replacement-level filler keeps the roster size constant, and the partner
+      drops its worst-of-type to absorb the incoming player.
+
+    In the pick case, if the partner has no droppable player of the sent player's
+    type, nothing is dropped and the partner grows by one -- you cannot drop what
+    does not exist. Accepted (a benched extra body is second-order).
     """
     user = inputs.user_team_name
-    filler = build_replacement_filler(sent)
-    new_user = [p for p in inputs.team_rosters[user] if p is not sent] + [filler]
-
     partner_roster = inputs.team_rosters[partner]
-    drop = worst_of_type(partner_roster, sent.player_type, inputs.denoms)
-    new_partner = [p for p in partner_roster if p is not drop] + [sent]
+
+    if received is not None:
+        if not any(p is received for p in partner_roster):
+            # Otherwise the partner silently grows by one and the two sides of the
+            # comparison are no longer the same size, which quietly biases the delta.
+            raise ValueError(
+                f"{received.name!r} is not on {partner!r}'s roster; a two-way trade has "
+                "to move a player who is actually there"
+            )
+        new_user = [p for p in inputs.team_rosters[user] if p is not sent] + [received]
+        new_partner = [p for p in partner_roster if p is not received] + [sent]
+    else:
+        new_user = [p for p in inputs.team_rosters[user] if p is not sent] + [
+            build_replacement_filler(sent)
+        ]
+        drop = worst_of_type(partner_roster, sent.player_type, inputs.denoms)
+        new_partner = [p for p in partner_roster if p is not drop] + [sent]
 
     scenario = dict(inputs.team_rosters)
     scenario[user] = new_user
@@ -300,18 +323,20 @@ def this_year_impact(
     sent: Player,
     partner: str,
     *,
+    received: Player | None = None,
     n_iter: int = 2000,
     seed: int = 42,
 ) -> ThisYearImpact:
     """Baseline vs post-trade ROS MC for the user, with common random numbers.
 
-    Full swing: the sent player leaves the user (replaced by a bench-or-
-    replacement filler) and joins the partner. Reports the user's overall win%
-    and top-3% and per-category first%/top-3%.
+    Full swing: the sent player leaves the user and joins the partner. With
+    ``received`` the real incoming player fills the slot; without it, a
+    replacement-level filler does. Reports the user's overall win% and top-3%
+    and per-category first%/top-3%.
     """
     user = inputs.user_team_name
     base = run_scenario(inputs, inputs.team_rosters, n_iter, seed)
-    scen_rosters = build_trade_scenario(inputs, sent, partner)
+    scen_rosters = build_trade_scenario(inputs, sent, partner, received=received)
     scen = run_scenario(inputs, scen_rosters, n_iter, seed)
 
     br = base["team_results"][user]
@@ -345,6 +370,16 @@ class TradePickResult:
     partner: str
     this_year: ThisYearImpact
     next_year: NextYearValue
+    received_name: str | None = None
+    # The pick going the OTHER way, when the trade swaps picks rather than buying
+    # one. `net_pick_var` is what the swap is actually worth: incoming minus
+    # outgoing. Without an outgoing pick it is just `next_year.expected_var`.
+    sent_pick: NextYearValue | None = None
+
+    @property
+    def net_pick_var(self) -> float:
+        out = self.sent_pick.expected_var if self.sent_pick is not None else 0.0
+        return self.next_year.expected_var - out
 
 
 def resolve_partner(team_rosters: dict[str, list[Player]], to: str, user: str) -> str:
@@ -365,21 +400,43 @@ def compute_trade_pick(
     to: str,
     pick_round: int,
     *,
+    receive: str | None = None,
+    send_pick_round: int | None = None,
     player_type: str | None = None,
+    receive_player_type: str | None = None,
     pick_slot: str = "round",
     n_iter: int = 2000,
     seed: int = 42,
     config_path: Path | None = None,
 ) -> TradePickResult:
-    """Load stored state, compute both halves, and return the combined result."""
+    """Load stored state, compute both halves, and return the combined result.
+
+    `receive` names a player coming back from the partner, making this a real
+    two-way swap rather than a player-for-pick sale. `send_pick_round` names a
+    pick going the other way, so the reported next-year value is the NET of the
+    two picks instead of the gross value of the one received.
+    """
     cfg_path = config_path or _CONFIG_PATH
     inputs = load_mc_inputs_from_upstash(cfg_path)
     config = load_config(cfg_path)
     partner = resolve_partner(inputs.team_rosters, to, inputs.user_team_name)
     sent = find_sent_player(inputs.team_rosters[inputs.user_team_name], send, player_type)
-    this_year = this_year_impact(inputs, sent, partner, n_iter=n_iter, seed=seed)
+    got = (
+        find_sent_player(inputs.team_rosters[partner], receive, receive_player_type)
+        if receive
+        else None
+    )
+    this_year = this_year_impact(inputs, sent, partner, received=got, n_iter=n_iter, seed=seed)
     nxt = next_year_value(config, pick_round, pick_slot)
-    return TradePickResult(sent.name, partner, this_year, nxt)
+    out_pick = next_year_value(config, send_pick_round, pick_slot) if send_pick_round else None
+    return TradePickResult(
+        sent.name,
+        partner,
+        this_year,
+        nxt,
+        received_name=got.name if got else None,
+        sent_pick=out_pick,
+    )
 
 
 def _kp(x: float) -> str:
@@ -394,16 +451,24 @@ def render_report(result: TradePickResult) -> str:
     dtop3 = ty.new_top3 - ty.base_top3
     lines: list[str] = []
     lines.append("=" * 72)
-    lines.append("TRADE-FOR-PICK CALCULATOR")
-    lines.append(f"  Send: {result.sent_name}  ->  {result.partner}")
+    lines.append("TRADE CALCULATOR")
+    out_pick = f" + 2027 R{result.sent_pick.nominal_round} pick" if result.sent_pick else ""
+    lines.append(f"  Send:    {result.sent_name}{out_pick}  ->  {result.partner}")
+    got = f"{result.received_name} + " if result.received_name else ""
     lines.append(
-        f"  For:  2027 Round {ny.nominal_round} pick  "
+        f"  Receive: {got}2027 Round {ny.nominal_round} pick  "
         f"(keeper rounds: {ny.keeper_rounds}  ->  drafted round {ny.drafted_round})"
     )
     lines.append("=" * 72)
 
     lines.append("")
-    lines.append(f"1. THIS YEAR WITHOUT {result.sent_name}  (full swing: joins {result.partner})")
+    swap = (
+        f"1. THIS YEAR -- {result.sent_name} out, {result.received_name} in "
+        f"(swap with {result.partner})"
+        if result.received_name
+        else f"1. THIS YEAR WITHOUT {result.sent_name}  (full swing: joins {result.partner})"
+    )
+    lines.append(swap)
     lines.append("-" * 72)
     lines.append(f"  Win%   : {ty.base_win:5.1f}%  ->  {ty.new_win:5.1f}%   ({dwin:+.1f})")
     lines.append(f"  Top-3% : {ty.base_top3:5.1f}%  ->  {ty.new_top3:5.1f}%   ({dtop3:+.1f})")
@@ -422,9 +487,24 @@ def render_report(result: TradePickResult) -> str:
         )
 
     lines.append("")
-    lines.append(f"2. NEXT YEAR -- extra 2027 pick (drafted round {ny.drafted_round})")
+    label = (
+        "pick swap" if result.sent_pick else f"extra 2027 pick (drafted round {ny.drafted_round})"
+    )
+    lines.append(f"2. NEXT YEAR -- {label}")
     lines.append("-" * 72)
-    lines.append(f"  Expected pick value : ~{ny.expected_var:.1f} VAR")
+    if result.sent_pick:
+        sp = result.sent_pick
+        lines.append(
+            f"  Receive R{ny.nominal_round} (drafted {ny.drafted_round}) : "
+            f"~{ny.expected_var:.2f} VAR"
+        )
+        lines.append(
+            f"  Send    R{sp.nominal_round} (drafted {sp.drafted_round}) : "
+            f"~{sp.expected_var:.2f} VAR"
+        )
+        lines.append(f"  NET pick value      : ~{result.net_pick_var:+.2f} VAR")
+    else:
+        lines.append(f"  Expected pick value : ~{ny.expected_var:.1f} VAR")
     lines.append(
         f"  (early in the round : ~{ny.early_var:.1f} VAR ; "
         f"keeper-average keeper : ~{_kp(ny.keeper_par)} VAR)"
@@ -439,12 +519,12 @@ def render_report(result: TradePickResult) -> str:
     if dwin < 0:
         lines.append(
             f"You give up ~{abs(dwin):.1f} win% / ~{abs(dtop3):.1f} top-3% this year "
-            f"to gain a pick worth ~{ny.expected_var:.1f} VAR."
+            f"for pick value worth ~{result.net_pick_var:+.2f} VAR."
         )
     else:
         lines.append(
             f"This year is roughly neutral to positive ({dwin:+.1f} win% / "
-            f"{dtop3:+.1f} top-3%), and you also gain a pick worth ~{ny.expected_var:.1f} VAR."
+            f"{dtop3:+.1f} top-3%), and pick value is worth ~{result.net_pick_var:+.2f} VAR."
         )
     lines.append(
         f"MC: n_iter={ty.n_iter}, seed={ty.seed} (common random numbers across both runs)."

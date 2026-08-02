@@ -220,3 +220,60 @@ def test_cli_help_runs():
     )
     assert result.returncode == 0
     assert "--send" in result.stdout and "--pick-round" in result.stdout
+
+
+def test_build_trade_scenario_two_way_swaps_the_real_players():
+    """A player-for-player trade must move BOTH players, not substitute a filler.
+
+    With `received` supplied there is no vacated slot to fill: each side gives one
+    and gets one, so sizes hold without inventing a replacement, and neither roster
+    should end up holding a synthetic body.
+    """
+    from tests.test_analysis.test_injury_stress import _synth_inputs
+
+    inputs = _synth_inputs()
+    user, partner = inputs.user_team_name, "Opp"
+    sent = find_sent_player(inputs.team_rosters[user], "Star")
+    received = inputs.team_rosters[partner][0]
+    n_user0, n_partner0 = len(inputs.team_rosters[user]), len(inputs.team_rosters[partner])
+
+    scen = build_trade_scenario(inputs, sent, partner, received=received)
+
+    assert len(scen[user]) == n_user0
+    assert len(scen[partner]) == n_partner0
+    assert any(p is received for p in scen[user])
+    assert all(p is not sent for p in scen[user])
+    assert any(p is sent for p in scen[partner])
+    assert all(p is not received for p in scen[partner])
+    # No filler on either side -- a two-way trade fills its own hole.
+    assert not any(p.name.startswith("Replacement") for p in scen[user])
+    assert not any(p.name.startswith("Replacement") for p in scen[partner])
+    # And nothing was dropped from the partner: the incoming player IS the slot filler.
+    assert {p.name for p in inputs.team_rosters[partner]} - {p.name for p in scen[partner]} == {
+        received.name
+    }
+
+
+def test_build_trade_scenario_two_way_does_not_mutate_inputs():
+    from tests.test_analysis.test_injury_stress import _synth_inputs
+
+    inputs = _synth_inputs()
+    user, partner = inputs.user_team_name, "Opp"
+    before_user = list(inputs.team_rosters[user])
+    before_partner = list(inputs.team_rosters[partner])
+    sent = find_sent_player(inputs.team_rosters[user], "Star")
+    build_trade_scenario(inputs, sent, partner, received=inputs.team_rosters[partner][0])
+    assert inputs.team_rosters[user] == before_user
+    assert inputs.team_rosters[partner] == before_partner
+
+
+def test_build_trade_scenario_rejects_a_received_player_not_on_the_partner():
+    """Otherwise the partner silently grows by one and the comparison is unbalanced."""
+    from tests.test_analysis.test_injury_stress import _synth_inputs
+
+    inputs = _synth_inputs()
+    user, partner = inputs.user_team_name, "Opp"
+    sent = find_sent_player(inputs.team_rosters[user], "Star")
+    stranger = _hit("Not Theirs")
+    with pytest.raises(ValueError, match="not on"):
+        build_trade_scenario(inputs, sent, partner, received=stranger)
