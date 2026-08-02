@@ -98,7 +98,12 @@ def main() -> int:
         | {int(i) for f in pitching.values() for i in f["player.id"].dropna()}
     )
     logger.info("distinct players %d-%d: %d", args.start, args.end, len(ids))
-    people = fetch_mlb_people(RAW_DIR, ids, f"all_{args.start}_{args.end}")
+    # The tag must change when the ID SET can change, per fetch_mlb_people's contract.
+    # --refresh re-pulls the live season and so discovers players who debuted since the
+    # last build; serving them a people file keyed only on the year range would leave
+    # every one of them without a birth date, hence without an age, hence unscoreable.
+    tag = f"all_{args.start}_{args.end}" + ("_refresh" if args.refresh else "")
+    people = fetch_mlb_people(RAW_DIR, ids, tag)
 
     PANEL_DIR.mkdir(parents=True, exist_ok=True)
     for label, seasons, builder in (

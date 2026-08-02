@@ -51,10 +51,20 @@ from fantasy_baseball.keepers.actuals import (
 )
 from fantasy_baseball.keepers.blend import parse_blend
 
-PT_PANELS = {
-    "hitter": PROJECT_ROOT / "data" / "playing_time" / "hitter_pt_panel_2010_2026.csv",
-    "pitcher": PROJECT_ROOT / "data" / "playing_time" / "pitcher_pt_panel_2010_2026.csv",
-}
+PT_PANEL_DIR = PROJECT_ROOT / "data" / "playing_time"
+
+
+def _panel_path(kind: str) -> Path | None:
+    """Newest `{kind}_pt_panel_{start}_{end}.csv`, or None if none is built.
+
+    Globbed rather than hardcoded: `build_pt_panel.py` names its output from
+    --start/--end with --end defaulting to the CURRENT year, so a pinned
+    `_2010_2026.csv` would be orphaned by the next rebuild and the board would
+    silently fall back to the one-year gap volume model this curve replaced.
+    """
+    matches = sorted(PT_PANEL_DIR.glob(f"{kind}_pt_panel_*.csv"))
+    return matches[-1] if matches else None
+
 
 from fantasy_baseball.keepers.persistence import (
     Share,
@@ -104,7 +114,9 @@ def fetch_blend() -> dict:
     return payload
 
 
-def volume_forecast(kind: str, target_year: int, observed: pd.Series) -> pd.Series | None:
+def volume_forecast(
+    kind: str, target_year: int, observed: pd.Series, floor: float
+) -> pd.Series | None:
     """Projected `target_year` PA (hitters) or IP (pitchers) from career history.
 
     Supersedes the one-year gap term for both pools. `observed` is the CURRENT season's
@@ -116,11 +128,15 @@ def volume_forecast(kind: str, target_year: int, observed: pd.Series) -> pd.Seri
     as the first lag. That is an extrapolation: the curve was fit one year ahead, and
     iterating it compounds its error.
     """
-    path = PT_PANELS[kind]
-    if not path.exists():
+    path = _panel_path(kind)
+    if path is None:
+        print(f"  WARNING: no {kind} playing-time panel; falling back to the gap model")
         return None
+    print(f"  {kind} playing-time panel: {path.name}")
     panel = pd.read_csv(path)
-    rows = lag_panel(panel, kind, min_recent=300.0 if kind == "hitter" else 50.0)
+    # Same floor the caller scores on, so the fit population and the prediction
+    # population cannot desync when --min-pa/--min-ip is passed.
+    rows = lag_panel(panel, kind, min_recent=floor)
     curve = fit_curve(rows[list(FEATURES[kind])], rows["target"], kind)
     latest = int(panel.loc[~panel["partial_season"].astype(bool), "season"].max())
     volume = "pa" if kind == "hitter" else "ip"
@@ -131,7 +147,15 @@ def volume_forecast(kind: str, target_year: int, observed: pd.Series) -> pd.Seri
 
     vol2 = series_for(BASE_YEAR - 1, volume)
     vol3 = series_for(BASE_YEAR - 2, volume)
-    age = series_for(latest, "age") + (target_year - latest)
+    # Age comes from the BASE year, not the last COMPLETED one. Sourcing it from
+    # `latest` gave NaN to every player whose first season is the base year -- 107 of
+    # them in the 2026 panel, 10 already past 300 PA -- and that NaN propagated through
+    # the whole 5x5 line, silently dropping exactly the young debutants a keeper league
+    # values most. The base-year row exists for anyone the blend covers; `latest` stays
+    # as a fallback for a player the base season somehow missed.
+    age = (series_for(BASE_YEAR, "age") + (target_year - BASE_YEAR)).fillna(
+        series_for(latest, "age") + (target_year - latest)
+    )
     # Role comes from the base season's PARTIAL panel row, not the blend. The blend
     # carries full-season volume but its `g` field is REST-OF-SEASON games, so volume/g
     # off the blend is nonsense (600+ PA over 46 games). A per-appearance rate is
@@ -214,7 +238,7 @@ def forecast_pool(
     result = pd.DataFrame(index=idx)
     # Volume comes from the multi-year career curve for BOTH pools now, not the
     # one-year gap term. Falls back to the gap model if a panel is missing.
-    curve_volume = volume_forecast(kind, target_year, observed.loc[idx, pt])
+    curve_volume = volume_forecast(kind, target_year, observed.loc[idx, pt], floor)
     for col in columns:
         g = gap(observed.loc[idx, col], base.loc[idx, col])
         aging = None
@@ -222,10 +246,14 @@ def forecast_pool(
             aging = centered_aging(
                 out[col].reindex(idx), base.loc[idx, col], weights=observed.loc[idx, pt]
             )
+        folded = fold_forecast(base.loc[idx, col], g, shares[col], aging)
         if col == pt and curve_volume is not None:
-            result[col] = curve_volume.reindex(idx)
+            # Per-player fallback, not all-or-nothing: a player the curve cannot score
+            # (missing lags, missing age) must not land a NaN in the counting line and
+            # vanish from the board without a word.
+            result[col] = curve_volume.reindex(idx).fillna(folded)
         else:
-            result[col] = fold_forecast(base.loc[idx, col], g, shares[col], aging)
+            result[col] = folded
         result[f"{col}_gap"] = g
     # A rate cannot go negative, and neither can volume. The linear fold can push a
     # near-zero rate under zero for a player whose 2026 collapsed; clip rather than
@@ -242,6 +270,11 @@ def to_counting(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
         return pd.DataFrame(
             {
                 "PA": pa,
+                # Carried so the AVG term is scaled by the at-bats THIS player is
+                # forecast to take. ab_pa spans 0.80-0.96 across the pool, so a league
+                # constant misprices high-walk and high-contact bats in opposite
+                # directions by more than adjacent keeper candidates are separated by.
+                "AB": frame["ab_pa"] * pa,
                 "R": frame["r_pa"] * pa,
                 "HR": frame["hr_pa"] * pa,
                 "RBI": frame["rbi_pa"] * pa,

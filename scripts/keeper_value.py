@@ -99,13 +99,13 @@ def sgp_frame(counting: pd.DataFrame, kind: str, denoms: dict[Category, float]) 
             calculate_counting_sgp(counting[cat.value], denoms[cat])
             for cat in (Category.R, Category.HR, Category.RBI, Category.SB)
         )
-        # `ab` is not in the counting frame; recover it from PA at the league AB/PA
-        # ratio the forecast itself produced, so the marginal-hits term is scaled by
-        # the at-bats this player is actually forecast to take.
-        ab = counting["PA"] * 0.895
+        # The forecast's own per-player at-bats, so the marginal-hits term is scaled by
+        # the AB this hitter is actually projected to take. This used to be a hardcoded
+        # league 0.895 -- ab_pa really spans 0.80-0.96, which is worth ~0.34 SGP of
+        # var_total to a high-walk bat, against adjacent candidates often under 0.5 apart.
         return total + calculate_hitting_rate_sgp(
             player_avg=counting["AVG"],
-            player_ab=ab,  # type: ignore[arg-type]
+            player_ab=counting["AB"],  # type: ignore[arg-type]
             replacement_avg=REPLACEMENT_AVG,
             sgp_denominator=denoms[Category.AVG],
             team_ab=DEFAULT_TEAM_AB,
@@ -340,12 +340,19 @@ def main() -> int:
     if args.kind:
         view = view[view["kind"] == args.kind]
     if args.team:
-        view = board[board["team"].fillna("").str.lower() == args.team.lower()]
+        # Narrows `view`, NOT `board`: restarting from the board here silently threw
+        # away a --kind filter applied on the line above.
+        view = view[view["team"].fillna("").str.lower() == args.team.lower()]
     view = view.head(args.top)
 
     title = f"KEEPER VALUE -- {args.team}" if args.team else "KEEPER VALUE -- full board"
     print(f"\n{'=' * 108}\n{title}  (VAR = SGP above the last rostered player)\n{'=' * 108}")
     if args.stats:
+        # Hitters and pitchers score different categories, so one header cannot serve a
+        # mixed board -- without --kind this used to fall through to the pitcher columns
+        # and render every hitter as six NaNs.
+        if args.kind is None:
+            parser.error("--stats needs --kind: the two pools score different categories")
         cats = (
             ["PA", "R", "HR", "RBI", "SB", "AVG"]
             if args.kind == "hitter"
