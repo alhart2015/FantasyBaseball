@@ -24,7 +24,16 @@ _ZIPS_HITTER = {
     "RBI": 100,
     "SB": 12,
 }
-_ZIPS_PITCHER = {"MLBAMID": 22, "IP": 180.0, "ER": 60, "BB": 45, "H": 150, "SO": 200, "W": 15}
+_ZIPS_PITCHER = {
+    "MLBAMID": 22,
+    "IP": 180.0,
+    "ER": 60,
+    "BB": 45,
+    "H": 150,
+    "SO": 200,
+    "W": 15,
+    "SV": 3,
+}
 _MLB_HITTING = {
     "player.id": 1,
     "stat.plateAppearances": 600,
@@ -43,6 +52,7 @@ _MLB_PITCHING = {
     "stat.hits": 150,
     "stat.strikeOuts": 200,
     "stat.wins": 15,
+    "stat.saves": 3,
 }
 
 
