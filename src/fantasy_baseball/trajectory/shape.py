@@ -178,6 +178,15 @@ class Prepared:
     boolean subset, and slicing a DataFrame 600 times costs more than the fit does.
     """
 
+    #: Which pool the panel was loaded from. Held because `kind` is otherwise a pure
+    #: label -- it lands on `Trajectory.kind` for `render` and is never checked against
+    #: the panel. That was safe while every caller loaded the panel and named the pool in
+    #: one expression, but hoisting the panel out of the loop is exactly what this class
+    #: is for, and a board is mixed hitters and pitchers. One `prepare` above that loop
+    #: would fit every pitcher on hitter seasons -- different SGP scale, different aging
+    #: shape, different survival -- and print it under `kind='pitcher'` with a plausible
+    #: `n_comps` and no warning.
+    kind: str
     #: Horizons whose forward values are available. A query may ask for any subset.
     horizons: tuple[int, ...]
     #: Last season with an observable outcome; a row is censored past it.
@@ -195,12 +204,16 @@ class Prepared:
 def prepare(
     panel: pd.DataFrame,
     *,
+    kind: str,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     last_complete_season: int | None = None,
 ) -> Prepared:
     """Hoist the panel-level half of `shape_trajectory` out of the per-query loop.
 
     Worth it from roughly the second query onward; below that just pass the panel.
+
+    `kind` names the pool `panel` was loaded from, and every query against the result
+    must agree with it -- see `Prepared.kind`.
     """
     if not horizons:
         raise ValueError("horizons must not be empty")
@@ -226,6 +239,7 @@ def prepare(
         for h in sorted(set(horizons))
     }
     return Prepared(
+        kind=kind,
         horizons=tuple(sorted(set(horizons))),
         last=last,
         age=history["age"].to_numpy(dtype=float),
@@ -336,6 +350,11 @@ def shape_trajectory(
     horizons = tuple(sorted(horizons))
     if isinstance(panel, Prepared):
         prepared = panel
+        if prepared.kind != kind:
+            raise ValueError(
+                f"prepared state was built from the {prepared.kind} panel and cannot "
+                f"answer a {kind} query; prepare one state per pool"
+            )
         unavailable = sorted(set(horizons) - set(prepared.horizons))
         if unavailable:
             raise ValueError(
@@ -348,7 +367,9 @@ def shape_trajectory(
                 f"state's {prepared.last}; rebuild it rather than censoring twice"
             )
     else:
-        prepared = prepare(panel, horizons=horizons, last_complete_season=last_complete_season)
+        prepared = prepare(
+            panel, kind=kind, horizons=horizons, last_complete_season=last_complete_season
+        )
     last = prepared.last
 
     # Weight once: the kernels describe the QUERY's neighbourhood and do not move with

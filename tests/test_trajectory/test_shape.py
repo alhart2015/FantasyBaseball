@@ -193,7 +193,7 @@ def test_prepared_state_gives_the_same_answer_as_the_panel(horizons: tuple[int, 
     kw = {"kind": "hitter", "age": 28, "sgp": 15.0, "peak": 15.0, "peak_band": 50.0}
     direct, direct_anchors = shape_trajectory(panel, horizons=horizons, **kw)
     prepared, prepared_anchors = shape_trajectory(
-        prepare(panel, horizons=(1, 2)), horizons=horizons, **kw
+        prepare(panel, kind="hitter", horizons=(1, 2)), horizons=horizons, **kw
     )
 
     # Nothing below may pass by comparing NaN to NaN.
@@ -209,12 +209,29 @@ def test_prepared_state_gives_the_same_answer_as_the_panel(horizons: tuple[int, 
         assert got == want
 
 
+def test_prepared_state_refuses_a_query_from_the_other_pool() -> None:
+    """`kind` is otherwise a pure label -- it lands on `Trajectory.kind` for `render` and
+    is never checked against the panel. That was safe while every caller loaded the panel
+    and named the pool in one expression, but the whole point of `prepare` is hoisting the
+    panel out of the loop, and a board is mixed hitters and pitchers. One `prepare` above
+    that loop would fit every pitcher on hitter seasons and print it under
+    `kind='pitcher'` with a plausible `n_comps` and no warning."""
+    prepared = prepare(_mixed_panel(), kind="hitter", horizons=(1,))
+    with pytest.raises(ValueError, match="pitcher"):
+        shape_trajectory(prepared, kind="pitcher", age=28, sgp=15.0, peak=15.0, horizons=(1,))
+
+
 def test_prepared_state_refuses_a_horizon_it_has_no_forward_values_for() -> None:
     """Silently returning an empty path here would read as "no comps for this player"."""
     panel = _mixed_panel()
     with pytest.raises(ValueError, match="horizons"):
         shape_trajectory(
-            prepare(panel, horizons=(1,)), kind="hitter", age=28, sgp=15.0, peak=15.0, horizons=(2,)
+            prepare(panel, kind="hitter", horizons=(1,)),
+            kind="hitter",
+            age=28,
+            sgp=15.0,
+            peak=15.0,
+            horizons=(2,),
         )
 
 
@@ -224,7 +241,7 @@ def test_prepared_state_refuses_a_contradictory_last_season() -> None:
     panel = _mixed_panel()
     with pytest.raises(ValueError, match="last_complete_season"):
         shape_trajectory(
-            prepare(panel, horizons=(1,), last_complete_season=2012),
+            prepare(panel, kind="hitter", horizons=(1,), last_complete_season=2012),
             kind="hitter",
             age=28,
             sgp=15.0,
