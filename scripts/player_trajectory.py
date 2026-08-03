@@ -1,17 +1,26 @@
 """Career SGP trajectory from historical comparables (#303).
 
-A player is on pace for N SGP in his age-A season. What does the rest of his career
-look like? Answered from every historical player-season that started in the same
-place, with departures scored as the zero they are worth to a roster slot.
+A player produced X SGP last year and is on pace for Y this one, at age A. What does
+the rest of his career look like?
 
 STANDALONE. Reads `data/trajectory/` and touches nothing in the keeper pipeline.
 
+Three matchers, selected with `--match`. **`shape` is the default**: it beats level
+matching out of sample on every elite slice, and by 18-20% on the case a keeper
+decision actually turns on -- a star coming off a down year, where level matching
+under-predicts by 3.32 SGP a year (see `trajectory/shape.py`). It needs BOTH of the
+player's last two seasons, which `--player` looks up for you.
+
+    shape     fit forward SGP on both anchors, kernel-weighted age and level (#310)
+    current   comps matched on this season's level alone -- the original estimator
+    track     current, plus a hard band on the prior season too (#305)
+
 Usage:
-    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13
     python scripts/player_trajectory.py --player "Juan Soto"
-    python scripts/player_trajectory.py --pool pitcher --age 25 --sgp 13 --band 4
-    python scripts/player_trajectory.py --player "Bobby Witt Jr." --show-comps 15
-    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --no-era-adjust
+    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --prior-sgp 18
+    python scripts/player_trajectory.py --player "Juan Soto" --show-anchors
+    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --match current
+    python scripts/player_trajectory.py --player "Bobby Witt Jr." --match current --show-comps 15
 
 Build the panel first (one time, ~1 minute):
     python scripts/build_pt_panel.py --start 2000 --end 2026 --out-dir data/trajectory
@@ -278,20 +287,23 @@ def main() -> int:
     parser.add_argument("--band", type=float, default=DEFAULT_BAND, help="comp width in SGP")
     parser.add_argument(
         "--match",
-        choices=("current", "track", "shape"),
-        default="current",
+        choices=("shape", "track", "current"),
+        default="shape",
         help=(
-            "'current' (default) matches comps on this season alone; 'track' also "
-            "requires them to have produced near the player's PRIOR season, so a "
-            "breakout and a steady producer stop drawing the same cohort (#305); "
-            "'shape' fits forward SGP on both anchors with kernel-weighted age and "
-            "level, excluding nobody on a cliff (#310)"
+            "'shape' (default) fits forward SGP on both anchors -- last year and this "
+            "year -- with kernel-weighted age and level, excluding nobody on a cliff "
+            "(#310); 'current' matches comps on this season's level alone; 'track' "
+            "adds a hard band on the prior season too (#305). --band/--prior-band "
+            "apply to the two comp modes only; shape has no band"
         ),
     )
     parser.add_argument(
         "--prior-sgp",
         type=float,
-        help="prior-season SGP for --match track; looked up automatically with --player",
+        help=(
+            "prior-season SGP, required by --match shape/track without --player "
+            "(looked up automatically with --player); 0 means he was not in the majors"
+        ),
     )
     parser.add_argument(
         "--prior-band",
@@ -369,7 +381,15 @@ def main() -> int:
             print(f"  (--sgp {args.sgp} overrides the pace above)")
     else:
         if args.match in ("track", "shape") and args.prior_sgp is None:
-            parser.error(f"--match {args.match} needs --prior-sgp when not using --player")
+            # Never guess it. Assuming last year equalled this year is a real modelling
+            # claim -- it says the season is representative -- and it would silently
+            # move the answer for exactly the players (breakouts, collapses) the two
+            # anchors exist to tell apart.
+            parser.error(
+                f"--match {args.match} needs the player's PRIOR season too; pass "
+                "--prior-sgp N (use 0 if he was not in the majors), or --player NAME "
+                "to look it up, or --match current to score on this season alone"
+            )
         queries = [(args.pool, args.age, args.sgp, args.prior_sgp)]
 
     horizons = tuple(range(1, args.horizon + 1))
