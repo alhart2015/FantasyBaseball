@@ -10,13 +10,29 @@ reliever, and a single year would not be a keeper question. The two differ enoug
 flip the order: Mason Miller is 8.9 VAR over three years to Zack Wheeler's 6.9, while on
 raw SGP Wheeler leads him every single year.
 
-    python scripts/trajectory_board.py --top 25
-    python scripts/trajectory_board.py --pool pitcher --top 15 --horizon 5
-    python scripts/trajectory_board.py --top 10 --min-sgp 8
+THE ONE THAT ANSWERS MOST QUESTIONS -- top 50 league-wide, your whole roster, the best
+five on every other team, and a CSV of all 551 rows to slice afterwards:
+
+    python scripts/trajectory_board.py --top 50 --min-sgp 4 --by-team --csv board.csv
+
+Then answer follow-ups from `board.csv` rather than re-running: the sweep is ~17s, and
+two answers pulled from one file cannot disagree with each other the way two sweeps can.
+
+    python scripts/trajectory_board.py --top 25                    # league board only
+    python scripts/trajectory_board.py --team "Hello Peanuts!"     # one roster, in full
+    python scripts/trajectory_board.py --pool pitcher --horizon 5
+    python scripts/trajectory_board.py --by-team --min-support 0.1 # drop extrapolations
+
+`--min-sgp 4` trims the fringe without touching anyone rankable; `--by-team` and `--team`
+read LIVE rosters from Upstash, so they need `.env` credentials and a network.
 
 The band is p10..p90 from the empirical outcome distribution, NOT a multiple of a
 standard deviation -- see `PathPoint.p10`. Read it: at three years out the interval is
 most of the story, especially for pitchers, where the point estimate carries little.
+
+`(!)` marks a row whose fitted line was evaluated outside its own support. The BAND is
+honest on those and is what to read; the point estimate is the part still assuming the
+line holds out there. See `MIN_LOCAL_SUPPORT`.
 
 Build the panel first (one time, ~1 minute):
     python scripts/build_pt_panel.py --start 2000 --end 2026 --out-dir data/trajectory
@@ -149,15 +165,13 @@ def add_ranks(scored: list[dict]) -> None:
             row[field] = i
 
 
-def by_team(
-    scored: list[dict], spots: list, my_team: str, per_team: int, base: int, horizons: tuple
-) -> None:
-    """Every player on your team, then the best `per_team` on each other team.
+def assign_teams(scored: list[dict], spots: list) -> dict[str, list[str]]:
+    """Stamp each scored row with its owning team, and return who never matched.
 
-    Ranks shown are LEAGUE ranks, carried from `add_ranks`, not ranks within the team --
-    otherwise every team's best player reads as a 1.
+    Joined on (normalized name, player_type) because roster blobs carry no mlbam_id
+    (#284). The unmatched are returned rather than swallowed: a silently shortened team
+    reads as "he has nobody else worth listing".
     """
-    one, span = _header(base, horizons)
     owners = {(s.normalized, s.player_type): s.team for s in spots}
     status = {(s.normalized, s.player_type): s.status for s in spots}
     for row in scored:
@@ -165,13 +179,29 @@ def by_team(
         row["team"] = owners.get(key)
         row["status"] = status.get(key, "")
 
-    # Roster spots that never matched a scored row. Named, not counted: a silently
-    # shortened team reads as "he has nobody else worth listing".
     scored_keys = {(normalize_name(r["name"]), r["pool"]) for r in scored}
     missing: dict[str, list[str]] = {}
     for s in spots:
         if (s.normalized, s.player_type) not in scored_keys:
             missing.setdefault(s.team, []).append(s.name)
+    return missing
+
+
+def by_team(
+    scored: list[dict],
+    missing: dict[str, list[str]],
+    my_team: str,
+    per_team: int,
+    base: int,
+    horizons: tuple,
+    only: str | None = None,
+) -> None:
+    """Every player on your team, then the best `per_team` on each other team.
+
+    Ranks shown are LEAGUE ranks, carried from `add_ranks`, not ranks within the team --
+    otherwise every team's best player reads as a 1.
+    """
+    one, span = _header(base, horizons)
 
     def block(team: str, rows: list[dict], limit: int | None) -> None:
         rows.sort(key=lambda r: r["total"], reverse=True)
@@ -192,6 +222,16 @@ def by_team(
             print(f"  not scored: {', '.join(sorted(missing[team]))}")
 
     print(f"\n\n{'=' * 78}\nPER-TEAM  (#{span} and #{one} are LEAGUE ranks)\n{'=' * 78}")
+    if only is not None:
+        # One team, in full. `--team` exists so asking about somebody else's roster does
+        # not mean re-running the sweep and reading past nine other blocks.
+        rows = [r for r in scored if r["team"] == only]
+        if not rows:
+            known = sorted({r["team"] for r in scored if r["team"]})
+            print(f"\n  no scored players on {only!r}. Teams: {', '.join(known)}")
+            return
+        block(f"{only}  -- all players", rows, None)
+        return
     mine = [r for r in scored if r["team"] == my_team]
     block(f"{my_team}  -- YOUR TEAM, all players", mine, None)
     others = sorted({r["team"] for r in scored if r["team"] and r["team"] != my_team})
@@ -276,6 +316,19 @@ def main() -> int:
         help="also break the board down by fantasy team, reading live rosters from Upstash",
     )
     parser.add_argument("--per-team", type=int, default=5, help="rows per opposing team")
+    parser.add_argument(
+        "--team",
+        help="show ONE team in full instead of the per-team breakdown (implies --by-team)",
+    )
+    parser.add_argument(
+        "--csv",
+        type=Path,
+        help=(
+            "write every scored row here -- ranks, band, support and owning team. The "
+            "sweep takes ~17s, so slicing a saved board beats re-running it, and two "
+            "answers taken from one file cannot disagree with each other."
+        ),
+    )
     parser.add_argument("--panel-dir", type=Path, default=DEFAULT_PANEL_DIR)
     args = parser.parse_args()
     if args.horizon < 1:
@@ -343,14 +396,19 @@ def main() -> int:
         return 1
     add_ranks(scored)
     render(scored, args.top, horizons, levels, season)
-    if args.by_team:
+    if args.by_team or args.team or args.csv:
         config = load_config(PROJECT_ROOT / "config" / "league.yaml")
         # Live Upstash, not the local mirror: roster membership is exactly the kind of
         # state that goes stale silently, and a trade since the last sync would show a
         # player on the wrong team with no indication anything was wrong.
         spots = live_rosters(config.team_name, project_root=PROJECT_ROOT)
         print(f"\n  {len(spots)} roster spots read from Upstash")
-        by_team(scored, spots, config.team_name, args.per_team, season, horizons)
+        missing = assign_teams(scored, spots)
+        if args.by_team or args.team:
+            by_team(scored, missing, config.team_name, args.per_team, season, horizons, args.team)
+    if args.csv:
+        pd.DataFrame(scored).sort_values("rank_total").to_csv(args.csv, index=False)
+        print(f"\n  wrote {len(scored)} rows to {args.csv}")
     print(f"\n  scored in {time.perf_counter() - started:.1f}s")
     return 0
 
