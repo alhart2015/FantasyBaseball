@@ -42,17 +42,18 @@ from .comps import PathPoint, Trajectory, comp_trajectory
 from .era import era_normalize, league_rates
 from .panel import DEFAULT_PANEL_DIR, load_scored_panel
 from .shape import Anchors, shape_trajectory
-from .value import to_var
+from .value import best_floor, resolve_slots
 
 __all__ = [
     "DEFAULT_PANEL_DIR",
     "Anchors",
     "PathPoint",
     "Trajectory",
+    "best_floor",
     "comp_trajectory",
     "era_normalize",
     "league_rates",
     "load_scored_panel",
+    "resolve_slots",
     "shape_trajectory",
-    "to_var",
 ]

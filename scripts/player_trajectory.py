@@ -59,7 +59,7 @@ from fantasy_baseball.trajectory.panel import (
     season_elapsed_fraction,
 )
 from fantasy_baseball.trajectory.shape import shape_trajectory
-from fantasy_baseball.trajectory.value import resolve_slots, to_var
+from fantasy_baseball.trajectory.value import replacement_for, resolve_slots
 from fantasy_baseball.utils.name_utils import normalize_name
 
 PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
@@ -189,17 +189,32 @@ def _resolve_player(
 def _eligibility(season: int) -> dict[int, frozenset[str]]:
     """MLBAM id -> slots with 10+ games that season, the league's own rule.
 
-    Reads the SAME MLB Stats cache the panel is built from, via the ingest layer. The
-    live season's fielding pull is a point-in-time snapshot, so eligibility only grows
-    after it was taken -- a player who crosses 10 games later still prices at UTIL until
-    the cache is refreshed. Conservative, never flattering.
+    READS a cache; never populates one. `fetch_mlb_season` falls through to a live
+    paginated download on a miss and writes the result into the KEEPER pipeline's
+    directory -- a standalone tool quietly filling another pipeline's cache, and a
+    network dependency on a command that otherwise runs offline. The fielding pull
+    covers only the keeper range while this panel spans 2000, so a miss is routine
+    rather than exceptional: it degrades to UTIL, the HIGHEST floor, which understates
+    rather than invents.
+
+    Even a present cache is a point-in-time snapshot for the live season, so eligibility
+    only grows after it was taken. Conservative in both directions.
     """
     from fantasy_baseball.keepers.appearances import season_eligibility
     from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 
-    fielding = fetch_mlb_season(
-        PROJECT_ROOT / "data" / "cache" / "keeper_skills", season, "fielding"
-    )
+    cache = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
+    if not (cache / f"mlb_fielding_{season}.csv").exists():
+        print(
+            f"  NOTE: no cached {season} fielding data, so eligibility is unknown and "
+            "every player here nets against the UTIL floor. (--scale sgp needs none.)"
+        )
+        return {}
+    try:
+        fielding = fetch_mlb_season(cache, season, "fielding")
+    except Exception:  # a corrupt cache degrades the same way rather than crashing
+        print(f"  NOTE: {season} fielding cache unreadable; netting against UTIL.")
+        return {}
     return {pid: frozenset(slots) for pid, slots in season_eligibility(fielding).items()}
 
 
@@ -218,6 +233,38 @@ def _slots_for(panel: pd.DataFrame, mlbam_id: int, kind: str) -> set[str]:
         starts=float(row.get("starts") or 0.0),
         games=float(row.get("games") or 0.0),
     )
+
+
+def _query_slots(
+    args: argparse.Namespace,
+    panel: pd.DataFrame,
+    mlbam_id: int,
+    pool: str,
+    two_way: bool,
+    parser: argparse.ArgumentParser,
+) -> set[str] | None:
+    """Slots for one pool's query, or None when the raw scale needs no floor.
+
+    Only consulted for `--scale var`, because the eligibility lookup reads a fielding
+    cache the raw scale has never needed -- calling it unconditionally turned the
+    DEFAULT invocation into a live MLB Stats fetch.
+
+    An explicit `--position` cannot describe a two-way player: `_resolve_player` returns
+    one query per pool, and a single token applied to both put his bat on a pitcher's
+    floor -- the mispricing `resolve_slots` exists to prevent, re-entering through the
+    override.
+    """
+    if args.scale != "var":
+        return None
+    if args.position is not None:
+        if two_way:
+            parser.error(
+                f"--position {args.position} cannot describe a two-way player: "
+                f"{args.player} is scored in both pools and each needs its own floor. "
+                "Drop --position to derive both, or add --pool to score one."
+            )
+        return {args.position}
+    return _slots_for(panel, mlbam_id, pool)
 
 
 def _prior_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> float:
@@ -443,8 +490,9 @@ def main() -> int:
         default="sgp",
         help=(
             "'sgp' (default) is raw projected production; 'var' nets it against the "
-            "position-aware waiver floor, which spans 2.54 SGP (RP 7.42, C 7.70, "
-            "OF/UTIL 9.96) and is the scale the keeper and draft boards rank on"
+            "position-aware waiver floor -- the scale the keeper and draft boards rank "
+            "on. Floors come from config/league.yaml at run time and are printed with "
+            "the result, so they are not repeated here"
         ),
     )
     parser.add_argument(
@@ -480,6 +528,8 @@ def main() -> int:
             "--prior-sgp applies to --match shape/track; --match current scores on this "
             "season alone and would discard it"
         )
+    if args.position is not None and args.scale != "var":
+        parser.error("--position selects a replacement floor and applies to --scale var")
     if args.show_anchors and args.match != "shape":
         parser.error("--show-anchors applies to --match shape; the comp matchers fit no anchors")
 
@@ -513,6 +563,7 @@ def main() -> int:
         # Dating the season is a league fact and must come off the hitter panel even for
         # a pitcher query -- pitcher `games` counts appearances, not team games.
         calendar = live.get("hitter") if "hitter" in live else load("hitter", True)
+        resolved = _resolve_player(args.player, live, calendar, args.mlbam_id)
         queries = [
             # `is not None`, never `or`: --sgp 0 and --age 0 are falsy but meaningful.
             (
@@ -520,9 +571,9 @@ def main() -> int:
                 age if args.age is None else args.age,
                 sgp if args.sgp is None else args.sgp,
                 _prior_for(live[pool], pid, args) if args.match in ("track", "shape") else None,
-                {args.position} if args.position else _slots_for(live[pool], pid, pool),
+                _query_slots(args, live[pool], pid, pool, len(resolved) > 1, parser),
             )
-            for pool, pid, age, sgp in _resolve_player(args.player, live, calendar, args.mlbam_id)
+            for pool, pid, age, sgp in resolved
         ]
         if args.sgp is not None:
             # The looked-up pace was printed above but is not what gets scored; say so
@@ -557,12 +608,18 @@ def main() -> int:
                 args.age,
                 args.sgp,
                 args.prior_sgp if args.match != "current" else None,
-                args.position,
+                {args.position} if args.position else None,
             )
         ]
 
     horizons = tuple(range(1, args.horizon + 1))
-    for pool, age, sgp, prior, position in queries:
+    levels = position_aware_replacement_levels(denoms)
+    for pool, age, sgp, prior, slots in queries:
+        # The floor is passed INTO the estimator, not subtracted from its answer. Each
+        # comp is floored at zero individually -- a man out of the league is worth 0 to
+        # the slot, not minus a floor -- and that carries through to median, spread and
+        # the survivor mean instead of leaving them on a different scale.
+        slot, floor = replacement_for(slots, levels) if slots is not None else (None, 0.0)
         if args.match == "shape":
             traj, anchors = shape_trajectory(
                 load(pool, False),
@@ -571,6 +628,7 @@ def main() -> int:
                 sgp=sgp,
                 peak=prior,
                 horizons=horizons,
+                replacement=floor,
             )
             if args.show_anchors:
                 print("\n   fitted anchors (forward = intercept + a*now + b*last year):")
@@ -590,16 +648,9 @@ def main() -> int:
                 prior_sgp=prior,
                 prior_band=args.prior_band,
                 horizons=horizons,
+                replacement=floor,
             )
-        floor = None
-        if args.scale == "var":
-            # Net of the position-aware waiver floor, which spans 2.54 SGP (RP 7.42 and
-            # C 7.70 up to OF/UTIL 9.96). On the raw scale a 9.96-SGP closer and a
-            # 9.87-SGP starter look interchangeable; on this one they are 2.54 and 0.58.
-            traj, slot, floor = to_var(traj, position_aware_replacement_levels(denoms), position)
-            render(traj, args.show_comps, slot, floor)
-            continue
-        render(traj, args.show_comps)
+        render(traj, args.show_comps, slot, floor if slot else None)
     return 0
 
 

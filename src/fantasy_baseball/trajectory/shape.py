@@ -142,6 +142,7 @@ def shape_trajectory(
     age_window: int = AGE_WINDOW,
     peak_band: float = PEAK_BAND,
     last_complete_season: int | None = None,
+    replacement: float = 0.0,
     seed: int = 0,
     bootstrap_draws: int = BOOTSTRAP_DRAWS,
 ) -> tuple[Trajectory, tuple[Anchors, ...]]:
@@ -149,6 +150,13 @@ def shape_trajectory(
 
     Returns the trajectory and the fitted anchors, so the coefficients that produced
     each number can be read rather than trusted.
+
+    `replacement` fits the model on VALUE ABOVE REPLACEMENT instead of raw SGP: the
+    response becomes `max(forward - replacement, 0)` while the two anchors stay on the
+    SGP scale the caller supplies them in. Flooring the RESPONSE rather than shifting
+    the fitted mean is what keeps a departed comp worth 0 instead of minus a floor, and
+    it carries through to `spread`, `median` and `mean_if_survived` for free -- shifting
+    afterwards moved only the mean and left the other three on a different scale.
     """
     if peak_band <= 0:
         raise ValueError(f"peak_band must be positive, got {peak_band}")
@@ -193,6 +201,11 @@ def shape_trajectory(
         # Missing key = out of the league that year = a real 0, the same convention the
         # comps forward path uses.
         y = np.nan_to_num(y, nan=0.0)
+        # Survival off the RAW line: after flooring, a below-replacement season and a
+        # career ending are both 0 and no longer tell apart.
+        mask = played(y)
+        if replacement:
+            y = np.maximum(y - replacement, 0.0)
         x, w = anchor_columns[keep], weights[keep]
 
         # Gate on the EFFECTIVE size, not the row count. Three rows fit a
@@ -236,7 +249,7 @@ def shape_trajectory(
         # n_eff 15, ~32% at n_eff 7. Negligible on a healthy fit (0.4% at n_eff 347),
         # which is the point: it self-corrects toward honest at the dangerous end.
         residual_var = float(np.average(residuals**2, weights=w)) * n_eff / (n_eff - N_PARAMETERS)
-        survived = played(y)
+        survived = mask
         path.append(
             PathPoint(
                 horizon=h,

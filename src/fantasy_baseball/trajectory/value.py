@@ -11,8 +11,9 @@ replacing a starter is not. Ranking raw SGP against a VAR board silently penalis
 catcher and reliever in the table.
 
 Floors come from `sgp/replacement.py`, the same source the draft board and the keeper
-board use, so a trajectory, a draft pick and a keeper all net against ONE definition of
-replacement.
+board use, so a trajectory, a draft pick and a keeper net against one definition of
+replacement -- for HITTERS exactly, and for pitchers with the SP/RP routing caveat on
+`STARTER_SHARE` below.
 
 **Eligibility is the league's own rule: 10 games at a position in the season**, via
 `keepers.appearances.season_eligibility` over the MLB Stats fielding leaderboard. That
@@ -34,13 +35,17 @@ not apply.
 
 from __future__ import annotations
 
-from dataclasses import replace
-
-from .comps import Trajectory
-
 #: A starter's floor sits 1.87 SGP above a reliever's, so misrouting a pitcher hands him
-#: value he never earned. Role comes from the share of appearances that were starts, not
-#: from an innings threshold -- see #253 on why total IP is the wrong shape for this.
+#: value he never earned.
+#:
+#: This DIVERGES from `utils.constants.role_from_ip` (ip >= 100), which the draft board
+#: and keeper board route on via `sgp.var._pitcher_floor_key`. The two disagree on 814
+#: of 4793 pitcher-seasons (17%) in the 2021-2026 panel -- a 90-IP all-starts rookie is
+#: a starter here and a reliever there. Kept deliberately: #253 records that a total-IP
+#: threshold is the wrong shape for role, and this model has the starts the shared
+#: classifier lacks. It is a real inconsistency between boards, not a hidden one; the
+#: resolution is to move starts-based routing into the shared classifier under #253,
+#: not to fork it further.
 STARTER_SHARE = 0.5
 
 #: Nothing eligible, so he fills a UTIL slot -- the HIGHEST floor. A missing lookup can
@@ -54,6 +59,11 @@ def best_floor(slots: set[str], replacement_levels: dict[str, float]) -> tuple[s
     Same rule `calculate_var` applies: a multi-eligible player is priced at his scarcest
     position, because that is the roster hole he actually fills.
     """
+    if isinstance(slots, str):
+        # A str is iterable, so `{s for s in "SP"}` silently becomes {"S", "P"}, matches
+        # no floor, and falls through to UTIL -- the whole feature quietly disabled for
+        # every position but the one-character "C". Refuse rather than accept it.
+        raise TypeError(f"slots must be a set of slot names, not the string {slots!r}")
     usable = {s: replacement_levels[s] for s in slots if s in replacement_levels}
     if not usable:
         return DEFAULT_SLOT, replacement_levels.get(DEFAULT_SLOT, 0.0)
@@ -80,21 +90,12 @@ def resolve_slots(
     return {slot for slot in (eligible or ()) if slot != "P"}
 
 
-def to_var(
-    trajectory: Trajectory, replacement_levels: dict[str, float], slots: set[str]
-) -> tuple[Trajectory, str, float]:
-    """Net every horizon of the cheapest eligible floor.
+def replacement_for(slots: set[str], replacement_levels: dict[str, float]) -> tuple[str, float]:
+    """The slot and floor a trajectory should be scored against.
 
-    Returns the shifted trajectory, the slot chosen, and the floor applied. Only the
-    LEVEL moves: `se` and `spread` are widths of a distribution and a constant shift
-    leaves them alone, `median` slides with the mean, and survival and support are
-    untouched. A horizon with no support stays untouched -- there is no estimate to net.
+    Thin on purpose. Flooring happens inside the estimators, which see the individual
+    comp outcomes; a post-hoc shift of the finished mean charged the floor a second time
+    against every comp who had left the league, and moved `mean` while leaving `median`,
+    `spread` and `mean_if_survived` on the raw scale.
     """
-    slot, floor = best_floor(slots, replacement_levels)
-    shifted = tuple(
-        point
-        if point.n == 0
-        else replace(point, mean=point.mean - floor, median=point.median - floor)
-        for point in trajectory.path
-    )
-    return replace(trajectory, path=shifted), slot, floor
+    return best_floor(slots, replacement_levels)

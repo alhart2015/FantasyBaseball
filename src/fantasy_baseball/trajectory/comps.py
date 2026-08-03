@@ -177,6 +177,7 @@ def comp_trajectory(
     prior_band: float | None = None,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     last_complete_season: int | None = None,
+    replacement: float = 0.0,
     seed: int = 0,
     bootstrap_draws: int = BOOTSTRAP_DRAWS,
 ) -> Trajectory:
@@ -185,6 +186,13 @@ def comp_trajectory(
     `panel` is a scored, era-normalized panel of COMPLETE seasons (see
     `panel.load_scored_panel` and `era.era_normalize`); passing in-progress seasons
     would average a two-thirds year in as if it were a full one.
+
+    `replacement` scores every horizon as VALUE ABOVE REPLACEMENT rather than raw SGP,
+    flooring each comp at zero BEFORE aggregating: `max(sgp - replacement, 0)`. That has
+    to happen here rather than as a shift of the finished mean, because a comp who left
+    the league scores a structural 0 and is worth 0 to a roster slot -- not minus a
+    floor. Subtracting afterwards charges the floor a second time against attrition;
+    measured at age 30 it turned a +0.46 five-year value into -6.01.
 
     `last_complete_season` defaults to the panel's maximum and defines observability,
     which is applied PER HORIZON: a 2024 age-25 season has a real age-26 to look at and
@@ -257,8 +265,12 @@ def comp_trajectory(
     rng = np.random.default_rng(seed)
     path = []
     for h in horizons:
-        values = comps[f"h{h}"].dropna().to_numpy(dtype=float) if not comps.empty else np.array([])
-        survived = values[played(values)]
+        raw = comps[f"h{h}"].dropna().to_numpy(dtype=float) if not comps.empty else np.array([])
+        # Survival is read off the RAW line. After flooring, a below-replacement season
+        # and a career ending are both 0 and no longer tell apart.
+        mask = played(raw)
+        values = np.maximum(raw - replacement, 0.0) if replacement else raw
+        survived = values[mask]
         path.append(
             PathPoint(
                 horizon=h,

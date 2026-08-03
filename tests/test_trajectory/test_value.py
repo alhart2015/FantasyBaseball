@@ -1,20 +1,21 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from fantasy_baseball.trajectory.comps import comp_trajectory
-from fantasy_baseball.trajectory.value import best_floor, resolve_slots, to_var
+from fantasy_baseball.trajectory.shape import shape_trajectory
+from fantasy_baseball.trajectory.value import best_floor, replacement_for, resolve_slots
 
 LEVELS = {"RP": 7.42, "C": 7.70, "1B": 9.15, "SP": 9.29, "SS": 9.51, "OF": 9.96, "UTIL": 9.96}
 
 
-def _trajectory() -> object:
-    panel = pd.DataFrame(
-        [(1, 2010, 27, 13.0), (1, 2011, 28, 11.0), (2, 2010, 27, 13.0), (2, 2011, 28, 9.0)],
-        columns=["mlbam_id", "season", "age", "sgp"],
-    )
-    return comp_trajectory(panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,))
+def _panel(rows: list[tuple[int, int, int, float]]) -> pd.DataFrame:
+    return pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
+
+
+# --------------------------------------------------------------------- floors
 
 
 def test_a_multi_eligible_player_is_priced_at_his_scarcest_slot() -> None:
@@ -29,6 +30,25 @@ def test_no_eligible_slot_falls_back_to_the_HIGHEST_floor() -> None:
     assert best_floor({"nonsense"}, LEVELS) == ("UTIL", 9.96)
 
 
+@pytest.mark.parametrize("position", ["SP", "RP", "1B", "OF", "SS", "C"])
+def test_a_bare_STRING_is_refused_not_iterated(position: str) -> None:
+    """A str is iterable, so `for s in "SP"` yields "S" and "P", matches no floor, and
+    falls through to UTIL -- the feature silently disabled for every position except the
+    one-character "C". The CLI passed a string here and nothing caught it, because every
+    other test built the set by hand."""
+    with pytest.raises(TypeError, match="set of slot names"):
+        best_floor(position, LEVELS)
+    # And the set form, which is what callers must pass, still works.
+    assert best_floor({position}, LEVELS)[0] == position
+
+
+def test_replacement_for_is_the_same_lookup() -> None:
+    assert replacement_for({"C", "OF"}, LEVELS) == best_floor({"C", "OF"}, LEVELS)
+
+
+# ---------------------------------------------------------------------- slots
+
+
 def test_a_two_way_players_bat_does_not_borrow_the_pitcher_floor() -> None:
     """The league scores him as two assets. Letting the fielding leaderboard's "P" reach
     the hitter side put Ohtani's BAT on the reliever floor -- 2.54 SGP a year his hitting
@@ -38,48 +58,103 @@ def test_a_two_way_players_bat_does_not_borrow_the_pitcher_floor() -> None:
 
 
 def test_pitcher_role_comes_from_starts_not_from_the_leaderboard() -> None:
-    # A closer: many appearances, no starts.
     assert resolve_slots({"P"}, "pitcher", starts=0.0, games=58.0) == {"RP"}
-    # A starter: every appearance is a start.
     assert resolve_slots({"P"}, "pitcher", starts=31.0, games=31.0) == {"SP"}
-    # Never routed off a hitter's games, and never left unresolved.
     assert resolve_slots(None, "pitcher", starts=0.0, games=0.0) == {"RP"}
 
 
-def test_var_shifts_the_level_and_leaves_the_widths_alone() -> None:
-    traj = _trajectory()
-    raw = traj.path[0]
-    scored, slot, floor = to_var(traj, LEVELS, {"C"})
-    point = scored.path[0]
-    assert (slot, floor) == ("C", 7.70)
-    assert point.mean == pytest.approx(raw.mean - 7.70)
-    assert point.median == pytest.approx(raw.median - 7.70)
-    # A constant shift changes neither width nor support.
-    assert point.se == raw.se
-    assert point.spread == raw.spread
-    assert (point.n, point.survivors, point.n_effective) == (
-        raw.n,
-        raw.survivors,
-        raw.n_effective,
+def test_a_short_schedule_starter_is_still_a_starter() -> None:
+    """`panel._scale_short_schedules` scales BOTH counts, so the ratio survives. Scaling
+    games alone capped 2020's attainable share at 0.37 and made every starter a
+    reliever."""
+    scale = 162 / 60
+    assert resolve_slots({"P"}, "pitcher", starts=12 * scale, games=12 * scale) == {"SP"}
+
+
+# ------------------------------------------------------- flooring at the source
+
+
+def _cohort(forward: list[float]) -> pd.DataFrame:
+    """One age-27 cohort at 13.0 SGP whose age-28 outcomes are `forward`."""
+    return _panel(
+        [(i, 2010, 27, 13.0) for i in range(len(forward))]
+        + [(i, 2011, 28, v) for i, v in enumerate(forward) if v != 0.0]
     )
 
 
-def test_a_scarcer_slot_is_worth_more_on_the_same_projection() -> None:
-    """The whole point: identical raw SGP, different value."""
-    traj = _trajectory()
-    catcher, _, _ = to_var(traj, LEVELS, {"C"})
-    outfielder, _, _ = to_var(traj, LEVELS, {"OF"})
-    assert catcher.path[0].mean - outfielder.path[0].mean == pytest.approx(9.96 - 7.70)
-
-
-def test_an_unsupported_horizon_is_left_alone() -> None:
-    """There is no estimate there to net, and shifting NaN would invent one."""
-    panel = pd.DataFrame(
-        [(1, 2010, 27, 13.0), (1, 2011, 28, 11.0)], columns=["mlbam_id", "season", "age", "sgp"]
-    )
+def test_a_departed_comp_is_worth_ZERO_not_minus_a_floor() -> None:
+    """Subtracting a flat floor afterwards charged attrition the floor a second time:
+    measured at age 30 it turned a +0.46 five-year value into -6.01. A man out of the
+    league is worth 0 to the slot -- the manager starts the replacement he was already
+    being measured against."""
+    # One comp produces 12, one left the league (structural 0).
+    panel = _cohort([12.0, 0.0])
     traj = comp_trajectory(
-        panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1, 2), last_complete_season=2011
+        panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=10.0
     )
-    scored, _, _ = to_var(traj, LEVELS, {"C"})
-    assert scored.path[1].n == 0
-    assert scored.path[1] == traj.path[1]
+    # max(12-10,0)=2 and max(0-10,0)=0  ->  mean 1.0, NOT (6.0 - 10.0) = -4.0
+    assert traj.path[0].mean == pytest.approx(1.0)
+
+
+def test_flooring_reaches_median_spread_and_the_survivor_mean() -> None:
+    """A post-hoc shift moved `mean` and left the other three level columns on the raw
+    scale, so one printed row mixed VAR and SGP."""
+    panel = _cohort([14.0, 12.0, 0.0, 11.0])
+    raw = comp_trajectory(panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,))
+    var = comp_trajectory(
+        panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=10.0
+    )
+    assert var.path[0].median == pytest.approx(np.median([4.0, 2.0, 0.0, 1.0]))
+    assert var.path[0].mean_if_survived == pytest.approx(np.mean([4.0, 2.0, 1.0]))
+    assert var.path[0].spread < raw.path[0].spread  # flooring compresses the low tail
+
+
+def test_survival_is_read_off_the_RAW_line() -> None:
+    """After flooring, a below-replacement season and a career ending are both 0. The
+    survival column must still tell them apart."""
+    panel = _cohort([14.0, 2.0, 0.0])  # one good, one below replacement, one departed
+    traj = comp_trajectory(
+        panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=10.0
+    )
+    assert traj.path[0].survivors == 2
+    assert traj.path[0].survival == pytest.approx(2 / 3)
+
+
+def test_no_replacement_leaves_every_number_untouched() -> None:
+    """`--scale sgp` is the default and must not move."""
+    panel = _cohort([14.0, 12.0, 0.0])
+    # `.path` rather than the whole Trajectory: it carries a DataFrame, which does not
+    # compare elementwise to a bool.
+    assert (
+        comp_trajectory(panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,)).path
+        == comp_trajectory(
+            panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=0.0
+        ).path
+    )
+
+
+def test_shape_fits_on_var_when_given_a_floor() -> None:
+    """Flooring the RESPONSE, not shifting the fitted mean, is what keeps a departed comp
+    at 0 and keeps every derived statistic on one scale."""
+    rng = np.random.default_rng(3)
+    rows = []
+    for i in range(300):
+        peak, down = float(rng.uniform(12, 30)), float(rng.uniform(12, 30))
+        # Real noise, or both spreads are ~1e-15 and comparing them says nothing.
+        forward = 0.5 * down + 0.4 * peak + float(rng.normal(0, 2.0))
+        rows += [(i, 2010, 26, peak), (i, 2011, 27, down), (i, 2012, 28, max(forward, 0.0))]
+    panel = _panel(rows)
+    kw = {
+        "kind": "hitter",
+        "age": 27,
+        "sgp": 15.0,
+        "peak": 15.0,
+        "horizons": (1,),
+        "peak_band": 60.0,
+    }
+    raw, _ = shape_trajectory(panel, **kw)
+    var, _ = shape_trajectory(panel, replacement=8.0, **kw)
+    # Every forward value here clears the floor, so VAR is exactly SGP minus it.
+    assert var.path[0].mean == pytest.approx(raw.path[0].mean - 8.0, abs=0.25)
+    # The widths are on the same scale, not left behind on the raw one.
+    assert var.path[0].spread == pytest.approx(raw.path[0].spread, rel=0.15)
