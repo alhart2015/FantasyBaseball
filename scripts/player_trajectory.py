@@ -6,10 +6,11 @@ the rest of his career look like?
 STANDALONE. Reads `data/trajectory/` and touches nothing in the keeper pipeline.
 
 Three matchers, selected with `--match`. **`shape` is the default**: it beats level
-matching out of sample on every elite slice, and by 18-20% on the case a keeper
+matching out of sample on every elite slice, and by ~21% RMSE on the case a keeper
 decision actually turns on -- a star coming off a down year, where level matching
-under-predicts by 3.32 SGP a year (see `trajectory/shape.py`). It needs BOTH of the
-player's last two seasons, which `--player` looks up for you.
+under-predicts by 3.31 SGP a year. Re-measure with `scripts/backtest_trajectory.py`;
+those numbers come from there and nowhere else, and they are HITTERS ONLY (#313).
+Shape needs BOTH of the player's last two seasons, which `--player` looks up for you.
 
     shape     fit forward SGP on both anchors, kernel-weighted age and level (#310)
     current   comps matched on this season's level alone -- the original estimator
@@ -264,14 +265,17 @@ def render(traj: Trajectory, show_comps: int) -> None:
             "(kernel-weighted)"
         )
         _warn_if_thin(traj)
-        print("\n   age    pred   +/-SE  +/-spread   median   sample played   if played")
+        # Weighted survival against the EFFECTIVE size, so every column in the row
+        # describes the same population the fit used. A raw count beside a weighted
+        # median invited the reader to take both as properties of the prediction.
+        print("\n   age    pred   +/-SE  +/-spread   median   played (of eff)   if played")
         for p in traj.path:
             if p.n == 0:
                 print(f"   {p.age:3d}        --      --         --       --   (not fittable)")
                 continue
             print(
                 f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}    {p.spread:7.2f}  {p.median:7.2f}"
-                f"    {p.survivors:5d}/{p.n} ({p.survival:4.0%})  {p.mean_if_survived:6.2f}"
+                f"     {p.survival:5.0%} (of {p.n_effective:5.0f})  {p.mean_if_survived:6.2f}"
             )
         _print_total(traj)
         if show_comps:
@@ -341,7 +345,14 @@ def main() -> int:
     parser.add_argument("--pool", choices=("hitter", "pitcher"))
     parser.add_argument("--age", type=int, help="the player's age in the season he is producing")
     parser.add_argument("--sgp", type=float, help="full-season SGP pace")
-    parser.add_argument("--band", type=float, default=DEFAULT_BAND, help="comp width in SGP")
+    parser.add_argument(
+        "--band",
+        type=float,
+        # default=None, NOT DEFAULT_BAND: the validation below must distinguish
+        # "the user asked for a band" from "nobody mentioned one".
+        default=None,
+        help=f"comp width in SGP for --match current/track (default {DEFAULT_BAND})",
+    )
     parser.add_argument(
         "--match",
         choices=("shape", "track", "current"),
@@ -391,13 +402,24 @@ def main() -> int:
         parser.error("pass --player, or all of --pool/--age/--sgp")
     if args.horizon < 1:
         parser.error("--horizon must be at least 1")
-    # The mirror of the missing-prior check below. Without it the flag reaches
-    # comp_trajectory's ValueError and exits on a five-frame traceback, after paying the
-    # panel-load time -- where every other bad combination here gets one usage line.
-    if args.prior_band is not None and args.match == "current":
-        parser.error("--prior-band applies to --match track; --match current has no prior band")
-    if args.prior_band is not None and args.match == "shape":
-        parser.error("--prior-band applies to --match track; shape uses kernels, not bands")
+    # Every flag that cannot affect the chosen mode is refused, not ignored. Accepting
+    # one silently lets a user tune a parameter, see a byte-identical answer, and
+    # conclude the parameter does nothing -- or worse, believe an input was honoured
+    # that was dropped. --prior-band was already refused; the rest were not.
+    if args.prior_band is not None and args.match != "track":
+        parser.error(
+            f"--prior-band applies to --match track; {args.match} "
+            f"{'uses kernels, not bands' if args.match == 'shape' else 'has no prior band'}"
+        )
+    if args.band is not None and args.match == "shape":
+        parser.error("--band applies to --match current/track; shape uses kernels, not bands")
+    if args.prior_sgp is not None and args.match == "current":
+        parser.error(
+            "--prior-sgp applies to --match shape/track; --match current scores on this "
+            "season alone and would discard it"
+        )
+    if args.show_anchors and args.match != "shape":
+        parser.error("--show-anchors applies to --match shape; the comp matchers fit no anchors")
 
     # Anchor to the REPO, mirroring build_pt_panel._anchor on the write side. The
     # documented build command passes a RELATIVE --out-dir, so a reader resolving the
@@ -486,7 +508,7 @@ def main() -> int:
                 kind=pool,
                 age=age,
                 sgp=sgp,
-                band=args.band,
+                band=DEFAULT_BAND if args.band is None else args.band,
                 prior_sgp=prior,
                 prior_band=args.prior_band,
                 horizons=horizons,
