@@ -29,6 +29,7 @@ import sys
 import time
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -57,7 +58,8 @@ SWEEP_DRAWS = 250
 
 #: Fitting weight that must sit near the query's own current season before its row is
 #: ranked rather than flagged. Shape has no kernel on the CURRENT season, so a query can
-#: to a cohort it sits entirely outside and priced by extrapolating that cohort's line.
+#: be matched to a cohort it sits entirely outside and priced by extrapolating that
+#: cohort's fitted line.
 #:
 #: 10% separates the two failure modes cleanly on the real board -- measured, not chosen:
 #:
@@ -118,31 +120,64 @@ def score(
                 "years": len(traj.observable),
                 "n_eff": min(p.n_effective for p in traj.observable),
                 "support": traj.local_support,
+                # NEXT season alone, for the second ranking. A one-year board and a
+                # multi-year board answer different questions -- who helps now versus
+                # who is worth holding -- and the gap between a player's two ranks is
+                # the keeper decision in one number.
+                "next": traj.observable[0].mean
+                if traj.observable[0].horizon == 1
+                else float("nan"),
             }
         )
     return scored
 
 
-def render(scored: list[dict], top: int, horizons: tuple[int, ...], levels: dict) -> None:
+def add_ranks(scored: list[dict]) -> None:
+    """Stamp each row with BOTH rankings, over the whole scored pool.
+
+    Ranks are computed once over everyone and then carried, so a per-team view shows a
+    player's LEAGUE rank rather than his rank among his own teammates -- the latter would
+    make every team's best player look like a 1.
+    """
+    for key, field in (("total", "rank_total"), ("next", "rank_next")):
+        order = sorted(
+            scored, key=lambda r, k=key: (-r[k] if not np.isnan(r[k]) else 1.0, r["name"])
+        )
+        for i, row in enumerate(order, start=1):
+            row[field] = i
+
+
+def _header(base: int, horizons: tuple[int, ...]) -> tuple[str, str]:
+    """Column labels as SEASONS, since "+1" and "3-year" are not what a keeper thinks in."""
+    return f"{base + 1}", f"{base + min(horizons)}-{str(base + max(horizons))[-2:]}"
+
+
+def render(
+    scored: list[dict], top: int, horizons: tuple[int, ...], levels: dict, base: int
+) -> None:
     scored.sort(key=lambda r: r["total"], reverse=True)
-    span = f"{len(horizons)}-year"
+    one, span = _header(base, horizons)
     floors = "  ".join(f"{s} {levels[s]:.2f}" for s in sorted(levels, key=lambda s: levels[s]))
     print(f"\nTOP {min(top, len(scored))} by {span} TOTAL VAR   (floors: {floors})")
     print(f"{len(scored)} players scored\n")
     print(
-        f"{'rank':>4}  {'player':<24} {'age':>3} {'slot':>4} {'now':>6} {'prior':>6} "
-        f"{'total':>7}  {'p10..p90':>16} {'yrs':>3} {'n_eff':>6} {'supp':>5}"
+        f"{'#' + span:>8} {'#' + one:>6}  {'player':<24} {'age':>3} {'slot':>4} {'now':>6} "
+        f"{'prior':>6} {span + ' VAR':>10} {one + ' VAR':>9}  {'p10..p90':>16} {'supp':>5}"
     )
-    for i, r in enumerate(scored[:top], start=1):
+    for r in scored[:top]:
         band = f"{r['p10']:6.1f}..{r['p90']:<6.1f}"
         # (!) is a warning, not decoration: below the threshold the fitted line was
-        # evaluated outside its own support, so the estimate AND the band describe
-        # players unlike this one.
+        # evaluated outside its own support, so the band is wide because the model is
+        # extrapolating rather than because this player is genuinely volatile.
         flag = " (!)" if r["support"] < MIN_LOCAL_SUPPORT else ""
+        # The MOVE between the two ranks is the keeper signal: a player far better over
+        # three years than next year is who you hold rather than who you start.
+        shift = r["rank_next"] - r["rank_total"]
+        arrow = f"{shift:+d}" if abs(shift) >= 5 else ""
         print(
-            f"{i:4d}  {r['name'][:24]:<24} {r['age']:3d} {r['slot']:>4} {r['now']:6.1f} "
-            f"{r['prior']:6.1f} {r['total']:7.1f}  {band:>16} {r['years']:3d} {r['n_eff']:6.0f} "
-            f"{r['support']:5.0%}{flag}"
+            f"{r['rank_total']:8d} {r['rank_next']:6d}  {r['name'][:24]:<24} {r['age']:3d} "
+            f"{r['slot']:>4} {r['now']:6.1f} {r['prior']:6.1f} {r['total']:10.1f} "
+            f"{r['next']:9.1f}  {band:>16} {r['support']:5.0%}{flag}{arrow:>5}"
         )
     if any(r["support"] < MIN_LOCAL_SUPPORT for r in scored[:top]):
         print(
@@ -240,7 +275,8 @@ def main() -> int:
     if not scored:
         print("\nnothing scored -- check --min-sgp and that the panel covers this season")
         return 1
-    render(scored, args.top, horizons, levels)
+    add_ranks(scored)
+    render(scored, args.top, horizons, levels, season)
     print(f"\n  scored in {time.perf_counter() - started:.1f}s")
     return 0
 
