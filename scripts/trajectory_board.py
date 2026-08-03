@@ -182,11 +182,17 @@ def render(
     if any(r["support"] < MIN_LOCAL_SUPPORT for r in scored[:top]):
         print(
             f"\n  (!) under {MIN_LOCAL_SUPPORT:.0%} of the fitting weight sits near this"
-            "\n      player's own current season. LAST season is kernel-weighted and THIS"
+            "\n      player's own current season -- LAST season is kernel-weighted and THIS"
             "\n      one is not, so a season that far outruns its prior is priced by"
-            "\n      extrapolating a line fitted on players unlike him -- and the band, being"
-            "\n      that cohort's scatter, comes out NARROW. Do not rank on these."
-            "\n      Estimator fix is #310; --min-support drops them entirely."
+            "\n      extrapolating a line fitted on players unlike him."
+            "\n"
+            "\n      The BAND already accounts for this and is wide on these rows, so read it"
+            "\n      rather than the point estimate: measured on breakouts the interval is"
+            "\n      calibrated for hitters (12%/11% against a nominal 10%/10%) and still"
+            "\n      optimistic for pitchers three years out (24% below p10). What stays"
+            "\n      unguarded is the estimate itself, which leans on the fitted line holding"
+            "\n      outside its own data -- locally unbiased where checked, but assumed."
+            "\n      Estimator fix is #310; --min-support drops these rows entirely."
         )
 
 
