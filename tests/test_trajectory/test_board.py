@@ -173,13 +173,17 @@ def test_only_players_with_a_line_in_the_scored_season_appear() -> None:
 # --- the extrapolation guard --------------------------------------------------------
 
 
-def _cohort(level_range: tuple[float, float], n: int = 400) -> pd.DataFrame:
+def _cohort(level_range: tuple[float, float], n: int = 400, noise: float = 1.5) -> pd.DataFrame:
+    """Forward season is `0.8 * current` plus noise. NOISY on purpose -- a noiseless
+    population has zero-width residuals, so every band collapses onto the point estimate
+    and any assertion about band width compares floating-point dust."""
     rng = np.random.default_rng(0)
     rows = []
     for i in range(n):
         prior = float(rng.uniform(*level_range))
         current = float(rng.uniform(*level_range))
-        rows += [(i, 2010, 27, prior), (i, 2011, 28, current), (i, 2012, 29, current * 0.8)]
+        forward = current * 0.8 + float(rng.normal(0, noise))
+        rows += [(i, 2010, 27, prior), (i, 2011, 28, current), (i, 2012, 29, forward)]
     return pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
 
 
@@ -191,11 +195,9 @@ def test_local_support_is_high_when_the_query_sits_inside_its_cohort() -> None:
 
 
 def test_local_support_collapses_when_the_query_outruns_its_cohort() -> None:
-    """The failure the board exists to guard: `prior_sgp` is kernel-weighted but `sgp` is a
-    bare regressor, so a player whose current season far outruns his prior is matched to
-    a cohort he sits outside and then priced by extrapolating their fitted line. The
-    band comes out NARROW at the same time, because it is that cohort's scatter --
-    confident and wrong together, which is what makes it worth refusing."""
+    """Only the prior season is kernel-weighted, so a player whose current season far
+    outruns his prior is matched to a cohort he sits outside and priced by extrapolating
+    their fitted line. `local_support` is what measures that gap."""
     panel = _cohort((0.0, 6.0))
     inside, _ = shape_trajectory(
         panel, kind="hitter", age=28, sgp=3.0, prior_sgp=3.0, horizons=(1,), prior_window=8.0
@@ -205,7 +207,17 @@ def test_local_support_collapses_when_the_query_outruns_its_cohort() -> None:
     )
     assert inside.local_support > 0.25
     assert outside.local_support < 0.10
-    # And the giveaway: the extrapolated query reports a NARROWER band, not a wider one.
-    assert (outside.path[0].p90 - outside.path[0].p10) <= (
-        inside.path[0].p90 - inside.path[0].p10
-    ) * 1.5
+
+
+def test_an_extrapolated_query_is_not_reported_as_more_certain() -> None:
+    """This once asserted the opposite, pinning the defect: the extrapolated query came
+    back with a NARROWER band than the supported one, because the band was the fitting
+    cohort's residual scatter and that cohort was a tight fringe population unlike him.
+    Confident and wrong together. The band is now read off residuals reweighted toward
+    the query's own current season, so it can no longer claim more certainty out there
+    than it has in the middle of its own data."""
+    panel = _cohort((0.0, 6.0))
+    kw = {"kind": "hitter", "age": 28, "prior_sgp": 3.0, "horizons": (1,), "prior_window": 8.0}
+    inside, _ = shape_trajectory(panel, sgp=3.0, **kw)
+    outside, _ = shape_trajectory(panel, sgp=16.0, **kw)
+    assert (outside.path[0].p90 - outside.path[0].p10) >= (inside.path[0].p90 - inside.path[0].p10)

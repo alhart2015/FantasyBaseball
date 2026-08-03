@@ -91,6 +91,15 @@ AGE_WINDOW = 2
 #: this constrains only half the query. See `Trajectory.local_support` and #310.
 PRIOR_WINDOW = 8.0
 
+#: Kernel half-width used ONLY to reweight residuals when reading the band -- never in
+#: the fit. Kernelling the current season in the fit too would shrink a query like the
+#: 21-year-old above from ~1,100 effective rows to 14, trading a falsely confident
+#: estimate for a uselessly thin one; the point estimate is locally unbiased and should
+#: be left alone. This changes what the band is read off, not what is predicted.
+#:
+#: Matched to `PRIOR_WINDOW` so the two anchors are treated alike here.
+CURRENT_WINDOW = 8.0
+
 #: Refits behind `PathPoint.se`. Cost is linear in this and it is ~90% of a query once
 #: the panel-level work is hoisted out (#311), so a board sweep should LOWER it -- but
 #: per call, not here. Across four real hitter queries x four horizons, over twelve seeds:
@@ -523,17 +532,6 @@ def shape_trajectory(
         median = float(predicted + _weighted_quantile(residuals, w, 0.5))
         if replacement:
             median = max(median, 0.0)
-        # The BAND, off the same weighted residual distribution the median comes from.
-        # `mean +/- k*spread` would be a Gaussian reading, and out of sample the errors
-        # are not Gaussian in a way that varies by pool and horizon -- flatter and
-        # right-skewed for pitchers at +3, near-normal and left-skewed for hitters at +1.
-        # Quantiles carry that shape for free; a single width cannot.
-        p10 = float(predicted + _weighted_quantile(residuals, w, 0.10))
-        p90 = float(predicted + _weighted_quantile(residuals, w, 0.90))
-        if replacement:
-            # Same floor the response carries: below replacement is worth zero, not
-            # negative, so a band reaching under it reports zero rather than a debt.
-            p10, p90 = max(p10, 0.0), max(p90, 0.0)
         # These are FITTED residuals from a three-parameter model, so their weighted
         # mean square estimates (1 - p/n_eff) * sigma^2, not sigma^2. Without the
         # correction the spread -- the number `PathPoint.spread` tells the reader to
@@ -541,6 +539,49 @@ def shape_trajectory(
         # n_eff 15, ~32% at n_eff 7. Negligible on a healthy fit (0.4% at n_eff 347),
         # which is the point: it self-corrects toward honest at the dangerous end.
         residual_var = float(np.average(residuals**2, weights=w)) * n_eff / (n_eff - N_PARAMETERS)
+
+        # The BAND. Two things distinguish it from `predicted +/- k*spread`.
+        #
+        # It is EMPIRICAL, because the errors are not Gaussian and not in the same way
+        # across pools and horizons -- flatter and right-skewed for pitchers at +3,
+        # near-normal and left-skewed for hitters at +1. Quantiles carry that shape.
+        #
+        # And it is read off residuals reweighted toward the query's OWN current season,
+        # not the whole fitting cohort's. Only the prior season is kernel-weighted in the
+        # fit, so a player whose current season outruns his prior is matched to a cohort
+        # he sits outside: a 21-year-old at 13.6 now / 0.0 prior drew a population whose
+        # current seasons average 2.9, and inherited that population's tight scatter.
+        # The point estimate survives this -- measured locally it is unbiased, -0.61
+        # against a prediction of 13.5 -- but the band did not, reporting a NARROW
+        # interval precisely where the model knew least. Reweighting widens it ~20-35% on
+        # those queries and leaves a well-supported one alone, which is the whole ask.
+        band_weights = w * _triangular(current[keep] - sgp, CURRENT_WINDOW)
+        band_effective = (
+            float(band_weights.sum() ** 2 / np.square(band_weights).sum())
+            if band_weights.sum() > 0
+            else 0.0
+        )
+        # Too few comps near his current season to describe a distribution. Fall back to
+        # the cohort's own residuals rather than quantile 20 effective rows -- the band is
+        # then the understated one, which `Trajectory.local_support` is there to flag.
+        if band_effective < MIN_EFFECTIVE_ROWS:
+            band_weights = w
+        # The fitted mean carries its own uncertainty, and it GROWS with leverage -- the
+        # query being far from the data is exactly when the line is least pinned down.
+        # `spread` picks this up as `se^2`; quantiles have no variance to add it to, so it
+        # enters as the same scale factor, sqrt(1 + se^2/sigma^2). Small in practice (~4%
+        # here) but it is the term that belongs to extrapolation, so it is not dropped.
+        inflate = (
+            float(np.sqrt(1.0 + se**2 / residual_var))
+            if residual_var > 0 and not np.isnan(se)
+            else 1.0
+        )
+        p10 = float(predicted + inflate * _weighted_quantile(residuals, band_weights, 0.10))
+        p90 = float(predicted + inflate * _weighted_quantile(residuals, band_weights, 0.90))
+        if replacement:
+            # Same floor the response carries: below replacement is worth zero, not
+            # negative, so a band reaching under it reports zero rather than a debt.
+            p10, p90 = max(p10, 0.0), max(p90, 0.0)
         survived = mask
         path.append(
             PathPoint(
