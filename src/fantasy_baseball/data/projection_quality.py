@@ -11,7 +11,7 @@ from fantasy_baseball.utils.name_utils import normalize_name
 
 # Thresholds for cross-system outlier detection
 EXCLUDE_THRESHOLD = 0.20  # System median < 20% of consensus → exclude
-WARN_THRESHOLD = 0.50     # System median deviates > 50% from consensus → warn
+WARN_THRESHOLD = 0.50  # System median deviates > 50% from consensus → warn
 
 # Minimum playing time to include a player in outlier detection.
 # Filters out fringe players that inflate large-pool systems (Steamer, Oopsy)
@@ -23,6 +23,7 @@ MIN_PITCHER_IP = 10
 @dataclass
 class QualityReport:
     """Results of pre-blend projection quality checks."""
+
     warnings: list[str] = field(default_factory=list)
     exclusions: dict[str, set[str]] = field(default_factory=dict)
     missing_players: dict[str, list[str]] = field(default_factory=dict)
@@ -105,9 +106,7 @@ def _check_stat_outliers(
                 all_keys.update(nonzero.values)
 
             # Check for all-NaN columns before the sparse-stat filter
-            all_nan_systems = {
-                s for s, df in present_systems.items() if df[stat].isna().all()
-            }
+            all_nan_systems = {s for s, df in present_systems.items() if df[stat].isna().all()}
 
             if not all_keys and not all_nan_systems:
                 continue
@@ -124,18 +123,14 @@ def _check_stat_outliers(
 
             # Compute per-system consensus as the median of all OTHER systems' medians
             # (leave-one-out) so that a single outlier system doesn't skew its own reference
-            valid_medians = {
-                s: v for s, v in sys_medians.items() if not np.isnan(v)
-            }
+            valid_medians = {s: v for s, v in sys_medians.items() if not np.isnan(v)}
 
             for sys_name, sys_median in sys_medians.items():
                 df = present_systems[sys_name]
                 col_all_nan = sys_name in all_nan_systems
 
                 if col_all_nan:
-                    report.warnings.append(
-                        f"EXCLUDE: {sys_name} {player_type} {stat} all NaN"
-                    )
+                    report.warnings.append(f"EXCLUDE: {sys_name} {player_type} {stat} all NaN")
                     if sys_name not in report.exclusions:
                         report.exclusions[sys_name] = set()
                     report.exclusions[sys_name].add(stat)
@@ -154,7 +149,7 @@ def _check_stat_outliers(
                 if ratio < EXCLUDE_THRESHOLD:
                     report.warnings.append(
                         f"EXCLUDE: {sys_name} {player_type} {stat} "
-                        f"median ({sys_median:.1f}) is <{EXCLUDE_THRESHOLD*100:.0f}% of consensus ({consensus:.1f})"
+                        f"median ({sys_median:.1f}) is <{EXCLUDE_THRESHOLD * 100:.0f}% of consensus ({consensus:.1f})"
                     )
                     if sys_name not in report.exclusions:
                         report.exclusions[sys_name] = set()
@@ -163,7 +158,7 @@ def _check_stat_outliers(
                     direction = "above" if ratio > 1 else "below"
                     report.warnings.append(
                         f"WARNING: {sys_name} {player_type} {stat} median ({sys_median:.1f}) "
-                        f"is {abs(ratio - 1.0)*100:.0f}% {direction} consensus ({consensus:.1f})"
+                        f"is {abs(ratio - 1.0) * 100:.0f}% {direction} consensus ({consensus:.1f})"
                     )
 
 
@@ -209,8 +204,7 @@ def _check_roster_coverage(
 
     for player_name in sorted(roster_names):
         missing_from = [
-            sys_name for sys_name in systems
-            if player_name not in sys_name_sets[sys_name]
+            sys_name for sys_name in systems if player_name not in sys_name_sets[sys_name]
         ]
         if not missing_from:
             continue
@@ -223,6 +217,4 @@ def _check_roster_coverage(
                 f"no projection available"
             )
         else:
-            report.warnings.append(
-                f"WARNING: {player_name} missing from {', '.join(missing_from)}"
-            )
+            report.warnings.append(f"WARNING: {player_name} missing from {', '.join(missing_from)}")

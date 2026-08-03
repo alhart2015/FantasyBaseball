@@ -1,0 +1,115 @@
+"""Who owns whom, from the live roster blobs.
+
+Two cache keys together cover the league, and they are NOT the same shape:
+
+    cache:roster        a BARE LIST -- your own team, with no team name on it
+    cache:opp_rosters   a dict {team_name: [player, ...]} -- the other nine
+
+Getting that asymmetry wrong drops your own roster silently, which reads as "you own
+nobody" rather than as an error.
+
+**Joins fall back to (normalized name, player_type).** Roster blobs carry a Yahoo
+`player_id` and a `player_type` but no `mlbam_id` (#284), while every board in this repo
+is MLBAM-keyed. Two different players sharing a normalized name and type therefore
+collapse onto one owner. That residual is irreducible here -- the fix is populating
+`mlbam_id` at Yahoo ingest, not more matching logic. Callers join on that key and
+should NAME what they could not place rather than let a failed join read as "nobody owns
+him".
+
+`parse_rosters` is separated from `live_rosters` because the second reaches prod Upstash,
+which `build_explicit_upstash_kv` refuses to do under pytest. The shape handling is the
+part worth testing, so it is testable without a network.
+"""
+
+from __future__ import annotations
+
+import json
+from dataclasses import dataclass
+from typing import Any
+
+from ..utils.name_utils import normalize_name
+
+
+@dataclass(frozen=True)
+class RosterSpot:
+    """One player on one fantasy roster."""
+
+    name: str
+    #: Accent-stripped, lowercased. The join key, paired with `player_type`.
+    normalized: str
+    player_type: str
+    team: str
+    #: Yahoo's own id. Carried because it IS unique where the name is not, so a caller
+    #: that later gets mlbam_id at ingest can upgrade the join without re-reading this.
+    yahoo_id: str
+    #: "", "IL10", "DTD", ... -- an injured player is still owned.
+    status: str
+
+
+def parse_rosters(roster_blob: Any, opp_blob: Any, my_team: str) -> list[RosterSpot]:
+    """Flatten both blobs into one list. Pure -- no network, no environment."""
+    spots: list[RosterSpot] = []
+    # (payload, team-if-the-payload-is-a-bare-list)
+    for payload, mine in ((opp_blob, None), (roster_blob, my_team)):
+        if payload is None:
+            continue
+        data = payload.get("_data", payload) if isinstance(payload, dict) else payload
+        # opp_rosters is {team: [players]}; roster is a BARE LIST -- your own team.
+        groups = data.items() if isinstance(data, dict) else [(mine, data)]
+        for team, players in groups:
+            if not isinstance(players, list) or team is None:
+                continue
+            for p in players:
+                if not isinstance(p, dict) or not p.get("name"):
+                    continue
+                spots.append(
+                    RosterSpot(
+                        name=str(p["name"]),
+                        normalized=normalize_name(str(p["name"])),
+                        player_type=str(p.get("player_type", "")),
+                        team=str(team),
+                        yahoo_id=str(p.get("player_id", "")),
+                        status=str(p.get("status", "") or ""),
+                    )
+                )
+    return spots
+
+
+def owner_map(spots: list[RosterSpot]) -> dict[tuple[str, str], str]:
+    """(normalized name, player_type) -> owning team.
+
+    Collisions collapse, by construction -- see the module docstring. Later spots win,
+    which is arbitrary; that is the #284 residual, not a decision worth encoding.
+    """
+    return {(s.normalized, s.player_type): s.team for s in spots}
+
+
+def live_rosters(my_team: str) -> list[RosterSpot]:
+    """Read both roster blobs from PROD Upstash and flatten them.
+
+    `build_explicit_upstash_kv` rather than `get_kv()`, deliberately: off Render `get_kv`
+    returns the local SQLite mirror, which is only as fresh as the last sync, and roster
+    membership is exactly the kind of live state that goes stale silently -- a trade since
+    the last sync would put a player on the wrong team with nothing looking wrong.
+
+    It does NOT set `RENDER`. Several scripts do that before calling this constructor,
+    which is cargo: the env gate lives in `get_kv` alone and this path never consults it,
+    so the assignment cannot change what is returned. What it CAN do is steer `get_kv` --
+    a process-wide singleton -- for whatever runs next, which for a library function
+    reachable from the web app is a side effect with no upside. `.env` loading is likewise
+    already handled inside `_build_upstash_kv`.
+    """
+    from .cache_keys import CacheKey, redis_key
+    from .kv_store import build_explicit_upstash_kv
+
+    kv = build_explicit_upstash_kv()
+
+    def decode(raw: Any) -> Any:
+        if raw is None:
+            return None
+        return json.loads(raw) if isinstance(raw, str) else raw
+
+    # One round trip. The two blobs are independent and `mget` is on the KVStore protocol
+    # for both backends, so fetching them separately just bought an extra network wait.
+    roster_raw, opp_raw = kv.mget(redis_key(CacheKey.ROSTER), redis_key(CacheKey.OPP_ROSTERS))
+    return parse_rosters(decode(roster_raw), decode(opp_raw), my_team)

@@ -52,10 +52,10 @@ def score(panel: pd.DataFrame, queries: pd.DataFrame, kind: str, horizon: int) -
         actual = float(index.get((q.mlbam_id, q.season + horizon), 0.0))
         # No self-matching: the player is gone from the panel both estimators see.
         clean = panel[panel["mlbam_id"] != q.mlbam_id]
-        age, down, peak = int(q.age), float(q.down), float(q.peak)
-        level = comp_trajectory(clean, kind=kind, age=age, sgp=down, horizons=(horizon,))
+        age, current, prior = int(q.age), float(q.current), float(q.prior)
+        level = comp_trajectory(clean, kind=kind, age=age, sgp=current, horizons=(horizon,))
         curve, _ = shape_trajectory(
-            clean, kind=kind, age=age, sgp=down, peak=peak, horizons=(horizon,)
+            clean, kind=kind, age=age, sgp=current, prior_sgp=prior, horizons=(horizon,)
         )
         if level.path[0].n == 0 or np.isnan(curve.path[0].mean):
             continue
@@ -64,8 +64,8 @@ def score(panel: pd.DataFrame, queries: pd.DataFrame, kind: str, horizon: int) -
                 "mlbam_id": q.mlbam_id,
                 "season": q.season,
                 "age": age,
-                "peak": peak,
-                "down": down,
+                "prior": prior,
+                "now": current,
                 "actual": actual,
                 "current": level.path[0].mean,
                 "shape": curve.path[0].mean,
@@ -137,7 +137,7 @@ def main() -> int:
         queries = pool.sample(min(args.sample, len(pool)), random_state=args.seed)
         header = f"random sample of {len(queries)}"
     else:
-        queries = pool[pool["peak"] >= args.elite_floor]
+        queries = pool[pool["prior"] >= args.elite_floor]
         header = f"every season with a prior >= {args.elite_floor:g} SGP"
 
     print(
@@ -151,12 +151,12 @@ def main() -> int:
     print(f"\nscored {len(df)} (query player held out of the panel each time)")
     print(f"{'':32s}       current -> shape")
     report(df, "ALL")
-    elite = df[df["peak"] >= args.elite_floor]
+    elite = df[df["prior"] >= args.elite_floor]
     report(elite, f"elite (prior >= {args.elite_floor:g})")
-    report(elite[elite["down"] < elite["peak"] * 0.8], "elite down year (<80% of prior)")
-    report(elite[elite["down"] < elite["peak"] * 0.7], "elite big drop (<70% of prior)")
-    report(elite[elite["down"] >= elite["peak"] * 0.8], "elite holding steady")
-    report(df[df["down"] > df["peak"] * 1.25], "breakout (up >25%)")
+    report(elite[elite["now"] < elite["prior"] * 0.8], "elite down year (<80% of prior)")
+    report(elite[elite["now"] < elite["prior"] * 0.7], "elite big drop (<70% of prior)")
+    report(elite[elite["now"] >= elite["prior"] * 0.8], "elite holding steady")
+    report(df[df["now"] > df["prior"] * 1.25], "breakout (up >25%)")
     return 0
 
 

@@ -46,6 +46,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.config import load_config
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+from fantasy_baseball.trajectory.board import people as board_people
+from fantasy_baseball.trajectory.board import player_names, season_slots
 from fantasy_baseball.trajectory.comps import (
     DEFAULT_BAND,
     Trajectory,
@@ -74,41 +76,6 @@ PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
 THIN_COMPS = 20
 
 
-@lru_cache(maxsize=1)
-def _people() -> pd.DataFrame:
-    """Every MLBAM people cache in the shared directory, unioned, for name lookup.
-
-    UNIONED rather than ranked, because no single-file rule is stable here. This
-    directory is shared with the keeper pipeline, whose `--end` defaults to the current
-    year, so any 2027 keeper rebuild drops `mlb_people_all_2010_2027.csv` beside the
-    trajectory build's `..._2000_2026.csv`. Ranking on (end, -start) then prefers the
-    2027 file and silently loses the 2000-2009 players -- 2060 of them, 1923 present in
-    the trajectory panel -- exactly the regression a filename sort caused before, just
-    re-armed on a timer. A plain string sort is worse still ("2010" > "2000").
-
-    A union has no such failure mode: ids are stable and a name never disagrees between
-    caches, so more files can only mean better coverage. Deduplicated on `id`, keeping
-    the newest file's spelling.
-    """
-    caches = sorted(PEOPLE_CACHE.glob("mlb_people_all_*.csv"))
-    if not caches:
-        raise FileNotFoundError(
-            f"no people cache in {PEOPLE_CACHE}; run scripts/build_pt_panel.py first"
-        )
-    people = pd.concat(
-        [pd.read_csv(path, usecols=["id", "fullName"]) for path in caches],
-        ignore_index=True,
-    ).drop_duplicates(subset="id", keep="last")
-    people["norm"] = people["fullName"].map(normalize_name)
-    return people
-
-
-def _names() -> pd.Series:
-    """mlbam_id -> full name, so a comp list is readable rather than a column of ids."""
-    people = _people()
-    return people.set_index("id")["fullName"]
-
-
 def _resolve_player(
     name: str,
     panels: dict[str, pd.DataFrame],
@@ -133,7 +100,7 @@ def _resolve_player(
     silently prints one player's trajectory under the other's name -- an ambiguous name
     lists the candidates and stops. `mlbam_id` is the way through.
     """
-    people = _people()
+    people = board_people(PEOPLE_CACHE)
     hits = people[people["norm"] == normalize_name(name)]
     if hits.empty:
         raise SystemExit(f"no player named {name!r} in the people cache")
@@ -190,49 +157,6 @@ def _resolve_player(
     return resolved
 
 
-@lru_cache(maxsize=4)
-def _eligibility(season: int) -> dict[int, frozenset[str]]:
-    """MLBAM id -> slots with 10+ games that season, the league's own rule.
-
-    READS a cache; never populates one. `fetch_mlb_season` falls through to a live
-    paginated download on a miss and writes the result into the KEEPER pipeline's
-    directory -- a standalone tool quietly filling another pipeline's cache, and a
-    network dependency on a command that otherwise runs offline. The fielding pull
-    covers only the keeper range while this panel spans 2000, so a miss is routine
-    rather than exceptional: it degrades to UTIL, the HIGHEST floor, which understates
-    rather than invents.
-
-    Even a present cache is a point-in-time snapshot for the live season, so eligibility
-    only grows after it was taken. Conservative in both directions.
-    """
-    from fantasy_baseball.keepers.appearances import season_eligibility
-    from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
-
-    cache = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
-    path = cache / f"mlb_fielding_{season}.csv"
-    # NON-EMPTY, not merely present. `fetch_or_cache` treats an empty frame as a miss and
-    # falls through to a live download plus a write into the keeper pipeline's cache --
-    # so a header-only file passed an `exists()` check and reintroduced the very
-    # cross-pipeline write this guard was added to stop, invisibly.
-    if not path.exists() or path.stat().st_size == 0:
-        print(
-            f"  NOTE: no cached {season} fielding data, so eligibility is unknown and "
-            "every player here nets against the UTIL floor. (--scale sgp needs none.)"
-        )
-        return {}
-    try:
-        fielding = fetch_mlb_season(cache, season, "fielding")
-        # The PARSE is inside the guard too. `season_eligibility` raises KeyError on a
-        # schema-shifted file, which is what half of "corrupt" looks like once the CSV
-        # itself still parses -- leaving the documented degradation covering only the
-        # read.
-        eligibility = season_eligibility(fielding)
-    except Exception:  # a corrupt cache degrades rather than crashing
-        print(f"  NOTE: {season} fielding cache unusable; netting against UTIL.")
-        return {}
-    return {pid: frozenset(slots) for pid, slots in eligibility.items()}
-
-
 def _number(row: pd.Series, column: str) -> float:
     """A count off a panel row, treating missing AND NaN as zero.
 
@@ -276,7 +200,9 @@ def _slots_for(panel: pd.DataFrame, mlbam_id: int, kind: str) -> set[str]:
         return resolve_slots(None, kind, starts=_number(row, "starts"), games=_number(row, "games"))
     rows = panel[panel["mlbam_id"] == mlbam_id]
     row = rows.loc[rows["season"].idxmax()]
-    return resolve_slots(set(_eligibility(int(row["season"])).get(mlbam_id, frozenset())), kind)
+    return resolve_slots(
+        set(season_slots(PEOPLE_CACHE, int(row["season"])).get(mlbam_id, frozenset())), kind
+    )
 
 
 def _query_slots(
@@ -342,12 +268,40 @@ def _no_support(traj: Trajectory) -> bool:
     return not traj.observable
 
 
+def _warn_if_extrapolated(traj: Trajectory) -> None:
+    """Say so when the fitted line was evaluated outside its own support.
+
+    A DIFFERENT failure from `_warn_if_thin`, which reads `n_effective`: a query can have
+    1,100 effective rows behind it and still have almost none of them near its own current
+    season, because only the prior season is kernel-weighted. That is the 13.6-now /
+    0.0-prior case, and without this the board flagged it with `(!)` while this CLI --
+    the one used for a single keep-or-cut call -- printed the same numbers unmarked.
+    """
+    if not (traj.extrapolated or traj.band_fell_back):
+        return
+    if traj.band_fell_back:
+        print(
+            "\n  *** BAND REVERTED: too few comps near his current season to read a band"
+            "\n      from, so it falls back to the whole cohort's scatter -- the UNDERSTATED"
+            "\n      interval the reweighting exists to replace, on the query that needed it"
+            "\n      most. Treat the band below as a lower bound on the real uncertainty. ***"
+        )
+    print(
+        f"\n  *** EXTRAPOLATED: only {traj.local_support:.0%} of the fitting weight sits"
+        f" near his own {traj.sgp:.1f} SGP season."
+        "\n      LAST season is kernel-weighted and THIS one is not, so a season that far"
+        "\n      outruns its prior is priced by extending a line fitted on players unlike"
+        "\n      him. Read the p10..p90 band rather than the point estimate: the band"
+        "\n      accounts for this and the estimate does not. See #310. ***"
+    )
+
+
 def _warn_if_thin(traj: Trajectory) -> None:
     """Say so when the support is too thin for the printed precision.
 
     Reads the EFFECTIVE size, not the row count. Under kernel weighting those diverge:
     a 41-row shape fit carrying an effective 15 cleared a raw-count threshold while
-    fitting `on_peak` at -1.03 -- more production last year predicting less next year --
+    fitting `on_prior` at -1.03 -- more production last year predicting less next year --
     and printed unqualified to two decimals.
     """
     support = min((p.n_effective for p in traj.observable), default=0.0)
@@ -408,19 +362,26 @@ def render(traj: Trajectory, show_comps: int) -> None:
             "(kernel-weighted)"
         )
         _warn_if_thin(traj)
+        _warn_if_extrapolated(traj)
         # Weighted survival against the EFFECTIVE size, so every column in the row
         # describes the same population the fit used. A raw count beside a weighted
         # median invited the reader to take both as properties of the prediction.
         print(
-            f"\n   age   pred {_units(traj)}  +/-SE  +/-spread   median"
+            f"\n   age   pred {_units(traj)}  +/-SE     p10..p90   median"
             "   played (of eff)  if played"
         )
         for p in traj.path:
             if p.n == 0:
-                print(f"   {p.age:3d}        --      --         --       --   (not fittable)")
+                print(f"   {p.age:3d}        --      --           --        --   (not fittable)")
                 continue
+            # p10..p90 rather than +/-spread. `spread` is one width, so printing it
+            # invites a symmetric Gaussian reading, and out of sample the outcomes are
+            # neither symmetric nor Gaussian in the same way across pools and horizons:
+            # +/-1 spread holds 59% of pitchers at +3 against a nominal 68%. The
+            # quantiles are the interval actually measured.
+            band = f"{p.p10:5.1f}..{p.p90:<5.1f}"
             print(
-                f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}    {p.spread:7.2f}  {p.median:7.2f}"
+                f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}  {band:>13}  {p.median:7.2f}"
                 f"     {p.survival:5.0%} (of {p.n_effective:5.0f})  {p.mean_if_survived:6.2f}"
             )
         _print_total(traj)
@@ -457,14 +418,19 @@ def render(traj: Trajectory, show_comps: int) -> None:
     _warn_if_thin(traj)
 
     print(
-        f"\n   age   exp {_units(traj)}    +/-SE  +/-spread   median   still playing   if playing"
+        f"\n   age   exp {_units(traj)}    +/-SE     p10..p90   median   still playing   if playing"
     )
     for p in traj.path:
         if p.n == 0:
-            print(f"   {p.age:3d}        --        --         --       --   (not yet observable)")
+            print(f"   {p.age:3d}        --        --           --        --   (not observable)")
             continue
+        # p10..p90, matching the shape table. `spread` is ONE width, and a reader doubles
+        # it into a symmetric interval -- the Gaussian reading measured at 59% coverage
+        # against a nominal 68% for pitchers at +3. These comps ARE the empirical
+        # distribution, so the quantiles cost nothing to report.
+        band = f"{p.p10:5.1f}..{p.p90:<5.1f}"
         print(
-            f"   {p.age:3d}   {p.mean:7.2f}    {p.se:5.2f}    {p.spread:7.2f}  {p.median:7.2f}"
+            f"   {p.age:3d}   {p.mean:7.2f}    {p.se:5.2f}  {band:>13}  {p.median:7.2f}"
             f"    {p.survivors:5d}/{p.n} ({p.survival:4.0%})  {p.mean_if_survived:6.2f}"
         )
     _print_total(traj)
@@ -476,7 +442,11 @@ def render(traj: Trajectory, show_comps: int) -> None:
         top = traj.comps.assign(gap=(traj.comps["sgp0"] - traj.sgp).abs()).nsmallest(
             show_comps, "gap"
         )
-        top = top.assign(player=top["mlbam_id"].map(_names()).fillna(top["mlbam_id"].astype(str)))
+        top = top.assign(
+            player=top["mlbam_id"]
+            .map(player_names(PEOPLE_CACHE))
+            .fillna(top["mlbam_id"].astype(str))
+        )
         cols = ["player", "season", "sgp0"] + [f"h{p.horizon}" for p in traj.path]
         print(f"\n   {len(top)} closest comps (0 = did not play, -- = season not played yet):")
         print(top[cols].to_string(index=False, na_rep="--", float_format=lambda v: f"{v:6.2f}"))
@@ -697,7 +667,7 @@ def main() -> int:
                 kind=pool,
                 age=age,
                 sgp=sgp,
-                peak=prior,
+                prior_sgp=prior,
                 horizons=horizons,
                 replacement=floor,
                 slot=slot,
@@ -707,8 +677,8 @@ def main() -> int:
                 print("     h  intercept   a(now)  b(last)   n_fit   n_eff")
                 for a in anchors:
                     print(
-                        f"     {a.horizon}   {a.intercept:8.2f} {a.on_down:8.3f} "
-                        f"{a.on_peak:8.3f} {a.n_fit:7d} {a.n_effective:7.0f}"
+                        f"     {a.horizon}   {a.intercept:8.2f} {a.on_current:8.3f} "
+                        f"{a.on_prior:8.3f} {a.n_fit:7d} {a.n_effective:7.0f}"
                     )
         else:
             traj = comp_trajectory(
