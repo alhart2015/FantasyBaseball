@@ -35,9 +35,13 @@ about that player at all (#311). `prepare` hoists the panel-level state -- the h
 frame and the forward-value lookup -- out of the query, and `shape_trajectory` accepts
 the result in place of a panel:
 
-    prepared = prepare(panel, horizons=(1, 2, 3))
+    prepared = prepare(panel, kind="hitter", horizons=(1, 2, 3))
     for player in board:
-        shape_trajectory(prepared, kind=..., age=..., sgp=..., peak=...)
+        shape_trajectory(prepared, kind="hitter", age=..., sgp=..., peak=...)
+
+ONE STATE PER POOL. A board is mixed hitters and pitchers, and hoisting a single
+`prepare` above the whole loop would fit every pitcher on hitter seasons; `kind` is
+carried on the state and a disagreeing query is refused rather than answered.
 
 Passing a panel still works and is the CLI's path. The numbers are the same either way;
 `tests/test_trajectory/test_shape.py` asserts that rather than leaving it to inspection.
