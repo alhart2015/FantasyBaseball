@@ -143,6 +143,7 @@ def shape_trajectory(
     peak_band: float = PEAK_BAND,
     last_complete_season: int | None = None,
     replacement: float = 0.0,
+    slot: str | None = None,
     seed: int = 0,
     bootstrap_draws: int = BOOTSTRAP_DRAWS,
 ) -> tuple[Trajectory, tuple[Anchors, ...]]:
@@ -224,6 +225,14 @@ def shape_trajectory(
         coefficients = _weighted_least_squares(x, y, w)
         query = np.array([1.0, sgp, peak])
         predicted = float(query @ coefficients)
+        # Flooring the RESPONSE is not enough here. `comp_trajectory` averages values
+        # that are already >= 0, so its mean cannot go negative; this is an unconstrained
+        # WLS extrapolation, and on a collapsed veteran it printed -2.35 -- a keeper
+        # apparently COSTING value, when a below-replacement player costs exactly zero
+        # (you drop him and start the replacement). The two matchers disagreed in sign on
+        # the same player, and this is the one that runs by default.
+        if replacement:
+            predicted = max(predicted, 0.0)
 
         # Resampling rows and refitting gives the sampling variability of the fitted
         # MEAN, E[forward | down, peak]. It shrinks as sqrt(n) and contains no residual
@@ -242,6 +251,8 @@ def shape_trajectory(
         # the fit itself barely counted, which for an edge-of-window query is most of
         # the row count.
         median = float(predicted + _weighted_quantile(residuals, w, 0.5))
+        if replacement:
+            median = max(median, 0.0)
         # These are FITTED residuals from a three-parameter model, so their weighted
         # mean square estimates (1 - p/n_eff) * sigma^2, not sigma^2. Without the
         # correction the spread -- the number `PathPoint.spread` tells the reader to
@@ -305,6 +316,8 @@ def shape_trajectory(
             path=tuple(path),
             comps=pd.DataFrame(rows),
             mode="shape",
+            floor=replacement,
+            slot=slot,
         ),
         tuple(anchors),
     )

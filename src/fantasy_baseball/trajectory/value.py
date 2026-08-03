@@ -48,6 +48,23 @@ from __future__ import annotations
 #: not to fork it further.
 STARTER_SHARE = 0.5
 
+#: Which slots each pool can possibly net against. A hitter cannot be priced on the
+#: reliever floor and a pitcher cannot be priced at catcher, but argparse offers one flat
+#: list, so `--pool hitter --position RP` was accepted and printed "RP floor 7.42" over a
+#: hitter -- 2.54 SGP a year, stated as fact. Validated in one place rather than at each
+#: call site, because the two-way guard was added at one site and this was missed.
+POOL_SLOTS: dict[str, frozenset[str]] = {
+    "hitter": frozenset({"C", "1B", "2B", "3B", "SS", "OF", "UTIL"}),
+    "pitcher": frozenset({"SP", "RP"}),
+}
+
+#: Appearances before an in-progress season is trusted to describe a pitcher's ROLE.
+#: The same 10-game threshold the league uses for eligibility: a starter back from the
+#: IL with two September relief outings is not a reliever, but `starts / games` on that
+#: fragment says he is, and the pace-adjustment applied to his SGP was never applied
+#: here.
+ROLE_MIN_GAMES = 10
+
 #: Nothing eligible, so he fills a UTIL slot -- the HIGHEST floor. A missing lookup can
 #: therefore only understate a player, never invent value for him.
 DEFAULT_SLOT = "UTIL"
@@ -69,6 +86,17 @@ def best_floor(slots: set[str], replacement_levels: dict[str, float]) -> tuple[s
         return DEFAULT_SLOT, replacement_levels.get(DEFAULT_SLOT, 0.0)
     slot = min(usable, key=lambda s: usable[s])
     return slot, usable[slot]
+
+
+def check_position(position: str, pool: str) -> str | None:
+    """None if `position` can price `pool`, else why not."""
+    if position in POOL_SLOTS[pool]:
+        return None
+    other = "pitcher" if pool == "hitter" else "hitter"
+    return (
+        f"--position {position} is a {other} slot and cannot price a {pool}; "
+        f"{pool} slots are {', '.join(sorted(POOL_SLOTS[pool]))}"
+    )
 
 
 def resolve_slots(

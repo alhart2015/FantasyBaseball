@@ -59,7 +59,12 @@ from fantasy_baseball.trajectory.panel import (
     season_elapsed_fraction,
 )
 from fantasy_baseball.trajectory.shape import shape_trajectory
-from fantasy_baseball.trajectory.value import replacement_for, resolve_slots
+from fantasy_baseball.trajectory.value import (
+    ROLE_MIN_GAMES,
+    check_position,
+    replacement_for,
+    resolve_slots,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 
 PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
@@ -204,7 +209,12 @@ def _eligibility(season: int) -> dict[int, frozenset[str]]:
     from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 
     cache = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
-    if not (cache / f"mlb_fielding_{season}.csv").exists():
+    path = cache / f"mlb_fielding_{season}.csv"
+    # NON-EMPTY, not merely present. `fetch_or_cache` treats an empty frame as a miss and
+    # falls through to a live download plus a write into the keeper pipeline's cache --
+    # so a header-only file passed an `exists()` check and reintroduced the very
+    # cross-pipeline write this guard was added to stop, invisibly.
+    if not path.exists() or path.stat().st_size == 0:
         print(
             f"  NOTE: no cached {season} fielding data, so eligibility is unknown and "
             "every player here nets against the UTIL floor. (--scale sgp needs none.)"
@@ -212,27 +222,61 @@ def _eligibility(season: int) -> dict[int, frozenset[str]]:
         return {}
     try:
         fielding = fetch_mlb_season(cache, season, "fielding")
-    except Exception:  # a corrupt cache degrades the same way rather than crashing
-        print(f"  NOTE: {season} fielding cache unreadable; netting against UTIL.")
+        # The PARSE is inside the guard too. `season_eligibility` raises KeyError on a
+        # schema-shifted file, which is what half of "corrupt" looks like once the CSV
+        # itself still parses -- leaving the documented degradation covering only the
+        # read.
+        eligibility = season_eligibility(fielding)
+    except Exception:  # a corrupt cache degrades rather than crashing
+        print(f"  NOTE: {season} fielding cache unusable; netting against UTIL.")
         return {}
-    return {pid: frozenset(slots) for pid, slots in season_eligibility(fielding).items()}
+    return {pid: frozenset(slots) for pid, slots in eligibility.items()}
+
+
+def _number(row: pd.Series, column: str) -> float:
+    """A count off a panel row, treating missing AND NaN as zero.
+
+    `row.get(c) or 0.0` is the falsy-zero pattern the root CLAUDE.md prohibits, and here
+    it failed both ways: a missing column gave 0.0 and routed every starter to the
+    reliever floor, and NaN is TRUTHY so a null propagated NaN into the comparison and
+    landed on RP too.
+    """
+    value = row.get(column)
+    if value is None or pd.isna(value):
+        return 0.0
+    return float(value)
+
+
+def _role_row(panel: pd.DataFrame, mlbam_id: int) -> pd.Series:
+    """The season that should decide a pitcher's SP/RP role.
+
+    His most recent, unless that is an in-progress fragment: `_resolve_player` already
+    pace-adjusts a partial season's SGP because a fragment is not representative, and
+    the role read has the same problem. Below `ROLE_MIN_GAMES` appearances, fall back to
+    the last season that cleared it.
+    """
+    rows = panel[panel["mlbam_id"] == mlbam_id].sort_values("season")
+    latest = rows.iloc[-1]
+    if _number(latest, "games") >= ROLE_MIN_GAMES:
+        return latest
+    settled = rows[rows["games"] >= ROLE_MIN_GAMES]
+    return settled.iloc[-1] if not settled.empty else latest
 
 
 def _slots_for(panel: pd.DataFrame, mlbam_id: int, kind: str) -> set[str]:
-    """Eligible slots for the player's most recent season.
+    """Eligible slots for this player in this pool.
 
-    Most recent because eligibility is a CURRENT fact: a catcher who stopped catching
-    two years ago no longer fills the scarce slot, and a converted reliever no longer
-    nets against the starter floor.
+    A pitcher never consults the fielding leaderboard: `resolve_slots` ignores it and
+    decides SP/RP from starts, so calling it read a multi-megabyte CSV to throw the
+    result away -- and on a cache miss printed a NOTE claiming everyone nets against
+    UTIL, two lines above a banner correctly naming the SP floor.
     """
+    if kind == "pitcher":
+        row = _role_row(panel, mlbam_id)
+        return resolve_slots(None, kind, starts=_number(row, "starts"), games=_number(row, "games"))
     rows = panel[panel["mlbam_id"] == mlbam_id]
     row = rows.loc[rows["season"].idxmax()]
-    return resolve_slots(
-        set(_eligibility(int(row["season"])).get(mlbam_id, frozenset())),
-        kind,
-        starts=float(row.get("starts") or 0.0),
-        games=float(row.get("games") or 0.0),
-    )
+    return resolve_slots(set(_eligibility(int(row["season"])).get(mlbam_id, frozenset())), kind)
 
 
 def _query_slots(
@@ -257,6 +301,9 @@ def _query_slots(
     if args.scale != "var":
         return None
     if args.position is not None:
+        problem = check_position(args.position, pool)
+        if problem:
+            parser.error(problem)
         if two_way:
             parser.error(
                 f"--position {args.position} cannot describe a two-way player: "
@@ -314,24 +361,26 @@ def _warn_if_thin(traj: Trajectory) -> None:
     )
 
 
+def _units(traj: Trajectory) -> str:
+    """What the numbers are denominated in. Read off the trajectory, never passed --
+    a VAR total printed as "SGP" is the mixed-scale comparison this feature exists to
+    prevent, and it was printed that way because the label was a literal."""
+    return "VAR" if traj.scale == "var" else "SGP"
+
+
 def _print_total(traj: Trajectory) -> None:
     covered, asked = len(traj.observable), len(traj.path)
     note = "" if covered == asked else f"  (only {covered} of {asked} are observable)"
-    print(f"\n   total over {covered} years: {traj.total:.1f} SGP{note}")
+    print(f"\n   total over {covered} years: {traj.total:.1f} {_units(traj)}{note}")
 
 
-def render(
-    traj: Trajectory,
-    show_comps: int,
-    position: str | None = None,
-    floor: float | None = None,
-) -> None:
+def render(traj: Trajectory, show_comps: int) -> None:
     span = f"{traj.seasons[0]}-{traj.seasons[1]}" if traj.seasons else "n/a"
     print(f"\n{traj.kind.upper()}: {traj.sgp:.1f} SGP in an age-{traj.age} season")
-    if position is not None and floor is not None:
+    if traj.scale == "var":
         # Say the floor out loud. A VAR table with no floor printed cannot be compared
         # against any other board, and the floor is the whole difference between them.
-        print(f"  SCALE: value above replacement, {position} floor {floor:.2f} SGP")
+        print(f"  SCALE: value above replacement, {traj.slot} floor {traj.floor:.2f} SGP")
     if traj.mode == "shape":
         # A fitted prediction, not an average over a handful of careers: `n` counts the
         # rows the relationship was fit on, and nothing was excluded on a cliff.
@@ -362,7 +411,10 @@ def render(
         # Weighted survival against the EFFECTIVE size, so every column in the row
         # describes the same population the fit used. A raw count beside a weighted
         # median invited the reader to take both as properties of the prediction.
-        print("\n   age    pred   +/-SE  +/-spread   median   played (of eff)   if played")
+        print(
+            f"\n   age   pred {_units(traj)}  +/-SE  +/-spread   median"
+            "   played (of eff)  if played"
+        )
         for p in traj.path:
             if p.n == 0:
                 print(f"   {p.age:3d}        --      --         --       --   (not fittable)")
@@ -404,7 +456,9 @@ def render(
     print(f"  comps started from {traj.mean_start:.1f} SGP on average{prior_note}")
     _warn_if_thin(traj)
 
-    print("\n   age   exp SGP    +/-SE  +/-spread   median   still playing   if playing")
+    print(
+        f"\n   age   exp {_units(traj)}    +/-SE  +/-spread   median   still playing   if playing"
+    )
     for p in traj.path:
         if p.n == 0:
             print(f"   {p.age:3d}        --        --         --       --   (not yet observable)")
@@ -530,6 +584,23 @@ def main() -> int:
         )
     if args.position is not None and args.scale != "var":
         parser.error("--position selects a replacement floor and applies to --scale var")
+    # Validated HERE, not in the per-query helper, because that helper only runs on the
+    # --player path -- putting the check there left `--pool hitter --position RP` pricing
+    # a hitter on the reliever floor, which is the same one-path-of-two mistake this
+    # whole round exists to stop making. Argument validation covers both entry points.
+    if args.position is not None and args.pool is not None:
+        problem = check_position(args.position, args.pool)
+        if problem:
+            parser.error(problem)
+    if args.no_era_adjust and args.scale == "var":
+        # The floors are calibrated on the 2023-2025 run environment (era.REFERENCE_SEASONS);
+        # netting un-normalized historical SGP against them compares a 2005 stat line to a
+        # 2026 waiver line, wrong by an amount that varies with the season.
+        parser.error(
+            "--no-era-adjust cannot be combined with --scale var: the replacement floors "
+            "are calibrated on the 2023-2025 run environment, so un-normalized seasons "
+            "would be netted against a floor that does not describe them"
+        )
     if args.show_anchors and args.match != "shape":
         parser.error("--show-anchors applies to --match shape; the comp matchers fit no anchors")
 
@@ -629,6 +700,7 @@ def main() -> int:
                 peak=prior,
                 horizons=horizons,
                 replacement=floor,
+                slot=slot,
             )
             if args.show_anchors:
                 print("\n   fitted anchors (forward = intercept + a*now + b*last year):")
@@ -649,8 +721,9 @@ def main() -> int:
                 prior_band=args.prior_band,
                 horizons=horizons,
                 replacement=floor,
+                slot=slot,
             )
-        render(traj, args.show_comps, slot, floor if slot else None)
+        render(traj, args.show_comps)
     return 0
 
 

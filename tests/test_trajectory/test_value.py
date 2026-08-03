@@ -158,3 +158,81 @@ def test_shape_fits_on_var_when_given_a_floor() -> None:
     assert var.path[0].mean == pytest.approx(raw.path[0].mean - 8.0, abs=0.25)
     # The widths are on the same scale, not left behind on the raw one.
     assert var.path[0].spread == pytest.approx(raw.path[0].spread, rel=0.15)
+
+
+# ------------------------------------------- the class, not the instances
+
+
+def test_a_trajectory_knows_its_own_scale() -> None:
+    """Five review rounds each found a different consumer left on the raw scale -- the
+    median, the survivor mean, the comps frame, the headers, the total. The scale rides
+    ON the object now, so a reader cannot be wrong about what its numbers mean."""
+    panel = _cohort([14.0, 12.0, 0.0])
+    raw = comp_trajectory(panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,))
+    var = comp_trajectory(
+        panel,
+        kind="hitter",
+        age=27,
+        sgp=13.0,
+        band=1.0,
+        horizons=(1,),
+        replacement=10.0,
+        slot="C",
+    )
+    assert (raw.scale, raw.slot, raw.floor) == ("sgp", None, 0.0)
+    assert (var.scale, var.slot, var.floor) == ("var", "C", 10.0)
+
+
+def test_the_comps_frame_is_on_the_same_scale_as_the_path() -> None:
+    """`--show-comps` prints this frame directly beneath the path. Flooring the
+    aggregates and not the frame listed raw SGP under a VAR table, so anyone checking
+    the arithmetic got a different mean than the row above."""
+    panel = _cohort([14.0, 12.0, 0.0])
+    var = comp_trajectory(
+        panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=10.0
+    )
+    assert sorted(var.comps["h1"]) == [0.0, 2.0, 4.0]
+    assert var.comps["h1"].mean() == pytest.approx(var.path[0].mean)
+
+
+def test_shape_never_predicts_below_replacement() -> None:
+    """comp_trajectory is structurally non-negative because it averages floored values;
+    shape's prediction is an unconstrained extrapolation and printed -2.35 for a
+    collapsed veteran. A below-replacement player costs zero, not minus a floor."""
+    rng = np.random.default_rng(5)
+    rows = []
+    for i in range(200):
+        peak, down = float(rng.uniform(18, 26)), float(rng.uniform(0, 3))
+        rows += [(i, 2010, 32, peak), (i, 2011, 33, down), (i, 2012, 34, float(rng.uniform(0, 4)))]
+    panel = _panel(rows)
+    traj, _ = shape_trajectory(
+        panel,
+        kind="hitter",
+        age=33,
+        sgp=0.5,
+        peak=24.0,
+        horizons=(1,),
+        peak_band=60.0,
+        replacement=9.96,
+    )
+    assert traj.path[0].mean >= 0.0
+    assert traj.path[0].median >= 0.0
+
+
+@pytest.mark.parametrize(
+    ("position", "pool", "ok"),
+    [
+        ("C", "hitter", True),
+        ("RP", "pitcher", True),
+        ("RP", "hitter", False),
+        ("C", "pitcher", False),
+        ("SP", "hitter", False),
+        ("OF", "pitcher", False),
+    ],
+)
+def test_a_position_cannot_price_the_wrong_pool(position: str, pool: str, ok: bool) -> None:
+    """`--pool hitter --position RP` printed "RP floor 7.42" over a hitter, 2.54 SGP a
+    year stated as fact, because argparse offers one flat list of slots."""
+    from fantasy_baseball.trajectory.value import check_position
+
+    assert (check_position(position, pool) is None) is ok
