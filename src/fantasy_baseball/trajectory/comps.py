@@ -72,10 +72,13 @@ class PathPoint:
     #: kernel weights taper. Thin-support decisions must read THIS, not `n` -- a shape
     #: fit of 41 rows can carry an effective 15 and be degenerate while `n` looks ample.
     n_effective: float = float("nan")
-
-    @property
-    def survival(self) -> float:
-        return self.survivors / self.n if self.n else float("nan")
+    #: Fraction of the sample that played, WEIGHTED the way the estimate is. In comps
+    #: that is survivors/n, since every comp counts once. In shape it is the
+    #: kernel-weighted fraction, because an unweighted rate describes the far-age /
+    #: far-peak tail the fit itself barely counted -- the same argument that made the
+    #: median and the residual variance weighted. Left as a plain field rather than a
+    #: property so the two modes can each say what they mean.
+    survival: float = float("nan")
 
 
 @dataclass(frozen=True)
@@ -267,8 +270,10 @@ def comp_trajectory(
                 survivors=len(survived),
                 mean_if_survived=float(survived.mean()) if len(survived) else float("nan"),
                 spread=float(values.std(ddof=1)) if len(values) > 1 else float("nan"),
-                # Every comp counts exactly once, so the effective size IS the count.
+                # Every comp counts exactly once, so the effective size IS the count and
+                # the weighted survival rate IS survivors/n.
                 n_effective=float(len(values)),
+                survival=float(len(survived) / len(values)) if len(values) else float("nan"),
             )
         )
 

@@ -22,10 +22,19 @@ Layers:
   `shape`   fit forward SGP on last year AND this year, kernel-weighted -- the DEFAULT
 
 `shape` is the default matcher because it wins where the decision is. Level matching
-under-predicts a star coming off a down year by 3.32 SGP a year (n=240, out of sample,
-player held out of the panel); shape is unbiased there and beats it on every elite
-slice. `comps` is kept, not deprecated: it is the simpler estimator, it needs only one
-season, and it remains the honest baseline any future matcher has to beat.
+under-predicts a star coming off a down year by **3.31 SGP a year** (n=239, out of
+sample, the query player removed from the panel so neither estimator can match him to
+himself); shape is unbiased there and beats it on every elite slice.
+
+    scripts/backtest_trajectory.py --pool hitter        # +1, hitters
+    elite big drop (<70% of prior)  n=239  RMSE 6.03 -> 4.78  bias -3.31 -> -0.15
+
+Re-measure rather than trust: those figures come from that script and nowhere else, so
+a regression shows up as a changed table instead of a stale docstring. **Hitters only.**
+The pitcher pool has never been validated and shape is its default too -- #313.
+
+`comps` is kept, not deprecated: it is the simpler estimator, it needs only one season,
+and it remains the honest baseline any future matcher has to beat.
 """
 
 from .comps import PathPoint, Trajectory, comp_trajectory

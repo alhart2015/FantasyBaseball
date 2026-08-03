@@ -120,10 +120,14 @@ def build_history(panel: pd.DataFrame) -> pd.DataFrame:
     index = panel.set_index(["mlbam_id", "season"])["sgp"]
 
     history = panel.copy()
-    history["peak"] = [
-        float(index.get((pid, season - 1), 0.0)) if season - 1 >= first else float("nan")
-        for pid, season in zip(history["mlbam_id"], history["season"], strict=True)
-    ]
+    seasons = history["season"].to_numpy()
+    # One vectorized reindex instead of a per-row MultiIndex .get. A missing key means
+    # he was out of the league that year (a real 0); a key BEFORE the panel starts is
+    # unobservable and stays NaN so `dropna` censors it.
+    peak = index.reindex(
+        pd.MultiIndex.from_arrays([history["mlbam_id"].to_numpy(), seasons - 1])
+    ).to_numpy(dtype=float)
+    history["peak"] = np.where(seasons - 1 >= first, np.nan_to_num(peak, nan=0.0), np.nan)
     return history.dropna(subset=["peak"]).rename(columns={"sgp": "down"})
 
 
@@ -174,20 +178,22 @@ def shape_trajectory(
     history, weights = history[usable].reset_index(drop=True), weights[usable]
 
     rng = np.random.default_rng(seed)
+    ids, seasons = history["mlbam_id"].to_numpy(), history["season"].to_numpy()
+    anchor_columns = history[["down", "peak"]].to_numpy(dtype=float)
     path, anchors, rows = [], [], []
     for h in horizons:
-        observable = (history["season"] + h <= last).to_numpy()
-        forward = np.array(
-            [
-                float(index.get((pid, season + h), 0.0))
-                for pid, season in zip(history["mlbam_id"], history["season"], strict=True)
-            ]
+        # Look up ONLY the observable rows, vectorized. The previous form built a value
+        # for every row through a per-row MultiIndex .get and then discarded the ones
+        # the mask rejected -- ~3,000 individual gets for a five-horizon query, a
+        # growing share of them thrown away.
+        keep = np.flatnonzero(seasons + h <= last)
+        y = index.reindex(pd.MultiIndex.from_arrays([ids[keep], seasons[keep] + h])).to_numpy(
+            dtype=float
         )
-        y, x, w = (
-            forward[observable],
-            history.loc[observable, ["down", "peak"]].to_numpy(dtype=float),
-            weights[observable],
-        )
+        # Missing key = out of the league that year = a real 0, the same convention the
+        # comps forward path uses.
+        y = np.nan_to_num(y, nan=0.0)
+        x, w = anchor_columns[keep], weights[keep]
 
         # Gate on the EFFECTIVE size, not the row count. Three rows fit a
         # three-parameter model exactly -- residuals identically zero, median collapsed
@@ -240,11 +246,18 @@ def shape_trajectory(
                 median=median,
                 n=len(y),
                 survivors=int(survived.sum()),
-                mean_if_survived=float(y[survived].mean()) if survived.any() else float("nan"),
+                # WEIGHTED, for the same reason the median and residual variance are:
+                # the raw rate describes the far tail the fit barely counted. Measured
+                # gap on real queries, unweighted -> weighted: +0.2% at age 27 / peak
+                # 21.5, +4.5% at age 34 / peak 12.
+                mean_if_survived=float(np.average(y[survived], weights=w[survived]))
+                if survived.any()
+                else float("nan"),
                 # Predictive, not the SE of the mean: how far ONE player can land from
                 # the prediction.
                 spread=float(np.sqrt(residual_var + (0.0 if np.isnan(se) else se**2))),
                 n_effective=n_eff,
+                survival=float(np.average(survived, weights=w)),
             )
         )
         anchors.append(
