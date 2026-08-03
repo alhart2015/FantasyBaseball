@@ -55,6 +55,7 @@ import numpy as np
 import pandas as pd
 
 from .comps import (
+    DEFAULT_BAND,
     DEFAULT_HORIZONS,
     PathPoint,
     Trajectory,
@@ -567,6 +568,12 @@ def shape_trajectory(
             band=float("nan"),  # no band: weight decays, nothing is excluded on a cliff
             prior_sgp=peak,
             n_comps=len(usable),
+            # Weight sitting within a comp band of the QUERY's own current season. The
+            # fit has no kernel on `down`, so this is the only thing that says whether
+            # the line was evaluated inside its own support or extrapolated past it.
+            local_support=float(weights[np.abs(down - sgp) <= DEFAULT_BAND].sum() / weights.sum())
+            if len(usable) and weights.sum() > 0
+            else float("nan"),
             mean_start=float(np.average(down, weights=weights)) if len(usable) else float("nan"),
             mean_prior=float(np.average(high, weights=weights)) if len(usable) else float("nan"),
             seasons=(int(seasons.min()), int(seasons.max())) if len(usable) else None,

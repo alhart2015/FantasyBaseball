@@ -138,6 +138,26 @@ class Trajectory:
     seasons: tuple[int, int] | None
     path: tuple[PathPoint, ...]
     comps: pd.DataFrame = field(repr=False)
+    #: Share of the fitting weight sitting within `DEFAULT_BAND` SGP of the query's own
+    #: current season. NaN in the comp matchers, where the band IS the matching rule and
+    #: this is 1.0 by construction.
+    #:
+    #: Shape weights `age` and `peak` on kernels but takes `down` as a bare regressor
+    #: with no locality at all, so a query can be matched to a cohort it sits entirely
+    #: outside and then priced by extrapolating that cohort's fitted line. A 21-year-old
+    #: at (down 13.6, peak 0.0) draws the peak~0 population, whose own `down` averages
+    #: 2.9, and the line fitted on those fringe seasons is evaluated 4.7x beyond their
+    #: centre -- reporting 12.4 VAR over three years against a survivor mean near 1.0.
+    #:
+    #: The band comes out NARROW in exactly that case, because the residuals it is read
+    #: off belong to the tightly-clustered fringe cohort rather than to anyone like the
+    #: query. Confident and wrong together, which is the combination worth refusing.
+    #:
+    #: `mean_start` shows the same thing but cannot separate "above this cohort's mean"
+    #: from "outside this cohort" -- on a real board it flagged 11 of the top 20,
+    #: including players with perfectly ordinary support. This measures the support
+    #: directly. Read it before ranking on `total`; #310 covers fixing the estimator.
+    local_support: float = float("nan")
     #: Which matcher produced this -- "current", "track" (comps.comp_trajectory) or
     #: "shape" (shape.shape_trajectory). In "shape" the numbers are a fitted prediction
     #: rather than an average over comps, so `PathPoint.n` counts FITTING rows and
