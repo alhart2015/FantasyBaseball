@@ -1,17 +1,26 @@
 """Career SGP trajectory from historical comparables (#303).
 
-A player is on pace for N SGP in his age-A season. What does the rest of his career
-look like? Answered from every historical player-season that started in the same
-place, with departures scored as the zero they are worth to a roster slot.
+A player produced X SGP last year and is on pace for Y this one, at age A. What does
+the rest of his career look like?
 
 STANDALONE. Reads `data/trajectory/` and touches nothing in the keeper pipeline.
 
+Three matchers, selected with `--match`. **`shape` is the default**: it beats level
+matching out of sample on every elite slice, and by 18-20% on the case a keeper
+decision actually turns on -- a star coming off a down year, where level matching
+under-predicts by 3.32 SGP a year (see `trajectory/shape.py`). It needs BOTH of the
+player's last two seasons, which `--player` looks up for you.
+
+    shape     fit forward SGP on both anchors, kernel-weighted age and level (#310)
+    current   comps matched on this season's level alone -- the original estimator
+    track     current, plus a hard band on the prior season too (#305)
+
 Usage:
-    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13
     python scripts/player_trajectory.py --player "Juan Soto"
-    python scripts/player_trajectory.py --pool pitcher --age 25 --sgp 13 --band 4
-    python scripts/player_trajectory.py --player "Bobby Witt Jr." --show-comps 15
-    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --no-era-adjust
+    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --prior-sgp 18
+    python scripts/player_trajectory.py --player "Juan Soto" --show-anchors
+    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --match current
+    python scripts/player_trajectory.py --player "Bobby Witt Jr." --match current --show-comps 15
 
 Build the panel first (one time, ~1 minute):
     python scripts/build_pt_panel.py --start 2000 --end 2026 --out-dir data/trajectory
@@ -46,9 +55,14 @@ from fantasy_baseball.trajectory.panel import (
     prorate_partial,
     season_elapsed_fraction,
 )
+from fantasy_baseball.trajectory.shape import shape_trajectory
 from fantasy_baseball.utils.name_utils import normalize_name
 
 PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
+
+#: Below this many comps the path is directional at best. Not a statistical threshold --
+#: a floor at which the printed precision stops being honest.
+THIN_COMPS = 20
 
 
 @lru_cache(maxsize=1)
@@ -167,30 +181,141 @@ def _resolve_player(
     return resolved
 
 
+def _prior_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> float:
+    """The player's own SGP in the season before the one being scored.
+
+    Explicit --prior-sgp wins. Otherwise it is read off the panel, and a player who was
+    not in the league that year scores 0 -- the same convention comps get, and for a
+    young player the normal case rather than an error.
+    """
+    if args.prior_sgp is not None:
+        return args.prior_sgp
+    rows = panel[panel["mlbam_id"] == mlbam_id]
+    current = int(rows["season"].max())
+    previous = rows[rows["season"] == current - 1]
+    prior = float(previous["sgp"].sum()) if not previous.empty else 0.0
+    print(f"  prior season ({current - 1}): {prior:.1f} SGP")
+    return prior
+
+
+def _no_support(traj: Trajectory) -> bool:
+    """True when nothing could be scored, whatever the reason.
+
+    Tests `observable`, NOT `n_comps`. Keying on the cohort size left a window --
+    enough seasons to form a cohort, too few EFFECTIVE to fit any horizon -- in which
+    every row printed "--" and the footer still read "total over 0 years: 0.0 SGP",
+    a fabricated forecast of no future value for a player the model could not score.
+    """
+    return not traj.observable
+
+
+def _warn_if_thin(traj: Trajectory) -> None:
+    """Say so when the support is too thin for the printed precision.
+
+    Reads the EFFECTIVE size, not the row count. Under kernel weighting those diverge:
+    a 41-row shape fit carrying an effective 15 cleared a raw-count threshold while
+    fitting `on_peak` at -1.03 -- more production last year predicting less next year --
+    and printed unqualified to two decimals.
+    """
+    support = min((p.n_effective for p in traj.observable), default=0.0)
+    if support >= THIN_COMPS:
+        return
+    unit = "effective fitting seasons" if traj.mode == "shape" else "comps"
+    widen = "the kernels" if traj.mode == "shape" else "--band/--prior-band"
+    print(
+        f"  *** THIN: {support:.0f} {unit} at the weakest horizon. The numbers below are"
+        f" directional only -- widen {widen}, or read a different mode. ***"
+    )
+
+
+def _print_total(traj: Trajectory) -> None:
+    covered, asked = len(traj.observable), len(traj.path)
+    note = "" if covered == asked else f"  (only {covered} of {asked} are observable)"
+    print(f"\n   total over {covered} years: {traj.total:.1f} SGP{note}")
+
+
 def render(traj: Trajectory, show_comps: int) -> None:
     span = f"{traj.seasons[0]}-{traj.seasons[1]}" if traj.seasons else "n/a"
     print(f"\n{traj.kind.upper()}: {traj.sgp:.1f} SGP in an age-{traj.age} season")
+    if traj.mode == "shape":
+        # A fitted prediction, not an average over a handful of careers: `n` counts the
+        # rows the relationship was fit on, and nothing was excluded on a cliff.
+        print(f"  SHAPE: {traj.prior_sgp:.1f} last year -> {traj.sgp:.1f} now")
+        if _no_support(traj):
+            # NOT "not yet observable" -- nothing was censored here. Either no season is
+            # near enough to enter the kernels at all, or too few carry enough weight to
+            # fit. Both must stop before the table, which would otherwise print NaNs
+            # under a "total over 0 years: 0.0 SGP" that reads as a real forecast.
+            if traj.n_comps == 0:
+                print(
+                    "  NO FIT -- no season is close enough in age and level to score "
+                    "this query. Widen the kernels, or check the age and --prior-sgp."
+                )
+            else:
+                print(
+                    f"  NO FIT -- {traj.n_comps} season(s) are near enough to weigh, but "
+                    "none of the horizons reach the effective-support floor. Widen the "
+                    "kernels, or try --match current."
+                )
+            return
+        print(f"  fit on {traj.n_comps} weighted seasons, {span}")
+        print(
+            f"  their average shape: {traj.mean_prior:.1f} -> {traj.mean_start:.1f} SGP "
+            "(kernel-weighted)"
+        )
+        _warn_if_thin(traj)
+        print("\n   age    pred   +/-SE  +/-spread   median   sample played   if played")
+        for p in traj.path:
+            if p.n == 0:
+                print(f"   {p.age:3d}        --      --         --       --   (not fittable)")
+                continue
+            print(
+                f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}    {p.spread:7.2f}  {p.median:7.2f}"
+                f"    {p.survivors:5d}/{p.n} ({p.survival:4.0%})  {p.mean_if_survived:6.2f}"
+            )
+        _print_total(traj)
+        if show_comps:
+            # The block below reads sgp0/hN, which a shape frame does not have -- and a
+            # shape fit has no per-query comps to list, only a weighted population.
+            print(
+                f"\n   (--show-comps {show_comps} lists individual comps, which only the "
+                "comp matchers have; add --match current, or --show-anchors for the "
+                "fitted coefficients)"
+            )
+        return
+
+    if traj.prior_sgp is not None:
+        print(f"  matched on TRACK RECORD: {traj.prior_sgp:.1f} -> {traj.sgp:.1f} SGP")
     # `n_comps` and `span` describe the NEAREST horizon's cohort; later horizons see
     # fewer, which is why the per-row n is printed rather than left to this header.
     print(f"  {traj.n_comps} comps at +1 within +/-{traj.band} SGP, age-{traj.age} seasons {span}")
-    if traj.n_comps == 0:
-        print("  NO COMPS -- widen --band or check the age")
+    if _no_support(traj):
+        print("  NO COMPS -- widen --band/--prior-band or check the age")
         return
-    print(f"  comps started from {traj.mean_start:.1f} SGP on average")
+    # `mean_prior` skips comps whose own prior sits before the panel begins, so it can
+    # describe a SMALLER cohort than `mean_start` beside it -- and is NaN when every
+    # comp is censored, which rendered as "after nan the year before". Say what it
+    # covers rather than implying both halves of the sentence share a denominator.
+    known = int(traj.comps["sgp_prior"].notna().sum()) if "sgp_prior" in traj.comps else 0
+    if known == 0:
+        prior_note = "; no comp's prior year is inside the panel"
+    elif known < traj.n_comps:
+        prior_note = f", after {traj.mean_prior:.1f} the year before ({known} of {traj.n_comps})"
+    else:
+        prior_note = f", after {traj.mean_prior:.1f} the year before"
+    print(f"  comps started from {traj.mean_start:.1f} SGP on average{prior_note}")
+    _warn_if_thin(traj)
 
-    print("\n   age   exp SGP    +/-SE    median   still playing   if still playing")
+    print("\n   age   exp SGP    +/-SE  +/-spread   median   still playing   if playing")
     for p in traj.path:
         if p.n == 0:
-            print(f"   {p.age:3d}        --        --        --      (not yet observable)")
+            print(f"   {p.age:3d}        --        --         --       --   (not yet observable)")
             continue
         print(
-            f"   {p.age:3d}   {p.mean:7.2f}    {p.se:5.2f}   {p.median:7.2f}"
-            f"      {p.survivors:3d}/{p.n} ({p.survival:4.0%})       {p.mean_if_survived:6.2f}"
+            f"   {p.age:3d}   {p.mean:7.2f}    {p.se:5.2f}    {p.spread:7.2f}  {p.median:7.2f}"
+            f"    {p.survivors:5d}/{p.n} ({p.survival:4.0%})  {p.mean_if_survived:6.2f}"
         )
-    covered = len(traj.observable)
-    asked = len(traj.path)
-    note = "" if covered == asked else f"  (only {covered} of {asked} are observable)"
-    print(f"\n   total over {covered} years: {traj.total:.1f} SGP{note}")
+    _print_total(traj)
 
     if show_comps:
         # Ranked by closeness to the query, not by sgp0 -- "show me the comps" means the
@@ -217,8 +342,38 @@ def main() -> int:
     parser.add_argument("--age", type=int, help="the player's age in the season he is producing")
     parser.add_argument("--sgp", type=float, help="full-season SGP pace")
     parser.add_argument("--band", type=float, default=DEFAULT_BAND, help="comp width in SGP")
+    parser.add_argument(
+        "--match",
+        choices=("shape", "track", "current"),
+        default="shape",
+        help=(
+            "'shape' (default) fits forward SGP on both anchors -- last year and this "
+            "year -- with kernel-weighted age and level, excluding nobody on a cliff "
+            "(#310); 'current' matches comps on this season's level alone; 'track' "
+            "adds a hard band on the prior season too (#305). --band/--prior-band "
+            "apply to the two comp modes only; shape has no band"
+        ),
+    )
+    parser.add_argument(
+        "--prior-sgp",
+        type=float,
+        help=(
+            "prior-season SGP, required by --match shape/track without --player "
+            "(looked up automatically with --player); 0 means he was not in the majors"
+        ),
+    )
+    parser.add_argument(
+        "--prior-band",
+        type=float,
+        help="comp width on the prior season (defaults to --band)",
+    )
     parser.add_argument("--horizon", type=int, default=5, help="years forward to project")
     parser.add_argument("--show-comps", type=int, default=0, metavar="N")
+    parser.add_argument(
+        "--show-anchors",
+        action="store_true",
+        help="with --match shape, print the fitted coefficients behind each prediction",
+    )
     parser.add_argument(
         "--no-era-adjust",
         action="store_true",
@@ -236,6 +391,13 @@ def main() -> int:
         parser.error("pass --player, or all of --pool/--age/--sgp")
     if args.horizon < 1:
         parser.error("--horizon must be at least 1")
+    # The mirror of the missing-prior check below. Without it the flag reaches
+    # comp_trajectory's ValueError and exits on a five-frame traceback, after paying the
+    # panel-load time -- where every other bad combination here gets one usage line.
+    if args.prior_band is not None and args.match == "current":
+        parser.error("--prior-band applies to --match track; --match current has no prior band")
+    if args.prior_band is not None and args.match == "shape":
+        parser.error("--prior-band applies to --match track; shape uses kernels, not bands")
 
     # Anchor to the REPO, mirroring build_pt_panel._anchor on the write side. The
     # documented build command passes a RELATIVE --out-dir, so a reader resolving the
@@ -272,8 +434,9 @@ def main() -> int:
                 pool,
                 age if args.age is None else args.age,
                 sgp if args.sgp is None else args.sgp,
+                _prior_for(live[pool], pid, args) if args.match in ("track", "shape") else None,
             )
-            for pool, _, age, sgp in _resolve_player(args.player, live, calendar, args.mlbam_id)
+            for pool, pid, age, sgp in _resolve_player(args.player, live, calendar, args.mlbam_id)
         ]
         if args.sgp is not None:
             # The looked-up pace was printed above but is not what gets scored; say so
@@ -281,17 +444,53 @@ def main() -> int:
             # which one drove the table.
             print(f"  (--sgp {args.sgp} overrides the pace above)")
     else:
-        queries = [(args.pool, args.age, args.sgp)]
+        if args.match in ("track", "shape") and args.prior_sgp is None:
+            # Never guess it. Assuming last year equalled this year is a real modelling
+            # claim -- it says the season is representative -- and it would silently
+            # move the answer for exactly the players (breakouts, collapses) the two
+            # anchors exist to tell apart.
+            parser.error(
+                f"--match {args.match} needs the player's PRIOR season too; pass "
+                "--prior-sgp N (use 0 if he was not in the majors), or --player NAME "
+                "to look it up, or --match current to score on this season alone"
+            )
+        # Gate the prior on the MODE, exactly as the --player branch does. Passing it
+        # through unconditionally made `--match current --prior-sgp N` run the track
+        # estimator instead -- silently overriding the mode the user asked for.
+        queries = [
+            (args.pool, args.age, args.sgp, args.prior_sgp if args.match != "current" else None)
+        ]
 
-    for pool, age, sgp in queries:
-        traj = comp_trajectory(
-            load(pool, False),
-            kind=pool,
-            age=age,
-            sgp=sgp,
-            band=args.band,
-            horizons=tuple(range(1, args.horizon + 1)),
-        )
+    horizons = tuple(range(1, args.horizon + 1))
+    for pool, age, sgp, prior in queries:
+        if args.match == "shape":
+            traj, anchors = shape_trajectory(
+                load(pool, False),
+                kind=pool,
+                age=age,
+                sgp=sgp,
+                peak=prior,
+                horizons=horizons,
+            )
+            if args.show_anchors:
+                print("\n   fitted anchors (forward = intercept + a*now + b*last year):")
+                print("     h  intercept   a(now)  b(last)   n_fit   n_eff")
+                for a in anchors:
+                    print(
+                        f"     {a.horizon}   {a.intercept:8.2f} {a.on_down:8.3f} "
+                        f"{a.on_peak:8.3f} {a.n_fit:7d} {a.n_effective:7.0f}"
+                    )
+        else:
+            traj = comp_trajectory(
+                load(pool, False),
+                kind=pool,
+                age=age,
+                sgp=sgp,
+                band=args.band,
+                prior_sgp=prior,
+                prior_band=args.prior_band,
+                horizons=horizons,
+            )
         render(traj, args.show_comps)
     return 0
 
