@@ -155,6 +155,23 @@ def test_both_modes_collapse_a_split_season() -> None:
     assert comps.mean_start == pytest.approx(10.0)
 
 
+@pytest.mark.parametrize("draws", [0, 1])
+def test_both_modes_refuse_an_unusable_bootstrap_count(draws: int) -> None:
+    """`std(ddof=1)` over fewer than two draws is a NaN and a RuntimeWarning, so the SE
+    goes missing silently and `spread` quietly drops its SE term. `_bootstrap_se` guards
+    the COMP count, not the draw count, so it never covered this -- and for a while shape
+    mode raised while comps mode degraded silently on the identical argument."""
+    panel = _population()
+    with pytest.raises(ValueError, match="bootstrap_draws"):
+        comp_trajectory(
+            panel, kind="hitter", age=27, sgp=10.0, band=5.0, horizons=(1,), bootstrap_draws=draws
+        )
+    with pytest.raises(ValueError, match="bootstrap_draws"):
+        shape_trajectory(
+            panel, kind="hitter", age=27, sgp=10.0, peak=10.0, horizons=(1,), bootstrap_draws=draws
+        )
+
+
 def test_every_mode_is_labelled() -> None:
     """`render` branches on `mode`; an unlabelled estimator would silently take the
     comps layout and mislabel its own columns."""
