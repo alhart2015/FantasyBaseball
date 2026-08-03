@@ -155,11 +155,15 @@ timeout_method = "thread"
 line-length = 100
 target-version = "py311"
 extend-exclude = [
-    "data",
-    "docs",
-    "logs",
-    ".venv",
-    "venv",
+    # ROOT-ANCHORED. Unanchored, "data" matches any directory of that name at any depth
+    # -- including `src/fantasy_baseball/data/`, which silently dropped 18 source files
+    # out of `ruff check .` and `ruff format .`. A file added there passed every lint
+    # gate in CI and locally while never being looked at.
+    "/data",
+    "/docs",
+    "/logs",
+    "/.venv",
+    "/venv",
 ]
 
 [tool.ruff.lint]
@@ -207,7 +211,10 @@ indent-style = "space"
 
 [tool.vulture]
 paths = ["src", "scripts"]
-exclude = ["data/", "docs/", "logs/", ".venv/"]
+# `paths` is already src/ + scripts/, so a bare "data/" here can only mean
+# `src/fantasy_baseball/data/` -- 18 real source files that were never scanned. The
+# top-level data/ directory holding CSVs is not in `paths` and needs no exclusion.
+exclude = ["docs/", "logs/", ".venv/"]
 min_confidence = 80
 sort_by_size = true
 ignore_decorators = [

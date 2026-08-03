@@ -46,6 +46,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.config import load_config
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+from fantasy_baseball.trajectory.board import people as board_people
+from fantasy_baseball.trajectory.board import player_names, season_slots
 from fantasy_baseball.trajectory.comps import (
     DEFAULT_BAND,
     Trajectory,
@@ -74,41 +76,6 @@ PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
 THIN_COMPS = 20
 
 
-@lru_cache(maxsize=1)
-def _people() -> pd.DataFrame:
-    """Every MLBAM people cache in the shared directory, unioned, for name lookup.
-
-    UNIONED rather than ranked, because no single-file rule is stable here. This
-    directory is shared with the keeper pipeline, whose `--end` defaults to the current
-    year, so any 2027 keeper rebuild drops `mlb_people_all_2010_2027.csv` beside the
-    trajectory build's `..._2000_2026.csv`. Ranking on (end, -start) then prefers the
-    2027 file and silently loses the 2000-2009 players -- 2060 of them, 1923 present in
-    the trajectory panel -- exactly the regression a filename sort caused before, just
-    re-armed on a timer. A plain string sort is worse still ("2010" > "2000").
-
-    A union has no such failure mode: ids are stable and a name never disagrees between
-    caches, so more files can only mean better coverage. Deduplicated on `id`, keeping
-    the newest file's spelling.
-    """
-    caches = sorted(PEOPLE_CACHE.glob("mlb_people_all_*.csv"))
-    if not caches:
-        raise FileNotFoundError(
-            f"no people cache in {PEOPLE_CACHE}; run scripts/build_pt_panel.py first"
-        )
-    people = pd.concat(
-        [pd.read_csv(path, usecols=["id", "fullName"]) for path in caches],
-        ignore_index=True,
-    ).drop_duplicates(subset="id", keep="last")
-    people["norm"] = people["fullName"].map(normalize_name)
-    return people
-
-
-def _names() -> pd.Series:
-    """mlbam_id -> full name, so a comp list is readable rather than a column of ids."""
-    people = _people()
-    return people.set_index("id")["fullName"]
-
-
 def _resolve_player(
     name: str,
     panels: dict[str, pd.DataFrame],
@@ -133,7 +100,7 @@ def _resolve_player(
     silently prints one player's trajectory under the other's name -- an ambiguous name
     lists the candidates and stops. `mlbam_id` is the way through.
     """
-    people = _people()
+    people = board_people(PEOPLE_CACHE)
     hits = people[people["norm"] == normalize_name(name)]
     if hits.empty:
         raise SystemExit(f"no player named {name!r} in the people cache")
@@ -190,49 +157,6 @@ def _resolve_player(
     return resolved
 
 
-@lru_cache(maxsize=4)
-def _eligibility(season: int) -> dict[int, frozenset[str]]:
-    """MLBAM id -> slots with 10+ games that season, the league's own rule.
-
-    READS a cache; never populates one. `fetch_mlb_season` falls through to a live
-    paginated download on a miss and writes the result into the KEEPER pipeline's
-    directory -- a standalone tool quietly filling another pipeline's cache, and a
-    network dependency on a command that otherwise runs offline. The fielding pull
-    covers only the keeper range while this panel spans 2000, so a miss is routine
-    rather than exceptional: it degrades to UTIL, the HIGHEST floor, which understates
-    rather than invents.
-
-    Even a present cache is a point-in-time snapshot for the live season, so eligibility
-    only grows after it was taken. Conservative in both directions.
-    """
-    from fantasy_baseball.keepers.appearances import season_eligibility
-    from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
-
-    cache = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
-    path = cache / f"mlb_fielding_{season}.csv"
-    # NON-EMPTY, not merely present. `fetch_or_cache` treats an empty frame as a miss and
-    # falls through to a live download plus a write into the keeper pipeline's cache --
-    # so a header-only file passed an `exists()` check and reintroduced the very
-    # cross-pipeline write this guard was added to stop, invisibly.
-    if not path.exists() or path.stat().st_size == 0:
-        print(
-            f"  NOTE: no cached {season} fielding data, so eligibility is unknown and "
-            "every player here nets against the UTIL floor. (--scale sgp needs none.)"
-        )
-        return {}
-    try:
-        fielding = fetch_mlb_season(cache, season, "fielding")
-        # The PARSE is inside the guard too. `season_eligibility` raises KeyError on a
-        # schema-shifted file, which is what half of "corrupt" looks like once the CSV
-        # itself still parses -- leaving the documented degradation covering only the
-        # read.
-        eligibility = season_eligibility(fielding)
-    except Exception:  # a corrupt cache degrades rather than crashing
-        print(f"  NOTE: {season} fielding cache unusable; netting against UTIL.")
-        return {}
-    return {pid: frozenset(slots) for pid, slots in eligibility.items()}
-
-
 def _number(row: pd.Series, column: str) -> float:
     """A count off a panel row, treating missing AND NaN as zero.
 
@@ -276,7 +200,9 @@ def _slots_for(panel: pd.DataFrame, mlbam_id: int, kind: str) -> set[str]:
         return resolve_slots(None, kind, starts=_number(row, "starts"), games=_number(row, "games"))
     rows = panel[panel["mlbam_id"] == mlbam_id]
     row = rows.loc[rows["season"].idxmax()]
-    return resolve_slots(set(_eligibility(int(row["season"])).get(mlbam_id, frozenset())), kind)
+    return resolve_slots(
+        set(season_slots(PEOPLE_CACHE, int(row["season"])).get(mlbam_id, frozenset())), kind
+    )
 
 
 def _query_slots(
@@ -482,7 +408,11 @@ def render(traj: Trajectory, show_comps: int) -> None:
         top = traj.comps.assign(gap=(traj.comps["sgp0"] - traj.sgp).abs()).nsmallest(
             show_comps, "gap"
         )
-        top = top.assign(player=top["mlbam_id"].map(_names()).fillna(top["mlbam_id"].astype(str)))
+        top = top.assign(
+            player=top["mlbam_id"]
+            .map(player_names(PEOPLE_CACHE))
+            .fillna(top["mlbam_id"].astype(str))
+        )
         cols = ["player", "season", "sgp0"] + [f"h{p.horizon}" for p in traj.path]
         print(f"\n   {len(top)} closest comps (0 = did not play, -- = season not played yet):")
         print(top[cols].to_string(index=False, na_rep="--", float_format=lambda v: f"{v:6.2f}"))

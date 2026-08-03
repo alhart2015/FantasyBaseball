@@ -72,7 +72,7 @@ def test_a_spot_records_the_yahoo_id_even_though_the_join_cannot_use_it() -> Non
 
 def test_owner_map_is_keyed_the_way_the_board_looks_players_up() -> None:
     spots = [
-        RosterSpot("A B", "a b", "hitter", "Spacemen", "1", "", "OF"),
-        RosterSpot("C D", "c d", "pitcher", MINE, "2", "IL10", "P"),
+        RosterSpot("A B", "a b", "hitter", "Spacemen", "1", ""),
+        RosterSpot("C D", "c d", "pitcher", MINE, "2", "IL10"),
     ]
     assert owner_map(spots) == {("a b", "hitter"): "Spacemen", ("c d", "pitcher"): MINE}

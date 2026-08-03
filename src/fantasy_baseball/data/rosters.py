@@ -12,21 +12,19 @@ nobody" rather than as an error.
 `player_id` and a `player_type` but no `mlbam_id` (#284), while every board in this repo
 is MLBAM-keyed. Two different players sharing a normalized name and type therefore
 collapse onto one owner. That residual is irreducible here -- the fix is populating
-`mlbam_id` at Yahoo ingest, not more matching logic -- so callers are given
-`unmatched_names` and should say what they could not place rather than let a failed join
-read as "nobody owns him".
+`mlbam_id` at Yahoo ingest, not more matching logic. Callers join on that key and
+should NAME what they could not place rather than let a failed join read as "nobody owns
+him".
 
-`parse_rosters` is separated from `live_rosters` because the second crosses the RENDER
-gate to reach prod Upstash, which `build_explicit_upstash_kv` refuses under pytest. The
-shape handling is the part worth testing, so it is testable without a network.
+`parse_rosters` is separated from `live_rosters` because the second reaches prod Upstash,
+which `build_explicit_upstash_kv` refuses to do under pytest. The shape handling is the
+part worth testing, so it is testable without a network.
 """
 
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any
 
 from ..utils.name_utils import normalize_name
@@ -46,12 +44,9 @@ class RosterSpot:
     yahoo_id: str
     #: "", "IL10", "DTD", ... -- an injured player is still owned.
     status: str
-    selected_position: str
 
 
-def parse_rosters(
-    roster_blob: Any, opp_blob: Any, my_team: str
-) -> list[RosterSpot]:
+def parse_rosters(roster_blob: Any, opp_blob: Any, my_team: str) -> list[RosterSpot]:
     """Flatten both blobs into one list. Pure -- no network, no environment."""
     spots: list[RosterSpot] = []
     # (payload, team-if-the-payload-is-a-bare-list)
@@ -75,7 +70,6 @@ def parse_rosters(
                         team=str(team),
                         yahoo_id=str(p.get("player_id", "")),
                         status=str(p.get("status", "") or ""),
-                        selected_position=str(p.get("selected_position", "") or ""),
                     )
                 )
     return spots
@@ -90,28 +84,32 @@ def owner_map(spots: list[RosterSpot]) -> dict[tuple[str, str], str]:
     return {(s.normalized, s.player_type): s.team for s in spots}
 
 
-def live_rosters(my_team: str, *, project_root: Path | None = None) -> list[RosterSpot]:
+def live_rosters(my_team: str) -> list[RosterSpot]:
     """Read both roster blobs from PROD Upstash and flatten them.
 
-    Crosses the RENDER gate deliberately: `get_kv()` off Render returns the local SQLite
-    mirror, which is only as fresh as the last sync, and roster membership is exactly the
-    kind of live state that goes stale silently.
+    `build_explicit_upstash_kv` rather than `get_kv()`, deliberately: off Render `get_kv`
+    returns the local SQLite mirror, which is only as fresh as the last sync, and roster
+    membership is exactly the kind of live state that goes stale silently -- a trade since
+    the last sync would put a player on the wrong team with nothing looking wrong.
+
+    It does NOT set `RENDER`. Several scripts do that before calling this constructor,
+    which is cargo: the env gate lives in `get_kv` alone and this path never consults it,
+    so the assignment cannot change what is returned. What it CAN do is steer `get_kv` --
+    a process-wide singleton -- for whatever runs next, which for a library function
+    reachable from the web app is a side effect with no upside. `.env` loading is likewise
+    already handled inside `_build_upstash_kv`.
     """
-    os.environ["RENDER"] = "true"
-    from dotenv import load_dotenv
-
-    root = project_root or Path(__file__).resolve().parents[3]
-    load_dotenv(root / ".env")
-
     from .cache_keys import CacheKey, redis_key
     from .kv_store import build_explicit_upstash_kv
 
     kv = build_explicit_upstash_kv()
 
-    def read(key: CacheKey) -> Any:
-        raw = kv.get(redis_key(key))
+    def decode(raw: Any) -> Any:
         if raw is None:
             return None
         return json.loads(raw) if isinstance(raw, str) else raw
 
-    return parse_rosters(read(CacheKey.ROSTER), read(CacheKey.OPP_ROSTERS), my_team)
+    # One round trip. The two blobs are independent and `mget` is on the KVStore protocol
+    # for both backends, so fetching them separately just bought an extra network wait.
+    roster_raw, opp_raw = kv.mget(redis_key(CacheKey.ROSTER), redis_key(CacheKey.OPP_ROSTERS))
+    return parse_rosters(decode(roster_raw), decode(opp_raw), my_team)

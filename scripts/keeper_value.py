@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -145,7 +144,7 @@ def fetch_rosters(my_team: str) -> dict[tuple[str, str], str]:
     """
     from fantasy_baseball.data.rosters import live_rosters, owner_map
 
-    return owner_map(live_rosters(my_team, project_root=PROJECT_ROOT))
+    return owner_map(live_rosters(my_team))
 
 
 def _by_team(board: pd.DataFrame, args: argparse.Namespace) -> int:

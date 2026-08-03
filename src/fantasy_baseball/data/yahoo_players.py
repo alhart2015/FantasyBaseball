@@ -31,9 +31,7 @@ def fetch_positions_from_yahoo(league) -> dict[str, list[str]]:
                         pos_map[name] = eligible
                 position_maps.append(pos_map)
             except Exception:
-                logger.exception(
-                    "Failed to fetch roster for team %s; skipping", team_key
-                )
+                logger.exception("Failed to fetch roster for team %s; skipping", team_key)
                 continue
     except Exception:
         logger.exception("Failed to fetch teams; skipping rostered players")
@@ -48,17 +46,13 @@ def fetch_positions_from_yahoo(league) -> dict[str, list[str]]:
                 eligible = player.get("eligible_positions", [pos])
                 pos_map[name] = eligible
             position_maps.append(pos_map)
-        except (PermissionError, OSError) as exc:
+        except (PermissionError, OSError):
             # Auth failures and critical OS-level errors should not be hidden
-            logger.exception(
-                "Critical error fetching free agents for position %s", pos
-            )
+            logger.exception("Critical error fetching free agents for position %s", pos)
             raise
         except Exception:
             # Transient network errors, rate limits, etc. — log and skip
-            logger.exception(
-                "Failed to fetch free agents for position %s; skipping", pos
-            )
+            logger.exception("Failed to fetch free agents for position %s; skipping", pos)
             continue
     return merge_position_maps(position_maps)
 

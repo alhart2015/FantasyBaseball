@@ -36,6 +36,7 @@ from .panel import prorate_partial, season_elapsed_fraction
 from .value import ROLE_MIN_GAMES, best_floor, resolve_slots
 
 
+@lru_cache(maxsize=4)
 def people(cache_dir: Path) -> pd.DataFrame:
     """Every MLBAM people cache in `cache_dir`, unioned, for id -> name lookup.
 
@@ -172,14 +173,12 @@ def _paced(current: pd.DataFrame, calendar: pd.DataFrame, season: int) -> pd.Ser
     league somewhere it is not. Same rule `_resolve_player` follows.
     """
     fraction = season_elapsed_fraction(calendar, season)
-    return current.apply(
-        lambda r: (
-            prorate_partial(float(r["sgp"]), fraction)
-            if bool(r["partial_season"])
-            else float(r["sgp"])
-        ),
-        axis=1,
-    ).astype(float)
+    sgp = current["sgp"].astype(float)
+    partial = current["partial_season"].astype(bool)
+    # A column operation, not a `.apply(axis=1)` -- the per-row form builds a Series per
+    # row and re-reads two columns by name each time, and it is the pattern this repo's
+    # conventions warn about. `fraction` is one number for the whole frame.
+    return sgp.where(~partial, sgp.map(lambda v: prorate_partial(v, fraction)))
 
 
 def _pitcher_slots(live: pd.DataFrame, season: int) -> dict[int, set[str]]:
@@ -200,10 +199,11 @@ def _pitcher_slots(live: pd.DataFrame, season: int) -> dict[int, set[str]]:
         starts=rows["starts"].fillna(0.0).astype(float),
         games=rows["games"].fillna(0.0).astype(float),
     )
-    settled = rows[rows["games"] >= ROLE_MIN_GAMES]
-    # Last settled season per player, else his latest of any size.
-    chosen = pd.concat([rows.groupby("mlbam_id").tail(1), settled.groupby("mlbam_id").tail(1)])
-    chosen = chosen.groupby("mlbam_id").tail(1)
+    # Sorting on (settled, season) and taking the last per player IS the rule: prefer a
+    # settled season, then the most recent. Expressing it as concat-then-tail made the
+    # answer depend on which frame was concatenated second, which nobody re-derives.
+    rows = rows.assign(settled=rows["games"] >= ROLE_MIN_GAMES)
+    chosen = rows.sort_values(["mlbam_id", "settled", "season"]).groupby("mlbam_id").tail(1)
     return {
         int(r.mlbam_id): resolve_slots(None, "pitcher", starts=r.starts, games=r.games)
         for r in chosen.itertuples(index=False)
@@ -259,16 +259,18 @@ def board_inputs(
     # The prior year, looked up as a whole column. A player absent from it was out of
     # the league, which is a real 0 -- the same convention the forward path uses.
     prior = live[live["season"] == season - 1].set_index("mlbam_id")["sgp"].astype(float).to_dict()
-    slots_by_id = (
-        _pitcher_slots(live, season)
-        if kind == "pitcher"
-        else {
+    # Three branches, written as three branches. The last is a pure shortcut: with no
+    # eligibility every hitter resolves to the empty set anyway, which `best_floor` turns
+    # into the UTIL fallback -- so skipping the comprehension changes nothing but work.
+    if kind == "pitcher":
+        slots_by_id = _pitcher_slots(live, season)
+    elif eligibility:
+        slots_by_id = {
             pid: resolve_slots(set(eligibility.get(pid, frozenset())), kind)
             for pid in current["mlbam_id"].astype(int)
         }
-        if eligibility
-        else {}
-    )
+    else:
+        slots_by_id = {}
 
     rows = []
     for r in current.itertuples(index=False):

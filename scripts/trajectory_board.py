@@ -41,6 +41,7 @@ Build the panel first (one time, ~1 minute):
 from __future__ import annotations
 
 import argparse
+import math
 import sys
 import time
 from pathlib import Path
@@ -54,7 +55,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
 from fantasy_baseball.config import load_config
-from fantasy_baseball.data.rosters import live_rosters
+from fantasy_baseball.data.rosters import RosterSpot, live_rosters
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import (
@@ -159,25 +160,24 @@ def add_ranks(scored: list[dict]) -> None:
     """
     for key, field in (("total", "rank_total"), ("next", "rank_next")):
         order = sorted(
-            scored, key=lambda r, k=key: (-r[k] if not np.isnan(r[k]) else 1.0, r["name"])
+            scored, key=lambda r, k=key: (-r[k] if not np.isnan(r[k]) else math.inf, r["name"])
         )
         for i, row in enumerate(order, start=1):
             row[field] = i
 
 
-def assign_teams(scored: list[dict], spots: list) -> dict[str, list[str]]:
+def assign_teams(scored: list[dict], spots: list[RosterSpot]) -> dict[str, list[str]]:
     """Stamp each scored row with its owning team, and return who never matched.
 
     Joined on (normalized name, player_type) because roster blobs carry no mlbam_id
     (#284). The unmatched are returned rather than swallowed: a silently shortened team
     reads as "he has nobody else worth listing".
     """
-    owners = {(s.normalized, s.player_type): s.team for s in spots}
-    status = {(s.normalized, s.player_type): s.status for s in spots}
+    by_key = {(s.normalized, s.player_type): s for s in spots}
     for row in scored:
-        key = (normalize_name(row["name"]), row["pool"])
-        row["team"] = owners.get(key)
-        row["status"] = status.get(key, "")
+        spot = by_key.get((normalize_name(row["name"]), row["pool"]))
+        row["team"] = spot.team if spot else None
+        row["status"] = spot.status if spot else ""
 
     scored_keys = {(normalize_name(r["name"]), r["pool"]) for r in scored}
     missing: dict[str, list[str]] = {}
@@ -193,7 +193,7 @@ def by_team(
     my_team: str,
     per_team: int,
     base: int,
-    horizons: tuple,
+    horizons: tuple[int, ...],
     only: str | None = None,
 ) -> None:
     """Every player on your team, then the best `per_team` on each other team.
@@ -338,7 +338,8 @@ def main() -> int:
     if not args.panel_dir.is_absolute():
         args.panel_dir = PROJECT_ROOT / args.panel_dir
 
-    overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
+    config = load_config(PROJECT_ROOT / "config" / "league.yaml")
+    overrides = config.sgp_overrides
     levels = position_aware_replacement_levels(get_sgp_denominators(overrides))
     horizons = tuple(range(1, args.horizon + 1))
     pools = ["hitter", "pitcher"] if args.pool == "both" else [args.pool]
@@ -382,8 +383,12 @@ def main() -> int:
         ]
         print(f"  {kind}: {len(rows)} players with a {season} line", flush=True)
         # The comp pool must NOT contain the in-progress season: a two-thirds year would
-        # be averaged in as though it were a full one.
-        scored += score(rows, load(kind, False), kind, horizons)
+        # be averaged in as though it were a full one. DERIVED from `live` rather than
+        # loaded again -- a second `load()` re-reads a 4.7MB CSV and runs two more
+        # full-panel `apply` passes for a frame that is this one minus its partial rows.
+        # Verified identical on both pools: same ids, same seasons, max |sgp diff| 0.0.
+        complete = live[~live["partial_season"]].reset_index(drop=True)
+        scored += score(rows, complete, kind, horizons)
 
     if args.min_support > 0:
         dropped = [r for r in scored if r["support"] < args.min_support]
@@ -397,11 +402,10 @@ def main() -> int:
     add_ranks(scored)
     render(scored, args.top, horizons, levels, season)
     if args.by_team or args.team or args.csv:
-        config = load_config(PROJECT_ROOT / "config" / "league.yaml")
         # Live Upstash, not the local mirror: roster membership is exactly the kind of
         # state that goes stale silently, and a trade since the last sync would show a
         # player on the wrong team with no indication anything was wrong.
-        spots = live_rosters(config.team_name, project_root=PROJECT_ROOT)
+        spots = live_rosters(config.team_name)
         print(f"\n  {len(spots)} roster spots read from Upstash")
         missing = assign_teams(scored, spots)
         if args.by_team or args.team:

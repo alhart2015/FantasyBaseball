@@ -155,14 +155,39 @@ class Anchors:
     n_effective: float
 
 
-def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> float:
-    """The `q`-quantile of `values` under `weights`, by cumulative weight."""
-    order = np.argsort(values)
+def _weighted_quantiles(
+    values: np.ndarray, weights: np.ndarray, qs: tuple[float, ...], order: np.ndarray | None = None
+) -> list[float]:
+    """The `qs`-quantiles of `values` under `weights`, by cumulative weight.
+
+    Takes all the quantiles at once, and optionally a precomputed `order`, because the
+    sort key is the same residual array for the median and both band edges -- sorting it
+    three times per horizon was the diff's own doing.
+    """
+    order = np.argsort(values) if order is None else order
     v, w = values[order], weights[order]
     total = w.sum()
     if total <= 0:
-        return float("nan")
-    return float(v[np.searchsorted(np.cumsum(w), q * total)])
+        return [float("nan")] * len(qs)
+    cumulative = np.cumsum(w)
+    return [float(v[np.searchsorted(cumulative, q * total)]) for q in qs]
+
+
+def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> float:
+    """One quantile. Kept for callers that want a single number."""
+    return _weighted_quantiles(values, weights, (q,))[0]
+
+
+def _kish(weights: np.ndarray) -> float:
+    """Kish effective sample size, `(sum w)^2 / sum(w^2)`.
+
+    The raw row count overstates support whenever kernel weights taper -- a 41-row fit
+    can carry an effective 15. Written once because it is compared against
+    `MIN_EFFECTIVE_ROWS` in two places, and two spellings of one definition is how the
+    two gates drift apart.
+    """
+    total = weights.sum()
+    return float(total**2 / np.square(weights).sum()) if total > 0 else 0.0
 
 
 def _triangular(distance: np.ndarray, width: float) -> np.ndarray:
@@ -474,6 +499,16 @@ def shape_trajectory(
     seasons = prepared.season[usable]
     current, prior = prepared.current[usable], prepared.prior[usable]
     weights = weights[usable]
+    # Weight sitting within a comp band of the QUERY's own current season. The fit has no
+    # kernel on the current season, so this is the only thing that says whether the line
+    # was evaluated inside its own support or extrapolated past it. Every surviving weight
+    # is strictly positive by the `weights > 0` filter above, so `len(usable)` is the only
+    # guard needed.
+    local_support = (
+        float(weights[np.abs(current - sgp) <= DEFAULT_BAND].sum() / weights.sum())
+        if len(usable)
+        else float("nan")
+    )
 
     rng = np.random.default_rng(seed)
     anchor_columns = np.column_stack([current, prior])
@@ -499,7 +534,7 @@ def shape_trajectory(
         # support whenever the kernels taper: a 41-row fit carrying an effective 15 was
         # passing a raw-count floor while producing `on_prior` of -1.03, i.e. more
         # production last year predicting LESS next year.
-        n_eff = float(w.sum() ** 2 / np.square(w).sum()) if w.sum() > 0 else 0.0
+        n_eff = _kish(w)
         if n_eff < MIN_EFFECTIVE_ROWS or w.sum() <= 0:
             path.append(_empty_point(h, age))
             anchors.append(Anchors(h, float("nan"), float("nan"), float("nan"), len(y), n_eff))
@@ -556,11 +591,7 @@ def shape_trajectory(
         # interval precisely where the model knew least. Reweighting widens it ~20-35% on
         # those queries and leaves a well-supported one alone, which is the whole ask.
         band_weights = w * _triangular(current[keep] - sgp, CURRENT_WINDOW)
-        band_effective = (
-            float(band_weights.sum() ** 2 / np.square(band_weights).sum())
-            if band_weights.sum() > 0
-            else 0.0
-        )
+        band_effective = _kish(band_weights)
         # Too few comps near his current season to describe a distribution. Fall back to
         # the cohort's own residuals rather than quantile 20 effective rows -- the band is
         # then the understated one, which `Trajectory.local_support` is there to flag.
@@ -628,14 +659,7 @@ def shape_trajectory(
             band=float("nan"),  # no band: weight decays, nothing is excluded on a cliff
             prior_sgp=prior_sgp,
             n_comps=len(usable),
-            # Weight sitting within a comp band of the QUERY's own current season. The
-            # fit has no kernel on the CURRENT season, so this is the only thing that says
-            # the line was evaluated inside its own support or extrapolated past it.
-            local_support=float(
-                weights[np.abs(current - sgp) <= DEFAULT_BAND].sum() / weights.sum()
-            )
-            if len(usable) and weights.sum() > 0
-            else float("nan"),
+            local_support=local_support,
             mean_start=float(np.average(current, weights=weights)) if len(usable) else float("nan"),
             mean_prior=float(np.average(prior, weights=weights)) if len(usable) else float("nan"),
             seasons=(int(seasons.min()), int(seasons.max())) if len(usable) else None,
