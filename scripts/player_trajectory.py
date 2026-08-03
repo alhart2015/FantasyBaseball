@@ -44,6 +44,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.comps import (
     DEFAULT_BAND,
     Trajectory,
@@ -57,6 +59,7 @@ from fantasy_baseball.trajectory.panel import (
     season_elapsed_fraction,
 )
 from fantasy_baseball.trajectory.shape import shape_trajectory
+from fantasy_baseball.trajectory.value import resolve_slots, to_var
 from fantasy_baseball.utils.name_utils import normalize_name
 
 PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
@@ -182,6 +185,41 @@ def _resolve_player(
     return resolved
 
 
+@lru_cache(maxsize=4)
+def _eligibility(season: int) -> dict[int, frozenset[str]]:
+    """MLBAM id -> slots with 10+ games that season, the league's own rule.
+
+    Reads the SAME MLB Stats cache the panel is built from, via the ingest layer. The
+    live season's fielding pull is a point-in-time snapshot, so eligibility only grows
+    after it was taken -- a player who crosses 10 games later still prices at UTIL until
+    the cache is refreshed. Conservative, never flattering.
+    """
+    from fantasy_baseball.keepers.appearances import season_eligibility
+    from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
+
+    fielding = fetch_mlb_season(
+        PROJECT_ROOT / "data" / "cache" / "keeper_skills", season, "fielding"
+    )
+    return {pid: frozenset(slots) for pid, slots in season_eligibility(fielding).items()}
+
+
+def _slots_for(panel: pd.DataFrame, mlbam_id: int, kind: str) -> set[str]:
+    """Eligible slots for the player's most recent season.
+
+    Most recent because eligibility is a CURRENT fact: a catcher who stopped catching
+    two years ago no longer fills the scarce slot, and a converted reliever no longer
+    nets against the starter floor.
+    """
+    rows = panel[panel["mlbam_id"] == mlbam_id]
+    row = rows.loc[rows["season"].idxmax()]
+    return resolve_slots(
+        set(_eligibility(int(row["season"])).get(mlbam_id, frozenset())),
+        kind,
+        starts=float(row.get("starts") or 0.0),
+        games=float(row.get("games") or 0.0),
+    )
+
+
 def _prior_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> float:
     """The player's own SGP in the season before the one being scored.
 
@@ -235,9 +273,18 @@ def _print_total(traj: Trajectory) -> None:
     print(f"\n   total over {covered} years: {traj.total:.1f} SGP{note}")
 
 
-def render(traj: Trajectory, show_comps: int) -> None:
+def render(
+    traj: Trajectory,
+    show_comps: int,
+    position: str | None = None,
+    floor: float | None = None,
+) -> None:
     span = f"{traj.seasons[0]}-{traj.seasons[1]}" if traj.seasons else "n/a"
     print(f"\n{traj.kind.upper()}: {traj.sgp:.1f} SGP in an age-{traj.age} season")
+    if position is not None and floor is not None:
+        # Say the floor out loud. A VAR table with no floor printed cannot be compared
+        # against any other board, and the floor is the whole difference between them.
+        print(f"  SCALE: value above replacement, {position} floor {floor:.2f} SGP")
     if traj.mode == "shape":
         # A fitted prediction, not an average over a handful of careers: `n` counts the
         # rows the relationship was fit on, and nothing was excluded on a cliff.
@@ -391,6 +438,21 @@ def main() -> int:
         help="pool raw SGP without restating each season's run environment",
     )
     parser.add_argument(
+        "--scale",
+        choices=("sgp", "var"),
+        default="sgp",
+        help=(
+            "'sgp' (default) is raw projected production; 'var' nets it against the "
+            "position-aware waiver floor, which spans 2.54 SGP (RP 7.42, C 7.70, "
+            "OF/UTIL 9.96) and is the scale the keeper and draft boards rank on"
+        ),
+    )
+    parser.add_argument(
+        "--position",
+        choices=("C", "1B", "2B", "3B", "SS", "OF", "UTIL", "SP", "RP"),
+        help="replacement floor to net against for --scale var; derived with --player",
+    )
+    parser.add_argument(
         "--panel-dir",
         type=Path,
         default=DEFAULT_PANEL_DIR,
@@ -431,6 +493,7 @@ def main() -> int:
     # league.yaml's denominators are what every other valuation in this repo prices in,
     # so the trajectory is quoted in the same units as a draft board or a keeper line.
     overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
+    denoms = get_sgp_denominators(overrides)
 
     def load(kind: str, include_partial: bool) -> pd.DataFrame:
         panel = load_scored_panel(
@@ -457,6 +520,7 @@ def main() -> int:
                 age if args.age is None else args.age,
                 sgp if args.sgp is None else args.sgp,
                 _prior_for(live[pool], pid, args) if args.match in ("track", "shape") else None,
+                {args.position} if args.position else _slots_for(live[pool], pid, pool),
             )
             for pool, pid, age, sgp in _resolve_player(args.player, live, calendar, args.mlbam_id)
         ]
@@ -479,12 +543,26 @@ def main() -> int:
         # Gate the prior on the MODE, exactly as the --player branch does. Passing it
         # through unconditionally made `--match current --prior-sgp N` run the track
         # estimator instead -- silently overriding the mode the user asked for.
+        if args.scale == "var" and args.position is None:
+            # Refuse rather than guess. Defaulting a pitcher to RP would hand a starter
+            # 1.87 SGP a year he never earned, and defaulting a catcher to UTIL would
+            # take 2.26 off him -- both silent, both larger than the gaps being read.
+            parser.error(
+                "--scale var needs --position (C/1B/2B/3B/SS/OF/UTIL/SP/RP) when not "
+                "using --player, since the floor a player nets against depends on it"
+            )
         queries = [
-            (args.pool, args.age, args.sgp, args.prior_sgp if args.match != "current" else None)
+            (
+                args.pool,
+                args.age,
+                args.sgp,
+                args.prior_sgp if args.match != "current" else None,
+                args.position,
+            )
         ]
 
     horizons = tuple(range(1, args.horizon + 1))
-    for pool, age, sgp, prior in queries:
+    for pool, age, sgp, prior, position in queries:
         if args.match == "shape":
             traj, anchors = shape_trajectory(
                 load(pool, False),
@@ -513,6 +591,14 @@ def main() -> int:
                 prior_band=args.prior_band,
                 horizons=horizons,
             )
+        floor = None
+        if args.scale == "var":
+            # Net of the position-aware waiver floor, which spans 2.54 SGP (RP 7.42 and
+            # C 7.70 up to OF/UTIL 9.96). On the raw scale a 9.96-SGP closer and a
+            # 9.87-SGP starter look interchangeable; on this one they are 2.54 and 0.58.
+            traj, slot, floor = to_var(traj, position_aware_replacement_levels(denoms), position)
+            render(traj, args.show_comps, slot, floor)
+            continue
         render(traj, args.show_comps)
     return 0
 
