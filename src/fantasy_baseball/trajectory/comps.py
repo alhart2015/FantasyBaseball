@@ -236,6 +236,13 @@ def comp_trajectory(
         raise ValueError("prior_band has no effect without prior_sgp")
     if not horizons:
         raise ValueError("horizons must not be empty")
+    if bootstrap_draws < 2:
+        # `std(ddof=1)` over fewer than two draws is NaN plus a RuntimeWarning, and the
+        # caller sees an SE that is silently missing rather than a refused argument.
+        # `_bootstrap_se` guards the COMP count, not the draw count, so it does not
+        # cover this -- `shape_trajectory` refuses the same argument and the two modes
+        # must not disagree about it (test_mode_parity).
+        raise ValueError(f"bootstrap_draws must be at least 2, got {bootstrap_draws}")
 
     horizons = tuple(sorted(horizons))
     last = last_complete_season if last_complete_season is not None else int(panel["season"].max())

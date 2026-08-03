@@ -352,7 +352,8 @@ def shape_trajectory(
     if bootstrap_draws < 2:
         # `std(ddof=1)` on fewer than two draws is NaN plus a RuntimeWarning, which
         # reaches the caller as an SE that is silently missing rather than as a refused
-        # argument. `comps._bootstrap_se` already guards this.
+        # argument. `comps._bootstrap_se` does NOT cover this -- it guards the comp
+        # count -- so `comp_trajectory` carries the same check, deliberately in both.
         raise ValueError(f"bootstrap_draws must be at least 2, got {bootstrap_draws}")
 
     horizons = tuple(sorted(horizons))
