@@ -66,7 +66,37 @@ class PathPoint:
     #: the comp-to-comp SD in comps mode, and sqrt(residual variance + se^2) in shape
     #: mode. Both answer "how far from this number could one player land", which `se`
     #: does not.
+    #:
+    #: A SINGLE number, so any band read off it assumes the outcomes are normal around
+    #: the estimate. Measured out of sample they are not, and not uniformly: hitters at
+    #: +1 are close to normal (kurtosis 3.20, skew -0.41) but pitchers at +3 come out
+    #: FLATTER than a bell (kurtosis 2.48, skew +0.30), with mass pushed onto both
+    #: shoulders -- 41% of them land outside +/-1 spread against a Gaussian 32%. Prefer
+    #: `p10`/`p90` for anything a reader will treat as an interval.
     spread: float = float("nan")
+    #: 10th and 90th percentile of the outcome, read off the EMPIRICAL distribution --
+    #: the weighted residual quantiles in shape mode, the comp values themselves in
+    #: comps mode. Not `mean +/- k*spread`, which is a normality assumption the outcomes
+    #: do not honour: hitters at +1 come out near-normal (kurtosis 3.20, skew -0.41) but
+    #: pitchers at +3 come out FLATTER than a bell (kurtosis 2.48, skew +0.30), so one
+    #: width cannot describe both. These carry the shape, and the skew with it.
+    #:
+    #: MEASURED COVERAGE, out of sample, query player held out. Each tail should hold
+    #: 10%; a hot tail is a band that lies about that side.
+    #:
+    #:     pool       h     n   this band       mean +/- 1.28*spread
+    #:     hitter     1   779   11% / 10%       12% / 9%
+    #:     hitter     3   729   12% / 10%       12% / 9%
+    #:     pitcher    1   503   13% / 11%       13% / 10%
+    #:     pitcher    3   469   14% / 13%       11% / 14%
+    #:
+    #: So: better than the Gaussian reading for hitters and at pitcher +1, and a wash at
+    #: pitcher +3, where the two are wrong in opposite directions -- the symmetric band
+    #: happens to sit deeper on the downside because it ignores a right-skew the fitting
+    #: residuals have and the realized elite-pitcher outcomes do not. Treat the interval
+    #: as ROUGHLY 80% and slightly optimistic on the downside for pitchers, not exact.
+    p10: float = float("nan")
+    p90: float = float("nan")
     #: Support actually behind the number, as a Kish effective size. Equal to `n` in
     #: comps mode, where every comp counts once; strictly below it in shape mode, where
     #: kernel weights taper. Thin-support decisions must read THIS, not `n` -- a shape
@@ -315,6 +345,13 @@ def comp_trajectory(
                 survivors=len(survived),
                 mean_if_survived=float(survived.mean()) if len(survived) else float("nan"),
                 spread=float(values.std(ddof=1)) if len(values) > 1 else float("nan"),
+                # Straight off the comps, which ARE the empirical distribution here --
+                # no residuals and no normality assumed. Same reason as shape mode: the
+                # outcome spread changes shape by pool and horizon, and one width cannot
+                # carry that. A departed comp's structural 0 is in `values`, so the low
+                # end reflects attrition rather than hiding it.
+                p10=float(np.percentile(values, 10)) if len(values) else float("nan"),
+                p90=float(np.percentile(values, 90)) if len(values) else float("nan"),
                 # Every comp counts exactly once, so the effective size IS the count and
                 # the weighted survival rate IS survivors/n.
                 n_effective=float(len(values)),

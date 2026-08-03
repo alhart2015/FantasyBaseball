@@ -503,6 +503,17 @@ def shape_trajectory(
         median = float(predicted + _weighted_quantile(residuals, w, 0.5))
         if replacement:
             median = max(median, 0.0)
+        # The BAND, off the same weighted residual distribution the median comes from.
+        # `mean +/- k*spread` would be a Gaussian reading, and out of sample the errors
+        # are not Gaussian in a way that varies by pool and horizon -- flatter and
+        # right-skewed for pitchers at +3, near-normal and left-skewed for hitters at +1.
+        # Quantiles carry that shape for free; a single width cannot.
+        p10 = float(predicted + _weighted_quantile(residuals, w, 0.10))
+        p90 = float(predicted + _weighted_quantile(residuals, w, 0.90))
+        if replacement:
+            # Same floor the response carries: below replacement is worth zero, not
+            # negative, so a band reaching under it reports zero rather than a debt.
+            p10, p90 = max(p10, 0.0), max(p90, 0.0)
         # These are FITTED residuals from a three-parameter model, so their weighted
         # mean square estimates (1 - p/n_eff) * sigma^2, not sigma^2. Without the
         # correction the spread -- the number `PathPoint.spread` tells the reader to
@@ -530,6 +541,8 @@ def shape_trajectory(
                 # Predictive, not the SE of the mean: how far ONE player can land from
                 # the prediction.
                 spread=float(np.sqrt(residual_var + (0.0 if np.isnan(se) else se**2))),
+                p10=p10,
+                p90=p90,
                 n_effective=n_eff,
                 survival=float(np.average(survived, weights=w)),
             )

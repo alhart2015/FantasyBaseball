@@ -128,6 +128,56 @@ def test_the_mode_is_labelled_so_render_cannot_confuse_it_with_comps() -> None:
     assert traj.prior_sgp == pytest.approx(15.0)
 
 
+def test_the_band_is_empirical_not_a_gaussian_multiple_of_spread() -> None:
+    """`spread` is one number, so reading a band off it assumes the residuals are normal.
+    Measured out of sample they are not: for pitchers at +3 the standardized error has
+    kurtosis 2.48 -- FLATTER than a bell, mass pushed symmetrically onto both shoulders --
+    so +/-1 spread holds 59% of players where a Gaussian reading promises 68%. `p10`/`p90`
+    are read off the weighted residual distribution instead, so the band carries whatever
+    shape and skew the comps actually had."""
+    # NOISY on purpose: `_linear_population` is exactly linear, so its residuals are
+    # zero-width and every quantile collapses onto the point estimate. A band only means
+    # something where the comps scatter.
+    rng = np.random.default_rng(1)
+    rows = []
+    for i in range(400):
+        peak = float(rng.uniform(8.0, 22.0))
+        down = float(rng.uniform(8.0, 22.0))
+        forward = 0.4 * down + 0.5 * peak + float(rng.normal(0, 3.0))
+        rows += [(i, 2010, 27, peak), (i, 2011, 28, down), (i, 2012, 29, forward)]
+    traj, _ = shape_trajectory(
+        _panel(rows), kind="hitter", age=28, sgp=15.0, peak=15.0, horizons=(1,), peak_band=50.0
+    )
+    point = traj.path[0]
+    assert point.p10 < point.median < point.p90
+    assert point.p10 < point.mean < point.p90
+    # On a symmetric normal population the empirical band should land near the Gaussian
+    # one -- the point is that it is FREE to differ, not that it always does.
+    assert (point.p90 - point.p10) == pytest.approx(2 * 1.2816 * point.spread, rel=0.15)
+
+
+def test_an_asymmetric_residual_distribution_gives_an_asymmetric_band() -> None:
+    """The whole reason for reading quantiles rather than scaling `spread`: a population
+    that mostly holds steady and occasionally collapses has a long LEFT tail, and a
+    symmetric band would overstate the upside and understate the downside by the same
+    wrong amount."""
+    rng = np.random.default_rng(0)
+    rows = []
+    for i in range(400):
+        peak = float(rng.uniform(12.0, 18.0))
+        down = float(rng.uniform(12.0, 18.0))
+        # 85% land near 15; 15% collapse to nearly nothing.
+        forward = 1.0 if rng.random() < 0.15 else 15.0 + float(rng.normal(0, 0.5))
+        rows += [(i, 2010, 27, peak), (i, 2011, 28, down), (i, 2012, 29, forward)]
+    traj, _ = shape_trajectory(
+        _panel(rows), kind="hitter", age=28, sgp=15.0, peak=15.0, horizons=(1,), peak_band=50.0
+    )
+    point = traj.path[0]
+    below = point.median - point.p10
+    above = point.p90 - point.median
+    assert below > 3 * above, f"expected a long left tail, got -{below:.2f} / +{above:.2f}"
+
+
 def test_the_bootstrap_is_reproducible() -> None:
     panel = _linear_population(coef_down=0.4, coef_peak=0.5)
     kw = {"kind": "hitter", "age": 28, "sgp": 15.0, "peak": 15.0, "horizons": (1,)}

@@ -412,15 +412,21 @@ def render(traj: Trajectory, show_comps: int) -> None:
         # describes the same population the fit used. A raw count beside a weighted
         # median invited the reader to take both as properties of the prediction.
         print(
-            f"\n   age   pred {_units(traj)}  +/-SE  +/-spread   median"
+            f"\n   age   pred {_units(traj)}  +/-SE     p10..p90   median"
             "   played (of eff)  if played"
         )
         for p in traj.path:
             if p.n == 0:
-                print(f"   {p.age:3d}        --      --         --       --   (not fittable)")
+                print(f"   {p.age:3d}        --      --           --        --   (not fittable)")
                 continue
+            # p10..p90 rather than +/-spread. `spread` is one width, so printing it
+            # invites a symmetric Gaussian reading, and out of sample the outcomes are
+            # neither symmetric nor Gaussian in the same way across pools and horizons:
+            # +/-1 spread holds 59% of pitchers at +3 against a nominal 68%. The
+            # quantiles are the interval actually measured.
+            band = f"{p.p10:5.1f}..{p.p90:<5.1f}"
             print(
-                f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}    {p.spread:7.2f}  {p.median:7.2f}"
+                f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}  {band:>13}  {p.median:7.2f}"
                 f"     {p.survival:5.0%} (of {p.n_effective:5.0f})  {p.mean_if_survived:6.2f}"
             )
         _print_total(traj)
