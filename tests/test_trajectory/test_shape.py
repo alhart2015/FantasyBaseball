@@ -162,6 +162,53 @@ def test_the_band_is_empirical_not_a_gaussian_multiple_of_spread() -> None:
     assert (point.p90 - point.p10) == pytest.approx(2 * 1.2816 * point.spread, rel=0.15)
 
 
+def test_the_band_always_contains_its_own_point_estimate() -> None:
+    """The band is reweighted toward the query's current season while the point estimate
+    comes off the fit weights, so the two were centred on different distributions -- and
+    where the reweighted one sat below zero BOTH quantiles landed under `mean`, printing
+    an interval that excluded the number it was drawn around. 135 of 4020 horizon-rows on
+    the live board did this, mostly low-VAR veterans where the replacement floor compresses
+    everything. The quantiles are now measured relative to the reweighted MEDIAN, so
+    q10 <= q50 <= q90 makes the containment structural.
+
+    A COHORT MOSTLY BELOW REPLACEMENT is what triggers it, which is why the real failures
+    were low-VAR veterans. Flooring the response at zero leaves most comps at exactly 0,
+    so their residuals against a small positive prediction are nearly all negative -- and
+    then even the 90th-percentile residual sits below zero, dragging `p90` under `mean`.
+    A smoothly-curved or purely linear population does NOT reproduce it; two earlier
+    fixtures passed against the broken code before this one was found."""
+    rng = np.random.default_rng(3)
+    rows = []
+    for i in range(600):
+        prior = float(rng.uniform(0.0, 14.0))
+        current = float(rng.uniform(0.0, 14.0))
+        forward = 0.45 * current + 0.2 * prior + float(rng.normal(0, 1.5))
+        rows += [(i, 2010, 33, prior), (i, 2011, 34, current), (i, 2012, 35, max(forward, 0.0))]
+    panel = _panel(rows)
+
+    checked = 0
+    for current in (3.0, 5.0, 7.0, 9.0, 11.0, 13.0):
+        for prior in (2.0, 6.0, 10.0):
+            # Floor of 8 against a cohort topping out near 8 -- most comps land at 0.
+            traj, _ = shape_trajectory(
+                panel,
+                kind="hitter",
+                age=34,
+                sgp=current,
+                prior_sgp=prior,
+                horizons=(1,),
+                replacement=8.0,
+                slot="UTIL",
+            )
+            for point in traj.observable:
+                checked += 1
+                assert point.p10 <= point.mean <= point.p90, (
+                    f"current={current} prior={prior}: "
+                    f"mean {point.mean:.2f} outside {point.p10:.2f}..{point.p90:.2f}"
+                )
+    assert checked > 10, "swept too few fittable queries to mean anything"
+
+
 def test_an_asymmetric_residual_distribution_gives_an_asymmetric_band() -> None:
     """The whole reason for reading quantiles rather than scaling `spread`: a population
     that mostly holds steady and occasionally collapses has a long LEFT tail, and a

@@ -268,6 +268,34 @@ def _no_support(traj: Trajectory) -> bool:
     return not traj.observable
 
 
+def _warn_if_extrapolated(traj: Trajectory) -> None:
+    """Say so when the fitted line was evaluated outside its own support.
+
+    A DIFFERENT failure from `_warn_if_thin`, which reads `n_effective`: a query can have
+    1,100 effective rows behind it and still have almost none of them near its own current
+    season, because only the prior season is kernel-weighted. That is the 13.6-now /
+    0.0-prior case, and without this the board flagged it with `(!)` while this CLI --
+    the one used for a single keep-or-cut call -- printed the same numbers unmarked.
+    """
+    if not (traj.extrapolated or traj.band_fell_back):
+        return
+    if traj.band_fell_back:
+        print(
+            "\n  *** BAND REVERTED: too few comps near his current season to read a band"
+            "\n      from, so it falls back to the whole cohort's scatter -- the UNDERSTATED"
+            "\n      interval the reweighting exists to replace, on the query that needed it"
+            "\n      most. Treat the band below as a lower bound on the real uncertainty. ***"
+        )
+    print(
+        f"\n  *** EXTRAPOLATED: only {traj.local_support:.0%} of the fitting weight sits"
+        f" near his own {traj.sgp:.1f} SGP season."
+        "\n      LAST season is kernel-weighted and THIS one is not, so a season that far"
+        "\n      outruns its prior is priced by extending a line fitted on players unlike"
+        "\n      him. Read the p10..p90 band rather than the point estimate: the band"
+        "\n      accounts for this and the estimate does not. See #310. ***"
+    )
+
+
 def _warn_if_thin(traj: Trajectory) -> None:
     """Say so when the support is too thin for the printed precision.
 
@@ -334,6 +362,7 @@ def render(traj: Trajectory, show_comps: int) -> None:
             "(kernel-weighted)"
         )
         _warn_if_thin(traj)
+        _warn_if_extrapolated(traj)
         # Weighted survival against the EFFECTIVE size, so every column in the row
         # describes the same population the fit used. A raw count beside a weighted
         # median invited the reader to take both as properties of the prediction.
@@ -389,14 +418,19 @@ def render(traj: Trajectory, show_comps: int) -> None:
     _warn_if_thin(traj)
 
     print(
-        f"\n   age   exp {_units(traj)}    +/-SE  +/-spread   median   still playing   if playing"
+        f"\n   age   exp {_units(traj)}    +/-SE     p10..p90   median   still playing   if playing"
     )
     for p in traj.path:
         if p.n == 0:
-            print(f"   {p.age:3d}        --        --         --       --   (not yet observable)")
+            print(f"   {p.age:3d}        --        --           --        --   (not observable)")
             continue
+        # p10..p90, matching the shape table. `spread` is ONE width, and a reader doubles
+        # it into a symmetric interval -- the Gaussian reading measured at 59% coverage
+        # against a nominal 68% for pitchers at +3. These comps ARE the empirical
+        # distribution, so the quantiles cost nothing to report.
+        band = f"{p.p10:5.1f}..{p.p90:<5.1f}"
         print(
-            f"   {p.age:3d}   {p.mean:7.2f}    {p.se:5.2f}    {p.spread:7.2f}  {p.median:7.2f}"
+            f"   {p.age:3d}   {p.mean:7.2f}    {p.se:5.2f}  {band:>13}  {p.median:7.2f}"
             f"    {p.survivors:5d}/{p.n} ({p.survival:4.0%})  {p.mean_if_survived:6.2f}"
         )
     _print_total(traj)

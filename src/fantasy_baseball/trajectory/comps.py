@@ -32,6 +32,18 @@ import numpy as np
 import pandas as pd
 
 DEFAULT_BAND = 2.5
+
+#: Fitting weight that must sit near the query's own current season before its numbers are
+#: ranked rather than flagged. Beside `Trajectory.local_support`, which it qualifies, so
+#: the board and the single-player CLI cannot disagree about what "unsupported" means.
+#:
+#: 10% separates the two failure modes cleanly on the real 2026 board -- measured, not
+#: chosen. Sal Stewart (16.8 now / 1.5 prior) 1.8%, Kevin McGonigle (13.6 / 0.0) 4.6% and
+#: CJ Abrams (20.9 / 14.0) 6.3% are extrapolations; Crow-Armstrong (20.2 / 17.2) 16.1%,
+#: Juan Soto (12.9 / 21.5) 33.1% and Bobby Witt Jr. (15.5 / 18.9) 40.1% are supported.
+#: The obvious gauge, `sgp - mean_start`, cannot make that split -- it reads "above this
+#: cohort's mean" and "outside this cohort" the same way, and flagged 11 of the top 20.
+MIN_LOCAL_SUPPORT = 0.10
 DEFAULT_HORIZONS = (1, 2, 3, 4, 5)
 BOOTSTRAP_DRAWS = 2000
 
@@ -158,6 +170,12 @@ class Trajectory:
     #: including players with perfectly ordinary support. This measures the support
     #: directly. Read it before ranking on `total`; #310 covers fixing the estimator.
     local_support: float = float("nan")
+    #: True when at least one horizon could not find enough comps near the query's own
+    #: current season to read a band from, and fell back to the whole cohort's residual
+    #: scatter -- the understated interval the reweighting exists to replace. It happens
+    #: on the DEEPEST extrapolations, the ones most in need of a wide band, so a caller
+    #: telling a reader to trust the band must say when it silently reverted.
+    band_fell_back: bool = False
     #: Which matcher produced this -- "current", "track" (comps.comp_trajectory) or
     #: "shape" (shape.shape_trajectory). In "shape" the numbers are a fitted prediction
     #: rather than an average over comps, so `PathPoint.n` counts FITTING rows and
@@ -171,6 +189,20 @@ class Trajectory:
     #: total. A reader of this object can no longer be wrong about what its numbers mean.
     floor: float = 0.0
     slot: str | None = None
+
+    @property
+    def extrapolated(self) -> bool:
+        """True when the fitted line was evaluated outside its own support.
+
+        The THRESHOLD lives here, beside the field it qualifies, so every consumer shares
+        one definition of "unsupported". It did not: the board owned the number and
+        flagged rows with `(!)`, while `player_trajectory.py` -- the tool a human actually
+        uses to make a single keep-or-cut call -- printed the same extrapolated fit with
+        no warning at all. 10% separates the two failure modes on the real board; see
+        `MIN_LOCAL_SUPPORT`. NaN (the comp matchers, where the band IS the matching rule)
+        is not extrapolation.
+        """
+        return not np.isnan(self.local_support) and self.local_support < MIN_LOCAL_SUPPORT
 
     @property
     def scale(self) -> str:

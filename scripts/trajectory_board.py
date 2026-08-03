@@ -139,6 +139,8 @@ def score(
                 "years": len(traj.observable),
                 "n_eff": min(p.n_effective for p in traj.observable),
                 "support": traj.local_support,
+                "extrapolated": traj.extrapolated,
+                "band_fell_back": traj.band_fell_back,
                 # NEXT season alone, for the second ranking. A one-year board and a
                 # multi-year board answer different questions -- who helps now versus
                 # who is worth holding -- and the gap between a player's two ranks is
@@ -189,6 +191,7 @@ def assign_teams(scored: list[dict], spots: list[RosterSpot]) -> dict[str, list[
 
 def by_team(
     scored: list[dict],
+    spots: list[RosterSpot],
     missing: dict[str, list[str]],
     my_team: str,
     per_team: int,
@@ -203,15 +206,21 @@ def by_team(
     """
     one, span = _header(base, horizons)
 
-    def block(team: str, rows: list[dict], limit: int | None) -> None:
-        rows.sort(key=lambda r: r["total"], reverse=True)
+    def block(team: str, limit: int | None, note: str = "") -> None:
+        """One team's block. Takes the TEAM, never a decorated title -- `missing` is keyed
+        on the raw name, and passing a label like "X -- YOUR TEAM" made the lookup miss, so
+        the unmatched-player warning fired for every opposing team and silently never for
+        your own: the one roster a keep-or-cut call is made from."""
+        rows = sorted(
+            (r for r in scored if r["team"] == team), key=lambda r: r["total"], reverse=True
+        )
         shown = rows if limit is None else rows[:limit]
         total = sum(r["total"] for r in rows)
-        head = f"{team}  ({len(rows)} scored, {total:.1f} total {span} VAR)"
+        head = f"{team}{note}  ({len(rows)} scored, {total:.1f} total {span} VAR)"
         print(f"\n{head}\n{'-' * len(head)}")
         for r in shown:
             band = f"{r['p10']:5.1f}..{r['p90']:<5.1f}"
-            flag = " (!)" if r["support"] < MIN_LOCAL_SUPPORT else "    "
+            flag = " (!!)" if r["band_fell_back"] else (" (!)" if r["extrapolated"] else "    ")
             hurt = f" [{r['status']}]" if r["status"] else ""
             print(
                 f"  #{r['rank_total']:<4d} #{r['rank_next']:<4d} {r['name'][:22]:<22} "
@@ -222,23 +231,24 @@ def by_team(
             print(f"  not scored: {', '.join(sorted(missing[team]))}")
 
     print(f"\n\n{'=' * 78}\nPER-TEAM  (#{span} and #{one} are LEAGUE ranks)\n{'=' * 78}")
+    # Teams come from the ROSTERS, not from the scored rows. A team whose players were all
+    # filtered out -- by --min-sgp, by --min-support, or by the join failing wholesale --
+    # has no scored rows at all, so deriving the list from `scored` dropped it and its
+    # entire `missing` list with it, leaving nothing on screen to say it existed.
+    rostered = {s.team for s in spots}
     if only is not None:
         # One team, in full. `--team` exists so asking about somebody else's roster does
         # not mean re-running the sweep and reading past nine other blocks.
-        rows = [r for r in scored if r["team"] == only]
-        if not rows:
-            known = sorted({r["team"] for r in scored if r["team"]})
-            print(f"\n  no scored players on {only!r}. Teams: {', '.join(known)}")
+        if only not in rostered:
+            print(f"\n  no team named {only!r}. Teams: {', '.join(sorted(rostered))}")
             return
-        block(f"{only}  -- all players", rows, None)
+        block(only, None, note="  -- all players")
         return
-    mine = [r for r in scored if r["team"] == my_team]
-    block(f"{my_team}  -- YOUR TEAM, all players", mine, None)
-    others = sorted({r["team"] for r in scored if r["team"] and r["team"] != my_team})
-    for team in others:
-        block(team, [r for r in scored if r["team"] == team], per_team)
-    if not mine and not others:
-        print("\n  no roster rows matched the board -- see the join note above.")
+    block(my_team, None, note="  -- YOUR TEAM, all players")
+    for team in sorted(rostered - {my_team}):
+        block(team, per_team)
+    if not rostered:
+        print("\n  no rosters read -- see the join note above.")
 
 
 def _header(base: int, horizons: tuple[int, ...]) -> tuple[str, str]:
@@ -256,14 +266,14 @@ def render(
     print(f"{len(scored)} players scored\n")
     print(
         f"{'#' + span:>8} {'#' + one:>6}  {'player':<24} {'age':>3} {'slot':>4} {'now':>6} "
-        f"{'prior':>6} {span + ' VAR':>10} {one + ' VAR':>9}  {'p10..p90':>16} {'supp':>5}"
+        f"{'prior':>6} {span + ' VAR':>10} {one + ' VAR':>9}  {'p10..p90':>16} {'yrs':>4} {'supp':>5}"
     )
     for r in scored[:top]:
         band = f"{r['p10']:6.1f}..{r['p90']:<6.1f}"
         # (!) is a warning, not decoration: below the threshold the fitted line was
         # evaluated outside its own support, so the band is wide because the model is
         # extrapolating rather than because this player is genuinely volatile.
-        flag = " (!)" if r["support"] < MIN_LOCAL_SUPPORT else ""
+        flag = " (!!)" if r["band_fell_back"] else (" (!)" if r["extrapolated"] else "")
         # The MOVE between the two ranks is the keeper signal: a player far better over
         # three years than next year is who you hold rather than who you start.
         shift = r["rank_next"] - r["rank_total"]
@@ -271,9 +281,9 @@ def render(
         print(
             f"{r['rank_total']:8d} {r['rank_next']:6d}  {r['name'][:24]:<24} {r['age']:3d} "
             f"{r['slot']:>4} {r['now']:6.1f} {r['prior']:6.1f} {r['total']:10.1f} "
-            f"{r['next']:9.1f}  {band:>16} {r['support']:5.0%}{flag}{arrow:>5}"
+            f"{r['next']:9.1f}  {band:>16} {r['years']:4d} {r['support']:5.0%}{flag}{arrow:>5}"
         )
-    if any(r["support"] < MIN_LOCAL_SUPPORT for r in scored[:top]):
+    if any(r["extrapolated"] for r in scored[:top]):
         print(
             f"\n  (!) under {MIN_LOCAL_SUPPORT:.0%} of the fitting weight sits near this"
             "\n      player's own current season -- LAST season is kernel-weighted and THIS"
@@ -401,15 +411,30 @@ def main() -> int:
         return 1
     add_ranks(scored)
     render(scored, args.top, horizons, levels, season)
-    if args.by_team or args.team or args.csv:
+    show_teams = bool(args.by_team or args.team)
+    if show_teams or args.csv:
         # Live Upstash, not the local mirror: roster membership is exactly the kind of
         # state that goes stale silently, and a trade since the last sync would show a
         # player on the wrong team with no indication anything was wrong.
-        spots = live_rosters(config.team_name)
-        print(f"\n  {len(spots)} roster spots read from Upstash")
-        missing = assign_teams(scored, spots)
-        if args.by_team or args.team:
-            by_team(scored, missing, config.team_name, args.per_team, season, horizons, args.team)
+        #
+        # `--csv` alone must not DIE on a missing network. The roster read only adds an
+        # owner column there, and the docstring promises credentials are needed for
+        # `--by-team`/`--team` -- so failing the documented headline invocation offline,
+        # after the 17s sweep has already run and printed, costs the whole run for a
+        # column. The team views genuinely cannot proceed, so those still fail loudly.
+        try:
+            spots = live_rosters(config.team_name)
+            print(f"\n  {len(spots)} roster spots read from Upstash")
+            missing = assign_teams(scored, spots)
+        except Exception as exc:
+            if show_teams:
+                raise
+            print(f"\n  NOTE: rosters unavailable ({type(exc).__name__}); CSV has no team column.")
+            spots, missing = [], {}
+        if show_teams:
+            by_team(
+                scored, spots, missing, config.team_name, args.per_team, season, horizons, args.team
+            )
     if args.csv:
         pd.DataFrame(scored).sort_values("rank_total").to_csv(args.csv, index=False)
         print(f"\n  wrote {len(scored)} rows to {args.csv}")

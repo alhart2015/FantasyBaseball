@@ -511,6 +511,7 @@ def shape_trajectory(
     )
 
     rng = np.random.default_rng(seed)
+    band_fell_back = False
     anchor_columns = np.column_stack([current, prior])
     path, anchors, rows = [], [], []
     for h in horizons:
@@ -592,11 +593,19 @@ def shape_trajectory(
         # those queries and leaves a well-supported one alone, which is the whole ask.
         band_weights = w * _triangular(current[keep] - sgp, CURRENT_WINDOW)
         band_effective = _kish(band_weights)
-        # Too few comps near his current season to describe a distribution. Fall back to
-        # the cohort's own residuals rather than quantile 20 effective rows -- the band is
-        # then the understated one, which `Trajectory.local_support` is there to flag.
+        # Too few comps near his current season to describe a distribution, so fall back
+        # to the cohort's own residuals rather than quantile 20 effective rows.
+        #
+        # This DISENGAGES the fix on the deepest extrapolations -- exactly the queries it
+        # exists to protect -- restoring the understated cohort-scatter band. That has to
+        # be visible, not inferred: the board tells the reader the band is the trustworthy
+        # part, and a reverted row printed identically to a widened one. `local_support`
+        # does not cover it either; it measures a different width (`DEFAULT_BAND`, hard)
+        # than this gate (`CURRENT_WINDOW`, tapered), so the two disagree on which rows
+        # are affected. Recorded per horizon and surfaced on the trajectory.
         if band_effective < MIN_EFFECTIVE_ROWS:
             band_weights = w
+            band_fell_back = True
         # The fitted mean carries its own uncertainty, and it GROWS with leverage -- the
         # query being far from the data is exactly when the line is least pinned down.
         # `spread` picks this up as `se^2`; quantiles have no variance to add it to, so it
@@ -607,8 +616,25 @@ def shape_trajectory(
             if residual_var > 0 and not np.isnan(se)
             else 1.0
         )
-        p10 = float(predicted + inflate * _weighted_quantile(residuals, band_weights, 0.10))
-        p90 = float(predicted + inflate * _weighted_quantile(residuals, band_weights, 0.90))
+        low, high = _weighted_quantiles(residuals, band_weights, (0.10, 0.90))
+        p10 = float(predicted + inflate * low)
+        p90 = float(predicted + inflate * high)
+        # WIDEN to contain the estimate; never relocate the band to do it. The fit centres
+        # the `w`-weighted residuals, so their quantiles straddle zero -- but the band is
+        # read off `band_weights`, whose distribution carries its own offset, and where
+        # that offset is large enough BOTH quantiles land on one side of `predicted`. The
+        # interval then excludes the very number it is drawn around: 135 of 4020
+        # horizon-rows on the live board did exactly that (Arenado age-37, mean 0.43,
+        # band 0.00..0.40), while the board footer told the reader to trust the band over
+        # the estimate.
+        #
+        # Re-centring on the reweighted median also fixes it, and was tried -- but the
+        # offset is real information, not noise, and dropping it cost coverage where the
+        # model is weakest: elite pitchers at +3 went from 14% to 22% below p10 against a
+        # nominal 10%. Clamping keeps the offset, so calibration is untouched wherever the
+        # band already contained the estimate, and can only ever WIDEN elsewhere -- the
+        # conservative direction for a keep-or-cut call.
+        p10, p90 = min(p10, predicted), max(p90, predicted)
         if replacement:
             # Same floor the response carries: below replacement is worth zero, not
             # negative, so a band reaching under it reports zero rather than a debt.
@@ -660,6 +686,7 @@ def shape_trajectory(
             prior_sgp=prior_sgp,
             n_comps=len(usable),
             local_support=local_support,
+            band_fell_back=band_fell_back,
             mean_start=float(np.average(current, weights=weights)) if len(usable) else float("nan"),
             mean_prior=float(np.average(prior, weights=weights)) if len(usable) else float("nan"),
             seasons=(int(seasons.min()), int(seasons.max())) if len(usable) else None,

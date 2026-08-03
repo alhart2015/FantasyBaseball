@@ -61,6 +61,7 @@ files = [
     "src/fantasy_baseball/data/projection_quality.py",
     "src/fantasy_baseball/data/projections.py",
     "src/fantasy_baseball/data/redis_store.py",
+    "src/fantasy_baseball/data/rosters.py",
     "src/fantasy_baseball/data/ros_export_ingest.py",
     "src/fantasy_baseball/data/ros_pipeline.py",
     "src/fantasy_baseball/data/yahoo_players.py",
@@ -155,15 +156,20 @@ timeout_method = "thread"
 line-length = 100
 target-version = "py311"
 extend-exclude = [
-    # ROOT-ANCHORED. Unanchored, "data" matches any directory of that name at any depth
-    # -- including `src/fantasy_baseball/data/`, which silently dropped 18 source files
-    # out of `ruff check .` and `ruff format .`. A file added there passed every lint
-    # gate in CI and locally while never being looked at.
-    "/data",
-    "/docs",
-    "/logs",
-    "/.venv",
-    "/venv",
+    # `dir/**`, NOT `dir` and NOT `/dir`. Ruff treats a bare name as "any directory
+    # called this, at any depth", so plain "data" also matched
+    # `src/fantasy_baseball/data/` and silently dropped 18 source files out of
+    # `ruff check .` and `ruff format .` -- a file added there passed every lint gate
+    # while never being looked at. A LEADING slash does not anchor it either; it makes
+    # the pattern match nothing at all, which put top-level `docs/` and `logs/` back
+    # inside the gate and let `ruff format .` rewrite files kept out of it deliberately.
+    # A pattern containing a slash is matched against the path from the project root,
+    # which is the behaviour wanted here. Verified by probe file in each direction.
+    "data/**",
+    "docs/**",
+    "logs/**",
+    ".venv/**",
+    "venv/**",
 ]
 
 [tool.ruff.lint]
