@@ -81,6 +81,12 @@ All league settings live in `config/league.yaml`. Key fields: `draft.strategy`, 
 
   Show the commands you ran and what they returned in your final message — never just claim "checks pass."
 
+- **Identifiers are looked up, never recalled.** A bare id literal in a query — `mlbam_id == 672515`, a Yahoo `player_id`, a `player_key`, a game pk — is a defect *even when the output looks correct*, unless that value was derived by a lookup in the same snippet. Write the lookup: resolve the name to the id in code, then use the variable.
+
+  The failure mode is specific and it does not announce itself. A fabricated id usually resolves to a REAL row belonging to someone else, and that row tends to have the shape you were expecting, so the query appears to confirm the hypothesis and the check stops there. Both times this has happened, a hand-typed id landed on a different real player: `672515` returned a catcher whose line looked exactly like the catcher being investigated, and `676979` returned a player with no eligibility, which was then reasoned about as evidence of a bug that did not exist. Neither reached a shipped number, but only because the investigation continued past the false confirmation.
+
+  This is the same defect class as a bare-name join (see the `name::player_type` rule above and #284) — an identifier trusted without being resolved. Tools that already guard it, like `player_trajectory.py` refusing a `--mlbam-id` that does not match the `--player` name, must not be bypassed by ad-hoc scripts.
+
 - **Grep is not an AST.** When renaming or changing any function/class/variable, search separately for:
   - Direct calls and references (`foo(`, `from ... import foo`, `Foo(...)`)
   - Type annotations and generics (`: Foo`, `-> Foo`, `TypeVar`, `Protocol` subclasses)

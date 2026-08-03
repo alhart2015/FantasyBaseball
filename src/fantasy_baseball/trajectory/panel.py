@@ -188,7 +188,15 @@ def _scale_short_schedules(df: pd.DataFrame, kind: str) -> pd.DataFrame:
     # this ratio cannot see. `prorate_partial` handles those; they are excluded from
     # the comp pool by default.
     df[volume] = df[volume] * scale
-    df["games"] = df["games"] * scale
+    # EVERY appearance count scales, not just `games`. Scaling one and not the other
+    # silently breaks any ratio between them: `starts / games` is how a pitcher is
+    # routed to the SP or RP replacement floor, and in 2020 (scale 2.7) the highest
+    # attainable ratio became 0.37, below the 0.5 starter threshold, so every 2020
+    # starter -- including a man who started all twelve of his appearances -- was
+    # classified a reliever and handed 1.87 SGP a year he never earned.
+    for count in ("games", "starts"):
+        if count in df.columns:
+            df[count] = df[count] * scale
     return df
 
 

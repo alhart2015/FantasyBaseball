@@ -113,6 +113,19 @@ class Trajectory:
     #: rather than an average over comps, so `PathPoint.n` counts FITTING rows and
     #: `band` does not apply.
     mode: str = "current"
+    #: The replacement floor already netted out of every number here, and the slot it
+    #: came from. Carried ON the trajectory rather than passed alongside it, because a
+    #: caller who has to remember the scale is a caller who will eventually forget:
+    #: every round of review on this feature found another consumer left on the raw
+    #: scale -- the median, the survivor mean, the comps frame, the column headers, the
+    #: total. A reader of this object can no longer be wrong about what its numbers mean.
+    floor: float = 0.0
+    slot: str | None = None
+
+    @property
+    def scale(self) -> str:
+        """ "var" once a floor has been netted out, "sgp" otherwise."""
+        return "var" if self.slot is not None else "sgp"
 
     @property
     def observable(self) -> tuple[PathPoint, ...]:
@@ -177,6 +190,8 @@ def comp_trajectory(
     prior_band: float | None = None,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     last_complete_season: int | None = None,
+    replacement: float = 0.0,
+    slot: str | None = None,
     seed: int = 0,
     bootstrap_draws: int = BOOTSTRAP_DRAWS,
 ) -> Trajectory:
@@ -185,6 +200,13 @@ def comp_trajectory(
     `panel` is a scored, era-normalized panel of COMPLETE seasons (see
     `panel.load_scored_panel` and `era.era_normalize`); passing in-progress seasons
     would average a two-thirds year in as if it were a full one.
+
+    `replacement` scores every horizon as VALUE ABOVE REPLACEMENT rather than raw SGP,
+    flooring each comp at zero BEFORE aggregating: `max(sgp - replacement, 0)`. That has
+    to happen here rather than as a shift of the finished mean, because a comp who left
+    the league scores a structural 0 and is worth 0 to a roster slot -- not minus a
+    floor. Subtracting afterwards charges the floor a second time against attrition;
+    measured at age 30 it turned a +0.46 five-year value into -6.01.
 
     `last_complete_season` defaults to the panel's maximum and defines observability,
     which is applied PER HORIZON: a 2024 age-25 season has a real age-26 to look at and
@@ -254,11 +276,27 @@ def comp_trajectory(
         width = prior_band if prior_band is not None else band
         comps = comps[(comps["sgp_prior"] - prior_sgp).abs().le(width)].reset_index(drop=True)
 
+    # Keep the pre-floor forwards: survival must stay readable off the RAW line, since
+    # after flooring a below-replacement season and a career ending are both 0.
+    raw_forward = {f"h{h}": comps[f"h{h}"].copy() for h in horizons} if not comps.empty else {}
+    if replacement and not comps.empty:
+        # The FRAME is floored too, not just the aggregates. It is what `--show-comps`
+        # prints, and flooring only the aggregates left it listing raw SGP directly
+        # beneath a VAR table -- anyone checking the arithmetic got a different mean
+        # than the row above.
+        for h in horizons:
+            column = comps[f"h{h}"]
+            comps[f"h{h}"] = column.where(column.isna(), (column - replacement).clip(lower=0.0))
+
     rng = np.random.default_rng(seed)
     path = []
     for h in horizons:
         values = comps[f"h{h}"].dropna().to_numpy(dtype=float) if not comps.empty else np.array([])
-        survived = values[played(values)]
+        # Survival off the RAW line: after flooring, a below-replacement season and a
+        # career ending are both 0 and no longer tell apart, so the mask is taken from
+        # the pre-floor values kept alongside.
+        raw = raw_forward[f"h{h}"].dropna().to_numpy(dtype=float) if not comps.empty else values
+        survived = values[played(raw)]
         path.append(
             PathPoint(
                 horizon=h,
@@ -292,4 +330,6 @@ def comp_trajectory(
         path=tuple(path),
         comps=comps,
         mode="track" if prior_sgp is not None else "current",
+        floor=replacement,
+        slot=slot,
     )

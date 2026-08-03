@@ -44,6 +44,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.comps import (
     DEFAULT_BAND,
     Trajectory,
@@ -57,6 +59,12 @@ from fantasy_baseball.trajectory.panel import (
     season_elapsed_fraction,
 )
 from fantasy_baseball.trajectory.shape import shape_trajectory
+from fantasy_baseball.trajectory.value import (
+    ROLE_MIN_GAMES,
+    check_position,
+    replacement_for,
+    resolve_slots,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 
 PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
@@ -182,6 +190,130 @@ def _resolve_player(
     return resolved
 
 
+@lru_cache(maxsize=4)
+def _eligibility(season: int) -> dict[int, frozenset[str]]:
+    """MLBAM id -> slots with 10+ games that season, the league's own rule.
+
+    READS a cache; never populates one. `fetch_mlb_season` falls through to a live
+    paginated download on a miss and writes the result into the KEEPER pipeline's
+    directory -- a standalone tool quietly filling another pipeline's cache, and a
+    network dependency on a command that otherwise runs offline. The fielding pull
+    covers only the keeper range while this panel spans 2000, so a miss is routine
+    rather than exceptional: it degrades to UTIL, the HIGHEST floor, which understates
+    rather than invents.
+
+    Even a present cache is a point-in-time snapshot for the live season, so eligibility
+    only grows after it was taken. Conservative in both directions.
+    """
+    from fantasy_baseball.keepers.appearances import season_eligibility
+    from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
+
+    cache = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
+    path = cache / f"mlb_fielding_{season}.csv"
+    # NON-EMPTY, not merely present. `fetch_or_cache` treats an empty frame as a miss and
+    # falls through to a live download plus a write into the keeper pipeline's cache --
+    # so a header-only file passed an `exists()` check and reintroduced the very
+    # cross-pipeline write this guard was added to stop, invisibly.
+    if not path.exists() or path.stat().st_size == 0:
+        print(
+            f"  NOTE: no cached {season} fielding data, so eligibility is unknown and "
+            "every player here nets against the UTIL floor. (--scale sgp needs none.)"
+        )
+        return {}
+    try:
+        fielding = fetch_mlb_season(cache, season, "fielding")
+        # The PARSE is inside the guard too. `season_eligibility` raises KeyError on a
+        # schema-shifted file, which is what half of "corrupt" looks like once the CSV
+        # itself still parses -- leaving the documented degradation covering only the
+        # read.
+        eligibility = season_eligibility(fielding)
+    except Exception:  # a corrupt cache degrades rather than crashing
+        print(f"  NOTE: {season} fielding cache unusable; netting against UTIL.")
+        return {}
+    return {pid: frozenset(slots) for pid, slots in eligibility.items()}
+
+
+def _number(row: pd.Series, column: str) -> float:
+    """A count off a panel row, treating missing AND NaN as zero.
+
+    `row.get(c) or 0.0` is the falsy-zero pattern the root CLAUDE.md prohibits, and here
+    it failed both ways: a missing column gave 0.0 and routed every starter to the
+    reliever floor, and NaN is TRUTHY so a null propagated NaN into the comparison and
+    landed on RP too.
+    """
+    value = row.get(column)
+    if value is None or pd.isna(value):
+        return 0.0
+    return float(value)
+
+
+def _role_row(panel: pd.DataFrame, mlbam_id: int) -> pd.Series:
+    """The season that should decide a pitcher's SP/RP role.
+
+    His most recent, unless that is an in-progress fragment: `_resolve_player` already
+    pace-adjusts a partial season's SGP because a fragment is not representative, and
+    the role read has the same problem. Below `ROLE_MIN_GAMES` appearances, fall back to
+    the last season that cleared it.
+    """
+    rows = panel[panel["mlbam_id"] == mlbam_id].sort_values("season")
+    latest = rows.iloc[-1]
+    if _number(latest, "games") >= ROLE_MIN_GAMES:
+        return latest
+    settled = rows[rows["games"] >= ROLE_MIN_GAMES]
+    return settled.iloc[-1] if not settled.empty else latest
+
+
+def _slots_for(panel: pd.DataFrame, mlbam_id: int, kind: str) -> set[str]:
+    """Eligible slots for this player in this pool.
+
+    A pitcher never consults the fielding leaderboard: `resolve_slots` ignores it and
+    decides SP/RP from starts, so calling it read a multi-megabyte CSV to throw the
+    result away -- and on a cache miss printed a NOTE claiming everyone nets against
+    UTIL, two lines above a banner correctly naming the SP floor.
+    """
+    if kind == "pitcher":
+        row = _role_row(panel, mlbam_id)
+        return resolve_slots(None, kind, starts=_number(row, "starts"), games=_number(row, "games"))
+    rows = panel[panel["mlbam_id"] == mlbam_id]
+    row = rows.loc[rows["season"].idxmax()]
+    return resolve_slots(set(_eligibility(int(row["season"])).get(mlbam_id, frozenset())), kind)
+
+
+def _query_slots(
+    args: argparse.Namespace,
+    panel: pd.DataFrame,
+    mlbam_id: int,
+    pool: str,
+    two_way: bool,
+    parser: argparse.ArgumentParser,
+) -> set[str] | None:
+    """Slots for one pool's query, or None when the raw scale needs no floor.
+
+    Only consulted for `--scale var`, because the eligibility lookup reads a fielding
+    cache the raw scale has never needed -- calling it unconditionally turned the
+    DEFAULT invocation into a live MLB Stats fetch.
+
+    An explicit `--position` cannot describe a two-way player: `_resolve_player` returns
+    one query per pool, and a single token applied to both put his bat on a pitcher's
+    floor -- the mispricing `resolve_slots` exists to prevent, re-entering through the
+    override.
+    """
+    if args.scale != "var":
+        return None
+    if args.position is not None:
+        problem = check_position(args.position, pool)
+        if problem:
+            parser.error(problem)
+        if two_way:
+            parser.error(
+                f"--position {args.position} cannot describe a two-way player: "
+                f"{args.player} is scored in both pools and each needs its own floor. "
+                "Drop --position to derive both, or add --pool to score one."
+            )
+        return {args.position}
+    return _slots_for(panel, mlbam_id, pool)
+
+
 def _prior_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> float:
     """The player's own SGP in the season before the one being scored.
 
@@ -229,15 +361,26 @@ def _warn_if_thin(traj: Trajectory) -> None:
     )
 
 
+def _units(traj: Trajectory) -> str:
+    """What the numbers are denominated in. Read off the trajectory, never passed --
+    a VAR total printed as "SGP" is the mixed-scale comparison this feature exists to
+    prevent, and it was printed that way because the label was a literal."""
+    return "VAR" if traj.scale == "var" else "SGP"
+
+
 def _print_total(traj: Trajectory) -> None:
     covered, asked = len(traj.observable), len(traj.path)
     note = "" if covered == asked else f"  (only {covered} of {asked} are observable)"
-    print(f"\n   total over {covered} years: {traj.total:.1f} SGP{note}")
+    print(f"\n   total over {covered} years: {traj.total:.1f} {_units(traj)}{note}")
 
 
 def render(traj: Trajectory, show_comps: int) -> None:
     span = f"{traj.seasons[0]}-{traj.seasons[1]}" if traj.seasons else "n/a"
     print(f"\n{traj.kind.upper()}: {traj.sgp:.1f} SGP in an age-{traj.age} season")
+    if traj.scale == "var":
+        # Say the floor out loud. A VAR table with no floor printed cannot be compared
+        # against any other board, and the floor is the whole difference between them.
+        print(f"  SCALE: value above replacement, {traj.slot} floor {traj.floor:.2f} SGP")
     if traj.mode == "shape":
         # A fitted prediction, not an average over a handful of careers: `n` counts the
         # rows the relationship was fit on, and nothing was excluded on a cliff.
@@ -268,7 +411,10 @@ def render(traj: Trajectory, show_comps: int) -> None:
         # Weighted survival against the EFFECTIVE size, so every column in the row
         # describes the same population the fit used. A raw count beside a weighted
         # median invited the reader to take both as properties of the prediction.
-        print("\n   age    pred   +/-SE  +/-spread   median   played (of eff)   if played")
+        print(
+            f"\n   age   pred {_units(traj)}  +/-SE  +/-spread   median"
+            "   played (of eff)  if played"
+        )
         for p in traj.path:
             if p.n == 0:
                 print(f"   {p.age:3d}        --      --         --       --   (not fittable)")
@@ -310,7 +456,9 @@ def render(traj: Trajectory, show_comps: int) -> None:
     print(f"  comps started from {traj.mean_start:.1f} SGP on average{prior_note}")
     _warn_if_thin(traj)
 
-    print("\n   age   exp SGP    +/-SE  +/-spread   median   still playing   if playing")
+    print(
+        f"\n   age   exp {_units(traj)}    +/-SE  +/-spread   median   still playing   if playing"
+    )
     for p in traj.path:
         if p.n == 0:
             print(f"   {p.age:3d}        --        --         --       --   (not yet observable)")
@@ -391,6 +539,22 @@ def main() -> int:
         help="pool raw SGP without restating each season's run environment",
     )
     parser.add_argument(
+        "--scale",
+        choices=("sgp", "var"),
+        default="sgp",
+        help=(
+            "'sgp' (default) is raw projected production; 'var' nets it against the "
+            "position-aware waiver floor -- the scale the keeper and draft boards rank "
+            "on. Floors come from config/league.yaml at run time and are printed with "
+            "the result, so they are not repeated here"
+        ),
+    )
+    parser.add_argument(
+        "--position",
+        choices=("C", "1B", "2B", "3B", "SS", "OF", "UTIL", "SP", "RP"),
+        help="replacement floor to net against for --scale var; derived with --player",
+    )
+    parser.add_argument(
         "--panel-dir",
         type=Path,
         default=DEFAULT_PANEL_DIR,
@@ -418,6 +582,25 @@ def main() -> int:
             "--prior-sgp applies to --match shape/track; --match current scores on this "
             "season alone and would discard it"
         )
+    if args.position is not None and args.scale != "var":
+        parser.error("--position selects a replacement floor and applies to --scale var")
+    # Validated HERE, not in the per-query helper, because that helper only runs on the
+    # --player path -- putting the check there left `--pool hitter --position RP` pricing
+    # a hitter on the reliever floor, which is the same one-path-of-two mistake this
+    # whole round exists to stop making. Argument validation covers both entry points.
+    if args.position is not None and args.pool is not None:
+        problem = check_position(args.position, args.pool)
+        if problem:
+            parser.error(problem)
+    if args.no_era_adjust and args.scale == "var":
+        # The floors are calibrated on the 2023-2025 run environment (era.REFERENCE_SEASONS);
+        # netting un-normalized historical SGP against them compares a 2005 stat line to a
+        # 2026 waiver line, wrong by an amount that varies with the season.
+        parser.error(
+            "--no-era-adjust cannot be combined with --scale var: the replacement floors "
+            "are calibrated on the 2023-2025 run environment, so un-normalized seasons "
+            "would be netted against a floor that does not describe them"
+        )
     if args.show_anchors and args.match != "shape":
         parser.error("--show-anchors applies to --match shape; the comp matchers fit no anchors")
 
@@ -431,6 +614,7 @@ def main() -> int:
     # league.yaml's denominators are what every other valuation in this repo prices in,
     # so the trajectory is quoted in the same units as a draft board or a keeper line.
     overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
+    denoms = get_sgp_denominators(overrides)
 
     def load(kind: str, include_partial: bool) -> pd.DataFrame:
         panel = load_scored_panel(
@@ -450,6 +634,7 @@ def main() -> int:
         # Dating the season is a league fact and must come off the hitter panel even for
         # a pitcher query -- pitcher `games` counts appearances, not team games.
         calendar = live.get("hitter") if "hitter" in live else load("hitter", True)
+        resolved = _resolve_player(args.player, live, calendar, args.mlbam_id)
         queries = [
             # `is not None`, never `or`: --sgp 0 and --age 0 are falsy but meaningful.
             (
@@ -457,8 +642,9 @@ def main() -> int:
                 age if args.age is None else args.age,
                 sgp if args.sgp is None else args.sgp,
                 _prior_for(live[pool], pid, args) if args.match in ("track", "shape") else None,
+                _query_slots(args, live[pool], pid, pool, len(resolved) > 1, parser),
             )
-            for pool, pid, age, sgp in _resolve_player(args.player, live, calendar, args.mlbam_id)
+            for pool, pid, age, sgp in resolved
         ]
         if args.sgp is not None:
             # The looked-up pace was printed above but is not what gets scored; say so
@@ -479,12 +665,32 @@ def main() -> int:
         # Gate the prior on the MODE, exactly as the --player branch does. Passing it
         # through unconditionally made `--match current --prior-sgp N` run the track
         # estimator instead -- silently overriding the mode the user asked for.
+        if args.scale == "var" and args.position is None:
+            # Refuse rather than guess. Defaulting a pitcher to RP would hand a starter
+            # 1.87 SGP a year he never earned, and defaulting a catcher to UTIL would
+            # take 2.26 off him -- both silent, both larger than the gaps being read.
+            parser.error(
+                "--scale var needs --position (C/1B/2B/3B/SS/OF/UTIL/SP/RP) when not "
+                "using --player, since the floor a player nets against depends on it"
+            )
         queries = [
-            (args.pool, args.age, args.sgp, args.prior_sgp if args.match != "current" else None)
+            (
+                args.pool,
+                args.age,
+                args.sgp,
+                args.prior_sgp if args.match != "current" else None,
+                {args.position} if args.position else None,
+            )
         ]
 
     horizons = tuple(range(1, args.horizon + 1))
-    for pool, age, sgp, prior in queries:
+    levels = position_aware_replacement_levels(denoms)
+    for pool, age, sgp, prior, slots in queries:
+        # The floor is passed INTO the estimator, not subtracted from its answer. Each
+        # comp is floored at zero individually -- a man out of the league is worth 0 to
+        # the slot, not minus a floor -- and that carries through to median, spread and
+        # the survivor mean instead of leaving them on a different scale.
+        slot, floor = replacement_for(slots, levels) if slots is not None else (None, 0.0)
         if args.match == "shape":
             traj, anchors = shape_trajectory(
                 load(pool, False),
@@ -493,6 +699,8 @@ def main() -> int:
                 sgp=sgp,
                 peak=prior,
                 horizons=horizons,
+                replacement=floor,
+                slot=slot,
             )
             if args.show_anchors:
                 print("\n   fitted anchors (forward = intercept + a*now + b*last year):")
@@ -512,6 +720,8 @@ def main() -> int:
                 prior_sgp=prior,
                 prior_band=args.prior_band,
                 horizons=horizons,
+                replacement=floor,
+                slot=slot,
             )
         render(traj, args.show_comps)
     return 0
