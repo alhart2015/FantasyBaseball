@@ -75,6 +75,20 @@ from .comps import (
 
 #: Age contributes on a triangular kernel this many years either side. Ages 25-30 age
 #: similarly enough to pool; beyond that the shape itself changes.
+#:
+#: MEASURED, not chosen -- `scripts/tune_shape_windows.py`, #310. Leave-one-player-out over
+#: the whole panel, every grid point scored on the same complete cases so a narrow kernel
+#: cannot win by refusing the hard queries. 2 is the argmin on hitters pooled and on the
+#: elite-down-year slice, and 1 through 4 are statistically indistinguishable from it under
+#: a bootstrap resampled by player. What is NOT indistinguishable is switching the kernel
+#: off: a window wide enough to admit the whole panel costs +2.2% RMSE on hitters pooled
+#: and +2.6% on elite-down-year, in every bootstrap draw.
+#:
+#: The one alternative worth recording as rejected is 3. All five CV folds picked it on the
+#: elite slice, at all three horizons -- but the bootstrap puts it at 87%, its interval
+#: covers zero, and it REVERSES on the pooled set and on fringe. Fold unanimity was a
+#: consistent tiny tilt (0.004 SGP), not an effect, and cross-validated tuning came out
+#: BEHIND this default. That is the trap the CV exists to catch, so it is written down.
 AGE_WINDOW = 2
 
 #: Kernel half-width on the PRIOR season, in SGP. Wide, because `prior_sgp` is also a
@@ -89,6 +103,27 @@ AGE_WINDOW = 2
 #:
 #: Note what has NO window: the current season. It enters the fit as a bare regressor, so
 #: this constrains only half the query. See `Trajectory.local_support` and #310.
+#:
+#: MEASURED alongside `AGE_WINDOW` (#310), and the two pools do not agree.
+#:
+#: On HITTERS 8.0 is the argmin, and the kernel is buying something real: widening it to
+#: 100 SGP -- effectively off, wider than the observed spread -- costs +1.7% RMSE on the
+#: elite slice and +2.7% on elite-down-year, the default winning every bootstrap draw. But
+#: the optimum is a PLATEAU, not a point: 4 through 16 are indistinguishable. "8 is right"
+#: is really "8 is the centre of a wide flat region", which is the useful form of the claim
+#: -- it says a future change of a couple of SGP either way needs no defence, and one to 2
+#: or 40 does.
+#:
+#: On PITCHERS the prior kernel buys nothing measurable. Turning it off scores 5.775 on the
+#: elite slice against this default's 5.778, and the argmin drifts out to 12-24. That is
+#: the same finding as #313's fitted coefficients from the other direction: `on_prior` is
+#: flat at ~0.10-0.19 across the whole pitcher level range and never crosses `on_current`,
+#: so last season carries little enough signal that localising on it does not help.
+#:
+#: The constant stays global at 8.0 anyway. Cross-validated selection loses to it on EVERY
+#: pitcher slice (-0.0% to -0.4%) and the folds disagree with each other on all four, so
+#: the wider pitcher optimum is not stable enough to ship -- and splitting this per pool is
+#: #313's call to make, on #313's evidence, not a side effect of tuning a shared window.
 PRIOR_WINDOW = 8.0
 
 #: Kernel half-width used ONLY to reweight residuals when reading the band -- never in
