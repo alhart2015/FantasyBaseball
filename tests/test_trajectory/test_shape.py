@@ -261,9 +261,28 @@ def test_prepared_state_refuses_a_horizon_it_has_no_forward_values_for() -> None
         )
 
 
-def test_prepared_state_refuses_a_contradictory_last_season() -> None:
-    """`prepare` has already censored on its own `last`; honouring a different one here
-    would apply two different cutoffs to the same query."""
+def test_a_prepared_state_honours_a_lower_cutoff_without_a_rebuild() -> None:
+    """`prepare` never uses `last` -- it carries it, builds `forward` for every row, and
+    leaves all censoring to the query. So an as-of-season sweep can reuse one state across
+    cutoffs instead of re-running `build_history` and a full reindex per cutoff, which is
+    the exact work `prepare` exists to hoist."""
+    panel = _mixed_panel()
+    kw = {"kind": "hitter", "age": 28, "sgp": 15.0, "peak": 15.0, "peak_band": 50.0}
+    prepared = prepare(panel, kind="hitter", horizons=(1,))
+
+    reused, _ = shape_trajectory(prepared, horizons=(1,), last_complete_season=2012, **kw)
+    rebuilt, _ = shape_trajectory(panel, horizons=(1,), last_complete_season=2012, **kw)
+
+    assert reused.n_comps == rebuilt.n_comps
+    assert reused.path[0] == rebuilt.path[0]
+    # And the cutoff genuinely bit, rather than both silently using the panel maximum.
+    assert reused.n_comps < shape_trajectory(prepared, horizons=(1,), **kw)[0].n_comps
+
+
+def test_prepared_state_refuses_a_cutoff_past_what_it_was_built_for() -> None:
+    """The unsafe direction. `forward` was looked up against the panel, so a season past
+    `prepared.last` came back missing and was recorded as the 0 that means "out of the
+    league" -- raising the cutoff would reinterpret "not yet played" as "did not play"."""
     panel = _mixed_panel()
     with pytest.raises(ValueError, match="last_complete_season"):
         shape_trajectory(
@@ -273,7 +292,7 @@ def test_prepared_state_refuses_a_contradictory_last_season() -> None:
             sgp=15.0,
             peak=15.0,
             horizons=(1,),
-            last_complete_season=2011,
+            last_complete_season=2014,
         )
 
 

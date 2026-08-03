@@ -403,16 +403,29 @@ def shape_trajectory(
                 f"prepared state has no forward values for horizons {unavailable}; "
                 f"it was built for {list(prepared.horizons)}"
             )
-        if last_complete_season is not None and last_complete_season != prepared.last:
+        # A LOWER cutoff is fine and does not need a rebuild: `prepare` never uses `last`
+        # for anything, it just carries it -- `forward` is built for every history row and
+        # all censoring happens per query below. Refusing any difference forced an
+        # as-of-season sweep to re-run `build_history` and a full reindex per cutoff,
+        # which is the exact work `prepare` exists to hoist.
+        #
+        # A HIGHER one is unsafe and stays refused. `forward` was looked up against the
+        # panel, so a season past `prepared.last` came back missing and was recorded as
+        # the 0 that means "out of the league" -- raising the cutoff would silently
+        # reinterpret "has not happened yet" as "did not play".
+        if last_complete_season is not None and last_complete_season > prepared.last:
             raise ValueError(
-                f"last_complete_season {last_complete_season} contradicts the prepared "
-                f"state's {prepared.last}; rebuild it rather than censoring twice"
+                f"last_complete_season {last_complete_season} runs past the prepared "
+                f"state's {prepared.last}, where a missing season is not yet played "
+                f"rather than not played; rebuild the state to reach further"
             )
     else:
         prepared = prepare(
             panel, kind=kind, horizons=horizons, last_complete_season=last_complete_season
         )
-    last = prepared.last
+    # The query's cutoff wins where it is given -- it can only ever censor MORE than the
+    # prepared state does, the guard above having refused the other direction.
+    last = last_complete_season if last_complete_season is not None else prepared.last
 
     # Weight once: the kernels describe the QUERY's neighbourhood and do not move with
     # the horizon. `age_window + 1` so a player exactly `age_window` years away still
