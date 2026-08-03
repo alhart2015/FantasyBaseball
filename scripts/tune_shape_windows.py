@@ -88,6 +88,12 @@ DEFAULT_PRIOR_WINDOWS = (2.0, 3.0, 4.0, 6.0, 8.0, 12.0, 16.0, 24.0, 40.0, 100.0)
 #: for once per grid point per query.
 TUNING_DRAWS = 2
 
+#: Memory the plateau bootstrap's working arrays may occupy, which sets its batch size at
+#: `PLATEAU_BYTES // (24 * players)`. Same budget and same reasoning as
+#: `shape.BOOTSTRAP_BYTES`: a batch is pure vectorization width, so trading it away costs
+#: a little speed and nothing else -- the draws, and therefore the answer, are unchanged.
+PLATEAU_BYTES = 32 * 1024 * 1024
+
 
 def _folds(ids: np.ndarray, folds: int) -> np.ndarray:
     """Assign each row a fold from its PLAYER id, so a career never spans two folds.
@@ -164,6 +170,7 @@ def score_grid(
                 for point in curve.path:
                     records.append(
                         (
+                            kind,
                             q.mlbam_id,
                             q.season,
                             int(q.age),
@@ -179,6 +186,11 @@ def score_grid(
     return pd.DataFrame(
         records,
         columns=[
+            # Carried on every row so `--from-csv` can REFUSE a pool it was not swept on.
+            # Nothing downstream reads it; it exists because the analysis is pool-blind and
+            # would otherwise print pitcher predictions under a HITTERS header. Same failure
+            # `shape.Prepared.kind` was added to stop, one layer out.
+            "pool",
             "mlbam_id",
             "season",
             "age",
@@ -263,18 +275,29 @@ def plateau(
     counts = at_default.groupby("mlbam_id").size().reindex(sums.index).to_numpy(dtype=float)
 
     n = len(sums)
+    per_player = sums.to_numpy()
     rng = np.random.default_rng(seed)
-    # The offset-bincount idiom from `shape._bootstrap_predictions`: how many times each
-    # player was drawn, as one bincount over the whole batch rather than `draws` of them.
-    picks = rng.integers(0, n, (draws, n))
-    picks += (np.arange(draws) * n)[:, None]
-    weights = np.bincount(picks.ravel(), minlength=draws * n).reshape(draws, n).astype(float)
-    rmse = np.sqrt((weights @ sums.to_numpy()) / (weights @ counts)[:, None])
+    # BATCHED over draws, under a byte budget, for the reason `shape.BOOTSTRAP_BYTES`
+    # exists: the offset-bincount idiom borrowed below holds three (batch, n) arrays alive
+    # at once, so a fixed batch grows without bound in the number of players. At the
+    # shipped defaults that is ~29 MB and unbatched would be fine; at `--sample 0
+    # --draws 10000` it is half a gigabyte. The batch is pure vectorization width -- draws
+    # are consumed in the same order at any width, so the answer does not depend on it.
+    chunk = max(1, min(draws, PLATEAU_BYTES // (24 * n)))
+    rmse = np.empty((draws, per_player.shape[1]))
+    for start in range(0, draws, chunk):
+        size = min(chunk, draws - start)
+        # How many times each player was drawn, as one offset bincount over the whole
+        # batch rather than `size` separate ones -- `shape._bootstrap_predictions`'s idiom.
+        picks = rng.integers(0, n, (size, n))
+        picks += (np.arange(size) * n)[:, None]
+        weights = np.bincount(picks.ravel(), minlength=size * n).reshape(size, n).astype(float)
+        rmse[start : start + size] = np.sqrt((weights @ per_player) / (weights @ counts)[:, None])
 
     # Unstacked off the pivot's own MultiIndex rather than reshaped into an assumed
     # (prior, age) order -- a transposed grid would still print as a plausible table.
     at = list(sums.columns).index((PRIOR_WINDOW, AGE_WINDOW))
-    observed = np.sqrt(sums.to_numpy().sum(axis=0) / counts.sum())
+    observed = np.sqrt(per_player.sum(axis=0) / counts.sum())
     delta = pd.Series(observed - observed[at], index=sums.columns)
     # Ties count as half a win each. A cell that never differs from the default is the
     # perfectly indistinguishable case, and a bare `>` scores it 0.00 -- the same reading
@@ -401,51 +424,102 @@ def main() -> int:
     if not args.panel_dir.is_absolute():
         args.panel_dir = PROJECT_ROOT / args.panel_dir
 
-    overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
-    panel = era_normalize(
-        load_scored_panel(args.pool, panel_dir=args.panel_dir, sgp_overrides=overrides),
-        args.pool,
-        sgp_overrides=overrides,
-    )
-    last = int(panel["season"].max())
-    horizons = tuple(sorted(set(args.horizons)))
-    age_windows = tuple(sorted(set(args.age_windows)))
-    prior_windows = tuple(sorted(set(args.prior_windows)))
+    if args.from_csv:
+        # The sweep is minutes and the analysis is seconds. Changing a slice or a bootstrap
+        # setting should not cost another sweep, and re-running one to do it invites
+        # comparing two tables that came from different query samples.
+        #
+        # EVERYTHING here is read off the file -- pool, grid, horizons, counts. The panel is
+        # not loaded at all. It used to be: the query set was rebuilt from the CLI defaults,
+        # printed as the header, and then thrown away, so `--from-csv pitchers.csv` announced
+        # HITTERS and `--sample 25` announced 25 fringe queries above an analysis of 3000.
+        # The numbers below it were right the whole time, which is what made it dangerous.
+        # Refused, not ignored -- `player_trajectory.py` does the same for flags that cannot
+        # affect the chosen mode. These all describe how to SWEEP, and the sweep already
+        # happened; accepting `--sample 25` here and answering from 3000 saved queries is
+        # how the old header came to disagree with its own table.
+        sweeps_only = (
+            "horizons",
+            "age_windows",
+            "prior_windows",
+            "min_age",
+            "max_age",
+            "sample",
+            "panel_dir",
+            "out",
+        )
+        overridden = [
+            f"--{name.replace('_', '-')}"
+            for name in sweeps_only
+            if getattr(args, name) != parser.get_default(name)
+        ]
+        if overridden:
+            verb = "describes" if len(overridden) == 1 else "describe"
+            parser.error(
+                f"{', '.join(overridden)} {verb} the sweep and cannot apply to "
+                f"--from-csv; the saved file already fixes that"
+            )
+        df = pd.read_csv(args.from_csv)
+        if "pool" not in df.columns:
+            parser.error(
+                f"{args.from_csv} predates the `pool` column and cannot be checked against "
+                f"--pool {args.pool}; re-run the sweep to regenerate it"
+            )
+        pools = sorted(set(df["pool"]))
+        if pools != [args.pool]:
+            parser.error(
+                f"{args.from_csv} holds {'/'.join(pools)} predictions but --pool is "
+                f"{args.pool}; the analysis is pool-blind and would label them wrongly"
+            )
+        horizons = tuple(sorted(set(df["horizon"])))
+        age_windows = tuple(sorted(set(df["age_window"])))
+        prior_windows = tuple(sorted(set(df["prior_window"])))
+        ages = (int(df["age"].min()), int(df["age"].max()))
+        # QUERIES, matching the sweep branch's `len(queries)` -- one per (player, season),
+        # not per query-horizon, or the same header line would mean two different things
+        # depending on which branch printed it.
+        n_queries = int(df.groupby(["mlbam_id", "season"], sort=False).ngroups)
+        elite_rows = df[df["prior"] >= args.elite_floor]
+        n_elite = int(elite_rows.groupby(["mlbam_id", "season"], sort=False).ngroups)
+    else:
+        overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
+        panel = era_normalize(
+            load_scored_panel(args.pool, panel_dir=args.panel_dir, sgp_overrides=overrides),
+            args.pool,
+            sgp_overrides=overrides,
+        )
+        last = int(panel["season"].max())
+        horizons = tuple(sorted(set(args.horizons)))
+        age_windows = tuple(sorted(set(args.age_windows)))
+        prior_windows = tuple(sorted(set(args.prior_windows)))
+        ages = (args.min_age, args.max_age)
+
+        history = build_history(panel)
+        history = history[
+            history["age"].between(args.min_age, args.max_age)
+            & (history["season"] + min(horizons) <= last)
+        ]
+        elite = history[history["prior"] >= args.elite_floor]
+        fringe = history[history["prior"] < args.elite_floor]
+        if args.sample:
+            fringe = fringe.sample(min(args.sample, len(fringe)), random_state=args.seed)
+        queries = pd.concat([elite, fringe])
+        n_queries, n_elite = len(queries), len(elite)
+
     if AGE_WINDOW not in age_windows or PRIOR_WINDOW not in prior_windows:
         parser.error(
             f"the grid must contain the shipped default (age={AGE_WINDOW}, "
             f"prior={PRIOR_WINDOW:g}); everything here is reported against it"
         )
-
-    pool = build_history(panel)
-    pool = pool[
-        pool["age"].between(args.min_age, args.max_age) & (pool["season"] + min(horizons) <= last)
-    ]
-    elite = pool[pool["prior"] >= args.elite_floor]
-    fringe = pool[pool["prior"] < args.elite_floor]
-    if args.sample:
-        fringe = fringe.sample(min(args.sample, len(fringe)), random_state=args.seed)
-    queries = pd.concat([elite, fringe])
-
     n_grid = len(age_windows) * len(prior_windows)
     print(
-        f"{args.pool.upper()}S, horizons {list(horizons)}, ages {args.min_age}-{args.max_age}\n"
-        f"{len(queries)} queries ({len(elite)} elite at prior >= {args.elite_floor:g}, "
-        f"{len(fringe)} fringe) x {n_grid} grid points\n"
+        f"{args.pool.upper()}S, horizons {list(horizons)}, ages {ages[0]}-{ages[1]}\n"
+        f"{n_queries} queries ({n_elite} elite at prior >= {args.elite_floor:g}, "
+        f"{n_queries - n_elite} fringe) x {n_grid} grid points\n"
         f"age windows {list(age_windows)}, prior windows "
         f"{[f'{p:g}' for p in prior_windows]}\n"
     )
     if args.from_csv:
-        # The sweep is minutes and the analysis is seconds. Changing a slice or a bootstrap
-        # setting should not cost another sweep, and re-running one to do it invites
-        # comparing two tables that came from different query samples.
-        df = pd.read_csv(args.from_csv)
-        swept = sorted(set(zip(df["prior_window"], df["age_window"], strict=True)))
-        if swept != sorted((pw, aw) for aw in age_windows for pw in prior_windows):
-            parser.error(
-                f"{args.from_csv} was swept over a different grid; pass the --age-windows "
-                f"and --prior-windows it actually holds"
-            )
         print(f"re-analysing {len(df)} saved predictions from {args.from_csv}\n")
     else:
         df = score_grid(

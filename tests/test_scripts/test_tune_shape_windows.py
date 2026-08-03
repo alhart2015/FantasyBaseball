@@ -1,18 +1,27 @@
 """The methodology guards in the window tuner (#310).
 
-The sweep itself is a measurement and does not belong in the suite -- it takes minutes and
+The full sweep is a measurement and does not belong in the suite -- it takes minutes and
 its answer is data, not behaviour. What is asserted here is the part that decides whether
-the answer means anything: that a grid point cannot be scored on a kinder population than
-its neighbours, and that a player cannot appear on both sides of a cross-validation split.
+the answer means anything: that the query player really is absent from the panel he is
+scored against, that a grid point cannot be scored on a kinder population than its
+neighbours, and that a player cannot appear on both sides of a cross-validation split.
 """
 
 from __future__ import annotations
 
 import numpy as np
 import pandas as pd
+import pytest
 
-from fantasy_baseball.trajectory.shape import AGE_WINDOW, PRIOR_WINDOW
-from scripts.tune_shape_windows import _folds, _n_queries, complete_cases, error_table, plateau
+from fantasy_baseball.trajectory.shape import AGE_WINDOW, PRIOR_WINDOW, shape_trajectory
+from scripts.tune_shape_windows import (
+    _folds,
+    _n_queries,
+    complete_cases,
+    error_table,
+    plateau,
+    score_grid,
+)
 
 
 def _rows(records: list[tuple]) -> pd.DataFrame:
@@ -28,6 +37,93 @@ def _rows(records: list[tuple]) -> pd.DataFrame:
             "actual",
         ],
     )
+
+
+def _panel(rows: list[tuple[int, int, int, float]]) -> pd.DataFrame:
+    """(mlbam_id, season, age, sgp) rows, matching `tests/test_trajectory/test_shape.py`."""
+    return pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
+
+
+def _population(n: int = 200) -> list[tuple[int, int, int, float]]:
+    """Careers whose next season is a clean 0.5x the current one."""
+    rng = np.random.default_rng(0)
+    rows = []
+    for i in range(n):
+        prior, current = float(rng.uniform(8, 16)), float(rng.uniform(8, 16))
+        rows += [(i, 2010, 27, prior), (i, 2011, 28, current), (i, 2012, 29, 0.5 * current)]
+    return rows
+
+
+def _saboteur(mlbam_id: int, seasons: int = 60) -> list[tuple[int, int, int, float]]:
+    """One id's worth of seasons that pull the fit hard the other way.
+
+    A flat 12.0 forever, against a population that halves -- and enough of them, sitting
+    dead centre of both kernels, that leaving him in visibly moves the answer. Without that
+    the held-out and not-held-out fits would agree and the test would pass vacuously.
+
+    One row per season, ending at the population's last year: a duplicate `(id, season)`
+    would be collapsed as a split season and a later one would push `last` past the
+    population's forward values, censoring the very rows the fit needs.
+    """
+    return [(mlbam_id, 2012 - s, 28, 12.0) for s in range(seasons)]
+
+
+def test_the_query_player_is_absent_from_the_panel_he_is_scored_against() -> None:
+    """The claim the whole measurement rests on. If his own seasons stayed in, an estimator
+    that fits a model would be matching him to himself and every RMSE here would flatter it.
+    """
+    saboteur_id = 9999
+    panel = _panel(_population() + _saboteur(saboteur_id))
+    queries = pd.DataFrame(
+        [{"mlbam_id": saboteur_id, "season": 2011, "age": 28, "current": 12.0, "prior": 12.0}]
+    )
+    scored = score_grid(
+        panel,
+        queries,
+        kind="hitter",
+        horizons=(1,),
+        age_windows=(AGE_WINDOW,),
+        prior_windows=(PRIOR_WINDOW,),
+    )
+
+    without_him = panel[panel["mlbam_id"] != saboteur_id]
+    expected, _ = shape_trajectory(
+        without_him,
+        kind="hitter",
+        age=28,
+        sgp=12.0,
+        prior_sgp=12.0,
+        horizons=(1,),
+        last_complete_season=int(panel["season"].max()),
+        bootstrap_draws=2,
+    )
+    assert scored["predicted"].iloc[0] == pytest.approx(expected.path[0].mean)
+
+    # And the exclusion has to BITE, or the assertion above is vacuous.
+    with_him, _ = shape_trajectory(
+        panel,
+        kind="hitter",
+        age=28,
+        sgp=12.0,
+        prior_sgp=12.0,
+        horizons=(1,),
+        last_complete_season=int(panel["season"].max()),
+        bootstrap_draws=2,
+    )
+    assert with_him.path[0].mean != pytest.approx(expected.path[0].mean)
+
+
+def test_the_pool_is_stamped_on_every_row_so_a_reanalysis_cannot_mislabel_it() -> None:
+    """`--from-csv` refuses a pool mismatch, which it can only do if the sweep recorded one."""
+    scored = score_grid(
+        _panel(_population()),
+        pd.DataFrame([{"mlbam_id": 0, "season": 2011, "age": 28, "current": 12.0, "prior": 12.0}]),
+        kind="pitcher",
+        horizons=(1,),
+        age_windows=(AGE_WINDOW,),
+        prior_windows=(PRIOR_WINDOW,),
+    )
+    assert set(scored["pool"]) == {"pitcher"}
 
 
 def test_a_query_one_grid_point_refused_is_dropped_from_all_of_them() -> None:
@@ -110,6 +206,20 @@ def test_a_setting_that_never_differs_from_the_default_reads_as_a_coin_flip() ->
 def test_the_default_cell_is_blank_rather_than_a_comparison_with_itself() -> None:
     _, confidence = plateau(_two_cell_grid(1.0), draws=200)
     assert np.isnan(confidence.loc[PRIOR_WINDOW, AGE_WINDOW])
+
+
+def test_the_plateau_bootstrap_gives_the_same_answer_at_any_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The batch is a memory budget, not a modelling choice -- draws are consumed in the
+    same order at any width, so narrowing it must not move a number. Mirrors
+    `test_shape.py`'s BOOTSTRAP_BYTES invariance test, for the same reason."""
+    df = _two_cell_grid(2.0)
+    wide_delta, wide_confidence = plateau(df, draws=64)
+    monkeypatch.setattr("scripts.tune_shape_windows.PLATEAU_BYTES", 1)
+    narrow_delta, narrow_confidence = plateau(df, draws=64)
+    pd.testing.assert_frame_equal(wide_delta, narrow_delta)
+    pd.testing.assert_frame_equal(wide_confidence, narrow_confidence)
 
 
 def test_a_clearly_worse_setting_is_called_worse_in_every_draw() -> None:
