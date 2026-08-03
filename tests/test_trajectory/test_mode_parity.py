@@ -55,20 +55,66 @@ def test_survival_matches_between_modes_on_one_population() -> None:
     assert comps.path[0].n == shape.path[0].n
 
 
-def test_both_modes_report_a_predictive_spread_wider_than_the_mean_se() -> None:
-    """`se` is the standard error of the MEAN and shrinks as sqrt(n); `spread` is how
-    far ONE player can land. Reporting only `se` beside a single-player forecast read as
-    though the season were pinned to within a fraction of an SGP."""
+def _known_sigma_population(sigma: float, n: int = 400) -> pd.DataFrame:
+    """Next season is exactly 0.4*down + 0.5*peak plus noise of a KNOWN sigma, so a
+    correct predictive spread has a value to be checked against."""
+    rng = np.random.default_rng(11)
+    rows = []
+    for i in range(n):
+        peak = float(rng.uniform(5, 25))
+        down = float(rng.uniform(5, 25))
+        rows.append((i, 2010, 26, peak))
+        rows.append((i, 2011, 27, down))
+        rows.append((i, 2012, 28, 0.4 * down + 0.5 * peak + float(rng.normal(0, sigma))))
+    return _panel(rows)
+
+
+def test_shape_spread_recovers_the_generating_sigma() -> None:
+    """`spread > se` is a TAUTOLOGY in shape mode -- spread is sqrt(residual_var + se^2)
+    with residual_var >= 0 -- so asserting it locks nothing. This binds instead: on a
+    population whose noise sigma is known, the reported spread must recover it. It fails
+    if the residual variance is dropped, mis-weighted, or the degrees-of-freedom
+    correction is removed."""
+    sigma = 3.0
+    traj, _ = shape_trajectory(
+        _known_sigma_population(sigma),
+        kind="hitter",
+        age=27,
+        sgp=15.0,
+        peak=15.0,
+        horizons=(1,),
+        peak_band=60.0,
+    )
+    point = traj.path[0]
+    assert point.spread == pytest.approx(sigma, rel=0.15)
+    # And it must dwarf the SE of the mean, which shrinks as sqrt(n).
+    assert point.spread > 5 * point.se
+
+
+def test_comps_spread_recovers_the_comp_to_comp_sd() -> None:
+    """The comps half of the same contract: `spread` is the SD of the forward values,
+    not a rescaled SE."""
+    forward = [2.0, 6.0, 10.0, 14.0]
+    panel = _panel(
+        [(i, 2010, 27, 10.0) for i in range(4)] + [(i, 2011, 28, v) for i, v in enumerate(forward)]
+    )
+    traj = comp_trajectory(panel, kind="hitter", age=27, sgp=10.0, band=1.0, horizons=(1,))
+    assert traj.path[0].spread == pytest.approx(float(np.std(forward, ddof=1)))
+
+
+def test_thin_support_is_visible_as_an_effective_size_in_both_modes() -> None:
+    """A raw row count overstates support wherever kernels taper, which is why the
+    thin-support gate reads `n_effective`. In comps every row counts once, so the two
+    agree; in shape the effective size must be strictly smaller."""
     panel = _population()
-    for traj in (
-        comp_trajectory(panel, kind="hitter", age=27, sgp=10.0, band=30.0, horizons=(1,)),
-        shape_trajectory(
-            panel, kind="hitter", age=27, sgp=10.0, peak=10.0, horizons=(1,), peak_band=60.0
-        )[0],
-    ):
-        point = traj.path[0]
-        assert not np.isnan(point.spread)
-        assert point.spread > point.se
+    comps = comp_trajectory(panel, kind="hitter", age=27, sgp=10.0, band=30.0, horizons=(1,))
+    assert comps.path[0].n_effective == pytest.approx(comps.path[0].n)
+
+    shape, anchors = shape_trajectory(
+        panel, kind="hitter", age=27, sgp=10.0, peak=10.0, horizons=(1,), peak_band=8.0
+    )
+    assert shape.path[0].n_effective == pytest.approx(anchors[0].n_effective)
+    assert shape.path[0].n_effective < shape.path[0].n
 
 
 def test_both_modes_count_only_seasons_with_an_observable_forward_year() -> None:

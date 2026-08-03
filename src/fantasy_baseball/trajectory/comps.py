@@ -67,6 +67,11 @@ class PathPoint:
     #: mode. Both answer "how far from this number could one player land", which `se`
     #: does not.
     spread: float = float("nan")
+    #: Support actually behind the number, as a Kish effective size. Equal to `n` in
+    #: comps mode, where every comp counts once; strictly below it in shape mode, where
+    #: kernel weights taper. Thin-support decisions must read THIS, not `n` -- a shape
+    #: fit of 41 rows can carry an effective 15 and be degenerate while `n` looks ample.
+    n_effective: float = float("nan")
 
     @property
     def survival(self) -> float:
@@ -262,6 +267,8 @@ def comp_trajectory(
                 survivors=len(survived),
                 mean_if_survived=float(survived.mean()) if len(survived) else float("nan"),
                 spread=float(values.std(ddof=1)) if len(values) > 1 else float("nan"),
+                # Every comp counts exactly once, so the effective size IS the count.
+                n_effective=float(len(values)),
             )
         )
 

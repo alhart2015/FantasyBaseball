@@ -51,9 +51,14 @@ PEAK_BAND = 8.0
 
 BOOTSTRAP_DRAWS = 1000
 
-#: Minimum rows before a horizon is fit at all. The model has three parameters, so three
-#: rows interpolate it exactly and every diagnostic downstream degenerates.
-MIN_FIT_ROWS = 12
+#: Intercept plus the two anchors. The residual degrees of freedom subtract this.
+N_PARAMETERS = 3
+
+#: Minimum EFFECTIVE size before a horizon is fit at all. Applied to the Kish size
+#: rather than the row count, because kernel weights make those diverge badly: a 41-row
+#: fit can carry an effective 15. Comfortably above `N_PARAMETERS`, since a fit with
+#: barely more support than parameters interpolates its own sample.
+MIN_EFFECTIVE_ROWS = 12.0
 
 
 @dataclass(frozen=True)
@@ -184,14 +189,17 @@ def shape_trajectory(
             weights[observable],
         )
 
-        # MIN_FIT_ROWS, not 3: three rows fit a three-parameter model exactly, so the
-        # residuals are identically zero, the median collapses onto the mean, and every
-        # bootstrap draw refits a singular design that lstsq resolves silently to a
-        # least-norm solution. That produces a confident-looking number backed by
-        # nothing.
-        if len(y) < MIN_FIT_ROWS or w.sum() <= 0:
+        # Gate on the EFFECTIVE size, not the row count. Three rows fit a
+        # three-parameter model exactly -- residuals identically zero, median collapsed
+        # onto the mean, every bootstrap draw refitting a singular design that lstsq
+        # resolves silently to a least-norm solution. But the row count overstates
+        # support whenever the kernels taper: a 41-row fit carrying an effective 15 was
+        # passing a raw-count floor while producing `on_peak` of -1.03, i.e. more
+        # production last year predicting LESS next year.
+        n_eff = float(w.sum() ** 2 / np.square(w).sum()) if w.sum() > 0 else 0.0
+        if n_eff < MIN_EFFECTIVE_ROWS or w.sum() <= 0:
             path.append(_empty_point(h, age))
-            anchors.append(Anchors(h, float("nan"), float("nan"), float("nan"), len(y), 0.0))
+            anchors.append(Anchors(h, float("nan"), float("nan"), float("nan"), len(y), n_eff))
             continue
 
         coefficients = _weighted_least_squares(x, y, w)
@@ -215,7 +223,13 @@ def shape_trajectory(
         # the fit itself barely counted, which for an edge-of-window query is most of
         # the row count.
         median = float(predicted + _weighted_quantile(residuals, w, 0.5))
-        residual_var = float(np.average(residuals**2, weights=w))
+        # These are FITTED residuals from a three-parameter model, so their weighted
+        # mean square estimates (1 - p/n_eff) * sigma^2, not sigma^2. Without the
+        # correction the spread -- the number `PathPoint.spread` tells the reader to
+        # size a decision by -- runs narrow exactly where support is thinnest: ~12% at
+        # n_eff 15, ~32% at n_eff 7. Negligible on a healthy fit (0.4% at n_eff 347),
+        # which is the point: it self-corrects toward honest at the dangerous end.
+        residual_var = float(np.average(residuals**2, weights=w)) * n_eff / (n_eff - N_PARAMETERS)
         survived = played(y)
         path.append(
             PathPoint(
@@ -230,6 +244,7 @@ def shape_trajectory(
                 # Predictive, not the SE of the mean: how far ONE player can land from
                 # the prediction.
                 spread=float(np.sqrt(residual_var + (0.0 if np.isnan(se) else se**2))),
+                n_effective=n_eff,
             )
         )
         anchors.append(
@@ -239,7 +254,7 @@ def shape_trajectory(
                 on_down=float(coefficients[1]),
                 on_peak=float(coefficients[2]),
                 n_fit=len(y),
-                n_effective=float(w.sum() ** 2 / np.square(w).sum()),
+                n_effective=n_eff,
             )
         )
         rows.append({"horizon": h, "predicted": predicted})

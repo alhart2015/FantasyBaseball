@@ -198,19 +198,33 @@ def _prior_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> 
     return prior
 
 
+def _no_support(traj: Trajectory) -> bool:
+    """True when nothing could be scored, whatever the reason.
+
+    Tests `observable`, NOT `n_comps`. Keying on the cohort size left a window --
+    enough seasons to form a cohort, too few EFFECTIVE to fit any horizon -- in which
+    every row printed "--" and the footer still read "total over 0 years: 0.0 SGP",
+    a fabricated forecast of no future value for a player the model could not score.
+    """
+    return not traj.observable
+
+
 def _warn_if_thin(traj: Trajectory) -> None:
     """Say so when the support is too thin for the printed precision.
 
-    Applies to EVERY mode. It used to live only in the comps branch, so once shape
-    became the default a twelve-row fit printed to two decimals with no caveat at all.
+    Reads the EFFECTIVE size, not the row count. Under kernel weighting those diverge:
+    a 41-row shape fit carrying an effective 15 cleared a raw-count threshold while
+    fitting `on_peak` at -1.03 -- more production last year predicting less next year --
+    and printed unqualified to two decimals.
     """
-    if traj.n_comps >= THIN_COMPS:
+    support = min((p.n_effective for p in traj.observable), default=0.0)
+    if support >= THIN_COMPS:
         return
-    unit = "fitting seasons" if traj.mode == "shape" else "comps"
+    unit = "effective fitting seasons" if traj.mode == "shape" else "comps"
     widen = "the kernels" if traj.mode == "shape" else "--band/--prior-band"
     print(
-        f"  *** THIN: {traj.n_comps} {unit}. The numbers below are directional only --"
-        f" widen {widen}, or read a different mode. ***"
+        f"  *** THIN: {support:.0f} {unit} at the weakest horizon. The numbers below are"
+        f" directional only -- widen {widen}, or read a different mode. ***"
     )
 
 
@@ -227,15 +241,22 @@ def render(traj: Trajectory, show_comps: int) -> None:
         # A fitted prediction, not an average over a handful of careers: `n` counts the
         # rows the relationship was fit on, and nothing was excluded on a cliff.
         print(f"  SHAPE: {traj.prior_sgp:.1f} last year -> {traj.sgp:.1f} now")
-        if traj.n_comps == 0:
-            # NOT "not yet observable" -- nothing was censored. This query simply sits
-            # outside the age and peak kernels, and without this guard the table prints
-            # NaNs under a "total over 0 years: 0.0 SGP" that reads as a real forecast
-            # of zero future value.
-            print(
-                "  NO FIT -- no season is close enough in age and level to score this "
-                "query. Widen the kernels, or check the age and --prior-sgp."
-            )
+        if _no_support(traj):
+            # NOT "not yet observable" -- nothing was censored here. Either no season is
+            # near enough to enter the kernels at all, or too few carry enough weight to
+            # fit. Both must stop before the table, which would otherwise print NaNs
+            # under a "total over 0 years: 0.0 SGP" that reads as a real forecast.
+            if traj.n_comps == 0:
+                print(
+                    "  NO FIT -- no season is close enough in age and level to score "
+                    "this query. Widen the kernels, or check the age and --prior-sgp."
+                )
+            else:
+                print(
+                    f"  NO FIT -- {traj.n_comps} season(s) are near enough to weigh, but "
+                    "none of the horizons reach the effective-support floor. Widen the "
+                    "kernels, or try --match current."
+                )
             return
         print(f"  fit on {traj.n_comps} weighted seasons, {span}")
         print(
@@ -268,13 +289,21 @@ def render(traj: Trajectory, show_comps: int) -> None:
     # `n_comps` and `span` describe the NEAREST horizon's cohort; later horizons see
     # fewer, which is why the per-row n is printed rather than left to this header.
     print(f"  {traj.n_comps} comps at +1 within +/-{traj.band} SGP, age-{traj.age} seasons {span}")
-    if traj.n_comps == 0:
+    if _no_support(traj):
         print("  NO COMPS -- widen --band/--prior-band or check the age")
         return
-    print(
-        f"  comps started from {traj.mean_start:.1f} SGP on average, "
-        f"after {traj.mean_prior:.1f} the year before"
-    )
+    # `mean_prior` skips comps whose own prior sits before the panel begins, so it can
+    # describe a SMALLER cohort than `mean_start` beside it -- and is NaN when every
+    # comp is censored, which rendered as "after nan the year before". Say what it
+    # covers rather than implying both halves of the sentence share a denominator.
+    known = int(traj.comps["sgp_prior"].notna().sum()) if "sgp_prior" in traj.comps else 0
+    if known == 0:
+        prior_note = "; no comp's prior year is inside the panel"
+    elif known < traj.n_comps:
+        prior_note = f", after {traj.mean_prior:.1f} the year before ({known} of {traj.n_comps})"
+    else:
+        prior_note = f", after {traj.mean_prior:.1f} the year before"
+    print(f"  comps started from {traj.mean_start:.1f} SGP on average{prior_note}")
     _warn_if_thin(traj)
 
     print("\n   age   exp SGP    +/-SE  +/-spread   median   still playing   if playing")
