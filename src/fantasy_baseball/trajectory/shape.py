@@ -50,7 +50,13 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .comps import PathPoint, Trajectory, collapse_split_seasons, played
+from .comps import (
+    DEFAULT_HORIZONS,
+    PathPoint,
+    Trajectory,
+    collapse_split_seasons,
+    played,
+)
 
 #: Age contributes on a triangular kernel this many years either side. Ages 25-30 age
 #: similarly enough to pool; beyond that the shape itself changes.
@@ -91,8 +97,6 @@ BOOTSTRAP_CHUNK = 250
 #: batch is a pure vectorization width, so trading it away on a wide fit costs a little
 #: speed and nothing else -- the draws, and therefore the answer, are unchanged.
 BOOTSTRAP_BYTES = 32 * 1024 * 1024
-
-DEFAULT_HORIZONS = (1, 2, 3, 4, 5)
 
 #: Intercept plus the two anchors. The residual degrees of freedom subtract this.
 N_PARAMETERS = 3
@@ -143,6 +147,22 @@ def _weighted_least_squares(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> np.n
     return coefficients
 
 
+def collapsed_index(panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
+    """The panel with split seasons collapsed, and its `(mlbam_id, season) -> sgp` lookup.
+
+    One function because the two must agree. `build_history` collapses to build the
+    anchors and `prepare` needs the same lookup for the forward values, and deriving them
+    separately spelled the split-season rule out twice -- one via `collapse_split_seasons`
+    and one via a `groupby(level=[0, 1]).sum()` over the raw panel. `collapse_split_seasons`
+    was made shared precisely so the anchor side and the forward-lookup side cannot
+    disagree; if the collapse ever stops being a plain sum (PA-weighting a rate, say), the
+    two spellings would diverge and `x` and `y` would describe differently-collapsed
+    seasons with nothing failing.
+    """
+    collapsed = collapse_split_seasons(panel).sort_values(["mlbam_id", "season"])
+    return collapsed, collapsed.set_index(["mlbam_id", "season"])["sgp"]
+
+
 def build_history(panel: pd.DataFrame) -> pd.DataFrame:
     """One row per season that has an OBSERVABLE prior, carrying both anchors.
 
@@ -158,9 +178,8 @@ def build_history(panel: pd.DataFrame) -> pd.DataFrame:
     value -- attenuating the fitted `on_down`, double-weighting him, and dragging
     `mean_start` low.
     """
-    panel = collapse_split_seasons(panel).sort_values(["mlbam_id", "season"])
+    panel, index = collapsed_index(panel)
     first = int(panel["season"].min())
-    index = panel.set_index(["mlbam_id", "season"])["sgp"]
 
     history = panel.copy()
     seasons = history["season"].to_numpy()
@@ -238,10 +257,8 @@ def prepare(
         raise ValueError(f"horizons must be at least 1, got {sorted(horizons)}")
 
     last = last_complete_season if last_complete_season is not None else int(panel["season"].max())
-    history = build_history(panel)
-    index = panel.set_index(["mlbam_id", "season"])["sgp"]
-    if index.index.has_duplicates:
-        index = index.groupby(level=[0, 1]).sum()
+    collapsed, index = collapsed_index(panel)
+    history = build_history(collapsed)
 
     ids = history["mlbam_id"].to_numpy()
     seasons = history["season"].to_numpy()
@@ -369,7 +386,10 @@ def shape_trajectory(
         # count -- so `comp_trajectory` carries the same check, deliberately in both.
         raise ValueError(f"bootstrap_draws must be at least 2, got {bootstrap_draws}")
 
-    horizons = tuple(sorted(horizons))
+    # DEDUPED, matching `prepare`. Sorting alone let `horizons=(1, 1, 2)` fit h1 twice,
+    # append two identical `PathPoint`s and `Anchors`, run the bootstrap twice, and
+    # double-count h1 in `Trajectory.total`.
+    horizons = tuple(sorted(set(horizons)))
     if isinstance(panel, Prepared):
         prepared = panel
         if prepared.kind != kind:

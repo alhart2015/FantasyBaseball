@@ -221,6 +221,21 @@ def test_prepared_state_refuses_a_query_from_the_other_pool() -> None:
         shape_trajectory(prepared, kind="pitcher", age=28, sgp=15.0, peak=15.0, horizons=(1,))
 
 
+def test_a_repeated_horizon_is_not_fitted_twice() -> None:
+    """`prepare` normalizes with `sorted(set(...))` and `shape_trajectory` used to sort
+    without deduping, so `(1, 1, 2)` passed the prepared-state check on set arithmetic and
+    then fitted h1 twice -- two identical `PathPoint`s and `Anchors`, the bootstrap run
+    twice, and h1 counted twice in the `total` the caller reads."""
+    panel = _mixed_panel()
+    kw = {"kind": "hitter", "age": 28, "sgp": 15.0, "peak": 15.0, "peak_band": 50.0}
+    once, once_anchors = shape_trajectory(panel, horizons=(1, 2), **kw)
+    twice, twice_anchors = shape_trajectory(panel, horizons=(1, 1, 2), **kw)
+
+    assert [p.horizon for p in twice.path] == [1, 2]
+    assert twice_anchors == once_anchors
+    assert twice.total == pytest.approx(once.total)
+
+
 def test_a_prepared_state_can_be_cached_on() -> None:
     """A frozen dataclass over ndarrays derives an `__eq__` that raises on the ambiguous
     truth value of an array and a `__hash__` that raises on unhashable ndarrays -- both
