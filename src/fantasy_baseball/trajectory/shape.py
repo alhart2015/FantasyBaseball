@@ -29,6 +29,18 @@ informs a 27-year-old query instead of being discarded. Weight decays; it never 
 The output is a prediction rather than an average over a handful of careers, so
 `PathPoint.n` counts FITTING rows and `survivors` describes that sample's attrition, not
 a cohort of the query's own comps. `render` labels them accordingly.
+
+Scoring a whole board calls this once per player, and most of what one call does is not
+about that player at all (#311). `prepare` hoists the panel-level state -- the history
+frame and the forward-value lookup -- out of the query, and `shape_trajectory` accepts
+the result in place of a panel:
+
+    prepared = prepare(panel, horizons=(1, 2, 3))
+    for player in board:
+        shape_trajectory(prepared, kind=..., age=..., sgp=..., peak=...)
+
+Passing a panel still works and is the CLI's path. The numbers are the same either way;
+`tests/test_trajectory/test_shape.py` asserts that rather than leaving it to inspection.
 """
 
 from __future__ import annotations
@@ -49,7 +61,29 @@ AGE_WINDOW = 2
 #: straight line does not have to serve fringe and elite players at once.
 PEAK_BAND = 8.0
 
-BOOTSTRAP_DRAWS = 1000
+#: Refits behind `PathPoint.se`. Cost is linear in this and it was ~90% of a query once
+#: the panel-level work was hoisted out (#311), so the count was chosen by measuring what
+#: the reported numbers actually need rather than by reaching for a round 1000. Across
+#: four real hitter queries x four horizons, over twelve seeds:
+#:
+#:     draws   ms/query   seed-to-seed SD of `se`   shift in `spread` vs 1000
+#:      1000      144            0.0084                  --
+#:       250       37            0.0184                  0.0006
+#:       100       16            0.0260                  0.0007
+#:
+#: `spread` is the decision-relevant width and it does not move: `se` enters it as
+#: `sqrt(residual_var + se^2)` and residual variance dominates by an order of magnitude.
+#: `se` itself prints at 2 decimals and was ALREADY unstable in that digit at 1000 draws
+#: (+/-0.008), so the extra 107ms bought precision the output never showed. Raise it per
+#: call if a specific analysis needs a tighter SE.
+BOOTSTRAP_DRAWS = 250
+
+#: Bootstrap refits solved per batch. The (batch, n) multiplicity matrix is this
+#: routine's memory high-water mark, so the cap keeps it at a few MB instead of letting
+#: it grow with the fitting sample.
+BOOTSTRAP_CHUNK = 250
+
+DEFAULT_HORIZONS = (1, 2, 3, 4, 5)
 
 #: Intercept plus the two anchors. The residual degrees of freedom subtract this.
 N_PARAMETERS = 3
@@ -131,14 +165,139 @@ def build_history(panel: pd.DataFrame) -> pd.DataFrame:
     return history.dropna(subset=["peak"]).rename(columns={"sgp": "down"})
 
 
-def shape_trajectory(
+@dataclass(frozen=True)
+class Prepared:
+    """Panel-level state for shape matching, computed once and reused across queries.
+
+    Everything here depends on the panel and the horizons and NOT on the player being
+    asked about, so recomputing it per query is pure waste -- it was ~85% of a board
+    sweep (#311). Only the kernel weights and the weighted least squares are genuinely
+    per-query, and those are the cheap parts.
+
+    Columns are held as arrays rather than a frame because the per-query step is a
+    boolean subset, and slicing a DataFrame 600 times costs more than the fit does.
+    """
+
+    #: Horizons whose forward values are available. A query may ask for any subset.
+    horizons: tuple[int, ...]
+    #: Last season with an observable outcome; a row is censored past it.
+    last: int
+    age: np.ndarray
+    down: np.ndarray
+    peak: np.ndarray
+    season: np.ndarray
+    #: horizon -> forward SGP for every history row, 0 where he was out of the league.
+    #: Rows whose `season + horizon` runs past `last` are unobservable and are masked
+    #: off per query rather than being trusted here.
+    forward: dict[int, np.ndarray]
+
+
+def prepare(
     panel: pd.DataFrame,
+    *,
+    horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+    last_complete_season: int | None = None,
+) -> Prepared:
+    """Hoist the panel-level half of `shape_trajectory` out of the per-query loop.
+
+    Worth it from roughly the second query onward; below that just pass the panel.
+    """
+    if not horizons:
+        raise ValueError("horizons must not be empty")
+    if min(horizons) < 1:
+        raise ValueError(f"horizons must be at least 1, got {sorted(horizons)}")
+
+    last = last_complete_season if last_complete_season is not None else int(panel["season"].max())
+    history = build_history(panel)
+    index = panel.set_index(["mlbam_id", "season"])["sgp"]
+    if index.index.has_duplicates:
+        index = index.groupby(level=[0, 1]).sum()
+
+    ids = history["mlbam_id"].to_numpy()
+    seasons = history["season"].to_numpy()
+    # One vectorized reindex per horizon over the whole history, instead of one per
+    # query. A missing key means he was out of the league that year -- a real 0, the
+    # same convention the comps forward path uses.
+    forward = {
+        h: np.nan_to_num(
+            index.reindex(pd.MultiIndex.from_arrays([ids, seasons + h])).to_numpy(dtype=float),
+            nan=0.0,
+        )
+        for h in sorted(set(horizons))
+    }
+    return Prepared(
+        horizons=tuple(sorted(set(horizons))),
+        last=last,
+        age=history["age"].to_numpy(dtype=float),
+        down=history["down"].to_numpy(dtype=float),
+        peak=history["peak"].to_numpy(dtype=float),
+        season=seasons,
+        forward=forward,
+    )
+
+
+def _bootstrap_predictions(
+    x: np.ndarray,
+    y: np.ndarray,
+    w: np.ndarray,
+    query: np.ndarray,
+    rng: np.random.Generator,
+    draws: int,
+) -> np.ndarray:
+    """Query predictions from `draws` refits on rows resampled with replacement.
+
+    Solved in BATCHES through the normal equations rather than one `lstsq` per draw. A
+    resampled fit differs from the original only in how many times each row appears, so
+    every draw's `X'WX` and `X'Wy` is a weighted sum of the same per-row contributions --
+    which makes a batch two matrix products and a stack of 3x3 pseudo-inverses instead
+    of a thousand full-size SVDs. It was ~46% of a query's cost.
+
+    The resampled indices are drawn in the same order the per-draw loop drew them, so
+    the draws themselves are unchanged; only the solver differs, and the two agree far
+    inside the resolution `se` is reported at.
+
+    `pinv` rather than `solve`, deliberately. A draw can land on too few distinct rows
+    to identify three parameters, and `solve` raises on that while the `lstsq` this
+    replaced returned the least-norm solution. Those two are the same answer here --
+    `pinv(X'WX) X'Wy` equals `pinv(X'W^.5) W^.5 y` for any rank -- so the rank-deficient
+    draw keeps behaving exactly as it did, with no separate branch to go stale. The 3x3
+    SVDs cost about 4% of this routine.
+    """
+    n = len(y)
+    design = np.column_stack([np.ones(n), x])
+    rooted = design * np.sqrt(w)[:, None]
+    response = y * np.sqrt(w)
+    # Per-row contributions to the normal equations, so a draw is a weighted SUM of
+    # these rather than another pass over its own resampled rows.
+    gram = np.einsum("ni,nj->nij", rooted, rooted).reshape(n, -1)
+    moment = rooted * response[:, None]
+
+    out = np.empty(draws)
+    for start in range(0, draws, BOOTSTRAP_CHUNK):
+        size = min(BOOTSTRAP_CHUNK, draws - start)
+        picks = rng.integers(0, n, (size, n))
+        # How many times each row was drawn, as one offset bincount rather than `size`
+        # separate ones. The offset is applied IN PLACE: `picks` is freshly drawn and
+        # discarded here, and a second (size, n) allocation per chunk was costing more
+        # than either matrix product it feeds.
+        picks += (np.arange(size) * n)[:, None]
+        counts = np.bincount(picks.ravel(), minlength=size * n).reshape(size, n).astype(float)
+        width = design.shape[1]
+        normal = (counts @ gram).reshape(size, width, width)
+        out[start : start + size] = (np.linalg.pinv(normal) @ (counts @ moment)[..., None])[
+            ..., 0
+        ] @ query
+    return out
+
+
+def shape_trajectory(
+    panel: pd.DataFrame | Prepared,
     *,
     kind: str,
     age: int,
     sgp: float,
     peak: float,
-    horizons: tuple[int, ...] = (1, 2, 3, 4, 5),
+    horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     age_window: int = AGE_WINDOW,
     peak_band: float = PEAK_BAND,
     last_complete_season: int | None = None,
@@ -148,6 +307,9 @@ def shape_trajectory(
     bootstrap_draws: int = BOOTSTRAP_DRAWS,
 ) -> tuple[Trajectory, tuple[Anchors, ...]]:
     """Forward path for a player at `age`, now producing `sgp`, who produced `peak`.
+
+    `panel` may be a season panel or a `Prepared` from `prepare`. The second form skips
+    the panel-level work and is what a board sweep should pass; the answer is identical.
 
     Returns the trajectory and the fitted anchors, so the coefficients that produced
     each number can be read rather than trusted.
@@ -165,43 +327,55 @@ def shape_trajectory(
         raise ValueError(f"age_window must be at least 1, got {age_window}")
     if not horizons:
         raise ValueError("horizons must not be empty")
+    if bootstrap_draws < 2:
+        # `std(ddof=1)` on fewer than two draws is NaN plus a RuntimeWarning, which
+        # reaches the caller as an SE that is silently missing rather than as a refused
+        # argument. `comps._bootstrap_se` already guards this.
+        raise ValueError(f"bootstrap_draws must be at least 2, got {bootstrap_draws}")
 
     horizons = tuple(sorted(horizons))
-    last = last_complete_season if last_complete_season is not None else int(panel["season"].max())
-    history = build_history(panel)
-    index = panel.set_index(["mlbam_id", "season"])["sgp"]
-    if index.index.has_duplicates:
-        index = index.groupby(level=[0, 1]).sum()
+    if isinstance(panel, Prepared):
+        prepared = panel
+        unavailable = sorted(set(horizons) - set(prepared.horizons))
+        if unavailable:
+            raise ValueError(
+                f"prepared state has no forward values for horizons {unavailable}; "
+                f"it was built for {list(prepared.horizons)}"
+            )
+        if last_complete_season is not None and last_complete_season != prepared.last:
+            raise ValueError(
+                f"last_complete_season {last_complete_season} contradicts the prepared "
+                f"state's {prepared.last}; rebuild it rather than censoring twice"
+            )
+    else:
+        prepared = prepare(panel, horizons=horizons, last_complete_season=last_complete_season)
+    last = prepared.last
 
     # Weight once: the kernels describe the QUERY's neighbourhood and do not move with
     # the horizon. `age_window + 1` so a player exactly `age_window` years away still
     # carries weight rather than sitting exactly on zero.
-    weights = _triangular(history["age"].to_numpy(dtype=float) - age, age_window + 1) * _triangular(
-        history["peak"].to_numpy(dtype=float) - peak, peak_band
+    weights = _triangular(prepared.age - age, age_window + 1) * _triangular(
+        prepared.peak - peak, peak_band
     )
     # The NEAREST horizon sets membership, matching `comp_trajectory`: a season too
     # recent to have even one observable forward year enters no fit, so counting it in
     # `n_comps` (which render prints as "fit on N weighted seasons") would describe the
     # fit with rows the fit never saw.
-    usable = (weights > 0) & (history["season"] + horizons[0] <= last).to_numpy()
-    history, weights = history[usable].reset_index(drop=True), weights[usable]
+    usable = np.flatnonzero((weights > 0) & (prepared.season + horizons[0] <= last))
+    seasons = prepared.season[usable]
+    down, high = prepared.down[usable], prepared.peak[usable]
+    weights = weights[usable]
 
     rng = np.random.default_rng(seed)
-    ids, seasons = history["mlbam_id"].to_numpy(), history["season"].to_numpy()
-    anchor_columns = history[["down", "peak"]].to_numpy(dtype=float)
+    anchor_columns = np.column_stack([down, high])
     path, anchors, rows = [], [], []
     for h in horizons:
-        # Look up ONLY the observable rows, vectorized. The previous form built a value
-        # for every row through a per-row MultiIndex .get and then discarded the ones
-        # the mask rejected -- ~3,000 individual gets for a five-horizon query, a
-        # growing share of them thrown away.
+        # Positions into the PREPARED arrays, so the forward values are a gather rather
+        # than a fresh lookup. Observability is still decided here and not in `prepare`:
+        # a row too recent to have an outcome at this horizon may well have one at a
+        # nearer horizon in the same query.
         keep = np.flatnonzero(seasons + h <= last)
-        y = index.reindex(pd.MultiIndex.from_arrays([ids[keep], seasons[keep] + h])).to_numpy(
-            dtype=float
-        )
-        # Missing key = out of the league that year = a real 0, the same convention the
-        # comps forward path uses.
-        y = np.nan_to_num(y, nan=0.0)
+        y = prepared.forward[h][usable[keep]]
         # Survival off the RAW line: after flooring, a below-replacement season and a
         # career ending are both 0 and no longer tell apart.
         mask = played(y)
@@ -239,11 +413,7 @@ def shape_trajectory(
         # variance, so it is not how far one player can land from the prediction --
         # `spread` below is. Reporting this alone read as though Soto's age-28 season
         # were pinned to within 0.66 SGP.
-        draws = np.empty(bootstrap_draws)
-        for i in range(bootstrap_draws):
-            pick = rng.integers(0, len(y), len(y))
-            draws[i] = query @ _weighted_least_squares(x[pick], y[pick], w[pick])
-        se = float(draws.std(ddof=1)) if bootstrap_draws > 1 else float("nan")
+        se = float(_bootstrap_predictions(x, y, w, query, rng, bootstrap_draws).std(ddof=1))
 
         residuals = y - np.column_stack([np.ones(len(x)), x]) @ coefficients
         # WEIGHTED, both of them. The fit centres the weighted residual distribution;
@@ -303,16 +473,10 @@ def shape_trajectory(
             sgp=sgp,
             band=float("nan"),  # no band: weight decays, nothing is excluded on a cliff
             prior_sgp=peak,
-            n_comps=len(history),
-            mean_start=float(np.average(history["down"], weights=weights))
-            if len(history)
-            else float("nan"),
-            mean_prior=float(np.average(history["peak"], weights=weights))
-            if len(history)
-            else float("nan"),
-            seasons=(int(history["season"].min()), int(history["season"].max()))
-            if len(history)
-            else None,
+            n_comps=len(usable),
+            mean_start=float(np.average(down, weights=weights)) if len(usable) else float("nan"),
+            mean_prior=float(np.average(high, weights=weights)) if len(usable) else float("nan"),
+            seasons=(int(seasons.min()), int(seasons.max())) if len(usable) else None,
             path=tuple(path),
             comps=pd.DataFrame(rows),
             mode="shape",

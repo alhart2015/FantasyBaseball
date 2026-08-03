@@ -41,19 +41,21 @@ and it remains the honest baseline any future matcher has to beat.
 from .comps import PathPoint, Trajectory, comp_trajectory
 from .era import era_normalize, league_rates
 from .panel import DEFAULT_PANEL_DIR, load_scored_panel
-from .shape import Anchors, shape_trajectory
+from .shape import Anchors, Prepared, prepare, shape_trajectory
 from .value import best_floor, resolve_slots
 
 __all__ = [
     "DEFAULT_PANEL_DIR",
     "Anchors",
     "PathPoint",
+    "Prepared",
     "Trajectory",
     "best_floor",
     "comp_trajectory",
     "era_normalize",
     "league_rates",
     "load_scored_panel",
+    "prepare",
     "resolve_slots",
     "shape_trajectory",
 ]

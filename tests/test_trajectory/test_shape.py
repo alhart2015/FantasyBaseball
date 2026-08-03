@@ -4,7 +4,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fantasy_baseball.trajectory.shape import build_history, shape_trajectory
+from fantasy_baseball.trajectory.shape import (
+    _bootstrap_predictions,
+    _weighted_least_squares,
+    build_history,
+    prepare,
+    shape_trajectory,
+)
 
 
 def _panel(rows: list[tuple[int, int, int, float]]) -> pd.DataFrame:
@@ -135,9 +141,140 @@ def test_the_bootstrap_is_reproducible() -> None:
         ({"peak_band": 0.0}, "peak_band"),
         ({"age_window": 0}, "age_window"),
         ({"horizons": ()}, "horizons"),
+        # `std(ddof=1)` on fewer than two draws is a NaN and a RuntimeWarning, which
+        # reaches the caller as a silently missing SE rather than a refused argument.
+        ({"bootstrap_draws": 0}, "bootstrap_draws"),
+        ({"bootstrap_draws": 1}, "bootstrap_draws"),
     ],
 )
 def test_rejects_impossible_settings(kwargs: dict, match: str) -> None:
     panel = _linear_population(coef_down=0.4, coef_peak=0.5)
     with pytest.raises(ValueError, match=match):
         shape_trajectory(panel, kind="hitter", age=28, sgp=15.0, peak=15.0, **kwargs)
+
+
+# --- the batch entry point (#311) ---------------------------------------------------
+#
+# The whole contract is "same answer, less work", so these assert EQUALITY against the
+# panel path rather than checking the batch path is self-consistent. A batch API that
+# quietly returns different numbers is worse than a slow one.
+
+
+def _mixed_panel() -> pd.DataFrame:
+    """A multi-season population plus the awkward cases -- a split season, a gap year,
+    and a prior that predates the panel -- so the batch path has to reproduce the
+    censoring rules and not just the arithmetic.
+
+    Six seasons deep on purpose: on a panel that only supports horizon 1, every
+    horizon-2 assertion below would pass on a pair of NaNs.
+    """
+    rng = np.random.default_rng(0)
+    rows = []
+    for i in range(120):
+        level = float(rng.uniform(6.0, 24.0))
+        for offset, season in enumerate(range(2010, 2016)):
+            rows.append((i, season, 25 + offset, max(level + float(rng.normal(0, 2.5)), 0.0)))
+    rows += [
+        (900, 2010, 27, 8.0),
+        (900, 2011, 28, 6.0),  # split season: two rows for one player-year
+        (900, 2011, 28, 5.0),
+        (900, 2012, 29, 14.0),
+        (900, 2013, 30, 11.0),
+        (901, 2010, 26, 12.0),
+        (901, 2012, 28, 9.0),  # gap year: his 2011 is a real 0, not a censored unknown
+        (901, 2013, 29, 10.0),
+    ]
+    return _panel(rows)
+
+
+@pytest.mark.parametrize("horizons", [(1,), (1, 2), (2,)])
+def test_prepared_state_gives_the_same_answer_as_the_panel(horizons: tuple[int, ...]) -> None:
+    panel = _mixed_panel()
+    kw = {"kind": "hitter", "age": 28, "sgp": 15.0, "peak": 15.0, "peak_band": 50.0}
+    direct, direct_anchors = shape_trajectory(panel, horizons=horizons, **kw)
+    prepared, prepared_anchors = shape_trajectory(
+        prepare(panel, horizons=(1, 2)), horizons=horizons, **kw
+    )
+
+    # Nothing below may pass by comparing NaN to NaN.
+    assert all(np.isfinite(p.mean) and np.isfinite(p.se) for p in direct.path)
+
+    assert (prepared.n_comps, prepared.seasons) == (direct.n_comps, direct.seasons)
+    assert prepared.mean_start == direct.mean_start
+    assert prepared.mean_prior == direct.mean_prior
+    assert prepared_anchors == direct_anchors
+    for got, want in zip(prepared.path, direct.path, strict=True):
+        # Exact, not approx: the batch path reorders no arithmetic, it only stops
+        # redoing it. `se` included -- same rng, same draws, same order.
+        assert got == want
+
+
+def test_prepared_state_refuses_a_horizon_it_has_no_forward_values_for() -> None:
+    """Silently returning an empty path here would read as "no comps for this player"."""
+    panel = _mixed_panel()
+    with pytest.raises(ValueError, match="horizons"):
+        shape_trajectory(
+            prepare(panel, horizons=(1,)), kind="hitter", age=28, sgp=15.0, peak=15.0, horizons=(2,)
+        )
+
+
+def test_prepared_state_refuses_a_contradictory_last_season() -> None:
+    """`prepare` has already censored on its own `last`; honouring a different one here
+    would apply two different cutoffs to the same query."""
+    panel = _mixed_panel()
+    with pytest.raises(ValueError, match="last_complete_season"):
+        shape_trajectory(
+            prepare(panel, horizons=(1,), last_complete_season=2012),
+            kind="hitter",
+            age=28,
+            sgp=15.0,
+            peak=15.0,
+            horizons=(1,),
+            last_complete_season=2011,
+        )
+
+
+def test_the_batched_bootstrap_matches_a_refit_per_draw() -> None:
+    """The vectorized bootstrap must draw the same rows in the same order as the loop it
+    replaced -- only the solver changed, so the two agree to floating-point noise rather
+    than to bootstrap noise."""
+    rng = np.random.default_rng(1)
+    n = 200
+    x = rng.normal(10.0, 4.0, (n, 2))
+    y = rng.normal(9.0, 5.0, n)
+    w = rng.uniform(0.01, 1.0, n)
+    query = np.array([1.0, 12.0, 18.0])
+
+    # ONE generator across all draws, exactly as the old loop consumed it.
+    reference_rng = np.random.default_rng(5)
+    loop = np.empty(300)
+    for i in range(300):
+        pick = reference_rng.integers(0, n, n)
+        loop[i] = query @ _weighted_least_squares(x[pick], y[pick], w[pick])
+
+    batched = _bootstrap_predictions(x, y, w, query, np.random.default_rng(5), 300)
+    assert batched == pytest.approx(loop, rel=1e-9)
+
+
+def test_the_batched_bootstrap_survives_a_rank_deficient_draw() -> None:
+    """Two anchors can be collinear -- every comp down exactly half his peak, say -- and
+    then three parameters are not identified. `lstsq` answered that with the least-norm
+    solution and a plain `solve` raises `LinAlgError` on it, so the batched form has to
+    keep the old behaviour rather than fail the query."""
+    rng = np.random.default_rng(2)
+    n = 60
+    down = rng.uniform(5.0, 25.0, n)
+    x = np.column_stack([down, 2.0 * down])  # peak is exactly 2 * down: rank 2, not 3
+    y = rng.normal(9.0, 5.0, n)
+    w = rng.uniform(0.2, 1.0, n)
+    query = np.array([1.0, 12.0, 24.0])
+
+    batched = _bootstrap_predictions(x, y, w, query, np.random.default_rng(4), 40)
+    assert np.isfinite(batched).all()
+
+    reference_rng = np.random.default_rng(4)
+    loop = np.empty(40)
+    for i in range(40):
+        pick = reference_rng.integers(0, n, n)
+        loop[i] = query @ _weighted_least_squares(x[pick], y[pick], w[pick])
+    assert batched == pytest.approx(loop, rel=1e-6)
