@@ -38,7 +38,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from .comps import PathPoint, Trajectory
+from .comps import PathPoint, Trajectory, collapse_split_seasons, played
 
 #: Age contributes on a triangular kernel this many years either side. Ages 25-30 age
 #: similarly enough to pool; beyond that the shape itself changes.
@@ -50,6 +50,10 @@ AGE_WINDOW = 2
 PEAK_BAND = 8.0
 
 BOOTSTRAP_DRAWS = 1000
+
+#: Minimum rows before a horizon is fit at all. The model has three parameters, so three
+#: rows interpolate it exactly and every diagnostic downstream degenerates.
+MIN_FIT_ROWS = 12
 
 
 @dataclass(frozen=True)
@@ -64,6 +68,16 @@ class Anchors:
     #: Kish effective sample size, `(sum w)^2 / sum(w^2)`. The raw row count overstates
     #: support when most rows carry a small kernel weight.
     n_effective: float
+
+
+def _weighted_quantile(values: np.ndarray, weights: np.ndarray, q: float) -> float:
+    """The `q`-quantile of `values` under `weights`, by cumulative weight."""
+    order = np.argsort(values)
+    v, w = values[order], weights[order]
+    total = w.sum()
+    if total <= 0:
+        return float("nan")
+    return float(v[np.searchsorted(np.cumsum(w), q * total)])
 
 
 def _triangular(distance: np.ndarray, width: float) -> np.ndarray:
@@ -88,12 +102,17 @@ def build_history(panel: pd.DataFrame) -> pd.DataFrame:
     given a prior of 0 -- the same censoring the forward path uses, for the same reason:
     "we cannot see it" must never be scored as "he did not play". A player who was
     genuinely out of the league keeps his 0, which is a real observation.
+
+    A split season (a mid-season trade, two rows for one player-year) is collapsed on
+    BOTH sides, as `comps.comp_trajectory` does. Collapsing only the lookup would sum his
+    future correctly while still entering him into the fit TWICE as two half-seasons,
+    each with a half-size `down` against a full-size `peak` and a full-size forward
+    value -- attenuating the fitted `on_down`, double-weighting him, and dragging
+    `mean_start` low.
     """
-    panel = panel.sort_values(["mlbam_id", "season"])
+    panel = collapse_split_seasons(panel).sort_values(["mlbam_id", "season"])
     first = int(panel["season"].min())
     index = panel.set_index(["mlbam_id", "season"])["sgp"]
-    if index.index.has_duplicates:
-        index = index.groupby(level=[0, 1]).sum()
 
     history = panel.copy()
     history["peak"] = [
@@ -142,7 +161,11 @@ def shape_trajectory(
     weights = _triangular(history["age"].to_numpy(dtype=float) - age, age_window + 1) * _triangular(
         history["peak"].to_numpy(dtype=float) - peak, peak_band
     )
-    usable = weights > 0
+    # The NEAREST horizon sets membership, matching `comp_trajectory`: a season too
+    # recent to have even one observable forward year enters no fit, so counting it in
+    # `n_comps` (which render prints as "fit on N weighted seasons") would describe the
+    # fit with rows the fit never saw.
+    usable = (weights > 0) & (history["season"] + horizons[0] <= last).to_numpy()
     history, weights = history[usable].reset_index(drop=True), weights[usable]
 
     rng = np.random.default_rng(seed)
@@ -161,7 +184,12 @@ def shape_trajectory(
             weights[observable],
         )
 
-        if len(y) < 3 or w.sum() <= 0:
+        # MIN_FIT_ROWS, not 3: three rows fit a three-parameter model exactly, so the
+        # residuals are identically zero, the median collapses onto the mean, and every
+        # bootstrap draw refits a singular design that lstsq resolves silently to a
+        # least-norm solution. That produces a confident-looking number backed by
+        # nothing.
+        if len(y) < MIN_FIT_ROWS or w.sum() <= 0:
             path.append(_empty_point(h, age))
             anchors.append(Anchors(h, float("nan"), float("nan"), float("nan"), len(y), 0.0))
             continue
@@ -170,25 +198,38 @@ def shape_trajectory(
         query = np.array([1.0, sgp, peak])
         predicted = float(query @ coefficients)
 
-        # Bootstrap the FIT, not the outcomes: resample rows, refit, re-predict. That is
-        # the uncertainty in the relationship, which is what an SE on a prediction means.
+        # Resampling rows and refitting gives the sampling variability of the fitted
+        # MEAN, E[forward | down, peak]. It shrinks as sqrt(n) and contains no residual
+        # variance, so it is not how far one player can land from the prediction --
+        # `spread` below is. Reporting this alone read as though Soto's age-28 season
+        # were pinned to within 0.66 SGP.
         draws = np.empty(bootstrap_draws)
         for i in range(bootstrap_draws):
             pick = rng.integers(0, len(y), len(y))
             draws[i] = query @ _weighted_least_squares(x[pick], y[pick], w[pick])
+        se = float(draws.std(ddof=1)) if bootstrap_draws > 1 else float("nan")
 
         residuals = y - np.column_stack([np.ones(len(x)), x]) @ coefficients
-        survived = y > 0
+        # WEIGHTED, both of them. The fit centres the weighted residual distribution;
+        # an unweighted median or variance is dominated by the far-age / far-peak tail
+        # the fit itself barely counted, which for an edge-of-window query is most of
+        # the row count.
+        median = float(predicted + _weighted_quantile(residuals, w, 0.5))
+        residual_var = float(np.average(residuals**2, weights=w))
+        survived = played(y)
         path.append(
             PathPoint(
                 horizon=h,
                 age=age + h,
                 mean=predicted,
-                se=float(draws.std(ddof=1)),
-                median=float(predicted + np.median(residuals)),
+                se=se,
+                median=median,
                 n=len(y),
                 survivors=int(survived.sum()),
                 mean_if_survived=float(y[survived].mean()) if survived.any() else float("nan"),
+                # Predictive, not the SE of the mean: how far ONE player can land from
+                # the prediction.
+                spread=float(np.sqrt(residual_var + (0.0 if np.isnan(se) else se**2))),
             )
         )
         anchors.append(

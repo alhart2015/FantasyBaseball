@@ -36,6 +36,17 @@ DEFAULT_HORIZONS = (1, 2, 3, 4, 5)
 BOOTSTRAP_DRAWS = 2000
 
 
+#: A forward season is "he did not play" only when it is EXACTLY zero. SGP is genuinely
+#: negative for a below-replacement season -- 7.7% of hitter-seasons and 15.0% of
+#: pitcher-seasons in the panel, down to -3.87 -- so testing `> 0` would file every one
+#: of those as a career ending, understating survival and inflating the survivor mean.
+#: Both estimators import this rather than each spelling the test out.
+def played(values: np.ndarray) -> np.ndarray:
+    """Mask of forward seasons the player actually played."""
+    mask: np.ndarray = values != 0.0
+    return mask
+
+
 @dataclass(frozen=True)
 class PathPoint:
     """One horizon of a trajectory."""
@@ -43,11 +54,19 @@ class PathPoint:
     horizon: int
     age: int
     mean: float
+    #: Standard error of the MEAN -- how well the central estimate is known. It shrinks
+    #: as sqrt(n) and says nothing about how much one player varies. For a keeper
+    #: decision read `spread`, not this.
     se: float
     median: float
     n: int
     survivors: int
     mean_if_survived: float
+    #: Predictive spread for an INDIVIDUAL player, the decision-relevant uncertainty:
+    #: the comp-to-comp SD in comps mode, and sqrt(residual variance + se^2) in shape
+    #: mode. Both answer "how far from this number could one player land", which `se`
+    #: does not.
+    spread: float = float("nan")
 
     @property
     def survival(self) -> float:
@@ -111,6 +130,27 @@ class Trajectory:
         return float(sum(p.mean for p in self.observable))
 
 
+def collapse_split_seasons(panel: pd.DataFrame) -> pd.DataFrame:
+    """One row per (player, season), summing a season split across two rows.
+
+    A mid-season trade can produce two rows for one player-year. They must be collapsed
+    BEFORE anything reads the panel, on BOTH the forward-lookup side and the
+    cohort/fitting side. Collapsing only the lookup sums his future correctly while
+    still entering him twice as two half-seasons -- inflating n, double-weighting him,
+    and dragging `mean_start` low because each half sits below his real total.
+
+    Shared by `comp_trajectory` and `shape.build_history` so the two estimators cannot
+    drift apart on it; fixing one and not the other is exactly how this recurred.
+    """
+    if not panel.set_index(["mlbam_id", "season"]).index.has_duplicates:
+        return panel
+    return (
+        panel.groupby(["mlbam_id", "season"], as_index=False)
+        .agg(sgp=("sgp", "sum"), age=("age", "first"))
+        .reset_index(drop=True)
+    )
+
+
 def _bootstrap_se(values: np.ndarray, rng: np.random.Generator, draws: int) -> float:
     if len(values) < 2:
         return float("nan")
@@ -169,18 +209,7 @@ def comp_trajectory(
 
     horizons = tuple(sorted(horizons))
     last = last_complete_season if last_complete_season is not None else int(panel["season"].max())
-    # A player with two rows for one season (a mid-season trade split, say) must be
-    # collapsed BEFORE anything reads him, on BOTH sides. Doing it only on the forward
-    # lookup summed his future correctly while still entering him into the cohort twice
-    # as two half-seasons -- inflating n, double-weighting him in the mean, and dragging
-    # `mean_start` toward the band's lower edge, since each half sits below his real
-    # total.
-    if panel.set_index(["mlbam_id", "season"]).index.has_duplicates:
-        panel = (
-            panel.groupby(["mlbam_id", "season"], as_index=False)
-            .agg(sgp=("sgp", "sum"), age=("age", "first"))
-            .reset_index(drop=True)
-        )
+    panel = collapse_split_seasons(panel)
     by_player_season = panel.set_index(["mlbam_id", "season"])["sgp"]
 
     matched = panel[(panel["age"] == age) & (panel["sgp"] - sgp).abs().le(band)]
@@ -221,7 +250,7 @@ def comp_trajectory(
     path = []
     for h in horizons:
         values = comps[f"h{h}"].dropna().to_numpy(dtype=float) if not comps.empty else np.array([])
-        survived = values[values != 0.0]
+        survived = values[played(values)]
         path.append(
             PathPoint(
                 horizon=h,
@@ -232,6 +261,7 @@ def comp_trajectory(
                 n=len(values),
                 survivors=len(survived),
                 mean_if_survived=float(survived.mean()) if len(survived) else float("nan"),
+                spread=float(values.std(ddof=1)) if len(values) > 1 else float("nan"),
             )
         )
 

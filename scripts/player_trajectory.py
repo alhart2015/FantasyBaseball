@@ -198,6 +198,28 @@ def _prior_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> 
     return prior
 
 
+def _warn_if_thin(traj: Trajectory) -> None:
+    """Say so when the support is too thin for the printed precision.
+
+    Applies to EVERY mode. It used to live only in the comps branch, so once shape
+    became the default a twelve-row fit printed to two decimals with no caveat at all.
+    """
+    if traj.n_comps >= THIN_COMPS:
+        return
+    unit = "fitting seasons" if traj.mode == "shape" else "comps"
+    widen = "the kernels" if traj.mode == "shape" else "--band/--prior-band"
+    print(
+        f"  *** THIN: {traj.n_comps} {unit}. The numbers below are directional only --"
+        f" widen {widen}, or read a different mode. ***"
+    )
+
+
+def _print_total(traj: Trajectory) -> None:
+    covered, asked = len(traj.observable), len(traj.path)
+    note = "" if covered == asked else f"  (only {covered} of {asked} are observable)"
+    print(f"\n   total over {covered} years: {traj.total:.1f} SGP{note}")
+
+
 def render(traj: Trajectory, show_comps: int) -> None:
     span = f"{traj.seasons[0]}-{traj.seasons[1]}" if traj.seasons else "n/a"
     print(f"\n{traj.kind.upper()}: {traj.sgp:.1f} SGP in an age-{traj.age} season")
@@ -205,22 +227,40 @@ def render(traj: Trajectory, show_comps: int) -> None:
         # A fitted prediction, not an average over a handful of careers: `n` counts the
         # rows the relationship was fit on, and nothing was excluded on a cliff.
         print(f"  SHAPE: {traj.prior_sgp:.1f} last year -> {traj.sgp:.1f} now")
+        if traj.n_comps == 0:
+            # NOT "not yet observable" -- nothing was censored. This query simply sits
+            # outside the age and peak kernels, and without this guard the table prints
+            # NaNs under a "total over 0 years: 0.0 SGP" that reads as a real forecast
+            # of zero future value.
+            print(
+                "  NO FIT -- no season is close enough in age and level to score this "
+                "query. Widen the kernels, or check the age and --prior-sgp."
+            )
+            return
         print(f"  fit on {traj.n_comps} weighted seasons, {span}")
         print(
             f"  their average shape: {traj.mean_prior:.1f} -> {traj.mean_start:.1f} SGP "
             "(kernel-weighted)"
         )
-        print("\n   age    pred   +/-SE   median   sample still playing   sample if playing")
+        _warn_if_thin(traj)
+        print("\n   age    pred   +/-SE  +/-spread   median   sample played   if played")
         for p in traj.path:
             if p.n == 0:
-                print(f"   {p.age:3d}        --      --       --      (not yet observable)")
+                print(f"   {p.age:3d}        --      --         --       --   (not fittable)")
                 continue
             print(
-                f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}  {p.median:7.2f}"
-                f"      {p.survivors:4d}/{p.n} ({p.survival:4.0%})       {p.mean_if_survived:6.2f}"
+                f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}    {p.spread:7.2f}  {p.median:7.2f}"
+                f"    {p.survivors:5d}/{p.n} ({p.survival:4.0%})  {p.mean_if_survived:6.2f}"
             )
-        covered = len(traj.observable)
-        print(f"\n   total over {covered} years: {traj.total:.1f} SGP")
+        _print_total(traj)
+        if show_comps:
+            # The block below reads sgp0/hN, which a shape frame does not have -- and a
+            # shape fit has no per-query comps to list, only a weighted population.
+            print(
+                f"\n   (--show-comps {show_comps} lists individual comps, which only the "
+                "comp matchers have; add --match current, or --show-anchors for the "
+                "fitted coefficients)"
+            )
         return
 
     if traj.prior_sgp is not None:
@@ -235,30 +275,18 @@ def render(traj: Trajectory, show_comps: int) -> None:
         f"  comps started from {traj.mean_start:.1f} SGP on average, "
         f"after {traj.mean_prior:.1f} the year before"
     )
-    if traj.n_comps < THIN_COMPS:
-        # A handful of comps still prints a mean and a standard error, and those look
-        # exactly as authoritative as the ones backed by 150. Track-record matching is
-        # where this bites: adding a second hard band cut Soto's cohort from 185 to 2.
-        print(
-            f"  *** THIN: {traj.n_comps} comps. The bootstrap SE below describes the"
-            " spread of this handful, NOT how well the path is known. Widen"
-            f"{' --prior-band' if traj.prior_sgp is not None else ''} --band, or read"
-            " it as directional only. ***"
-        )
+    _warn_if_thin(traj)
 
-    print("\n   age   exp SGP    +/-SE    median   still playing   if still playing")
+    print("\n   age   exp SGP    +/-SE  +/-spread   median   still playing   if playing")
     for p in traj.path:
         if p.n == 0:
-            print(f"   {p.age:3d}        --        --        --      (not yet observable)")
+            print(f"   {p.age:3d}        --        --         --       --   (not yet observable)")
             continue
         print(
-            f"   {p.age:3d}   {p.mean:7.2f}    {p.se:5.2f}   {p.median:7.2f}"
-            f"      {p.survivors:3d}/{p.n} ({p.survival:4.0%})       {p.mean_if_survived:6.2f}"
+            f"   {p.age:3d}   {p.mean:7.2f}    {p.se:5.2f}    {p.spread:7.2f}  {p.median:7.2f}"
+            f"    {p.survivors:5d}/{p.n} ({p.survival:4.0%})  {p.mean_if_survived:6.2f}"
         )
-    covered = len(traj.observable)
-    asked = len(traj.path)
-    note = "" if covered == asked else f"  (only {covered} of {asked} are observable)"
-    print(f"\n   total over {covered} years: {traj.total:.1f} SGP{note}")
+    _print_total(traj)
 
     if show_comps:
         # Ranked by closeness to the query, not by sgp0 -- "show me the comps" means the
@@ -334,6 +362,13 @@ def main() -> int:
         parser.error("pass --player, or all of --pool/--age/--sgp")
     if args.horizon < 1:
         parser.error("--horizon must be at least 1")
+    # The mirror of the missing-prior check below. Without it the flag reaches
+    # comp_trajectory's ValueError and exits on a five-frame traceback, after paying the
+    # panel-load time -- where every other bad combination here gets one usage line.
+    if args.prior_band is not None and args.match == "current":
+        parser.error("--prior-band applies to --match track; --match current has no prior band")
+    if args.prior_band is not None and args.match == "shape":
+        parser.error("--prior-band applies to --match track; shape uses kernels, not bands")
 
     # Anchor to the REPO, mirroring build_pt_panel._anchor on the write side. The
     # documented build command passes a RELATIVE --out-dir, so a reader resolving the
@@ -390,7 +425,12 @@ def main() -> int:
                 "--prior-sgp N (use 0 if he was not in the majors), or --player NAME "
                 "to look it up, or --match current to score on this season alone"
             )
-        queries = [(args.pool, args.age, args.sgp, args.prior_sgp)]
+        # Gate the prior on the MODE, exactly as the --player branch does. Passing it
+        # through unconditionally made `--match current --prior-sgp N` run the track
+        # estimator instead -- silently overriding the mode the user asked for.
+        queries = [
+            (args.pool, args.age, args.sgp, args.prior_sgp if args.match != "current" else None)
+        ]
 
     horizons = tuple(range(1, args.horizon + 1))
     for pool, age, sgp, prior in queries:
