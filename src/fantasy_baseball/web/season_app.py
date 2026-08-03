@@ -32,5 +32,21 @@ def create_app() -> Flask:
     if os.environ.get("RENDER"):
         app.config["SESSION_COOKIE_SECURE"] = True
     app.jinja_env.filters["format_ip"] = format_ip
+
+    @app.context_processor
+    def inject_yahoo_sync_state() -> dict:
+        """Expose the stale-data toggle to every template.
+
+        Read from the environment on each render rather than from
+        ``cache:meta``, so the banner tracks the switch itself: it appears the
+        moment the env var is set (before any refresh has run in that mode)
+        and disappears the moment it is cleared. ``cache:meta`` describes the
+        last run instead, and would lag the toggle in both directions.
+        No KV read, so this stays free on every page.
+        """
+        from fantasy_baseball.web.refresh_pipeline import skip_yahoo_requested
+
+        return {"yahoo_sync_disabled": skip_yahoo_requested()}
+
     register_routes(app)
     return app

@@ -244,6 +244,53 @@ def test_logs_page_renders(client, kv_isolation):
     assert b"Job Logs" in resp.data
 
 
+# --- Stale-data (FB_SKIP_YAHOO) warning banner -------------------------------
+
+
+def test_yahoo_off_banner_absent_by_default(client, kv_isolation, monkeypatch):
+    from fantasy_baseball.web.refresh_pipeline import SKIP_YAHOO_ENV
+
+    monkeypatch.delenv(SKIP_YAHOO_ENV, raising=False)
+    resp = client.get("/logs")
+    assert resp.status_code == 200
+    assert b"Yahoo sync is OFF" not in resp.data
+
+
+def test_yahoo_off_banner_shown_next_to_refresh_button(client, kv_isolation, monkeypatch):
+    """The banner must render immediately above the Refresh Data button, and
+    say that refreshing will not reach Yahoo."""
+    from fantasy_baseball.web.refresh_pipeline import SKIP_YAHOO_ENV
+
+    monkeypatch.setenv(SKIP_YAHOO_ENV, "1")
+    resp = client.get("/logs")
+    assert resp.status_code == 200
+
+    html = resp.data.decode()
+    assert "Yahoo sync is OFF" in html
+    assert "not</strong> pull anything from Yahoo" in html
+
+    banner_at = html.index("yahoo-off")
+    button_at = html.index('id="refresh-btn"')
+    assert banner_at < button_at, "warning must appear above the Refresh Data button"
+
+
+def test_yahoo_off_banner_tracks_the_env_var_not_the_last_run(client, kv_isolation, monkeypatch):
+    """Regression guard: the banner reads the live toggle, so it clears as soon
+    as the env var is unset even though cache:meta still records a skipped run.
+    """
+    from fantasy_baseball.web.refresh_pipeline import SKIP_YAHOO_ENV
+    from fantasy_baseball.web.season_data import write_cache
+
+    write_cache(
+        CacheKey.META,
+        {"last_refresh": "2026-08-03 09:00", "yahoo_skipped": True},
+        required=False,
+    )
+
+    monkeypatch.delenv(SKIP_YAHOO_ENV, raising=False)
+    assert b"Yahoo sync is OFF" not in client.get("/logs").data
+
+
 # --- Refresh / ROS-fetch mutual exclusion -----------------------------------
 # The full refresh and the ROS-projection fetch both sync MLB game logs
 # (a read-modify-write of the shared rollup) and write the same cache keys.

@@ -73,6 +73,19 @@
                         No data yet
                     {% endif %}
                 </div>
+                {#- Whitespace-controlled so the default (banner off) render is
+                    byte-identical to the pre-banner markup — see
+                    tests/test_web/snapshots/streaks.html. -#}
+                {%- if yahoo_sync_disabled %}
+                <div class="yahoo-off" role="alert">
+                    <div class="yahoo-off-title">Yahoo sync is OFF</div>
+                    <div class="yahoo-off-body">
+                        Rosters, standings, free agents and transactions are frozen{% if meta and meta.get('rosters_as_of') %} at {{ meta['rosters_as_of'] }}{% endif %}.
+                        Refreshing updates projections from MLB game logs only &mdash; it will
+                        <strong>not</strong> pull anything from Yahoo.
+                    </div>
+                </div>
+                {%- endif %}
                 <button class="btn-refresh" id="refresh-btn" onclick="startRefresh()">Refresh Data</button>
                 <div id="refresh-progress" style="display: none; font-size: 11px; color: var(--accent); margin-top: 6px;"></div>
                 <a href="{{ url_for('logout') }}" style="display: block; margin-top: 8px; font-size: 11px; color: var(--text-secondary); text-decoration: none;">Logout</a>
