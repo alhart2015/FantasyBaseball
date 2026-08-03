@@ -139,18 +139,18 @@ def test_shape_fits_on_var_when_given_a_floor() -> None:
     rng = np.random.default_rng(3)
     rows = []
     for i in range(300):
-        peak, down = float(rng.uniform(12, 30)), float(rng.uniform(12, 30))
+        prior, current = float(rng.uniform(12, 30)), float(rng.uniform(12, 30))
         # Real noise, or both spreads are ~1e-15 and comparing them says nothing.
-        forward = 0.5 * down + 0.4 * peak + float(rng.normal(0, 2.0))
-        rows += [(i, 2010, 26, peak), (i, 2011, 27, down), (i, 2012, 28, max(forward, 0.0))]
+        forward = 0.5 * current + 0.4 * prior + float(rng.normal(0, 2.0))
+        rows += [(i, 2010, 26, prior), (i, 2011, 27, current), (i, 2012, 28, max(forward, 0.0))]
     panel = _panel(rows)
     kw = {
         "kind": "hitter",
         "age": 27,
         "sgp": 15.0,
-        "peak": 15.0,
+        "prior_sgp": 15.0,
         "horizons": (1,),
-        "peak_band": 60.0,
+        "prior_window": 60.0,
     }
     raw, _ = shape_trajectory(panel, **kw)
     var, _ = shape_trajectory(panel, replacement=8.0, **kw)
@@ -210,9 +210,9 @@ def test_shape_never_predicts_below_replacement() -> None:
         kind="hitter",
         age=33,
         sgp=0.5,
-        peak=24.0,
+        prior_sgp=24.0,
         horizons=(1,),
-        peak_band=60.0,
+        prior_window=60.0,
         replacement=9.96,
     )
     assert traj.path[0].mean >= 0.0

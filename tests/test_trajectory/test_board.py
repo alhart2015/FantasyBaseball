@@ -173,35 +173,35 @@ def test_only_players_with_a_line_in_the_scored_season_appear() -> None:
 # --- the extrapolation guard --------------------------------------------------------
 
 
-def _cohort(down_range: tuple[float, float], n: int = 400) -> pd.DataFrame:
+def _cohort(level_range: tuple[float, float], n: int = 400) -> pd.DataFrame:
     rng = np.random.default_rng(0)
     rows = []
     for i in range(n):
-        peak = float(rng.uniform(*down_range))
-        down = float(rng.uniform(*down_range))
-        rows += [(i, 2010, 27, peak), (i, 2011, 28, down), (i, 2012, 29, down * 0.8)]
+        prior = float(rng.uniform(*level_range))
+        current = float(rng.uniform(*level_range))
+        rows += [(i, 2010, 27, prior), (i, 2011, 28, current), (i, 2012, 29, current * 0.8)]
     return pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
 
 
 def test_local_support_is_high_when_the_query_sits_inside_its_cohort() -> None:
     traj, _ = shape_trajectory(
-        _cohort((10.0, 20.0)), kind="hitter", age=28, sgp=15.0, peak=15.0, horizons=(1,)
+        _cohort((10.0, 20.0)), kind="hitter", age=28, sgp=15.0, prior_sgp=15.0, horizons=(1,)
     )
     assert traj.local_support > 0.25
 
 
 def test_local_support_collapses_when_the_query_outruns_its_cohort() -> None:
-    """The failure the board exists to guard: `peak` is kernel-weighted but `down` is a
+    """The failure the board exists to guard: `prior_sgp` is kernel-weighted but `sgp` is a
     bare regressor, so a player whose current season far outruns his prior is matched to
     a cohort he sits outside and then priced by extrapolating their fitted line. The
     band comes out NARROW at the same time, because it is that cohort's scatter --
     confident and wrong together, which is what makes it worth refusing."""
     panel = _cohort((0.0, 6.0))
     inside, _ = shape_trajectory(
-        panel, kind="hitter", age=28, sgp=3.0, peak=3.0, horizons=(1,), peak_band=8.0
+        panel, kind="hitter", age=28, sgp=3.0, prior_sgp=3.0, horizons=(1,), prior_window=8.0
     )
     outside, _ = shape_trajectory(
-        panel, kind="hitter", age=28, sgp=16.0, peak=3.0, horizons=(1,), peak_band=8.0
+        panel, kind="hitter", age=28, sgp=16.0, prior_sgp=3.0, horizons=(1,), prior_window=8.0
     )
     assert inside.local_support > 0.25
     assert outside.local_support < 0.10

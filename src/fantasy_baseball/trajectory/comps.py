@@ -105,7 +105,7 @@ class PathPoint:
     #: Fraction of the sample that played, WEIGHTED the way the estimate is. In comps
     #: that is survivors/n, since every comp counts once. In shape it is the
     #: kernel-weighted fraction, because an unweighted rate describes the far-age /
-    #: far-peak tail the fit itself barely counted -- the same argument that made the
+    #: far-prior tail the fit itself barely counted -- the same argument that made the
     #: median and the residual variance weighted. Left as a plain field rather than a
     #: property so the two modes can each say what they mean.
     survival: float = float("nan")
@@ -142,10 +142,10 @@ class Trajectory:
     #: current season. NaN in the comp matchers, where the band IS the matching rule and
     #: this is 1.0 by construction.
     #:
-    #: Shape weights `age` and `peak` on kernels but takes `down` as a bare regressor
-    #: with no locality at all, so a query can be matched to a cohort it sits entirely
-    #: outside and then priced by extrapolating that cohort's fitted line. A 21-year-old
-    #: at (down 13.6, peak 0.0) draws the peak~0 population, whose own `down` averages
+    #: Shape weights `age` and `prior_sgp` on kernels but takes `sgp` -- this season -- as
+    #: a bare regressor with no locality, so a query can be matched to a cohort it sits
+    #: entirely outside and then priced by extrapolating that cohort's line. A 21-year-old
+    #: at (13.6 now, 0.0 prior) draws the prior~0 population, whose own current seasons average
     #: 2.9, and the line fitted on those fringe seasons is evaluated 4.7x beyond their
     #: centre -- reporting 12.4 VAR over three years against a survivor mean near 1.0.
     #:

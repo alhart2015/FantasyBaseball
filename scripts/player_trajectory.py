@@ -347,7 +347,7 @@ def _warn_if_thin(traj: Trajectory) -> None:
 
     Reads the EFFECTIVE size, not the row count. Under kernel weighting those diverge:
     a 41-row shape fit carrying an effective 15 cleared a raw-count threshold while
-    fitting `on_peak` at -1.03 -- more production last year predicting less next year --
+    fitting `on_prior` at -1.03 -- more production last year predicting less next year --
     and printed unqualified to two decimals.
     """
     support = min((p.n_effective for p in traj.observable), default=0.0)
@@ -703,7 +703,7 @@ def main() -> int:
                 kind=pool,
                 age=age,
                 sgp=sgp,
-                peak=prior,
+                prior_sgp=prior,
                 horizons=horizons,
                 replacement=floor,
                 slot=slot,
@@ -713,8 +713,8 @@ def main() -> int:
                 print("     h  intercept   a(now)  b(last)   n_fit   n_eff")
                 for a in anchors:
                     print(
-                        f"     {a.horizon}   {a.intercept:8.2f} {a.on_down:8.3f} "
-                        f"{a.on_peak:8.3f} {a.n_fit:7d} {a.n_effective:7.0f}"
+                        f"     {a.horizon}   {a.intercept:8.2f} {a.on_current:8.3f} "
+                        f"{a.on_prior:8.3f} {a.n_fit:7d} {a.n_effective:7.0f}"
                     )
         else:
             traj = comp_trajectory(

@@ -56,7 +56,7 @@ from fantasy_baseball.trajectory.shape import prepare, shape_trajectory
 SWEEP_DRAWS = 250
 
 #: Fitting weight that must sit near the query's own current season before its row is
-#: ranked rather than flagged. Shape has no kernel on `down`, so a query can be matched
+#: ranked rather than flagged. Shape has no kernel on the CURRENT season, so a query can
 #: to a cohort it sits entirely outside and priced by extrapolating that cohort's line.
 #:
 #: 10% separates the two failure modes cleanly on the real board -- measured, not chosen:
@@ -92,7 +92,7 @@ def score(
             kind=kind,
             age=row.age,
             sgp=row.sgp,
-            peak=row.prior_sgp,
+            prior_sgp=row.prior_sgp,
             horizons=horizons,
             replacement=row.floor,
             slot=row.slot,
@@ -147,10 +147,10 @@ def render(scored: list[dict], top: int, horizons: tuple[int, ...], levels: dict
     if any(r["support"] < MIN_LOCAL_SUPPORT for r in scored[:top]):
         print(
             f"\n  (!) under {MIN_LOCAL_SUPPORT:.0%} of the fitting weight sits near this"
-            "\n      player's own current season. `peak` is kernel-weighted, `down` is not,"
-            "\n      so a season that far outruns its prior is priced by extrapolating a"
-            "\n      line fitted on players unlike him -- and the band, being that cohort's"
-            "\n      scatter, comes out NARROW rather than wide. Do not rank on these."
+            "\n      player's own current season. LAST season is kernel-weighted and THIS"
+            "\n      one is not, so a season that far outruns its prior is priced by"
+            "\n      extrapolating a line fitted on players unlike him -- and the band, being"
+            "\n      that cohort's scatter, comes out NARROW. Do not rank on these."
             "\n      Estimator fix is #310; --min-support drops them entirely."
         )
 

@@ -47,7 +47,7 @@ def test_survival_matches_between_modes_on_one_population() -> None:
     panel = _population()
     comps = comp_trajectory(panel, kind="hitter", age=27, sgp=10.0, band=30.0, horizons=(1,))
     shape, _ = shape_trajectory(
-        panel, kind="hitter", age=27, sgp=10.0, peak=10.0, horizons=(1,), peak_band=60.0
+        panel, kind="hitter", age=27, sgp=10.0, prior_sgp=10.0, horizons=(1,), prior_window=60.0
     )
     # Same underlying seasons, so the same count played -- the two modes must not
     # disagree about what "played" means.
@@ -56,16 +56,16 @@ def test_survival_matches_between_modes_on_one_population() -> None:
 
 
 def _known_sigma_population(sigma: float, n: int = 400) -> pd.DataFrame:
-    """Next season is exactly 0.4*down + 0.5*peak plus noise of a KNOWN sigma, so a
+    """Next season is exactly 0.4*current + 0.5*prior plus noise of a KNOWN sigma, so a
     correct predictive spread has a value to be checked against."""
     rng = np.random.default_rng(11)
     rows = []
     for i in range(n):
-        peak = float(rng.uniform(5, 25))
-        down = float(rng.uniform(5, 25))
-        rows.append((i, 2010, 26, peak))
-        rows.append((i, 2011, 27, down))
-        rows.append((i, 2012, 28, 0.4 * down + 0.5 * peak + float(rng.normal(0, sigma))))
+        prior = float(rng.uniform(5, 25))
+        current = float(rng.uniform(5, 25))
+        rows.append((i, 2010, 26, prior))
+        rows.append((i, 2011, 27, current))
+        rows.append((i, 2012, 28, 0.4 * current + 0.5 * prior + float(rng.normal(0, sigma))))
     return _panel(rows)
 
 
@@ -81,9 +81,9 @@ def test_shape_spread_recovers_the_generating_sigma() -> None:
         kind="hitter",
         age=27,
         sgp=15.0,
-        peak=15.0,
+        prior_sgp=15.0,
         horizons=(1,),
-        peak_band=60.0,
+        prior_window=60.0,
     )
     point = traj.path[0]
     assert point.spread == pytest.approx(sigma, rel=0.15)
@@ -111,7 +111,7 @@ def test_thin_support_is_visible_as_an_effective_size_in_both_modes() -> None:
     assert comps.path[0].n_effective == pytest.approx(comps.path[0].n)
 
     shape, anchors = shape_trajectory(
-        panel, kind="hitter", age=27, sgp=10.0, peak=10.0, horizons=(1,), peak_band=8.0
+        panel, kind="hitter", age=27, sgp=10.0, prior_sgp=10.0, horizons=(1,), prior_window=8.0
     )
     assert shape.path[0].n_effective == pytest.approx(anchors[0].n_effective)
     assert shape.path[0].n_effective < shape.path[0].n
@@ -136,9 +136,9 @@ def test_both_modes_count_only_seasons_with_an_observable_forward_year() -> None
             kind="hitter",
             age=27,
             sgp=10.0,
-            peak=10.0,
+            prior_sgp=10.0,
             horizons=(1,),
-            peak_band=60.0,
+            prior_window=60.0,
             last_complete_season=2011,
         )[0],
     ):
@@ -168,7 +168,13 @@ def test_both_modes_refuse_an_unusable_bootstrap_count(draws: int) -> None:
         )
     with pytest.raises(ValueError, match="bootstrap_draws"):
         shape_trajectory(
-            panel, kind="hitter", age=27, sgp=10.0, peak=10.0, horizons=(1,), bootstrap_draws=draws
+            panel,
+            kind="hitter",
+            age=27,
+            sgp=10.0,
+            prior_sgp=10.0,
+            horizons=(1,),
+            bootstrap_draws=draws,
         )
 
 
@@ -182,7 +188,9 @@ def test_every_mode_is_labelled() -> None:
         == "track"
     )
     assert (
-        shape_trajectory(panel, kind="hitter", age=27, sgp=10.0, peak=10.0, horizons=(1,))[0].mode
+        shape_trajectory(panel, kind="hitter", age=27, sgp=10.0, prior_sgp=10.0, horizons=(1,))[
+            0
+        ].mode
         == "shape"
     )
 
@@ -193,7 +201,7 @@ def test_no_support_is_distinguishable_from_no_data_in_every_mode() -> None:
     panel = _population()
     empty_comps = comp_trajectory(panel, kind="hitter", age=99, sgp=10.0, horizons=(1,))
     empty_shape, _ = shape_trajectory(
-        panel, kind="hitter", age=99, sgp=10.0, peak=10.0, horizons=(1,), peak_band=1.0
+        panel, kind="hitter", age=99, sgp=10.0, prior_sgp=10.0, horizons=(1,), prior_window=1.0
     )
     for traj in (empty_comps, empty_shape):
         assert isinstance(traj, Trajectory)
