@@ -78,10 +78,19 @@ PEAK_BAND = 8.0
 #: a sweep passes `bootstrap_draws=250` explicitly, which is the caller that benefits.
 BOOTSTRAP_DRAWS = 1000
 
-#: Bootstrap refits solved per batch. The (batch, n) multiplicity matrix is this
-#: routine's memory high-water mark, so the cap keeps it at a few MB instead of letting
-#: it grow with the fitting sample.
+#: Ceiling on the refits solved per batch. The batch holds three (batch, n) arrays alive
+#: at once -- the drawn indices, the bincount over them, and those counts as float -- so
+#: a fixed chunk is ~24 bytes per (draw, fitting row) and grows without bound in n. The
+#: per-draw loop it replaced peaked at three (n,)-sized gathers, so a fixed 250 would
+#: have turned a few hundred KB into ~120 MB on a loose-kernel query over the full panel.
+#: `BOOTSTRAP_BYTES` is the real cap and this is only the upper bound on batch size.
 BOOTSTRAP_CHUNK = 250
+
+#: Memory the bootstrap's working arrays may occupy, which sets the batch size at
+#: `BOOTSTRAP_BYTES // (24 * n)`. Deliberately a budget rather than a chunk count: the
+#: batch is a pure vectorization width, so trading it away on a wide fit costs a little
+#: speed and nothing else -- the draws, and therefore the answer, are unchanged.
+BOOTSTRAP_BYTES = 32 * 1024 * 1024
 
 DEFAULT_HORIZONS = (1, 2, 3, 4, 5)
 
@@ -294,9 +303,13 @@ def _bootstrap_predictions(
     gram = np.einsum("ni,nj->nij", rooted, rooted).reshape(n, -1)
     moment = rooted * response[:, None]
 
+    # Three (batch, n) arrays are alive at the peak, at 8 bytes each. Narrowing the batch
+    # on a wide fit costs vectorization width and nothing else -- the draws are drawn in
+    # the same order at any batch size, so the result does not depend on this.
+    chunk = max(1, min(BOOTSTRAP_CHUNK, BOOTSTRAP_BYTES // (24 * n)))
     out = np.empty(draws)
-    for start in range(0, draws, BOOTSTRAP_CHUNK):
-        size = min(BOOTSTRAP_CHUNK, draws - start)
+    for start in range(0, draws, chunk):
+        size = min(chunk, draws - start)
         picks = rng.integers(0, n, (size, n))
         # How many times each row was drawn, as one offset bincount rather than `size`
         # separate ones. The offset is applied IN PLACE: `picks` is freshly drawn and

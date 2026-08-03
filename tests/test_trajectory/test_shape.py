@@ -284,6 +284,26 @@ def test_the_batched_bootstrap_matches_a_refit_per_draw() -> None:
     assert batched == pytest.approx(loop, rel=1e-9)
 
 
+def test_the_bootstrap_answer_does_not_depend_on_the_batch_size(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The batch is a vectorization width, and the memory budget narrows it on a wide
+    fit. Indices are drawn in the same order at any width, so a fit that happens to be
+    memory-bound must not get a different SE from one that is not."""
+    rng = np.random.default_rng(3)
+    n = 150
+    x = rng.normal(10.0, 4.0, (n, 2))
+    y = rng.normal(9.0, 5.0, n)
+    w = rng.uniform(0.01, 1.0, n)
+    query = np.array([1.0, 12.0, 18.0])
+
+    wide = _bootstrap_predictions(x, y, w, query, np.random.default_rng(9), 400)
+    # Small enough to force a batch of 1 -- the pathological end of the budget.
+    monkeypatch.setattr("fantasy_baseball.trajectory.shape.BOOTSTRAP_BYTES", 1)
+    narrow = _bootstrap_predictions(x, y, w, query, np.random.default_rng(9), 400)
+    assert narrow == pytest.approx(wide, rel=1e-12)
+
+
 def test_the_batched_bootstrap_survives_a_rank_deficient_draw() -> None:
     """Two anchors can be collinear -- every comp down exactly half his peak, say -- and
     then three parameters are not identified. `lstsq` answered that with the least-norm
