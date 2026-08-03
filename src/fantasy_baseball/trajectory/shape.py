@@ -165,7 +165,15 @@ def build_history(panel: pd.DataFrame) -> pd.DataFrame:
     return history.dropna(subset=["peak"]).rename(columns={"sgp": "down"})
 
 
-@dataclass(frozen=True)
+#: `eq=False` because the fields are ndarrays. The generated `__eq__` tuple-compares
+#: them, so `prepare(p) == prepare(p)` raises "truth value of an array is ambiguous",
+#: and `frozen=True` then derives a `__hash__` that raises "unhashable type: ndarray".
+#: Both fire on the natural way to use this class -- `player_trajectory.py` already
+#: memoizes its panel-side helpers with `@lru_cache`, and an `lru_cache`d scoring helper
+#: taking a prepared state would die before scoring a player. Identity semantics are what
+#: a cache key wants here anyway: two states off the same panel ARE interchangeable, and
+#: comparing 16k-row arrays to discover that is not a comparison anyone wants to pay for.
+@dataclass(frozen=True, eq=False)
 class Prepared:
     """Panel-level state for shape matching, computed once and reused across queries.
 

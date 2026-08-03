@@ -221,6 +221,17 @@ def test_prepared_state_refuses_a_query_from_the_other_pool() -> None:
         shape_trajectory(prepared, kind="pitcher", age=28, sgp=15.0, peak=15.0, horizons=(1,))
 
 
+def test_a_prepared_state_can_be_cached_on() -> None:
+    """A frozen dataclass over ndarrays derives an `__eq__` that raises on the ambiguous
+    truth value of an array and a `__hash__` that raises on unhashable ndarrays -- both
+    on the natural use, an `lru_cache`d scoring helper keyed by the prepared state."""
+    prepared = prepare(_mixed_panel(), kind="hitter", horizons=(1,))
+    assert hash(prepared) == hash(prepared)
+    assert prepared == prepared
+    assert prepared != prepare(_mixed_panel(), kind="hitter", horizons=(1,))
+    assert len({prepared, prepared}) == 1
+
+
 def test_prepared_state_refuses_a_horizon_it_has_no_forward_values_for() -> None:
     """Silently returning an empty path here would read as "no comps for this player"."""
     panel = _mixed_panel()
