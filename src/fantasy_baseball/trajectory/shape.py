@@ -61,22 +61,22 @@ AGE_WINDOW = 2
 #: straight line does not have to serve fringe and elite players at once.
 PEAK_BAND = 8.0
 
-#: Refits behind `PathPoint.se`. Cost is linear in this and it was ~90% of a query once
-#: the panel-level work was hoisted out (#311), so the count was chosen by measuring what
-#: the reported numbers actually need rather than by reaching for a round 1000. Across
-#: four real hitter queries x four horizons, over twelve seeds:
+#: Refits behind `PathPoint.se`. Cost is linear in this and it is ~90% of a query once
+#: the panel-level work is hoisted out (#311), so a board sweep should LOWER it -- but
+#: per call, not here. Across four real hitter queries x four horizons, over twelve seeds:
 #:
 #:     draws   ms/query   seed-to-seed SD of `se`   shift in `spread` vs 1000
 #:      1000      144            0.0084                  --
 #:       250       37            0.0184                  0.0006
 #:       100       16            0.0260                  0.0007
 #:
-#: `spread` is the decision-relevant width and it does not move: `se` enters it as
+#: `spread` is the decision-relevant width and it barely moves, because `se` enters it as
 #: `sqrt(residual_var + se^2)` and residual variance dominates by an order of magnitude.
-#: `se` itself prints at 2 decimals and was ALREADY unstable in that digit at 1000 draws
-#: (+/-0.008), so the extra 107ms bought precision the output never showed. Raise it per
-#: call if a specific analysis needs a tighter SE.
-BOOTSTRAP_DRAWS = 250
+#: But `se` is its own printed column at 2 decimals, and 250 draws roughly DOUBLE its
+#: seed-to-seed wobble -- a reader comparing how well two horizons are known would be
+#: reading resampling noise. So the default stays where the single-query CLI wants it and
+#: a sweep passes `bootstrap_draws=250` explicitly, which is the caller that benefits.
+BOOTSTRAP_DRAWS = 1000
 
 #: Bootstrap refits solved per batch. The (batch, n) multiplicity matrix is this
 #: routine's memory high-water mark, so the cap keeps it at a few MB instead of letting
