@@ -38,6 +38,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
 from fantasy_baseball.config import load_config
+from fantasy_baseball.data.rosters import live_rosters
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import (
@@ -49,6 +50,7 @@ from fantasy_baseball.trajectory.board import (
 from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
 from fantasy_baseball.trajectory.shape import prepare, shape_trajectory
+from fantasy_baseball.utils.name_utils import normalize_name
 
 #: Bootstrap refits per query. The board reports no SE column, and `se` enters the band
 #: only through `spread`, which moves by 0.0006 between 250 draws and 1000 -- so the
@@ -147,6 +149,58 @@ def add_ranks(scored: list[dict]) -> None:
             row[field] = i
 
 
+def by_team(
+    scored: list[dict], spots: list, my_team: str, per_team: int, base: int, horizons: tuple
+) -> None:
+    """Every player on your team, then the best `per_team` on each other team.
+
+    Ranks shown are LEAGUE ranks, carried from `add_ranks`, not ranks within the team --
+    otherwise every team's best player reads as a 1.
+    """
+    one, span = _header(base, horizons)
+    owners = {(s.normalized, s.player_type): s.team for s in spots}
+    status = {(s.normalized, s.player_type): s.status for s in spots}
+    for row in scored:
+        key = (normalize_name(row["name"]), row["pool"])
+        row["team"] = owners.get(key)
+        row["status"] = status.get(key, "")
+
+    # Roster spots that never matched a scored row. Named, not counted: a silently
+    # shortened team reads as "he has nobody else worth listing".
+    scored_keys = {(normalize_name(r["name"]), r["pool"]) for r in scored}
+    missing: dict[str, list[str]] = {}
+    for s in spots:
+        if (s.normalized, s.player_type) not in scored_keys:
+            missing.setdefault(s.team, []).append(s.name)
+
+    def block(team: str, rows: list[dict], limit: int | None) -> None:
+        rows.sort(key=lambda r: r["total"], reverse=True)
+        shown = rows if limit is None else rows[:limit]
+        total = sum(r["total"] for r in rows)
+        head = f"{team}  ({len(rows)} scored, {total:.1f} total {span} VAR)"
+        print(f"\n{head}\n{'-' * len(head)}")
+        for r in shown:
+            band = f"{r['p10']:5.1f}..{r['p90']:<5.1f}"
+            flag = " (!)" if r["support"] < MIN_LOCAL_SUPPORT else "    "
+            hurt = f" [{r['status']}]" if r["status"] else ""
+            print(
+                f"  #{r['rank_total']:<4d} #{r['rank_next']:<4d} {r['name'][:22]:<22} "
+                f"{r['age']:3d} {r['slot']:>4} {r['total']:6.1f} {r['next']:5.1f}  "
+                f"{band:>14}{flag}{hurt}"
+            )
+        if team in missing:
+            print(f"  not scored: {', '.join(sorted(missing[team]))}")
+
+    print(f"\n\n{'=' * 78}\nPER-TEAM  (#{span} and #{one} are LEAGUE ranks)\n{'=' * 78}")
+    mine = [r for r in scored if r["team"] == my_team]
+    block(f"{my_team}  -- YOUR TEAM, all players", mine, None)
+    others = sorted({r["team"] for r in scored if r["team"] and r["team"] != my_team})
+    for team in others:
+        block(team, [r for r in scored if r["team"] == team], per_team)
+    if not mine and not others:
+        print("\n  no roster rows matched the board -- see the join note above.")
+
+
 def _header(base: int, horizons: tuple[int, ...]) -> tuple[str, str]:
     """Column labels as SEASONS, since "+1" and "3-year" are not what a keeper thinks in."""
     return f"{base + 1}", f"{base + min(horizons)}-{str(base + max(horizons))[-2:]}"
@@ -216,6 +270,12 @@ def main() -> int:
             f"below this (try {MIN_LOCAL_SUPPORT}); by default they are flagged, not removed"
         ),
     )
+    parser.add_argument(
+        "--by-team",
+        action="store_true",
+        help="also break the board down by fantasy team, reading live rosters from Upstash",
+    )
+    parser.add_argument("--per-team", type=int, default=5, help="rows per opposing team")
     parser.add_argument("--panel-dir", type=Path, default=DEFAULT_PANEL_DIR)
     args = parser.parse_args()
     if args.horizon < 1:
@@ -283,6 +343,14 @@ def main() -> int:
         return 1
     add_ranks(scored)
     render(scored, args.top, horizons, levels, season)
+    if args.by_team:
+        config = load_config(PROJECT_ROOT / "config" / "league.yaml")
+        # Live Upstash, not the local mirror: roster membership is exactly the kind of
+        # state that goes stale silently, and a trade since the last sync would show a
+        # player on the wrong team with no indication anything was wrong.
+        spots = live_rosters(config.team_name, project_root=PROJECT_ROOT)
+        print(f"\n  {len(spots)} roster spots read from Upstash")
+        by_team(scored, spots, config.team_name, args.per_team, season, horizons)
     print(f"\n  scored in {time.perf_counter() - started:.1f}s")
     return 0
 

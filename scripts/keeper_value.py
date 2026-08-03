@@ -138,32 +138,14 @@ def fetch_rosters(my_team: str) -> dict[tuple[str, str], str]:
     collapse onto one owner. That residual is irreducible here; the fix is populating
     mlbam_id at Yahoo ingest, not more matching logic. Unmatched counts are printed so
     a silent join failure cannot pass for "nobody owns him".
+
+    The reading and flattening live in `data.rosters` so this and the trajectory board
+    cannot drift on the blob-shape asymmetry -- `cache:roster` is a bare list and
+    `cache:opp_rosters` is a dict, and handling that wrong drops your own team silently.
     """
-    os.environ["RENDER"] = "true"
-    from dotenv import load_dotenv
+    from fantasy_baseball.data.rosters import live_rosters, owner_map
 
-    load_dotenv(PROJECT_ROOT / ".env")
-    from fantasy_baseball.data.cache_keys import CacheKey
-    from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
-
-    kv = build_explicit_upstash_kv()
-    owners: dict[tuple[str, str], str] = {}
-    for key, mine in ((CacheKey.OPP_ROSTERS, None), (CacheKey.ROSTER, my_team)):
-        raw = kv.get(f"cache:{key.value}")
-        if raw is None:
-            continue
-        blob = json.loads(raw) if isinstance(raw, str) else raw
-        data = blob.get("_data", blob)
-        # opp_rosters is {team: [players]}; roster is a BARE LIST -- my own team.
-        groups = data.items() if isinstance(data, dict) else [(mine, data)]
-        for team, players in groups:
-            if not isinstance(players, list):
-                continue
-            for p in players:
-                if not isinstance(p, dict) or not p.get("name"):
-                    continue
-                owners[(normalize_name(p["name"]), str(p.get("player_type", "")))] = str(team)
-    return owners
+    return owner_map(live_rosters(my_team, project_root=PROJECT_ROOT))
 
 
 def _by_team(board: pd.DataFrame, args: argparse.Namespace) -> int:
