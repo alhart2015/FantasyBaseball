@@ -198,6 +198,35 @@ def test_the_band_belongs_to_the_scale_on_screen(payload: dict) -> None:
     assert var_bands != sgp_bands, "the two scales are separate fits with separate bands"
 
 
+def test_my_players_are_marked(payload: dict) -> None:
+    """The first question a reader has on a keeper board is which of these are already
+    his. Roster blobs carry no mlbam_id (#284), so the join is (normalized name,
+    player_type) -- the same non-unique key the rest of the repo has to live with.
+    """
+    board = build_board(payload, top="all", mine={("big bat", "hitter"), ("big arm", "pitcher")})
+    marked = {r["name"] for r in board.rows if r["mine"]}
+    assert marked == {"Big Bat", "Big Arm"}
+    assert not any(r["mine_ambiguous"] for r in board.rows)
+
+    unmarked = build_board(payload, top="all")
+    assert not any(r["mine"] for r in unmarked.rows), "no roster read -- nothing claimed"
+
+
+def test_a_colliding_name_is_flagged_rather_than_claimed(payload: dict) -> None:
+    """Two players can share (normalized name, player_type) -- the live board carries two
+    hitters called Max Muncy. Marking both as mine on one roster hit would put a player
+    the reader does not own on his keeper shortlist, so an ambiguous match says so.
+    """
+    twin = dict(payload)
+    first = payload["players"][0]
+    twin["players"] = [*payload["players"], {**first, "id": first["id"] + 10_000}]
+
+    board = build_board(twin, top="all", mine={(first["name"].lower(), first["pool"])})
+    hits = [r for r in board.rows if r["mine"]]
+    assert len(hits) == 2, "both rows match the only key available"
+    assert all(r["mine_ambiguous"] for r in hits), "and both must say the match is unsure"
+
+
 def test_the_board_reports_who_it_left_out(payload: dict) -> None:
     """A shortened board reads as "these are the best players" when it is "these are the
     ones the model can price". The CLI already prints its drop count; the page must too.

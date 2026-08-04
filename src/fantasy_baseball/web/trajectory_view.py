@@ -17,6 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from fantasy_baseball.trajectory.sweep import SCALES, add_ranks, from_payload, totals
+from fantasy_baseball.utils.name_utils import normalize_name
 
 #: Default rows on the league-wide board. Deliberately not the CLI's 25: a web table
 #: scrolls where a terminal dump does not.
@@ -44,6 +45,9 @@ class Board:
     top: int | str
     #: Which fit the whole table is showing: "var" or "sgp".
     scale: str
+    #: True when a live roster read succeeded, so the page can tell "none of these
+    #: are yours" apart from "we could not reach Upstash".
+    has_rosters: bool = False
     #: Season labels for the per-year columns, e.g. [2027, 2028, 2029]. Empty for a
     #: single-year board, where a breakout column would just repeat the total.
     year_columns: list[int] = field(default_factory=list)
@@ -73,6 +77,7 @@ def build_board(
     pool: str = "both",
     top: Any = None,
     scale: str = "var",
+    mine: set[tuple[str, str]] | None = None,
 ) -> Board:
     """Collapse the cached sweep to one timeframe and rank it.
 
@@ -106,14 +111,28 @@ def build_board(
     ranked = totals(players, horizons, scale)
     add_ranks(ranked)
 
+    # (normalized name, pool) is the only key a roster blob can be joined on -- they
+    # carry no mlbam_id (#284). It is NOT unique: the live board has two hitters called
+    # Max Muncy. So count the rows each key matches and mark a multi-hit as unsure rather
+    # than silently putting a player the reader does not own on his keeper shortlist.
+    owned = mine or set()
+    key_counts: dict[tuple[str, str], int] = {}
+    for row in ranked:
+        k = (normalize_name(row["name"]), row["pool"])
+        key_counts[k] = key_counts.get(k, 0) + 1
+
     rows = []
     for row in ranked:
         if pool != "both" and row["pool"] != pool:
             continue
         move = row["rank_next"] - row["rank_total"]
+        key = (normalize_name(row["name"]), row["pool"])
+        is_mine = key in owned
         rows.append(
             {
                 **row,
+                "mine": is_mine,
+                "mine_ambiguous": is_mine and key_counts[key] > 1,
                 # The MOVE between the two ranks is the keeper signal in one number: a
                 # player far better over the range than next year is who you hold rather
                 # than who you start.
@@ -135,6 +154,7 @@ def build_board(
         pool=pool,
         top="all" if top_n is None else top_n,
         scale=scale,
+        has_rosters=mine is not None,
         # A per-year breakout only earns its columns once the range spans more than one.
         year_columns=[base + h for h in horizons] if len(horizons) > 1 else [],
         meta={

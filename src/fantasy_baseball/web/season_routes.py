@@ -812,6 +812,24 @@ def register_routes(app: Flask) -> None:
         payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
         board, error = None, None
         if payload:
+            # LIVE rosters, not the local mirror: which players are mine is exactly the
+            # state that goes stale silently, and a trade since the last sync would mark
+            # the wrong rows. A failure here must not take the page down -- the board is
+            # still worth reading unmarked -- so it degrades to no highlighting, and
+            # `has_rosters` lets the template distinguish that from "you own none of
+            # these".
+            mine = None
+            try:
+                from fantasy_baseball.data.rosters import live_rosters
+
+                my_team = _load_config().team_name
+                mine = {
+                    (spot.normalized, spot.player_type)
+                    for spot in live_rosters(my_team)
+                    if spot.team == my_team
+                }
+            except Exception:
+                logger.warning("trajectory: live roster read failed; rendering unmarked")
             try:
                 board = build_board(
                     payload,
@@ -819,6 +837,7 @@ def register_routes(app: Flask) -> None:
                     pool=request.args.get("pool", "both"),
                     top=request.args.get("top"),
                     scale=request.args.get("scale", "var"),
+                    mine=mine,
                 )
             except (ValueError, KeyError) as exc:
                 error = str(exc)
