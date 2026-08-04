@@ -546,7 +546,6 @@ def shape_trajectory(
     )
 
     rng = np.random.default_rng(seed)
-    band_fell_back = False
     anchor_columns = np.column_stack([current, prior])
     path, anchors, rows = [], [], []
     for h in horizons:
@@ -641,7 +640,6 @@ def shape_trajectory(
         fell_back = band_effective < MIN_EFFECTIVE_ROWS
         if fell_back:
             band_weights = w
-            band_fell_back = True
         # The fitted mean carries its own uncertainty, and it GROWS with leverage -- the
         # query being far from the data is exactly when the line is least pinned down.
         # `spread` picks this up as `se^2`; quantiles have no variance to add it to, so it
@@ -723,7 +721,12 @@ def shape_trajectory(
             prior_sgp=prior_sgp,
             n_comps=len(usable),
             local_support=local_support,
-            band_fell_back=band_fell_back,
+            # The trajectory-level flag IS the OR over the path -- comps.py documents
+            # it that way and test_shape.py asserts it literally. Derived rather than
+            # accumulated, so a later edit inside the fallback branch cannot set one
+            # without the other and leave the trajectory claiming a revert that no
+            # PathPoint reports (or the reverse).
+            band_fell_back=any(p.band_fell_back for p in path),
             mean_start=float(np.average(current, weights=weights)) if len(usable) else float("nan"),
             mean_prior=float(np.average(prior, weights=weights)) if len(usable) else float("nan"),
             seasons=(int(seasons.min()), int(seasons.max())) if len(usable) else None,
