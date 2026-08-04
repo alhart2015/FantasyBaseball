@@ -61,7 +61,22 @@ def roles(panel: pd.DataFrame) -> pd.Series:
     split `trajectory.value` routes a pitcher's replacement floor on, and
     `CLOSER_SV_THRESHOLD` is the same save count the draft board buckets closers at. A
     third rule defined here would be one more thing to disagree with them.
+
+    **Pass the RAW panel, not the era-normalized one.** `era_normalize` rescales
+    `sv_ip` and `panel.score` then rebuilds `sv` from it, so a 20-save threshold on a
+    normalized frame is a threshold on restated saves -- which is meaningless, because
+    a closer is a JOB and 20 saves is a count of real ones. Measured on the live panel,
+    that mistake moves 8 of 17,947 seasons across the bucket line. Refused below rather
+    than documented, since the two frames are otherwise interchangeable to look at.
     """
+    normalized = [c for c in panel.columns if c.startswith("era_factor_")]
+    if normalized:
+        raise ValueError(
+            "roles() needs the RAW panel: this frame is era-normalized "
+            f"(carries {normalized[:3]}...), so its `sv` has been restated into the "
+            "reference run environment and a 20-save cut no longer means 20 saves. "
+            "Pass the frame from load_scored_panel, before era_normalize."
+        )
     missing = [c for c in _ROLE_SUMS if c not in panel.columns]
     if missing:
         raise KeyError(f"pitcher panel is missing role columns {missing}")
@@ -98,19 +113,20 @@ def score(
         curve, _ = shape_trajectory(
             clean, kind=kind, age=age, sgp=current, prior_sgp=prior, horizons=(horizon,)
         )
+        if level.path[0].n == 0 or np.isnan(curve.path[0].mean):
+            continue
         # `track` is `current` plus a HARD band on the prior season (#305) -- the same
         # two anchors shape uses, bounded instead of kernel-weighted. Passing prior_sgp
         # is what selects it; `comp_trajectory` defaults to level matching without it.
         #
-        # Its row-inclusion is deliberately NOT part of the guard below: the two-mode
-        # comparison was already published from this harness, and dropping rows track
-        # cannot score would silently change the current-vs-shape population. Track
-        # simply records NaN there and is reported on its own defined subset.
+        # Fitted AFTER the guard so a row that is about to be discarded does not pay for
+        # a third full-panel scan. Its own emptiness is deliberately NOT part of that
+        # guard: the two-mode comparison was already published from this harness, and
+        # dropping rows track cannot score would silently change the current-vs-shape
+        # population. Track records NaN there and is reported on its own defined subset.
         tracked = comp_trajectory(
             clean, kind=kind, age=age, sgp=current, prior_sgp=prior, horizons=(horizon,)
         )
-        if level.path[0].n == 0 or np.isnan(curve.path[0].mean):
-            continue
         rows.append(
             {
                 "mlbam_id": q.mlbam_id,
@@ -216,11 +232,11 @@ def main() -> int:
         args.panel_dir = PROJECT_ROOT / args.panel_dir
 
     overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
-    panel = era_normalize(
-        load_scored_panel(args.pool, panel_dir=args.panel_dir, sgp_overrides=overrides),
-        args.pool,
-        sgp_overrides=overrides,
-    )
+    # Kept separately: the estimators want the era-normalized frame, but `roles` needs
+    # the raw one -- see its docstring. Everything below reads `panel` except that one
+    # call.
+    raw_panel = load_scored_panel(args.pool, panel_dir=args.panel_dir, sgp_overrides=overrides)
+    panel = era_normalize(raw_panel, args.pool, sgp_overrides=overrides)
     last = int(panel["season"].max())
 
     # `build_history` supplies both anchors and censors seasons whose prior predates
@@ -240,7 +256,7 @@ def main() -> int:
         f"{args.pool.upper()}S, +{args.horizon}: {header}, ages "
         f"{args.min_age}-{args.max_age}, {len(queries)} queries\n"
     )
-    role_by_season = roles(panel) if args.pool == "pitcher" else None
+    role_by_season = roles(raw_panel) if args.pool == "pitcher" else None
     df = score(panel, queries, args.pool, args.horizon, role_by_season)
     if args.out:
         df.to_csv(args.out, index=False)

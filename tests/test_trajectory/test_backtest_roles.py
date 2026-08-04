@@ -105,3 +105,27 @@ def test_missing_role_columns_raise_rather_than_bucketing_everyone_as_rp():
     panel = pd.DataFrame([{"mlbam_id": 1, "season": 2020, "starts": 30, "games": 32}])
     with pytest.raises(KeyError, match="sv"):
         roles(panel)
+
+
+def test_era_normalized_panel_is_refused():
+    """The closer cut counts REAL saves, so an era-normalized frame must be rejected.
+
+    `era_normalize` rescales `sv_ip` and `panel.score` rebuilds `sv` from it, so a
+    20-save threshold applied to a normalized frame is a threshold on restated saves.
+    The frames are otherwise interchangeable to look at, which is exactly why this is a
+    refusal rather than a comment -- it was a live bug caught in review on #326.
+    """
+    panel = pd.DataFrame(
+        [
+            {
+                "mlbam_id": 1,
+                "season": 2020,
+                "starts": 0,
+                "games": 65,
+                "sv": 20,
+                "era_factor_sv_ip": 0.94,
+            }
+        ]
+    )
+    with pytest.raises(ValueError, match="needs the RAW panel"):
+        roles(panel)

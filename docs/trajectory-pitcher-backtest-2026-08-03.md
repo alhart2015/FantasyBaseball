@@ -85,8 +85,8 @@ pitcher numbers from the same harness.
 |---|---|---|---|---|---|
 | ALL | 700 | 3.48 -> 3.41 | 2.50 -> 2.43 | -0.09 -> -0.06 | 58% |
 | SP | 226 | 4.70 -> 4.53 | 3.58 -> 3.46 | -0.39 -> -0.21 | 55% |
-| RP | 447 | 2.63 -> 2.61 | 1.93 -> 1.86 | +0.01 -> -0.04 | 60% |
-| closer | 27 | 3.92 -> **4.10** | 3.05 -> **3.22** | +0.62 -> +0.79 | **41%** |
+| RP | 448 | 2.63 -> 2.61 | 1.93 -> 1.86 | +0.02 -> -0.03 | 60% |
+| closer | 26 | 3.96 -> **4.14** | 3.05 -> **3.24** | +0.53 -> +0.71 | **38%** |
 | either anchor negative | 140 | 2.04 -> 2.04 | 1.55 -> 1.30 | +0.29 -> -0.14 | 72% |
 | current season negative | 109 | 1.82 -> 1.82 | 1.40 -> 1.10 | +0.34 -> -0.20 | 75% |
 
@@ -147,9 +147,9 @@ was that a pooled pitcher number hides a starter effect cancelling a closer effe
 does not: SP wins 55-56% and RP wins 60%, both positive, in both runs.
 
 **2. Closers are UNRESOLVED, and the two runs disagree.** Elite closers (n=27) show
-shape winning 67% with RMSE improving. Random-sample closers (n=27) show shape winning
-**41%** with RMSE and MAE getting *worse*. Different populations, both n=27, opposite
-signs. **This is noise, not a finding in either direction.** Per constraint 4 of
+shape winning 67% with RMSE improving. Random-sample closers (n=26) show shape winning
+**38%** with RMSE and MAE getting *worse*. Different populations, both around n=27,
+opposite signs. **This is noise, not a finding in either direction.** Per constraint 4 of
 `keeper-value-teardown-2026-08-01.md` -- do not select between models whose gap sits
 inside the noise floor -- the honest statement is that we cannot say whether shape helps
 or hurts closers, and the default should not be forked on 27 rows. #306 (match pitcher
@@ -170,7 +170,11 @@ bias, not the tail.
   `utils.constants.CLOSER_SV_THRESHOLD` for saves, so this buckets pitchers the same way
   the replacement floor and the draft board do. Split seasons are re-summed first --
   `collapse_split_seasons` keeps only `sgp` and `age`, so a traded pitcher would
-  otherwise read as two half-roles.
+  otherwise read as two half-roles. It takes the **raw** panel and refuses an
+  era-normalized one: `era_normalize` rescales `sv_ip` and `panel.score` rebuilds `sv`
+  from it, so a 20-save cut on a normalized frame is a cut on restated saves. That was a
+  live bug caught in review on #326 -- it moved 8 of 17,947 seasons across the bucket
+  line, and one of them was inside the random sample (closer 27 -> 26, RP 447 -> 448).
 - Role and negative-anchor slices on the pitcher pool.
 - `report()` now prints `(under 10, not reported)` instead of returning silently. A
   slice that vanishes reads as "not applicable" when it means "too thin to measure" --
