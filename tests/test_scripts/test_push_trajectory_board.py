@@ -26,6 +26,27 @@ def _script():
     return module
 
 
+def test_an_empty_pool_refuses_the_push(monkeypatch) -> None:
+    """A pool that scores nobody must not overwrite a good board.
+
+    `panel_path` picks the newest panel per kind INDEPENDENTLY and the base season comes
+    off the HITTER panel, so a stale pitcher panel makes `board_inputs(season=2026)` hit
+    `current.empty` and return [] -- the run then prints "0 players with a 2026 line" and
+    pushes a hitters-only board over a complete one. Same shape as the 2026-06-04 ROS
+    incident, and guarded the same way: refuse before touching the KV.
+    """
+    module = _script()
+    with pytest.raises(module.EmptyPoolError) as exc:
+        module._require_scored_pool("pitcher", [], 2026, "pitcher_pt_panel_2000_2025.csv")
+
+    message = str(exc.value)
+    assert "pitcher" in message and "2026" in message
+    assert "pitcher_pt_panel_2000_2025.csv" in message, "name the panel that came up short"
+
+    # A pool that scored is silent.
+    module._require_scored_pool("hitter", [object()], 2026, "hitter_pt_panel_2000_2026.csv")
+
+
 def test_local_stays_local_even_when_render_is_already_set(monkeypatch, tmp_path) -> None:
     """`--local` exists to keep an unverified board OFF Render.
 

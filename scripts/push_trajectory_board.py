@@ -49,6 +49,47 @@ DEFAULT_MAX_HORIZON = 5
 MIN_SGP = 0.0
 
 
+class EmptyPoolError(RuntimeError):
+    """Raised when a pool scores zero players, so the push is refused.
+
+    Pushing anyway overwrites a complete ``cache:trajectory_board`` with a
+    half board -- and it renders perfectly: the page reports "Showing 50 of
+    563 scored" under "Of everyone you could hold", with every pitcher
+    silently gone and only the panel filename in the vintage line to say so.
+
+    The reachable cause is a panel-vintage mismatch. ``panel_path`` picks the
+    newest panel for each kind INDEPENDENTLY, while the base season comes off
+    the HITTER panel alone, so a hitter panel rebuilt through 2026 against a
+    pitcher panel still ending 2025 makes ``board_inputs(season=2026)`` find
+    ``current.empty`` and return no rows.
+
+    Same shape as the 2026-06-04 ROS incident -- a failed fetch overwriting a
+    good blob with a degraded one -- and guarded the same way: abort before
+    any KV read or write, keeping the last-good board.
+    """
+
+
+def _require_scored_pool(kind: str, rows: list, season: int, panel_name: str) -> None:
+    """Abort the push unless ``kind`` scored at least one player.
+
+    Runs during payload assembly, BEFORE any KV read or write, so a refused
+    run leaves the deployed board untouched.
+
+    Raises:
+        EmptyPoolError: the pool produced no scorable rows.
+    """
+    if rows:
+        return
+    raise EmptyPoolError(
+        f"Refusing to push: the {kind} pool scored 0 players for {season}. "
+        f"Its panel is {panel_name} -- most likely it predates {season} while the "
+        f"hitter panel (which sets the base season) does not. Pushing would replace "
+        f"the deployed board with a {kind}-less one that still renders normally. "
+        f"Keeping the last-good board -- rebuild the {kind} panel through {season} "
+        f"and re-run."
+    )
+
+
 def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     """Sweep both pools on both scales. Returns the payload and the rows scored."""
     from fantasy_baseball.config import load_config
@@ -111,6 +152,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
             set(live.loc[live["season"] == season - 1, "mlbam_id"])
             - set(live.loc[live["season"] == season, "mlbam_id"])
         )
+        _require_scored_pool(kind, rows, season, panel_path(kind, panel_dir).name)
         print(f"  {kind}: {len(rows)} players with a {season} line", flush=True)
         started = time.perf_counter()
         # The comp pool must NOT contain the in-progress season: a two-thirds year would
