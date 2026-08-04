@@ -639,6 +639,61 @@ class TestSkipYahoo:
         roster = _read(fake_redis, CacheKey.ROSTER)
         assert roster, "stale-data mode produced an empty roster cache"
 
+    def test_skip_yahoo_does_not_advance_last_refresh(
+        self,
+        configured_test_env,
+        fake_redis,
+        monkeypatch,
+    ):
+        """``last_refresh`` means "when the league data last updated".
+
+        A stale run recomputes the derived caches but fetches no new league
+        state, so advancing ``last_refresh`` would silence the dashboard's own
+        ">24h old" staleness badge (base.html reads this field) for exactly as
+        long as the outage lasts -- the one stretch it needs to fire.
+        """
+        from datetime import date, datetime
+        from unittest.mock import patch
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+            live_refresh = _read(fake_redis, CacheKey.META)["last_refresh"]
+            assert live_refresh, "the live run must record a refresh time"
+
+            # Days later: Yahoo is down and the cron keeps running.
+            monkeypatch.setattr(refresh_pipeline, "local_today", lambda: date(2026, 4, 20))
+            monkeypatch.setattr(refresh_pipeline, "local_now", lambda: datetime(2026, 4, 24, 9, 0))
+
+            def _boom(*args, **kwargs):
+                raise AssertionError("stale-data mode must not call Yahoo")
+
+            armed = [
+                patch(target, side_effect=_boom)
+                for target in [
+                    "fantasy_baseball.auth.yahoo_auth.get_yahoo_session",
+                    "fantasy_baseball.auth.yahoo_auth.get_league",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_teams",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_roster",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_standings",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_scoring_period",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_all_transactions",
+                    "fantasy_baseball.lineup.waivers.fetch_and_match_free_agents",
+                ]
+            ]
+            for p in armed:
+                p.start()
+            try:
+                refresh_pipeline.run_full_refresh(skip_yahoo=True)
+            finally:
+                for p in armed:
+                    p.stop()
+
+        meta = _read(fake_redis, CacheKey.META)
+        assert meta["last_refresh"] == live_refresh, (
+            "a stale run must carry forward the last LIVE refresh time; "
+            "advancing it hides the staleness badge during the outage"
+        )
+
     def test_skip_yahoo_leaves_yahoo_only_caches_untouched(
         self,
         configured_test_env,

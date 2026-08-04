@@ -51,6 +51,7 @@ from fantasy_baseball.web.season_data import (
     _compute_pending_moves_diff,
     _load_game_log_totals,
     read_cache,
+    read_cache_dict,
     read_cache_with_meta,
     reset_cache_job,
     set_cache_job,
@@ -1903,13 +1904,33 @@ class RefreshRun:
             log.exception("Streak computation failed; cache unchanged")
             self._progress("Streak computation failed (continuing)")
 
+    def _last_refresh_stamp(self) -> str:
+        """When the league data behind this refresh last came from Yahoo.
+
+        A stale run recomputes the derived caches off frozen league state, so
+        it carries the previous live run's stamp forward rather than claiming
+        the moment it happened to run. The dashboard's ">24h old" staleness
+        badge reads this field (``base.html``), so advancing it on a stale run
+        would keep the badge silent for exactly as long as the outage lasts --
+        the one stretch it exists to cover.
+
+        Falls back to now only when no prior stamp exists, which a stale run
+        cannot normally reach: it already fails loudly on a missing
+        ``cache:standings`` before getting here.
+        """
+        now = local_now().strftime("%Y-%m-%d %H:%M")
+        if not self.skip_yahoo:
+            return now
+        previous = read_cache_dict(CacheKey.META) or {}
+        return previous.get("last_refresh") or now
+
     # --- Step 16: Write meta ---
     def _write_meta(self):
         assert self.config is not None
 
         self._progress("Finalizing...")
         meta = {
-            "last_refresh": local_now().strftime("%Y-%m-%d %H:%M"),
+            "last_refresh": self._last_refresh_stamp(),
             "start_date": self.start_date,
             "end_date": self.end_date,
             "team_name": self.config.team_name,
