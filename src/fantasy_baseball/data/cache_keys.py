@@ -37,6 +37,10 @@ class CacheKey(StrEnum):
     DRAFT_VALUE = "draft_value"
     STANDINGS_SNAPSHOT = "standings_snapshot"
     PACE_DEVIATIONS = "pace_deviations"
+    #: Written OFFLINE by scripts/push_trajectory_board.py, never by the refresh
+    #: pipeline: the fit needs `data/trajectory/` and `data/cache/keeper_skills`, both
+    #: gitignored and so absent on Render. Read-only to the web app.
+    TRAJECTORY_BOARD = "trajectory_board"
 
 
 def redis_key(key: CacheKey) -> str:
