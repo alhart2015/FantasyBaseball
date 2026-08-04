@@ -19,6 +19,7 @@ Upstash credentials must be in the environment or ``.env`` -- the
 dotenv loader in ``kv_store`` picks them up automatically.
 """
 
+import argparse
 import os
 import sys
 from pathlib import Path
@@ -27,7 +28,25 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
-def main() -> int:
+def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--skip-yahoo",
+        action="store_true",
+        help=(
+            "Run in stale-data mode: skip every step that pulls from Yahoo "
+            "(auth, rosters, standings, free agents, transactions) and reuse "
+            "the last persisted league state. Everything that depends only on "
+            "MLB game logs and projections still recomputes. Use while Yahoo "
+            "auth is broken. Equivalent to FB_SKIP_YAHOO=1."
+        ),
+    )
+    return parser.parse_args(argv)
+
+
+def main(argv: list[str] | None = None) -> int:
+    args = _parse_args(argv)
+
     # Must flip the gate BEFORE importing the pipeline: import-time
     # module state (e.g. cached singletons) reads RENDER once.
     os.environ["RENDER"] = "true"
@@ -42,8 +61,12 @@ def main() -> int:
     # Upstash.
     kv_store._reset_singleton()
 
-    print("Running refresh against remote Upstash...")
-    run_full_refresh()
+    if args.skip_yahoo:
+        print("Running refresh against remote Upstash (stale-data mode: Yahoo steps skipped)...")
+    else:
+        print("Running refresh against remote Upstash...")
+    # Pass None when the flag is absent so FB_SKIP_YAHOO still applies.
+    run_full_refresh(skip_yahoo=True if args.skip_yahoo else None)
     print("Refresh complete.")
 
     # Archive a trimmed snapshot of the ROS projection vintage this refresh
