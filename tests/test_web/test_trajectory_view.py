@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import math
 
 import pytest
@@ -10,6 +11,7 @@ from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, RANK_MOVE, build_b
 from tests._trajectory_panel import synthetic_panel
 
 BASE = 2026
+_HAND_SEQ = itertools.count()
 
 
 @pytest.fixture(scope="module")
@@ -199,6 +201,9 @@ def _hand_payload(players: list[tuple[str, list[float]]]) -> dict:
         "version": 1,
         "base_season": BASE,
         "max_horizon": 3,
+        # Unique per call: real payloads always carry one, and sharing it would let two
+        # hand-built fixtures collide in the derived-state cache.
+        "generated_at": f"hand-{next(_HAND_SEQ)}",
         "players": [
             {
                 "id": i,
@@ -330,6 +335,50 @@ def test_a_filtered_view_reports_both_denominators(payload: dict) -> None:
     assert max(r["rank_total"] for r in pitchers.rows) <= pitchers.ranked
 
     assert everyone.scored == everyone.ranked, "unfiltered, the two agree"
+
+
+def test_the_derived_board_is_reused_across_requests(payload: dict, monkeypatch) -> None:
+    """The payload is an immutable offline artifact, so deriving it once is safe.
+
+    Measured on a live-shaped payload (1,169 players x 5 horizons x 2 scales, 651 KB):
+    from_payload 10.5ms rebuilding 11,690 frozen dataclasses, totals + add_ranks 4.7ms.
+    None of it depends on pool/top/mine, which only slice an already-ranked list -- and
+    every control on the page is a full-page GET, so flipping pool, then end year, then
+    scale, then top was four full rebuilds of the same thing.
+    """
+    from fantasy_baseball.web import trajectory_view
+
+    trajectory_view.clear_board_cache()
+    calls = {"n": 0}
+    real = trajectory_view.from_payload
+
+    def counted(pl):
+        calls["n"] += 1
+        return real(pl)
+
+    monkeypatch.setattr(trajectory_view, "from_payload", counted)
+
+    build_board(payload, end=BASE + 3)
+    assert calls["n"] == 1
+    build_board(payload, end=BASE + 3, pool="pitcher", top=25)
+    build_board(payload, end=BASE + 3, scale="sgp")
+    build_board(payload, end=BASE + 1)
+    assert calls["n"] == 1, "filters and timeframes reuse the parsed sweep"
+
+
+def test_a_new_push_invalidates_the_cache(payload: dict) -> None:
+    """Vintage-keyed, so the next push is picked up rather than served stale."""
+    from fantasy_baseball.web import trajectory_view
+
+    trajectory_view.clear_board_cache()
+    first = build_board(payload, top="all")
+
+    fresher = dict(payload, generated_at="2026-09-01T09:00:00-04:00")
+    fresher["players"] = payload["players"][:2]
+    second = build_board(fresher, top="all")
+
+    assert len(first.rows) == 5
+    assert len(second.rows) == 2, "a new generated_at must not serve the old rows"
 
 
 def test_my_players_are_marked(payload: dict) -> None:

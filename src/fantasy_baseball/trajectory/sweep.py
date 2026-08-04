@@ -310,12 +310,12 @@ def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
     }
 
 
-def from_payload(payload: dict) -> list[SweptPlayer]:
-    """Rebuild the sweep from a cached payload.
+def require_supported_version(payload: dict) -> None:
+    """Refuse a payload this build cannot read, rather than mis-indexing its point arrays.
 
-    Deliberately reconstructs `SweptPlayer` rather than letting the web layer read the
-    dicts directly, so the page and the CLI collapse a range through the same `totals()`
-    and cannot disagree about what a three-year VAR is.
+    Split out of `from_payload` so a caller that caches the PARSE still validates every
+    payload it is handed -- otherwise a schema bump would be waved through whenever the
+    parse came from cache.
     """
     version = payload.get("version")
     if version != PAYLOAD_VERSION:
@@ -323,6 +323,16 @@ def from_payload(payload: dict) -> list[SweptPlayer]:
             f"trajectory board payload is version {version!r}, this build reads "
             f"{PAYLOAD_VERSION}; re-run scripts/push_trajectory_board.py"
         )
+
+
+def from_payload(payload: dict) -> list[SweptPlayer]:
+    """Rebuild the sweep from a cached payload.
+
+    Deliberately reconstructs `SweptPlayer` rather than letting the web layer read the
+    dicts directly, so the page and the CLI collapse a range through the same `totals()`
+    and cannot disagree about what a three-year VAR is.
+    """
+    require_supported_version(payload)
     players = []
     for row in payload["players"]:
         age = int(row["age"])

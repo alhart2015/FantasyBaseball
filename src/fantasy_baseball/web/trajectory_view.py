@@ -23,6 +23,7 @@ from fantasy_baseball.trajectory.sweep import (
     SCALES,
     add_ranks,
     from_payload,
+    require_supported_version,
     totals,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -77,6 +78,66 @@ def _clamp(value: Any, low: int, high: int, default: int) -> int:
         return max(low, min(high, int(value)))
     except (TypeError, ValueError):
         return default
+
+
+#: Derived state for ONE payload vintage: the parsed sweep, and the ranked rows per
+#: (horizons, scale). The cached blob is an immutable offline artifact -- it changes only
+#: when `push_trajectory_board.py` runs -- so deriving it once per vintage is safe, and
+#: `generated_at` is the invalidation key. At most 5 end years x 2 scales, so the map is
+#: bounded without an eviction policy.
+#:
+#: Not locked. Two requests racing a cold cache both compute and the second write wins;
+#: the values are equal, so the cost of the race is one wasted derivation, not a wrong
+#: board. Rows here are never mutated after `add_ranks` -- `build_board` copies each into
+#: a new dict -- which is what makes sharing them across requests safe.
+_CACHE_VINTAGE: tuple | None = None
+_PLAYERS_CACHE: list | None = None
+_RANKED_CACHE: dict[tuple, list[dict]] = {}
+
+
+def clear_board_cache() -> None:
+    """Drop the derived-state cache. For tests, and for anything that needs a cold read."""
+    global _CACHE_VINTAGE, _PLAYERS_CACHE
+    _CACHE_VINTAGE = None
+    _PLAYERS_CACHE = None
+    _RANKED_CACHE.clear()
+
+
+def _derive(payload: dict, horizons: tuple[int, ...], scale: str) -> list[dict]:
+    """Parse and rank, with no caching. The cache-miss body, and the uncacheable path."""
+    rows = totals(from_payload(payload), horizons, scale)
+    add_ranks(rows)
+    return rows
+
+
+def _ranked_rows(payload: dict, horizons: tuple[int, ...], scale: str) -> list[dict]:
+    """Ranked rows for this payload/timeframe/scale, derived once per vintage."""
+    global _CACHE_VINTAGE, _PLAYERS_CACHE
+    if not payload.get("generated_at"):
+        # No vintage, no cache. Every real payload carries one -- push_trajectory_board
+        # always stamps it -- so this is a hand-built payload, and inventing a key for it
+        # would let two unrelated fixtures share derived rows.
+        return _derive(payload, horizons, scale)
+    # `generated_at` alone is not enough: two payloads can share a timestamp and differ,
+    # and serving the wrong one is worse than the derivation it saves. The rest are the
+    # cheap fields that must match for the derived rows to be valid at all.
+    vintage = (
+        str(payload.get("generated_at")),
+        payload.get("base_season"),
+        payload.get("max_horizon"),
+        len(payload.get("players", ())),
+    )
+    if vintage != _CACHE_VINTAGE:
+        clear_board_cache()
+        _CACHE_VINTAGE = vintage
+    if _PLAYERS_CACHE is None:
+        _PLAYERS_CACHE = from_payload(payload)
+    key = (horizons, scale)
+    if key not in _RANKED_CACHE:
+        rows = totals(_PLAYERS_CACHE, horizons, scale)
+        add_ranks(rows)
+        _RANKED_CACHE[key] = rows
+    return _RANKED_CACHE[key]
 
 
 def _year_cells(by_year: list[dict], horizons: tuple[int, ...]) -> list[float | None]:
@@ -134,7 +195,7 @@ def build_board(
     (see `trajectory.sweep`) -- and it is also what keeps `rank_next` meaningful, since
     `next` is only populated when horizon 1 is in range.
     """
-    players = from_payload(payload)
+    require_supported_version(payload)
     base = int(payload["base_season"])
     max_horizon = int(payload["max_horizon"])
     end_years = [base + h for h in range(1, max_horizon + 1)]
@@ -156,8 +217,7 @@ def build_board(
     # RANKED OVER THE WHOLE POOL, then filtered. A pitcher-only view shows LEAGUE ranks,
     # so its top row can read #7 -- correct, and the same rule #322/#323 depend on, where
     # ranking within a subset would make every team's best player a #1.
-    ranked_rows = totals(players, horizons, scale)
-    add_ranks(ranked_rows)
+    ranked_rows = _ranked_rows(payload, horizons, scale)
 
     # (normalized name, pool) is the only key a roster blob can be joined on -- they
     # carry no mlbam_id (#284). It is NOT unique: the live board has two hitters called
