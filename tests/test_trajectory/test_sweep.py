@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pytest
 
 from fantasy_baseball.trajectory.board import BoardRow
+from fantasy_baseball.trajectory.shape import shape_trajectory
 from fantasy_baseball.trajectory.sweep import (
+    SWEEP_DRAWS,
     add_ranks,
     from_payload,
     sweep_pool,
@@ -155,3 +159,76 @@ def test_ranks_run_over_the_whole_pool_and_break_ties_by_name() -> None:
     assert (by_name["A"]["rank_total"], by_name["B"]["rank_total"]) == (2, 3)
     # A NaN `next` sorts last rather than poisoning the comparison.
     assert by_name["C"]["rank_next"] == 3
+
+
+def test_a_swept_row_matches_shape_trajectory_itself() -> None:
+    """The one assertion grounding the sweep against the model it wraps.
+
+    The refactor deleted `score()` from scripts/trajectory_board.py, whose row values
+    were read straight off a `Trajectory` -- `traj.total`, `sum(p.p10 for p in
+    traj.observable)`, `min(p.n_effective ...)`. The replacement re-derives them through
+    `_points()` -> `YearPoint` -> `totals()`.
+
+    Every other test here compares one sweep against another sweep -- prefix-of-longest,
+    prefix-sum, payload round-trip -- so a wrong field mapping inside `_points` (`median`
+    where `mean` was meant, or p10/p90 transposed in BOTH `_pack` and `_unpack`) stays
+    perfectly self-consistent and passes all of them. This is the only check that would
+    catch it, and scripts/trajectory_board.py has no test file of its own.
+    """
+    panel = synthetic_panel()
+    row = BoardRow(1, "Grounded", "hitter", 27, 18.0, 16.0, "OF", 4.0)
+    horizons = (1, 2, 3)
+
+    swept = sweep_pool([row], panel, "hitter", horizons, scales=("var",))
+    got = totals(swept, horizons, scale="var")[0]
+
+    traj, _ = shape_trajectory(
+        panel,
+        kind="hitter",
+        age=row.age,
+        sgp=row.sgp,
+        prior_sgp=row.prior_sgp,
+        horizons=horizons,
+        replacement=row.floor,
+        slot=row.slot,
+        bootstrap_draws=SWEEP_DRAWS,
+    )
+    observable = traj.observable
+
+    assert got["total"] == pytest.approx(traj.total, abs=1e-9)
+    assert got["p10"] == pytest.approx(sum(p.p10 for p in observable), abs=1e-9)
+    assert got["p90"] == pytest.approx(sum(p.p90 for p in observable), abs=1e-9)
+    assert got["n_eff"] == pytest.approx(min(p.n_effective for p in observable), abs=1e-9)
+    assert got["support"] == pytest.approx(traj.local_support, abs=1e-9)
+    assert got["extrapolated"] == traj.extrapolated
+    assert got["next"] == pytest.approx(
+        next(p.mean for p in observable if p.horizon == 1), abs=1e-9
+    )
+    assert [c["mean"] for c in got["by_year"]] == [
+        pytest.approx(p.mean, abs=1e-9) for p in observable
+    ]
+
+
+def test_the_band_flag_is_scoped_to_the_range_on_screen() -> None:
+    """A fallback at +3 must not flag a 1-year board.
+
+    Commit bde75ced exists to stop a latched trajectory-level flag marking a
+    well-supported near year unreliable. test_shape.py covers `PathPoint.band_fell_back`
+    inside `shape_trajectory`; this covers the consumer side -- `totals()` ORing it over
+    the SELECTED horizons only. Reverting to an unfiltered `any(...)` over the whole path
+    restores the exact regression, and nothing else would catch it.
+    """
+    panel = synthetic_panel()
+    row = BoardRow(1, "Flagged", "hitter", 27, 18.0, 16.0, "OF", 4.0)
+    swept = sweep_pool([row], panel, "hitter", (1, 2, 3), scales=("var",))
+
+    player = swept[0]
+    # Force a fallback at the FAR horizon only, leaving the near years clean.
+    patched = replace(
+        player,
+        var=tuple(replace(p, band_fell_back=(p.horizon == 3)) for p in player.var),
+    )
+
+    assert totals([patched], (1,), scale="var")[0]["band_fell_back"] is False
+    assert totals([patched], (1, 2), scale="var")[0]["band_fell_back"] is False
+    assert totals([patched], (1, 2, 3), scale="var")[0]["band_fell_back"] is True
