@@ -1,0 +1,196 @@
+{% extends "season/base.html" %}
+{% block title %}Trajectory Board -- Season Dashboard{% endblock %}
+{% block content %}
+
+{% macro board_url(end=None, pool=None, top=None, scale=None) -%}
+{{ url_for('trajectory',
+           end=end if end is not none else board.end_year,
+           pool=pool if pool is not none else board.pool,
+           top=top if top is not none else board.top,
+           scale=scale if scale is not none else board.scale) }}
+{%- endmacro %}
+
+<div class="page-trajectory">
+<div class="page-header">
+    <h2>Trajectory Board</h2>
+</div>
+
+{% if error %}
+  <p class="warning">{{ error }}</p>
+{% elif not board %}
+  <p class="warning">No trajectory board cached yet.</p>
+  <p class="muted">
+    This board is built offline -- the fit needs the player-trajectory panel and the
+    keeper-skills cache, neither of which is deployed. Run
+    <code>python scripts/push_trajectory_board.py</code> on a machine that has them.
+  </p>
+{% else %}
+
+<p class="muted">
+  Of everyone you could hold, who is worth the most over {{ board.span }}.
+  {% if board.scale == 'var' -%}
+  Showing <strong>VAR</strong> -- value above the position-aware waiver floor. The default,
+  because raw SGP quietly penalises every catcher and reliever.
+  {%- else -%}
+  Showing <strong>raw SGP</strong>, which does not net out the waiver floor -- so catchers
+  and relievers rank lower here than their roster value warrants. Switch to VAR to correct
+  for that; the gap between the two views is the correction.
+  {%- endif %}
+</p>
+
+{#- Every control is a URL built by `board_url`, the single place that knows the full
+    filter state. The selects previously lived in a <form> and needed a hidden input per
+    filter to carry the ones they did not own -- so the state was encoded twice, in two
+    mechanisms, and adding a filter meant remembering both. Missing the hidden input
+    silently reset that filter whenever a dropdown changed. -#}
+<div class="trajectory-controls">
+  <label>Through
+    <select onchange="location = this.value">
+      {% for y in board.end_years %}
+      <option value="{{ board_url(end=y) }}" {% if y == board.end_year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Top
+    <select onchange="location = this.value">
+      {% for n in [25, 50, 100, 250, 'all'] %}
+      <option value="{{ board_url(top=n) }}" {% if n == board.top %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <span class="pill-group">
+    {% for value, label in [('both', 'Both'), ('hitter', 'Hitters'), ('pitcher', 'Pitchers')] %}
+    <a class="pill {% if board.pool == value %}active{% endif %}" href="{{ board_url(pool=value) }}">{{ label }}</a>
+    {% endfor %}
+  </span>
+  <span class="pill-group">
+    {% for value, label in [('var', 'VAR'), ('sgp', 'SGP')] %}
+    <a class="pill {% if board.scale == value %}active{% endif %}" href="{{ board_url(scale=value) }}">{{ label }}</a>
+    {% endfor %}
+  </span>
+  <noscript>
+    <span class="pill-group">
+      {% for y in board.end_years %}
+      <a class="pill {% if y == board.end_year %}active{% endif %}" href="{{ board_url(end=y) }}">{{ y }}</a>
+      {% endfor %}
+    </span>
+    <span class="pill-group">
+      {% for n in [25, 50, 100, 250, 'all'] %}
+      <a class="pill {% if n == board.top %}active{% endif %}" href="{{ board_url(top=n) }}">{{ n }}</a>
+      {% endfor %}
+    </span>
+  </noscript>
+</div>
+
+<p class="muted trajectory-vintage">
+  Showing {{ board.rows|length }} of {{ board.scored }}{% if board.pool != 'both' %} {{ board.pool }}s{% endif %} scored{% if board.ranked != board.scored %}, ranked against all {{ board.ranked }} -- the # column is a league-wide position, so it runs past this count{% endif %}.
+  {%- if board.meta.excluded and board.meta.excluded.total %}
+  <strong>{{ board.meta.excluded.total }} players league-wide{% if board.pool != 'both' %} (hitters and pitchers together, not just {{ board.pool }}s){% endif %} are not on this board at all</strong> --
+  {{ board.meta.excluded.no_current_line }} with no {{ board.base_season }} line
+  (injured, released, or not yet up) and {{ board.meta.excluded.low_sgp }} pacing below
+  {{ '%.1f'|format(board.meta.min_sgp) }} SGP. They were never scored, so an absent player
+  means the model could not price him, not that it ranked him last.
+  {%- endif %}
+  Start year is locked at {{ board.base_season + 1 }}.
+  {% if board.meta.generated_at %}Built {{ board.meta.generated_at }}{% endif %}
+  {% if board.meta.panel_vintage %}from {{ board.meta.panel_vintage.hitter }} / {{ board.meta.panel_vintage.pitcher }}{% endif %}
+  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% complete, and every fit is built on the paced full-year figure{% endif %}.
+  This board does not refresh with the dashboard; it is as fresh as the last
+  <code>push_trajectory_board.py</code> run.
+  {%- if not board.has_rosters %}
+  <strong>Your players are not highlighted</strong> -- the live roster read failed, so
+  nothing on this page claims to know what you own.
+  {%- endif %}
+</p>
+
+{% if not board.rows %}
+  <p>Nothing scored at this timeframe.</p>
+{% else %}
+<table class="data-table trajectory-table">
+  <thead>
+    <tr>
+      <th title="Rank by {{ board.span }} {{ board.scale|upper }} over the whole scored pool, both pools, regardless of the filter above">#</th>
+      <th></th>
+      <th>Player</th>
+      <th>Age</th>
+      <th>Slot</th>
+      <th title="{{ board.base_season }} {{ board.scale|upper }}, paced to a full year{% if board.scale == 'var' %} -- SGP minus this slot's replacement level, not clamped, so a below-replacement player reads negative{% endif %}">Now</th>
+      <th class="sorted">{{ board.span }} {{ board.scale|upper }}</th>
+      <th title="p10..p90 of the {{ board.span }} {{ board.scale|upper }} total, summed across years -- assumes the years move together, so it is if anything too wide">Band</th>
+      {% for y in board.year_columns %}
+      <th title="{{ board.scale|upper }} in {{ y }} alone">'{{ (y|string)[2:] }}</th>
+      {% endfor %}
+      <th title="Share of the fitting weight sitting near this player's own current season">Supp</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in board.rows %}
+    <tr{% if r.mine %} class="user-team"{% endif %}>
+      <td>{{ r.rank_total }}</td>
+      <td class="rank-move">
+        {%- if r.rank_move > 0 %}<span class="move-up" title="{{ r.rank_move }} places better over {{ board.span }} than next year alone -- hold rather than start">+{{ r.rank_move }}</span>
+        {%- elif r.rank_move < 0 %}<span class="move-down" title="{{ -r.rank_move }} places better next year alone than over {{ board.span }} -- start rather than hold">{{ r.rank_move }}</span>
+        {%- endif %}
+      </td>
+      <td class="team-name">
+        {{ r.name }}
+        {%- if r.mine_ambiguous %} <span class="flag flag-extrap" title="You roster a player with this name, but the board has more than one -- roster blobs carry no MLBAM id (#284), so the name is the only join available and it cannot tell them apart. Check which one before acting on it.">(?)</span>
+        {%- endif %}
+        {%- if r.band_fell_back %} <span class="flag flag-band" title="The band on at least one year in this range fell back to the whole cohort's residual scatter -- the understated interval the reweighting exists to replace. It happens on the deepest extrapolations, the ones most in need of a wide band.">(!!)</span>
+        {%- elif r.extrapolated %} <span class="flag flag-extrap" title="Under {{ '%.0f'|format(board.meta.min_local_support * 100) }}% of the fitting weight sits near this player's own current season, so the line was evaluated outside its own support. Read the band, not the point estimate.">(!)</span>
+        {%- endif %}
+      </td>
+      <td>{{ r.age }}</td>
+      <td>{{ r.slot }}</td>
+      <td>{{ '%.1f'|format(r.now) }}</td>
+      <td class="total-col">{{ '%.1f'|format(r.total) }}</td>
+      <td class="band-col">[{{ '%.1f'|format(r.p10) }}, {{ '%.1f'|format(r.p90) }}]</td>
+      {%- for cell in r.year_cells %}
+      <td class="year-col">{% if cell is not none %}{{ '%.1f'|format(cell) }}{% else %}--{% endif %}</td>
+      {%- endfor %}
+      <td>{{ '%.0f'|format(r.support * 100) }}%</td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<div class="card trajectory-footer">
+  <p>
+    <strong>(!)</strong> under {{ '%.0f'|format(board.meta.min_local_support * 100) }}% of the fitting weight sits near this player's own
+    current season. LAST season is kernel-weighted and THIS one is not, so a season that
+    far outruns its prior is priced by extrapolating a line fitted on players unlike him.
+    The <em>band</em> already accounts for it and is wide on these rows -- read it rather
+    than the point estimate. The estimate itself leans on the fitted line holding outside
+    its own data: locally unbiased where checked, but assumed.
+  </p>
+  <p>
+    <strong>(!!)</strong> at least one year in this range also reverted to the cohort's
+    own residual scatter, which is the narrower interval the reweighting exists to
+    replace -- so on these rows even the band understates.
+  </p>
+  <p>
+    <strong>VAR against SGP.</strong> These are two separate fits, not one shifted by the
+    floor: the projected VAR is fitted on production above replacement and clamped at
+    zero, so a below-replacement player projects to 0 rather than a negative.
+    {%- if board.scale == 'var' %}
+    The <em>Now</em> column is not clamped, so a player already under his slot's floor
+    reads negative there against a 0.0 forecast.
+    {%- else %}
+    Nothing is clamped on this scale. The raw fit is run with no replacement level, and
+    every clamp in the model is gated on having one -- so a projection or either end of
+    a <em>Band</em> can come out negative here, and on the live board most rows' p10 does.
+    <em>Now</em> is the exception: it is raw paced SGP, and the board only carries players
+    at or above the SGP cut, so it never reads negative. That is the mirror image of the
+    VAR view, where the projections are floored at zero and <em>Now</em> is the column
+    that goes negative.
+    {%- endif %}
+    Flipping the toggle is what shows the divergence the board exists to correct -- a
+    closer and an ace can trade places entirely, and the rank column moves with the
+    scale.
+  </p>
+</div>
+{% endif %}
+{% endif %}
+
+</div>
+{% endblock %}

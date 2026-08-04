@@ -2148,3 +2148,79 @@ def test_transactions_empty_txn_but_populated_draft(client):
     assert "switchTab" in body  # tab JS hoisted, present regardless of txn_data
     assert "toggleTxnDetail" in body  # expand JS hoisted too
     assert "Juan Soto" in body  # draft rows render
+
+
+def test_trajectory_page_renders_with_a_cold_cache(client):
+    """A missing board must SAY so. The page is fed by an offline push script, not by
+    the refresh pipeline, so "no board yet" is a normal state and rendering an empty
+    table would read as "nobody scored"."""
+    with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None):
+        resp = client.get("/trajectory")
+    assert resp.status_code == 200
+    assert b"No trajectory board cached yet" in resp.data
+    assert b"push_trajectory_board.py" in resp.data
+
+
+def test_trajectory_page_reports_a_payload_it_cannot_read(client):
+    """Rather than 500ing, or worse, mis-indexing the compact point arrays."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value={"version": 99, "players": [], "base_season": 2026, "max_horizon": 3},
+    ):
+        resp = client.get("/trajectory")
+    assert resp.status_code == 200
+    assert b"version" in resp.data
+
+
+def test_trajectory_page_renders_a_board(client):
+
+    from fantasy_baseball.trajectory.board import BoardRow
+    from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
+    from tests._trajectory_panel import synthetic_panel
+
+    panel = synthetic_panel()
+    swept = sweep_pool(
+        [BoardRow(1, "Testy McTestface", "hitter", 27, 20.0, 19.0, "OF", 4.0)],
+        panel,
+        "hitter",
+        (1, 2),
+    )
+    payload = to_payload(swept, base_season=2026, max_horizon=2, generated_at="2026-08-04T09:00:00")
+
+    with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload):
+        resp = client.get("/trajectory?end=2028")
+    assert resp.status_code == 200
+    assert b"Testy McTestface" in resp.data
+    # The vintage is load-bearing: this board does not move with a dashboard refresh.
+    assert b"2026-08-04T09:00:00" in resp.data
+    # Per-year columns appear once the range spans more than one season.
+    assert b"'27" in resp.data and b"'28" in resp.data
+
+    # ONE mechanism for the control state. Every control is a URL from `board_url`; the
+    # dropdowns used to sit in a <form> that needed a hidden input per filter to carry
+    # the ones it did not own, so the state was encoded twice and a filter added to only
+    # one of them silently reset whenever a dropdown changed.
+    html = resp.data.decode()
+    assert 'type="hidden"' not in html, "control state must live in the URL, not in inputs"
+    assert "<form" not in html, "no form on this page -- the selects navigate"
+    assert "scale=var" in html and "pool=hitter" in html, "controls carry the full state"
+
+    # Prose must not assert one scale's semantics while the other is selected. The Now
+    # column is floor-subtracted and unclamped on VAR, and raw on SGP -- a footer that
+    # promises negative rows under SGP sends the reader looking for rows that cannot
+    # exist there.
+    with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload):
+        var_html = client.get("/trajectory?end=2028&scale=var").data.decode()
+        sgp_html = client.get("/trajectory?end=2028&scale=sgp").data.decode()
+    assert "reads negative there" in var_html
+    assert "reads negative there" not in sgp_html, "VAR-only claim leaked into the SGP view"
+
+    # And the SGP text must not claim the INVERSE either. Every clamp in shape_trajectory
+    # is gated on `if replacement:`, which is falsy for the 0.0 the raw pass is fitted
+    # with -- so SGP is the UNCLAMPED scale: on the live board most rows have a negative
+    # p10 there, while VAR has none and instead has ~900 negative Now values. A footer
+    # promising "nothing reads negative" on SGP contradicts the Band column beside it.
+    assert "Nothing is clamped on this scale" in sgp_html
+    assert "nothing reads negative" not in sgp_html, (
+        "SGP is the scale where negatives DO occur -- this claim is inverted"
+    )

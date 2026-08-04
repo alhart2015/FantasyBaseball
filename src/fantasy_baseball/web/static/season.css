@@ -3825,3 +3825,59 @@ td[style*="--neg"] {
   margin-top: 12px;
 }
 .dist-wrapper canvas { display: block; width: 100%; height: 100%; }
+
+/* Trajectory board (#321). Reuses .data-table, .pill and .card; only the controls
+   row, the two flag glyphs and the numeric column alignment are specific to it. */
+.trajectory-controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 14px;
+  margin: 14px 0 10px;
+}
+.trajectory-controls label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.trajectory-controls select {
+  font: inherit;
+  font-size: 12px;
+  letter-spacing: normal;
+  text-transform: none;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 6px;
+}
+.trajectory-vintage { margin-bottom: 14px; }
+/* The board is pushed offline and does not move with a dashboard refresh, so its
+   vintage is load-bearing rather than decorative -- see push_trajectory_board.py. */
+.trajectory-vintage code { font-size: 11px; }
+.trajectory-table th a { color: inherit; text-decoration: none; }
+.trajectory-table th a:hover { text-decoration: underline; }
+.trajectory-table th.sorted { color: var(--accent); }
+.trajectory-table th.sorted a { cursor: default; }
+.trajectory-table .band-col,
+.trajectory-table .year-col { color: var(--text-secondary); white-space: nowrap; }
+.trajectory-table .rank-move { width: 34px; font-size: 11px; }
+.trajectory-table .move-up { color: var(--success); }
+.trajectory-table .move-down { color: var(--danger); }
+/* The flags are warnings, not decoration: below the support threshold the fitted line
+   was evaluated outside its own data, so the band is wide because the model is
+   extrapolating rather than because the player is genuinely volatile. */
+.trajectory-table .flag { font-size: 11px; cursor: help; }
+.trajectory-table .flag-extrap { color: var(--gold-deep); }
+.trajectory-table .flag-band { color: var(--danger); }
+.trajectory-footer { margin-top: 18px; }
+.trajectory-footer p {
+  font-size: 12px;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+.trajectory-footer p:last-child { margin-bottom: 0; }

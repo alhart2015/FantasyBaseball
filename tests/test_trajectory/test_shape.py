@@ -5,6 +5,7 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.trajectory.shape import (
+    MIN_EFFECTIVE_ROWS,
     _bootstrap_predictions,
     _weighted_least_squares,
     build_history,
@@ -235,6 +236,47 @@ def test_an_asymmetric_residual_distribution_gives_an_asymmetric_band() -> None:
     below = point.median - point.p10
     above = point.p90 - point.median
     assert below > 3 * above, f"expected a long left tail, got -{below:.2f} / +{above:.2f}"
+
+
+def test_the_band_fallback_is_recorded_on_the_horizon_it_happened_at() -> None:
+    """A fallback at +2 must not mark +1 unreliable.
+
+    One sweep at the longest horizon serves every shorter range (#321), so a board for
+    2027 alone reads its points off a fit that also went out to 2031. While the flag was
+    a single latched bool on the trajectory, that board inherited a fallback from a year
+    it was not showing -- and the flag is the one telling the reader the band is the
+    trustworthy part.
+
+    The panel puts a cohort at the query's own level ONLY in the last season that has a
+    +1 outcome, so the band has real weight near the query at +1 and none at +2.
+    """
+    rng = np.random.default_rng(0)
+    rows = []
+    # Carries the fit but no band weight: 15 SGP from the query, outside CURRENT_WINDOW.
+    for i in range(120):
+        level = float(rng.uniform(8.0, 12.0))
+        for offset, season in enumerate(range(2010, 2016)):
+            rows.append((i, season, 25 + offset, max(level + float(rng.normal(0, 1.5)), 0.0)))
+    for j in range(30):
+        rows.append((900 + j, 2014, 28, 25.0 + float(rng.normal(0, 1.0))))
+        rows.append((900 + j, 2015, 29, 25.0 + float(rng.normal(0, 1.0))))
+
+    traj, _ = shape_trajectory(
+        _panel(rows),
+        kind="hitter",
+        age=28,
+        sgp=25.0,
+        prior_sgp=24.0,
+        horizons=(1, 2),
+        prior_window=50.0,
+    )
+
+    near, far = traj.path
+    # Both fitted, so neither assertion below passes on an empty point.
+    assert near.n_effective > MIN_EFFECTIVE_ROWS and far.n_effective > MIN_EFFECTIVE_ROWS
+    assert not near.band_fell_back
+    assert far.band_fell_back
+    assert traj.band_fell_back == any(p.band_fell_back for p in traj.path)
 
 
 def test_the_bootstrap_is_reproducible() -> None:

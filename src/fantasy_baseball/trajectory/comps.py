@@ -121,6 +121,16 @@ class PathPoint:
     #: median and the residual variance weighted. Left as a plain field rather than a
     #: property so the two modes can each say what they mean.
     survival: float = float("nan")
+    #: True when THIS horizon's band could not find enough weight near the query's own
+    #: current season and fell back to the whole cohort's residual scatter -- see
+    #: `Trajectory.band_fell_back`, which is this OR-ed across the path.
+    #:
+    #: Per horizon rather than per trajectory because one sweep at the longest horizon
+    #: serves every shorter range (#321): the per-year points are identical whichever
+    #: tuple was fitted, so a board for 2027 alone is read off the same fit as 2027-2031.
+    #: A latched flag would carry a +5 fallback onto a +1 view and mark a well-supported
+    #: year unreliable.
+    band_fell_back: bool = False
 
 
 @dataclass(frozen=True)
@@ -175,6 +185,10 @@ class Trajectory:
     #: scatter -- the understated interval the reweighting exists to replace. It happens
     #: on the DEEPEST extrapolations, the ones most in need of a wide band, so a caller
     #: telling a reader to trust the band must say when it silently reverted.
+    #:
+    #: The trajectory-level OR of `PathPoint.band_fell_back`. Read the per-point flag when
+    #: showing a SUBSET of the path -- a consumer summing only the first year off a
+    #: five-year fit would otherwise inherit a fallback that happened at +5.
     band_fell_back: bool = False
     #: Which matcher produced this -- "current", "track" (comps.comp_trajectory) or
     #: "shape" (shape.shape_trajectory). In "shape" the numbers are a fitted prediction

@@ -798,6 +798,57 @@ def register_routes(app: Flask) -> None:
             stash=payload,
         )
 
+    @app.route("/trajectory")
+    def trajectory():
+        """League-wide keeper board, ranked on projected trajectory (#321).
+
+        A pure reader. The sweep needs the panel and the keeper-skills cache, neither of
+        which is deployed, so `scripts/push_trajectory_board.py` computes it offline and
+        writes `cache:trajectory_board`. A cold or stale-schema cache is reported rather
+        than silently rendering an empty board that looks like "nobody scored".
+        """
+        from fantasy_baseball.web.trajectory_view import build_board
+
+        payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
+        board, error = None, None
+        if payload:
+            # LIVE rosters, not the local mirror: which players are mine is exactly the
+            # state that goes stale silently, and a trade since the last sync would mark
+            # the wrong rows. A failure here must not take the page down -- the board is
+            # still worth reading unmarked -- so it degrades to no highlighting, and
+            # `has_rosters` lets the template distinguish that from "you own none of
+            # these".
+            mine = None
+            try:
+                from fantasy_baseball.data.rosters import live_rosters
+
+                my_team = _load_config().team_name
+                mine = {
+                    (spot.normalized, spot.player_type)
+                    for spot in live_rosters(my_team)
+                    if spot.team == my_team
+                }
+            except Exception:
+                logger.warning("trajectory: live roster read failed; rendering unmarked")
+            try:
+                board = build_board(
+                    payload,
+                    end=request.args.get("end"),
+                    pool=request.args.get("pool", "both"),
+                    top=request.args.get("top"),
+                    scale=request.args.get("scale", "var"),
+                    mine=mine,
+                )
+            except (ValueError, KeyError) as exc:
+                error = str(exc)
+        return render_template(
+            "season/trajectory.html",
+            meta=read_meta(),
+            active_page="trajectory",
+            board=board,
+            error=error,
+        )
+
     @app.route("/api/il-return-plan")
     def api_il_return_plan():
         from fantasy_baseball.lineup.il_return_planner import plan_il_returns_scenarios

@@ -389,6 +389,19 @@ def _build_sqlite_kv() -> SqliteKVStore:
     return SqliteKVStore(path)
 
 
+def build_explicit_sqlite_kv() -> SqliteKVStore:
+    """Build the LOCAL SQLite KV regardless of ``RENDER``.
+
+    The mirror image of :func:`build_explicit_upstash_kv`, and for the same
+    reason: a caller that has already decided where it is writing should say
+    so, rather than routing that decision through an environment variable
+    some other part of the process may have set. ``get_kv()`` is the right
+    call when the environment gate IS the decision; it is the wrong one when
+    a ``--local`` flag already made it.
+    """
+    return _build_sqlite_kv()
+
+
 def build_explicit_upstash_kv() -> UpstashKVStore:
     """Build an Upstash KV regardless of ``RENDER``.
 
