@@ -41,12 +41,10 @@ Build the panel first (one time, ~1 minute):
 from __future__ import annotations
 
 import argparse
-import math
 import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -58,114 +56,12 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.data.rosters import RosterSpot, live_rosters
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
-from fantasy_baseball.trajectory.board import (
-    BoardRow,
-    board_inputs,
-    player_names,
-    season_slots,
-)
+from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
+from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
-from fantasy_baseball.trajectory.shape import prepare, shape_trajectory
+from fantasy_baseball.trajectory.sweep import add_ranks, sweep_pool, totals
 from fantasy_baseball.utils.name_utils import normalize_name
-
-#: Bootstrap refits per query. The board reports no SE column, and `se` enters the band
-#: only through `spread`, which moves by 0.0006 between 250 draws and 1000 -- so the
-#: sweep buys a 4x speedup for precision it does not print. The single-player CLI keeps
-#: the higher default, where the SE IS a printed column.
-SWEEP_DRAWS = 250
-
-#: Fitting weight that must sit near the query's own current season before its row is
-#: ranked rather than flagged. Shape has no kernel on the CURRENT season, so a query can
-#: be matched to a cohort it sits entirely outside and priced by extrapolating that
-#: cohort's fitted line.
-#:
-#: 10% separates the two failure modes cleanly on the real board -- measured, not chosen:
-#:
-#:     Sal Stewart      16.8 now / 1.5 prior     1.8%   extrapolated
-#:     Kevin McGonigle  13.6 now / 0.0 prior     4.6%   extrapolated
-#:     CJ Abrams        20.9 now / 14.0 prior    6.3%   extrapolated
-#:     ---
-#:     Crow-Armstrong   20.2 now / 17.2 prior   16.1%   supported
-#:     Hunter Goodman   16.1 now / 12.9 prior   20.5%   supported
-#:     Juan Soto        12.9 now / 21.5 prior   33.1%   supported
-#:     Bobby Witt Jr.   15.5 now / 18.9 prior   40.1%   supported
-#:
-#: The obvious gauge, `sgp - mean_start`, cannot make that split: it reads "above this
-#: cohort's mean" and "outside this cohort" the same way, and flagged 11 of the top 20.
-MIN_LOCAL_SUPPORT = 0.10
-
-
-def score(
-    rows: list[BoardRow], panel: pd.DataFrame, kind: str, horizons: tuple[int, ...]
-) -> list[dict]:
-    """Fit every row against one prepared state.
-
-    The whole point of #311: `build_history` and the forward-value lookup depend on the
-    panel, not the player, so they are hoisted out of the loop. One state per pool --
-    a hitter-fitted state cannot price a pitcher and will refuse to try.
-    """
-    prepared = prepare(panel, kind=kind, horizons=horizons)
-    scored = []
-    for row in rows:
-        traj, _ = shape_trajectory(
-            prepared,
-            kind=kind,
-            age=row.age,
-            sgp=row.sgp,
-            prior_sgp=row.prior_sgp,
-            horizons=horizons,
-            replacement=row.floor,
-            slot=row.slot,
-            bootstrap_draws=SWEEP_DRAWS,
-        )
-        if not traj.observable:
-            continue
-        scored.append(
-            {
-                "name": row.name,
-                "pool": row.pool,
-                "age": row.age,
-                "slot": row.slot,
-                "now": row.sgp,
-                "prior": row.prior_sgp,
-                "total": traj.total,
-                # Summed across horizons, so the band describes the TOTAL rather than
-                # any one year. This assumes the years move together, which overstates
-                # the width if they do not -- stated rather than hidden, and it is the
-                # conservative direction for a keep-or-cut call.
-                "p10": sum(p.p10 for p in traj.observable),
-                "p90": sum(p.p90 for p in traj.observable),
-                "years": len(traj.observable),
-                "n_eff": min(p.n_effective for p in traj.observable),
-                "support": traj.local_support,
-                "extrapolated": traj.extrapolated,
-                "band_fell_back": traj.band_fell_back,
-                # NEXT season alone, for the second ranking. A one-year board and a
-                # multi-year board answer different questions -- who helps now versus
-                # who is worth holding -- and the gap between a player's two ranks is
-                # the keeper decision in one number.
-                "next": traj.observable[0].mean
-                if traj.observable[0].horizon == 1
-                else float("nan"),
-            }
-        )
-    return scored
-
-
-def add_ranks(scored: list[dict]) -> None:
-    """Stamp each row with BOTH rankings, over the whole scored pool.
-
-    Ranks are computed once over everyone and then carried, so a per-team view shows a
-    player's LEAGUE rank rather than his rank among his own teammates -- the latter would
-    make every team's best player look like a 1.
-    """
-    for key, field in (("total", "rank_total"), ("next", "rank_next")):
-        order = sorted(
-            scored, key=lambda r, k=key: (-r[k] if not np.isnan(r[k]) else math.inf, r["name"])
-        )
-        for i, row in enumerate(order, start=1):
-            row[field] = i
 
 
 def assign_teams(scored: list[dict], spots: list[RosterSpot]) -> dict[str, list[str]]:
@@ -375,7 +271,7 @@ def main() -> int:
     eligibility = season_slots(cache, season)
 
     started = time.perf_counter()
-    scored: list[dict] = []
+    swept = []
     for kind in pools:
         live = calendar if kind == "hitter" else load(kind, True)
         rows = [
@@ -398,7 +294,12 @@ def main() -> int:
         # full-panel `apply` passes for a frame that is this one minus its partial rows.
         # Verified identical on both pools: same ids, same seasons, max |sgp diff| 0.0.
         complete = live[~live["partial_season"]].reset_index(drop=True)
-        scored += score(rows, complete, kind, horizons)
+        # VAR only. The web board (#321) also caches a raw-SGP fit for its second column,
+        # but that is a SECOND fit per player -- asking for it here would double a 17s run
+        # to serve a column this CLI does not print.
+        swept += sweep_pool(rows, complete, kind, horizons, scales=("var",))
+
+    scored = totals(swept, horizons, scale="var")
 
     if args.min_support > 0:
         dropped = [r for r in scored if r["support"] < args.min_support]
