@@ -168,7 +168,7 @@ def render(
     # Printing only the post-filter count beside a # column that runs past it is the
     # contradiction the web board was fixed for in 1eea2062.
     if ranked != len(scored):
-        print(f"{len(scored)} shown, ranked against all {ranked} scored" + chr(10))
+        print(f"{len(scored)} scored after --min-support, ranked against all {ranked}" + chr(10))
     else:
         print(f"{len(scored)} players scored" + chr(10))
     print(

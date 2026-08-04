@@ -176,9 +176,13 @@
     The <em>Now</em> column is not clamped, so a player already under his slot's floor
     reads negative there against a 0.0 forecast.
     {%- else %}
-    You are on the SGP scale, so <em>Now</em> and every projection here are raw -- the
-    floor is not subtracted anywhere on this view, and nothing reads negative for being
-    below replacement. Switch to VAR to see that.
+    Nothing is clamped on this scale. The raw fit is run with no replacement level, and
+    every clamp in the model is gated on having one -- so a projection or either end of
+    a <em>Band</em> can come out negative here, and on the live board most rows' p10 does.
+    <em>Now</em> is the exception: it is raw paced SGP, and the board only carries players
+    at or above the SGP cut, so it never reads negative. That is the mirror image of the
+    VAR view, where the projections are floored at zero and <em>Now</em> is the column
+    that goes negative.
     {%- endif %}
     Flipping the toggle is what shows the divergence the board exists to correct -- a
     closer and an ace can trade places entirely, and the rank column moves with the

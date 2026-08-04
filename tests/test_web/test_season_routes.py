@@ -2214,4 +2214,13 @@ def test_trajectory_page_renders_a_board(client):
         sgp_html = client.get("/trajectory?end=2028&scale=sgp").data.decode()
     assert "reads negative there" in var_html
     assert "reads negative there" not in sgp_html, "VAR-only claim leaked into the SGP view"
-    assert "floor is not subtracted anywhere on this view" in sgp_html
+
+    # And the SGP text must not claim the INVERSE either. Every clamp in shape_trajectory
+    # is gated on `if replacement:`, which is falsy for the 0.0 the raw pass is fitted
+    # with -- so SGP is the UNCLAMPED scale: on the live board most rows have a negative
+    # p10 there, while VAR has none and instead has ~900 negative Now values. A footer
+    # promising "nothing reads negative" on SGP contradicts the Band column beside it.
+    assert "Nothing is clamped on this scale" in sgp_html
+    assert "nothing reads negative" not in sgp_html, (
+        "SGP is the scale where negatives DO occur -- this claim is inverted"
+    )
