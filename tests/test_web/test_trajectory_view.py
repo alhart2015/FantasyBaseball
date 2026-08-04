@@ -94,28 +94,45 @@ def test_ranks_are_league_wide_even_when_the_pool_is_filtered(payload: dict) -> 
     assert pitchers.rows[0]["rank_total"] != 1, "expected a league rank, not a within-pool one"
 
 
-def test_sorting_by_sgp_reorders_rows_without_renumbering_the_rank(payload: dict) -> None:
-    """The rank column means "rank by VAR" whatever the sort. Renumbering it on SGP would
-    erase the divergence the board exists to show -- raw SGP misranks catchers and
-    relievers, which is why VAR is the default."""
-    by_var = build_board(payload, end=BASE + 3, sort="var")
-    by_sgp = build_board(payload, end=BASE + 3, sort="sgp")
+def test_the_scale_toggle_renumbers_the_rank(payload: dict) -> None:
+    """The whole table is ONE scale, so the rank must be a rank on that scale.
 
-    assert {r["name"]: r["rank_total"] for r in by_var.rows} == {
+    This replaces an earlier rule where `#` stayed a VAR rank under an SGP sort. That
+    made sense when SGP was a second column beside VAR; with a toggle the reader is
+    looking at one board, and a number that ranks by something not on screen is worse
+    than no number. Raw SGP misranks catchers and relievers, which is why VAR remains
+    the default -- but the SGP view now shows SGP ranks.
+    """
+    by_var = build_board(payload, end=BASE + 3, scale="var")
+    by_sgp = build_board(payload, end=BASE + 3, scale="sgp")
+
+    for board in (by_var, by_sgp):
+        assert [r["rank_total"] for r in board.rows] == sorted(
+            r["rank_total"] for r in board.rows
+        ), "rows render in rank order"
+        assert [r["total"] for r in board.rows] == sorted(
+            (r["total"] for r in board.rows), reverse=True
+        ), "and rank order is the displayed scale's order"
+
+    assert {r["name"]: r["rank_total"] for r in by_var.rows} != {
         r["name"]: r["rank_total"] for r in by_sgp.rows
-    }
-    assert [r["sgp_total"] for r in by_sgp.rows] == sorted(
-        (r["sgp_total"] for r in by_sgp.rows), reverse=True
-    )
+    }, "VAR and SGP disagree on this fixture, so the ranks must differ"
 
 
-def test_every_row_carries_both_scales_and_they_differ(payload: dict) -> None:
-    """Two separate fits, not one shifted by the floor -- see the sweep tests for the
-    below-replacement case where reconstructing one from the other lands on the floor."""
-    rows = build_board(payload, end=BASE + 3).rows
-    assert all(row["sgp_total"] is not None for row in rows)
-    assert all(row["sgp_total"] >= row["total"] for row in rows)
-    assert any(row["sgp_total"] > row["total"] for row in rows)
+def test_now_is_rendered_on_the_selected_scale(payload: dict) -> None:
+    """VAR is SGP minus the replacement level -- including for the current season.
+
+    Deliberately NOT clamped at zero: a player already below his slot's waiver floor is
+    exactly what a keeper reader needs to see, and clamping would render him identical
+    to a replacement-level one.
+    """
+    by_var = {r["name"]: r for r in build_board(payload, end=BASE + 3, scale="var").rows}
+    by_sgp = {r["name"]: r for r in build_board(payload, end=BASE + 3, scale="sgp").rows}
+
+    for name, sgp_row in by_sgp.items():
+        var_row = by_var[name]
+        assert var_row["now"] == pytest.approx(sgp_row["now"] - var_row["floor"])
+        assert var_row["floor"] > 0
 
 
 @pytest.mark.parametrize(
@@ -159,29 +176,26 @@ def test_extrapolated_rows_are_flagged_and_always_shown(payload: dict) -> None:
         build_board(payload, hide_unsupported=True)  # type: ignore[call-arg]
 
 
-def test_each_scale_carries_its_own_band(payload: dict) -> None:
-    """VAR and SGP are separate fits on different scales, so they need separate bands.
+def test_the_band_belongs_to_the_scale_on_screen(payload: dict) -> None:
+    """One scale on screen, so one band -- and it must be that scale's own fit.
 
-    The page prints a total and an interval side by side. Pairing the SGP total
-    with the VAR band prints an interval that does not contain its own headline
-    number -- measured at 1165 of 1169 rows on the live board, always in the
-    optimistic direction, under a header that calls it "p10..p90 of the TOTAL".
+    The earlier layout showed both totals with a single VAR band beside them; measured
+    on the live board, 1165 of 1169 rows had their SGP total fall outside the interval
+    printed next to it, always optimistically. A single-scale table makes that
+    structurally impossible, and this pins it.
     """
-    board = build_board(payload, end=BASE + 3)
-    assert board.rows
+    for scale in ("var", "sgp"):
+        board = build_board(payload, end=BASE + 3, scale=scale)
+        assert board.rows
+        for r in board.rows:
+            assert r["p10"] <= r["total"] <= r["p90"], (
+                f"{scale}: {r['name']} total {r['total']:.1f} outside its own band "
+                f"{r['p10']:.1f}..{r['p90']:.1f}"
+            )
 
-    for r in board.rows:
-        assert r["sgp_total"] is not None, "fixture must sweep both scales"
-        assert r["sgp_p10"] <= r["sgp_total"] <= r["sgp_p90"], (
-            f"{r['name']}: SGP total {r['sgp_total']:.1f} outside its own band "
-            f"{r['sgp_p10']:.1f}..{r['sgp_p90']:.1f}"
-        )
-
-    # The two bands are distinct fits, not one band copied onto both columns:
-    # VAR nets out the replacement floor, so a floored player's bands must differ.
-    assert any((r["p10"], r["p90"]) != (r["sgp_p10"], r["sgp_p90"]) for r in board.rows), (
-        "SGP band is identical to the VAR band on every row -- it is being copied"
-    )
+    var_bands = {r["name"]: (r["p10"], r["p90"]) for r in build_board(payload, scale="var").rows}
+    sgp_bands = {r["name"]: (r["p10"], r["p90"]) for r in build_board(payload, scale="sgp").rows}
+    assert var_bands != sgp_bands, "the two scales are separate fits with separate bands"
 
 
 def test_the_board_reports_who_it_left_out(payload: dict) -> None:

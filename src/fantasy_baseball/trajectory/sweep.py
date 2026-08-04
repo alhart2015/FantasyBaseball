@@ -206,7 +206,16 @@ def totals(
                 "pool": player.pool,
                 "age": player.age,
                 "slot": player.slot,
-                "now": player.now,
+                # THIS season on the scale being read, so the leftmost number and the
+                # projections it sits beside mean the same thing. VAR is SGP minus the
+                # slot's replacement level -- that is the definition -- and it is NOT
+                # clamped at zero here: a player already below his waiver floor is
+                # exactly what a keeper reader needs to see, and clamping would render
+                # him identical to a replacement-level one. (The PROJECTED var does
+                # clamp, inside `shape_trajectory`, so a row can read a negative Now
+                # against a 0.0 forecast -- that asymmetry is real and intended.)
+                "now": player.now if scale == "sgp" else player.now - player.floor,
+                "floor": player.floor,
                 "prior": player.prior,
                 "total": sum(p.mean for p in points),
                 "p10": sum(p.p10 for p in points),

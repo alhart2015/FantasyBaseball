@@ -2,12 +2,12 @@
 {% block title %}Trajectory Board -- Season Dashboard{% endblock %}
 {% block content %}
 
-{% macro board_url(end=None, pool=None, top=None, sort=None) -%}
+{% macro board_url(end=None, pool=None, top=None, scale=None) -%}
 {{ url_for('trajectory',
            end=end if end is not none else board.end_year,
            pool=pool if pool is not none else board.pool,
            top=top if top is not none else board.top,
-           sort=sort if sort is not none else board.sort) }}
+           scale=scale if scale is not none else board.scale) }}
 {%- endmacro %}
 
 <div class="page-trajectory">
@@ -28,8 +28,14 @@
 
 <p class="muted">
   Of everyone you could hold, who is worth the most over {{ board.span }}.
-  Ranked on <strong>VAR</strong> -- value above the position-aware waiver floor -- not raw
-  SGP, which quietly penalises every catcher and reliever.
+  {% if board.scale == 'var' -%}
+  Showing <strong>VAR</strong> -- value above the position-aware waiver floor. The default,
+  because raw SGP quietly penalises every catcher and reliever.
+  {%- else -%}
+  Showing <strong>raw SGP</strong>, which does not net out the waiver floor -- so catchers
+  and relievers rank lower here than their roster value warrants. Switch to VAR to correct
+  for that; the gap between the two views is the correction.
+  {%- endif %}
 </p>
 
 <form method="get" class="trajectory-controls">
@@ -52,8 +58,13 @@
     <a class="pill {% if board.pool == value %}active{% endif %}" href="{{ board_url(pool=value) }}">{{ label }}</a>
     {% endfor %}
   </span>
+  <span class="pill-group">
+    {% for value, label in [('var', 'VAR'), ('sgp', 'SGP')] %}
+    <a class="pill {% if board.scale == value %}active{% endif %}" href="{{ board_url(scale=value) }}">{{ label }}</a>
+    {% endfor %}
+  </span>
   <input type="hidden" name="pool" value="{{ board.pool }}">
-  <input type="hidden" name="sort" value="{{ board.sort }}">
+  <input type="hidden" name="scale" value="{{ board.scale }}">
   <noscript><button type="submit" class="pill">Apply</button></noscript>
 </form>
 
@@ -80,22 +91,16 @@
 <table class="data-table trajectory-table">
   <thead>
     <tr>
-      <th title="Rank by {{ board.span }} VAR over the whole scored pool, both pools, regardless of the filter above">#</th>
+      <th title="Rank by {{ board.span }} {{ board.scale|upper }} over the whole scored pool, both pools, regardless of the filter above">#</th>
       <th></th>
       <th>Player</th>
       <th>Age</th>
       <th>Slot</th>
-      <th title="{{ board.base_season }} SGP, paced to a full year">Now</th>
-      <th class="{% if board.sort == 'var' %}sorted{% endif %}">
-        <a href="{{ board_url(sort='var') }}">{{ board.span }} VAR</a>
-      </th>
-      <th title="p10..p90 of the {{ board.span }} VAR total, summed across years -- assumes the years move together, so it is if anything too wide">VAR band</th>
-      <th class="{% if board.sort == 'sgp' %}sorted{% endif %}">
-        <a href="{{ board_url(sort='sgp') }}">{{ board.span }} SGP</a>
-      </th>
-      <th title="p10..p90 of the {{ board.span }} SGP total. A separate fit from VAR, not the VAR band shifted by the replacement floor, so the two intervals differ by more than a constant.">SGP band</th>
+      <th title="{{ board.base_season }} {{ board.scale|upper }}, paced to a full year{% if board.scale == 'var' %} -- SGP minus this slot's replacement level, not clamped, so a below-replacement player reads negative{% endif %}">Now</th>
+      <th class="sorted">{{ board.span }} {{ board.scale|upper }}</th>
+      <th title="p10..p90 of the {{ board.span }} {{ board.scale|upper }} total, summed across years -- assumes the years move together, so it is if anything too wide">Band</th>
       {% for y in board.year_columns %}
-      <th title="{{ 'VAR' if board.sort == 'var' else 'SGP' }} in {{ y }} alone">'{{ (y|string)[2:] }}</th>
+      <th title="{{ board.scale|upper }} in {{ y }} alone">'{{ (y|string)[2:] }}</th>
       {% endfor %}
       <th title="Share of the fitting weight sitting near this player's own current season">Supp</th>
     </tr>
@@ -119,10 +124,8 @@
       <td>{{ r.slot }}</td>
       <td>{{ '%.1f'|format(r.now) }}</td>
       <td class="total-col">{{ '%.1f'|format(r.total) }}</td>
-      <td class="band-col">{{ '%.1f'|format(r.p10) }}..{{ '%.1f'|format(r.p90) }}</td>
-      <td>{% if r.sgp_total is not none %}{{ '%.1f'|format(r.sgp_total) }}{% else %}--{% endif %}</td>
-      <td class="band-col">{% if r.sgp_p10 is not none %}{{ '%.1f'|format(r.sgp_p10) }}..{{ '%.1f'|format(r.sgp_p90) }}{% else %}--{% endif %}</td>
-      {% set years = r.by_year if board.sort == 'var' else r.sgp_by_year %}
+      <td class="band-col">[{{ '%.1f'|format(r.p10) }}, {{ '%.1f'|format(r.p90) }}]</td>
+      {% set years = r.by_year %}
       {% for cell in years %}
       <td class="year-col">{{ '%.1f'|format(cell.mean) }}</td>
       {% endfor %}
@@ -151,10 +154,12 @@
   </p>
   <p>
     <strong>VAR against SGP.</strong> These are two separate fits, not one shifted by the
-    floor: VAR is fitted on production above replacement and clamped at zero, so a
-    below-replacement player is worth 0 rather than a negative. Sorting by SGP is what
-    shows the divergence the board exists to correct -- a closer and an ace can trade
-    places entirely.
+    floor: the projected VAR is fitted on production above replacement and clamped at
+    zero, so a below-replacement player projects to 0 rather than a negative. The
+    <em>Now</em> column is not clamped, so a player already under his slot's floor reads
+    negative there against a 0.0 forecast. Flipping the toggle is what shows the
+    divergence the board exists to correct -- a closer and an ace can trade places
+    entirely, and the rank column moves with the scale.
   </p>
 </div>
 {% endif %}

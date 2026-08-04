@@ -818,7 +818,7 @@ def register_routes(app: Flask) -> None:
                     end=request.args.get("end"),
                     pool=request.args.get("pool", "both"),
                     top=request.args.get("top"),
-                    sort=request.args.get("sort", "var"),
+                    scale=request.args.get("scale", "var"),
                 )
             except (ValueError, KeyError) as exc:
                 error = str(exc)
