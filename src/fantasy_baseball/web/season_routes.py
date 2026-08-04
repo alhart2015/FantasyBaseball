@@ -798,6 +798,39 @@ def register_routes(app: Flask) -> None:
             stash=payload,
         )
 
+    @app.route("/trajectory")
+    def trajectory():
+        """League-wide keeper board, ranked on projected trajectory (#321).
+
+        A pure reader. The sweep needs the panel and the keeper-skills cache, neither of
+        which is deployed, so `scripts/push_trajectory_board.py` computes it offline and
+        writes `cache:trajectory_board`. A cold or stale-schema cache is reported rather
+        than silently rendering an empty board that looks like "nobody scored".
+        """
+        from fantasy_baseball.web.trajectory_view import build_board
+
+        payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
+        board, error = None, None
+        if payload:
+            try:
+                board = build_board(
+                    payload,
+                    end=request.args.get("end"),
+                    pool=request.args.get("pool", "both"),
+                    top=request.args.get("top"),
+                    sort=request.args.get("sort", "var"),
+                    hide_unsupported=request.args.get("support") == "hide",
+                )
+            except (ValueError, KeyError) as exc:
+                error = str(exc)
+        return render_template(
+            "season/trajectory.html",
+            meta=read_meta(),
+            active_page="trajectory",
+            board=board,
+            error=error,
+        )
+
     @app.route("/api/il-return-plan")
     def api_il_return_plan():
         from fantasy_baseball.lineup.il_return_planner import plan_il_returns_scenarios

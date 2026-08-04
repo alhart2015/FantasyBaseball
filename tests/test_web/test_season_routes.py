@@ -2148,3 +2148,57 @@ def test_transactions_empty_txn_but_populated_draft(client):
     assert "switchTab" in body  # tab JS hoisted, present regardless of txn_data
     assert "toggleTxnDetail" in body  # expand JS hoisted too
     assert "Juan Soto" in body  # draft rows render
+
+
+def test_trajectory_page_renders_with_a_cold_cache(client):
+    """A missing board must SAY so. The page is fed by an offline push script, not by
+    the refresh pipeline, so "no board yet" is a normal state and rendering an empty
+    table would read as "nobody scored"."""
+    with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=None):
+        resp = client.get("/trajectory")
+    assert resp.status_code == 200
+    assert b"No trajectory board cached yet" in resp.data
+    assert b"push_trajectory_board.py" in resp.data
+
+
+def test_trajectory_page_reports_a_payload_it_cannot_read(client):
+    """Rather than 500ing, or worse, mis-indexing the compact point arrays."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value={"version": 99, "players": [], "base_season": 2026, "max_horizon": 3},
+    ):
+        resp = client.get("/trajectory")
+    assert resp.status_code == 200
+    assert b"version" in resp.data
+
+
+def test_trajectory_page_renders_a_board(client):
+    import numpy as np
+    import pandas as pd
+
+    from fantasy_baseball.trajectory.board import BoardRow
+    from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
+
+    rng = np.random.default_rng(0)
+    rows = []
+    for i in range(160):
+        level = float(rng.uniform(4.0, 22.0))
+        for offset, season in enumerate(range(2010, 2019)):
+            rows.append((i, season, 24 + offset, max(level + float(rng.normal(0, 2.0)), 0.0)))
+    panel = pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
+    swept = sweep_pool(
+        [BoardRow(1, "Testy McTestface", "hitter", 27, 20.0, 19.0, "OF", 4.0)],
+        panel,
+        "hitter",
+        (1, 2),
+    )
+    payload = to_payload(swept, base_season=2026, max_horizon=2, generated_at="2026-08-04T09:00:00")
+
+    with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload):
+        resp = client.get("/trajectory?end=2028")
+    assert resp.status_code == 200
+    assert b"Testy McTestface" in resp.data
+    # The vintage is load-bearing: this board does not move with a dashboard refresh.
+    assert b"2026-08-04T09:00:00" in resp.data
+    # Per-year columns appear once the range spans more than one season.
+    assert b"'27" in resp.data and b"'28" in resp.data

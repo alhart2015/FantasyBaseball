@@ -113,6 +113,7 @@ files = [
     "src/fantasy_baseball/web/season_app.py",
     "src/fantasy_baseball/web/season_data.py",
     "src/fantasy_baseball/web/season_routes.py",
+    "src/fantasy_baseball/web/trajectory_view.py",
 ]
 warn_return_any = true
 warn_unused_ignores = true
