@@ -51,6 +51,7 @@ def payload() -> dict:
         generated_at="2026-08-04T09:00:00-04:00",
         panel_vintage={"hitter": "h.csv", "pitcher": "p.csv"},
         floors={"OF": 4.0},
+        excluded={"low_sgp": 7, "no_current_line": 12, "total": 19},
     )
 
 
@@ -181,6 +182,22 @@ def test_each_scale_carries_its_own_band(payload: dict) -> None:
     assert any((r["p10"], r["p90"]) != (r["sgp_p10"], r["sgp_p90"]) for r in board.rows), (
         "SGP band is identical to the VAR band on every row -- it is being copied"
     )
+
+
+def test_the_board_reports_who_it_left_out(payload: dict) -> None:
+    """A shortened board reads as "these are the best players" when it is "these are the
+    ones the model can price". The CLI already prints its drop count; the page must too.
+
+    Two separate exclusions, and the second is the larger: players cut by the min-SGP
+    gate, and players with no current-season line at all who were never candidates
+    (measured on the 2026 board: 171 and 390).
+    """
+    board = build_board(payload)
+    excluded = board.meta["excluded"]
+
+    assert excluded["low_sgp"] == 7
+    assert excluded["no_current_line"] == 12
+    assert excluded["total"] == 19
 
 
 def test_a_cache_written_by_another_schema_raises_rather_than_rendering_empty(

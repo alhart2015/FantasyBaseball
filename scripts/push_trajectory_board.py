@@ -89,11 +89,11 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     elapsed = season_elapsed_fraction(calendar, season)
 
     swept = []
+    excluded = {"low_sgp": 0, "no_current_line": 0}
     for kind in ("hitter", "pitcher"):
         live = calendar if kind == "hitter" else load(kind)
-        rows = [
-            r
-            for r in board_inputs(
+        candidates = list(
+            board_inputs(
                 live,
                 kind=kind,
                 names=names,
@@ -102,8 +102,16 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
                 calendar=calendar,
                 season=season,
             )
-            if r.sgp >= MIN_SGP
-        ]
+        )
+        rows = [r for r in candidates if r.sgp >= MIN_SGP]
+        # Who this pool leaves out, so the page can say so. Two separate exclusions:
+        # the min-SGP gate, and -- larger and entirely silent -- players who had a line
+        # LAST season and none this one, who are never candidates at all.
+        excluded["low_sgp"] += len(candidates) - len(rows)
+        excluded["no_current_line"] += len(
+            set(live.loc[live["season"] == season - 1, "mlbam_id"])
+            - set(live.loc[live["season"] == season, "mlbam_id"])
+        )
         print(f"  {kind}: {len(rows)} players with a {season} line", flush=True)
         started = time.perf_counter()
         # The comp pool must NOT contain the in-progress season: a two-thirds year would
@@ -123,6 +131,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
         # build artifact whose span is what identifies it.
         panel_vintage={k: panel_path(k, panel_dir).name for k in ("hitter", "pitcher")},
         floors={slot: round(v, 4) for slot, v in sorted(levels.items())},
+        excluded={**excluded, "total": excluded["low_sgp"] + excluded["no_current_line"]},
     )
     return payload, len(swept)
 

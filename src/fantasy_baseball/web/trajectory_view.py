@@ -153,5 +153,10 @@ def build_board(
             "season_elapsed": payload.get("season_elapsed"),
             "min_sgp": payload.get("min_sgp"),
             "floors": payload.get("floors", {}),
+            # Who is NOT on the board. A shortened board reads as "these are the best
+            # players" when it is "these are the ones the model can price", and the
+            # larger exclusion is the silent one: a player with no current-season line
+            # was never a candidate, so he is absent with no row and no flag.
+            "excluded": payload.get("excluded", {}),
         },
     )

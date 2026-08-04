@@ -59,6 +59,13 @@
 
 <p class="muted trajectory-vintage">
   Showing {{ board.rows|length }} of {{ board.scored }} scored.
+  {%- if board.meta.excluded and board.meta.excluded.total %}
+  <strong>{{ board.meta.excluded.total }} players are not on this board at all</strong> --
+  {{ board.meta.excluded.no_current_line }} with no {{ board.base_season }} line
+  (injured, released, or not yet up) and {{ board.meta.excluded.low_sgp }} pacing below
+  {{ '%.1f'|format(board.meta.min_sgp) }} SGP. They were never scored, so an absent player
+  means the model could not price him, not that it ranked him last.
+  {%- endif %}
   Start year is locked at {{ board.base_season + 1 }}.
   {% if board.meta.generated_at %}Built {{ board.meta.generated_at }}{% endif %}
   {% if board.meta.panel_vintage %}from {{ board.meta.panel_vintage.hitter }} / {{ board.meta.panel_vintage.pitcher }}{% endif %}
