@@ -60,7 +60,7 @@ from fantasy_baseball.trajectory.board import board_inputs, player_names, season
 from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
-from fantasy_baseball.trajectory.sweep import add_ranks, sweep_pool, totals
+from fantasy_baseball.trajectory.sweep import RANK_MOVE, add_ranks, sweep_pool, totals
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -173,7 +173,7 @@ def render(
         # The MOVE between the two ranks is the keeper signal: a player far better over
         # three years than next year is who you hold rather than who you start.
         shift = r["rank_next"] - r["rank_total"]
-        arrow = f"{shift:+d}" if abs(shift) >= 5 else ""
+        arrow = f"{shift:+d}" if abs(shift) >= RANK_MOVE else ""
         print(
             f"{r['rank_total']:8d} {r['rank_next']:6d}  {r['name'][:24]:<24} {r['age']:3d} "
             f"{r['slot']:>4} {r['now']:6.1f} {r['prior']:6.1f} {r['total']:10.1f} "

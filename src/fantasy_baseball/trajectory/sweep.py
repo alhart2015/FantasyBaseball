@@ -38,6 +38,12 @@ from fantasy_baseball.trajectory.shape import prepare, shape_trajectory
 #: the higher default, where the SE IS a printed column.
 SWEEP_DRAWS = 250
 
+#: Rank movement worth drawing an arrow for. Below this the two rankings are saying the
+#: same thing with noise on top. Lives beside `add_ranks`, which produces the two ranks
+#: being compared, so the CLI and the web board cannot disagree about which players get
+#: flagged as hold-rather-than-start -- the decision this board exists to make.
+RANK_MOVE = 5
+
 #: The two scales a board row can be read on. "var" nets out the position-aware waiver
 #: floor and clamps at zero; "sgp" is the raw projection.
 SCALES = ("var", "sgp")

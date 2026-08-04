@@ -17,16 +17,18 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
-from fantasy_baseball.trajectory.sweep import SCALES, add_ranks, from_payload, totals
+from fantasy_baseball.trajectory.sweep import (
+    RANK_MOVE,
+    SCALES,
+    add_ranks,
+    from_payload,
+    totals,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 
 #: Default rows on the league-wide board. Deliberately not the CLI's 25: a web table
 #: scrolls where a terminal dump does not.
 DEFAULT_TOP = 50
-
-#: Rank movement worth drawing an arrow for. Below this the two rankings are saying the
-#: same thing with noise on top.
-RANK_MOVE = 5
 
 
 @dataclass(frozen=True)
