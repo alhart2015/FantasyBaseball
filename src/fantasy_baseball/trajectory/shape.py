@@ -638,7 +638,8 @@ def shape_trajectory(
         # does not cover it either; it measures a different width (`DEFAULT_BAND`, hard)
         # than this gate (`CURRENT_WINDOW`, tapered), so the two disagree on which rows
         # are affected. Recorded per horizon and surfaced on the trajectory.
-        if band_effective < MIN_EFFECTIVE_ROWS:
+        fell_back = band_effective < MIN_EFFECTIVE_ROWS
+        if fell_back:
             band_weights = w
             band_fell_back = True
         # The fitted mean carries its own uncertainty, and it GROWS with leverage -- the
@@ -698,6 +699,7 @@ def shape_trajectory(
                 p90=p90,
                 n_effective=n_eff,
                 survival=float(np.average(survived, weights=w)),
+                band_fell_back=fell_back,
             )
         )
         anchors.append(
