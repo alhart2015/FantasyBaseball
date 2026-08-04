@@ -22,7 +22,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import time
 from pathlib import Path
@@ -136,6 +135,33 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     return payload, len(swept)
 
 
+def _target_store(*, local: bool):
+    """Where this push writes -- decided by the FLAG, on both branches.
+
+    Neither branch consults ``RENDER``. The prod client is explicit already
+    (``build_explicit_upstash_kv`` builds one regardless of the env), and routing the
+    local branch through ``get_kv()`` made the destination depend on an environment
+    variable this process does not own: ``is_remote()`` reads RENDER at call time, so
+    ``--local`` in a shell where it was already "true" wrote the board to PRODUCTION
+    while reporting the local mirror.
+
+    The script also used to SET RENDER on the prod path and never clear it. That was
+    copied from ``scripts/refresh_remote.py``, where it IS load-bearing because that
+    script then runs code resolving through ``get_kv()``; here nothing does. What it did
+    do is invert the provenance: with RENDER set, ``_code_sha()`` takes the is_remote()
+    branch, skips the ``git rev-parse`` fallback, finds no RENDER_GIT_COMMIT on a laptop,
+    and stamps ``_sha: "unknown"`` -- so the PROD blob, the one an operator has to date
+    when the board disagrees with the CLI, recorded "unknown" while ``--local`` recorded
+    the real commit.
+    """
+    from fantasy_baseball.data.kv_store import (
+        build_explicit_sqlite_kv,
+        build_explicit_upstash_kv,
+    )
+
+    return build_explicit_sqlite_kv() if local else build_explicit_upstash_kv()
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--max-horizon", type=int, default=DEFAULT_MAX_HORIZON)
@@ -181,18 +207,10 @@ def main() -> int:
         print("\n  --dry-run: nothing written to prod")
         return 0
 
-    # Flip RENDER on BEFORE importing the store so get_kv() resolves to Upstash, the same
-    # order scripts/refresh_remote.py uses -- module state reads RENDER once. Left OFF for
-    # --local, where the whole point is to reach the SQLite mirror instead.
-    if not args.local:
-        os.environ["RENDER"] = "true"
-    from fantasy_baseball.data import kv_store
     from fantasy_baseball.data.cache_keys import CacheKey, redis_key
-    from fantasy_baseball.data.kv_store import build_explicit_upstash_kv, get_kv
     from fantasy_baseball.web.season_data import write_cache_to
 
-    kv_store._reset_singleton()
-    target = get_kv() if args.local else build_explicit_upstash_kv()
+    target = _target_store(local=args.local)
     write_cache_to(target, CacheKey.TRAJECTORY_BOARD, payload)
 
     # Read it back. A push that silently wrote nothing leaves the dashboard on a stale
