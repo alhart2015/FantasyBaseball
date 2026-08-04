@@ -221,11 +221,6 @@ def main() -> int:
         ),
     )
     parser.add_argument("--panel-dir", type=Path, default=None)
-    parser.add_argument(
-        "--out",
-        type=Path,
-        help="also write the payload here, for inspection or a local dashboard",
-    )
     args = parser.parse_args()
     if args.max_horizon < 1:
         parser.error("--max-horizon must be at least 1")
@@ -242,9 +237,6 @@ def main() -> int:
     )
     print(f"  payload {len(body) / 1024:.0f} KB  (base {payload['base_season']})")
 
-    if args.out:
-        args.out.write_text(body, encoding="utf-8")
-        print(f"  wrote {args.out}")
     if args.dry_run:
         print("\n  --dry-run: nothing written to prod")
         return 0
