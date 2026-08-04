@@ -85,7 +85,7 @@
 <p class="muted trajectory-vintage">
   Showing {{ board.rows|length }} of {{ board.scored }}{% if board.pool != 'both' %} {{ board.pool }}s{% endif %} scored{% if board.ranked != board.scored %}, ranked against all {{ board.ranked }} -- the # column is a league-wide position, so it runs past this count{% endif %}.
   {%- if board.meta.excluded and board.meta.excluded.total %}
-  <strong>{{ board.meta.excluded.total }} players are not on this board at all</strong> --
+  <strong>{{ board.meta.excluded.total }} players league-wide{% if board.pool != 'both' %} (hitters and pitchers together, not just {{ board.pool }}s){% endif %} are not on this board at all</strong> --
   {{ board.meta.excluded.no_current_line }} with no {{ board.base_season }} line
   (injured, released, or not yet up) and {{ board.meta.excluded.low_sgp }} pacing below
   {{ '%.1f'|format(board.meta.min_sgp) }} SGP. They were never scored, so an absent player
@@ -171,11 +171,18 @@
   <p>
     <strong>VAR against SGP.</strong> These are two separate fits, not one shifted by the
     floor: the projected VAR is fitted on production above replacement and clamped at
-    zero, so a below-replacement player projects to 0 rather than a negative. The
-    <em>Now</em> column is not clamped, so a player already under his slot's floor reads
-    negative there against a 0.0 forecast. Flipping the toggle is what shows the
-    divergence the board exists to correct -- a closer and an ace can trade places
-    entirely, and the rank column moves with the scale.
+    zero, so a below-replacement player projects to 0 rather than a negative.
+    {%- if board.scale == 'var' %}
+    The <em>Now</em> column is not clamped, so a player already under his slot's floor
+    reads negative there against a 0.0 forecast.
+    {%- else %}
+    You are on the SGP scale, so <em>Now</em> and every projection here are raw -- the
+    floor is not subtracted anywhere on this view, and nothing reads negative for being
+    below replacement. Switch to VAR to see that.
+    {%- endif %}
+    Flipping the toggle is what shows the divergence the board exists to correct -- a
+    closer and an ace can trade places entirely, and the rank column moves with the
+    scale.
   </p>
 </div>
 {% endif %}

@@ -2204,3 +2204,14 @@ def test_trajectory_page_renders_a_board(client):
     assert 'type="hidden"' not in html, "control state must live in the URL, not in inputs"
     assert "<form" not in html, "no form on this page -- the selects navigate"
     assert "scale=var" in html and "pool=hitter" in html, "controls carry the full state"
+
+    # Prose must not assert one scale's semantics while the other is selected. The Now
+    # column is floor-subtracted and unclamped on VAR, and raw on SGP -- a footer that
+    # promises negative rows under SGP sends the reader looking for rows that cannot
+    # exist there.
+    with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload):
+        var_html = client.get("/trajectory?end=2028&scale=var").data.decode()
+        sgp_html = client.get("/trajectory?end=2028&scale=sgp").data.decode()
+    assert "reads negative there" in var_html
+    assert "reads negative there" not in sgp_html, "VAR-only claim leaked into the SGP view"
+    assert "floor is not subtracted anywhere on this view" in sgp_html
