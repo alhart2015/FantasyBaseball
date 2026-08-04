@@ -381,6 +381,43 @@ def test_a_new_push_invalidates_the_cache(payload: dict) -> None:
     assert len(second.rows) == 2, "a new generated_at must not serve the old rows"
 
 
+def test_a_push_landing_mid_derivation_cannot_pin_the_old_board(payload: dict, monkeypatch) -> None:
+    """A thread holding the previous vintage must not be able to write into the new one.
+
+    Threaded WSGI, two requests straddling a push. T1 reads vintage A, misses, and is
+    preempted inside the derivation -- it already holds A's players. T2 arrives with the
+    freshly pushed payload B, swaps the vintage, derives B and stores it. T1 resumes and
+    writes A's rows into the shared map. The vintage now says B while the rows are A's,
+    nothing revalidates, and every later request is served the PRE-PUSH board while the
+    page prints B's generated_at beside it.
+
+    Simulated deterministically: `totals` is patched so the first derivation lands a
+    complete B-vintage build before it returns, which is exactly the interleaving.
+    """
+    from fantasy_baseball.web import trajectory_view
+
+    trajectory_view.clear_board_cache()
+    newer = dict(payload, generated_at="2026-09-01T09:00:00-04:00")
+    newer["players"] = payload["players"][:2]
+
+    real_totals = trajectory_view.totals
+    landed = {"done": False}
+
+    def totals_with_a_push_landing(players, horizons, scale):
+        rows = real_totals(players, horizons, scale)
+        if not landed["done"]:
+            landed["done"] = True
+            build_board(newer, top="all")  # T2 completes while T1 is mid-derivation
+        return rows
+
+    monkeypatch.setattr(trajectory_view, "totals", totals_with_a_push_landing)
+    build_board(payload, top="all")  # T1, holding the OLD payload
+    monkeypatch.undo()
+
+    after = build_board(newer, top="all")
+    assert len(after.rows) == 2, "the post-push board must not be pinned to the pre-push rows"
+
+
 def test_my_players_are_marked(payload: dict) -> None:
     """The first question a reader has on a keeper board is which of these are already
     his. Roster blobs carry no mlbam_id (#284), so the join is (normalized name,
