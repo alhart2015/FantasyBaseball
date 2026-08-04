@@ -299,6 +299,14 @@ def test_the_arrow_threshold_is_the_boundary_it_claims() -> None:
     assert move_for(RANK_MOVE - 1) == 0, "below the threshold the two rankings agree"
     assert move_for(RANK_MOVE) == RANK_MOVE, "at the threshold the arrow is drawn"
 
+    # A TRIPWIRE, not a specification. Everything above is computed FROM RANK_MOVE, so it
+    # pins the boundary's behaviour and is blind to the constant's VALUE -- retuning 5 to
+    # 2 passes every assertion here and every other test in the repo, while silently
+    # changing which players on a 1,169-row board are flagged hold-rather-than-start.
+    # Retuning is legitimate; doing it without noticing is not, so this line makes it a
+    # deliberate edit. If you are changing it on purpose, change this number too.
+    assert RANK_MOVE == 5
+
 
 def test_no_arrow_when_there_is_no_next_year_estimate() -> None:
     """`next` is NaN whenever horizon 1 is unobservable, and `add_ranks` sorts NaN last.

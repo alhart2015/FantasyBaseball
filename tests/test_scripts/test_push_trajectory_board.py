@@ -47,6 +47,16 @@ def test_an_empty_pool_refuses_the_push(monkeypatch) -> None:
     module._require_scored_pool("hitter", [object()], 2026, "hitter_pt_panel_2000_2026.csv")
 
 
+PANEL_DIR = PROJECT_ROOT / "data" / "trajectory"
+
+
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "drives the real build_payload, which loads data/trajectory/*_pt_panel_*.csv and "
+        "data/cache/keeper_skills -- both gitignored, so this cannot run on a fresh clone"
+    ),
+)
 def test_the_guard_checks_what_the_sweep_produced_not_what_it_was_given(monkeypatch) -> None:
     """Candidate rows are not scored rows, and the guard has to look at the latter.
 
