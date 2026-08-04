@@ -250,7 +250,7 @@ def main() -> int:
         return 0
 
     from fantasy_baseball.data.cache_keys import CacheKey, redis_key
-    from fantasy_baseball.web.season_data import write_cache_to
+    from fantasy_baseball.web.season_data import unwrap_cache_envelope, write_cache_to
 
     target = _target_store(local=args.local)
     write_cache_to(target, CacheKey.TRAJECTORY_BOARD, payload)
@@ -258,7 +258,7 @@ def main() -> int:
     # Read it back. A push that silently wrote nothing leaves the dashboard on a stale
     # board that still renders, which is the failure this project keeps re-learning.
     stored = json.loads(target.get(redis_key(CacheKey.TRAJECTORY_BOARD)))
-    data = stored.get("_data", stored)
+    data = unwrap_cache_envelope(stored)
     print(
         f"\n  wrote to {'local SQLite' if args.local else 'prod Upstash'}: "
         f"{len(data['players'])} players, generated {data['generated_at']}, "
