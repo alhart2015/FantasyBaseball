@@ -300,6 +300,29 @@ def test_no_arrow_when_there_is_no_next_year_estimate() -> None:
     assert solo.rows[0]["rank_move"] == 0, "no next-year estimate means no hold-vs-start claim"
 
 
+def test_per_year_cells_are_placed_by_horizon_not_by_position() -> None:
+    """Each fit is per-horizon, so `by_year` is not guaranteed to be a prefix.
+
+    Rendering it positionally and padding at the tail would print a year-2 figure under
+    the '27 header and a year-3 figure under '28 for any path with a hole in it. This is
+    DEFENSIVE -- no such gap has been reproduced from the model, and the source comment
+    in `shape_trajectory` describes the opposite direction (observable near, unobservable
+    far) as the intent, which tail-padding handles correctly. Aligning by horizon costs
+    nothing and removes the assumption.
+    """
+    gapped = _hand_payload([("Gapped", [0.0, 7.0, 5.0])])
+    gapped["players"][0]["var"] = [p for p in gapped["players"][0]["var"] if p[0] != 1]
+
+    board = build_board(gapped, top="all", end=BASE + 3)
+    row = board.rows[0]
+
+    assert [c["horizon"] for c in row["by_year"]] == [2, 3], "fixture must have a hole at 1"
+    assert row["year_cells"] == [None, pytest.approx(7.0), pytest.approx(5.0)], (
+        "the year-2 figure belongs under 2028, not 2027"
+    )
+    assert len(row["year_cells"]) == len(board.year_columns)
+
+
 def test_my_players_are_marked(payload: dict) -> None:
     """The first question a reader has on a keeper board is which of these are already
     his. Roster blobs carry no mlbam_id (#284), so the join is (normalized name,

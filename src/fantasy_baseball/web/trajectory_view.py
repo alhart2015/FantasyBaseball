@@ -71,6 +71,14 @@ def _clamp(value: Any, low: int, high: int, default: int) -> int:
         return default
 
 
+def _year_cells(by_year: list[dict], horizons: tuple[int, ...]) -> list[float | None]:
+    """One cell per rendered year column, keyed on horizon rather than list position."""
+    if len(horizons) < 2:
+        return []
+    means = {c["horizon"]: c["mean"] for c in by_year}
+    return [means.get(h) for h in horizons]
+
+
 def _rank_move(row: dict) -> int:
     """The hold-vs-start arrow, or 0 where the two rankings are not comparable.
 
@@ -169,6 +177,14 @@ def build_board(
                 # player far better over the range than next year is who you hold rather
                 # than who you start. See `_rank_move` for when it is withheld.
                 "rank_move": move,
+                # Per-year cells ALIGNED TO THE YEAR COLUMNS by horizon, one entry each,
+                # None where this player has no point for that year. Each horizon is a
+                # separate fit, so `by_year` carries no guarantee of being a prefix;
+                # rendering it positionally and padding the tail would put a year-2
+                # figure under the year-1 header for any path with a hole. Defensive --
+                # no such gap has been reproduced from the model -- but the alignment is
+                # free here and the assumption is not worth carrying in the template.
+                "year_cells": _year_cells(row["by_year"], horizons),
             }
         )
 

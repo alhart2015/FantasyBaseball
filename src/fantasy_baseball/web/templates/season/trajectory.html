@@ -131,13 +131,9 @@
       <td>{{ '%.1f'|format(r.now) }}</td>
       <td class="total-col">{{ '%.1f'|format(r.total) }}</td>
       <td class="band-col">[{{ '%.1f'|format(r.p10) }}, {{ '%.1f'|format(r.p90) }}]</td>
-      {% set years = r.by_year %}
-      {% for cell in years %}
-      <td class="year-col">{{ '%.1f'|format(cell.mean) }}</td>
-      {% endfor %}
-      {% for _ in range(board.year_columns|length - years|length) %}
-      <td class="year-col">--</td>
-      {% endfor %}
+      {%- for cell in r.year_cells %}
+      <td class="year-col">{% if cell is not none %}{{ '%.1f'|format(cell) }}{% else %}--{% endif %}</td>
+      {%- endfor %}
       <td>{{ '%.0f'|format(r.support * 100) }}%</td>
     </tr>
     {% endfor %}
