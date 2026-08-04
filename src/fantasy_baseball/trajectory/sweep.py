@@ -22,7 +22,7 @@ twice, which is why this is an offline job and not a request-time one.
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable
+from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -121,7 +121,6 @@ def sweep_pool(
     *,
     scales: tuple[str, ...] = SCALES,
     draws: int = SWEEP_DRAWS,
-    progress: Callable[[int, int], None] | None = None,
 ) -> list[SweptPlayer]:
     """Fit every row against one prepared state, once per requested scale.
 
@@ -139,9 +138,8 @@ def sweep_pool(
             f"scales must be a non-empty subset of {SCALES} including 'var', got {scales!r}"
         )
     prepared = prepare(panel, kind=kind, horizons=horizons)
-    rows = list(rows)
     swept: list[SweptPlayer] = []
-    for i, row in enumerate(rows, start=1):
+    for row in rows:
         fits = {}
         for scale in scales:
             traj, _ = shape_trajectory(
@@ -177,8 +175,6 @@ def sweep_pool(
                 sgp=_points(raw) if raw is not None else (),
             )
         )
-        if progress is not None:
-            progress(i, len(rows))
     return swept
 
 
