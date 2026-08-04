@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import math
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from fantasy_baseball.trajectory.board import BoardRow
 from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
-from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, build_board
+from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, RANK_MOVE, build_board
 
 BASE = 2026
 
@@ -196,6 +198,106 @@ def test_the_band_belongs_to_the_scale_on_screen(payload: dict) -> None:
     var_bands = {r["name"]: (r["p10"], r["p90"]) for r in build_board(payload, scale="var").rows}
     sgp_bands = {r["name"]: (r["p10"], r["p90"]) for r in build_board(payload, scale="sgp").rows}
     assert var_bands != sgp_bands, "the two scales are separate fits with separate bands"
+
+
+def _hand_payload(players: list[tuple[str, list[float]]]) -> dict:
+    """A payload with exact per-year means, so rank arithmetic can be pinned directly.
+
+    `_pack` is [horizon, mean, p10, p90, n_eff, band_fell_back]; the band and support
+    are irrelevant here and set wide/high so nothing else flags.
+    """
+    return {
+        "version": 1,
+        "base_season": BASE,
+        "max_horizon": 3,
+        "players": [
+            {
+                "id": i,
+                "name": name,
+                "pool": "hitter",
+                "age": 27,
+                "slot": "OF",
+                "floor": 4.0,
+                "now": 10.0,
+                "prior": 10.0,
+                "support": 0.9,
+                "extrapolated": 0,
+                "var": [[h, m, m - 5, m + 5, 50.0, 0] for h, m in enumerate(means, start=1)],
+                "sgp": [[h, m, m - 5, m + 5, 50.0, 0] for h, m in enumerate(means, start=1)],
+            }
+            for i, (name, means) in enumerate(players, start=1)
+        ],
+    }
+
+
+def test_no_arrow_when_both_rankings_rest_on_zeros() -> None:
+    """VAR clamps at zero, so every below-replacement player totals 0.0 and nexts 0.0.
+
+    `add_ranks` still gives them distinct consecutive ranks, broken by name -- and the
+    zero-set for `next` (year 1 only) is strictly larger than the zero-set for `total`
+    (all years), so the two blocks start at different offsets and the difference is
+    systematically non-zero on identical inputs. Simulated on a live-shaped 1,169-row
+    pool, 432 of 469 all-zero rows cleared the arrow threshold, worst move -97 -- drawn
+    beside a row reading 0.0 in every column.
+    """
+    board = build_board(
+        _hand_payload(
+            [
+                ("Real One", [9.0, 9.0, 9.0]),
+                # total > 0 but next == 0: sits in the `next` zero-block, not `total`'s.
+                # Named to sort AFTER the all-zero rows, so the two zero-blocks
+                # interleave and the ranks genuinely diverge -- which is what happens on
+                # the live board, where the tie-break is alphabetical over 1,169 rows.
+                *[(f"Zeta Bloom {i}", [0.0, 4.0, 4.0]) for i in range(6)],
+                # zero on both: rank differs only by the offset above.
+                *[(f"Alpha Sub {i}", [0.0, 0.0, 0.0]) for i in range(6)],
+            ]
+        ),
+        top="all",
+        end=BASE + 3,
+    )
+    rows = {r["name"]: r for r in board.rows}
+
+    subs = [r for n, r in rows.items() if n.startswith("Alpha Sub")]
+    assert subs, "fixture must contain all-zero rows"
+    assert all(r["total"] == 0.0 and r["next"] == 0.0 for r in subs)
+    assert any(abs(r["rank_next"] - r["rank_total"]) >= RANK_MOVE for r in subs), (
+        "fixture must actually produce a raw rank gap, or this proves nothing"
+    )
+    assert all(r["rank_move"] == 0 for r in subs), (
+        "a row that is 0.0 in every column has no hold-vs-start signal to draw"
+    )
+    assert rows["Real One"]["rank_move"] == 0
+
+
+def test_no_arrow_when_there_is_no_next_year_estimate() -> None:
+    """`next` is NaN whenever horizon 1 is unobservable, and `add_ranks` sorts NaN last.
+
+    That pairs a last-place `rank_next` with a real `rank_total`, which the arrow renders
+    as the strongest HOLD signal on the board -- produced by the total absence of a
+    next-year estimate rather than by any strength.
+    """
+    board = build_board(
+        _hand_payload(
+            [("Gapped", [0.0, 12.0, 12.0]), *[(f"Filler {i}", [5.0, 5.0, 5.0]) for i in range(8)]]
+        ),
+        top="all",
+        end=BASE + 3,
+    )
+    # A REAL zero next year against a positive span is a genuine hold signal, and must
+    # still draw. The guard is for rows with nothing to say, not for every zero.
+    gapped = next(r for r in board.rows if r["name"] == "Gapped")
+    assert gapped["total"] > 0 and gapped["next"] == 0.0
+    assert gapped["rank_move"] > 0, "a real 0-next / positive-span row still holds"
+
+    # Drop horizon 1 entirely so `next` is NaN rather than 0.0.
+    gapped_payload = _hand_payload([("Gapped", [0.0, 12.0, 12.0])])
+    gapped_payload["players"][0]["var"] = [
+        p for p in gapped_payload["players"][0]["var"] if p[0] != 1
+    ]
+    solo = build_board(gapped_payload, top="all", end=BASE + 3)
+    assert math.isnan(solo.rows[0]["next"]), "fixture must produce a NaN next"
+    assert solo.rows[0]["rank_move"] == 0, "no next-year estimate means no hold-vs-start claim"
 
 
 def test_my_players_are_marked(payload: dict) -> None:

@@ -13,6 +13,7 @@ Render. The board therefore does NOT move with a dashboard refresh, which is why
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -70,6 +71,37 @@ def _clamp(value: Any, low: int, high: int, default: int) -> int:
         return default
 
 
+def _rank_move(row: dict) -> int:
+    """The hold-vs-start arrow, or 0 where the two rankings are not comparable.
+
+    `rank_total` and `rank_next` are dense rankings broken by name, so their difference
+    is only meaningful when the VALUES behind them are. Two cases where they are not,
+    both of which put a large confident arrow on a row that has nothing to say:
+
+    * **Both totals are zero.** VAR clamps at zero, so every below-replacement player
+      reads 0.0 in every column. They still get distinct consecutive ranks, and the
+      zero-set for `next` (year 1 alone) is strictly larger than the one for `total`
+      (all years), so the two blocks begin at different offsets and the difference is
+      systematically non-zero on identical inputs. Simulated on a live-shaped 1,169-row
+      pool, 432 of 469 such rows cleared the threshold, worst arrow -97.
+
+    * **There is no next-year estimate.** `next` is NaN whenever horizon 1 is
+      unobservable, and `add_ranks` deliberately sorts NaN last so one unrankable row
+      cannot decide where the others land. That pairs a last-place `rank_next` with a
+      real `rank_total` and renders as the strongest HOLD signal on the board --
+      produced by the absence of an estimate rather than by any strength.
+
+    Below `RANK_MOVE` the two rankings are saying the same thing with noise on top.
+    """
+    nxt = row["next"]
+    if math.isnan(nxt):
+        return 0
+    if row["total"] == 0.0 and nxt == 0.0:
+        return 0
+    move = row["rank_next"] - row["rank_total"]
+    return move if abs(move) >= RANK_MOVE else 0
+
+
 def build_board(
     payload: dict,
     *,
@@ -125,7 +157,7 @@ def build_board(
     for row in ranked:
         if pool != "both" and row["pool"] != pool:
             continue
-        move = row["rank_next"] - row["rank_total"]
+        move = _rank_move(row)
         key = (normalize_name(row["name"]), row["pool"])
         is_mine = key in owned
         rows.append(
@@ -135,8 +167,8 @@ def build_board(
                 "mine_ambiguous": is_mine and key_counts[key] > 1,
                 # The MOVE between the two ranks is the keeper signal in one number: a
                 # player far better over the range than next year is who you hold rather
-                # than who you start.
-                "rank_move": move if abs(move) >= RANK_MOVE else 0,
+                # than who you start. See `_rank_move` for when it is withheld.
+                "rank_move": move,
             }
         )
 
