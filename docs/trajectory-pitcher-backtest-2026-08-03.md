@@ -8,6 +8,9 @@ python scripts/backtest_trajectory.py --pool pitcher --sample 700     # role cov
 python scripts/backtest_trajectory.py --pool hitter                   # the reference
 ```
 
+Every run prints two tables: `current -> shape` over all scored rows, and a three-way
+including `track` over the subset track can score.
+
 The query player is removed from the panel entirely before either estimator is built,
 so neither can match him to himself.
 
@@ -87,6 +90,56 @@ pitcher numbers from the same harness.
 | either anchor negative | 140 | 2.04 -> 2.04 | 1.55 -> 1.30 | +0.29 -> -0.14 | 72% |
 | current season negative | 109 | 1.82 -> 1.82 | 1.40 -> 1.10 | +0.34 -> -0.20 | 75% |
 
+## Three-way: shape vs level matching vs track
+
+The tables above race shape against `current` (level matching) only, which is what the
+harness had always done. `track` -- the same two anchors, bounded by a hard band on the
+prior instead of kernel-weighted -- is the closer competitor, and #325 proposes retiring
+it. It had never been raced. It has now.
+
+Reported on the subset where track's hard band finds any cohort; the coverage is stated
+because that subset is smaller than the full run.
+
+**HITTERS** (elite, track scored 766/775):
+
+| slice | current | track | shape | shape beats track |
+|---|---|---|---|---|
+| elite | 5.02 | 4.61 | **4.46** | 54% |
+| elite big drop (<70%) | 5.88 | 4.81 | **4.68** | 56% |
+| elite holding steady | 4.50 | 4.47 | **4.30** | 53% |
+
+**PITCHERS** (elite, track scored 481/502):
+
+| slice | current | track | shape | shape beats track |
+|---|---|---|---|---|
+| elite | 5.88 | **6.04** | **5.52** | 58% |
+| elite big drop (<70%) | 5.93 | 5.69 | **5.46** | 51% |
+| elite holding steady | 5.89 | **6.42** | **5.63** | 63% |
+
+Shape is best on every slice in both pools. Two things behind that headline are worth
+carrying forward:
+
+**1. For hitters, most of shape's advantage is "use the prior anchor at all", not the
+kernel.** Track captures 73% of shape's total RMSE gain over level matching on the elite
+slice, and **89%** on the decision-relevant big-drop slice (5.88 -> 4.81 of the
+5.88 -> 4.68 available). Shape's edge over track is real but modest: 3.3% RMSE and a 54%
+win rate, which is close to a coin flip. The honest hitter claim is therefore *shape is
+the best of the three, and clearly better than level matching -- but only slightly
+better than the crude version of the same idea.*
+
+**2. For pitchers the ordering inverts: track is the WORST of the three**, worse than
+plain level matching (6.04 vs 5.88 elite, 6.42 vs 5.89 on holding-steady). This is the
+same mechanism from the other direction. `b(last)` carries almost nothing for pitchers,
+so a hard band on the prior shrinks the cohort without adding signal. Shape *fits* the
+weight on that anchor (~0.19) and so degrades gracefully where track cannot, because
+track imposes the constraint regardless of whether it pays.
+
+That inversion is the strongest single argument for shape over track, and it is an
+argument the hitter numbers alone could not make: **shape adapts the weight on the prior
+season to the pool; track assumes it.** Note also that track is well calibrated in both
+pools (bias +0.03 pitchers, -0.21 hitters) -- it is unbiased but noisier. Shape gets
+both.
+
 ## Three findings from the pitcher-specific concerns in #313
 
 **1. Role heterogeneity does NOT average two opposite effects into a null.** The worry
@@ -127,6 +180,10 @@ Covered by `tests/test_trajectory/test_backtest_roles.py`.
 
 ## What this does NOT establish
 
+- **Track's coverage gap is not analysed.** Track cannot score 21/502 pitcher and 9/775
+  hitter queries at all (empty cohort under the hard band). Those rows are excluded from
+  the three-way rather than counted as a track failure. If anything that flatters track,
+  since the queries it cannot reach are the unusual ones.
 - **Horizon 1 only.** Every number here is a one-year-ahead prediction. The keeper board
   sums five. The bias argument above assumes the per-year bias persists across horizons,
   which is plausible but unmeasured.

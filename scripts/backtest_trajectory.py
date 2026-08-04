@@ -98,6 +98,17 @@ def score(
         curve, _ = shape_trajectory(
             clean, kind=kind, age=age, sgp=current, prior_sgp=prior, horizons=(horizon,)
         )
+        # `track` is `current` plus a HARD band on the prior season (#305) -- the same
+        # two anchors shape uses, bounded instead of kernel-weighted. Passing prior_sgp
+        # is what selects it; `comp_trajectory` defaults to level matching without it.
+        #
+        # Its row-inclusion is deliberately NOT part of the guard below: the two-mode
+        # comparison was already published from this harness, and dropping rows track
+        # cannot score would silently change the current-vs-shape population. Track
+        # simply records NaN there and is reported on its own defined subset.
+        tracked = comp_trajectory(
+            clean, kind=kind, age=age, sgp=current, prior_sgp=prior, horizons=(horizon,)
+        )
         if level.path[0].n == 0 or np.isnan(curve.path[0].mean):
             continue
         rows.append(
@@ -110,6 +121,7 @@ def score(
                 "actual": actual,
                 "current": level.path[0].mean,
                 "shape": curve.path[0].mean,
+                "track": (float("nan") if tracked.path[0].n == 0 else tracked.path[0].mean),
                 # The role of the QUERY season -- the one both anchors describe.
                 "role": (
                     role_by_season.get((q.mlbam_id, q.season), "")
@@ -141,6 +153,39 @@ def report(df: pd.DataFrame, label: str) -> dict | None:
         f"shape wins {wins:.0%}"
     )
     return {"slice": label, "n": len(df), "wins": wins}
+
+
+def report_track(df: pd.DataFrame, label: str) -> None:
+    """Three-way on the subset where `track` found any comps.
+
+    Separate from `report` on purpose. `track`'s hard prior band leaves some queries
+    with an empty cohort, and folding those drops into the shared row filter would move
+    the current-vs-shape population that was already measured and published. So the
+    three-way runs on track's own defined subset, and the coverage is printed rather
+    than left for the reader to infer from a shrinking n.
+    """
+    defined = df.dropna(subset=["track"])
+    coverage = f"{len(defined)}/{len(df)}"
+    if len(defined) < 10:
+        print(f"  {label:30s} track scored {coverage:>9}   (under 10, not reported)")
+        return
+    stats = {}
+    for mode in ("current", "track", "shape"):
+        err = defined[mode] - defined["actual"]
+        stats[mode] = (float(np.sqrt((err**2).mean())), float(err.mean()))
+    beats_track = float(
+        (
+            (defined["shape"] - defined["actual"]).abs()
+            < (defined["track"] - defined["actual"]).abs()
+        ).mean()
+    )
+    print(
+        f"  {label:30s} track scored {coverage:>9}   "
+        f"RMSE cur {stats['current'][0]:5.2f} / track {stats['track'][0]:5.2f} / "
+        f"shape {stats['shape'][0]:5.2f}   "
+        f"bias track {stats['track'][1]:+5.2f} shape {stats['shape'][1]:+5.2f}   "
+        f"shape beats track {beats_track:.0%}"
+    )
 
 
 def main() -> int:
@@ -209,6 +254,15 @@ def main() -> int:
     report(elite[elite["now"] < elite["prior"] * 0.7], "elite big drop (<70% of prior)")
     report(elite[elite["now"] >= elite["prior"] * 0.8], "elite holding steady")
     report(df[df["now"] > df["prior"] * 1.25], "breakout (up >25%)")
+
+    # The two-mode table above races shape against LEVEL matching only. `track` uses the
+    # same two anchors shape does, so it is the closer competitor -- and retiring it
+    # (#325) without ever racing it would be retiring an unmeasured alternative.
+    print("\n  -- three-way, including track (hard prior band) --")
+    report_track(df, "ALL")
+    report_track(elite, f"elite (prior >= {args.elite_floor:g})")
+    report_track(elite[elite["now"] < elite["prior"] * 0.7], "elite big drop (<70% of prior)")
+    report_track(elite[elite["now"] >= elite["prior"] * 0.8], "elite holding steady")
 
     if args.pool == "pitcher":
         # #313: a pooled pitcher number can average a starter effect and a closer effect
