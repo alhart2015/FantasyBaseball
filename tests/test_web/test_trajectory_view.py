@@ -312,6 +312,26 @@ def test_per_year_cells_are_placed_by_horizon_not_by_position() -> None:
     assert len(row["year_cells"]) == len(board.year_columns)
 
 
+def test_a_filtered_view_reports_both_denominators(payload: dict) -> None:
+    """The rank is league-wide, so the count beside it has to say which pool it counts.
+
+    `Board.scored` is counted AFTER the pool filter but its docstring calls it "the
+    denominator the rank column is against". On /trajectory?pool=pitcher the page read
+    "Showing 606 of 606 scored" while the # column ran to 1169 -- two numbers on screen
+    contradicting each other, and a reader gauging staff depth takes the top pitcher's
+    #12 as "12th of 606" when he is the best pitcher, 12th overall.
+    """
+    everyone = build_board(payload, top="all")
+    pitchers = build_board(payload, top="all", pool="pitcher")
+
+    assert pitchers.scored == len(pitchers.rows) == 2, "scored follows the view"
+    assert pitchers.ranked == everyone.scored, "ranked is the league-wide denominator"
+    assert pitchers.ranked > pitchers.scored
+    assert max(r["rank_total"] for r in pitchers.rows) <= pitchers.ranked
+
+    assert everyone.scored == everyone.ranked, "unfiltered, the two agree"
+
+
 def test_my_players_are_marked(payload: dict) -> None:
     """The first question a reader has on a keeper board is which of these are already
     his. Roster blobs carry no mlbam_id (#284), so the join is (normalized name,

@@ -37,9 +37,14 @@ class Board:
     """One rendered board: the rows, the controls that produced them, and the vintage."""
 
     rows: list[dict]
-    #: Every row scored at this timeframe, before the top-N slice -- the denominator the
-    #: rank column is against, so the page can say "50 of 1169" rather than implying 50.
+    #: Rows in THIS view at this timeframe, before the top-N slice -- so the page can
+    #: say "50 of 606" rather than implying 50.
     scored: int
+    #: Rows scored league-wide, which is what the rank column counts against. Equal to
+    #: `scored` unless a pool filter is on; separate because `add_ranks` deliberately
+    #: ranks the whole pool, so a pitcher view legitimately shows ranks past its own
+    #: count and the page must not print the two as if they were one number.
+    ranked: int
     base_season: int
     end_year: int
     end_years: list[int]
@@ -151,8 +156,8 @@ def build_board(
     # RANKED OVER THE WHOLE POOL, then filtered. A pitcher-only view shows LEAGUE ranks,
     # so its top row can read #7 -- correct, and the same rule #322/#323 depend on, where
     # ranking within a subset would make every team's best player a #1.
-    ranked = totals(players, horizons, scale)
-    add_ranks(ranked)
+    ranked_rows = totals(players, horizons, scale)
+    add_ranks(ranked_rows)
 
     # (normalized name, pool) is the only key a roster blob can be joined on -- they
     # carry no mlbam_id (#284). It is NOT unique: the live board has two hitters called
@@ -160,12 +165,12 @@ def build_board(
     # than silently putting a player the reader does not own on his keeper shortlist.
     owned = mine or set()
     key_counts: dict[tuple[str, str], int] = {}
-    for row in ranked:
+    for row in ranked_rows:
         k = (normalize_name(row["name"]), row["pool"])
         key_counts[k] = key_counts.get(k, 0) + 1
 
     rows = []
-    for row in ranked:
+    for row in ranked_rows:
         if pool != "both" and row["pool"] != pool:
             continue
         move = _rank_move(row)
@@ -192,6 +197,7 @@ def build_board(
         )
 
     scored = len(rows)
+    ranked = len(ranked_rows)
     # `add_ranks` already ordered by total descending with a name tie-break, so ranking
     # IS the sort order -- no second sort key, and nothing to get wrong about NaNs.
     rows.sort(key=lambda r: r["rank_total"])
@@ -199,6 +205,7 @@ def build_board(
     return Board(
         rows=rows if top_n is None else rows[:top_n],
         scored=scored,
+        ranked=ranked,
         base_season=base,
         end_year=end_year,
         end_years=end_years,

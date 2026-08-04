@@ -69,7 +69,7 @@
 </form>
 
 <p class="muted trajectory-vintage">
-  Showing {{ board.rows|length }} of {{ board.scored }} scored.
+  Showing {{ board.rows|length }} of {{ board.scored }}{% if board.pool != 'both' %} {{ board.pool }}s{% endif %} scored{% if board.ranked != board.scored %}, ranked against all {{ board.ranked }} -- the # column is a league-wide position, so it runs past this count{% endif %}.
   {%- if board.meta.excluded and board.meta.excluded.total %}
   <strong>{{ board.meta.excluded.total }} players are not on this board at all</strong> --
   {{ board.meta.excluded.no_current_line }} with no {{ board.base_season }} line
