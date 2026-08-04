@@ -27,6 +27,9 @@ def payload() -> dict:
         # this shape lands in the top five (CJ Abrams, 6.4%), so a fixture without one
         # cannot exercise anything that treats flagged rows differently.
         BoardRow(9, "Thin Support", "hitter", 27, 24.0, 5.0, "OF", 4.0),
+        # Below his slot's floor, so `now` on the VAR scale is negative. Without him the
+        # "deliberately not clamped" rule is unreachable and re-adding a clamp passes.
+        BoardRow(10, "Under Water", "hitter", 27, 2.5, 3.0, "C", 6.0),
     ]
     pitchers = [
         BoardRow(3, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0),
@@ -127,6 +130,12 @@ def test_now_is_rendered_on_the_selected_scale(payload: dict) -> None:
         assert var_row["now"] == pytest.approx(sgp_row["now"] - var_row["floor"])
         assert var_row["floor"] > 0
 
+    # The load-bearing half: a player BELOW his floor must read negative. Without such a
+    # row in the fixture the clamp is unreachable and re-adding it would pass unnoticed.
+    below = by_var["Under Water"]
+    assert below["now"] < 0, "a below-replacement Now must not be clamped to zero"
+    assert below["now"] == pytest.approx(by_sgp["Under Water"]["now"] - below["floor"])
+
 
 @pytest.mark.parametrize(
     ("end", "expected"),
@@ -142,7 +151,7 @@ def test_a_junk_or_out_of_range_end_year_falls_back_instead_of_500ing(
 def test_top_all_shows_every_scored_row(payload: dict) -> None:
     board = build_board(payload, top="all")
     assert board.top == "all"
-    assert len(board.rows) == board.scored == 5
+    assert len(board.rows) == board.scored == 6
 
 
 def test_the_default_top_is_the_web_default_not_the_cli_one(payload: dict) -> None:
@@ -264,6 +273,33 @@ def test_no_arrow_when_both_rankings_rest_on_zeros() -> None:
     assert rows["Real One"]["rank_move"] == 0
 
 
+def test_the_arrow_threshold_is_the_boundary_it_claims() -> None:
+    """RANK_MOVE itself was unpinned -- deleting it drew an arrow on every 1-rank wobble.
+
+    Two new tests appeared to cover `rank_move`, but one only exercised the all-zero
+    guard and the other the NaN guard; the threshold that decides which real movements
+    are worth drawing had no test anywhere in the repo. It is a tuned number -- 5 places
+    was signal on a 25-row CLI dump and is plausibly noise across 1,169 rows -- so it is
+    exactly the kind of constant someone will change.
+
+    Built so one player's two rankings differ by precisely RANK_MOVE - 1 and RANK_MOVE.
+    """
+
+    def move_for(gap: int) -> int:
+        # Subject tops the TOTAL ranking; `next` puts him `gap` places down.
+        players = [("Subject", [1.0, 90.0, 90.0])]
+        players += [(f"Peer {i}", [9.0 - i * 0.1, 0.0, 0.0]) for i in range(gap)]
+        players += [(f"Tail {i}", [0.5, 0.0, 0.0]) for i in range(3)]
+        board = build_board(_hand_payload(players), top="all", end=BASE + 3)
+        row = next(r for r in board.rows if r["name"] == "Subject")
+        assert row["rank_total"] == 1
+        assert row["rank_next"] - row["rank_total"] == gap, "fixture must produce this gap"
+        return row["rank_move"]
+
+    assert move_for(RANK_MOVE - 1) == 0, "below the threshold the two rankings agree"
+    assert move_for(RANK_MOVE) == RANK_MOVE, "at the threshold the arrow is drawn"
+
+
 def test_no_arrow_when_there_is_no_next_year_estimate() -> None:
     """`next` is NaN whenever horizon 1 is unobservable, and `add_ranks` sorts NaN last.
 
@@ -284,14 +320,27 @@ def test_no_arrow_when_there_is_no_next_year_estimate() -> None:
     assert gapped["total"] > 0 and gapped["next"] == 0.0
     assert gapped["rank_move"] > 0, "a real 0-next / positive-span row still holds"
 
-    # Drop horizon 1 entirely so `next` is NaN rather than 0.0.
-    gapped_payload = _hand_payload([("Gapped", [0.0, 12.0, 12.0])])
+    # A NaN row needs PEERS. Solo, rank_total and rank_next are both 1 and the raw move
+    # is 0 regardless, so the guard is unreachable and deleting it would still pass.
+    gapped_payload = _hand_payload(
+        [
+            ("Aaa Gapped", [0.0, 30.0, 30.0]),  # biggest total -> rank_total 1
+            *[(f"Filler {i}", [9.0, 1.0, 1.0]) for i in range(8)],
+        ]
+    )
     gapped_payload["players"][0]["var"] = [
         p for p in gapped_payload["players"][0]["var"] if p[0] != 1
     ]
-    solo = build_board(gapped_payload, top="all", end=BASE + 3)
-    assert math.isnan(solo.rows[0]["next"]), "fixture must produce a NaN next"
-    assert solo.rows[0]["rank_move"] == 0, "no next-year estimate means no hold-vs-start claim"
+    board2 = build_board(gapped_payload, top="all", end=BASE + 3)
+    row = next(r for r in board2.rows if r["name"] == "Aaa Gapped")
+
+    assert math.isnan(row["next"]), "fixture must produce a NaN next"
+    assert row["rank_total"] == 1, "and a real rank on the total"
+    assert abs(row["rank_next"] - row["rank_total"]) >= RANK_MOVE, (
+        "add_ranks sorts NaN last, so the raw move must clear the threshold -- otherwise "
+        "this proves nothing about the guard"
+    )
+    assert row["rank_move"] == 0, "no next-year estimate means no hold-vs-start claim"
 
 
 def test_per_year_cells_are_placed_by_horizon_not_by_position() -> None:
@@ -373,12 +422,20 @@ def test_a_new_push_invalidates_the_cache(payload: dict) -> None:
     trajectory_view.clear_board_cache()
     first = build_board(payload, top="all")
 
+    # SAME player count and shape, so `generated_at` is the only part of the key that
+    # differs -- otherwise `len(players)` does the invalidating and this proves nothing
+    # about the mechanism it names.
     fresher = dict(payload, generated_at="2026-09-01T09:00:00-04:00")
-    fresher["players"] = payload["players"][:2]
+    fresher["players"] = [
+        dict(payload["players"][0], name="Renamed By The New Push"),
+        *payload["players"][1:],
+    ]
     second = build_board(fresher, top="all")
 
-    assert len(first.rows) == 5
-    assert len(second.rows) == 2, "a new generated_at must not serve the old rows"
+    assert len(second.rows) == len(first.rows), "the fixture must differ only in content"
+    assert any(r["name"] == "Renamed By The New Push" for r in second.rows), (
+        "a new generated_at must invalidate even when the shape is identical"
+    )
 
 
 def test_a_push_landing_mid_derivation_cannot_pin_the_old_board(payload: dict, monkeypatch) -> None:

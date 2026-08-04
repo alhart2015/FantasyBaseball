@@ -198,6 +198,9 @@ def test_a_swept_row_matches_shape_trajectory_itself() -> None:
     assert got["total"] == pytest.approx(traj.total, abs=1e-9)
     assert got["p10"] == pytest.approx(sum(p.p10 for p in observable), abs=1e-9)
     assert got["p90"] == pytest.approx(sum(p.p90 for p in observable), abs=1e-9)
+    # NOT asserted against the fixture's own n_effective: the synthetic panel yields an
+    # identical value at every horizon, so min/max/mean are indistinguishable there. The
+    # conservative `min` is pinned separately below, on hand-set points.
     assert got["n_eff"] == pytest.approx(min(p.n_effective for p in observable), abs=1e-9)
     assert got["support"] == pytest.approx(traj.local_support, abs=1e-9)
     assert got["extrapolated"] == traj.extrapolated
@@ -232,3 +235,28 @@ def test_the_band_flag_is_scoped_to_the_range_on_screen() -> None:
     assert totals([patched], (1,), scale="var")[0]["band_fell_back"] is False
     assert totals([patched], (1, 2), scale="var")[0]["band_fell_back"] is False
     assert totals([patched], (1, 2, 3), scale="var")[0]["band_fell_back"] is True
+
+
+def test_n_eff_reports_the_worst_year_in_the_range() -> None:
+    """`min`, deliberately -- support shrinks with the horizon on real data.
+
+    The synthetic panel returns the SAME n_effective at every horizon, so a test built on
+    it cannot tell min from max or mean. Hand-set points make the choice observable.
+    """
+    swept = sweep_pool(
+        [BoardRow(1, "Solo", "hitter", 27, 18.0, 16.0, "OF", 4.0)],
+        synthetic_panel(),
+        "hitter",
+        (1, 2, 3),
+        scales=("var",),
+    )
+    player = swept[0]
+    thinning = replace(
+        player,
+        var=tuple(replace(pt, n_effective=float(100 - 10 * pt.horizon)) for pt in player.var),
+    )
+
+    assert [pt.n_effective for pt in thinning.var] == [90.0, 80.0, 70.0]
+    assert totals([thinning], (1, 2, 3), scale="var")[0]["n_eff"] == 70.0
+    assert totals([thinning], (1, 2), scale="var")[0]["n_eff"] == 80.0
+    assert totals([thinning], (1,), scale="var")[0]["n_eff"] == 90.0
