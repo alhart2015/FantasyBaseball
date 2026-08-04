@@ -2195,3 +2195,12 @@ def test_trajectory_page_renders_a_board(client):
     assert b"2026-08-04T09:00:00" in resp.data
     # Per-year columns appear once the range spans more than one season.
     assert b"'27" in resp.data and b"'28" in resp.data
+
+    # ONE mechanism for the control state. Every control is a URL from `board_url`; the
+    # dropdowns used to sit in a <form> that needed a hidden input per filter to carry
+    # the ones it did not own, so the state was encoded twice and a filter added to only
+    # one of them silently reset whenever a dropdown changed.
+    html = resp.data.decode()
+    assert 'type="hidden"' not in html, "control state must live in the URL, not in inputs"
+    assert "<form" not in html, "no form on this page -- the selects navigate"
+    assert "scale=var" in html and "pool=hitter" in html, "controls carry the full state"

@@ -38,18 +38,23 @@
   {%- endif %}
 </p>
 
-<form method="get" class="trajectory-controls">
+{#- Every control is a URL built by `board_url`, the single place that knows the full
+    filter state. The selects previously lived in a <form> and needed a hidden input per
+    filter to carry the ones they did not own -- so the state was encoded twice, in two
+    mechanisms, and adding a filter meant remembering both. Missing the hidden input
+    silently reset that filter whenever a dropdown changed. -#}
+<div class="trajectory-controls">
   <label>Through
-    <select name="end" onchange="this.form.submit()">
+    <select onchange="location = this.value">
       {% for y in board.end_years %}
-      <option value="{{ y }}" {% if y == board.end_year %}selected{% endif %}>{{ y }}</option>
+      <option value="{{ board_url(end=y) }}" {% if y == board.end_year %}selected{% endif %}>{{ y }}</option>
       {% endfor %}
     </select>
   </label>
   <label>Top
-    <select name="top" onchange="this.form.submit()">
+    <select onchange="location = this.value">
       {% for n in [25, 50, 100, 250, 'all'] %}
-      <option value="{{ n }}" {% if n == board.top %}selected{% endif %}>{{ n }}</option>
+      <option value="{{ board_url(top=n) }}" {% if n == board.top %}selected{% endif %}>{{ n }}</option>
       {% endfor %}
     </select>
   </label>
@@ -63,10 +68,19 @@
     <a class="pill {% if board.scale == value %}active{% endif %}" href="{{ board_url(scale=value) }}">{{ label }}</a>
     {% endfor %}
   </span>
-  <input type="hidden" name="pool" value="{{ board.pool }}">
-  <input type="hidden" name="scale" value="{{ board.scale }}">
-  <noscript><button type="submit" class="pill">Apply</button></noscript>
-</form>
+  <noscript>
+    <span class="pill-group">
+      {% for y in board.end_years %}
+      <a class="pill {% if y == board.end_year %}active{% endif %}" href="{{ board_url(end=y) }}">{{ y }}</a>
+      {% endfor %}
+    </span>
+    <span class="pill-group">
+      {% for n in [25, 50, 100, 250, 'all'] %}
+      <a class="pill {% if n == board.top %}active{% endif %}" href="{{ board_url(top=n) }}">{{ n }}</a>
+      {% endfor %}
+    </span>
+  </noscript>
+</div>
 
 <p class="muted trajectory-vintage">
   Showing {{ board.rows|length }} of {{ board.scored }}{% if board.pool != 'both' %} {{ board.pool }}s{% endif %} scored{% if board.ranked != board.scored %}, ranked against all {{ board.ranked }} -- the # column is a league-wide position, so it runs past this count{% endif %}.
