@@ -22,6 +22,7 @@ twice, which is why this is an offline job and not a request-time one.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
@@ -353,6 +354,36 @@ def from_payload(payload: dict) -> list[SweptPlayer]:
             )
         )
     return players
+
+
+def rank_move(row: dict) -> int:
+    """The hold-vs-start arrow for a ranked row, or 0 where it would be meaningless.
+
+    The THRESHOLD is only half the rule, and shipping only the threshold is what let the
+    CLI and the web board disagree about which players get flagged -- the decision this
+    board exists to make. Both halves live here so a caller cannot take one without the
+    other.
+
+    Withheld when the two rankings rest on values that cannot be compared:
+
+    * **Both totals zero.** VAR clamps at zero, so every below-replacement player reads
+      0.0 in every column. They still get distinct consecutive ranks broken by name, and
+      the zero-set for `next` (year 1 alone) is strictly larger than the one for `total`
+      (all years), so the two blocks begin at different offsets and the difference is
+      systematically non-zero on identical inputs. Measured on a live-shaped 1,169-row
+      pool: 432 of 469 such rows cleared the threshold, worst arrow -97.
+
+    * **No next-year estimate.** `next` is NaN when horizon 1 is unobservable, and
+      `add_ranks` sorts NaN last so one unrankable row cannot decide where the others
+      land. That pairs a last-place `rank_next` with a real `rank_total` and renders as
+      the strongest HOLD signal on the board, produced by an absence rather than a
+      strength.
+    """
+    nxt = row["next"]
+    if math.isnan(nxt) or (row["total"] == 0.0 and nxt == 0.0):
+        return 0
+    move = row["rank_next"] - row["rank_total"]
+    return move if abs(move) >= RANK_MOVE else 0
 
 
 def add_ranks(scored: list[dict]) -> None:

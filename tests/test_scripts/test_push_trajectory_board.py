@@ -47,6 +47,29 @@ def test_an_empty_pool_refuses_the_push(monkeypatch) -> None:
     module._require_scored_pool("hitter", [object()], 2026, "hitter_pt_panel_2000_2026.csv")
 
 
+def test_the_guard_checks_what_the_sweep_produced_not_what_it_was_given(monkeypatch) -> None:
+    """Candidate rows are not scored rows, and the guard has to look at the latter.
+
+    `sweep_pool` independently drops every player whose VAR path has no observable point.
+    A panel whose COMPLETE seasons do not span horizon 1 -- a pitcher panel built only
+    through the in-progress year, say -- yields hundreds of candidates, sails past a
+    guard that inspects its INPUT, and then returns [] with no exception. The push
+    proceeds and overwrites a complete board with a pool-less one that renders normally,
+    which is verbatim what EmptyPoolError's docstring says it prevents.
+
+    Drives `build_payload` rather than the guard directly: the defect was the guard's
+    POSITION, so calling it with an empty list would pass either way.
+    """
+    module = _script()
+    # build_payload imports sweep_pool inside the function, so patch it at the source.
+    monkeypatch.setattr("fantasy_baseball.trajectory.sweep.sweep_pool", lambda *a, **k: [])
+
+    with pytest.raises(module.EmptyPoolError) as exc:
+        module.build_payload(max_horizon=1, panel_dir=None)
+
+    assert "scored 0 players" in str(exc.value)
+
+
 def test_local_stays_local_even_when_render_is_already_set(monkeypatch, tmp_path) -> None:
     """`--local` exists to keep an unverified board OFF Render.
 

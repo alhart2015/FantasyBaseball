@@ -60,7 +60,7 @@ from fantasy_baseball.trajectory.board import board_inputs, player_names, season
 from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
-from fantasy_baseball.trajectory.sweep import RANK_MOVE, add_ranks, sweep_pool, totals
+from fantasy_baseball.trajectory.sweep import add_ranks, rank_move, sweep_pool, totals
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -153,13 +153,24 @@ def _header(base: int, horizons: tuple[int, ...]) -> tuple[str, str]:
 
 
 def render(
-    scored: list[dict], top: int, horizons: tuple[int, ...], levels: dict, base: int
+    scored: list[dict],
+    top: int,
+    horizons: tuple[int, ...],
+    levels: dict,
+    base: int,
+    ranked: int,
 ) -> None:
     scored.sort(key=lambda r: r["total"], reverse=True)
     one, span = _header(base, horizons)
     floors = "  ".join(f"{s} {levels[s]:.2f}" for s in sorted(levels, key=lambda s: levels[s]))
     print(f"\nTOP {min(top, len(scored))} by {span} TOTAL VAR   (floors: {floors})")
-    print(f"{len(scored)} players scored\n")
+    # Two numbers, because ranks are stamped over the WHOLE pool before any filter.
+    # Printing only the post-filter count beside a # column that runs past it is the
+    # contradiction the web board was fixed for in 1eea2062.
+    if ranked != len(scored):
+        print(f"{len(scored)} shown, ranked against all {ranked} scored" + chr(10))
+    else:
+        print(f"{len(scored)} players scored" + chr(10))
     print(
         f"{'#' + span:>8} {'#' + one:>6}  {'player':<24} {'age':>3} {'slot':>4} {'now':>6} "
         f"{'prior':>6} {span + ' VAR':>10} {one + ' VAR':>9}  {'p10..p90':>16} {'yrs':>4} {'supp':>5}"
@@ -172,8 +183,8 @@ def render(
         flag = " (!!)" if r["band_fell_back"] else (" (!)" if r["extrapolated"] else "")
         # The MOVE between the two ranks is the keeper signal: a player far better over
         # three years than next year is who you hold rather than who you start.
-        shift = r["rank_next"] - r["rank_total"]
-        arrow = f"{shift:+d}" if abs(shift) >= RANK_MOVE else ""
+        shift = rank_move(r)
+        arrow = f"{shift:+d}" if shift else ""
         print(
             f"{r['rank_total']:8d} {r['rank_next']:6d}  {r['name'][:24]:<24} {r['age']:3d} "
             f"{r['slot']:>4} {r['now']:6.1f} {r['prior']:6.1f} {r['total']:10.1f} "
@@ -308,6 +319,7 @@ def main() -> int:
     # --min-support drops a row: a rank is a position among everyone the model could
     # price, not among whatever survived a display filter.
     add_ranks(scored)
+    ranked = len(scored)
     if args.min_support > 0:
         dropped = [r for r in scored if r["support"] < args.min_support]
         scored = [r for r in scored if r["support"] >= args.min_support]
@@ -317,7 +329,7 @@ def main() -> int:
     if not scored:
         print("\nnothing scored -- check --min-sgp and that the panel covers this season")
         return 1
-    render(scored, args.top, horizons, levels, season)
+    render(scored, args.top, horizons, levels, season, ranked)
     show_teams = bool(args.by_team or args.team)
     if show_teams or args.csv:
         # Live Upstash, not the local mirror: roster membership is exactly the kind of

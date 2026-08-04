@@ -13,16 +13,15 @@ Render. The board therefore does NOT move with a dashboard refresh, which is why
 
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass, field
 from typing import Any
 
 from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.sweep import (
-    RANK_MOVE,
     SCALES,
     add_ranks,
     from_payload,
+    rank_move,
     require_supported_version,
     totals,
 )
@@ -55,8 +54,10 @@ class Board:
     top: int | str
     #: Which fit the whole table is showing: "var" or "sgp".
     scale: str
-    #: True when a live roster read succeeded, so the page can tell "none of these
-    #: are yours" apart from "we could not reach Upstash".
+    #: True when a live roster read returned SOMETHING. An empty result counts as a
+    #: failure: `live_rosters` returns [] without raising on a missing blob, so an empty
+    #: set cannot be told apart from an unreachable Upstash, and the page must not claim
+    #: "you own none of these" on the strength of it.
     has_rosters: bool = False
     #: Season labels for the per-year columns, e.g. [2027, 2028, 2029]. Empty for a
     #: single-year board, where a breakout column would just repeat the total.
@@ -155,37 +156,6 @@ def _year_cells(by_year: list[dict], horizons: tuple[int, ...]) -> list[float | 
     return [means.get(h) for h in horizons]
 
 
-def _rank_move(row: dict) -> int:
-    """The hold-vs-start arrow, or 0 where the two rankings are not comparable.
-
-    `rank_total` and `rank_next` are dense rankings broken by name, so their difference
-    is only meaningful when the VALUES behind them are. Two cases where they are not,
-    both of which put a large confident arrow on a row that has nothing to say:
-
-    * **Both totals are zero.** VAR clamps at zero, so every below-replacement player
-      reads 0.0 in every column. They still get distinct consecutive ranks, and the
-      zero-set for `next` (year 1 alone) is strictly larger than the one for `total`
-      (all years), so the two blocks begin at different offsets and the difference is
-      systematically non-zero on identical inputs. Simulated on a live-shaped 1,169-row
-      pool, 432 of 469 such rows cleared the threshold, worst arrow -97.
-
-    * **There is no next-year estimate.** `next` is NaN whenever horizon 1 is
-      unobservable, and `add_ranks` deliberately sorts NaN last so one unrankable row
-      cannot decide where the others land. That pairs a last-place `rank_next` with a
-      real `rank_total` and renders as the strongest HOLD signal on the board --
-      produced by the absence of an estimate rather than by any strength.
-
-    Below `RANK_MOVE` the two rankings are saying the same thing with noise on top.
-    """
-    nxt = row["next"]
-    if math.isnan(nxt):
-        return 0
-    if row["total"] == 0.0 and nxt == 0.0:
-        return 0
-    move = row["rank_next"] - row["rank_total"]
-    return move if abs(move) >= RANK_MOVE else 0
-
-
 def build_board(
     payload: dict,
     *,
@@ -240,7 +210,7 @@ def build_board(
     for row in ranked_rows:
         if pool != "both" and row["pool"] != pool:
             continue
-        move = _rank_move(row)
+        move = rank_move(row)
         key = (normalize_name(row["name"]), row["pool"])
         is_mine = key in owned
         rows.append(
@@ -279,7 +249,12 @@ def build_board(
         pool=pool,
         top="all" if top_n is None else top_n,
         scale=scale,
-        has_rosters=mine is not None,
+        # An EMPTY read is not a successful one. `live_rosters` returns [] without
+        # raising when the roster blobs are absent -- its module docstring calls that out
+        # as reading like "you own nobody" rather than an error -- so treating `set()` as
+        # success suppressed the warning AND highlighted nothing, which is the one
+        # combination this field exists to prevent.
+        has_rosters=bool(mine),
         # A per-year breakout only earns its columns once the range spans more than one.
         year_columns=[base + h for h in horizons] if len(horizons) > 1 else [],
         meta={

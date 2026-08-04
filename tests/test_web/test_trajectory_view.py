@@ -6,8 +6,8 @@ import math
 import pytest
 
 from fantasy_baseball.trajectory.board import BoardRow
-from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
-from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, RANK_MOVE, build_board
+from fantasy_baseball.trajectory.sweep import RANK_MOVE, sweep_pool, to_payload
+from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, build_board
 from tests._trajectory_panel import synthetic_panel
 
 BASE = 2026
@@ -430,6 +430,23 @@ def test_my_players_are_marked(payload: dict) -> None:
 
     unmarked = build_board(payload, top="all")
     assert not any(r["mine"] for r in unmarked.rows), "no roster read -- nothing claimed"
+
+
+def test_an_empty_roster_read_is_not_a_successful_one(payload: dict) -> None:
+    """ "You own none of these" and "we could not read your roster" must not look alike.
+
+    `live_rosters` returns [] WITHOUT raising when the roster blobs are absent -- its own
+    module docstring flags this: getting the asymmetry wrong "drops your own roster
+    silently, which reads as 'you own nobody' rather than as an error". The route only
+    caught exceptions, so a cold or half-written `cache:roster` gave `mine=set()`, which
+    counted as a successful read: nothing highlighted AND no warning, so the page
+    silently asserts the reader owns none of the top 50 keepers.
+    """
+    assert build_board(payload, mine=None).has_rosters is False, "no read attempted"
+    assert build_board(payload, mine=set()).has_rosters is False, (
+        "an EMPTY read is not a successful one -- it cannot be told from a failed one"
+    )
+    assert build_board(payload, mine={("big bat", "hitter")}).has_rosters is True
 
 
 def test_a_colliding_name_is_flagged_rather_than_claimed(payload: dict) -> None:
