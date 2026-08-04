@@ -1934,15 +1934,6 @@ class RefreshRun:
             "start_date": self.start_date,
             "end_date": self.end_date,
             "team_name": self.config.team_name,
-            # Recorded so a consumer of this refresh can tell that the rosters,
-            # standings, free agents and transactions behind it are stale even
-            # though last_refresh is current.
-            "yahoo_skipped": self.skip_yahoo,
-            "rosters_as_of": (
-                self.standings.effective_date.isoformat()
-                if self.skip_yahoo and self.standings is not None
-                else None
-            ),
         }
         write_cache(CacheKey.META, meta)
 

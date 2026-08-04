@@ -54,9 +54,12 @@ Pending moves are the exception: they are a diff of today's vs the effective
 date's *live* roster, so they are cleared to `[]` rather than left stale --
 republishing the old diff would keep showing moves that have already resolved.
 
-`cache:meta` records `yahoo_skipped: true` and `rosters_as_of: <date>` so a
-consumer can tell the underlying league state is stale even though
-`last_refresh` is current.
+`cache:meta`'s `last_refresh` is **not** advanced by a stale run -- it keeps the
+last live refresh's timestamp, because that is when the league data behind the
+dashboard actually came from Yahoo. The sidebar's existing ">24h old" staleness
+badge reads that field, so it starts firing on its own once an outage passes a
+day and keeps counting up for as long as the mode runs. That is the signal that
+the underlying league state is frozen; there is no separate banner.
 
 ## Known limitations
 

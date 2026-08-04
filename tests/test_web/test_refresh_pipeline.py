@@ -627,8 +627,6 @@ class TestSkipYahoo:
             assert fake_redis.get(redis_key(key)) is not None, f"Missing cache key: {key}"
 
         meta = _read(fake_redis, CacheKey.META)
-        assert meta["yahoo_skipped"] is True
-        assert meta["rosters_as_of"], "stale mode must record the vintage it ran on"
         assert meta["start_date"] == "2026-04-20"
         assert meta["end_date"] == "2026-04-26"
 
