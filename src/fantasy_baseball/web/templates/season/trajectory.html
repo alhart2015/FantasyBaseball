@@ -2,13 +2,12 @@
 {% block title %}Trajectory Board -- Season Dashboard{% endblock %}
 {% block content %}
 
-{% macro board_url(end=None, pool=None, top=None, sort=None, support=None) -%}
+{% macro board_url(end=None, pool=None, top=None, sort=None) -%}
 {{ url_for('trajectory',
            end=end if end is not none else board.end_year,
            pool=pool if pool is not none else board.pool,
            top=top if top is not none else board.top,
-           sort=sort if sort is not none else board.sort,
-           support=support if support is not none else ('hide' if board.hide_unsupported else 'all')) }}
+           sort=sort if sort is not none else board.sort) }}
 {%- endmacro %}
 
 <div class="page-trajectory">
@@ -53,13 +52,8 @@
     <a class="pill {% if board.pool == value %}active{% endif %}" href="{{ board_url(pool=value) }}">{{ label }}</a>
     {% endfor %}
   </span>
-  <span class="pill-group">
-    <a class="pill {% if board.hide_unsupported %}active{% endif %}"
-       href="{{ board_url(support='all' if board.hide_unsupported else 'hide') }}">Hide unsupported</a>
-  </span>
   <input type="hidden" name="pool" value="{{ board.pool }}">
   <input type="hidden" name="sort" value="{{ board.sort }}">
-  <input type="hidden" name="support" value="{{ 'hide' if board.hide_unsupported else 'all' }}">
   <noscript><button type="submit" class="pill">Apply</button></noscript>
 </form>
 

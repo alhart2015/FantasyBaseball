@@ -42,7 +42,6 @@ class Board:
     #: pool is 1,169 and the obvious ceiling to reach for is 1,000.
     top: int | str
     sort: str
-    hide_unsupported: bool
     #: Season labels for the per-year columns, e.g. [2027, 2028, 2029]. Empty for a
     #: single-year board, where a breakout column would just repeat the total.
     year_columns: list[int] = field(default_factory=list)
@@ -72,7 +71,6 @@ def build_board(
     pool: str = "both",
     top: Any = None,
     sort: str = "var",
-    hide_unsupported: bool = False,
 ) -> Board:
     """Collapse the cached sweep to one timeframe and rank it.
 
@@ -111,8 +109,6 @@ def build_board(
     for row in var_rows:
         if pool != "both" and row["pool"] != pool:
             continue
-        if hide_unsupported and row["extrapolated"]:
-            continue
         raw = sgp_by_key.get((row["id"], row["pool"]))
         move = row["rank_next"] - row["rank_total"]
         rows.append(
@@ -149,7 +145,6 @@ def build_board(
         pool=pool,
         top="all" if top_n is None else top_n,
         sort=sort,
-        hide_unsupported=hide_unsupported,
         # A per-year breakout only earns its columns once the range spans more than one.
         year_columns=[base + h for h in horizons] if len(horizons) > 1 else [],
         meta={

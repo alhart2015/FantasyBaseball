@@ -28,6 +28,12 @@ def payload() -> dict:
     hitters = [
         BoardRow(1, "Big Bat", "hitter", 27, 20.0, 19.0, "OF", 4.0),
         BoardRow(2, "Small Bat", "hitter", 27, 8.0, 7.0, "OF", 4.0),
+        # Observable but extrapolated: a 24.0 season off a 5.0 prior matches the
+        # low-prior cohort and is then evaluated far above their own current seasons,
+        # so local_support is 0 and the row carries the (!) flag. On the live board
+        # this shape lands in the top five (CJ Abrams, 6.4%), so a fixture without one
+        # cannot exercise anything that treats flagged rows differently.
+        BoardRow(9, "Thin Support", "hitter", 27, 24.0, 5.0, "OF", 4.0),
     ]
     pitchers = [
         BoardRow(3, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0),
@@ -125,19 +131,31 @@ def test_a_junk_or_out_of_range_end_year_falls_back_instead_of_500ing(
 def test_top_all_shows_every_scored_row(payload: dict) -> None:
     board = build_board(payload, top="all")
     assert board.top == "all"
-    assert len(board.rows) == board.scored == 4
+    assert len(board.rows) == board.scored == 5
 
 
 def test_the_default_top_is_the_web_default_not_the_cli_one(payload: dict) -> None:
     assert build_board(payload).top == DEFAULT_TOP == 50
 
 
-def test_hiding_unsupported_rows_shrinks_the_board_it_reports(payload: dict) -> None:
-    """`scored` must follow the filter, or the page says "4 scored" while showing 2."""
-    full = build_board(payload)
-    hidden = build_board(payload, hide_unsupported=True)
-    assert hidden.scored == len(hidden.rows)
-    assert hidden.scored <= full.scored
+def test_extrapolated_rows_are_flagged_and_always_shown(payload: dict) -> None:
+    """A thin-support row is the ambiguous keeper call, not noise to be filtered.
+
+    These cluster at the TOP of the live board -- extrapolation inflates the estimate,
+    so the rows the model is least sure about land where the decisions get made (James
+    Wood #3, CJ Abrams #5 on the 2026 board). Dropping them leaves a board that looks
+    authoritative and is missing exactly the players worth arguing about, so the board
+    flags them and shows them. There is deliberately no filter to remove them.
+    """
+    board = build_board(payload, top="all")
+    flagged = [r for r in board.rows if r["extrapolated"]]
+
+    assert flagged, "fixture must contain an extrapolated row for this to mean anything"
+    assert {r["name"] for r in flagged} == {"Thin Support"}
+    assert board.scored == len(board.rows), "every scored row is rendered"
+
+    with pytest.raises(TypeError):
+        build_board(payload, hide_unsupported=True)  # type: ignore[call-arg]
 
 
 def test_each_scale_carries_its_own_band(payload: dict) -> None:

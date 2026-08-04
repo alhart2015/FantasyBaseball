@@ -819,7 +819,6 @@ def register_routes(app: Flask) -> None:
                     pool=request.args.get("pool", "both"),
                     top=request.args.get("top"),
                     sort=request.args.get("sort", "var"),
-                    hide_unsupported=request.args.get("support") == "hide",
                 )
             except (ValueError, KeyError) as exc:
                 error = str(exc)
