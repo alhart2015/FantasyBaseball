@@ -301,6 +301,13 @@ def main() -> int:
 
     scored = totals(swept, horizons, scale="var")
 
+    # RANK FIRST, then filter. `add_ranks` documents itself as ranking "over the whole
+    # scored pool", and the web board does exactly that -- so ranking the filtered subset
+    # here renumbered 1..N and gave the same player a different number on the two
+    # surfaces. The visible consequence is that the # column now has GAPS when
+    # --min-support drops a row: a rank is a position among everyone the model could
+    # price, not among whatever survived a display filter.
+    add_ranks(scored)
     if args.min_support > 0:
         dropped = [r for r in scored if r["support"] < args.min_support]
         scored = [r for r in scored if r["support"] >= args.min_support]
@@ -310,7 +317,6 @@ def main() -> int:
     if not scored:
         print("\nnothing scored -- check --min-sgp and that the panel covers this season")
         return 1
-    add_ranks(scored)
     render(scored, args.top, horizons, levels, season)
     show_teams = bool(args.by_team or args.team)
     if show_teams or args.csv:
