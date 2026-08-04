@@ -538,6 +538,211 @@ class TestROSProjectionsRedisAuthoritative:
         )
 
 
+class TestSkipYahoo:
+    """Stale-data mode: the refresh runs with every Yahoo step skipped.
+
+    Used when Yahoo auth is broken. The steps that depend only on MLB game
+    logs and projections must still recompute off the last persisted league
+    state, and nothing may touch Yahoo.
+    """
+
+    @pytest.mark.parametrize(
+        "value,expected",
+        [
+            ("1", True),
+            ("true", True),
+            ("TRUE", True),
+            ("yes", True),
+            ("on", True),
+            (" 1 ", True),
+            ("0", False),
+            ("false", False),
+            ("", False),
+            ("maybe", False),
+        ],
+    )
+    def test_env_flag_parsing(self, monkeypatch, value, expected):
+        monkeypatch.setenv(refresh_pipeline.SKIP_YAHOO_ENV, value)
+        assert refresh_pipeline.skip_yahoo_requested() is expected
+
+    def test_env_flag_absent_is_false(self, monkeypatch):
+        monkeypatch.delenv(refresh_pipeline.SKIP_YAHOO_ENV, raising=False)
+        assert refresh_pipeline.skip_yahoo_requested() is False
+
+    def test_skip_yahoo_refresh_touches_no_yahoo_and_still_writes_caches(
+        self,
+        configured_test_env,
+        fake_redis,
+        monkeypatch,
+    ):
+        """A live refresh, then a stale one with every Yahoo entry point armed
+        to raise. The second run must complete and rewrite the derived caches.
+        """
+        from datetime import date
+        from unittest.mock import patch
+
+        with patched_refresh_environment(fake_redis):
+            # First: a normal refresh, to persist the league state that
+            # stale-data mode will read back.
+            refresh_pipeline.run_full_refresh()
+
+            # Freeze "today" so the locally-derived scoring week (and the
+            # season fraction it feeds) does not depend on the wall clock.
+            monkeypatch.setattr(refresh_pipeline, "local_today", lambda: date(2026, 4, 20))
+
+            def _boom(*args, **kwargs):
+                raise AssertionError("stale-data mode must not call Yahoo")
+
+            yahoo_entry_points = [
+                "fantasy_baseball.auth.yahoo_auth.get_yahoo_session",
+                "fantasy_baseball.auth.yahoo_auth.get_league",
+                "fantasy_baseball.lineup.yahoo_roster.fetch_teams",
+                "fantasy_baseball.lineup.yahoo_roster.fetch_roster",
+                "fantasy_baseball.lineup.yahoo_roster.fetch_standings",
+                "fantasy_baseball.lineup.yahoo_roster.fetch_scoring_period",
+                "fantasy_baseball.lineup.yahoo_roster.fetch_all_transactions",
+                "fantasy_baseball.lineup.waivers.fetch_and_match_free_agents",
+            ]
+            armed = [patch(target, side_effect=_boom) for target in yahoo_entry_points]
+            for p in armed:
+                p.start()
+            try:
+                refresh_pipeline.run_full_refresh(skip_yahoo=True)
+            finally:
+                for p in armed:
+                    p.stop()
+
+        # Everything downstream of the league state still recomputed.
+        for key in [
+            CacheKey.PROJECTIONS,
+            CacheKey.ROSTER,
+            CacheKey.RANKINGS,
+            CacheKey.LINEUP_OPTIMAL,
+            CacheKey.LEVERAGE,
+            CacheKey.MONTE_CARLO,
+            CacheKey.SPOE,
+            CacheKey.PACE_DEVIATIONS,
+            CacheKey.META,
+        ]:
+            assert fake_redis.get(redis_key(key)) is not None, f"Missing cache key: {key}"
+
+        meta = _read(fake_redis, CacheKey.META)
+        assert meta["start_date"] == "2026-04-20"
+        assert meta["end_date"] == "2026-04-26"
+
+        # Pending moves are unknowable without Yahoo — cleared, not stale.
+        assert _read(fake_redis, CacheKey.PENDING_MOVES) == []
+
+        # The roster rebuilt from the stored snapshot must carry real players.
+        roster = _read(fake_redis, CacheKey.ROSTER)
+        assert roster, "stale-data mode produced an empty roster cache"
+
+    def test_skip_yahoo_does_not_advance_last_refresh(
+        self,
+        configured_test_env,
+        fake_redis,
+        monkeypatch,
+    ):
+        """``last_refresh`` means "when the league data last updated".
+
+        A stale run recomputes the derived caches but fetches no new league
+        state, so advancing ``last_refresh`` would silence the dashboard's own
+        ">24h old" staleness badge (base.html reads this field) for exactly as
+        long as the outage lasts -- the one stretch it needs to fire.
+        """
+        from datetime import date, datetime
+        from unittest.mock import patch
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+            live_refresh = _read(fake_redis, CacheKey.META)["last_refresh"]
+            assert live_refresh, "the live run must record a refresh time"
+
+            # Days later: Yahoo is down and the cron keeps running.
+            monkeypatch.setattr(refresh_pipeline, "local_today", lambda: date(2026, 4, 20))
+            monkeypatch.setattr(refresh_pipeline, "local_now", lambda: datetime(2026, 4, 24, 9, 0))
+
+            def _boom(*args, **kwargs):
+                raise AssertionError("stale-data mode must not call Yahoo")
+
+            armed = [
+                patch(target, side_effect=_boom)
+                for target in [
+                    "fantasy_baseball.auth.yahoo_auth.get_yahoo_session",
+                    "fantasy_baseball.auth.yahoo_auth.get_league",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_teams",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_roster",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_standings",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_scoring_period",
+                    "fantasy_baseball.lineup.yahoo_roster.fetch_all_transactions",
+                    "fantasy_baseball.lineup.waivers.fetch_and_match_free_agents",
+                ]
+            ]
+            for p in armed:
+                p.start()
+            try:
+                refresh_pipeline.run_full_refresh(skip_yahoo=True)
+            finally:
+                for p in armed:
+                    p.stop()
+
+        meta = _read(fake_redis, CacheKey.META)
+        assert meta["last_refresh"] == live_refresh, (
+            "a stale run must carry forward the last LIVE refresh time; "
+            "advancing it hides the staleness badge during the outage"
+        )
+
+    def test_skip_yahoo_leaves_yahoo_only_caches_untouched(
+        self,
+        configured_test_env,
+        fake_redis,
+        monkeypatch,
+    ):
+        """Steps whose inputs only Yahoo can supply must not overwrite their
+        previous cache with an empty/degraded result."""
+        from datetime import date
+        from unittest.mock import patch
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+            before = {
+                key: fake_redis.get(redis_key(key))
+                for key in (
+                    CacheKey.ROSTER_AUDIT,
+                    CacheKey.STASH,
+                    CacheKey.POSITIONS,
+                    CacheKey.TRANSACTION_ANALYZER,
+                    CacheKey.STANDINGS,
+                )
+            }
+
+            monkeypatch.setattr(refresh_pipeline, "local_today", lambda: date(2026, 4, 20))
+            with patch(
+                "fantasy_baseball.auth.yahoo_auth.get_yahoo_session",
+                side_effect=PermissionError("Yahoo auth is broken"),
+            ):
+                refresh_pipeline.run_full_refresh(skip_yahoo=True)
+
+        for key, prior in before.items():
+            assert fake_redis.get(redis_key(key)) == prior, (
+                f"stale-data mode overwrote {key}, which only Yahoo can populate"
+            )
+
+    def test_skip_yahoo_without_cached_standings_fails_loudly(
+        self,
+        configured_test_env,
+        fake_redis,
+        monkeypatch,
+    ):
+        """With no prior league state there is nothing to refresh against —
+        that must raise, not silently produce a dashboard built on nothing."""
+        with (
+            patched_refresh_environment(fake_redis),
+            pytest.raises(RuntimeError, match="no cached standings"),
+        ):
+            refresh_pipeline.run_full_refresh(skip_yahoo=True)
+
+
 def test_standings_breakdown_cache_written_by_refresh():
     """build_standings_breakdown_payload produces the STANDINGS_BREAKDOWN shape."""
     import json

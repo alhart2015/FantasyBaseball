@@ -674,6 +674,29 @@ def match_roster_to_projections(
     return matched
 
 
+def roster_to_dicts(roster: Roster) -> list[dict]:
+    """Convert a :class:`Roster` into the raw roster-dict shape.
+
+    This is the inverse of the Yahoo roster fetch: the dicts carry the same
+    ``name`` / ``positions`` / ``selected_position`` / ``status`` /
+    ``player_id`` keys ``lineup.yahoo_roster.fetch_roster`` produces, which is
+    what :func:`match_roster_to_projections` and
+    ``web.refresh_steps.merge_matched_and_raw_roster`` expect. Callers that
+    have a persisted :class:`Roster` (Redis snapshots) rather than a live
+    Yahoo response use this to feed those name-keyed helpers.
+    """
+    return [
+        {
+            "name": entry.name,
+            "positions": [p.value for p in entry.positions],
+            "selected_position": entry.selected_position.value,
+            "status": entry.status,
+            "player_id": entry.yahoo_id,
+        }
+        for entry in roster.entries
+    ]
+
+
 def hydrate_roster_entries(
     roster: Roster,
     hitters_proj: pd.DataFrame,
@@ -712,18 +735,8 @@ def hydrate_roster_entries(
 
     The ``context`` kwarg is forwarded for log clarity.
     """
-    roster_dicts = [
-        {
-            "name": entry.name,
-            "positions": [p.value for p in entry.positions],
-            "selected_position": entry.selected_position.value,
-            "status": entry.status,
-            "player_id": entry.yahoo_id,
-        }
-        for entry in roster.entries
-    ]
     return match_roster_to_projections(
-        roster_dicts,
+        roster_to_dicts(roster),
         hitters_proj,
         pitchers_proj,
         full_hitters_proj=full_hitters_proj,

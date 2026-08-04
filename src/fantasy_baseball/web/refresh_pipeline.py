@@ -9,6 +9,10 @@ web UI polls via ``get_refresh_status``.
 Shared helpers (``_load_game_log_totals``, ``_compute_pending_moves_diff``,
 cache I/O) live in ``season_data`` and are imported below. The dependency
 is one-way: this module imports from ``season_data``, never the reverse.
+
+Stale-data mode (``FB_SKIP_YAHOO``, or ``skip_yahoo=True``) skips every step
+that pulls from Yahoo and runs the rest against the last persisted league
+state. See ``docs/stale-data-refresh-runbook.md``.
 """
 
 import json
@@ -19,7 +23,7 @@ import threading
 from collections.abc import Iterator
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from datetime import date
+from datetime import date, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -47,6 +51,7 @@ from fantasy_baseball.web.season_data import (
     _compute_pending_moves_diff,
     _load_game_log_totals,
     read_cache,
+    read_cache_dict,
     read_cache_with_meta,
     reset_cache_job,
     set_cache_job,
@@ -71,6 +76,20 @@ if TYPE_CHECKING:
     from fantasy_baseball.models.team import Team
 
 log = logging.getLogger(__name__)
+
+SKIP_YAHOO_ENV = "FB_SKIP_YAHOO"
+
+
+def skip_yahoo_requested() -> bool:
+    """True when ``FB_SKIP_YAHOO`` asks the refresh to run without Yahoo.
+
+    Read from the environment rather than ``config/league.yaml`` so the
+    production toggle is a Render dashboard env var: the QStash cron POSTs
+    ``/api/refresh`` with no arguments, so an env var is the only way to flip
+    the mode (in either direction) without a code deploy.
+    """
+    return os.environ.get(SKIP_YAHOO_ENV, "").strip().lower() in {"1", "true", "yes", "on"}
+
 
 _refresh_lock = threading.Lock()
 _refresh_status = {"running": False, "progress": "", "error": None}
@@ -393,10 +412,19 @@ class RefreshRun:
     across threads and stays at module scope.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, *, skip_yahoo: bool | None = None) -> None:
         from fantasy_baseball.web.job_logger import JobLogger
 
         self.logger = JobLogger("refresh")
+
+        # Stale-data mode: run every step that does NOT need Yahoo (MLB game
+        # logs, projections, standings projection, optimizer, Monte Carlo,
+        # SPoE) against the last league state this pipeline persisted, and
+        # skip the steps that do. Used when Yahoo auth is broken -- a refresh
+        # on stale rosters/standings still moves the numbers that depend on
+        # new game results, where the alternative is no refresh at all.
+        # Resolved once here so every step reads the same value.
+        self.skip_yahoo: bool = skip_yahoo_requested() if skip_yahoo is None else skip_yahoo
 
         self.config: LeagueConfig | None = None
         self.league: Any = None  # Yahoo session-bound league (untyped lib)
@@ -531,13 +559,22 @@ class RefreshRun:
 
     # --- Step 1: Auth + league ---
     def _authenticate(self):
-        from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
         from fantasy_baseball.config import load_config
+
+        project_root = Path(__file__).resolve().parents[3]
+        self.config = load_config(project_root / "config" / "league.yaml")
+
+        if self.skip_yahoo:
+            # self.league stays None -- every step that would dereference it
+            # is skipped below, so a None here is a loud AttributeError if a
+            # future step forgets its gate rather than a silent bad fetch.
+            self._progress(f"{SKIP_YAHOO_ENV} set: skipping Yahoo auth (stale-data mode)")
+            return
+
+        from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
 
         self._progress("Authenticating with Yahoo...")
         sc = get_yahoo_session()
-        project_root = Path(__file__).resolve().parents[3]
-        self.config = load_config(project_root / "config" / "league.yaml")
         self.league = get_league(sc, self.config.league_id, self.config.game_code)
 
     # --- Step 2: Find user's team key ---
@@ -545,6 +582,12 @@ class RefreshRun:
         from fantasy_baseball.lineup.yahoo_roster import fetch_teams, find_user_team_key
 
         assert self.config is not None
+        if self.skip_yahoo:
+            # teams_dict is only read by the opponent-roster fetch (skipped);
+            # user_team_key is recovered from the cached standings in
+            # _fetch_standings_and_roster, which knows every team's key.
+            self._progress("Skipping Yahoo team lookup (stale-data mode)")
+            return
         self._progress("Finding team...")
         self.teams_dict = fetch_teams(self.league)
         self.user_team_key = find_user_team_key(self.teams_dict, self.config.team_name)
@@ -558,6 +601,9 @@ class RefreshRun:
         )
 
         assert self.config is not None
+        if self.skip_yahoo:
+            self._reuse_cached_standings()
+            return
         assert self.user_team_key is not None
 
         # Compute the effective date for the next lineup lock BEFORE
@@ -597,6 +643,54 @@ class RefreshRun:
         if pending_moves:
             total_changes = sum(len(m["adds"]) + len(m["drops"]) for m in pending_moves)
             self._progress(f"Pending moves: {total_changes} change(s) detected")
+
+    def _reuse_cached_standings(self) -> None:
+        """Stale-data substitute for the Yahoo standings + roster fetch.
+
+        Reuses the last ``cache:standings`` blob this pipeline wrote and
+        derives the scoring week locally. The local derivation is Monday-Sunday
+        of the current week -- the league's actual scoring week, and the same
+        fallback ``fetch_scoring_period`` already uses when Yahoo reports no
+        active period.
+
+        ``self.roster_raw`` is deliberately left ``None`` here: it is rebuilt
+        from the Redis roster snapshots in
+        ``_write_snapshots_and_load_league``, once ``League.from_redis`` has
+        loaded them.
+        """
+        from fantasy_baseball.models.standings import Standings
+
+        assert self.config is not None
+
+        today = local_today()
+        monday = today - timedelta(days=today.weekday())
+        self.start_date = monday.isoformat()
+        self.end_date = (monday + timedelta(days=6)).isoformat()
+        self.effective_date = compute_effective_date(self.end_date)
+        self._progress(f"Effective date (next lock): {self.effective_date}")
+
+        payload = read_cache(CacheKey.STANDINGS)
+        if not isinstance(payload, dict) or not payload:
+            raise RuntimeError(
+                f"{SKIP_YAHOO_ENV} is set but no cached standings exist "
+                f"(cache:{CacheKey.STANDINGS}) -- there is no stale state to refresh "
+                "against. Restore Yahoo auth and run one full refresh first."
+            )
+        self.standings = Standings.from_json(payload)
+        self.user_team_key = next(
+            (e.team_key for e in self.standings.entries if e.team_name == self.config.team_name),
+            None,
+        )
+        self._progress(
+            f"Reusing cached standings from {self.standings.effective_date} "
+            f"({len(self.standings.entries)} teams)"
+        )
+
+        # Pending moves are a diff of today's vs the effective date's LIVE
+        # Yahoo roster. Without Yahoo they are unknowable, and republishing the
+        # previous run's diff would keep showing moves that have since
+        # resolved -- so publish an empty list rather than a stale one.
+        write_cache(CacheKey.PENDING_MOVES, [])
 
     # --- Step 4: Read preseason projections from Redis ---
     def _load_projections(self):
@@ -743,6 +837,12 @@ class RefreshRun:
         from fantasy_baseball.lineup.yahoo_roster import fetch_roster
 
         assert self.config is not None
+        if self.skip_yahoo:
+            # raw_rosters_by_team stays None; the snapshot write that consumes
+            # it is skipped too, and League.from_redis supplies every team's
+            # last stored roster from there on.
+            self._progress("Skipping opponent roster fetch (stale-data mode)")
+            return
         assert self.roster_raw is not None
         assert self.effective_date is not None
 
@@ -783,42 +883,88 @@ class RefreshRun:
 
         assert self.config is not None
         assert self.effective_date is not None
-        assert self.raw_rosters_by_team is not None
         assert self.standings is not None
 
-        self._progress("Writing roster snapshots to Redis...")
-        from fantasy_baseball.data.kv_store import get_kv
-        from fantasy_baseball.data.redis_store import (
-            write_roster_snapshot,
-            write_standings_snapshot,
-        )
-
-        client = get_kv()
-        snapshot_date = self.effective_date.isoformat()
-        for tname, team_raw in self.raw_rosters_by_team.items():
-            entries = [
-                {
-                    "slot": row["selected_position"],
-                    "player_name": row["name"],
-                    "positions": ", ".join(row.get("positions", [])),
-                    "status": row.get("status") or "",
-                    "yahoo_id": row.get("player_id") or "",
-                }
-                for row in team_raw
-            ]
-            write_roster_snapshot(
-                client,
-                snapshot_date,
-                tname,
-                entries,
+        if self.skip_yahoo:
+            # Nothing new to snapshot: re-writing the stale rosters/standings
+            # under today's date would fabricate history that claims the league
+            # did not change, and both histories are the durable record the
+            # rest of this refresh reads back.
+            self._progress("Skipping snapshot writes (stale-data mode)")
+        else:
+            assert self.raw_rosters_by_team is not None
+            self._progress("Writing roster snapshots to Redis...")
+            from fantasy_baseball.data.kv_store import get_kv
+            from fantasy_baseball.data.redis_store import (
+                write_roster_snapshot,
+                write_standings_snapshot,
             )
 
-        # Canonical Standings snapshot — write_standings_snapshot keys
-        # off standings.effective_date and serializes via .to_json().
-        write_standings_snapshot(client, self.standings)
+            client = get_kv()
+            snapshot_date = self.effective_date.isoformat()
+            for tname, team_raw in self.raw_rosters_by_team.items():
+                entries = [
+                    {
+                        "slot": row["selected_position"],
+                        "player_name": row["name"],
+                        "positions": ", ".join(row.get("positions", [])),
+                        "status": row.get("status") or "",
+                        "yahoo_id": row.get("player_id") or "",
+                    }
+                    for row in team_raw
+                ]
+                write_roster_snapshot(
+                    client,
+                    snapshot_date,
+                    tname,
+                    entries,
+                )
+
+            # Canonical Standings snapshot — write_standings_snapshot keys
+            # off standings.effective_date and serializes via .to_json().
+            write_standings_snapshot(client, self.standings)
 
         self._progress("Loading League from Redis...")
         self.league_model = League.from_redis(self.config.season_year)
+
+        if self.skip_yahoo:
+            self._reuse_cached_roster_raw()
+
+    def _reuse_cached_roster_raw(self) -> None:
+        """Rebuild ``roster_raw`` from the newest stored roster snapshot.
+
+        ``_match_roster_to_projections`` needs the raw (name-keyed) roster
+        shape that ``fetch_roster`` returns. In stale-data mode the equivalent
+        lives in ``weekly_rosters_history``, which ``League.from_redis`` has
+        just loaded, so convert the user's latest stored roster back into that
+        shape. This keeps the user's roster and the hydrated opponent rosters
+        on the same snapshot instead of mixing vintages.
+        """
+        from fantasy_baseball.data.projections import roster_to_dicts
+
+        assert self.config is not None
+        assert self.league_model is not None
+
+        try:
+            team = self.league_model.team_by_name(self.config.team_name)
+        except KeyError as exc:
+            raise RuntimeError(
+                f"{SKIP_YAHOO_ENV} is set but no stored roster snapshots exist for "
+                f"{self.config.team_name!r} -- there is no stale roster to refresh "
+                "against. Restore Yahoo auth and run one full refresh first."
+            ) from exc
+        if not team.rosters:
+            raise RuntimeError(
+                f"{SKIP_YAHOO_ENV} is set but {self.config.team_name!r} has no stored "
+                "roster snapshots for this season. Restore Yahoo auth and run one "
+                "full refresh first."
+            )
+
+        roster = team.latest_roster()
+        self.roster_raw = roster_to_dicts(roster)
+        self._progress(
+            f"Reusing cached roster from {roster.effective_date} ({len(self.roster_raw)} players)"
+        )
 
     # --- Step 4d: Hydrate user roster + opponent rosters from League ---
     def _hydrate_rosters(self):
@@ -1323,6 +1469,15 @@ class RefreshRun:
         from fantasy_baseball.web.refresh_steps import build_positions_map
 
         assert self.config is not None
+        if self.skip_yahoo:
+            # Every product of this step (upgrade list, stash board, positions
+            # map) is built against the free-agent pool, which only Yahoo can
+            # supply. Leave the previous run's caches in place -- a board
+            # computed against an empty FA pool would read as "no upgrades
+            # available", which is a claim, not a gap.
+            self.fa_players = []
+            self._progress("Skipping roster audit (stale-data mode: free agents need Yahoo)")
+            return
         assert self.hitters_proj is not None
         assert self.pitchers_proj is not None
         assert self.roster_players is not None
@@ -1573,6 +1728,11 @@ class RefreshRun:
 
     # --- Step 15: Transaction analyzer ---
     def _analyze_transactions(self):
+        if self.skip_yahoo:
+            # The transaction feed is Yahoo-only; the accumulated cache stays
+            # as-is and picks up the missed moves on the first live refresh.
+            self._progress("Skipping transaction analysis (stale-data mode)")
+            return
         self._progress("Analyzing transactions...")
         from fantasy_baseball.analysis.transactions import (
             _load_projections_for_date_redis,
@@ -1701,6 +1861,11 @@ class RefreshRun:
         """
         from fantasy_baseball.data.kv_store import is_remote
 
+        if self.skip_yahoo:
+            # compute_streak_report fetches rosters and free agents from Yahoo.
+            self._progress("Skipping streak compute (stale-data mode)")
+            return
+
         if is_remote():
             self._progress("Skipping streak compute on Render (run refresh_remote.py locally)")
             return
@@ -1739,13 +1904,33 @@ class RefreshRun:
             log.exception("Streak computation failed; cache unchanged")
             self._progress("Streak computation failed (continuing)")
 
+    def _last_refresh_stamp(self) -> str:
+        """When the league data behind this refresh last came from Yahoo.
+
+        A stale run recomputes the derived caches off frozen league state, so
+        it carries the previous live run's stamp forward rather than claiming
+        the moment it happened to run. The dashboard's ">24h old" staleness
+        badge reads this field (``base.html``), so advancing it on a stale run
+        would keep the badge silent for exactly as long as the outage lasts --
+        the one stretch it exists to cover.
+
+        Falls back to now only when no prior stamp exists, which a stale run
+        cannot normally reach: it already fails loudly on a missing
+        ``cache:standings`` before getting here.
+        """
+        now = local_now().strftime("%Y-%m-%d %H:%M")
+        if not self.skip_yahoo:
+            return now
+        previous = read_cache_dict(CacheKey.META) or {}
+        return previous.get("last_refresh") or now
+
     # --- Step 16: Write meta ---
     def _write_meta(self):
         assert self.config is not None
 
         self._progress("Finalizing...")
         meta = {
-            "last_refresh": local_now().strftime("%Y-%m-%d %H:%M"),
+            "last_refresh": self._last_refresh_stamp(),
             "start_date": self.start_date,
             "end_date": self.end_date,
             "team_name": self.config.team_name,
@@ -1753,10 +1938,13 @@ class RefreshRun:
         write_cache(CacheKey.META, meta)
 
 
-def run_full_refresh() -> None:
+def run_full_refresh(*, skip_yahoo: bool | None = None) -> None:
     """Connect to Yahoo, fetch all data, run computations, and write cache.
 
     Thin wrapper around RefreshRun for backward compatibility with
     existing callers (scripts/run_lineup.py, season_routes.py).
+
+    ``skip_yahoo`` forces stale-data mode on or off; ``None`` (the default)
+    defers to ``FB_SKIP_YAHOO`` in the environment.
     """
-    RefreshRun().run()
+    RefreshRun(skip_yahoo=skip_yahoo).run()

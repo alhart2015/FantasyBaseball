@@ -32,5 +32,6 @@ def create_app() -> Flask:
     if os.environ.get("RENDER"):
         app.config["SESSION_COOKIE_SECURE"] = True
     app.jinja_env.filters["format_ip"] = format_ip
+
     register_routes(app)
     return app
