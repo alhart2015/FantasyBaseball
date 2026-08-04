@@ -123,7 +123,7 @@
         {%- if r.mine_ambiguous %} <span class="flag flag-extrap" title="You roster a player with this name, but the board has more than one -- roster blobs carry no MLBAM id (#284), so the name is the only join available and it cannot tell them apart. Check which one before acting on it.">(?)</span>
         {%- endif %}
         {%- if r.band_fell_back %} <span class="flag flag-band" title="The band on at least one year in this range fell back to the whole cohort's residual scatter -- the understated interval the reweighting exists to replace. It happens on the deepest extrapolations, the ones most in need of a wide band.">(!!)</span>
-        {%- elif r.extrapolated %} <span class="flag flag-extrap" title="Under 10% of the fitting weight sits near this player's own current season, so the line was evaluated outside its own support. Read the band, not the point estimate.">(!)</span>
+        {%- elif r.extrapolated %} <span class="flag flag-extrap" title="Under {{ '%.0f'|format(board.meta.min_local_support * 100) }}% of the fitting weight sits near this player's own current season, so the line was evaluated outside its own support. Read the band, not the point estimate.">(!)</span>
         {%- endif %}
       </td>
       <td>{{ r.age }}</td>
@@ -142,7 +142,7 @@
 
 <div class="card trajectory-footer">
   <p>
-    <strong>(!)</strong> under 10% of the fitting weight sits near this player's own
+    <strong>(!)</strong> under {{ '%.0f'|format(board.meta.min_local_support * 100) }}% of the fitting weight sits near this player's own
     current season. LAST season is kernel-weighted and THIS one is not, so a season that
     far outruns its prior is priced by extrapolating a line fitted on players unlike him.
     The <em>band</em> already accounts for it and is wide on these rows -- read it rather

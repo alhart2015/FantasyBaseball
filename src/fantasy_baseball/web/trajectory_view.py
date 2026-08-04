@@ -17,6 +17,7 @@ import math
 from dataclasses import dataclass, field
 from typing import Any
 
+from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.sweep import (
     RANK_MOVE,
     SCALES,
@@ -218,5 +219,11 @@ def build_board(
             # larger exclusion is the silent one: a player with no current-season line
             # was never a candidate, so he is absent with no row and no flag.
             "excluded": payload.get("excluded", {}),
+            # The RULE behind the (!) flag, not just the verdict. It is a tuned number
+            # with a measured table behind it and an open issue (#310) to change the
+            # estimator it guards, so the page must not restate it as prose: the CLI
+            # renders it from the constant and a hardcoded template string would say
+            # "under 10%" about rows now flagged at something else.
+            "min_local_support": MIN_LOCAL_SUPPORT,
         },
     )
