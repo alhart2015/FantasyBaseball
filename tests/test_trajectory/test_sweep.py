@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from fantasy_baseball.trajectory.board import BoardRow
@@ -12,17 +10,7 @@ from fantasy_baseball.trajectory.sweep import (
     to_payload,
     totals,
 )
-
-
-def _panel(n: int = 160, seasons: range = range(2010, 2019)) -> pd.DataFrame:
-    """A population several seasons deep, so a 3-horizon fit is not a pair of NaNs."""
-    rng = np.random.default_rng(0)
-    rows = []
-    for i in range(n):
-        level = float(rng.uniform(4.0, 22.0))
-        for offset, season in enumerate(seasons):
-            rows.append((i, season, 24 + offset, max(level + float(rng.normal(0, 2.0)), 0.0)))
-    return pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
+from tests._trajectory_panel import synthetic_panel
 
 
 def _rows() -> list[BoardRow]:
@@ -58,7 +46,7 @@ def test_a_shorter_range_is_a_prefix_of_the_longest_sweep() -> None:
     1, the comp mask does not move, and each horizon is fitted independently. If this ever
     fails, the board is quietly answering a different question at every timeframe.
     """
-    panel = _panel()
+    panel = synthetic_panel()
     rows = _rows()
     long = sweep_pool(rows, panel, "hitter", (1, 2, 3))
     short = sweep_pool(rows, panel, "hitter", (1,))
@@ -73,7 +61,7 @@ def test_a_shorter_range_is_a_prefix_of_the_longest_sweep() -> None:
 
 
 def test_a_range_total_is_the_prefix_sum_of_the_cached_years() -> None:
-    swept = sweep_pool(_rows(), _panel(), "hitter", (1, 2, 3))
+    swept = sweep_pool(_rows(), synthetic_panel(), "hitter", (1, 2, 3))
     one, three = totals(swept, (1,)), totals(swept, (1, 2, 3))
     by_name = {r["name"]: r for r in three}
     for row in one:
@@ -91,7 +79,7 @@ def test_raw_sgp_is_a_separate_fit_not_var_plus_the_floor() -> None:
     reconstructing his SGP as `VAR + floor` would report it as exactly the floor -- a
     number he has nothing to do with.
     """
-    swept = sweep_pool(_rows(), _panel(), "hitter", (1,))
+    swept = sweep_pool(_rows(), synthetic_panel(), "hitter", (1,))
     below = next(p for p in swept if p.name == "Below Replacement")
     assert below.var[0].mean == 0.0, "expected the VAR fit to clamp at zero"
     # The wrong reconstruction lands exactly on the floor, which is the tell.
@@ -101,7 +89,7 @@ def test_raw_sgp_is_a_separate_fit_not_var_plus_the_floor() -> None:
 
 
 def test_the_var_only_sweep_skips_the_second_fit() -> None:
-    swept = sweep_pool(_rows(), _panel(), "hitter", (1,), scales=("var",))
+    swept = sweep_pool(_rows(), synthetic_panel(), "hitter", (1,), scales=("var",))
     assert all(p.var for p in swept)
     assert all(p.sgp == () for p in swept)
     # A caller then asking for the scale that was never fitted gets nothing, not a
@@ -112,11 +100,11 @@ def test_the_var_only_sweep_skips_the_second_fit() -> None:
 @pytest.mark.parametrize("scales", [(), ("sgp",), ("var", "bogus")])
 def test_rejects_a_scale_set_it_cannot_serve(scales: tuple[str, ...]) -> None:
     with pytest.raises(ValueError, match="scales must be"):
-        sweep_pool(_rows(), _panel(), "hitter", (1,), scales=scales)
+        sweep_pool(_rows(), synthetic_panel(), "hitter", (1,), scales=scales)
 
 
 def test_a_payload_round_trip_preserves_every_ranked_number() -> None:
-    swept = sweep_pool(_rows(), _panel(), "hitter", (1, 2, 3))
+    swept = sweep_pool(_rows(), synthetic_panel(), "hitter", (1, 2, 3))
     direct = totals(swept, (1, 2, 3))
     add_ranks(direct)
     restored = totals(from_payload(to_payload(swept, base_season=2026)), (1, 2, 3))
@@ -135,7 +123,7 @@ def test_a_payload_round_trip_preserves_every_ranked_number() -> None:
 def test_a_payload_from_another_schema_is_refused_not_misread() -> None:
     """A compact point is a positional array, so a shape change does not fail loudly on
     its own -- it indexes to the wrong field and produces confident nonsense."""
-    payload = to_payload(sweep_pool(_rows(), _panel(), "hitter", (1,)), base_season=2026)
+    payload = to_payload(sweep_pool(_rows(), synthetic_panel(), "hitter", (1,)), base_season=2026)
     payload["version"] = 99
     with pytest.raises(ValueError, match="version"):
         from_payload(payload)
@@ -147,8 +135,8 @@ def test_a_two_way_player_keeps_one_line_per_pool() -> None:
         BoardRow(660271, "Shohei Ohtani", "hitter", 31, 16.6, 22.6, "UTIL", 4.0),
         BoardRow(660271, "Shohei Ohtani", "pitcher", 31, 13.2, 12.0, "SP", 3.0),
     ]
-    swept = sweep_pool(rows[:1], _panel(), "hitter", (1,)) + sweep_pool(
-        rows[1:], _panel(), "pitcher", (1,)
+    swept = sweep_pool(rows[:1], synthetic_panel(), "hitter", (1,)) + sweep_pool(
+        rows[1:], synthetic_panel(), "pitcher", (1,)
     )
     scored = totals(swept, (1,))
     assert len({r["id"] for r in scored}) == 1

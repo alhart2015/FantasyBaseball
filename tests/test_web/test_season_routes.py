@@ -2173,19 +2173,12 @@ def test_trajectory_page_reports_a_payload_it_cannot_read(client):
 
 
 def test_trajectory_page_renders_a_board(client):
-    import numpy as np
-    import pandas as pd
 
     from fantasy_baseball.trajectory.board import BoardRow
     from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
+    from tests._trajectory_panel import synthetic_panel
 
-    rng = np.random.default_rng(0)
-    rows = []
-    for i in range(160):
-        level = float(rng.uniform(4.0, 22.0))
-        for offset, season in enumerate(range(2010, 2019)):
-            rows.append((i, season, 24 + offset, max(level + float(rng.normal(0, 2.0)), 0.0)))
-    panel = pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
+    panel = synthetic_panel()
     swept = sweep_pool(
         [BoardRow(1, "Testy McTestface", "hitter", 27, 20.0, 19.0, "OF", 4.0)],
         panel,

@@ -2,31 +2,20 @@ from __future__ import annotations
 
 import math
 
-import numpy as np
-import pandas as pd
 import pytest
 
 from fantasy_baseball.trajectory.board import BoardRow
 from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
 from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, RANK_MOVE, build_board
+from tests._trajectory_panel import synthetic_panel
 
 BASE = 2026
-
-
-def _panel() -> pd.DataFrame:
-    rng = np.random.default_rng(0)
-    rows = []
-    for i in range(160):
-        level = float(rng.uniform(4.0, 22.0))
-        for offset, season in enumerate(range(2010, 2019)):
-            rows.append((i, season, 24 + offset, max(level + float(rng.normal(0, 2.0)), 0.0)))
-    return pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
 
 
 @pytest.fixture(scope="module")
 def payload() -> dict:
     """A four-player board -- two hitters, two pitchers -- swept to three years."""
-    panel = _panel()
+    panel = synthetic_panel()
     hitters = [
         BoardRow(1, "Big Bat", "hitter", 27, 20.0, 19.0, "OF", 4.0),
         BoardRow(2, "Small Bat", "hitter", 27, 8.0, 7.0, "OF", 4.0),
