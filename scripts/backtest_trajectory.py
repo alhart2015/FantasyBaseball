@@ -40,9 +40,50 @@ from fantasy_baseball.trajectory.comps import comp_trajectory
 from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
 from fantasy_baseball.trajectory.shape import build_history, shape_trajectory
+from fantasy_baseball.trajectory.value import STARTER_SHARE
+from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+
+#: Columns the role bucket needs, and the rule for a season split across two rows.
+#: `collapse_split_seasons` keeps only `sgp` and `age`, so a traded pitcher's counting
+#: columns have to be re-summed here or a mid-season trade reads as two half-roles --
+#: the same reason `trajectory.board._SPLIT_RULES` re-sums `starts`/`games`.
+_ROLE_SUMS = ("starts", "games", "sv")
 
 
-def score(panel: pd.DataFrame, queries: pd.DataFrame, kind: str, horizon: int) -> pd.DataFrame:
+def roles(panel: pd.DataFrame) -> pd.Series:
+    """``(mlbam_id, season) -> "SP" / "closer" / "RP"``.
+
+    #313 asks for the pitcher result split by role, because a closer's SGP is
+    saves-dominated and saves are a job rather than a skill: a pooled pitcher number can
+    average two opposite effects into a null.
+
+    The cuts are BORROWED, not invented. `STARTER_SHARE` is the same `starts / games`
+    split `trajectory.value` routes a pitcher's replacement floor on, and
+    `CLOSER_SV_THRESHOLD` is the same save count the draft board buckets closers at. A
+    third rule defined here would be one more thing to disagree with them.
+    """
+    missing = [c for c in _ROLE_SUMS if c not in panel.columns]
+    if missing:
+        raise KeyError(f"pitcher panel is missing role columns {missing}")
+    agg = panel.groupby(["mlbam_id", "season"])[list(_ROLE_SUMS)].sum()
+    games = agg["games"].to_numpy(dtype=float)
+    starts = agg["starts"].to_numpy(dtype=float)
+    saves = agg["sv"].to_numpy(dtype=float)
+    # games == 0 cannot be a starter; guard the divide rather than letting it warn.
+    share = np.divide(starts, games, out=np.zeros_like(starts), where=games > 0)
+    bucket = np.where(
+        share >= STARTER_SHARE, "SP", np.where(saves >= CLOSER_SV_THRESHOLD, "closer", "RP")
+    )
+    return pd.Series(bucket, index=agg.index, name="role")
+
+
+def score(
+    panel: pd.DataFrame,
+    queries: pd.DataFrame,
+    kind: str,
+    horizon: int,
+    role_by_season: pd.Series | None = None,
+) -> pd.DataFrame:
     """Predict `horizon` years ahead for each query, with that player held out."""
     index = panel.set_index(["mlbam_id", "season"])["sgp"]
     rows = []
@@ -69,6 +110,12 @@ def score(panel: pd.DataFrame, queries: pd.DataFrame, kind: str, horizon: int) -
                 "actual": actual,
                 "current": level.path[0].mean,
                 "shape": curve.path[0].mean,
+                # The role of the QUERY season -- the one both anchors describe.
+                "role": (
+                    role_by_season.get((q.mlbam_id, q.season), "")
+                    if role_by_season is not None
+                    else ""
+                ),
             }
         )
     return pd.DataFrame(rows)
@@ -76,6 +123,10 @@ def score(panel: pd.DataFrame, queries: pd.DataFrame, kind: str, horizon: int) -
 
 def report(df: pd.DataFrame, label: str) -> dict | None:
     if len(df) < 10:
+        # Say so rather than printing nothing. A slice that silently vanishes reads as
+        # "not applicable" when it means "too thin to measure" -- which for the role
+        # splits in #313 is itself the finding.
+        print(f"  {label:30s} n={len(df):4d}   (under 10, not reported)")
         return None
     out = {}
     for mode in ("current", "shape"):
@@ -144,7 +195,8 @@ def main() -> int:
         f"{args.pool.upper()}S, +{args.horizon}: {header}, ages "
         f"{args.min_age}-{args.max_age}, {len(queries)} queries\n"
     )
-    df = score(panel, queries, args.pool, args.horizon)
+    role_by_season = roles(panel) if args.pool == "pitcher" else None
+    df = score(panel, queries, args.pool, args.horizon, role_by_season)
     if args.out:
         df.to_csv(args.out, index=False)
         print(f"wrote {args.out}")
@@ -157,6 +209,19 @@ def main() -> int:
     report(elite[elite["now"] < elite["prior"] * 0.7], "elite big drop (<70% of prior)")
     report(elite[elite["now"] >= elite["prior"] * 0.8], "elite holding steady")
     report(df[df["now"] > df["prior"] * 1.25], "breakout (up >25%)")
+
+    if args.pool == "pitcher":
+        # #313: a pooled pitcher number can average a starter effect and a closer effect
+        # into a null, so the roles are reported separately rather than trusted to agree.
+        print("\n  -- by role of the query season --")
+        for role in ("SP", "RP", "closer"):
+            report(df[df["role"] == role], f"{role}")
+            report(df[(df["role"] == role) & (df["prior"] >= args.elite_floor)], f"{role} elite")
+        # 15% of pitcher-seasons score below replacement against 7.7% for hitters, and
+        # the linear form was never checked against a negative anchor.
+        print("\n  -- negative anchors --")
+        report(df[(df["now"] < 0) | (df["prior"] < 0)], "either anchor negative")
+        report(df[df["now"] < 0], "current season negative")
     return 0
 
 
