@@ -121,8 +121,13 @@ def build_board(
                 # The raw scale is a SEPARATE fit, not `total + floor` -- for a
                 # below-replacement player VAR is 0 and that sum would report his SGP as
                 # exactly the floor. Absent when the sweep only ran the VAR scale.
+                #
+                # That same reasoning is why the band travels with it: a VAR band cannot
+                # be reused for an SGP total, and the two are rendered side by side.
                 "sgp_total": raw["total"] if raw else None,
                 "sgp_by_year": raw["by_year"] if raw else [],
+                "sgp_p10": raw["p10"] if raw else None,
+                "sgp_p90": raw["p90"] if raw else None,
                 # The MOVE between the two ranks is the keeper signal in one number: a
                 # player far better over the range than next year is who you hold rather
                 # than who you start.

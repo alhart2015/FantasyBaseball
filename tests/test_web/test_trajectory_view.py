@@ -140,6 +140,31 @@ def test_hiding_unsupported_rows_shrinks_the_board_it_reports(payload: dict) -> 
     assert hidden.scored <= full.scored
 
 
+def test_each_scale_carries_its_own_band(payload: dict) -> None:
+    """VAR and SGP are separate fits on different scales, so they need separate bands.
+
+    The page prints a total and an interval side by side. Pairing the SGP total
+    with the VAR band prints an interval that does not contain its own headline
+    number -- measured at 1165 of 1169 rows on the live board, always in the
+    optimistic direction, under a header that calls it "p10..p90 of the TOTAL".
+    """
+    board = build_board(payload, end=BASE + 3)
+    assert board.rows
+
+    for r in board.rows:
+        assert r["sgp_total"] is not None, "fixture must sweep both scales"
+        assert r["sgp_p10"] <= r["sgp_total"] <= r["sgp_p90"], (
+            f"{r['name']}: SGP total {r['sgp_total']:.1f} outside its own band "
+            f"{r['sgp_p10']:.1f}..{r['sgp_p90']:.1f}"
+        )
+
+    # The two bands are distinct fits, not one band copied onto both columns:
+    # VAR nets out the replacement floor, so a floored player's bands must differ.
+    assert any((r["p10"], r["p90"]) != (r["sgp_p10"], r["sgp_p90"]) for r in board.rows), (
+        "SGP band is identical to the VAR band on every row -- it is being copied"
+    )
+
+
 def test_a_cache_written_by_another_schema_raises_rather_than_rendering_empty(
     payload: dict,
 ) -> None:

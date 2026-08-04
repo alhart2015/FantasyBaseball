@@ -88,10 +88,11 @@
       <th class="{% if board.sort == 'var' %}sorted{% endif %}">
         <a href="{{ board_url(sort='var') }}">{{ board.span }} VAR</a>
       </th>
-      <th title="p10..p90 of the TOTAL, summed across years -- assumes the years move together, so it is if anything too wide">Band</th>
+      <th title="p10..p90 of the {{ board.span }} VAR total, summed across years -- assumes the years move together, so it is if anything too wide">VAR band</th>
       <th class="{% if board.sort == 'sgp' %}sorted{% endif %}">
         <a href="{{ board_url(sort='sgp') }}">{{ board.span }} SGP</a>
       </th>
+      <th title="p10..p90 of the {{ board.span }} SGP total. A separate fit from VAR, not the VAR band shifted by the replacement floor, so the two intervals differ by more than a constant.">SGP band</th>
       {% for y in board.year_columns %}
       <th title="{{ 'VAR' if board.sort == 'var' else 'SGP' }} in {{ y }} alone">'{{ (y|string)[2:] }}</th>
       {% endfor %}
@@ -119,6 +120,7 @@
       <td class="total-col">{{ '%.1f'|format(r.total) }}</td>
       <td class="band-col">{{ '%.1f'|format(r.p10) }}..{{ '%.1f'|format(r.p90) }}</td>
       <td>{% if r.sgp_total is not none %}{{ '%.1f'|format(r.sgp_total) }}{% else %}--{% endif %}</td>
+      <td class="band-col">{% if r.sgp_p10 is not none %}{{ '%.1f'|format(r.sgp_p10) }}..{{ '%.1f'|format(r.sgp_p90) }}{% else %}--{% endif %}</td>
       {% set years = r.by_year if board.sort == 'var' else r.sgp_by_year %}
       {% for cell in years %}
       <td class="year-col">{{ '%.1f'|format(cell.mean) }}</td>
