@@ -159,13 +159,13 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
         complete = live[~live["partial_season"]].reset_index(drop=True)
         produced = sweep_pool(rows, complete, kind, horizons)
         # Guard on what the sweep PRODUCED, not on what it was handed. sweep_pool
-        # independently drops every player whose VAR path has no observable point, so
+        # independently drops every player whose fitted path has no observable point, so
         # a panel whose complete seasons do not span horizon 1 yields hundreds of
         # candidates and zero scored rows -- passing an input-side check and pushing
         # the pool-less board this guard exists to refuse.
         _require_scored_pool(kind, produced, season, panel_path(kind, panel_dir).name)
         swept += produced
-        print(f"    swept both scales in {time.perf_counter() - started:.1f}s", flush=True)
+        print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
 
     payload = to_payload(
         swept,

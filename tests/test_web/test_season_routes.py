@@ -2206,21 +2206,23 @@ def test_trajectory_page_renders_a_board(client):
     assert "scale=var" in html and "pool=hitter" in html, "controls carry the full state"
 
     # Prose must not assert one scale's semantics while the other is selected. The Now
-    # column is floor-subtracted and unclamped on VAR, and raw on SGP -- a footer that
-    # promises negative rows under SGP sends the reader looking for rows that cannot
-    # exist there.
+    # column is floor-subtracted on VAR and raw on SGP, so where negatives are EXPECTED
+    # differs: on VAR they show up in every column, while on SGP the board's own min-SGP
+    # cut keeps Now positive and only the band's p10 goes under.
     with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload):
         var_html = client.get("/trajectory?end=2028&scale=var").data.decode()
         sgp_html = client.get("/trajectory?end=2028&scale=sgp").data.decode()
-    assert "reads negative there" in var_html
-    assert "reads negative there" not in sgp_html, "VAR-only claim leaked into the SGP view"
-
-    # And the SGP text must not claim the INVERSE either. Every clamp in shape_trajectory
-    # is gated on `if replacement:`, which is falsy for the 0.0 the raw pass is fitted
-    # with -- so SGP is the UNCLAMPED scale: on the live board most rows have a negative
-    # p10 there, while VAR has none and instead has ~900 negative Now values. A footer
-    # promising "nothing reads negative" on SGP contradicts the Band column beside it.
-    assert "Nothing is clamped on this scale" in sgp_html
-    assert "nothing reads negative" not in sgp_html, (
-        "SGP is the scale where negatives DO occur -- this claim is inverted"
+    assert "So negatives are expected on this scale" in var_html
+    assert "So negatives are expected on this scale" not in sgp_html, (
+        "VAR-only claim leaked into the SGP view"
     )
+    assert "Negatives are rarer on this scale but not absent" in sgp_html
+
+    # And neither view may claim VAR is clamped. That claim was true until #331 and is
+    # the thing the reader most needs corrected: a below-replacement player now reads a
+    # negative rather than rendering identically to a replacement-level one.
+    for scale, html_for_scale in (("var", var_html), ("sgp", sgp_html)):
+        assert "clamped at zero" not in html_for_scale, (
+            f"{scale}: VAR has not been clamped since #331"
+        )
+    assert "reads negative rather than 0" in var_html

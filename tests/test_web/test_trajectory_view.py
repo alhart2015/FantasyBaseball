@@ -67,11 +67,20 @@ def test_a_single_year_board_carries_no_per_year_columns(payload: dict) -> None:
 
 
 def test_a_shorter_end_year_is_a_prefix_of_the_longer_one(payload: dict) -> None:
+    """The one-year board must be the first term of the three-year one.
+
+    It used to also assert the three-year total was the LARGER of the two, which held
+    only while VAR was clamped at zero and every added year could therefore only add. A
+    below-replacement year is now a negative one (#331), so a longer range legitimately
+    scores lower -- that is the keeper signal, not a violation of the prefix rule.
+    """
     one = {r["name"]: r for r in build_board(payload, end=BASE + 1).rows}
     three = {r["name"]: r for r in build_board(payload, end=BASE + 3).rows}
     for name, row in one.items():
         assert row["total"] == pytest.approx(three[name]["by_year"][0]["mean"], abs=1e-5)
-        assert three[name]["total"] >= row["total"]
+        assert three[name]["total"] == pytest.approx(
+            sum(c["mean"] for c in three[name]["by_year"]), abs=1e-5
+        )
 
 
 def test_ranks_are_league_wide_even_when_the_pool_is_filtered(payload: dict) -> None:
@@ -197,7 +206,7 @@ def test_the_band_belongs_to_the_scale_on_screen(payload: dict) -> None:
 
     var_bands = {r["name"]: (r["p10"], r["p90"]) for r in build_board(payload, scale="var").rows}
     sgp_bands = {r["name"]: (r["p10"], r["p90"]) for r in build_board(payload, scale="sgp").rows}
-    assert var_bands != sgp_bands, "the two scales are separate fits with separate bands"
+    assert var_bands != sgp_bands, "each scale's band is netted against its own floor"
 
 
 def _hand_payload(players: list[tuple[str, list[float]]]) -> dict:
@@ -205,9 +214,13 @@ def _hand_payload(players: list[tuple[str, list[float]]]) -> dict:
 
     `_pack` is [horizon, mean, p10, p90, n_eff, band_fell_back]; the band and support
     are irrelevant here and set wide/high so nothing else flags.
+
+    The floor is ZERO so that `means` are the numbers the default (VAR) board reads. Only
+    the raw fit is stored now and VAR is derived as `sgp - floor` (#331), so a non-zero
+    floor here would silently shift every value these tests pin.
     """
     return {
-        "version": 1,
+        "version": 2,
         "base_season": BASE,
         "max_horizon": 3,
         # Unique per call: real payloads always carry one, and sharing it would let two
@@ -220,12 +233,11 @@ def _hand_payload(players: list[tuple[str, list[float]]]) -> dict:
                 "pool": "hitter",
                 "age": 27,
                 "slot": "OF",
-                "floor": 4.0,
+                "floor": 0.0,
                 "now": 10.0,
                 "prior": 10.0,
                 "support": 0.9,
                 "extrapolated": 0,
-                "var": [[h, m, m - 5, m + 5, 50.0, 0] for h, m in enumerate(means, start=1)],
                 "sgp": [[h, m, m - 5, m + 5, 50.0, 0] for h, m in enumerate(means, start=1)],
             }
             for i, (name, means) in enumerate(players, start=1)
@@ -233,44 +245,37 @@ def _hand_payload(players: list[tuple[str, list[float]]]) -> dict:
     }
 
 
-def test_no_arrow_when_both_rankings_rest_on_zeros() -> None:
-    """VAR clamps at zero, so every below-replacement player totals 0.0 and nexts 0.0.
+def test_the_toggle_cannot_reorder_players_who_share_a_slot(payload: dict) -> None:
+    """The bug #331 was opened on, at the surface it was seen on.
 
-    `add_ranks` still gives them distinct consecutive ranks, broken by name -- and the
-    zero-set for `next` (year 1 only) is strictly larger than the zero-set for `total`
-    (all years), so the two blocks start at different offsets and the difference is
-    systematically non-zero on identical inputs. Simulated on a live-shaped 1,169-row
-    pool, 432 of 469 all-zero rows cleared the arrow threshold, worst move -97 -- drawn
-    beside a row reading 0.0 in every column.
+    Flipping VAR/SGP visibly reordered same-slot players -- CJ Abrams above Elly De La
+    Cruz on one scale and below him on the other, both shortstops, both netting the same
+    floor. It happened because VAR was a SECOND FIT on a response clamped at zero, which
+    flattened every sub-floor comp and so changed the fitted slope; the shift was per
+    query rather than constant, and any pair closer together than the difference could
+    swap. Pitchers reshuffled worst, their floors being high against a narrow spread.
+
+    VAR is now the raw fit minus one number per slot, so this holds by construction. The
+    test earns its place anyway: it is the reader-visible statement of the invariant, and
+    it fails the moment anything nonlinear -- a clamp, a per-player floor, a second fit --
+    comes back.
     """
-    board = build_board(
-        _hand_payload(
-            [
-                ("Real One", [9.0, 9.0, 9.0]),
-                # total > 0 but next == 0: sits in the `next` zero-block, not `total`'s.
-                # Named to sort AFTER the all-zero rows, so the two zero-blocks
-                # interleave and the ranks genuinely diverge -- which is what happens on
-                # the live board, where the tie-break is alphabetical over 1,169 rows.
-                *[(f"Zeta Bloom {i}", [0.0, 4.0, 4.0]) for i in range(6)],
-                # zero on both: rank differs only by the offset above.
-                *[(f"Alpha Sub {i}", [0.0, 0.0, 0.0]) for i in range(6)],
-            ]
-        ),
-        top="all",
-        end=BASE + 3,
-    )
-    rows = {r["name"]: r for r in board.rows}
+    by_var = build_board(payload, end=BASE + 3, scale="var", top="all").rows
+    by_sgp = build_board(payload, end=BASE + 3, scale="sgp", top="all").rows
 
-    subs = [r for n, r in rows.items() if n.startswith("Alpha Sub")]
-    assert subs, "fixture must contain all-zero rows"
-    assert all(r["total"] == 0.0 and r["next"] == 0.0 for r in subs)
-    assert any(abs(r["rank_next"] - r["rank_total"]) >= RANK_MOVE for r in subs), (
-        "fixture must actually produce a raw rank gap, or this proves nothing"
-    )
-    assert all(r["rank_move"] == 0 for r in subs), (
-        "a row that is 0.0 in every column has no hold-vs-start signal to draw"
-    )
-    assert rows["Real One"]["rank_move"] == 0
+    def order_within_slots(rows: list[dict]) -> dict[str, list[str]]:
+        out: dict[str, list[str]] = {}
+        for r in sorted(rows, key=lambda r: r["rank_total"]):
+            out.setdefault(r["slot"], []).append(r["name"])
+        return out
+
+    var_order, sgp_order = order_within_slots(by_var), order_within_slots(by_sgp)
+    shared = [slot for slot, names in var_order.items() if len(names) > 1]
+    assert shared, "fixture must put more than one player in some slot, or this is vacuous"
+    for slot in shared:
+        assert var_order[slot] == sgp_order[slot], (
+            f"{slot} players share a floor, so subtracting it cannot reorder them"
+        )
 
 
 def test_the_arrow_threshold_is_the_boundary_it_claims() -> None:
@@ -336,8 +341,8 @@ def test_no_arrow_when_there_is_no_next_year_estimate() -> None:
             *[(f"Filler {i}", [9.0, 1.0, 1.0]) for i in range(8)],
         ]
     )
-    gapped_payload["players"][0]["var"] = [
-        p for p in gapped_payload["players"][0]["var"] if p[0] != 1
+    gapped_payload["players"][0]["sgp"] = [
+        p for p in gapped_payload["players"][0]["sgp"] if p[0] != 1
     ]
     board2 = build_board(gapped_payload, top="all", end=BASE + 3)
     row = next(r for r in board2.rows if r["name"] == "Aaa Gapped")
@@ -362,7 +367,7 @@ def test_per_year_cells_are_placed_by_horizon_not_by_position() -> None:
     nothing and removes the assumption.
     """
     gapped = _hand_payload([("Gapped", [0.0, 7.0, 5.0])])
-    gapped["players"][0]["var"] = [p for p in gapped["players"][0]["var"] if p[0] != 1]
+    gapped["players"][0]["sgp"] = [p for p in gapped["players"][0]["sgp"] if p[0] != 1]
 
     board = build_board(gapped, top="all", end=BASE + 3)
     row = board.rows[0]

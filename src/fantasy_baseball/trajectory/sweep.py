@@ -13,18 +13,25 @@ measured across 6,600 values on the live panel, max absolute difference 0.0, and
 in `test_a_shorter_range_is_a_prefix_of_the_longest_sweep`. So a shorter end year is a
 prefix sum over the cached points, not a refit.
 
-WHY TWO FITS PER PLAYER. `shape_trajectory(replacement=floor)` fits on
-`y = max(forward - replacement, 0)`: the floor is baked into the response and clamped at
-zero, so raw SGP is NOT `VAR + floor`. For anyone below replacement that formula reports
-his SGP as exactly the floor. Honest columns for both scales mean fitting each player
-twice, which is why this is an offline job and not a request-time one.
+WHY ONE FIT PER PLAYER. There used to be two, one per scale, because
+`shape_trajectory(replacement=floor)` clamped its response at zero and a clamped fit is
+not a shifted one. Removing that clamp (#331) made `y_var = y_sgp - floor` affine, so the
+VAR fit moves only its intercept and every VAR number is the raw number minus the slot's
+floor -- exactly, to floating-point noise, `mean` / `p10` / `p90` alike. The second fit
+was therefore computing a shift, at the price of doubling the sweep. It is gone, and
+`SweptPlayer.points("var")` derives the scale instead.
+
+That is also what makes the VAR/SGP toggle trustworthy. Two players in the same slot
+share a floor, so subtracting it cannot reorder them -- the property #331 was opened
+against, now true by construction rather than by assertion. The toggle still reorders
+ACROSS slots, which is the whole point of it: a catcher's floor is not a UTIL's.
 """
 
 from __future__ import annotations
 
 import math
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 import numpy as np
@@ -45,8 +52,9 @@ SWEEP_DRAWS = 250
 #: flagged as hold-rather-than-start -- the decision this board exists to make.
 RANK_MOVE = 5
 
-#: The two scales a board row can be read on. "var" nets out the position-aware waiver
-#: floor and clamps at zero; "sgp" is the raw projection.
+#: The two scales a board row can be read on. "sgp" is the raw projection; "var" is that
+#: minus the slot's position-aware waiver floor, and is NOT clamped -- a player projected
+#: under his floor reads negative, which is the information a keeper call needs (#331).
 SCALES = ("var", "sgp")
 
 
@@ -72,7 +80,7 @@ class YearPoint:
 
 @dataclass(frozen=True)
 class SweptPlayer:
-    """One player, fitted once per scale, at every horizon the sweep reached."""
+    """One player, fitted ONCE on raw SGP, at every horizon the sweep reached."""
 
     #: The only unique key on a board row. Names are NOT unique even within a pool -- the
     #: live board carries two hitters called Max Muncy -- so anything joining, charting or
@@ -92,15 +100,29 @@ class SweptPlayer:
     #: comp mask, which `horizons[0] == 1` pins for every range.
     support: float
     extrapolated: bool
-    var: tuple[YearPoint, ...]
-    #: Empty when the sweep was asked for the VAR scale alone -- the CLI's case, where a
-    #: second fit would double a 17s run to serve a column it does not print.
+    #: The RAW SGP fit. The only one stored, and the only one run: VAR is this minus
+    #: `floor`, exactly, so a second fit would compute a subtraction (see the module
+    #: docstring and #331).
     sgp: tuple[YearPoint, ...]
 
     def points(self, scale: str) -> tuple[YearPoint, ...]:
+        """The fitted path on `scale`. "var" is derived, never stored.
+
+        Derived rather than cached so the two can never drift: a stored VAR path is a
+        second copy of a fact the raw path and `floor` already determine, and the two
+        copies would be free to disagree after any later edit to either.
+        """
         if scale not in SCALES:
             raise ValueError(f"scale must be one of {SCALES}, got {scale!r}")
-        return self.var if scale == "var" else self.sgp
+        if scale == "sgp":
+            return self.sgp
+        # Only the LEVELS move. `n_effective` and `band_fell_back` describe the fit, which
+        # is the same fit; the widths (`p90 - p10`) are unchanged because both edges shift
+        # by the same floor.
+        return tuple(
+            replace(p, mean=p.mean - self.floor, p10=p.p10 - self.floor, p90=p.p90 - self.floor)
+            for p in self.sgp
+        )
 
 
 def _points(traj: Any) -> tuple[YearPoint, ...]:
@@ -126,46 +148,34 @@ def sweep_pool(
     kind: str,
     horizons: tuple[int, ...],
     *,
-    scales: tuple[str, ...] = SCALES,
     draws: int = SWEEP_DRAWS,
 ) -> list[SweptPlayer]:
-    """Fit every row against one prepared state, once per requested scale.
+    """Fit every row against one prepared state, once, on the raw SGP scale.
 
     `panel` must be the COMPLETE seasons only: an in-progress year averaged in as though
     it were a full one is a systematically low comp. One prepared state per pool; a
     hitter-fitted state cannot price a pitcher and will refuse to try.
 
-    `scales` defaults to both because the cached web board needs both, but each one is a
-    separate fit and the cost is linear in them -- ask for `("var",)` when that is all
-    you render.
+    Both scales come out of this one fit -- see `SweptPlayer.points`. There is no `scales`
+    argument any more because there is nothing left to skip: the CLI once passed
+    `("var",)` to halve a 17s run, and the run is now that half either way.
     """
-    unknown = set(scales) - set(SCALES)
-    if unknown or "var" not in scales:
-        raise ValueError(
-            f"scales must be a non-empty subset of {SCALES} including 'var', got {scales!r}"
-        )
     prepared = prepare(panel, kind=kind, horizons=horizons)
     swept: list[SweptPlayer] = []
     for row in rows:
-        fits = {}
-        for scale in scales:
-            traj, _ = shape_trajectory(
-                prepared,
-                kind=kind,
-                age=row.age,
-                sgp=row.sgp,
-                prior_sgp=row.prior_sgp,
-                horizons=horizons,
-                # The raw pass takes no floor AND no slot: `Trajectory.scale` reads the
-                # slot, so carrying it would label an unfloored path "var".
-                replacement=row.floor if scale == "var" else 0.0,
-                slot=row.slot if scale == "var" else None,
-                bootstrap_draws=draws,
-            )
-            fits[scale] = traj
-        if not fits["var"].observable:
+        # NO floor and NO slot. The floor is applied by `points("var")`, and `slot` would
+        # label this path "var" on `Trajectory.scale` while it carries raw SGP.
+        traj, _ = shape_trajectory(
+            prepared,
+            kind=kind,
+            age=row.age,
+            sgp=row.sgp,
+            prior_sgp=row.prior_sgp,
+            horizons=horizons,
+            bootstrap_draws=draws,
+        )
+        if not traj.observable:
             continue
-        raw = fits.get("sgp")
         swept.append(
             SweptPlayer(
                 mlbam_id=row.mlbam_id,
@@ -176,10 +186,9 @@ def sweep_pool(
                 floor=row.floor,
                 now=row.sgp,
                 prior=row.prior_sgp,
-                support=fits["var"].local_support,
-                extrapolated=fits["var"].extrapolated,
-                var=_points(fits["var"]),
-                sgp=_points(raw) if raw is not None else (),
+                support=traj.local_support,
+                extrapolated=traj.extrapolated,
+                sgp=_points(traj),
             )
         )
     return swept
@@ -210,13 +219,11 @@ def totals(
                 "age": player.age,
                 "slot": player.slot,
                 # THIS season on the scale being read, so the leftmost number and the
-                # projections it sits beside mean the same thing. VAR is SGP minus the
-                # slot's replacement level -- that is the definition -- and it is NOT
-                # clamped at zero here: a player already below his waiver floor is
-                # exactly what a keeper reader needs to see, and clamping would render
-                # him identical to a replacement-level one. (The PROJECTED var does
-                # clamp, inside `shape_trajectory`, so a row can read a negative Now
-                # against a 0.0 forecast -- that asymmetry is real and intended.)
+                # projections it sits beside mean the same thing: on VAR, both are SGP
+                # minus the slot's replacement level and neither is clamped. That was
+                # once an ASYMMETRY -- an unclamped Now beside a floored-at-zero forecast,
+                # so a row could read negative now against 0.0 next year -- and #331
+                # removed the projection's clamp rather than adding one here.
                 "now": player.now if scale == "sgp" else player.now - player.floor,
                 "floor": player.floor,
                 "prior": player.prior,
@@ -243,7 +250,11 @@ def totals(
 #: Payload schema version. Bumped when the shape changes incompatibly; a reader that
 #: finds a version it does not know refuses the blob rather than mis-indexing the compact
 #: point arrays into confidently wrong numbers.
-PAYLOAD_VERSION = 1
+#:
+#: 2 dropped the per-player "var" array. A v1 blob carries a VAR path fitted under the
+#: old clamp, which is NOT this build's `sgp - floor`, so reading one would render #331's
+#: reordering under a build that claims to have fixed it. Refusing it is the point.
+PAYLOAD_VERSION = 2
 
 #: Decimals kept on a cached point. Not chosen for display -- the board prints one -- but
 #: for the RANKING, which is a sum of these and is what the page sorts on. The pool is
@@ -303,7 +314,8 @@ def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
                 "prior": round(p.prior, _PRECISION),
                 "support": round(p.support, 4),
                 "extrapolated": int(p.extrapolated),
-                "var": [_pack(y) for y in p.var],
+                # RAW only. VAR is this minus `floor`, so storing it would be a second
+                # copy of a derived fact -- and one a stale writer could contradict.
                 "sgp": [_pack(y) for y in p.sgp],
             }
             for p in players
@@ -349,7 +361,6 @@ def from_payload(payload: dict) -> list[SweptPlayer]:
                 prior=float(row["prior"]),
                 support=float(row["support"]),
                 extrapolated=bool(row["extrapolated"]),
-                var=tuple(_unpack(y, age) for y in row["var"]),
                 sgp=tuple(_unpack(y, age) for y in row["sgp"]),
             )
         )
@@ -364,23 +375,22 @@ def rank_move(row: dict) -> int:
     board exists to make. Both halves live here so a caller cannot take one without the
     other.
 
-    Withheld when the two rankings rest on values that cannot be compared:
+    Withheld when there is **no next-year estimate**. `next` is NaN when horizon 1 is
+    unobservable, and `add_ranks` sorts NaN last so one unrankable row cannot decide where
+    the others land. That pairs a last-place `rank_next` with a real `rank_total` and
+    renders as the strongest HOLD signal on the board, produced by an absence rather than
+    a strength.
 
-    * **Both totals zero.** VAR clamps at zero, so every below-replacement player reads
-      0.0 in every column. They still get distinct consecutive ranks broken by name, and
-      the zero-set for `next` (year 1 alone) is strictly larger than the one for `total`
-      (all years), so the two blocks begin at different offsets and the difference is
-      systematically non-zero on identical inputs. Measured on a live-shaped 1,169-row
-      pool: 432 of 469 such rows cleared the threshold, worst arrow -97.
-
-    * **No next-year estimate.** `next` is NaN when horizon 1 is unobservable, and
-      `add_ranks` sorts NaN last so one unrankable row cannot decide where the others
-      land. That pairs a last-place `rank_next` with a real `rank_total` and renders as
-      the strongest HOLD signal on the board, produced by an absence rather than a
-      strength.
+    There was a second guard, for rows reading 0.0 on BOTH rankings. It existed because
+    VAR clamped at zero, which collapsed every below-replacement player onto an identical
+    all-zero row -- 469 of them on a live-shaped 1,169-row pool, of which 432 drew an
+    arrow off nothing but the offset between the two zero-blocks. #331 removed the clamp,
+    so those rows now carry distinct negative values and rank honestly, and an exact 0.0
+    on both is no longer a systematic block but a coincidence at the payload's sixth
+    decimal. The guard went with the clamp that made it necessary.
     """
     nxt = row["next"]
-    if math.isnan(nxt) or (row["total"] == 0.0 and nxt == 0.0):
+    if math.isnan(nxt):
         return 0
     move = row["rank_next"] - row["rank_total"]
     return move if abs(move) >= RANK_MOVE else 0

@@ -305,10 +305,10 @@ def main() -> int:
         # full-panel `apply` passes for a frame that is this one minus its partial rows.
         # Verified identical on both pools: same ids, same seasons, max |sgp diff| 0.0.
         complete = live[~live["partial_season"]].reset_index(drop=True)
-        # VAR only. The web board (#321) also caches a raw-SGP fit for its second column,
-        # but that is a SECOND fit per player -- asking for it here would double a 17s run
-        # to serve a column this CLI does not print.
-        swept += sweep_pool(rows, complete, kind, horizons, scales=("var",))
+        # ONE fit, serving both scales. This used to ask for `scales=("var",)` to avoid a
+        # second fit per player the CLI does not print; since #331 VAR is the raw fit
+        # minus the slot's floor, so there is no second fit left to decline.
+        swept += sweep_pool(rows, complete, kind, horizons)
 
     scored = totals(swept, horizons, scale="var")
 

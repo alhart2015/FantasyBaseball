@@ -656,10 +656,11 @@ def main() -> int:
     horizons = tuple(range(1, args.horizon + 1))
     levels = position_aware_replacement_levels(denoms)
     for pool, age, sgp, prior, slots in queries:
-        # The floor is passed INTO the estimator, not subtracted from its answer. Each
-        # comp is floored at zero individually -- a man out of the league is worth 0 to
-        # the slot, not minus a floor -- and that carries through to median, spread and
-        # the survivor mean instead of leaving them on a different scale.
+        # The floor is passed INTO the estimator, not subtracted from its answer, so it
+        # carries through to the median, the band and the survivor mean instead of
+        # leaving them on a different scale. It is a SHIFT and nothing is clamped: a man
+        # out of the league produced 0 SGP, so his VAR is minus the floor, and a player
+        # projected under his floor prints a negative rather than a zero (#331).
         slot, floor = replacement_for(slots, levels) if slots is not None else (None, 0.0)
         if args.match == "shape":
             traj, anchors = shape_trajectory(
