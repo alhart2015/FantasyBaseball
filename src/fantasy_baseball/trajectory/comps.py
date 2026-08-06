@@ -303,15 +303,12 @@ def comp_trajectory(
     and the `--show-comps` frame all land on the same scale as the mean -- shifting
     afterwards left every one of them on the raw scale.
 
-    NOT floored at zero, deliberately (#331). It was `max(sgp - replacement, 0)`, on the
-    argument that a comp who left the league scores a structural 0 and is worth 0 to a
-    roster slot because you drop him and start the replacement he was measured against.
-    That was reversed: out of the league is 0 SGP, so his VAR is minus the floor, and a
-    reader wanting the drop-adjusted number applies `max(var, 0)` at the point of
-    decision. The reversal is not really about this matcher -- in `shape.shape_trajectory`
-    the clamp sat on a REGRESSION RESPONSE, where flattening the sub-floor comps changed
-    the fitted slope and reordered players who share a slot across the VAR/SGP toggle.
-    Both matchers were changed together so the two cannot disagree about what a VAR is.
+    NOT floored at zero, deliberately (#331). It was `max(sgp - replacement, 0)`, which
+    kept a departed comp at 0 rather than minus a floor. The reversal was forced by the
+    OTHER matcher, where the identical clamp sat on a regression response and reordered
+    players sharing a slot; `shape.shape_trajectory` carries the full argument and the
+    cost accepted with it. It is applied here so the two cannot disagree about what a
+    VAR is -- see `test_mode_parity.test_both_modes_shift_var_by_the_floor_unclamped`.
 
     `last_complete_season` defaults to the panel's maximum and defines observability,
     which is applied PER HORIZON: a 2024 age-25 season has a real age-26 to look at and
@@ -388,10 +385,16 @@ def comp_trajectory(
         width = prior_band if prior_band is not None else band
         comps = comps[(comps["sgp_prior"] - prior_sgp).abs().le(width)].reset_index(drop=True)
 
-    # Keep the pre-shift forwards: survival must stay readable off the RAW line, where
-    # the exact 0 that means "not in the league" is still an exact 0.
-    raw_forward = {f"h{h}": comps[f"h{h}"].copy() for h in horizons} if not comps.empty else {}
-    if replacement and not comps.empty:
+    # Survival off the RAW line, so take the mask BEFORE the shift: shifted, a career
+    # ending reads `-replacement` rather than the exact 0 `played` keys on. Only the mask
+    # is kept, not a copy of the values -- `shape_trajectory` does the same thing the same
+    # way, and NaN positions are untouched by a subtraction so it stays aligned.
+    survived_at = (
+        {f"h{h}": played(comps[f"h{h}"].dropna().to_numpy(dtype=float)) for h in horizons}
+        if not comps.empty
+        else {}
+    )
+    if not comps.empty:
         # The FRAME is shifted too, not just the aggregates. It is what `--show-comps`
         # prints, and shifting only the aggregates left it listing raw SGP directly
         # beneath a VAR table -- anyone checking the arithmetic got a different mean
@@ -404,11 +407,7 @@ def comp_trajectory(
     path = []
     for h in horizons:
         values = comps[f"h{h}"].dropna().to_numpy(dtype=float) if not comps.empty else np.array([])
-        # Survival off the RAW line: shifted, a career ending reads `-replacement` rather
-        # than the exact 0 `played` keys on, so the mask is taken from the pre-shift
-        # values kept alongside.
-        raw = raw_forward[f"h{h}"].dropna().to_numpy(dtype=float) if not comps.empty else values
-        survived = values[played(raw)]
+        survived = values[survived_at[f"h{h}"]] if not comps.empty else values
         path.append(
             PathPoint(
                 horizon=h,

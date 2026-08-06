@@ -100,28 +100,32 @@ class SweptPlayer:
     #: comp mask, which `horizons[0] == 1` pins for every range.
     support: float
     extrapolated: bool
-    #: The RAW SGP fit. The only one stored, and the only one run: VAR is this minus
-    #: `floor`, exactly, so a second fit would compute a subtraction (see the module
-    #: docstring and #331).
+    #: The RAW SGP fit, and the only path stored or run. See the module docstring.
     sgp: tuple[YearPoint, ...]
 
-    def points(self, scale: str) -> tuple[YearPoint, ...]:
-        """The fitted path on `scale`. "var" is derived, never stored.
+    def offset(self, scale: str) -> float:
+        """What to subtract from a raw SGP number to read it on `scale`.
 
-        Derived rather than cached so the two can never drift: a stored VAR path is a
-        second copy of a fact the raw path and `floor` already determine, and the two
-        copies would be free to disagree after any later edit to either.
+        THE definition of the VAR scale, in ONE place. It was spelled twice -- here for
+        the fitted path and again inline in `totals` for the Now column -- and two
+        spellings of this rule is the drift #331 is about: the board printed an unclamped
+        Now beside a clamped forecast, which was only possible because the two columns
+        did not get their scale from the same site.
         """
         if scale not in SCALES:
             raise ValueError(f"scale must be one of {SCALES}, got {scale!r}")
-        if scale == "sgp":
+        return 0.0 if scale == "sgp" else self.floor
+
+    def points(self, scale: str) -> tuple[YearPoint, ...]:
+        """The fitted path on `scale`. "var" is derived, never stored."""
+        floor = self.offset(scale)
+        if floor == 0.0:
             return self.sgp
         # Only the LEVELS move. `n_effective` and `band_fell_back` describe the fit, which
         # is the same fit; the widths (`p90 - p10`) are unchanged because both edges shift
         # by the same floor.
         return tuple(
-            replace(p, mean=p.mean - self.floor, p10=p.p10 - self.floor, p90=p.p90 - self.floor)
-            for p in self.sgp
+            replace(p, mean=p.mean - floor, p10=p.p10 - floor, p90=p.p90 - floor) for p in self.sgp
         )
 
 
@@ -156,9 +160,9 @@ def sweep_pool(
     it were a full one is a systematically low comp. One prepared state per pool; a
     hitter-fitted state cannot price a pitcher and will refuse to try.
 
-    Both scales come out of this one fit -- see `SweptPlayer.points`. There is no `scales`
-    argument any more because there is nothing left to skip: the CLI once passed
-    `("var",)` to halve a 17s run, and the run is now that half either way.
+    Both scales come out of this one fit. There is no `scales` argument any more because
+    there is nothing left to skip: the CLI once passed `("var",)` to halve a 17s run, and
+    the run is now that half either way.
     """
     prepared = prepare(panel, kind=kind, horizons=horizons)
     swept: list[SweptPlayer] = []
@@ -218,14 +222,19 @@ def totals(
                 "pool": player.pool,
                 "age": player.age,
                 "slot": player.slot,
-                # THIS season on the scale being read, so the leftmost number and the
-                # projections it sits beside mean the same thing: on VAR, both are SGP
-                # minus the slot's replacement level and neither is clamped. That was
-                # once an ASYMMETRY -- an unclamped Now beside a floored-at-zero forecast,
-                # so a row could read negative now against 0.0 next year -- and #331
-                # removed the projection's clamp rather than adding one here.
-                "now": player.now if scale == "sgp" else player.now - player.floor,
+                # THIS season, netted through the SAME `offset` the fitted path above
+                # used, so the leftmost number and the projections beside it cannot end
+                # up on different scales. NOTE that `prior` below is deliberately NOT
+                # netted, which is a real inconsistency on the CLI's VAR board -- see the
+                # comment there.
+                "now": player.now - player.offset(scale),
                 "floor": player.floor,
+                # RAW, on both scales, unlike `now`. That is an inconsistency rather than
+                # a decision -- `scripts/trajectory_board.py` prints the two side by side
+                # under a VAR header, so on the VAR board `now` is netted and `prior`
+                # beside it is not. Left alone here because netting it changes a rendered
+                # number and this year's floor is a questionable thing to charge against
+                # last year's production; it is worth its own issue, not a drive-by.
                 "prior": player.prior,
                 "total": sum(p.mean for p in points),
                 "p10": sum(p.p10 for p in points),
@@ -251,9 +260,13 @@ def totals(
 #: finds a version it does not know refuses the blob rather than mis-indexing the compact
 #: point arrays into confidently wrong numbers.
 #:
-#: 2 dropped the per-player "var" array. A v1 blob carries a VAR path fitted under the
-#: old clamp, which is NOT this build's `sgp - floor`, so reading one would render #331's
-#: reordering under a build that claims to have fixed it. Refusing it is the point.
+#: 2 dropped the per-player "var" array (#331). Note what this is NOT: a v1 blob's "sgp"
+#: array is byte-identical to a v2 one, because the old raw pass already ran with
+#: `replacement=0.0` and every clamp was gated on a truthy floor -- so v2 is a strict
+#: subset of v1 and a tolerant reader would in fact get right answers. The refusal is
+#: deliberately stricter than the data requires: these points are positional arrays that
+#: mis-index into confident nonsense rather than failing, re-pushing costs one script
+#: run, and a reader that starts accepting near-miss schemas is how that stops being true.
 PAYLOAD_VERSION = 2
 
 #: Decimals kept on a cached point. Not chosen for display -- the board prints one -- but
@@ -314,8 +327,7 @@ def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
                 "prior": round(p.prior, _PRECISION),
                 "support": round(p.support, 4),
                 "extrapolated": int(p.extrapolated),
-                # RAW only. VAR is this minus `floor`, so storing it would be a second
-                # copy of a derived fact -- and one a stale writer could contradict.
+                # RAW only; VAR is derived on read. See the module docstring.
                 "sgp": [_pack(y) for y in p.sgp],
             }
             for p in players

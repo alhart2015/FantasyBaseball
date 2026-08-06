@@ -129,8 +129,8 @@ def test_the_shift_reaches_median_spread_and_the_survivor_mean() -> None:
 
 
 def test_survival_is_read_off_the_RAW_line() -> None:
-    """After flooring, a below-replacement season and a career ending are both 0. The
-    survival column must still tell them apart."""
+    """Shifted, a career ending reads `-replacement` rather than the exact 0 that `played`
+    keys on. The survival column must still tell a departed comp from a bad season."""
     panel = _cohort([14.0, 2.0, 0.0])  # one good, one below replacement, one departed
     traj = comp_trajectory(
         panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=10.0
@@ -152,36 +152,14 @@ def test_no_replacement_leaves_every_number_untouched() -> None:
     )
 
 
-def test_shape_fits_on_var_when_given_a_floor() -> None:
-    """Shifting the RESPONSE, not the fitted mean, is what keeps every derived statistic
-    on one scale -- the widths included."""
-    rng = np.random.default_rng(3)
-    rows = []
-    for i in range(300):
-        prior, current = float(rng.uniform(12, 30)), float(rng.uniform(12, 30))
-        # Real noise, or both spreads are ~1e-15 and comparing them says nothing.
-        forward = 0.5 * current + 0.4 * prior + float(rng.normal(0, 2.0))
-        rows += [(i, 2010, 26, prior), (i, 2011, 27, current), (i, 2012, 28, max(forward, 0.0))]
-    panel = _panel(rows)
-    kw = {
-        "kind": "hitter",
-        "age": 27,
-        "sgp": 15.0,
-        "prior_sgp": 15.0,
-        "horizons": (1,),
-        "prior_window": 60.0,
-    }
-    raw, _ = shape_trajectory(panel, **kw)
-    var, _ = shape_trajectory(panel, replacement=8.0, **kw)
-    # EXACT, not approximate. Subtracting a constant from the response of a weighted least
-    # squares whose design matrix carries an intercept column moves that intercept and
-    # nothing else, so the prediction shifts by exactly the floor (#331). The old
-    # `abs=0.25` tolerance was covering for the response clamp, which made the shift
-    # approximate and query-dependent.
-    assert var.path[0].mean == pytest.approx(raw.path[0].mean - 8.0)
-    # No residual moved, so the widths are identical rather than merely comparable.
-    assert var.path[0].spread == pytest.approx(raw.path[0].spread)
-    assert var.path[0].se == pytest.approx(raw.path[0].se)
+# The shape matcher's "VAR is the raw fit minus the floor, on every statistic" contract
+# lives in test_mode_parity.test_both_modes_shift_var_by_the_floor_unclamped, which
+# asserts it for BOTH matchers over mean/median/p10/p90/mean_if_survived plus the
+# untouched widths. A `test_shape_fits_on_var_when_given_a_floor` here asserted a strict
+# subset of that on its own 300-row panel -- and its population sat entirely ABOVE the
+# floor it was netted against, so no comp was ever sub-floor and restoring the response
+# clamp would have left it green. It was deleted rather than kept as a duplicate that
+# cannot fail on the bug it names.
 
 
 # ------------------------------------------- the class, not the instances
@@ -228,9 +206,10 @@ def test_shape_reports_a_collapsed_veteran_as_NEGATIVE_var() -> None:
 
     Rounding it away is what made a collapsed veteran render identically to a
     replacement-level one, which is the single most decision-relevant distinction on a
-    keeper board. Every clamp on this scale is gone: the projection, the median and both
-    band edges are the raw fit minus the floor, and a player under his floor reads
-    negative in all of them.
+    keeper board.
+
+    THE NEGATIVITY is all this asserts. That the shifted values equal `raw - floor` is
+    test_mode_parity's contract and is not restated here.
     """
     rng = np.random.default_rng(5)
     rows = []
@@ -246,7 +225,6 @@ def test_shape_reports_a_collapsed_veteran_as_NEGATIVE_var() -> None:
         "horizons": (1,),
         "prior_window": 60.0,
     }
-    raw, _ = shape_trajectory(panel, **kw)
     var, _ = shape_trajectory(panel, replacement=9.96, **kw)
 
     # This cohort produces 0-4 SGP against a floor of 9.96, so every one of them is a
@@ -254,8 +232,6 @@ def test_shape_reports_a_collapsed_veteran_as_NEGATIVE_var() -> None:
     assert var.path[0].mean < 0.0
     assert var.path[0].median < 0.0
     assert var.path[0].p10 < 0.0 and var.path[0].p90 < 0.0
-    for field in ("mean", "median", "p10", "p90"):
-        assert getattr(var.path[0], field) == pytest.approx(getattr(raw.path[0], field) - 9.96)
 
 
 @pytest.mark.parametrize(

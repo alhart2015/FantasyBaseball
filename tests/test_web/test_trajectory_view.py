@@ -6,7 +6,12 @@ import math
 import pytest
 
 from fantasy_baseball.trajectory.board import BoardRow
-from fantasy_baseball.trajectory.sweep import RANK_MOVE, sweep_pool, to_payload
+from fantasy_baseball.trajectory.sweep import (
+    PAYLOAD_VERSION,
+    RANK_MOVE,
+    sweep_pool,
+    to_payload,
+)
 from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, build_board
 from tests._trajectory_panel import synthetic_panel
 
@@ -220,7 +225,11 @@ def _hand_payload(players: list[tuple[str, list[float]]]) -> dict:
     floor here would silently shift every value these tests pin.
     """
     return {
-        "version": 2,
+        # From the constant, not a literal: this is the only hand-built payload in the
+        # repo (everything else goes through `to_payload`, which stamps it), so a hardcoded
+        # copy has to be hunted down on every bump and fails with a version-mismatch that
+        # says nothing about what changed. The one test that WANTS a mismatch overrides it.
+        "version": PAYLOAD_VERSION,
         "base_season": BASE,
         "max_horizon": 3,
         # Unique per call: real payloads always carry one, and sharing it would let two
