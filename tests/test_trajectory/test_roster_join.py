@@ -43,6 +43,43 @@ def test_a_name_matching_two_board_rows_is_ambiguous() -> None:
     assert not index.is_ambiguous("Elly De La Cruz", "hitter")
 
 
+def test_two_spots_sharing_a_key_are_ambiguous_and_the_loser_is_listed() -> None:
+    """The SPOT side of the same collision, with one board row to fight over.
+
+    Two different humans, two different teams, one key. Whichever spot wins, the
+    single row renders under a team that may not own him -- so it must carry the
+    (?) flag -- and the team that lost must still see the name somewhere rather
+    than have the player disappear off its page with no explanation.
+    """
+    rows = [_row("Max Muncy")]
+    spots = [_spot("Max Muncy", "Zebras"), _spot("Max Muncy", "Aardvarks")]
+    index = index_rosters(rows, spots, "Mine")
+
+    assert index.is_ambiguous("Max Muncy", "hitter")
+    winner = index.team_for("Max Muncy", "hitter")
+    assert winner in ("Zebras", "Aardvarks")
+    loser = "Aardvarks" if winner == "Zebras" else "Zebras"
+    assert index.unscored.get(loser) == ["Max Muncy"], "the displaced spot must not vanish"
+    assert winner not in index.unscored
+
+    # The winner is a function of the data, not of roster iteration order.
+    assert index_rosters(rows, list(reversed(spots)), "Mine").team_for("Max Muncy", "hitter") == (
+        winner
+    )
+
+
+def test_two_spots_and_two_rows_sharing_a_key_are_ambiguous() -> None:
+    """Both sides colliding at once -- two Max Muncys on the board, two owners."""
+    rows = [_row("Max Muncy"), _row("Max Muncy")]
+    spots = [_spot("Max Muncy", "Zebras"), _spot("Max Muncy", "Aardvarks")]
+    index = index_rosters(rows, spots, "Mine")
+
+    assert index.is_ambiguous("Max Muncy", "hitter")
+    winner = index.team_for("Max Muncy", "hitter")
+    loser = "Aardvarks" if winner == "Zebras" else "Zebras"
+    assert index.unscored.get(loser) == ["Max Muncy"]
+
+
 def test_the_same_name_in_two_pools_is_not_ambiguous() -> None:
     """A two-way player is two assets in this league, so (name, pool) is the key
     and a hitter does not collide with a pitcher."""

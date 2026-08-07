@@ -35,11 +35,18 @@ class RosterIndex:
     team_of: dict[tuple[str, str], str]
     #: Same key -> "" / "IL10" / "DTD". The CLI renders this; the web does not.
     status_of: dict[tuple[str, str], str]
-    #: Keys matching MORE THAN ONE board row. A consumer attributing such a row to
-    #: a team is guessing, and must say so on screen.
+    #: Keys the join cannot resolve, from EITHER side: more than one board row under
+    #: the key, or more than one roster spot under it. Both mean a consumer
+    #: attributing such a row to a team is guessing, and must say so on screen.
     ambiguous: set[tuple[str, str]]
-    #: Roster players with no scored row at all, per team. Rendering this is what
-    #: keeps "the model could not price him" from reading as "he ranked last".
+    #: Roster players this board cannot attribute a row to, per team. Two causes,
+    #: deliberately in one list: nothing on the board matched the name at all, and
+    #: the name matched but another team's spot won the key. The reader is asking
+    #: the same question in both cases -- "where is my guy?" -- and the answer is
+    #: the same, that this page is not showing him a row for that player. Rendering
+    #: it is what keeps "the model could not price him" from reading as "he ranked
+    #: last", and what keeps a collision loser from vanishing off his owner's page
+    #: with nothing on screen to say he was ever there.
     unscored: dict[str, list[str]]
     #: Dropdown order: my team first, then the rest alphabetically. Plain
     #: alphabetical when `my_team` is None or names no team on any roster.
@@ -64,7 +71,21 @@ def index_rosters(
 
     `rows` need only carry "name" and "pool".
     """
-    by_key: dict[tuple[str, str], RosterSpot] = {(s.normalized, s.player_type): s for s in spots}
+    # THE KEY COLLIDES ON THE ROSTER SIDE TOO, and that is the worse direction.
+    # Two board rows under one key at least leave the row on screen; two SPOTS
+    # under one key -- two different humans on two different teams -- mean one of
+    # them silently loses the key, so the row renders under a team that does not
+    # own him and the true owner's page is short a player. A dict comprehension
+    # over `spots` resolved that by roster iteration order, which is Yahoo's, and
+    # so attributed the same row to a different team from one read to the next.
+    # Sorting makes the winner a fixed function of the data instead.
+    ordered = sorted(spots, key=lambda s: (s.normalized, s.player_type, s.team, s.name, s.yahoo_id))
+    by_key: dict[tuple[str, str], RosterSpot] = {}
+    spot_counts: dict[tuple[str, str], int] = {}
+    for spot in ordered:
+        key = (spot.normalized, spot.player_type)
+        spot_counts[key] = spot_counts.get(key, 0) + 1
+        by_key.setdefault(key, spot)
 
     counts: dict[tuple[str, str], int] = {}
     for row in rows:
@@ -73,7 +94,10 @@ def index_rosters(
 
     unscored: dict[str, list[str]] = {}
     for spot in spots:
-        if (spot.normalized, spot.player_type) not in counts:
+        key = (spot.normalized, spot.player_type)
+        # `is not` and not `!=`: two spots for the same player on the same team
+        # are distinct roster entries even though the dataclass compares equal.
+        if key not in counts or by_key[key] is not spot:
             unscored.setdefault(spot.team, []).append(spot.name)
 
     rostered = {s.team for s in spots}
@@ -85,7 +109,8 @@ def index_rosters(
     return RosterIndex(
         team_of={k: s.team for k, s in by_key.items()},
         status_of={k: s.status for k, s in by_key.items()},
-        ambiguous={k for k, c in counts.items() if c > 1},
+        ambiguous={k for k, c in counts.items() if c > 1}
+        | {k for k, c in spot_counts.items() if c > 1},
         unscored=unscored,
         teams=teams,
     )

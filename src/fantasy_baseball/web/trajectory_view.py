@@ -65,10 +65,12 @@ class Board:
     #: Rostered players on the SELECTED team with no scored row. Empty for "all".
     #: Rendering this is what keeps an absent player from reading as a bad one.
     unscored: list[str] = field(default_factory=list)
-    #: True when a live roster read returned SOMETHING. An empty result counts as a
-    #: failure: `live_rosters` returns [] without raising on a missing blob, so an empty
-    #: set cannot be told apart from an unreachable Upstash, and the page must not claim
-    #: "you own none of these" on the strength of it.
+    #: True when MY OWN team joined at least one scored row on this board. Strictly
+    #: stronger than "a roster read returned something", and deliberately so -- the
+    #: reasoning is at the assignment site. A read can succeed, populate `teams` and
+    #: leave this False, so it is not a verdict on the read and nothing rendered from
+    #: it may name a cause. What it gates is whether any row on screen is marked
+    #: `mine`, which is the only claim the banner is entitled to make.
     has_rosters: bool = False
     #: Season labels for the per-year columns, e.g. [2027, 2028, 2029]. Empty for a
     #: single-year board, where a breakout column would just repeat the total.

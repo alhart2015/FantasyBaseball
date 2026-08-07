@@ -117,8 +117,10 @@
   This board does not refresh with the dashboard; it is as fresh as the last
   <code>push_trajectory_board.py</code> run.
   {%- if not board.has_rosters %}
-  <strong>Your players are not highlighted</strong> -- the live roster read failed, so
-  nothing on this page claims to know what you own.
+  <strong>Your players are not highlighted</strong> -- no row on this board joined to
+  your roster. That is all this page knows: the live read may have returned nothing, or
+  it may have returned your roster and none of your players matched a scored row. So
+  nothing here claims to know what you own.
   {%- endif %}
 </p>
 

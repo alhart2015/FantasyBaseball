@@ -2264,6 +2264,10 @@ def _trajectory_payload():
     local SQLite mirror, so without this patch there are no controls on the page
     and every dropdown assertion is answering the wrong question. Same
     construction as `test_trajectory_page_renders_a_board`.
+
+    `min_sgp` is set because `push_trajectory_board.py` always stamps it and the
+    "not scored" line prints it -- a fixture without it renders a page no real
+    push could produce.
     """
     from fantasy_baseball.trajectory.board import BoardRow
     from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
@@ -2278,16 +2282,36 @@ def _trajectory_payload():
         "hitter",
         (1, 2),
     )
-    return to_payload(swept, base_season=2026, max_horizon=2, generated_at="2026-08-07T09:00:00")
+    return to_payload(
+        swept,
+        base_season=2026,
+        max_horizon=2,
+        min_sgp=2.0,
+        generated_at="2026-08-07T09:00:00",
+    )
 
 
 def _trajectory_spots():
-    """Names must match the payload's BoardRows or the join yields no teams."""
+    """Names must match the payload's BoardRows or the join yields no teams.
+
+    THE OPPONENT SORTS BEFORE MY OWN TEAM on purpose. It used to be "Zebras", and
+    "Hart of the Order" < "Zebras", so the my-team-first assertion below passed
+    under plain alphabetical order as well -- hardcoding `promoted = ()` in
+    `index_rosters` left it green. "Aardvarks" makes it fail unless promotion
+    actually happened.
+
+    "Unpriced Prospect" matches no board row on purpose: he is what the "not
+    scored" line exists to render. He is alone on "Nobodies" so that selecting
+    that team also pins the line's PLACEMENT -- it sits outside the
+    `{% if not board.rows %}` branch precisely so a team with nothing scored
+    still gets the list that explains its empty page.
+    """
     from fantasy_baseball.data.rosters import RosterSpot
 
     return [
-        RosterSpot("Testy McTestface", "testy mctestface", "hitter", "Zebras", "1", ""),
+        RosterSpot("Testy McTestface", "testy mctestface", "hitter", "Aardvarks", "1", ""),
         RosterSpot("Someone Else", "someone else", "hitter", "Hart of the Order", "2", ""),
+        RosterSpot("Unpriced Prospect", "unpriced prospect", "hitter", "Nobodies", "3", ""),
     ]
 
 
@@ -2312,9 +2336,35 @@ def test_trajectory_page_offers_a_team_dropdown(client):
     # chrome and the ordering assertion passes however the dropdown is sorted.
     body = resp.data.decode()
     mine = body.index(">Hart of the Order</option>")
-    theirs = body.index(">Zebras</option>")
+    theirs = body.index(">Aardvarks</option>")
     assert mine < theirs, "my own team must lead the dropdown"
     assert body.index(">All teams</option>") < mine, "the default sits above it"
+
+
+def test_trajectory_page_lists_a_selected_teams_unpriced_players(client):
+    """Spec requirement 7, inherited from #322: a rostered player the model could
+    not price must be NAMED, not silently missing.
+
+    "Nobodies" holds exactly one such player and nothing else, so this also pins
+    where the line renders: a team with zero scored rows still gets it, which is
+    the whole reason it sits outside the empty-board branch.
+    """
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        resp = client.get("/trajectory?team=Nobodies")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "Nothing scored at this timeframe" in body, "no rows, so placement is meaningful"
+    assert "not scored:" in body
+    assert "Unpriced Prospect" in body
 
 
 def test_trajectory_page_hides_the_dropdown_when_no_rosters_arrived(client):
