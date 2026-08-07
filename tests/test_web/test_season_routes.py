@@ -2406,3 +2406,35 @@ def test_trajectory_page_survives_a_team_param_with_no_rosters(client):
         resp = client.get("/trajectory?team=Nobody+FC")
     assert resp.status_code == 200
     assert b"Testy McTestface" in resp.data
+
+
+def test_trajectory_controls_carry_every_filter_on_every_link(client):
+    """`board_url` is the single place that knows full filter state. A filter it
+    does not emit gets silently reset when any other control is used -- the
+    hidden-input failure the macro's own comment records.
+
+    `view` and `per` are threaded now so the link shape is right before Task 3
+    gives them anything to select.
+    """
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        resp = client.get("/trajectory?end=2028&pool=hitter&scale=sgp&top=25&per=3")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+
+    # Every control link must carry all six, or using one resets the others.
+    import re
+
+    links = re.findall(r'href="(/trajectory\?[^"]*)"', body)
+    assert links, "the control bar rendered no links"
+    for link in links:
+        for param in ("end=", "pool=", "scale=", "top=", "per=", "view="):
+            assert param in link, f"{param} missing from {link}"

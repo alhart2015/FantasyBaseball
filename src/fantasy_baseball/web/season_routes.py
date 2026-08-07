@@ -807,7 +807,11 @@ def register_routes(app: Flask) -> None:
         writes `cache:trajectory_board`. A cold or stale-schema cache is reported rather
         than silently rendering an empty board that looks like "nobody scored".
         """
-        from fantasy_baseball.web.trajectory_view import build_board
+        from fantasy_baseball.web.trajectory_view import (
+            DEFAULT_PER_TEAM,
+            DEFAULT_TOP,
+            build_board,
+        )
 
         payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
         board, error = None, None
@@ -848,6 +852,20 @@ def register_routes(app: Flask) -> None:
             active_page="trajectory",
             board=board,
             error=error,
+            # The full filter state in ONE object, so the control macros never have to
+            # reach into a view model that may not carry a given field.
+            cur={
+                "end_year": board.end_year if board else 0,
+                "pool": board.pool if board else "both",
+                "top": board.top if board else DEFAULT_TOP,
+                "scale": board.scale if board else "var",
+                "team": board.team if board else "all",
+                "view": "board",
+                # Raw here on purpose: the Per-team select only renders on the teams
+                # view, and `build_teams_board` owns the clamp. Clamping in two places
+                # is how the two spellings drift.
+                "per": request.args.get("per", DEFAULT_PER_TEAM),
+            },
         )
 
     @app.route("/api/il-return-plan")

@@ -2,14 +2,7 @@
 {% block title %}Trajectory Board -- Season Dashboard{% endblock %}
 {% block content %}
 
-{% macro board_url(end=None, pool=None, top=None, scale=None, team=None) -%}
-{{ url_for('trajectory',
-           end=end if end is not none else board.end_year,
-           pool=pool if pool is not none else board.pool,
-           top=top if top is not none else board.top,
-           scale=scale if scale is not none else board.scale,
-           team=team if team is not none else board.team) }}
-{%- endmacro %}
+{% import "season/_trajectory_controls.html" as ctl %}
 
 <div class="page-trajectory">
 <div class="page-header">
@@ -39,67 +32,7 @@
   {%- endif %}
 </p>
 
-{#- Every control is a URL built by `board_url`, the single place that knows the full
-    filter state. The selects previously lived in a <form> and needed a hidden input per
-    filter to carry the ones they did not own -- so the state was encoded twice, in two
-    mechanisms, and adding a filter meant remembering both. Missing the hidden input
-    silently reset that filter whenever a dropdown changed. -#}
-<div class="trajectory-controls">
-  <label>Through
-    <select onchange="location = this.value">
-      {% for y in board.end_years %}
-      <option value="{{ board_url(end=y) }}" {% if y == board.end_year %}selected{% endif %}>{{ y }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Top
-    <select onchange="location = this.value">
-      {% for n in [25, 50, 100, 250, 'all'] %}
-      <option value="{{ board_url(top=n) }}" {% if n == board.top %}selected{% endif %}>{{ n }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  {% if board.teams %}
-  <label>Team
-    <select onchange="location = this.value">
-      <option value="{{ board_url(team='all') }}" {% if board.team == 'all' %}selected{% endif %}>All teams</option>
-      {% for t in board.teams %}
-      <option value="{{ board_url(team=t) }}" {% if t == board.team %}selected{% endif %}>{{ t }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  {% endif %}
-  <span class="pill-group">
-    {% for value, label in [('both', 'Both'), ('hitter', 'Hitters'), ('pitcher', 'Pitchers')] %}
-    <a class="pill {% if board.pool == value %}active{% endif %}" href="{{ board_url(pool=value) }}">{{ label }}</a>
-    {% endfor %}
-  </span>
-  <span class="pill-group">
-    {% for value, label in [('var', 'VAR'), ('sgp', 'SGP')] %}
-    <a class="pill {% if board.scale == value %}active{% endif %}" href="{{ board_url(scale=value) }}">{{ label }}</a>
-    {% endfor %}
-  </span>
-  <noscript>
-    <span class="pill-group">
-      {% for y in board.end_years %}
-      <a class="pill {% if y == board.end_year %}active{% endif %}" href="{{ board_url(end=y) }}">{{ y }}</a>
-      {% endfor %}
-    </span>
-    <span class="pill-group">
-      {% for n in [25, 50, 100, 250, 'all'] %}
-      <a class="pill {% if n == board.top %}active{% endif %}" href="{{ board_url(top=n) }}">{{ n }}</a>
-      {% endfor %}
-    </span>
-      {% if board.teams %}
-      <span class="pill-group">
-        <a class="pill {% if board.team == 'all' %}active{% endif %}" href="{{ board_url(team='all') }}">All teams</a>
-        {% for t in board.teams %}
-        <a class="pill {% if t == board.team %}active{% endif %}" href="{{ board_url(team=t) }}">{{ t }}</a>
-        {% endfor %}
-      </span>
-      {% endif %}
-  </noscript>
-</div>
+{{ ctl.controls(cur, board.end_years, board.teams) }}
 
 <p class="muted trajectory-vintage">
   Showing {{ board.rows|length }} of {{ board.scored }}{% if board.pool != 'both' %} {{ board.pool }}s{% endif %} scored{% if board.ranked != board.scored %}, ranked against all {{ board.ranked }} -- the # column is a league-wide position, so it runs past this count{% endif %}.
