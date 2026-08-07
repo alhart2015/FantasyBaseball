@@ -818,16 +818,15 @@ def register_routes(app: Flask) -> None:
             # still worth reading unmarked -- so it degrades to no highlighting, and
             # `has_rosters` lets the template distinguish that from "you own none of
             # these".
-            mine = None
+            spots: list = []
+            my_team = None
             try:
                 from fantasy_baseball.data.rosters import live_rosters
 
                 my_team = _load_config().team_name
-                mine = {
-                    (spot.normalized, spot.player_type)
-                    for spot in live_rosters(my_team)
-                    if spot.team == my_team
-                }
+                # Every team's spots, not just mine: the dropdown filters to any
+                # roster, and `build_board` derives ownership from the same read.
+                spots = list(live_rosters(my_team))
             except Exception:
                 logger.warning("trajectory: live roster read failed; rendering unmarked")
             try:
@@ -837,7 +836,9 @@ def register_routes(app: Flask) -> None:
                     pool=request.args.get("pool", "both"),
                     top=request.args.get("top"),
                     scale=request.args.get("scale", "var"),
-                    mine=mine,
+                    spots=spots,
+                    my_team=my_team,
+                    team=request.args.get("team", "all"),
                 )
             except (ValueError, KeyError) as exc:
                 error = str(exc)

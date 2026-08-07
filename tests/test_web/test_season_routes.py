@@ -2254,3 +2254,99 @@ def test_trajectory_page_renders_a_board(client):
             f"{scale}: VAR has not been clamped since #331"
         )
     assert "reads negative rather than 0" in var_html
+
+
+def _trajectory_payload():
+    """A two-player board for the route tests.
+
+    The route reads the payload from the cache BEFORE it touches rosters, and
+    renders `board=None` when it is absent -- off Render that read hits the
+    local SQLite mirror, so without this patch there are no controls on the page
+    and every dropdown assertion is answering the wrong question. Same
+    construction as `test_trajectory_page_renders_a_board`.
+    """
+    from fantasy_baseball.trajectory.board import BoardRow
+    from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
+    from tests._trajectory_panel import synthetic_panel
+
+    swept = sweep_pool(
+        [
+            BoardRow(1, "Testy McTestface", "hitter", 27, 20.0, 19.0, "OF", 4.0),
+            BoardRow(2, "Someone Else", "hitter", 27, 12.0, 11.0, "OF", 4.0),
+        ],
+        synthetic_panel(),
+        "hitter",
+        (1, 2),
+    )
+    return to_payload(swept, base_season=2026, max_horizon=2, generated_at="2026-08-07T09:00:00")
+
+
+def _trajectory_spots():
+    """Names must match the payload's BoardRows or the join yields no teams."""
+    from fantasy_baseball.data.rosters import RosterSpot
+
+    return [
+        RosterSpot("Testy McTestface", "testy mctestface", "hitter", "Zebras", "1", ""),
+        RosterSpot("Someone Else", "someone else", "hitter", "Hart of the Order", "2", ""),
+    ]
+
+
+def test_trajectory_page_offers_a_team_dropdown(client):
+    """Rendered from live rosters, with my own team promoted to the top."""
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        resp = client.get("/trajectory")
+    assert resp.status_code == 200
+    assert b"All teams" in resp.data
+
+    # Compare the OPTION positions, not the raw page. "Hart of the Order" is
+    # also the site header, so `resp.data.index(b"Hart of the Order")` finds the
+    # chrome and the ordering assertion passes however the dropdown is sorted.
+    body = resp.data.decode()
+    mine = body.index(">Hart of the Order</option>")
+    theirs = body.index(">Zebras</option>")
+    assert mine < theirs, "my own team must lead the dropdown"
+    assert body.index(">All teams</option>") < mine, "the default sits above it"
+
+
+def test_trajectory_page_hides_the_dropdown_when_no_rosters_arrived(client):
+    """Empty `spots` -- an unreachable Upstash cannot be told from an empty
+    league, so the control is not rendered at all rather than rendered empty.
+
+    The payload IS patched, so a board renders and its other controls appear.
+    Without that this test would pass whether or not the dropdown was ever
+    built, since it asserts an absence.
+    """
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch("fantasy_baseball.data.rosters.live_rosters", return_value=[]),
+    ):
+        resp = client.get("/trajectory")
+    assert resp.status_code == 200
+    assert b"Testy McTestface" in resp.data, "a board rendered, so absence is meaningful"
+    assert b"All teams" not in resp.data
+
+
+def test_trajectory_page_survives_a_team_param_with_no_rosters(client):
+    """A stale bookmark must not 500."""
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch("fantasy_baseball.data.rosters.live_rosters", return_value=[]),
+    ):
+        resp = client.get("/trajectory?team=Nobody+FC")
+    assert resp.status_code == 200
+    assert b"Testy McTestface" in resp.data
