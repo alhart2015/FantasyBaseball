@@ -118,3 +118,39 @@ def test_the_push_never_mutates_render(monkeypatch) -> None:
     assert "RENDER" not in __import__("os").environ, (
         "selecting the prod store must not leave RENDER set for whatever runs next"
     )
+
+
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "drives the real build_payload, which loads data/trajectory/*_pt_panel_*.csv and "
+        "data/cache/keeper_skills -- both gitignored, so this cannot run on a fresh clone"
+    ),
+)
+def test_the_payload_carries_career_history_and_comps(monkeypatch) -> None:
+    """Both are computed where the panel lives and travel in the same blob.
+
+    The dashboard has no panel and never will -- `data/trajectory/` is gitignored and
+    absent on Render -- so anything the chart needs has to be baked here or it does not
+    exist at request time.
+    """
+    module = _script()
+    payload, scored = module.build_payload(
+        max_horizon=5, panel_dir=PROJECT_ROOT / "data" / "trajectory"
+    )
+
+    assert scored > 0
+    player = payload["players"][0]
+
+    assert player["history"], "every scored player has at least his current season"
+    ages = [row[0] for row in player["history"]]
+    assert ages == sorted(ages), "history ascends by age so a line can be drawn from it"
+    assert all(len(row) == 2 for row in player["history"])
+
+    assert len(player["comps"]) <= module.MAX_COMPS
+    if player["comps"]:
+        first = player["comps"][0]
+        assert set(first) == {"name", "season", "rmse", "path"}
+        assert len(first["path"]) == 5
+        rmses = [c["rmse"] for c in player["comps"]]
+        assert rmses == sorted(rmses), "closest first"

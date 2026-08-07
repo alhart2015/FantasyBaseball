@@ -323,8 +323,19 @@ def _unpack(packed: dict[str, float], age: int) -> YearPoint:
     )
 
 
-def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
-    """Serialize a sweep for the KV. `meta` carries the vintage the reader must show."""
+def to_payload(
+    players: Iterable[SweptPlayer],
+    *,
+    extras: dict[int, dict] | None = None,
+    **meta: Any,
+) -> dict:
+    """Serialize a sweep for the KV. `meta` carries the vintage the reader must show.
+
+    `extras` is per-player data the SWEEP does not produce -- career history and comps,
+    which need the panel and the people cache rather than the fit. Keyed by mlbam_id and
+    merged in here so `SweptPlayer` does not grow fields that only one consumer wants.
+    """
+    per_player = extras or {}
     return {
         **meta,
         "players": [
@@ -341,6 +352,7 @@ def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
                 "extrapolated": int(p.extrapolated),
                 # RAW only; VAR is derived on read. See the module docstring.
                 "sgp": [_pack(y) for y in p.sgp],
+                **per_player.get(p.mlbam_id, {}),
             }
             for p in players
         ],

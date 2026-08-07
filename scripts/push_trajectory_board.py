@@ -54,6 +54,12 @@ DEFAULT_MAX_HORIZON = 5
 #: does change RANKS, and a young player pacing low is exactly the ambiguous keeper call.
 MIN_SGP = 0.0
 
+#: Comps stored per player. TEN, not the five the chart shows by default: `N` is a
+#: display control and this blob is built hours earlier by another process, so the
+#: control can only ever slice what was stored. Ten is the control's ceiling, so every
+#: legal N is servable. Costs ~370 bytes a player over five.
+MAX_COMPS = 10
+
 
 class EmptyPoolError(RuntimeError):
     """Raised when a pool scores zero players, so the push is refused.
@@ -141,6 +147,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     elapsed = season_elapsed_fraction(calendar, season)
 
     swept = []
+    extras: dict[int, dict] = {}
     excluded = {"low_sgp": 0, "no_current_line": 0}
     for kind in ("hitter", "pitcher"):
         live = calendar if kind == "hitter" else load(kind)
@@ -177,10 +184,54 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
         # the pool-less board this guard exists to refuse.
         _require_scored_pool(kind, produced, season, panel_path(kind, panel_dir).name)
         swept += produced
+
+        # `sweep_pool` builds its own prepared state and does not return it. Preparing a
+        # second time costs one vectorized reindex per pool -- cheap next to the sweep,
+        # and far cheaper than widening `sweep_pool`'s signature, which the CLI and its
+        # tests also call.
+        from fantasy_baseball.trajectory.comp_paths import closest_paths
+        from fantasy_baseball.trajectory.shape import prepare
+
+        prepared = prepare(complete, kind=kind, horizons=horizons)
+        by_id = {int(i): g for i, g in complete.groupby("mlbam_id")}
+
+        for player in produced:
+            seasons = by_id.get(player.mlbam_id)
+            history = (
+                [
+                    [int(a), round(float(s), 4)]
+                    for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
+                ]
+                if seasons is not None
+                else []
+            )
+            comps = closest_paths(
+                prepared,
+                [point.mean for point in player.sgp],
+                age=player.age,
+                n=MAX_COMPS,
+            )
+            extras[player.mlbam_id] = {
+                "history": history,
+                "comps": [
+                    {
+                        # Named HERE, not in `closest_paths`: naming needs the people
+                        # cache, and keeping it out of that module is what lets it be
+                        # tested with no data files. An unknown id renders as its id
+                        # rather than vanishing -- a comp is still a comp.
+                        "name": names.get(c.mlbam_id, str(c.mlbam_id)),
+                        "season": c.season,
+                        "rmse": round(c.rmse, 3),
+                        "path": [round(v, 3) for v in c.path],
+                    }
+                    for c in comps
+                ],
+            }
         print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
 
     payload = to_payload(
         swept,
+        extras=extras,
         base_season=season,
         max_horizon=max_horizon,
         min_sgp=MIN_SGP,
