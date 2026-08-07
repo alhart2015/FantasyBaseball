@@ -2799,8 +2799,12 @@ def test_trajectory_chart_js_disables_the_default_aspect_ratio():
     (#324 F1). `season_trends.js`'s `buildChart` sets this same pair for the same
     box; `trajectory_chart.js` must match it rather than inherit the default."""
     src = _trajectory_chart_js_source()
-    assert "maintainAspectRatio: false" in src
-    assert "responsive: true" in src
+    # Anchored on the option lines themselves, not a bare substring: the comment
+    # above quotes `responsive: true, maintainAspectRatio: true` to explain the
+    # defaults, so a substring check is satisfied by the prose that documents the
+    # BROKEN form and stays green with the real option deleted.
+    assert re.search(r"^\s*maintainAspectRatio: false,$", src, re.M)
+    assert re.search(r"^\s*responsive: true,$", src, re.M)
 
 
 def test_trajectory_chart_js_discloses_the_var_netting_on_the_axis():
@@ -2808,8 +2812,11 @@ def test_trajectory_chart_js_discloses_the_var_netting_on_the_axis():
     scale using `data.floor` (the JSON island's copy of `board.floor`), not just
     repeat the scale name (#324 F2)."""
     src = _trajectory_chart_js_source()
-    assert "data.floor" in src
-    assert "slot floor" in src
+    # `data.floor` and "slot floor" both appear in the comment above the code, so
+    # asserting them alone passes against the pre-fix `data.scale.toUpperCase()`.
+    # Pin the interpolation that actually builds the label, and its use on the axis.
+    assert "`VAR (SGP - ${data.floor.toFixed(2)} slot floor)`" in src
+    assert "text: yAxisTitle" in src
 
 
 def test_trajectory_chart_js_filters_the_internal_p10_series_from_tooltips_too():
