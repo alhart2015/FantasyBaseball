@@ -2779,6 +2779,33 @@ def test_trajectory_end_and_pool_survive_a_round_trip_through_the_player_view(cl
     assert "pool=pitcher" in league_href
 
 
+def test_trajectory_search_form_carries_the_filters_it_passes_through(client):
+    """The search form is the other round trip. It is a GET form, so every filter it
+    omits is silently reset on submit -- the exact failure `_trajectory_controls.html`'s
+    docstring names ("missing an input silently reset that filter"). The pass-through in
+    `filter_state` is worth nothing if searching a second player drops the state on the
+    way out.
+    """
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&end=2028&pool=pitcher&top=25&team=Aardvarks")
+    assert resp.status_code == 200
+    form = re.search(
+        r'<form method="get" class="trajectory-search">(.*?)</form>',
+        resp.data.decode(),
+        re.S,
+    ).group(1)
+    for name, value in (
+        ("end", "2028"),
+        ("pool", "pitcher"),
+        ("top", "25"),
+        ("team", "Aardvarks"),
+    ):
+        assert f'name="{name}" value="{value}"' in form, f"search drops {name}"
+
+
 def test_trajectory_player_view_hides_the_inert_through_and_pool_controls(client):
     """The "Through" dropdown and the pool pills do nothing on the player view --
     `build_player_view` takes no `end` and searches one resolved name, not a pool.
