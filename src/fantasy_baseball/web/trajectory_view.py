@@ -485,6 +485,10 @@ def filter_state(view: str, board: Any, args: Mapping[str, str]) -> dict:
     """
     owned_teams = view == "teams"
     owned_player = view == "player"
+    # `top` and `team` belong to `Board` and to nothing else, so every OTHER view has
+    # to pass them through. Named once rather than spelled twice: a fourth view added
+    # to `VIEWS` has to be added to this one expression, not remembered into two.
+    owned_by_board = not (owned_teams or owned_player)
     return {
         "view": view,
         # `PlayerView` carries neither -- a per-player fit has no "end year" to move
@@ -499,16 +503,10 @@ def filter_state(view: str, board: Any, args: Mapping[str, str]) -> dict:
         # Owned by `build_teams_board` on the teams view; by the query string otherwise.
         "per": board.per_team if (owned_teams and board) else args.get("per", DEFAULT_PER_TEAM),
         # Owned by `build_board` on the league view; by the query string otherwise.
-        "top": (
-            args.get("top", DEFAULT_TOP)
-            if (owned_teams or owned_player)
-            else (board.top if board else DEFAULT_TOP)
-        ),
-        "team": (
-            args.get("team", "all")
-            if (owned_teams or owned_player)
-            else (board.team if board else "all")
-        ),
+        "top": (board.top if board else DEFAULT_TOP)
+        if owned_by_board
+        else args.get("top", DEFAULT_TOP),
+        "team": (board.team if board else "all") if owned_by_board else args.get("team", "all"),
         # Owned by the player view; a pass-through elsewhere so a round trip through
         # another view does not drop the searched name.
         "player": board.name if (owned_player and board) else args.get("player", ""),

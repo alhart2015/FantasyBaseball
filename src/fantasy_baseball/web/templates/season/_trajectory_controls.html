@@ -20,6 +20,11 @@
 {%- endmacro %}
 
 {% macro controls(cur, end_years, teams) -%}
+{#- The "Through" dropdown and the pool pills filter a RANKED LIST, which the player
+    view does not have -- it fits one resolved name over the full history. Offering
+    them there invites a reader to believe they filter something. Set once: the same
+    condition gated three separate blocks below, including one inside <noscript>. -#}
+{% set ranked_view = cur.view != 'player' %}
 <div class="trajectory-controls">
   <span class="pill-group">
     <a class="pill {% if cur.view == 'board' %}active{% endif %}" href="{{ board_url(cur, view='board') }}">League</a>
@@ -28,7 +33,7 @@
     {% endif %}
     <a class="pill {% if cur.view == 'player' %}active{% endif %}" href="{{ board_url(cur, view='player') }}">Player</a>
   </span>
-  {% if cur.view != 'player' %}
+  {% if ranked_view %}
   <label>Through
     <select onchange="location = this.value">
       {% for y in end_years %}
@@ -64,7 +69,7 @@
     </select>
   </label>
   {% endif %}
-  {% if cur.view != 'player' %}
+  {% if ranked_view %}
   <span class="pill-group">
     {% for value, label in [('both', 'Both'), ('hitter', 'Hitters'), ('pitcher', 'Pitchers')] %}
     <a class="pill {% if cur.pool == value %}active{% endif %}" href="{{ board_url(cur, pool=value) }}">{{ label }}</a>
@@ -77,7 +82,7 @@
     {% endfor %}
   </span>
   <noscript>
-    {% if cur.view != 'player' %}
+    {% if ranked_view %}
     <span class="pill-group">
       {% for y in end_years %}
       <a class="pill {% if y == cur.end %}active{% endif %}" href="{{ board_url(cur, end=y) }}">{{ y }}</a>
