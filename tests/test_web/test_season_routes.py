@@ -2663,9 +2663,13 @@ def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "trajectory-chart" in body, "the canvas the chart draws into"
-    assert "Andre Ethier" in body, "comps are named"
     assert "closest realized paths" in body, "labelled as illustration, not evidence"
-    assert "1.25" in body, "each comp shows its RMSE"
+    # The TABLE markup, not the `#trajectory-chart-data` JSON island -- that island
+    # also serializes `board.comps` verbatim, so a plain substring match on "Andre
+    # Ethier"/"1.25" is satisfied by the JSON alone and stays green even if the
+    # honesty table renders nothing.
+    assert "<td>Andre Ethier</td>" in body, "comps are named in the table"
+    assert "<td>1.25</td>" in body, "each comp shows its RMSE in the table"
 
 
 def test_trajectory_player_view_states_the_five_year_comp_rule(client):
@@ -2696,6 +2700,23 @@ def test_trajectory_player_view_unknown_name_does_not_500(client):
         resp = client.get("/trajectory?view=player&player=Nobody+At+All")
     assert resp.status_code == 200
     assert "No player named" in resp.data.decode()
+
+
+def test_trajectory_player_view_explains_a_pre_feature_blob(client):
+    """A blob pushed before this feature carries no `history`/`comps` keys at all --
+    the shape currently deployed in production. The page must say what's missing
+    rather than rendering an empty comps table as if the model scored zero comps."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "trajectory-chart" in body, "the projection still renders regardless"
+    assert body.count("predates") == 2, "one note for the missing comps, one for history"
+    comps_section = body[body.index("Closest realized paths") : body.index("The numbers")]
+    assert "<td>" not in comps_section, "no fabricated comp rows"
 
 
 def test_trajectory_player_chart_data_is_truncated_to_the_projected_horizons(client):
@@ -2735,6 +2756,71 @@ def test_trajectory_player_view_ambiguous_name_renders_no_chart(client):
     body = resp.data.decode()
     assert "trajectory-chart" not in body, "an ambiguous name must not render a chart"
     assert "More than one player is named" in body
+
+
+def test_trajectory_end_and_pool_survive_a_round_trip_through_the_player_view(client):
+    """`filter_state` gives `end_year`/`pool` to `PlayerView` the same treatment as
+    `top`/`team`: a pass-through from the query string, not a hardcoded default. A
+    League -> Player -> League round trip must land back on the same timeframe and
+    pool, not silently reset to `end_years[0]`/"both" -- the literal-`"all"` bug this
+    module's docstring already names, one field over.
+    """
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&end=2028&pool=pitcher")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    # The League pill's own link is the round trip: it must carry the values
+    # forward rather than resetting them.
+    league_href = re.search(r'href="([^"]*)">League</a>', body).group(1)
+    assert "end=2028" in league_href
+    assert "pool=pitcher" in league_href
+
+
+def test_trajectory_player_view_hides_the_inert_through_and_pool_controls(client):
+    """The "Through" dropdown and the pool pills do nothing on the player view --
+    `build_player_view` takes no `end` and searches one resolved name, not a pool.
+    Offering them invites a reader to believe they filter something."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "<label>Through" not in body
+    assert ">Hitters<" not in body and ">Pitchers<" not in body
+
+
+def test_trajectory_player_view_renders_no_per_team_selector(client):
+    """The Top/Team/Per-team block is a three-way branch now; a bare `else` would
+    show the teams view's "Per team" selector on the player page, which has no
+    per-team concept at all."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player")
+    assert resp.status_code == 200
+    assert "Per team" not in resp.data.decode()
+
+
+def test_trajectory_player_and_n_pass_through_on_the_league_board(client):
+    """`filter_state`'s `player`/`n` fields are the player view's own pass-through
+    story in reverse: on every OTHER view they must come from the query string, so a
+    search in progress survives a trip to League and back."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?player=Testy+McTestface&n=7")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    player_href = re.search(r'href="([^"]*)">Player</a>', body).group(1)
+    assert "player=Testy" in player_href
+    assert "n=7" in player_href
 
 
 def test_the_three_trajectory_views_coexist(client):

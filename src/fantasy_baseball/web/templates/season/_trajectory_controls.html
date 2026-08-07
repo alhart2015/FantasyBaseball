@@ -35,6 +35,7 @@
     {% endif %}
     <a class="pill {% if cur.view == 'player' %}active{% endif %}" href="{{ board_url(cur, view='player') }}">Player</a>
   </span>
+  {% if cur.view != 'player' %}
   <label>Through
     <select onchange="location = this.value">
       {% for y in end_years %}
@@ -42,6 +43,7 @@
       {% endfor %}
     </select>
   </label>
+  {% endif %}
   {% if cur.view == 'board' %}
   <label>Top
     <select onchange="location = this.value">
@@ -69,22 +71,26 @@
     </select>
   </label>
   {% endif %}
+  {% if cur.view != 'player' %}
   <span class="pill-group">
     {% for value, label in [('both', 'Both'), ('hitter', 'Hitters'), ('pitcher', 'Pitchers')] %}
     <a class="pill {% if cur.pool == value %}active{% endif %}" href="{{ board_url(cur, pool=value) }}">{{ label }}</a>
     {% endfor %}
   </span>
+  {% endif %}
   <span class="pill-group">
     {% for value, label in [('var', 'VAR'), ('sgp', 'SGP')] %}
     <a class="pill {% if cur.scale == value %}active{% endif %}" href="{{ board_url(cur, scale=value) }}">{{ label }}</a>
     {% endfor %}
   </span>
   <noscript>
+    {% if cur.view != 'player' %}
     <span class="pill-group">
       {% for y in end_years %}
       <a class="pill {% if y == cur.end_year %}active{% endif %}" href="{{ board_url(cur, end=y) }}">{{ y }}</a>
       {% endfor %}
     </span>
+    {% endif %}
     {% if cur.view == 'board' %}
     <span class="pill-group">
       {% for n in [25, 50, 100, 250, 'all'] %}

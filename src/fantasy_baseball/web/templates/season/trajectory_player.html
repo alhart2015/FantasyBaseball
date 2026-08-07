@@ -14,6 +14,14 @@
   <input type="hidden" name="view" value="player">
   <input type="hidden" name="scale" value="{{ board.scale }}">
   <input type="hidden" name="n" value="{{ board.n }}">
+  {#- Also carry the filters this view merely passes through (`cur.top`/`cur.team`/
+      `cur.end_year`/`cur.pool`) -- they mean nothing here, but a search that drops
+      them breaks the round trip back to the League/By-team views. Same failure mode
+      _trajectory_controls.html's own docstring names for a missing dropdown input. -#}
+  <input type="hidden" name="top" value="{{ cur.top }}">
+  <input type="hidden" name="team" value="{{ cur.team }}">
+  <input type="hidden" name="end" value="{{ cur.end_year }}">
+  <input type="hidden" name="pool" value="{{ cur.pool }}">
   <label>Player <input name="player" value="{{ board.name }}" placeholder="Juan Soto"></label>
   <button type="submit">Search</button>
 </form>
@@ -44,6 +52,7 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   "name": board.name, "scale": board.scale, "history": board.history,
   "projection": board.projection, "comps": board.comps} | tojson }}</script>
 
+{% if board.comps %}
 <h3>Closest realized paths <span class="muted">({{ board.comps | length }})</span></h3>
 <p class="muted">
   These are the closest realized paths to the projection -- chosen ON the outcome, so
@@ -62,8 +71,24 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     {% endfor %}
   </tbody>
 </table>
+{% else %}
+<h3>Closest realized paths</h3>
+<p class="muted">
+  None stored. Either this board predates the closest-comp feature (#324) and a
+  re-push of <code>push_trajectory_board.py</code> will fill it in, or this player has
+  no scored comps yet.
+</p>
+{% endif %}
 
 <h3>The numbers</h3>
+{% if not board.history %}
+<p class="muted">
+  No realized-season history in this blob. Either this board predates the
+  career-history feature (#324) and a re-push of <code>push_trajectory_board.py</code>
+  will fill it in, or this player has no realized MLB season in the panel yet -- only
+  the projection below is available either way.
+</p>
+{% endif %}
 <table class="data-table">
   <thead><tr><th>Age</th><th>{{ board.scale|upper }}</th><th>p10..p90</th></tr></thead>
   <tbody>

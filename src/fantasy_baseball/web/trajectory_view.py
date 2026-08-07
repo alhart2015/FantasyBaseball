@@ -483,11 +483,12 @@ def filter_state(view: str, board: Any, args: Mapping[str, str]) -> dict:
         "view": view,
         # `PlayerView` carries neither -- a per-player fit has no "end year" to move
         # (the chart always shows the full history) and no pool filter (the search is
-        # a single resolved name, not a ranked list). `getattr` rather than another
-        # `owned_*` branch: no view "owns" these on the player page the way `top`/
-        # `team` are owned there, because nothing on that page reads them back.
-        "end_year": getattr(board, "end_year", 0) if board else 0,
-        "pool": getattr(board, "pool", "both") if board else "both",
+        # a single resolved name, not a ranked list). Pass through from the query
+        # string on the player view, exactly like `top`/`team`: a round trip through
+        # another view must not drop them, which is the same bug the literal `"all"`
+        # this docstring memorializes already caused once for `team`.
+        "end_year": (args.get("end", 0) if owned_player else (board.end_year if board else 0)),
+        "pool": (args.get("pool", "both") if owned_player else (board.pool if board else "both")),
         "scale": board.scale if board else "var",
         # Owned by `build_teams_board` on the teams view; by the query string otherwise.
         "per": board.per_team if (owned_teams and board) else args.get("per", DEFAULT_PER_TEAM),
