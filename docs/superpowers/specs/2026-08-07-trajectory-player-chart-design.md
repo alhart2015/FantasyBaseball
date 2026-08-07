@@ -233,7 +233,14 @@ construction. Therefore:
 **`closest_paths` (unit).** Ordering by RMSE; exact-age filtering excludes a near-age row;
 the full-path requirement excludes a two-year path that would otherwise win on a smaller
 MSE; ties break deterministically and the result is identical when the input rows are
-shuffled; matching is on SGP (a row whose VAR would rank differently still sorts by SGP).
+shuffled.
+
+**Matching-on-SGP is deliberately NOT tested.** It is structural: `closest_paths` takes no
+floor, receives no slot, and reads `Prepared.forward`, which holds raw SGP -- so no
+implementation of that signature could net anything, and a test would pass against every
+one of them. The guarantee lives in the signature and the module docstring; what a reviewer
+should object to is a floor parameter appearing. Recorded so the missing test reads as a
+decision rather than an oversight.
 
 **View (unit).** Name resolution, ambiguity, unknown; `.get` fallbacks for a payload with
 no `history`/`comps`; `N` clamping, including that asking for more than `MAX_COMPS`
