@@ -872,7 +872,17 @@ def test_a_blocks_rows_carry_league_ranks(payload: dict) -> None:
 
 
 def test_per_team_slices_without_re_ranking(payload: dict) -> None:
-    """N is a slice of an already-ranked list, so the first row must not move."""
+    """N is a slice of an already-ranked list, so the first row must not move.
+
+    "Mine" is the load-bearing block and cannot be dropped for "Rivals" alone. Rows
+    reach `grouped` in `totals()` order -- every hitter, then every pitcher -- because
+    `add_ranks` ranks off a temporary sorted view and leaves its input untouched.
+    "Rivals" is appended [Big Bat(#1), Big Arm(#2)], which is ALREADY rank order, so
+    deleting the per-block sort left this test green while `per_team` sliced the wrong
+    players, `total` summed the wrong ones, and the block ordering the whole view exists
+    to compare went with them. "Mine" is appended [Small Bat(#5), Small Arm(#4)] -- the
+    opposite of rank order -- so at per_team=1 the surviving row is the sort's answer.
+    """
     one = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team=1)
     two = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team=2)
 
@@ -883,6 +893,16 @@ def test_per_team_slices_without_re_ranking(payload: dict) -> None:
     assert rivals_one.rows[0]["name"] == rivals_two.rows[0]["name"]
     assert rivals_one.scored == rivals_two.scored, "scored is the team's set, not the slice"
 
+    mine_two = next(b for b in two.blocks if b.team == "Mine")
+    assert [r["name"] for r in mine_two.rows] == ["Small Arm", "Small Bat"], (
+        "the fixture must append these OUT of rank order, or the slice below cannot fail"
+    )
+    mine_one = next(b for b in one.blocks if b.team == "Mine")
+    assert [r["name"] for r in mine_one.rows] == ["Small Arm"], (
+        "per_team=1 keeps the better-ranked row, not the first one appended"
+    )
+    assert mine_one.total == mine_two.rows[0]["total"], "and the block total follows it"
+
 
 def test_scored_follows_the_pool_filter_and_unscored_does_too(payload: dict) -> None:
     """A block that says "5 of 24" under a hitters-only table must mean 24 hitters,
@@ -890,10 +910,18 @@ def test_scored_follows_the_pool_filter_and_unscored_does_too(payload: dict) -> 
     both = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine")
     hitters = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", pool="hitter")
 
+    pitchers = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", pool="pitcher")
+
     assert next(b for b in both.blocks if b.team == "Rivals").scored == 2
     assert next(b for b in hitters.blocks if b.team == "Rivals").scored == 1
+    assert next(b for b in pitchers.blocks if b.team == "Rivals").scored == 1
     assert next(b for b in both.blocks if b.team == "Mine").unscored == ["Never Scored"]
     assert next(b for b in hitters.blocks if b.team == "Mine").unscored == ["Never Scored"]
+    # THE HALF THAT CAN FAIL. "Never Scored" is a hitter, so `both` and `hitter` name him
+    # either way -- dropping the `pool` argument from `unscored_for` left both green. Only
+    # the pitcher view expects a DIFFERENT list, and an unpriced hitter under a
+    # pitchers-only block reads as a hole in the pitching staff.
+    assert next(b for b in pitchers.blocks if b.team == "Mine").unscored == []
 
 
 def test_a_name_two_teams_roster_appears_in_both_blocks_flagged(payload: dict) -> None:
@@ -919,6 +947,33 @@ def test_mine_missing_when_my_team_names_no_block(payload: dict) -> None:
 
     assert not build_teams_board(payload, spots=_teams_fixture(), my_team="Mine").mine_missing
     assert build_teams_board(payload, spots=_teams_fixture(), my_team=None).mine_missing
+
+
+def test_a_teams_block_carries_the_flag_threshold_and_its_flagged_rows(payload: dict) -> None:
+    """The (!) rule is a tuned constant behind an open issue (#310), so the template
+    renders the threshold from `meta` rather than restating it as prose -- exactly as the
+    league board does. `TeamsBoard.meta` did not carry it, which meant the teams view
+    could not have rendered the flag even if it wanted to: it was dropped structurally,
+    and every block total then summed extrapolated rows with nothing on screen to say so.
+    """
+    from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
+
+    spots = [*_teams_fixture(), _spot("Thin Support", "Mine")]
+    board = build_teams_board(payload, spots=spots, my_team="Mine")
+
+    assert board.meta["min_local_support"] == MIN_LOCAL_SUPPORT
+    assert board.meta["min_local_support"] == build_board(payload).meta["min_local_support"], (
+        "both views flag on the same rule, so both must read the same constant"
+    )
+
+    mine = next(b for b in board.blocks if b.team == "Mine")
+    flagged = [r for r in mine.rows if r["extrapolated"]]
+    assert [r["name"] for r in flagged] == ["Thin Support"], (
+        "the fixture must put an extrapolated row in a block, or the flag is unreachable"
+    )
+    assert mine.total == pytest.approx(sum(r["total"] for r in mine.rows)), (
+        "and it is summed into the total that orders the page like any other row"
+    )
 
 
 def test_per_team_and_end_year_clamp_junk_from_the_query_string(payload: dict) -> None:

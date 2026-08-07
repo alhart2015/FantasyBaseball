@@ -875,7 +875,12 @@ def register_routes(app: Flask) -> None:
                 "pool": teams_board.pool,
                 "top": request.args.get("top", DEFAULT_TOP),
                 "scale": teams_board.scale,
-                "team": "all",
+                # RAW, like `top` above and for the same reason: the Team select only
+                # renders on the league board, and `build_board` owns the clamp. A
+                # hardcoded "all" here silently dropped the filter on the round trip --
+                # /trajectory?team=X -> "By team" -> "League" came back unfiltered,
+                # which is the exact failure the shared partial exists to prevent.
+                "team": request.args.get("team", "all"),
                 "view": "teams",
                 "per": teams_board.per_team,
             }

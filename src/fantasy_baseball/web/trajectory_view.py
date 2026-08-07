@@ -325,8 +325,11 @@ def build_board(
 
     scored = len(rows)
     ranked = len(ranked_rows)
-    # `add_ranks` already ordered by total descending with a name tie-break, so ranking
-    # IS the sort order -- no second sort key, and nothing to get wrong about NaNs.
+    # THIS SORT CREATES THE ORDER -- the rows do not arrive in it. `add_ranks` stamps
+    # ranks off a temporary sorted view and leaves its input in `totals()` order, which
+    # is every hitter and then every pitcher. Ranking by `rank_total` rather than by
+    # `total` is what makes it a re-use of the existing order rather than a second
+    # ranking: one key, already computed, and nothing to get wrong about NaNs.
     rows.sort(key=lambda r: r["rank_total"])
 
     return Board(
@@ -446,7 +449,11 @@ def build_teams_board(
 
     blocks = []
     for team, rows in grouped.items():
-        # `add_ranks` ordered by total descending, so ranking IS the sort order.
+        # THIS SORT CREATES THE ORDER, and it is load-bearing three times over. Rows
+        # arrive in `totals()` order -- every hitter, then every pitcher -- because
+        # `add_ranks` ranks off a temporary sorted view and leaves its input alone. Drop
+        # it and the `[:n]` below slices the wrong players, `total` sums the wrong ones,
+        # and the block ordering this whole view exists to compare is wrong with it.
         rows.sort(key=lambda r: r["rank_total"])
         shown = rows[:n]
         blocks.append(
@@ -481,5 +488,10 @@ def build_teams_board(
             "min_sgp": payload.get("min_sgp"),
             "floors": payload.get("floors", {}),
             "excluded": payload.get("excluded", {}),
+            # Carried for the same reason `Board` carries it, and its absence here was
+            # not an omission the template could route around: without the constant the
+            # (!) flag has no threshold to name, so the flags were dropped structurally
+            # and every block total silently summed unmarked extrapolated rows.
+            "min_local_support": MIN_LOCAL_SUPPORT,
         },
     )

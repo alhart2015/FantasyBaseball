@@ -20,6 +20,21 @@
 
 {{ ctl.controls(cur, board.end_years, board.blocks | map(attribute='team') | list) }}
 
+{#- THE SAME VINTAGE DISCLOSURE THE LEAGUE BOARD PRINTS, and needed harder here: this
+    is a bookmarkable, shareable URL that a trade conversation starts from, so a page
+    with no staleness signal invites acting on numbers that may be weeks old. -#}
+<p class="muted trajectory-vintage">
+  Start year is locked at {{ board.base_season + 1 }}.
+  {% if board.meta.generated_at %}Built {{ board.meta.generated_at }}{% endif %}
+  {% if board.meta.panel_vintage %}from {{ board.meta.panel_vintage.hitter }} / {{ board.meta.panel_vintage.pitcher }}{% endif %}
+  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% complete, and every fit is built on the paced full-year figure{% endif %}.
+  This board does not refresh with the dashboard; it is as fresh as the last
+  <code>push_trajectory_board.py</code> run.
+  Rows marked <strong>(!)</strong> or <strong>(!!)</strong> are counted in their block's
+  total like any other, so a block can be ordered above its neighbour on estimates the
+  model is least sure about -- read those rows' bands before comparing rosters.
+</p>
+
 {% if board.mine_missing %}
 <p class="muted"><strong>None of these blocks is marked as yours</strong> -- the page could
 not match your team name to any roster it read, so no block is highlighted. That is a
@@ -54,6 +69,12 @@ statement about the lookup, not about what you own.</p>
         <td>{{ r.rank_total }}</td>
         <td>{{ r.name }}
           {%- if r.owner_ambiguous %} <span class="flag flag-extrap" title="This name is not unique -- either the board carries more than one player under it, or more than one team rosters one. Roster blobs have no MLBAM id (#284), so the name is the only join available and it cannot tell them apart. Who owns this row is a guess; check before acting on it.">(?)</span>
+          {%- endif %}
+          {#- The SAME two flags and the same titles as the league board. A row shown
+              here without them reads as a firm number, and it is summed into the block
+              total that orders the page. -#}
+          {%- if r.band_fell_back %} <span class="flag flag-band" title="The band on at least one year in this range fell back to the whole cohort's residual scatter -- the understated interval the reweighting exists to replace. It happens on the deepest extrapolations, the ones most in need of a wide band.">(!!)</span>
+          {%- elif r.extrapolated %} <span class="flag flag-extrap" title="Under {{ '%.0f'|format(board.meta.min_local_support * 100) }}% of the fitting weight sits near this player's own current season, so the line was evaluated outside its own support. Read the band, not the point estimate.">(!)</span>
           {%- endif %}
         </td>
         <td>{{ r.age }}</td>
