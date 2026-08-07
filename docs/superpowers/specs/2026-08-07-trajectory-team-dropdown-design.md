@@ -41,10 +41,16 @@ selecting a team shows that roster in full without touching the Top control.
 ## Non-goals
 
 - **No second tab, no second template.** Superseding #322's tab shape.
-- **No IL/DTD status column.** `RosterSpot.status` will be in hand once spots
-  reach the view, and #322 argued for showing it. Hart declined during
-  brainstorming: the board answers a multi-year keeper question and a day-to-day
-  tag is this-week information that does not change it.
+- **No IL/DTD status column ON THE WEB BOARD.** `RosterSpot.status` will be in
+  hand once spots reach the view, and #322 argued for showing it. Hart declined
+  during brainstorming: the board answers a multi-year keeper question and a
+  day-to-day tag is this-week information that does not change it.
+
+  This is a non-goal for the web only. **The CLI already renders `[IL10]` and
+  must keep doing so**, which is why `RosterIndex` carries `status_of`:
+  `assign_teams` stamps `row["status"]` today, and deleting it without a
+  replacement would silently drop the suffix from `trajectory_board.py`. Caught
+  while writing the implementation plan, not by spec review.
 - **No team-level headline total.** #322 raised it as an open question. Rejected:
   the analogous CLI headline was just fixed (`7e74b7b1`) because summing a whole
   roster of unclamped VAR is dominated by fringe negatives -- 93.5% of scored
@@ -112,6 +118,7 @@ def index_rosters(
 | field | type | meaning |
 |---|---|---|
 | `team_of` | `dict[tuple[str, str], str]` | `(normalized_name, pool)` -> owning team |
+| `status_of` | `dict[tuple[str, str], str]` | same key -> `RosterSpot.status` (`""` / `"IL10"` / `"DTD"`) |
 | `ambiguous` | `set[tuple[str, str]]` | keys matching more than one board row |
 | `unscored` | `dict[str, list[str]]` | roster players with no scored row, per team |
 | `teams` | `tuple[str, ...]` | league teams, my team first then alphabetical; plain alphabetical when `my_team` is None or matches no team in `spots` |
