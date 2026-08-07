@@ -2438,3 +2438,59 @@ def test_trajectory_controls_carry_every_filter_on_every_link(client):
     for link in links:
         for param in ("end=", "pool=", "scale=", "top=", "per=", "view="):
             assert param in link, f"{param} missing from {link}"
+
+
+def test_trajectory_teams_view_renders_one_block_per_team(client):
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        resp = client.get("/trajectory?view=teams")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+
+    # NOT a bare `"Hart of the Order" in body` -- that string is also the site header,
+    # so it is present whether or not a single block rendered. Assert on markup only a
+    # block emits. (The same trap made a dropdown-ordering test vacuous on #336.)
+    assert body.count("from the best 5") == 2, "one header per team block"
+    assert "Aardvarks" in body
+    assert "Testy McTestface" in body, "a block's rows render"
+
+
+def test_trajectory_defaults_to_the_league_board(client):
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        plain = client.get("/trajectory")
+        explicit = client.get("/trajectory?view=board")
+        junk = client.get("/trajectory?view=nonsense")
+    for resp in (plain, explicit, junk):
+        assert resp.status_code == 200
+        assert "All teams" in resp.data.decode(), "the league board's team dropdown"
+
+
+def test_trajectory_teams_view_falls_back_when_no_rosters_arrived(client):
+    """A stale bookmark must degrade to the league board, not render an empty page."""
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch("fantasy_baseball.data.rosters.live_rosters", return_value=[]),
+    ):
+        resp = client.get("/trajectory?view=teams")
+    assert resp.status_code == 200
+    assert "Testy McTestface" in resp.data.decode(), "the league board rendered instead"

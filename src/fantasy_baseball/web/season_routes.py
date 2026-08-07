@@ -811,10 +811,12 @@ def register_routes(app: Flask) -> None:
             DEFAULT_PER_TEAM,
             DEFAULT_TOP,
             build_board,
+            build_teams_board,
+            select_view,
         )
 
         payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
-        board, error = None, None
+        board, teams_board, error = None, None, None
         if payload:
             # LIVE rosters, not the local mirror: which players are mine is exactly the
             # state that goes stale silently, and a trade since the last sync would mark
@@ -833,19 +835,59 @@ def register_routes(app: Flask) -> None:
                 spots = list(live_rosters(my_team))
             except Exception:
                 logger.warning("trajectory: live roster read failed; rendering unmarked")
+            view = select_view(request.args.get("view"))
             try:
-                board = build_board(
-                    payload,
-                    end=request.args.get("end"),
-                    pool=request.args.get("pool", "both"),
-                    top=request.args.get("top"),
-                    scale=request.args.get("scale", "var"),
-                    spots=spots,
-                    my_team=my_team,
-                    team=request.args.get("team", "all"),
-                )
+                if view == "teams":
+                    teams_board = build_teams_board(
+                        payload,
+                        end=request.args.get("end"),
+                        pool=request.args.get("pool", "both"),
+                        scale=request.args.get("scale", "var"),
+                        spots=spots,
+                        my_team=my_team,
+                        per_team=request.args.get("per"),
+                    )
+                    # No roster data means no blocks to show. Fall back rather than
+                    # render an empty page -- a bookmark outlives an Upstash outage.
+                    # Reset to "board" rather than inventing a third view value: the
+                    # only values that exist anywhere are the two `select_view` allows.
+                    if not teams_board.blocks:
+                        teams_board, view = None, "board"
+                if view == "board":
+                    board = build_board(
+                        payload,
+                        end=request.args.get("end"),
+                        pool=request.args.get("pool", "both"),
+                        top=request.args.get("top"),
+                        scale=request.args.get("scale", "var"),
+                        spots=spots,
+                        my_team=my_team,
+                        team=request.args.get("team", "all"),
+                    )
             except (ValueError, KeyError) as exc:
                 error = str(exc)
+        else:
+            view = "board"
+
+        if view == "teams" and teams_board is not None:
+            cur = {
+                "end_year": teams_board.end_year,
+                "pool": teams_board.pool,
+                "top": request.args.get("top", DEFAULT_TOP),
+                "scale": teams_board.scale,
+                "team": "all",
+                "view": "teams",
+                "per": teams_board.per_team,
+            }
+            return render_template(
+                "season/trajectory_teams.html",
+                meta=read_meta(),
+                active_page="trajectory",
+                board=teams_board,
+                error=error,
+                cur=cur,
+            )
+
         return render_template(
             "season/trajectory.html",
             meta=read_meta(),

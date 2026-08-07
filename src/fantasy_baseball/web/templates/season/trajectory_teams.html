@@ -1,0 +1,84 @@
+{% extends "season/base.html" %}
+{% block title %}Trajectory by Team -- Season Dashboard{% endblock %}
+{% block content %}
+{% import "season/_trajectory_controls.html" as ctl %}
+
+<div class="page-trajectory">
+<div class="page-header">
+    <h2>Trajectory Board -- by team</h2>
+</div>
+
+{% if error %}
+  <p class="warning">{{ error }}</p>
+{% else %}
+
+<p class="muted">
+  The best {{ board.per_team }} on every roster over {{ board.span }}, strongest team first.
+  Ranks are LEAGUE ranks -- a block's top row reads its position among all
+  {{ board.ranked }} scored players, not its position on that roster.
+</p>
+
+{{ ctl.controls(cur, board.end_years, board.blocks | map(attribute='team') | list) }}
+
+{% if board.mine_missing %}
+<p class="muted"><strong>None of these blocks is marked as yours</strong> -- the page could
+not match your team name to any roster it read, so no block is highlighted. That is a
+statement about the lookup, not about what you own.</p>
+{% endif %}
+
+{% for block in board.blocks %}
+<div class="team-block{% if block.is_mine %} user-team{% endif %}">
+  <h3>{{ block.team }}
+    {%- if block.scored %}
+    <span class="muted">({{ block.rows | length }} of {{ block.scored }} scored,
+    {{ '%.1f'|format(block.total) }} {{ board.span }} {{ board.scale|upper }} from the best {{ board.per_team }})</span>
+    {%- endif %}
+  </h3>
+  {% if block.rows %}
+  <table class="data-table trajectory-table">
+    <thead>
+      <tr>
+        <th title="League-wide rank over the whole scored pool">#</th>
+        <th>Player</th>
+        <th>Age</th>
+        <th>Slot</th>
+        <th class="sorted">{{ board.span }} {{ board.scale|upper }}</th>
+        {% for y in board.year_columns %}
+        <th title="{{ board.scale|upper }} in {{ y }} alone">'{{ (y|string)[2:] }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in block.rows %}
+      <tr>
+        <td>{{ r.rank_total }}</td>
+        <td>{{ r.name }}
+          {%- if r.owner_ambiguous %} <span class="flag flag-extrap" title="This name is not unique -- either the board carries more than one player under it, or more than one team rosters one. Roster blobs have no MLBAM id (#284), so the name is the only join available and it cannot tell them apart. Who owns this row is a guess; check before acting on it.">(?)</span>
+          {%- endif %}
+        </td>
+        <td>{{ r.age }}</td>
+        <td>{{ r.slot }}</td>
+        <td>{{ '%.1f'|format(r.total) }}</td>
+        {% for cell in r.year_cells %}
+        <td>{% if cell is not none %}{{ '%.1f'|format(cell) }}{% else %}--{% endif %}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Nothing on this roster was scored at this timeframe.</p>
+  {% endif %}
+  {% if block.unscored %}
+  <p class="muted">
+    not scored: {{ block.unscored|join(', ') }} --
+    no {{ board.base_season }} line (injured, released, or not yet up) or pacing under
+    {{ '%.1f'|format(board.meta.min_sgp) }} SGP, so the model could not price them.
+  </p>
+  {% endif %}
+</div>
+{% endfor %}
+
+{% endif %}
+</div>
+{% endblock %}

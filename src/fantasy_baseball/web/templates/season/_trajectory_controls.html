@@ -26,6 +26,12 @@
 
 {% macro controls(cur, end_years, teams) -%}
 <div class="trajectory-controls">
+  {% if teams %}
+  <span class="pill-group">
+    <a class="pill {% if cur.view == 'board' %}active{% endif %}" href="{{ board_url(cur, view='board') }}">League</a>
+    <a class="pill {% if cur.view == 'teams' %}active{% endif %}" href="{{ board_url(cur, view='teams') }}">By team</a>
+  </span>
+  {% endif %}
   <label>Through
     <select onchange="location = this.value">
       {% for y in end_years %}

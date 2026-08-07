@@ -371,6 +371,22 @@ def build_board(
     )
 
 
+#: The two views `/trajectory` renders. A junk or absent value is the league board.
+VIEWS = ("board", "teams")
+
+
+def select_view(value: Any) -> str:
+    """Which view a query string is asking for, clamped to one that exists.
+
+    Public because the ROUTE has to branch before it can build a view model, so it
+    cannot learn this from the returned object the way it learns `pool` or `scale`.
+    Exported deliberately rather than having the route import `_clamp_choice`:
+    reaching across a module boundary for a private helper is how that helper stops
+    being free to change.
+    """
+    return _clamp_choice(value, VIEWS, "board")
+
+
 def build_teams_board(
     payload: dict,
     *,
