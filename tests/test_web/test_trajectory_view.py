@@ -821,15 +821,29 @@ def test_blocks_are_ordered_by_strength_and_mine_is_not_promoted(payload: dict) 
 
 
 def test_teams_tied_on_total_are_ordered_by_name_not_by_roster_order(payload: dict) -> None:
-    """Two teams with nothing scored both total 0.0. Left to dict order the page
-    would reorder between reads -- the arbitrary-ordering defect `index_rosters`
-    was fixed for in 06bf2646."""
-    spots = _teams_fixture()
-    forward = build_teams_board(payload, spots=spots, my_team="Mine")
-    reverse = build_teams_board(payload, spots=list(reversed(spots)), my_team="Mine")
+    """Three teams total 0.0: "Aardvark FC" and "Empty FC" from `_teams_fixture`, plus
+    "Zebra FC" -- added here as `my_team`, with a player of its own that is not on the
+    board. That third team is load-bearing and cannot be dropped back to just the
+    original two.
+
+    `index_rosters` promotes `my_team` to the FRONT of `index.teams`, which is also
+    `grouped`'s insertion order. Python's `sort` is stable, so with NO tie-break at all
+    a three-way tie would simply keep that insertion order -- and "Zebra FC" being
+    FIRST into `grouped` would put it first among the ties too, the opposite of where
+    its name sorts. The original two-team version of this test used only "Aardvark FC"
+    and "Empty FC", both of which -- coincidentally -- already sit in alphabetical
+    order in `index.teams`' own insertion order, so a stable sort with no tie-break at
+    all reproduced the "correct" answer by accident and the assertion could not fail.
+    Only because "Zebra FC" is alphabetically LAST of the three, while being FIRST by
+    insertion order, does this version actually distinguish "sorted by name" from
+    "insertion order, stable-sorted."
+    """
+    spots = [*_teams_fixture(), _spot("Zebra Ghost", "Zebra FC")]
+    forward = build_teams_board(payload, spots=spots, my_team="Zebra FC")
+    reverse = build_teams_board(payload, spots=list(reversed(spots)), my_team="Zebra FC")
 
     empties = [b.team for b in forward.blocks if b.total == 0.0]
-    assert empties == ["Aardvark FC", "Empty FC"], "ties break on name, ascending"
+    assert empties == ["Aardvark FC", "Empty FC", "Zebra FC"], "ties break on name, ascending"
     assert [b.team for b in reverse.blocks] == [b.team for b in forward.blocks]
 
 
