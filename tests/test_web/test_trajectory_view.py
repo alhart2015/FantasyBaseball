@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import itertools
 import math
+import re
 
 import pytest
 
 from fantasy_baseball.trajectory.board import BoardRow
 from fantasy_baseball.trajectory.sweep import (
-    PAYLOAD_VERSION,
     RANK_MOVE,
     sweep_pool,
     to_payload,
@@ -217,19 +217,14 @@ def test_the_band_belongs_to_the_scale_on_screen(payload: dict) -> None:
 def _hand_payload(players: list[tuple[str, list[float]]]) -> dict:
     """A payload with exact per-year means, so rank arithmetic can be pinned directly.
 
-    `_pack` is [horizon, mean, p10, p90, n_eff, band_fell_back]; the band and support
-    are irrelevant here and set wide/high so nothing else flags.
+    Points are named keys, matching `_pack`; the band and support are irrelevant here
+    and set wide/high so nothing else flags.
 
     The floor is ZERO so that `means` are the numbers the default (VAR) board reads. Only
     the raw fit is stored now and VAR is derived as `sgp - floor` (#331), so a non-zero
     floor here would silently shift every value these tests pin.
     """
     return {
-        # From the constant, not a literal: this is the only hand-built payload in the
-        # repo (everything else goes through `to_payload`, which stamps it), so a hardcoded
-        # copy has to be hunted down on every bump and fails with a version-mismatch that
-        # says nothing about what changed. The one test that WANTS a mismatch overrides it.
-        "version": PAYLOAD_VERSION,
         "base_season": BASE,
         "max_horizon": 3,
         # Unique per call: real payloads always carry one, and sharing it would let two
@@ -247,7 +242,17 @@ def _hand_payload(players: list[tuple[str, list[float]]]) -> dict:
                 "prior": 10.0,
                 "support": 0.9,
                 "extrapolated": 0,
-                "sgp": [[h, m, m - 5, m + 5, 50.0, 0] for h, m in enumerate(means, start=1)],
+                "sgp": [
+                    {
+                        "horizon": h,
+                        "mean": m,
+                        "p10": m - 5,
+                        "p90": m + 5,
+                        "n_effective": 50.0,
+                        "band_fell_back": 0,
+                    }
+                    for h, m in enumerate(means, start=1)
+                ],
             }
             for i, (name, means) in enumerate(players, start=1)
         ],
@@ -351,7 +356,7 @@ def test_no_arrow_when_there_is_no_next_year_estimate() -> None:
         ]
     )
     gapped_payload["players"][0]["sgp"] = [
-        p for p in gapped_payload["players"][0]["sgp"] if p[0] != 1
+        p for p in gapped_payload["players"][0]["sgp"] if p["horizon"] != 1
     ]
     board2 = build_board(gapped_payload, top="all", end=BASE + 3)
     row = next(r for r in board2.rows if r["name"] == "Aaa Gapped")
@@ -376,7 +381,7 @@ def test_per_year_cells_are_placed_by_horizon_not_by_position() -> None:
     nothing and removes the assumption.
     """
     gapped = _hand_payload([("Gapped", [0.0, 7.0, 5.0])])
-    gapped["players"][0]["sgp"] = [p for p in gapped["players"][0]["sgp"] if p[0] != 1]
+    gapped["players"][0]["sgp"] = [p for p in gapped["players"][0]["sgp"] if p["horizon"] != 1]
 
     board = build_board(gapped, top="all", end=BASE + 3)
     row = board.rows[0]
@@ -562,6 +567,25 @@ def test_the_board_reports_who_it_left_out(payload: dict) -> None:
 def test_a_cache_written_by_another_schema_raises_rather_than_rendering_empty(
     payload: dict,
 ) -> None:
-    stale = dict(payload, version=99)
-    with pytest.raises(ValueError, match="version"):
+    """Reworded from a `version=99` check (2026-08-06, Hart's call) -- see
+    `test_sweep.test_the_old_positional_payload_is_refused_by_shape_not_by_a_version`.
+
+    The page-level guarantee is unchanged and is the reason this test exists: a payload
+    this build cannot read must reach `season_routes`' error path, not render a board
+    that silently means something else.
+    """
+    from fantasy_baseball.web import trajectory_view
+
+    trajectory_view.clear_board_cache()
+    stale = dict(payload, generated_at="positional-blob")
+    stale["players"] = [
+        dict(
+            p,
+            sgp=[
+                [y["horizon"], y["mean"], y["p10"], y["p90"], y["n_effective"], 0] for y in p["sgp"]
+            ],
+        )
+        for p in payload["players"]
+    ]
+    with pytest.raises(ValueError, match=re.escape("re-run scripts/push_trajectory_board.py")):
         build_board(stale)

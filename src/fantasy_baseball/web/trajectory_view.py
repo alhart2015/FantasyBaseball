@@ -22,7 +22,6 @@ from fantasy_baseball.trajectory.sweep import (
     add_ranks,
     from_payload,
     rank_move,
-    require_supported_version,
     totals,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -172,7 +171,6 @@ def build_board(
     (see `trajectory.sweep`) -- and it is also what keeps `rank_next` meaningful, since
     `next` is only populated when horizon 1 is in range.
     """
-    require_supported_version(payload)
     base = int(payload["base_season"])
     max_horizon = int(payload["max_horizon"])
     end_years = [base + h for h in range(1, max_horizon + 1)]

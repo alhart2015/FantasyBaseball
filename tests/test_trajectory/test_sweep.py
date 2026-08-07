@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 import pytest
@@ -137,12 +138,44 @@ def test_a_payload_round_trip_preserves_every_ranked_number() -> None:
         assert a["p10"] == pytest.approx(b["p10"], abs=1e-5)
 
 
-def test_a_payload_from_another_schema_is_refused_not_misread() -> None:
-    """A compact point is a positional array, so a shape change does not fail loudly on
-    its own -- it indexes to the wrong field and produces confident nonsense."""
+def test_the_old_positional_payload_is_refused_by_shape_not_by_a_version() -> None:
+    """Replaces a `version=99` test, deliberately (2026-08-06, Hart's call).
+
+    Points used to be positional arrays -- `[horizon, mean, p10, p90, n_eff, fell_back]`
+    -- which is why a version register existed: a shape change indexes to the wrong
+    field and produces confident nonsense instead of failing. Named keys removed the
+    failure mode, so the register that guarded it went too, and with it the deploy
+    window where a running build and a stored blob disagree by one integer.
+
+    What has to survive is the REFUSAL. The blob deployed at the time of this change is
+    positional, so the reader still has to say so in words rather than raising
+    `TypeError: list indices must be integers`.
+    """
     payload = to_payload(sweep_pool(_rows(), synthetic_panel(), "hitter", (1,)), base_season=2026)
-    payload["version"] = 99
-    with pytest.raises(ValueError, match="version"):
+    positional = dict(payload)
+    positional["players"] = [
+        dict(
+            p,
+            sgp=[
+                [y["horizon"], y["mean"], y["p10"], y["p90"], y["n_effective"], 0] for y in p["sgp"]
+            ],
+        )
+        for p in payload["players"]
+    ]
+    with pytest.raises(ValueError, match=re.escape("re-run scripts/push_trajectory_board.py")):
+        from_payload(positional)
+
+
+def test_a_point_missing_a_field_fails_loudly_rather_than_shifting_the_rest() -> None:
+    """The property that made the version register unnecessary.
+
+    Drop a field from a positional array and every later field shifts up one -- p90 read
+    as p10, n_effective as p90 -- and the board renders. Drop it from a dict and the
+    read fails on the name of the thing that is missing.
+    """
+    payload = to_payload(sweep_pool(_rows(), synthetic_panel(), "hitter", (1,)), base_season=2026)
+    payload["players"][0]["sgp"][0].pop("p10")
+    with pytest.raises(KeyError, match="p10"):
         from_payload(payload)
 
 

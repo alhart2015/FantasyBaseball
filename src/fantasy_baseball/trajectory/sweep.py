@@ -256,19 +256,6 @@ def totals(
     return scored
 
 
-#: Payload schema version. Bumped when the shape changes incompatibly; a reader that
-#: finds a version it does not know refuses the blob rather than mis-indexing the compact
-#: point arrays into confidently wrong numbers.
-#:
-#: 2 dropped the per-player "var" array (#331). Note what this is NOT: a v1 blob's "sgp"
-#: array is byte-identical to a v2 one, because the old raw pass already ran with
-#: `replacement=0.0` and every clamp was gated on a truthy floor -- so v2 is a strict
-#: subset of v1 and a tolerant reader would in fact get right answers. The refusal is
-#: deliberately stricter than the data requires: these points are positional arrays that
-#: mis-index into confident nonsense rather than failing, re-pushing costs one script
-#: run, and a reader that starts accepting near-miss schemas is how that stops being true.
-PAYLOAD_VERSION = 2
-
 #: Decimals kept on a cached point. Not chosen for display -- the board prints one -- but
 #: for the RANKING, which is a sum of these and is what the page sorts on. The pool is
 #: dense: 127 of 562 adjacent hitters sit within 0.001 VAR of each other, and some tie
@@ -284,36 +271,60 @@ PAYLOAD_VERSION = 2
 _PRECISION = 6
 
 
-def _pack(point: YearPoint) -> list[float]:
-    """A point as a positional array. `age` is dropped -- it is `player.age + horizon`,
-    and a stored copy is a second source for a derived fact."""
-    return [
-        point.horizon,
-        round(point.mean, _PRECISION),
-        round(point.p10, _PRECISION),
-        round(point.p90, _PRECISION),
-        round(point.n_effective, 1),
-        int(point.band_fell_back),
-    ]
+def _pack(point: YearPoint) -> dict[str, float]:
+    """A point as named fields. `age` is dropped -- it is `player.age + horizon`, and a
+    stored copy is a second source for a derived fact.
+
+    These were positional arrays, which cost ~340 KB less and bought a whole schema
+    register to go with it: a positional point that changes shape does not fail, it
+    indexes to the wrong field and renders confident nonsense, so the blob carried a
+    `PAYLOAD_VERSION` and the reader refused anything that did not match exactly. That
+    refusal is strict in BOTH directions -- an old build rejects a new blob just as a
+    new build rejects an old one -- so every bump had a mandatory window where the
+    deployed page was down, and it could not be closed by ordering the deploy and the
+    push, only shortened.
+
+    Named keys delete the failure mode rather than detecting it: a missing or renamed
+    field raises on its own name. The register went with it. The cost is the size, on a
+    blob with no ceiling enforced anywhere in this repo -- ~420 KB against ~760 KB, both
+    far under the plan limit. Clarity now, packing later if it is ever measured to
+    matter.
+    """
+    return {
+        "horizon": point.horizon,
+        "mean": round(point.mean, _PRECISION),
+        "p10": round(point.p10, _PRECISION),
+        "p90": round(point.p90, _PRECISION),
+        "n_effective": round(point.n_effective, 1),
+        "band_fell_back": int(point.band_fell_back),
+    }
 
 
-def _unpack(packed: list[float], age: int) -> YearPoint:
-    horizon = int(packed[0])
+def _unpack(packed: dict[str, float], age: int) -> YearPoint:
+    if not isinstance(packed, dict):
+        # The blob deployed when this landed is positional, and `packed[0]` on a list
+        # would read as a TypeError about integer indices -- true, and useless. Say
+        # what to do instead. Self-limiting: once prod is re-pushed it never fires,
+        # and unlike a version register nothing has to be remembered to keep it honest.
+        raise ValueError(
+            "trajectory board payload stores points as positional arrays, which this "
+            "build no longer reads; re-run scripts/push_trajectory_board.py"
+        )
+    horizon = int(packed["horizon"])
     return YearPoint(
         horizon=horizon,
         age=age + horizon,
-        mean=float(packed[1]),
-        p10=float(packed[2]),
-        p90=float(packed[3]),
-        n_effective=float(packed[4]),
-        band_fell_back=bool(packed[5]),
+        mean=float(packed["mean"]),
+        p10=float(packed["p10"]),
+        p90=float(packed["p90"]),
+        n_effective=float(packed["n_effective"]),
+        band_fell_back=bool(packed["band_fell_back"]),
     )
 
 
 def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
     """Serialize a sweep for the KV. `meta` carries the vintage the reader must show."""
     return {
-        "version": PAYLOAD_VERSION,
         **meta,
         "players": [
             {
@@ -335,29 +346,17 @@ def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
     }
 
 
-def require_supported_version(payload: dict) -> None:
-    """Refuse a payload this build cannot read, rather than mis-indexing its point arrays.
-
-    Split out of `from_payload` so a caller that caches the PARSE still validates every
-    payload it is handed -- otherwise a schema bump would be waved through whenever the
-    parse came from cache.
-    """
-    version = payload.get("version")
-    if version != PAYLOAD_VERSION:
-        raise ValueError(
-            f"trajectory board payload is version {version!r}, this build reads "
-            f"{PAYLOAD_VERSION}; re-run scripts/push_trajectory_board.py"
-        )
-
-
 def from_payload(payload: dict) -> list[SweptPlayer]:
     """Rebuild the sweep from a cached payload.
 
     Deliberately reconstructs `SweptPlayer` rather than letting the web layer read the
     dicts directly, so the page and the CLI collapse a range through the same `totals()`
     and cannot disagree about what a three-year VAR is.
+
+    A payload this build cannot read raises out of `_unpack`, on the field that is
+    actually wrong, rather than being screened by a schema register up front -- see
+    `_pack` for why that register existed and why named fields replaced it.
     """
-    require_supported_version(payload)
     players = []
     for row in payload["players"]:
         age = int(row["age"])

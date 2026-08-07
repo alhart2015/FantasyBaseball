@@ -2162,14 +2162,42 @@ def test_trajectory_page_renders_with_a_cold_cache(client):
 
 
 def test_trajectory_page_reports_a_payload_it_cannot_read(client):
-    """Rather than 500ing, or worse, mis-indexing the compact point arrays."""
+    """Rather than 500ing, or worse, reading the point fields off by one.
+
+    The trigger changed on 2026-08-06 (Hart's call): points are named fields now, so
+    there is no `PAYLOAD_VERSION` to mismatch -- an unreadable payload is one whose
+    points are the OLD positional arrays, which is exactly what prod held when this
+    landed. The route-level guarantee is unchanged and is why this test exists: the
+    page renders its error, it does not 500 and it does not render a board.
+    """
+    positional = {
+        "base_season": 2026,
+        "max_horizon": 3,
+        "generated_at": "positional-blob",
+        "players": [
+            {
+                "id": 1,
+                "name": "Old Schema",
+                "pool": "hitter",
+                "age": 27,
+                "slot": "OF",
+                "floor": 4.0,
+                "now": 10.0,
+                "prior": 10.0,
+                "support": 0.9,
+                "extrapolated": 0,
+                "sgp": [[1, 8.0, 3.0, 13.0, 50.0, 0]],
+            }
+        ],
+    }
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value={"version": 99, "players": [], "base_season": 2026, "max_horizon": 3},
+        return_value=positional,
     ):
         resp = client.get("/trajectory")
     assert resp.status_code == 200
-    assert b"version" in resp.data
+    assert b"push_trajectory_board" in resp.data
+    assert b"Old Schema" not in resp.data, "a board was rendered off an unreadable payload"
 
 
 def test_trajectory_page_renders_a_board(client):
