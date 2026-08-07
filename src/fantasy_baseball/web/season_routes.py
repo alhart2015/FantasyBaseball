@@ -808,10 +808,9 @@ def register_routes(app: Flask) -> None:
         than silently rendering an empty board that looks like "nobody scored".
         """
         from fantasy_baseball.web.trajectory_view import (
-            DEFAULT_PER_TEAM,
-            DEFAULT_TOP,
             build_board,
             build_teams_board,
+            filter_state,
             select_view,
         )
 
@@ -870,27 +869,13 @@ def register_routes(app: Flask) -> None:
             view = "board"
 
         if view == "teams" and teams_board is not None:
-            cur = {
-                "end_year": teams_board.end_year,
-                "pool": teams_board.pool,
-                "top": request.args.get("top", DEFAULT_TOP),
-                "scale": teams_board.scale,
-                # RAW, like `top` above and for the same reason: the Team select only
-                # renders on the league board, and `build_board` owns the clamp. A
-                # hardcoded "all" here silently dropped the filter on the round trip --
-                # /trajectory?team=X -> "By team" -> "League" came back unfiltered,
-                # which is the exact failure the shared partial exists to prevent.
-                "team": request.args.get("team", "all"),
-                "view": "teams",
-                "per": teams_board.per_team,
-            }
             return render_template(
                 "season/trajectory_teams.html",
                 meta=read_meta(),
                 active_page="trajectory",
                 board=teams_board,
                 error=error,
-                cur=cur,
+                cur=filter_state("teams", teams_board, request.args),
             )
 
         return render_template(
@@ -899,20 +884,9 @@ def register_routes(app: Flask) -> None:
             active_page="trajectory",
             board=board,
             error=error,
-            # The full filter state in ONE object, so the control macros never have to
-            # reach into a view model that may not carry a given field.
-            cur={
-                "end_year": board.end_year if board else 0,
-                "pool": board.pool if board else "both",
-                "top": board.top if board else DEFAULT_TOP,
-                "scale": board.scale if board else "var",
-                "team": board.team if board else "all",
-                "view": "board",
-                # Raw here on purpose: the Per-team select only renders on the teams
-                # view, and `build_teams_board` owns the clamp. Clamping in two places
-                # is how the two spellings drift.
-                "per": request.args.get("per", DEFAULT_PER_TEAM),
-            },
+            # Derived in ONE place for both views -- see `filter_state`, and the
+            # dropped-team-filter bug that motivated it.
+            cur=filter_state("board", board, request.args),
         )
 
     @app.route("/api/il-return-plan")
