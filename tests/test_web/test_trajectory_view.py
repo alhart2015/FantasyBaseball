@@ -1017,6 +1017,22 @@ def _payload_with_extras(payload: dict) -> dict:
     return out
 
 
+def _payload_with_a_twin(payload: dict, id_offset: int) -> tuple[dict, dict]:
+    """`_payload_with_extras` plus a second player under `players[0]`'s NAME.
+
+    Returns the payload and the original row, so a caller can assert against
+    `first["id"]` and `first["id"] + id_offset`. The SIGN of the offset is the whole
+    parameter: a positive one appends the larger id (the order `hits` arrives in
+    anyway, which a candidate-ordering assertion cannot distinguish from a real sort),
+    a negative one appends the smaller and only an actual `sorted()` produces it.
+    """
+    twin = _payload_with_extras(payload)
+    first = twin["players"][0]
+    twin["players"] = [*twin["players"], {**first, "id": first["id"] + id_offset}]
+    twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
+    return twin, first
+
+
 def test_a_player_is_found_by_name_with_his_career_and_projection(payload: dict) -> None:
     view = build_player_view(_payload_with_extras(payload), player="Big Bat")
     assert view.found
@@ -1041,11 +1057,7 @@ def test_an_unknown_name_is_not_found_and_lists_nobody(payload: dict) -> None:
 def test_an_ambiguous_name_lists_candidates_and_renders_no_chart(payload: dict) -> None:
     """Two players can share a normalized name -- the live board carries two hitters
     called Max Muncy. Guessing puts one man's career under another's name."""
-    twin = _payload_with_extras(payload)
-    first = twin["players"][0]
-    twin["players"] = [*twin["players"], {**first, "id": first["id"] + 10_000}]
-    twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"
-
+    twin, first = _payload_with_a_twin(payload, 10_000)
     view = build_player_view(twin, player=first["name"])
     assert not view.found, "an ambiguous name renders no chart"
     assert len(view.candidates) == 2
@@ -1145,11 +1157,7 @@ def test_ambiguous_candidates_are_ordered_by_id(payload: dict) -> None:
     passes it. Built with the smaller id appended LAST -- the opposite of the order
     `hits` would otherwise arrive in -- so only an actual sort produces this list.
     """
-    twin = _payload_with_extras(payload)
-    first = twin["players"][0]
-    twin["players"] = [*twin["players"], {**first, "id": first["id"] - 10_000}]
-    twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"
-
+    twin, first = _payload_with_a_twin(payload, -10_000)
     view = build_player_view(twin, player=first["name"])
     assert [c["id"] for c in view.candidates] == [first["id"] - 10_000, first["id"]]
 
