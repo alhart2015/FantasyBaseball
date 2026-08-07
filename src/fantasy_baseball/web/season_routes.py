@@ -809,13 +809,14 @@ def register_routes(app: Flask) -> None:
         """
         from fantasy_baseball.web.trajectory_view import (
             build_board,
+            build_player_view,
             build_teams_board,
             filter_state,
             select_view,
         )
 
         payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
-        board, teams_board, error = None, None, None
+        board, teams_board, player_view, error = None, None, None, None
         if payload:
             # LIVE rosters, not the local mirror: which players are mine is exactly the
             # state that goes stale silently, and a trade since the last sync would mark
@@ -836,6 +837,13 @@ def register_routes(app: Flask) -> None:
                 logger.warning("trajectory: live roster read failed; rendering unmarked")
             view = select_view(request.args.get("view"))
             try:
+                if view == "player":
+                    player_view = build_player_view(
+                        payload,
+                        player=request.args.get("player", ""),
+                        scale=request.args.get("scale", "var"),
+                        n=request.args.get("n"),
+                    )
                 if view == "teams":
                     teams_board = build_teams_board(
                         payload,
@@ -867,6 +875,16 @@ def register_routes(app: Flask) -> None:
                 error = str(exc)
         else:
             view = "board"
+
+        if view == "player" and player_view is not None:
+            return render_template(
+                "season/trajectory_player.html",
+                meta=read_meta(),
+                active_page="trajectory",
+                board=player_view,
+                error=error,
+                cur=filter_state("player", player_view, request.args),
+            )
 
         if view == "teams" and teams_board is not None:
             return render_template(

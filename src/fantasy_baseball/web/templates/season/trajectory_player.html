@@ -1,0 +1,88 @@
+{% extends "season/base.html" %}
+{% block title %}Player Trajectory -- Season Dashboard{% endblock %}
+{% block content %}
+{% import "season/_trajectory_controls.html" as ctl %}
+
+<div class="page-trajectory">
+<div class="page-header"><h2>Player Trajectory</h2></div>
+
+{% if error %}<p class="warning">{{ error }}</p>{% else %}
+
+{{ ctl.controls(cur, board.end_years, []) }}
+
+<form method="get" class="trajectory-search">
+  <input type="hidden" name="view" value="player">
+  <input type="hidden" name="scale" value="{{ board.scale }}">
+  <input type="hidden" name="n" value="{{ board.n }}">
+  <label>Player <input name="player" value="{{ board.name }}" placeholder="Juan Soto"></label>
+  <button type="submit">Search</button>
+</form>
+
+{% if board.candidates %}
+<p class="warning">More than one player is named "{{ board.name }}" on this board. Roster
+blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:</p>
+<ul>
+  {% for c in board.candidates %}
+  <li>{{ c.name }} -- age {{ c.age }}, {{ c.slot }} (id {{ c.id }})</li>
+  {% endfor %}
+</ul>
+
+{% elif not board.found %}
+  {% if board.name %}<p>No player named "{{ board.name }}" on this board.</p>
+  {% else %}<p class="muted">Search a player to see his trajectory.</p>{% endif %}
+
+{% else %}
+<p class="muted">
+  {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
+  Solid is what happened; dashed is projected, with the shaded band its p10-p90 range.
+  {% if board.extrapolated %}<strong>(!)</strong> This fit was evaluated outside its own
+  support -- read the band, not the point estimate.{% endif %}
+</p>
+
+<div class="chart-wrapper"><canvas id="trajectory-chart"></canvas></div>
+<script type="application/json" id="trajectory-chart-data">{{ {
+  "name": board.name, "scale": board.scale, "history": board.history,
+  "projection": board.projection, "comps": board.comps} | tojson }}</script>
+
+<h3>Closest realized paths <span class="muted">({{ board.comps | length }})</span></h3>
+<p class="muted">
+  These are the closest realized paths to the projection -- chosen ON the outcome, so
+  they illustrate what this shape looked like when it played out and are
+  <strong>not evidence for the forecast</strong>. The honest uncertainty is the shaded
+  band, which is wider than they are by construction. A comp needs five realized seasons
+  to be scored on the same horizons, so none is recent.
+</p>
+<table class="data-table">
+  <thead><tr><th>Player</th><th>Season</th><th>RMSE</th>
+    {% for pt in board.projection %}<th>{{ pt.age }}</th>{% endfor %}</tr></thead>
+  <tbody>
+    {% for c in board.comps %}
+    <tr><td>{{ c.name }}</td><td>{{ c.season }}</td><td>{{ '%.2f'|format(c.rmse) }}</td>
+      {% for pt in c.path %}<td>{{ '%.1f'|format(pt.value) }}</td>{% endfor %}</tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<h3>The numbers</h3>
+<table class="data-table">
+  <thead><tr><th>Age</th><th>{{ board.scale|upper }}</th><th>p10..p90</th></tr></thead>
+  <tbody>
+    {% for a, v in board.history %}
+    <tr><td>{{ a }}</td><td>{{ '%.1f'|format(v) }}</td><td class="muted">actual</td></tr>
+    {% endfor %}
+    {% for pt in board.projection %}
+    <tr><td>{{ pt.age }}</td><td>{{ '%.1f'|format(pt.mean) }}</td>
+      <td>{{ '%.1f'|format(pt.p10) }}..{{ '%.1f'|format(pt.p90) }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endif %}
+</div>
+{#- season_trends.js owns the Chart.js loader (`ensureChartJs`, exposed on `window`)
+    and the CDN reference; it defines them at load time without eager side effects
+    on a non-standings page, so including it here reuses that loader rather than
+    duplicating it -- see the module docstring in trajectory_chart.js. -#}
+<script src="{{ url_for('static', filename='season_trends.js') }}"></script>
+<script src="{{ url_for('static', filename='trajectory_chart.js') }}"></script>
+{% endblock %}

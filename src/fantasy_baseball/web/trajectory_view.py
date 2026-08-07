@@ -457,37 +457,55 @@ def build_board(
     )
 
 
-#: The two views `/trajectory` renders. A junk or absent value is the league board.
-VIEWS = ("board", "teams")
+#: The three views `/trajectory` renders. A junk or absent value is the league board.
+VIEWS = ("board", "teams", "player")
 
 
 def filter_state(view: str, board: Any, args: Mapping[str, str]) -> dict:
     """The page's full filter state, as ONE dict, derived in ONE place.
 
-    The two views carry different models -- `Board` has `top`/`team`, `TeamsBoard` has
-    `per_team`, and neither has the other's -- so whichever field the rendering view
-    does not own has to come from the query string instead. That asymmetry is real.
-    What was not real was spelling it out twice: the route built a seven-key dict per
-    branch by hand, and one of those fourteen values was written as a literal `"all"`
-    where its neighbours were pass-throughs. The effect was that /trajectory?team=X ->
-    "By team" -> "League" came back unfiltered, and the test that should have caught it
-    ran on only one of the two views.
+    The three views carry different models -- `Board` has `top`/`team`, `TeamsBoard` has
+    `per_team`, `PlayerView` has `name`/`n` -- and none has the others'. So whichever
+    field the rendering view does not own has to come from the query string instead.
+    That asymmetry is real. What was not real was spelling it out twice: the route built
+    a seven-key dict per branch by hand, and one of those fourteen values was written as
+    a literal `"all"` where its neighbours were pass-throughs. The effect was that
+    /trajectory?team=X -> "By team" -> "League" came back unfiltered, and the test that
+    should have caught it ran on only one of the two views.
 
     A field a view owns is read off the model, so it is already clamped. A field it does
     not own passes through raw: the OTHER builder owns that clamp, and clamping in two
     places is how two spellings drift apart.
     """
-    owned = view == "teams"
+    owned_teams = view == "teams"
+    owned_player = view == "player"
     return {
         "view": view,
-        "end_year": board.end_year if board else 0,
-        "pool": board.pool if board else "both",
+        # `PlayerView` carries neither -- a per-player fit has no "end year" to move
+        # (the chart always shows the full history) and no pool filter (the search is
+        # a single resolved name, not a ranked list). `getattr` rather than another
+        # `owned_*` branch: no view "owns" these on the player page the way `top`/
+        # `team` are owned there, because nothing on that page reads them back.
+        "end_year": getattr(board, "end_year", 0) if board else 0,
+        "pool": getattr(board, "pool", "both") if board else "both",
         "scale": board.scale if board else "var",
         # Owned by `build_teams_board` on the teams view; by the query string otherwise.
-        "per": board.per_team if (owned and board) else args.get("per", DEFAULT_PER_TEAM),
+        "per": board.per_team if (owned_teams and board) else args.get("per", DEFAULT_PER_TEAM),
         # Owned by `build_board` on the league view; by the query string otherwise.
-        "top": args.get("top", DEFAULT_TOP) if owned else (board.top if board else DEFAULT_TOP),
-        "team": args.get("team", "all") if owned else (board.team if board else "all"),
+        "top": (
+            args.get("top", DEFAULT_TOP)
+            if (owned_teams or owned_player)
+            else (board.top if board else DEFAULT_TOP)
+        ),
+        "team": (
+            args.get("team", "all")
+            if (owned_teams or owned_player)
+            else (board.team if board else "all")
+        ),
+        # Owned by the player view; a pass-through elsewhere so a round trip through
+        # another view does not drop the searched name.
+        "player": board.name if (owned_player and board) else args.get("player", ""),
+        "n": board.n if (owned_player and board) else args.get("n", DEFAULT_COMPS),
     }
 
 

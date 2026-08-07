@@ -1,5 +1,6 @@
 import json
 import re
+from pathlib import Path
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +11,8 @@ from fantasy_baseball.data.cache_keys import redis_key
 from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.web.season_app import create_app
 from fantasy_baseball.web.season_data import CacheKey
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
@@ -2622,3 +2625,146 @@ def test_trajectory_teams_view_falls_back_when_no_rosters_arrived(client):
         resp = client.get("/trajectory?view=teams")
     assert resp.status_code == 200
     assert "Testy McTestface" in resp.data.decode(), "the league board rendered instead"
+
+
+def _trajectory_payload_with_extras():
+    """The route fixture plus the keys the push script bakes."""
+    payload = _trajectory_payload()
+    payload["players"] = [
+        {
+            **p,
+            "history": [[25, 14.0], [26, 16.0]],
+            "comps": [
+                {
+                    "name": "Andre Ethier",
+                    "season": 2007,
+                    "rmse": 1.25,
+                    "path": [12.7, 14.4, 12.1, 9.2, 12.2],
+                },
+                {
+                    "name": "Bryan Reynolds",
+                    "season": 2020,
+                    "rmse": 1.31,
+                    "path": [11.0, 12.0, 11.5, 10.0, 9.5],
+                },
+            ],
+        }
+        for p in payload["players"]
+    ]
+    return payload
+
+
+def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "trajectory-chart" in body, "the canvas the chart draws into"
+    assert "Andre Ethier" in body, "comps are named"
+    assert "closest realized paths" in body, "labelled as illustration, not evidence"
+    assert "1.25" in body, "each comp shows its RMSE"
+
+
+def test_trajectory_player_view_states_the_five_year_comp_rule(client):
+    """A reader who notices no comp is recent must find the rule, not infer a bug."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert "five realized seasons" in resp.data.decode()
+
+
+def test_trajectory_player_view_with_no_name_renders_the_search_box(client):
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player")
+    assert resp.status_code == 200
+    assert 'name="player"' in resp.data.decode(), "the search input"
+
+
+def test_trajectory_player_view_unknown_name_does_not_500(client):
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Nobody+At+All")
+    assert resp.status_code == 200
+    assert "No player named" in resp.data.decode()
+
+
+def test_trajectory_player_chart_data_is_truncated_to_the_projected_horizons(client):
+    """The fixture's comp paths are stored 5 long; `_trajectory_payload` sweeps 2
+    horizons. The route must serve what `build_player_view` already truncated, not
+    the raw stored path -- a page showing 5 comp points against a 2-point projection
+    would draw off the end of the chart's x-axis."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    body = resp.data.decode()
+    m = re.search(
+        r'<script type="application/json" id="trajectory-chart-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert m, "the chart's data island"
+    chart_data = json.loads(m.group(1))
+    assert len(chart_data["projection"]) == 2, "the fixture sweeps 2 horizons"
+    assert len(chart_data["comps"][0]["path"]) == 2, "not the fixture's stored 5"
+
+
+def test_trajectory_player_view_ambiguous_name_renders_no_chart(client):
+    """Two players sharing a normalized name must not silently pick one -- the
+    disambiguation list renders instead of a chart for either man's career."""
+    payload = _trajectory_payload_with_extras()
+    first = payload["players"][0]
+    payload["players"] = [*payload["players"], {**first, "id": first["id"] + 10_000}]
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=payload,
+    ):
+        resp = client.get(f"/trajectory?view=player&player={first['name'].replace(' ', '+')}")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "trajectory-chart" not in body, "an ambiguous name must not render a chart"
+    assert "More than one player is named" in body
+
+
+def test_the_three_trajectory_views_coexist(client):
+    """Each renders its own thing, and the other two are still reachable."""
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload_with_extras(),
+        ),
+        patch("fantasy_baseball.data.rosters.live_rosters", return_value=_trajectory_spots()),
+    ):
+        board = client.get("/trajectory")
+        teams = client.get("/trajectory?view=teams")
+        player = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert all(r.status_code == 200 for r in (board, teams, player))
+    assert "All teams" in board.data.decode()
+    assert "team-block" in teams.data.decode()
+    assert "trajectory-chart" in player.data.decode()
+
+
+def test_the_stored_and_displayed_comp_ceilings_agree(client):
+    """The view clamps N to a ceiling; the push script stores that many. If they drift,
+    the control asks for comps the blob never carried."""
+    import importlib.util
+
+    from fantasy_baseball.web.trajectory_view import MAX_COMPS_SHOWN
+
+    spec = importlib.util.spec_from_file_location(
+        "push_trajectory_board", PROJECT_ROOT / "scripts" / "push_trajectory_board.py"
+    )
+    push = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(push)
+    assert push.MAX_COMPS == MAX_COMPS_SHOWN
