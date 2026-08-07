@@ -78,14 +78,34 @@ def test_a_shorter_end_year_is_a_prefix_of_the_longer_one(payload: dict) -> None
     only while VAR was clamped at zero and every added year could therefore only add. A
     below-replacement year is now a negative one (#331), so a longer range legitimately
     scores lower -- that is the keeper signal, not a violation of the prefix rule.
+
+    It also briefly asserted `three.total == sum(three.by_year means)`, which cannot
+    fail: `totals` builds both from the same filtered `points` list, so the claim is one
+    expression compared against itself. Every assertion here now spans SEPARATELY BUILT
+    boards, which is the only way the range filter can be caught disagreeing with itself.
     """
-    one = {r["name"]: r for r in build_board(payload, end=BASE + 1).rows}
-    three = {r["name"]: r for r in build_board(payload, end=BASE + 3).rows}
-    for name, row in one.items():
+    boards = {k: {r["name"]: r for r in build_board(payload, end=BASE + k).rows} for k in (1, 2, 3)}
+    three = boards[3]
+
+    for name, row in boards[1].items():
         assert row["total"] == pytest.approx(three[name]["by_year"][0]["mean"], abs=1e-5)
-        assert three[name]["total"] == pytest.approx(
-            sum(c["mean"] for c in three[name]["by_year"]), abs=1e-5
-        )
+
+    for k in (1, 2, 3):
+        for name, row in boards[k].items():
+            # The k-year board is the first k years of the three-year one -- compared
+            # across two independent `build_board` calls, not within one row.
+            assert row["total"] == pytest.approx(
+                sum(c["mean"] for c in three[name]["by_year"][:k]), abs=1e-5
+            ), f"{name}: the {k}-year total is not the first {k} years of the three-year board"
+            assert len(row["by_year"]) in (0, k), "a range rendered a different number of years"
+
+    for k in (2, 3):
+        for name, row in boards[k].items():
+            # And each step adds exactly its own year. An off-by-one in the
+            # `p.horizon in wanted` filter shows up here as a doubled or skipped year.
+            assert row["total"] == pytest.approx(
+                boards[k - 1][name]["total"] + three[name]["by_year"][k - 1]["mean"], abs=1e-5
+            ), f"{name}: year {k} did not add its own mean"
 
 
 def test_ranks_are_league_wide_even_when_the_pool_is_filtered(payload: dict) -> None:

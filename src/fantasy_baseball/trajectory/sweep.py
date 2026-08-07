@@ -234,7 +234,8 @@ def totals(
                 # under a VAR header, so on the VAR board `now` is netted and `prior`
                 # beside it is not. Left alone here because netting it changes a rendered
                 # number and this year's floor is a questionable thing to charge against
-                # last year's production; it is worth its own issue, not a drive-by.
+                # last year's production. Tracked as #333 -- named here so the deferral
+                # is checkable rather than a promise that a reader has to take on faith.
                 "prior": player.prior,
                 "total": sum(p.mean for p in points),
                 "p10": sum(p.p10 for p in points),

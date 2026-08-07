@@ -7,8 +7,14 @@ which are worth the most over the years I would hold them?
 Ranked on TOTAL VAR over the horizon -- value above the position-aware waiver floor,
 summed across the projected years. Raw SGP would silently penalise every catcher and
 reliever, and a single year would not be a keeper question. The two differ enough to
-flip the order: Mason Miller is 8.9 VAR over three years to Zack Wheeler's 6.9, while on
-raw SGP Wheeler leads him every single year.
+flip the order (2027-29, measured 2026-08-06): Mason Miller is 4.5 VAR to Zack Wheeler's
+-0.0, while on raw SGP Wheeler leads 27.9 to 26.8. Wheeler is the better pitcher and the
+worse KEEPER, because an SP floor of 9.29 is a much higher bar than an RP's 7.42.
+
+Those figures replace pre-#331 ones (8.9 and 6.9) that no VAR this tool computes can
+reproduce: VAR was a clamped refit then and is `raw - years * floor` now. The old text
+also claimed Wheeler led "every single year", which is no longer true either -- he leads
+years one and two, 11.7 to 10.6 and 9.3 to 8.7, and trails in year three, 6.8 to 7.5.
 
 THE ONE THAT ANSWERS MOST QUESTIONS -- top 50 league-wide, your whole roster, the best
 five on every other team, and a CSV of all 551 rows to slice afterwards:
