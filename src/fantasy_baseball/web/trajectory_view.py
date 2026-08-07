@@ -477,6 +477,11 @@ def filter_state(view: str, board: Any, args: Mapping[str, str]) -> dict:
     A field a view owns is read off the model, so it is already clamped. A field it does
     not own passes through raw: the OTHER builder owns that clamp, and clamping in two
     places is how two spellings drift apart.
+
+    THE KEYS ARE THE QUERY-STRING NAMES, exactly. That is what lets `board_url` be
+    `url_for('trajectory', **cur)` and the search form a loop over `cur`, instead of
+    three hand-copied lists of the same nine names -- the fourth copy of which (the
+    guard test) had already drifted two filters behind by the time this was written.
     """
     owned_teams = view == "teams"
     owned_player = view == "player"
@@ -488,7 +493,7 @@ def filter_state(view: str, board: Any, args: Mapping[str, str]) -> dict:
         # string on the player view, exactly like `top`/`team`: a round trip through
         # another view must not drop them, which is the same bug the literal `"all"`
         # this docstring memorializes already caused once for `team`.
-        "end_year": (args.get("end", 0) if owned_player else (board.end_year if board else 0)),
+        "end": (args.get("end", 0) if owned_player else (board.end_year if board else 0)),
         "pool": (args.get("pool", "both") if owned_player else (board.pool if board else "both")),
         "scale": board.scale if board else "var",
         # Owned by `build_teams_board` on the teams view; by the query string otherwise.

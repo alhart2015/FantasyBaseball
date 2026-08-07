@@ -6,24 +6,17 @@
     `per_team` and none of those, because they mean nothing in a grouped view. A
     partial reaching into `board` would work for one caller and break for the other.
 
-    `board_url` remains the single place that knows the full filter state. The selects
-    once lived in a <form> with a hidden input per filter, so the state was encoded
-    twice and missing an input silently reset that filter whenever a dropdown changed.
-    Every parameter is therefore emitted on every link, whichever view is rendering --
-    `per` included on the league board, `top` included on the teams view. -#}
+    `filter_state` is the single place that knows the full filter state, and its keys
+    ARE the query-string names -- so `board_url` overrides one of them and splats the
+    rest, rather than re-listing them. The selects once lived in a <form> with a hidden
+    input per filter, so the state was encoded twice and missing an input silently reset
+    that filter whenever a dropdown changed. Every parameter is therefore emitted on
+    every link, whichever view is rendering -- `per` included on the league board, `top`
+    included on the teams view -- and a filter added to `filter_state` is emitted here
+    with no edit to this file. -#}
 
-{% macro board_url(cur, end=None, pool=None, top=None, scale=None, team=None,
-                   view=None, per=None, player=None, n=None) -%}
-{{ url_for('trajectory',
-           end=end if end is not none else cur.end_year,
-           pool=pool if pool is not none else cur.pool,
-           top=top if top is not none else cur.top,
-           scale=scale if scale is not none else cur.scale,
-           team=team if team is not none else cur.team,
-           view=view if view is not none else cur.view,
-           per=per if per is not none else cur.per,
-           player=player if player is not none else cur.player,
-           n=n if n is not none else cur.n) }}
+{% macro board_url(cur) -%}
+{{ url_for('trajectory', **dict(cur, **kwargs)) }}
 {%- endmacro %}
 
 {% macro controls(cur, end_years, teams) -%}
@@ -39,7 +32,7 @@
   <label>Through
     <select onchange="location = this.value">
       {% for y in end_years %}
-      <option value="{{ board_url(cur, end=y) }}" {% if y == cur.end_year %}selected{% endif %}>{{ y }}</option>
+      <option value="{{ board_url(cur, end=y) }}" {% if y == cur.end %}selected{% endif %}>{{ y }}</option>
       {% endfor %}
     </select>
   </label>
@@ -87,7 +80,7 @@
     {% if cur.view != 'player' %}
     <span class="pill-group">
       {% for y in end_years %}
-      <a class="pill {% if y == cur.end_year %}active{% endif %}" href="{{ board_url(cur, end=y) }}">{{ y }}</a>
+      <a class="pill {% if y == cur.end %}active{% endif %}" href="{{ board_url(cur, end=y) }}">{{ y }}</a>
       {% endfor %}
     </span>
     {% endif %}

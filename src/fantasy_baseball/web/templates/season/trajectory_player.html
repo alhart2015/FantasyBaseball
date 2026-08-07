@@ -11,17 +11,16 @@
 {{ ctl.controls(cur, board.end_years, []) }}
 
 <form method="get" class="trajectory-search">
-  <input type="hidden" name="view" value="player">
-  <input type="hidden" name="scale" value="{{ board.scale }}">
-  <input type="hidden" name="n" value="{{ board.n }}">
-  {#- Also carry the filters this view merely passes through (`cur.top`/`cur.team`/
-      `cur.end_year`/`cur.pool`) -- they mean nothing here, but a search that drops
-      them breaks the round trip back to the League/By-team views. Same failure mode
-      _trajectory_controls.html's own docstring names for a missing dropdown input. -#}
-  <input type="hidden" name="top" value="{{ cur.top }}">
-  <input type="hidden" name="team" value="{{ cur.team }}">
-  <input type="hidden" name="end" value="{{ cur.end_year }}">
-  <input type="hidden" name="pool" value="{{ cur.pool }}">
+  {#- THE WHOLE FILTER STATE, from the one place that enumerates it. `cur`'s keys ARE
+      the query-string names, so this loop carries `view`/`scale`/`n` (this view's own
+      state) alongside `top`/`team`/`end`/`pool` (filters it merely passes through and
+      that mean nothing here). This is a GET form, so any name it omits is silently
+      reset on submit -- the failure _trajectory_controls.html's own comment names for
+      a missing dropdown input, and the reason the list is not hand-written here.
+      `player` is excluded because the visible input below owns it. -#}
+  {% for name, value in cur.items() if name != 'player' %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
   <label>Player <input name="player" value="{{ board.name }}" placeholder="Juan Soto"></label>
   <button type="submit">Search</button>
 </form>

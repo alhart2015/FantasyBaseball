@@ -11,6 +11,7 @@ from fantasy_baseball.data.cache_keys import redis_key
 from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.web.season_app import create_app
 from fantasy_baseball.web.season_data import CacheKey
+from fantasy_baseball.web.trajectory_view import VIEWS, filter_state
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -2411,17 +2412,23 @@ def test_trajectory_page_survives_a_team_param_with_no_rosters(client):
     assert b"Testy McTestface" in resp.data
 
 
-@pytest.mark.parametrize("view", ["board", "teams"])
+@pytest.mark.parametrize("view", VIEWS)
 def test_trajectory_controls_carry_every_filter_on_every_link(client, view):
-    """`board_url` is the single place that knows full filter state. A filter it
-    does not emit gets silently reset when any other control is used -- the
-    hidden-input failure the macro's own comment records.
+    """`filter_state` is the single place that knows full filter state. A filter it
+    names that a link does not emit gets silently reset when any other control is
+    used -- the hidden-input failure the macro's own comment records.
 
-    RUN ON BOTH VIEWS, because the route builds `cur` TWICE -- once per view -- and
-    only the second one was covered here. That is how `team` came to be a hardcoded
-    "all" on the teams branch while its neighbours were pass-throughs: the filter
-    survived the link shape check and died on the round trip.
+    RUN ON EVERY VIEW, because the route builds `cur` ONCE PER VIEW. Covering only
+    one is how `team` came to be a hardcoded "all" on the teams branch while its
+    neighbours were pass-throughs: the filter survived the link shape check and died
+    on the round trip.
+
+    EXPECTED PARAMS COME FROM `filter_state` ITSELF, not from a literal tuple. The
+    tuple was the fourth hand-written copy of the filter list and it had already
+    drifted two behind -- it named seven while `board_url` emitted nine, so `player`
+    and `n` were added to the links with no test that they stayed there.
     """
+    expected = [f"{name}=" for name in filter_state(view, None, {})]
     with (
         patch(
             "fantasy_baseball.web.season_routes.read_cache_dict",
@@ -2438,11 +2445,11 @@ def test_trajectory_controls_carry_every_filter_on_every_link(client, view):
     assert resp.status_code == 200
     body = resp.data.decode()
 
-    # Every control link must carry all seven, or using one resets the others.
+    # Every control link must carry every one of them, or using one resets the others.
     links = re.findall(r'href="(/trajectory\?[^"]*)"', body)
     assert links, "the control bar rendered no links"
     for link in links:
-        for param in ("end=", "pool=", "scale=", "top=", "per=", "view=", "team="):
+        for param in expected:
             assert param in link, f"{view}: {param} missing from {link}"
 
 
