@@ -30,6 +30,7 @@ from fantasy_baseball.streaks.inference import (
     score_player_windows,
 )
 from fantasy_baseball.streaks.models import StreakCategory, StreakDirection, StreakLabel
+from fantasy_baseball.utils.ansi import GREEN, RED, RESET, column_widths, pad, visible_width
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter
 
@@ -541,10 +542,12 @@ def render_markdown(report: Report) -> str:
 # --------------------------------------------------------------------- #
 
 # ANSI codes for hot/cold cells. Disabled when ``no_color=True`` so the
-# output remains readable when piped to a file or non-TTY.
-_ANSI_GREEN = "\033[32m"
-_ANSI_RED = "\033[31m"
-_ANSI_RESET = "\033[0m"
+# output remains readable when piped to a file or non-TTY. The codes and the
+# width arithmetic that has to ignore them now live in ``utils.ansi``, shared
+# with ``scripts/player_trajectory.py``.
+_ANSI_GREEN = GREEN
+_ANSI_RED = RED
+_ANSI_RESET = RESET
 
 
 def _paint_cell(score: PlayerCategoryScore | None, *, sparse: bool, no_color: bool) -> str:
@@ -556,39 +559,13 @@ def _paint_cell(score: PlayerCategoryScore | None, *, sparse: bool, no_color: bo
     return f"{color}{text}{_ANSI_RESET}"
 
 
-def _column_widths(rows: Sequence[Sequence[str]]) -> list[int]:
-    """Compute the visible width of each column, stripping ANSI."""
-    widths: list[int] = []
-    for r_idx, row in enumerate(rows):
-        for c_idx, cell in enumerate(row):
-            w = _visible_width(cell)
-            if c_idx >= len(widths):
-                widths.append(w)
-            elif w > widths[c_idx]:
-                widths[c_idx] = w
-        if r_idx == 0:
-            continue
-    return widths
+_column_widths = column_widths
 
 
-def _visible_width(s: str) -> int:
-    """Width of ``s`` ignoring ANSI escape sequences (e.g. ``\\033[32m``)."""
-    visible = []
-    i = 0
-    while i < len(s):
-        if s[i] == "\033":
-            # Skip to the ``m`` that closes the escape.
-            while i < len(s) and s[i] != "m":
-                i += 1
-            i += 1
-            continue
-        visible.append(s[i])
-        i += 1
-    return len("".join(visible))
+_visible_width = visible_width
 
 
-def _pad(cell: str, width: int) -> str:
-    return cell + " " * (width - _visible_width(cell))
+_pad = pad
 
 
 def _render_text_table(rows: Sequence[Sequence[str]]) -> list[str]:

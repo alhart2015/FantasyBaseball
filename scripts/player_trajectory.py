@@ -67,6 +67,7 @@ from fantasy_baseball.trajectory.value import (
     replacement_for,
     resolve_slots,
 )
+from fantasy_baseball.utils.ansi import DIM_GRAY, column_widths, pad, paint
 from fantasy_baseball.utils.name_utils import normalize_name
 
 PEOPLE_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
@@ -328,6 +329,69 @@ def _print_total(traj: Trajectory) -> None:
     print(f"\n   total over {covered} years: {traj.total:.1f} {_units(traj)}{note}")
 
 
+def _cell(value: object) -> str:
+    """One comps-table cell, matching the `to_string` formatting this replaced."""
+    if isinstance(value, float):
+        return "--" if pd.isna(value) else f"{value:6.2f}"
+    return str(value)
+
+
+def comps_legend(*, scale: str, color: bool) -> str:
+    """What the reader has to know to read the table, matching what it will show.
+
+    Split out so the legend and the cell rendering cannot drift: they drifted once
+    already, which is #331's tail -- the legend still said "0 = did not play" after
+    the frame stopped containing a 0 for that.
+    """
+    if scale != "var":
+        return "0 = did not play, -- = season not played yet"
+    marker = "faint" if color else "*"
+    return f"{marker} = out of the league, -- = season not played yet"
+
+
+def comp_table_lines(
+    top: pd.DataFrame,
+    cols: list[str],
+    departed: pd.DataFrame,
+    *,
+    color: bool,
+) -> list[str]:
+    """The `--show-comps` table, with years out of the league painted faint.
+
+    Hand-rolled rather than `DataFrame.to_string` because the distinction has to be
+    PER CELL and `to_string` pads on `len()`, which counts the escape bytes and shifts
+    every painted row left of every plain one. Widths here are visible widths.
+
+    Why paint at all: on the VAR scale the frame is shifted, so a comp who left the
+    league prints as `-floor` -- at the OF floor, -9.96, sitting four hundredths from
+    a real -10.00 season by someone who played and was bad. The old legend claimed
+    "0 = did not play", which after #331 named exactly the wrong rows: an exact 0.00
+    now means he played at precisely replacement level. The number cannot carry the
+    difference, so the mask does.
+
+    Redirected to a file there is no colour, so the marker becomes `*`. Printing the
+    bare number there would reintroduce the same ambiguity one pipe away, and a legend
+    promising "faint" over output containing none is the defect this fixes, mirrored.
+    """
+    header = [str(c) for c in cols]
+    body: list[list[str]] = []
+    for idx, row in top.iterrows():
+        cells = []
+        for c in cols:
+            text = _cell(row[c])
+            out = c in departed.columns and bool(departed.at[idx, c])
+            if out:
+                text = paint(text, DIM_GRAY, enabled=color) if color else f"{text}*"
+            cells.append(text)
+        body.append(cells)
+
+    widths = column_widths([header, *body])
+    return [
+        " ".join(pad(cell, widths[i], right=True) for i, cell in enumerate(row)).rstrip()
+        for row in [header, *body]
+    ]
+
+
 def render(traj: Trajectory, show_comps: int) -> None:
     span = f"{traj.seasons[0]}-{traj.seasons[1]}" if traj.seasons else "n/a"
     print(f"\n{traj.kind.upper()}: {traj.sgp:.1f} SGP in an age-{traj.age} season")
@@ -448,8 +512,14 @@ def render(traj: Trajectory, show_comps: int) -> None:
             .fillna(top["mlbam_id"].astype(str))
         )
         cols = ["player", "season", "sgp0"] + [f"h{p.horizon}" for p in traj.path]
-        print(f"\n   {len(top)} closest comps (0 = did not play, -- = season not played yet):")
-        print(top[cols].to_string(index=False, na_rep="--", float_format=lambda v: f"{v:6.2f}"))
+        # `departed` is row-aligned to the FULL comps frame; `top` is an nsmallest
+        # subset that keeps its index labels, so reindexing is the join.
+        marks = traj.departed.reindex(top.index) if not traj.departed.empty else traj.departed
+        color = sys.stdout.isatty()
+        legend = comps_legend(scale=traj.scale, color=color)
+        print(f"\n   {len(top)} closest comps ({legend}):")
+        for line in comp_table_lines(top, cols, marks, color=color):
+            print(line)
 
 
 def main() -> int:
