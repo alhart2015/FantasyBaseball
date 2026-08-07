@@ -29,7 +29,8 @@ selecting a team shows that roster in full without touching the Top control.
 - A **team dropdown** on the trajectory board. Default "All teams" = current
   behaviour, byte for byte.
 - Selecting a team narrows the board to that team's scored players.
-- **My team sorts first** in the dropdown; the rest alphabetical.
+- **My team sorts first among the teams**, directly below the default
+  "All teams" entry; the rest alphabetical.
 - **Ranks stay league-wide.** A selected team's best player reads `#37`, not
   `#1`.
 - Roster players the model could not price are **named on screen**, not silently
@@ -102,7 +103,7 @@ Rejected alternatives:
 
 ```python
 def index_rosters(
-    rows: Sequence[dict], spots: Sequence[RosterSpot], my_team: str
+    rows: Sequence[dict], spots: Sequence[RosterSpot], my_team: str | None
 ) -> RosterIndex
 ```
 
@@ -113,7 +114,7 @@ def index_rosters(
 | `team_of` | `dict[tuple[str, str], str]` | `(normalized_name, pool)` -> owning team |
 | `ambiguous` | `set[tuple[str, str]]` | keys matching more than one board row |
 | `unscored` | `dict[str, list[str]]` | roster players with no scored row, per team |
-| `teams` | `tuple[str, ...]` | league teams, my team first then alphabetical |
+| `teams` | `tuple[str, ...]` | league teams, my team first then alphabetical; plain alphabetical when `my_team` is None or matches no team in `spots` |
 
 **The no-mutation property is load-bearing, not stylistic.** `assign_teams`
 stamps `row["team"]` in place. That is safe for rows the CLI just built, but the
@@ -144,6 +145,21 @@ comparison per row.
 
 `Board` gains three fields: `team: str`, `teams: tuple[str, ...]`, and
 `unscored: list[str]` (for the selected team; empty when "all").
+
+**`has_rosters` keeps its current meaning and does not follow `spots`.** Today it
+is `bool(mine)` -- "my team joined at least one scored row" -- and it gates the
+banner "Your players are not highlighted". Deriving it from `spots` instead would
+change the predicate to "any roster data arrived", so a successful read where my
+own roster joined nothing would suppress the banner while nothing was in fact
+highlighted. That is the state the field's docstring exists to prevent: *"An
+empty result counts as a failure ... an empty set cannot be told apart from an
+unreachable Upstash."*
+
+These are now two distinct facts and get two expressions:
+
+- `has_rosters` = my team joined >= 1 row -> gates the highlight banner
+  (unchanged behaviour).
+- non-empty `spots` -> gates whether the dropdown renders at all.
 
 `scored` naturally becomes the selected team's row count while `ranked` stays
 league-wide. The template's existing sentence -- *"ranked against all 1,169 -- the
@@ -177,6 +193,13 @@ would turn "the model could not price these" into "these are not worth listing",
 which on a keeper board is the most misleading place for that confusion. #322
 states this as a hard requirement.
 
+**It renders OUTSIDE the `{% if not board.rows %}` / `{% else %}` pair, after
+it** -- not inside the table branch. The template today renders a bare "Nothing
+scored at this timeframe." when there are no rows (trajectory.html:108), so a
+line placed "beneath the table" would vanish for a team with zero scored
+players, which is precisely the team whose unscored list explains the empty
+page.
+
 ## Requirements
 
 1. Default state (`?team` absent or `all`) produces a board identical to today's.
@@ -187,11 +210,24 @@ states this as a hard requirement.
 5. `team` composes with `pool`, `scale`, `end`, and `top` -- any combination is
    reachable and each control preserves the others.
 6. Ambiguous rows (a `(name, pool)` key matching >1 board row) appear under the
-   team, carrying the existing `(?)` flag.
+   team, flagged `(?)`. The row field is **`owner_ambiguous`**, replacing
+   `mine_ambiguous`: true when the key is ambiguous **and** the row is being
+   attributed to a team on screen. In the "All teams" view that means `mine`
+   only, which is exactly today's behaviour; in a team view it means any row
+   shown, because attributing an opponent's player is as wrong as attributing
+   mine. The template condition moves with the field name -- **and so does the
+   tooltip copy**, which today reads "*You* roster a player with this name..."
+   (trajectory.html:137). Under a team filter that string would tell the reader
+   he rosters an opponent's player. It becomes owner-relative, naming the team
+   the row is attributed to, and keeps the #284 explanation.
 7. When a team is selected, its unscored roster players are named beneath the
    table.
-8. `by_team` in the CLI produces the same team assignment as the web, because
-   both read `index_rosters`.
+8. `by_team` in the CLI produces the same team assignment as the web. This is
+   **structural, not tested**: it holds because `assign_teams` is deleted and
+   `index_rosters` is the only implementation left. The deletion is the
+   evidence; a test asserting two callers of one function agree would assert
+   nothing. Stated so a future reader does not mistake the missing test for an
+   oversight.
 
 ## Edge cases and failure modes
 
@@ -201,7 +237,9 @@ states this as a hard requirement.
 | `?team=` names a team that does not exist (typo, traded-away franchise, stale bookmark) | Falls back to `all`. Same clamp `pool`, `scale`, and `end` already apply; `test_a_junk_or_out_of_range_end_year_falls_back_instead_of_500ing` pins that these params are user-editable. |
 | Selected team has zero scored rows | The existing "Nothing scored at this timeframe." branch renders. The unscored line still shows, so the page explains itself rather than looking broken. |
 | Two board rows share a `(name, pool)` key and one is rostered | Both render under that team with `(?)`. Hiding the one you own is worse than showing one you do not, clearly marked. Consistent with today's `mine_ambiguous`. |
-| A rostered player is scored but on no team (join miss) | He is absent from every team view and present in "All teams" -- and named in no `unscored` list, because `unscored` is keyed off roster spots that found no row, which is a different set. Accepted: this is #284's fragility, made visible by requirement 7 rather than hidden. |
+| A rostered player is scored but his roster spot does not join (accent, suffix, nickname) | Both halves of the same miss happen at once: the board row appears **only** under "All teams", and the roster spot appears in that team's `unscored` line under its roster spelling. So one human shows up twice, spelled two ways, in two places. Accepted and deliberately visible -- this is #284's fragility surfaced by requirement 7 rather than hidden. NOT a different set from `unscored`: a spot that found no row IS an unscored spot, by construction. |
+| Roster read succeeds but my own team joins nothing | `has_rosters` False (banner shown, nothing highlighted); dropdown still renders, because `spots` is non-empty and other teams are selectable. The two conditions are deliberately separate -- see "View changes". |
+| `my_team` is None (config read failed) or names no team in `spots` | `teams` is plain alphabetical with nothing promoted; `has_rosters` False. The dropdown still works for every other team. |
 | Team names contain spaces, apostrophes, `!` (`Jon's Underdogs`, `Hello Peanuts!`) | Carried as URL-encoded query values by `url_for`; compared as exact strings against `RosterSpot.team`. No normalization -- the roster blob is the only source of both sides. |
 
 ## Testing expectations
@@ -217,15 +255,32 @@ is **not** `#1`, proving league ranks survive; an unknown team falls back to
 selected.
 
 **Route/template.** The dropdown renders with my team first; it is absent when
-`has_rosters` is False; a `?team=` with no rosters does not 500.
+**`spots` is empty** -- not when `has_rosters` is False, which is now a different
+condition. Both sides of that split get a test: read-failed (empty `spots`, no
+dropdown) and read-succeeded-but-my-roster-joined-nothing (`has_rosters` False,
+dropdown still rendered, banner still shown). A `?team=` with no rosters does not
+500.
 
 **CLI parity.** The three `by_team` tests added in `7e74b7b1` must stay green
-through the `assign_teams` deletion. That is the check that the extraction did
-not change CLI behaviour.
+through the `assign_teams` deletion -- but they are **not sufficient**, and the
+spec previously claimed they were. All three call `by_team(scored, spots, {}, ...)`
+with `missing` hardcoded empty (test_trajectory_board_cli.py:80, 101, 119), and
+`missing` is precisely what `assign_teams` returns and what the CLI's
+`not scored:` line consumes. The one output being deleted and re-homed therefore
+has **zero** coverage today.
+
+So commit 1 additionally requires a new test: `by_team` prints
+`not scored: <names>` for a roster spot with no matching board row, driven
+through the real `index_rosters` rather than a hand-passed `missing` dict.
+Without it the CLI could silently stop reporting unscored players with a green
+suite.
 
 **Anti-vacuity.** The fixture must carry two teams with *different* rosters, one
-ambiguous name, and one unscored player. Without all three, the filter, flag, and
-unscored assertions cannot fail. Two vacuous tests were shipped and caught by
+unscored player, and an ambiguous name **on an opponent's roster, not mine**.
+Without all three the filter, flag, and unscored assertions cannot fail -- and
+the ambiguous name specifically must not sit on my team, or the fixture only
+exercises today's `mine`-only path and the `owner_ambiguous` extension (with its
+wrong-tooltip failure) ships untested. Two vacuous tests were shipped and caught by
 mutation earlier in this session (an alignment test where every cell was already
 column width, and a same-slot ordering test whose fixture had uniform year
 counts); the assertions that matter here get the same mutation check.
@@ -235,8 +290,10 @@ counts); the assertions that matter here get the same mutation check.
 One PR, three commits:
 
 1. `roster_join.py` plus its unit tests; `assign_teams` deleted and `by_team`
-   switched over. CLI behaviour unchanged, proven by the existing `by_team`
-   tests.
+   switched over. CLI behaviour unchanged -- proven by the existing `by_team`
+   tests **plus** the new `not scored:` test described under Testing, which is
+   the gate for this commit. The existing three do not touch `missing` and
+   cannot catch its loss.
 2. `build_board` takes `spots`/`my_team`/`team`; `Board` gains its three fields;
    view tests.
 3. Route, `board_url`, dropdown, unscored line, noscript fallback; route tests.
