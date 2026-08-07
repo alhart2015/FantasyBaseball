@@ -293,10 +293,22 @@ def test_a_rostered_player_the_model_cannot_price_is_named(capsys) -> None:
     assert "Scored Guy" in out, "the scored player still renders"
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [ ] **Step 2: Run it and confirm it PASSES**
 
 Run: `pytest tests/test_scripts/test_trajectory_board_cli.py::test_a_rostered_player_the_model_cannot_price_is_named -v`
-Expected: FAIL — `ModuleNotFoundError` on `roster_join` is already resolved by Task 1, so this fails on the assertion or on `by_team`'s signature, depending on ordering. Either failure is the expected red.
+Expected: **PASS.**
+
+This is a **characterization test**, deliberately written green before a
+refactor -- not a TDD red. `by_team`'s third positional parameter is still
+`missing` and `index.unscored` is the same `dict[str, list[str]]`, so the call
+already works and already prints the line. There is no red available here
+because no behaviour is being added; the behaviour is being *moved*, and the
+point is to pin it before it moves.
+
+Its job is to fail at Step 5 if the deletion of `assign_teams` drops the
+unscored map or the status suffix. Re-run it after Steps 3-4 and confirm it
+still passes -- that transition, green-to-green across a deletion, is the whole
+assertion.
 
 - [ ] **Step 3: Delete `assign_teams` and rewire `main`**
 
@@ -408,9 +420,12 @@ Add to `tests/test_web/test_trajectory_view.py`. Note the fixture requirements f
 def _spots_fixture():
     """Rosters for the `payload` fixture's six players.
 
-    "Big Bat" is deliberately duplicated onto an OPPONENT: the ambiguity flag
-    used to render only for my own rows, and a fixture that put the collision on
-    my roster would exercise the old path and leave the new one untested.
+    Two teams with DIFFERENT rosters, plus one rostered player who is not on the
+    board at all ("Never Scored") -- without both, the filter and unscored
+    assertions cannot fail. The ambiguity case needs a name collision, which this
+    fixture deliberately does NOT have: it lives in
+    `test_an_opponents_ambiguous_row_is_flagged_too`, which builds its own
+    payload so the shared module-scoped fixture keeps its asserted arity.
     """
     from fantasy_baseball.data.rosters import RosterSpot
 
@@ -478,12 +493,40 @@ def test_my_team_leads_the_dropdown(payload: dict) -> None:
 
 def test_an_opponents_ambiguous_row_is_flagged_too(payload: dict) -> None:
     """`mine_ambiguous` only ever fired for my rows. Attributing an opponent's
-    player on a guess is exactly as wrong."""
-    spots = _spots_fixture()
-    board = build_board(payload, spots=spots, my_team="Mine", team="Theirs")
-    big_bats = [r for r in board.rows if r["name"] == "Big Bat"]
-    assert big_bats, "fixture must place an ambiguous name on the opponent"
-    assert all(r["owner_ambiguous"] for r in big_bats)
+    player on a guess is exactly as wrong.
+
+    Reuses the `twin` construction from
+    `test_a_colliding_name_is_flagged_rather_than_claimed` -- duplicate
+    `players[0]` under a new id -- rather than sweeping a fresh panel, and
+    rather than adding a collision to the module-scoped `payload`, whose arity
+    is asserted by `test_top_all_shows_every_scored_row` (`scored == 6`).
+    """
+    from fantasy_baseball.data.rosters import RosterSpot
+
+    first = payload["players"][0]
+    twin = dict(payload)
+    twin["players"] = [*payload["players"], {**first, "id": first["id"] + 10_000}]
+    twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
+
+    spots = [
+        RosterSpot(
+            name=first["name"],
+            normalized=first["name"].lower(),
+            player_type=first["pool"],
+            team="Theirs",
+            yahoo_id="0",
+            status="",
+        )
+    ]
+
+    board = build_board(twin, top="all", spots=spots, my_team="Mine", team="Theirs")
+    assert len(board.rows) == 2, "both rows match the only key available"
+    assert all(r["owner_ambiguous"] for r in board.rows)
+    assert not any(r["mine"] for r in board.rows), "these are an opponent's rows"
+
+    # The all-teams view keeps today's behaviour: not mine, so not flagged.
+    everyone = build_board(twin, top="all", spots=spots, my_team="Mine")
+    assert not any(r["owner_ambiguous"] for r in everyone.rows)
 
 
 def test_has_rosters_still_tracks_my_own_roster_not_the_read(payload: dict) -> None:
@@ -507,16 +550,13 @@ def test_has_rosters_still_tracks_my_own_roster_not_the_read(payload: dict) -> N
     assert board.teams == ("Theirs",), "the dropdown still works for other teams"
 ```
 
-Note: `payload`'s fixture has two "Big Bat"-named rows only if the ambiguity is real. The fixture has ONE "Big Bat". Add a second board row with the same name in the module-level `payload` fixture so the collision exists:
-
-In the `payload` fixture's `hitters` list, add:
-
-```python
-        # A SECOND player sharing a normalized name with "Big Bat". The live
-        # board carries two Max Muncys; without a collision here the ambiguity
-        # flag is unreachable and re-breaking it would pass unnoticed.
-        BoardRow(11, "Big Bat", "hitter", 27, 19.0, 18.0, "OF", 4.0),
-```
+**Do NOT add a collision to the module-scoped `payload` fixture.** It is
+`scope="module"` and shared by the whole file, and its arity is asserted --
+`test_top_all_shows_every_scored_row` pins `len(board.rows) == board.scored == 6`
+(test_trajectory_view.py:188). A seventh player fails that unrelated test, and
+the tempting "fix" is to loosen it, which the repo's rules forbid. The ambiguity
+test above therefore builds its own two-row payload; `_spots_fixture` names only
+players already in the shared fixture.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -564,6 +604,17 @@ from collections.abc import Sequence
 from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.roster_join import index_rosters
 ```
+
+Delete the now-orphaned import at the top of the file:
+
+```python
+from fantasy_baseball.utils.name_utils import normalize_name
+```
+
+Its only two uses are lines 205 and 213, both inside the block being replaced
+below. `index_rosters` owns all name normalization now -- that concentration is
+part of why the join moved, and leaving the import would fail `ruff check .`
+(F401) at Step 8.
 
 Replace the ownership block — this:
 
@@ -648,7 +699,26 @@ and add:
 - [ ] **Step 6: Run the tests**
 
 Run: `pytest tests/test_web/test_trajectory_view.py -v`
-Expected: PASS. Existing tests that passed `mine=` must be updated to pass `spots=`/`my_team=` — search with `grep -n "mine=" tests/test_web/test_trajectory_view.py` and convert each.
+Expected: PASS.
+
+Three existing tests use the removed `mine=` parameter and must be converted --
+`grep -n "mine=" tests/test_web/test_trajectory_view.py` finds them at lines 530,
+549-553 and 565. Convert each by building `RosterSpot`s instead of a key set;
+do NOT delete them, they guard behaviour this change must preserve:
+
+- **`test_my_players_are_marked`** (line 524): pass spots for "Big Bat" and
+  "Big Arm" on `my_team`. Rename its `mine_ambiguous` assertion to
+  `owner_ambiguous`.
+- **`test_an_empty_roster_read_is_not_a_successful_one`** (line 538): this is
+  the guard for the `has_rosters` split. `mine=None` becomes `spots=None`,
+  `mine=set()` becomes `spots=[]`, and the third case becomes a spot for
+  "Big Bat" on `my_team`. All three expectations are unchanged -- that is the
+  point. Add the fourth case the spec's edge-case table now requires: spots
+  present but all on ANOTHER team, `has_rosters` still False.
+- **`test_a_colliding_name_is_flagged_rather_than_claimed`** (line 555): keep
+  the `twin` construction, pass a spot on `my_team`, and rename
+  `mine_ambiguous` to `owner_ambiguous`. It stays the my-team half of the
+  ambiguity behaviour; the new test above is the opponent half.
 
 - [ ] **Step 7: Verify the ambiguity test bites**
 
@@ -682,41 +752,108 @@ git commit -m "feat(trajectory): build_board takes roster spots and a team filte
 Add to `tests/test_web/test_season_routes.py`:
 
 ```python
-def test_trajectory_page_offers_a_team_dropdown(client):
-    """Rendered from live rosters, with my own team promoted to the top."""
+def _trajectory_payload():
+    """A two-player board for the route tests.
+
+    The route reads the payload from the cache BEFORE it touches rosters, and
+    renders `board=None` when it is absent -- off Render that read hits the
+    local SQLite mirror, so without this patch there are no controls on the page
+    and every dropdown assertion is answering the wrong question. Same
+    construction as `test_trajectory_page_renders_a_board`.
+    """
+    from fantasy_baseball.trajectory.board import BoardRow
+    from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
+    from tests._trajectory_panel import synthetic_panel
+
+    swept = sweep_pool(
+        [
+            BoardRow(1, "Testy McTestface", "hitter", 27, 20.0, 19.0, "OF", 4.0),
+            BoardRow(2, "Someone Else", "hitter", 27, 12.0, 11.0, "OF", 4.0),
+        ],
+        synthetic_panel(),
+        "hitter",
+        (1, 2),
+    )
+    return to_payload(
+        swept, base_season=2026, max_horizon=2, generated_at="2026-08-07T09:00:00"
+    )
+
+
+def _trajectory_spots():
+    """Names must match the payload's BoardRows or the join yields no teams."""
     from fantasy_baseball.data.rosters import RosterSpot
 
-    spots = [
+    return [
         RosterSpot("Testy McTestface", "testy mctestface", "hitter", "Zebras", "1", ""),
         RosterSpot("Someone Else", "someone else", "hitter", "Hart of the Order", "2", ""),
     ]
-    with patch("fantasy_baseball.data.rosters.live_rosters", return_value=spots):
+
+
+def test_trajectory_page_offers_a_team_dropdown(client):
+    """Rendered from live rosters, with my own team promoted to the top."""
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
         resp = client.get("/trajectory")
     assert resp.status_code == 200
     assert b"All teams" in resp.data
-    assert resp.data.index(b"Hart of the Order") < resp.data.index(b"Zebras")
+
+    # Compare the OPTION positions, not the raw page. "Hart of the Order" is
+    # also the site header, so `resp.data.index(b"Hart of the Order")` finds the
+    # chrome and the ordering assertion passes however the dropdown is sorted.
+    body = resp.data.decode()
+    mine = body.index(">Hart of the Order</option>")
+    theirs = body.index(">Zebras</option>")
+    assert mine < theirs, "my own team must lead the dropdown"
+    assert body.index(">All teams</option>") < mine, "the default sits above it"
 
 
 def test_trajectory_page_hides_the_dropdown_when_no_rosters_arrived(client):
     """Empty `spots` -- an unreachable Upstash cannot be told from an empty
-    league, so the control is not rendered at all rather than rendered empty."""
-    with patch("fantasy_baseball.data.rosters.live_rosters", return_value=[]):
+    league, so the control is not rendered at all rather than rendered empty.
+
+    The payload IS patched, so a board renders and its other controls appear.
+    Without that this test would pass whether or not the dropdown was ever
+    built, since it asserts an absence.
+    """
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch("fantasy_baseball.data.rosters.live_rosters", return_value=[]),
+    ):
         resp = client.get("/trajectory")
     assert resp.status_code == 200
+    assert b"Testy McTestface" in resp.data, "a board rendered, so absence is meaningful"
     assert b"All teams" not in resp.data
 
 
 def test_trajectory_page_survives_a_team_param_with_no_rosters(client):
     """A stale bookmark must not 500."""
-    with patch("fantasy_baseball.data.rosters.live_rosters", return_value=[]):
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch("fantasy_baseball.data.rosters.live_rosters", return_value=[]),
+    ):
         resp = client.get("/trajectory?team=Nobody+FC")
     assert resp.status_code == 200
+    assert b"Testy McTestface" in resp.data
 ```
 
 - [ ] **Step 2: Run them to verify they fail**
 
-Run: `pytest tests/test_web/test_season_routes.py -v -k "dropdown or team_param"`
-Expected: FAIL — "All teams" is not in the rendered page.
+Run: `pytest tests/test_web/test_season_routes.py -v -k "dropdown or team_param or offers_a_team"`
+Expected: `test_trajectory_page_offers_a_team_dropdown` FAILS on `b"All teams" in resp.data` -- the board renders (the payload is patched) but the control does not exist yet. The other two pass already; they guard the absence cases and must keep passing after Step 4.
 
 - [ ] **Step 3: Simplify the route**
 
