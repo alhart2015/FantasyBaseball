@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.board import BoardRow
 from fantasy_baseball.trajectory.sweep import (
     RANK_MOVE,
@@ -17,6 +18,21 @@ from tests._trajectory_panel import synthetic_panel
 
 BASE = 2026
 _HAND_SEQ = itertools.count()
+
+
+def _spot(name: str, team: str, pool: str = "hitter", status: str = "") -> RosterSpot:
+    """One roster spot. Module level so the seven tests below stop re-spelling the
+    six-field constructor -- and the `normalized=name.lower()` convention -- by hand.
+    Mirrors the helper of the same name in tests/test_trajectory/test_roster_join.py.
+    """
+    return RosterSpot(
+        name=name,
+        normalized=name.lower(),
+        player_type=pool,
+        team=team,
+        yahoo_id="0",
+        status=status,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -532,24 +548,13 @@ def _spots_fixture():
     `test_an_opponents_ambiguous_row_is_flagged_too`, which builds its own
     payload so the shared module-scoped fixture keeps its asserted arity.
     """
-    from fantasy_baseball.data.rosters import RosterSpot
-
-    def spot(name, team, pool="hitter", status=""):
-        return RosterSpot(
-            name=name,
-            normalized=name.lower(),
-            player_type=pool,
-            team=team,
-            yahoo_id="0",
-            status=status,
-        )
 
     return [
-        spot("Big Bat", "Theirs"),
-        spot("Small Bat", "Mine"),
-        spot("Under Water", "Mine"),
-        spot("Big Arm", "Mine", pool="pitcher"),
-        spot("Never Scored", "Mine"),
+        _spot("Big Bat", "Theirs"),
+        _spot("Small Bat", "Mine"),
+        _spot("Under Water", "Mine"),
+        _spot("Big Arm", "Mine", pool="pitcher"),
+        _spot("Never Scored", "Mine"),
     ]
 
 
@@ -606,23 +611,13 @@ def test_an_opponents_ambiguous_row_is_flagged_too(payload: dict) -> None:
     rather than adding a collision to the module-scoped `payload`, whose arity
     is asserted by `test_top_all_shows_every_scored_row` (`scored == 6`).
     """
-    from fantasy_baseball.data.rosters import RosterSpot
 
     first = payload["players"][0]
     twin = dict(payload)
     twin["players"] = [*payload["players"], {**first, "id": first["id"] + 10_000}]
     twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
 
-    spots = [
-        RosterSpot(
-            name=first["name"],
-            normalized=first["name"].lower(),
-            player_type=first["pool"],
-            team="Theirs",
-            yahoo_id="0",
-            status="",
-        )
-    ]
+    spots = [_spot(first["name"], "Theirs", first["pool"])]
 
     board = build_board(twin, top="all", spots=spots, my_team="Mine", team="Theirs")
     assert len(board.rows) == 2, "both rows match the only key available"
@@ -638,18 +633,8 @@ def test_has_rosters_still_tracks_my_own_roster_not_the_read(payload: dict) -> N
     """Two different facts. `has_rosters` gates the not-highlighted banner and
     must stay false when MY roster joined nothing, even though the read
     succeeded and the dropdown is perfectly usable."""
-    from fantasy_baseball.data.rosters import RosterSpot
 
-    others_only = [
-        RosterSpot(
-            name="Big Bat",
-            normalized="big bat",
-            player_type="hitter",
-            team="Theirs",
-            yahoo_id="0",
-            status="",
-        )
-    ]
+    others_only = [_spot("Big Bat", "Theirs")]
     board = build_board(payload, spots=others_only, my_team="Mine")
     assert board.has_rosters is False
     assert board.teams == ("Theirs",), "the dropdown still works for other teams"
@@ -660,25 +645,10 @@ def test_my_players_are_marked(payload: dict) -> None:
     his. Roster blobs carry no mlbam_id (#284), so the join is (normalized name,
     player_type) -- the same non-unique key the rest of the repo has to live with.
     """
-    from fantasy_baseball.data.rosters import RosterSpot
 
     spots = [
-        RosterSpot(
-            name="Big Bat",
-            normalized="big bat",
-            player_type="hitter",
-            team="Mine",
-            yahoo_id="0",
-            status="",
-        ),
-        RosterSpot(
-            name="Big Arm",
-            normalized="big arm",
-            player_type="pitcher",
-            team="Mine",
-            yahoo_id="0",
-            status="",
-        ),
+        _spot("Big Bat", "Mine"),
+        _spot("Big Arm", "Mine", "pitcher"),
     ]
     board = build_board(payload, top="all", spots=spots, my_team="Mine")
     marked = {r["name"] for r in board.rows if r["mine"]}
@@ -699,7 +669,6 @@ def test_an_empty_roster_read_is_not_a_successful_one(payload: dict) -> None:
     counted as a successful read: nothing highlighted AND no warning, so the page
     silently asserts the reader owns none of the top 50 keepers.
     """
-    from fantasy_baseball.data.rosters import RosterSpot
 
     assert build_board(payload, spots=None, my_team="Mine").has_rosters is False, (
         "no read attempted"
@@ -707,30 +676,12 @@ def test_an_empty_roster_read_is_not_a_successful_one(payload: dict) -> None:
     assert build_board(payload, spots=[], my_team="Mine").has_rosters is False, (
         "an EMPTY read is not a successful one -- it cannot be told from a failed one"
     )
-    mine_spot = [
-        RosterSpot(
-            name="Big Bat",
-            normalized="big bat",
-            player_type="hitter",
-            team="Mine",
-            yahoo_id="0",
-            status="",
-        )
-    ]
+    mine_spot = [_spot("Big Bat", "Mine")]
     assert build_board(payload, spots=mine_spot, my_team="Mine").has_rosters is True
 
     # Spots present, but all on ANOTHER team: the read succeeded and the dropdown
     # works, but MY roster still joined nothing.
-    others_spot = [
-        RosterSpot(
-            name="Big Bat",
-            normalized="big bat",
-            player_type="hitter",
-            team="Theirs",
-            yahoo_id="0",
-            status="",
-        )
-    ]
+    others_spot = [_spot("Big Bat", "Theirs")]
     assert build_board(payload, spots=others_spot, my_team="Mine").has_rosters is False
 
 
@@ -739,22 +690,12 @@ def test_a_colliding_name_is_flagged_rather_than_claimed(payload: dict) -> None:
     hitters called Max Muncy. Marking both as mine on one roster hit would put a player
     the reader does not own on his keeper shortlist, so an ambiguous match says so.
     """
-    from fantasy_baseball.data.rosters import RosterSpot
 
     twin = dict(payload)
     first = payload["players"][0]
     twin["players"] = [*payload["players"], {**first, "id": first["id"] + 10_000}]
 
-    spots = [
-        RosterSpot(
-            name=first["name"],
-            normalized=first["name"].lower(),
-            player_type=first["pool"],
-            team="Mine",
-            yahoo_id="0",
-            status="",
-        )
-    ]
+    spots = [_spot(first["name"], "Mine", first["pool"])]
     board = build_board(twin, top="all", spots=spots, my_team="Mine")
     hits = [r for r in board.rows if r["mine"]]
     assert len(hits) == 2, "both rows match the only key available"

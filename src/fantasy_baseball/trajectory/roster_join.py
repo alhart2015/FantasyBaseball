@@ -21,7 +21,7 @@ other, so the hazard is made unreachable instead of merely avoided.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -31,10 +31,11 @@ from fantasy_baseball.utils.name_utils import normalize_name
 class RosterIndex:
     """Everything a board needs to know about who owns which row."""
 
-    #: (normalized name, pool) -> owning team.
-    team_of: dict[tuple[str, str], str]
-    #: Same key -> "" / "IL10" / "DTD". The CLI renders this; the web does not.
-    status_of: dict[tuple[str, str], str]
+    #: (normalized name, pool) -> the spot that won the key. ONE dict rather than a
+    #: parallel `team_of` / `status_of` pair: both were built from this same mapping
+    #: and each held a single attribute off it, so every further field a consumer
+    #: wanted meant a third parallel dict keyed identically.
+    spot_of: dict[tuple[str, str], RosterSpot]
     #: Keys the join cannot resolve, from EITHER side: more than one board row under
     #: the key, or more than one roster spot under it. Both mean a consumer
     #: attributing such a row to a team is guessing, and must say so on screen.
@@ -48,15 +49,22 @@ class RosterIndex:
     #: last", and what keeps a collision loser from vanishing off his owner's page
     #: with nothing on screen to say he was ever there.
     unscored: dict[str, list[str]]
+    #: Teams owning at least one spot that WON a scored row. Falls out of the same
+    #: pass that builds `unscored` -- a spot not pushed there is a spot that matched
+    #: -- so a caller asking "did this team join anything" gets a set lookup instead
+    #: of rescanning every board row and re-normalizing every name to find out.
+    matched_teams: frozenset[str]
     #: Dropdown order: my team first, then the rest alphabetically. Plain
     #: alphabetical when `my_team` is None or names no team on any roster.
-    teams: tuple[str, ...] = field(default=())
+    teams: tuple[str, ...] = ()
 
     def team_for(self, name: str, pool: str) -> str | None:
-        return self.team_of.get((normalize_name(name), pool))
+        spot = self.spot_of.get((normalize_name(name), pool))
+        return spot.team if spot else None
 
     def status_for(self, name: str, pool: str) -> str:
-        return self.status_of.get((normalize_name(name), pool), "")
+        spot = self.spot_of.get((normalize_name(name), pool))
+        return spot.status if spot else ""
 
     def is_ambiguous(self, name: str, pool: str) -> bool:
         return (normalize_name(name), pool) in self.ambiguous
@@ -93,12 +101,15 @@ def index_rosters(
         counts[key] = counts.get(key, 0) + 1
 
     unscored: dict[str, list[str]] = {}
+    matched: set[str] = set()
     for spot in spots:
         key = (spot.normalized, spot.player_type)
         # `is not` and not `!=`: two spots for the same player on the same team
         # are distinct roster entries even though the dataclass compares equal.
         if key not in counts or by_key[key] is not spot:
             unscored.setdefault(spot.team, []).append(spot.name)
+        else:
+            matched.add(spot.team)
 
     rostered = {s.team for s in spots}
     # `my_team in rostered` rather than `is not None`: a renamed or mistyped team
@@ -107,10 +118,10 @@ def index_rosters(
     teams = promoted + tuple(sorted(rostered - set(promoted)))
 
     return RosterIndex(
-        team_of={k: s.team for k, s in by_key.items()},
-        status_of={k: s.status for k, s in by_key.items()},
+        spot_of=by_key,
         ambiguous={k for k, c in counts.items() if c > 1}
         | {k for k, c in spot_counts.items() if c > 1},
         unscored=unscored,
+        matched_teams=frozenset(matched),
         teams=teams,
     )

@@ -211,11 +211,17 @@
 </div>
 {% endif %}
 
+{#- The list has TWO causes (see `RosterIndex.unscored`) and this sentence must not
+    assert either one. It used to say "the model could not price them", inherited from
+    a predecessor whose list only ever had that cause -- which is false for a player
+    who WAS priced and merely lost the name key to another team's identically-named
+    spot. Naming both possibilities is honest without claiming to know which. -#}
 {% if board.team != 'all' and board.unscored %}
 <p class="muted">
-  not scored: {{ board.unscored|join(', ') }} --
-  no {{ board.base_season }} line or pacing under
-  {{ '%.1f'|format(board.meta.min_sgp) }} SGP, so the model could not price them.
+  not shown here: {{ board.unscored|join(', ') }} --
+  either no {{ board.base_season }} line (injured, released, or not yet up) or pacing
+  under {{ '%.1f'|format(board.meta.min_sgp) }} SGP, so the model could not price them,
+  or another team rosters a player whose name cannot be told apart from theirs (#284).
 </p>
 {% endif %}
 {% endif %}
