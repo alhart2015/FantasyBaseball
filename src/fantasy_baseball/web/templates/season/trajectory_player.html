@@ -49,11 +49,7 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 {#- THE SAME VINTAGE DISCLOSURE trajectory.html and trajectory_teams.html print --
     this page reads the same `meta`/`base_season` and had never shown either. -#}
 <p class="muted trajectory-vintage">
-  {% if board.meta.generated_at %}Built {{ board.meta.generated_at }}{% endif %}
-  {% if board.meta.panel_vintage %}from {{ board.meta.panel_vintage.hitter }} / {{ board.meta.panel_vintage.pitcher }}{% endif %}
-  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% complete, and every fit is built on the paced full-year figure{% endif %}.
-  This board does not refresh with the dashboard; it is as fresh as the last
-  <code>push_trajectory_board.py</code> run.
+  {{ ctl.vintage_note(board) }}
   {% if board.history %}The career line above stops before {{ board.base_season }} on
   purpose -- that season is still in progress, and its paced full-year figure (not a
   partial-season point) is exactly what the projection is built from.{% endif %}

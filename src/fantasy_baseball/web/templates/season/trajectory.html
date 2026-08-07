@@ -44,11 +44,7 @@
   means the model could not price him, not that it ranked him last.
   {%- endif %}
   Start year is locked at {{ board.base_season + 1 }}.
-  {% if board.meta.generated_at %}Built {{ board.meta.generated_at }}{% endif %}
-  {% if board.meta.panel_vintage %}from {{ board.meta.panel_vintage.hitter }} / {{ board.meta.panel_vintage.pitcher }}{% endif %}
-  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% complete, and every fit is built on the paced full-year figure{% endif %}.
-  This board does not refresh with the dashboard; it is as fresh as the last
-  <code>push_trajectory_board.py</code> run.
+  {{ ctl.vintage_note(board) }}
   {%- if not board.has_rosters %}
   <strong>Your players are not highlighted</strong> -- no row on this board joined to
   your roster. That is all this page knows: the live read may have returned nothing, or

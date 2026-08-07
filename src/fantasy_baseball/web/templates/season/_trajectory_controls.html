@@ -125,6 +125,22 @@
 {%- endif %}
 {%- endmacro %}
 
+{#- THE STALENESS DISCLOSURE, printed by all three views. The board is written offline
+    by `push_trajectory_board.py` and does NOT move with a dashboard refresh, so every
+    page rendering it has to say how old it is -- these are bookmarkable, shareable
+    URLs that a trade conversation starts from. Byte-identical in three templates until
+    this macro existed, which is the same failure `row_flags` above was extracted for:
+    a wording change lands in one and not the others. The sentences AROUND it differ per
+    view (start-year lock, block-total caveat, the career-line gap), so only the shared
+    middle is here. -#}
+{% macro vintage_note(board) -%}
+{% if board.meta.generated_at %}Built {{ board.meta.generated_at }}{% endif %}
+  {% if board.meta.panel_vintage %}from {{ board.meta.panel_vintage.hitter }} / {{ board.meta.panel_vintage.pitcher }}{% endif %}
+  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% complete, and every fit is built on the paced full-year figure{% endif %}.
+  This board does not refresh with the dashboard; it is as fresh as the last
+  <code>push_trajectory_board.py</code> run.
+{%- endmacro %}
+
 {#- The roster players this board could not price. One cause: no row matched. -#}
 {% macro unscored_note(names, base_season, min_sgp) -%}
 <p class="muted">
