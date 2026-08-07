@@ -113,12 +113,14 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     from fantasy_baseball.sgp.denominators import get_sgp_denominators
     from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
     from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
+    from fantasy_baseball.trajectory.comp_paths import closest_paths
     from fantasy_baseball.trajectory.era import era_normalize
     from fantasy_baseball.trajectory.panel import (
         load_scored_panel,
         panel_path,
         season_elapsed_fraction,
     )
+    from fantasy_baseball.trajectory.shape import prepare
     from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
     from fantasy_baseball.utils.time_utils import local_now
 
@@ -188,9 +190,6 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
         # second time costs one vectorized reindex per pool -- cheap next to the sweep,
         # and far cheaper than widening `sweep_pool`'s signature, which the CLI and its
         # tests also call.
-        from fantasy_baseball.trajectory.comp_paths import closest_paths
-        from fantasy_baseball.trajectory.shape import prepare
-
         prepared = prepare(complete, kind=kind, horizons=horizons)
         by_id = {int(i): g for i, g in complete.groupby("mlbam_id")}
 
