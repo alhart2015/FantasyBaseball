@@ -21,13 +21,12 @@ from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.roster_join import index_rosters
 from fantasy_baseball.trajectory.sweep import (
-    POSITIONAL_PAYLOAD_ERROR,
     SCALES,
     add_ranks,
     from_payload,
+    player_from_row,
     rank_move,
     totals,
-    var_offset,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -707,31 +706,30 @@ def build_player_view(
         )
 
     row = hits[0]
-    # Reads `row["sgp"]` points directly rather than through `from_payload`/`_unpack`
-    # (they carry no floor to net against, and this function needs one player, not the
-    # whole pool) -- which makes this a SECOND reader of the point schema. Without this
-    # guard, a legacy positional-points blob raises `TypeError: list indices must be
-    # integers or slices, not str` out of `pt["horizon"]` below, uncaught by the route's
-    # `except (ValueError, KeyError)` and a 500 where `/trajectory` degrades cleanly.
-    if row["sgp"] and not isinstance(row["sgp"][0], dict):
-        raise ValueError(POSITIONAL_PAYLOAD_ERROR)
+    # THROUGH THE PARSER, not a second hand-unpack of `row["sgp"]` beside it.
+    # `player_from_row` exists for exactly this caller: it applies the same point
+    # schema the board reads, so `age + horizon`, the floor subtraction and the
+    # legacy-positional-blob refusal are each spelled ONCE, in `sweep`. Hand-unpacking
+    # here re-spelled all three, and the guard had to be re-derived to keep a legacy
+    # blob raising a `ValueError` the route degrades on rather than a `TypeError` 500.
+    sp = player_from_row(row)
     # THE offset, from the one place it is defined -- see `var_offset`'s docstring.
     # Not `float(row["floor"]) if scale == "var" else 0.0` inline: that is a third
     # spelling of the same rule `SweptPlayer.offset` already carries, and it disagreed
     # with it silently (any non-"var" scale read as SGP, where `var_offset` raises).
-    floor = var_offset(float(row["floor"]), scale)
+    floor = sp.offset(scale)
     return replace(
         empty,
-        name=row["name"],
-        age=int(row["age"]),
-        slot=row["slot"],
+        name=sp.name,
+        age=sp.age,
+        slot=sp.slot,
         # The APPLIED offset, not the raw slot floor: under scale="sgp" nothing was
         # netted, and this field's own docstring promises "what every series was
         # netted against". A template reading this to label the chart must not print
         # "netted against 6.0" over a line that was left alone.
         floor=floor,
         found=True,
-        extrapolated=bool(row.get("extrapolated")),
+        extrapolated=sp.extrapolated,
         # Sorted by age rather than trusted in payload order: the push script's
         # groupby happens to emit ascending, but nothing enforces it, and an unsorted
         # blob would zigzag the chart with every other assertion here still green.
@@ -739,14 +737,9 @@ def build_player_view(
             ([int(a), float(v) - floor] for a, v in row.get("history", [])),
             key=lambda pt: pt[0],
         ),
+        # `points(scale)` applies the offset; `YearPoint.age` is already `age + horizon`.
         projection=[
-            {
-                "age": int(row["age"]) + int(pt["horizon"]),
-                "mean": float(pt["mean"]) - floor,
-                "p10": float(pt["p10"]) - floor,
-                "p90": float(pt["p90"]) - floor,
-            }
-            for pt in row["sgp"]
+            {"age": p.age, "mean": p.mean, "p10": p.p10, "p90": p.p90} for p in sp.points(scale)
         ],
         comps=[
             {
@@ -762,8 +755,8 @@ def build_player_view(
                 # horizons, not a rule the current pipeline exercises -- cheap and
                 # correct to keep regardless.
                 "path": [
-                    {"age": int(row["age"]) + h, "value": float(v) - floor}
-                    for h, v in list(enumerate(c["path"], start=1))[: len(row["sgp"])]
+                    {"age": sp.age + h, "value": float(v) - floor}
+                    for h, v in list(enumerate(c["path"], start=1))[: len(sp.sgp)]
                 ],
             }
             for c in row.get("comps", [])[:want]

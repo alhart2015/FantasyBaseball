@@ -65,9 +65,9 @@ def var_offset(floor: float, scale: str) -> float:
     fitted path and again inline in `totals` for the Now column -- and two spellings of
     this rule is the drift #331 is about: the board printed an unclamped Now beside a
     clamped forecast, which was only possible because the two columns did not get their
-    scale from the same site. `SweptPlayer.offset` and the trajectory-chart view
-    (`build_player_view`, #324) both delegate here rather than re-deriving it, so a
-    third spelling cannot drift from the first two.
+    scale from the same site. `SweptPlayer.offset` delegates here rather than
+    re-deriving it, and the trajectory-chart view (`build_player_view`, #324) reaches
+    it through that method rather than spelling the rule a third time.
     """
     if scale not in SCALES:
         raise ValueError(f"scale must be one of {SCALES}, got {scale!r}")
@@ -309,23 +309,21 @@ def _pack(point: YearPoint) -> dict[str, float]:
     }
 
 
-#: Shared between `_unpack` and `web.trajectory_view.build_player_view`, which reads
-#: `row["sgp"]` points directly rather than through `from_payload`/`_unpack` (#324) --
-#: two independent readers of the same point schema. One message, not two spellings
-#: of the same one-time migration note that could drift apart on the next edit.
-POSITIONAL_PAYLOAD_ERROR = (
-    "trajectory board payload stores points as positional arrays, which this "
-    "build no longer reads; re-run scripts/push_trajectory_board.py"
-)
-
-
 def _unpack(packed: dict[str, float], age: int) -> YearPoint:
     if not isinstance(packed, dict):
         # The blob deployed when this landed is positional, and `packed[0]` on a list
         # would read as a TypeError about integer indices -- true, and useless. Say
         # what to do instead. Self-limiting: once prod is re-pushed it never fires,
         # and unlike a version register nothing has to be remembered to keep it honest.
-        raise ValueError(POSITIONAL_PAYLOAD_ERROR)
+        #
+        # ONE guard, because there is one reader. The message used to be a module
+        # constant shared with `web.trajectory_view.build_player_view`, which unpacked
+        # `row["sgp"]` itself and so needed its own copy of this check; that reader now
+        # goes through `player_from_row` and inherits this one (#324).
+        raise ValueError(
+            "trajectory board payload stores points as positional arrays, which this "
+            "build no longer reads; re-run scripts/push_trajectory_board.py"
+        )
     horizon = int(packed["horizon"])
     return YearPoint(
         horizon=horizon,
@@ -374,6 +372,32 @@ def to_payload(
     }
 
 
+def player_from_row(row: dict) -> SweptPlayer:
+    """ONE cached payload row as a `SweptPlayer`.
+
+    Split out of `from_payload` for the consumers that want a single player rather than
+    the pool -- the trajectory chart (#324) resolves one name and has no use for the
+    other 1,168 fits. Before this existed that view unpacked `row["sgp"]` itself, which
+    made it a second reader of the point schema: it re-spelled `age + horizon`, re-spelled
+    the floor subtraction `SweptPlayer.points` already owns, and carried its own copy of
+    `_unpack`'s positional-blob guard to keep a legacy blob from 500ing it.
+    """
+    age = int(row["age"])
+    return SweptPlayer(
+        mlbam_id=int(row["id"]),
+        name=row["name"],
+        pool=row["pool"],
+        age=age,
+        slot=row["slot"],
+        floor=float(row["floor"]),
+        now=float(row["now"]),
+        prior=float(row["prior"]),
+        support=float(row["support"]),
+        extrapolated=bool(row["extrapolated"]),
+        sgp=tuple(_unpack(y, age) for y in row["sgp"]),
+    )
+
+
 def from_payload(payload: dict) -> list[SweptPlayer]:
     """Rebuild the sweep from a cached payload.
 
@@ -385,25 +409,7 @@ def from_payload(payload: dict) -> list[SweptPlayer]:
     actually wrong, rather than being screened by a schema register up front -- see
     `_pack` for why that register existed and why named fields replaced it.
     """
-    players = []
-    for row in payload["players"]:
-        age = int(row["age"])
-        players.append(
-            SweptPlayer(
-                mlbam_id=int(row["id"]),
-                name=row["name"],
-                pool=row["pool"],
-                age=age,
-                slot=row["slot"],
-                floor=float(row["floor"]),
-                now=float(row["now"]),
-                prior=float(row["prior"]),
-                support=float(row["support"]),
-                extrapolated=bool(row["extrapolated"]),
-                sgp=tuple(_unpack(y, age) for y in row["sgp"]),
-            )
-        )
-    return players
+    return [player_from_row(row) for row in payload["players"]]
 
 
 def rank_move(row: dict) -> int:
