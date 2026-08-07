@@ -13,10 +13,13 @@ Render. The board therefore does NOT move with a dashboard refresh, which is why
 
 from __future__ import annotations
 
+from collections.abc import Collection, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
+from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
+from fantasy_baseball.trajectory.roster_join import index_rosters
 from fantasy_baseball.trajectory.sweep import (
     SCALES,
     add_ranks,
@@ -53,10 +56,22 @@ class Board:
     top: int | str
     #: Which fit the whole table is showing: "var" or "sgp".
     scale: str
-    #: True when a live roster read returned SOMETHING. An empty result counts as a
-    #: failure: `live_rosters` returns [] without raising on a missing blob, so an empty
-    #: set cannot be told apart from an unreachable Upstash, and the page must not claim
-    #: "you own none of these" on the strength of it.
+    #: The selected team, or "all". Not a filter over `teams` -- an unknown value
+    #: is clamped to "all" the way `pool` and `scale` are, because this arrives
+    #: from a user-editable query string and survives a team rename.
+    team: str = "all"
+    #: Dropdown order: my team first, then alphabetical. Empty when no roster
+    #: data arrived, which is what hides the control entirely.
+    teams: tuple[str, ...] = ()
+    #: Rostered players on the SELECTED team with no scored row. Empty for "all".
+    #: Rendering this is what keeps an absent player from reading as a bad one.
+    unscored: list[str] = field(default_factory=list)
+    #: True when MY OWN team joined at least one scored row on this board. Strictly
+    #: stronger than "a roster read returned something", and deliberately so -- the
+    #: reasoning is at the assignment site. A read can succeed, populate `teams` and
+    #: leave this False, so it is not a verdict on the read and nothing rendered from
+    #: it may name a cause. What it gates is whether any row on screen is marked
+    #: `mine`, which is the only claim the banner is entitled to make.
     has_rosters: bool = False
     #: Season labels for the per-year columns, e.g. [2027, 2028, 2029]. Empty for a
     #: single-year board, where a breakout column would just repeat the total.
@@ -69,6 +84,16 @@ class Board:
         in, and the CLI header made the same choice."""
         start = self.base_season + 1
         return f"{start}" if self.end_year == start else f"{start}-{str(self.end_year)[-2:]}"
+
+
+def _clamp_choice(value: Any, allowed: Collection[str], default: str) -> str:
+    """A query param that must name one of `allowed`. The enum twin of `_clamp`, and
+    for the same reason its docstring gives: these arrive from a URL a user can edit.
+
+    Written once rather than inline per filter -- there were three hand-copied
+    `if x not in (...): x = default` blocks, which is how one of them eventually gets
+    `!=` where its neighbours have `not in`."""
+    return value if value in allowed else default
 
 
 def _clamp(value: Any, low: int, high: int, default: int) -> int:
@@ -162,7 +187,9 @@ def build_board(
     pool: str = "both",
     top: Any = None,
     scale: str = "var",
-    mine: set[tuple[str, str]] | None = None,
+    spots: Sequence[RosterSpot] | None = None,
+    my_team: str | None = None,
+    team: str = "all",
 ) -> Board:
     """Collapse the cached sweep to one timeframe and rank it.
 
@@ -178,10 +205,8 @@ def build_board(
     end_year = _clamp(end, end_years[0], end_years[-1], end_years[0])
     show_all = str(top).lower() == "all"
     top_n = None if show_all else _clamp(top, 1, 5000, DEFAULT_TOP)
-    if pool not in ("both", "hitter", "pitcher"):
-        pool = "both"
-    if scale not in SCALES:
-        scale = "var"
+    pool = _clamp_choice(pool, ("both", "hitter", "pitcher"), "both")
+    scale = _clamp_choice(scale, SCALES, "var")
     horizons = tuple(range(1, end_year - base + 1))
 
     # ONE SCALE ON SCREEN. The two scales differ by the slot's floor (#331 made that
@@ -195,28 +220,41 @@ def build_board(
     # ranking within a subset would make every team's best player a #1.
     ranked_rows = _ranked_rows(payload, horizons, scale)
 
-    # (normalized name, pool) is the only key a roster blob can be joined on -- they
-    # carry no mlbam_id (#284). It is NOT unique: the live board has two hitters called
-    # Max Muncy. So count the rows each key matches and mark a multi-hit as unsure rather
-    # than silently putting a player the reader does not own on his keeper shortlist.
-    owned = mine or set()
-    key_counts: dict[tuple[str, str], int] = {}
-    for row in ranked_rows:
-        k = (normalize_name(row["name"]), row["pool"])
-        key_counts[k] = key_counts.get(k, 0) + 1
+    # ONE index serves both the highlight and the filter. The route used to build
+    # the ownership set itself, which meant two places decided what a roster spot
+    # meant to a board row.
+    index = index_rosters(ranked_rows, spots or [], my_team)
+    # Same clamp `pool` and `scale` get, through the same helper: this arrives from a
+    # query string a reader can edit, and a bookmark outlives a team rename.
+    team = _clamp_choice(team, ("all", *index.teams), "all")
 
     rows = []
     for row in ranked_rows:
         if pool != "both" and row["pool"] != pool:
             continue
-        move = rank_move(row)
+        # The key ONCE per row. `team_for` and `is_ambiguous` each normalize the
+        # name themselves, so going through both cost two more NFKD passes per row
+        # on top of the one `index_rosters` already did -- three per row, for one
+        # lookup pair. The dicts they wrap are public; use them.
         key = (normalize_name(row["name"]), row["pool"])
-        is_mine = key in owned
+        # MEMBERSHIP, not the winning spot's team. Two owners of one key both see
+        # the row (flagged); deriving this from a single winner silently took the
+        # loser's own player off his page -- see `RosterIndex.owners_of`.
+        owners = index.owners_of.get(key, frozenset())
+        if team != "all" and team not in owners:
+            continue
+        move = rank_move(row)
+        is_mine = my_team is not None and my_team in owners
         rows.append(
             {
                 **row,
                 "mine": is_mine,
-                "mine_ambiguous": is_mine and key_counts[key] > 1,
+                # Flagged whenever the row is being ATTRIBUTED to a team on
+                # screen and the join cannot tell which player it is. In the
+                # all-teams view that is `mine` alone, exactly as before; under a
+                # team filter it is any row shown, because putting an opponent's
+                # player on a guess is as wrong as putting mine.
+                "owner_ambiguous": (is_mine or team != "all") and key in index.ambiguous,
                 # The MOVE between the two ranks is the keeper signal in one number: a
                 # player far better over the range than next year is who you hold rather
                 # than who you start. See `_rank_move` for when it is withheld.
@@ -248,12 +286,15 @@ def build_board(
         pool=pool,
         top="all" if top_n is None else top_n,
         scale=scale,
-        # An EMPTY read is not a successful one. `live_rosters` returns [] without
-        # raising when the roster blobs are absent -- its module docstring calls that out
-        # as reading like "you own nobody" rather than an error -- so treating `set()` as
-        # success suppressed the warning AND highlighted nothing, which is the one
-        # combination this field exists to prevent.
-        has_rosters=bool(mine),
+        team=team,
+        teams=index.teams,
+        # Filtered to the pool on screen: this list sits under a table that may be
+        # showing hitters only, and naming a pitcher there reads as a hole in it.
+        unscored=index.unscored_for(team, pool) if team != "all" else [],
+        # MY roster joined something -- deliberately NOT "the read returned
+        # data". This gates the not-highlighted banner, and a successful read
+        # where my own roster joined nothing must still show it.
+        has_rosters=my_team in index.matched_teams if my_team else False,
         # A per-year breakout only earns its columns once the range spans more than one.
         year_columns=[base + h for h in horizons] if len(horizons) > 1 else [],
         meta={

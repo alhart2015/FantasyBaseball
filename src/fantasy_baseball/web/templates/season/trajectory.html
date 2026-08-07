@@ -2,12 +2,13 @@
 {% block title %}Trajectory Board -- Season Dashboard{% endblock %}
 {% block content %}
 
-{% macro board_url(end=None, pool=None, top=None, scale=None) -%}
+{% macro board_url(end=None, pool=None, top=None, scale=None, team=None) -%}
 {{ url_for('trajectory',
            end=end if end is not none else board.end_year,
            pool=pool if pool is not none else board.pool,
            top=top if top is not none else board.top,
-           scale=scale if scale is not none else board.scale) }}
+           scale=scale if scale is not none else board.scale,
+           team=team if team is not none else board.team) }}
 {%- endmacro %}
 
 <div class="page-trajectory">
@@ -58,6 +59,16 @@
       {% endfor %}
     </select>
   </label>
+  {% if board.teams %}
+  <label>Team
+    <select onchange="location = this.value">
+      <option value="{{ board_url(team='all') }}" {% if board.team == 'all' %}selected{% endif %}>All teams</option>
+      {% for t in board.teams %}
+      <option value="{{ board_url(team=t) }}" {% if t == board.team %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
   <span class="pill-group">
     {% for value, label in [('both', 'Both'), ('hitter', 'Hitters'), ('pitcher', 'Pitchers')] %}
     <a class="pill {% if board.pool == value %}active{% endif %}" href="{{ board_url(pool=value) }}">{{ label }}</a>
@@ -79,6 +90,14 @@
       <a class="pill {% if n == board.top %}active{% endif %}" href="{{ board_url(top=n) }}">{{ n }}</a>
       {% endfor %}
     </span>
+      {% if board.teams %}
+      <span class="pill-group">
+        <a class="pill {% if board.team == 'all' %}active{% endif %}" href="{{ board_url(team='all') }}">All teams</a>
+        {% for t in board.teams %}
+        <a class="pill {% if t == board.team %}active{% endif %}" href="{{ board_url(team=t) }}">{{ t }}</a>
+        {% endfor %}
+      </span>
+      {% endif %}
   </noscript>
 </div>
 
@@ -98,8 +117,10 @@
   This board does not refresh with the dashboard; it is as fresh as the last
   <code>push_trajectory_board.py</code> run.
   {%- if not board.has_rosters %}
-  <strong>Your players are not highlighted</strong> -- the live roster read failed, so
-  nothing on this page claims to know what you own.
+  <strong>Your players are not highlighted</strong> -- no row on this board joined to
+  your roster. That is all this page knows: the live read may have returned nothing, or
+  it may have returned your roster and none of your players matched a scored row. So
+  nothing here claims to know what you own.
   {%- endif %}
 </p>
 
@@ -134,7 +155,7 @@
       </td>
       <td class="team-name">
         {{ r.name }}
-        {%- if r.mine_ambiguous %} <span class="flag flag-extrap" title="You roster a player with this name, but the board has more than one -- roster blobs carry no MLBAM id (#284), so the name is the only join available and it cannot tell them apart. Check which one before acting on it.">(?)</span>
+        {%- if r.owner_ambiguous %} <span class="flag flag-extrap" title="This name is not unique -- either the board carries more than one player under it, or more than one team rosters one. Roster blobs have no MLBAM id (#284), so the name is the only join available and it cannot tell them apart. Who owns this row is a guess; check before acting on it.">(?)</span>
         {%- endif %}
         {%- if r.band_fell_back %} <span class="flag flag-band" title="The band on at least one year in this range fell back to the whole cohort's residual scatter -- the understated interval the reweighting exists to replace. It happens on the deepest extrapolations, the ones most in need of a wide band.">(!!)</span>
         {%- elif r.extrapolated %} <span class="flag flag-extrap" title="Under {{ '%.0f'|format(board.meta.min_local_support * 100) }}% of the fitting weight sits near this player's own current season, so the line was evaluated outside its own support. Read the band, not the point estimate.">(!)</span>
@@ -188,6 +209,22 @@
     entirely, and the rank column moves with the scale.
   </p>
 </div>
+{% endif %}
+
+{#- Renders OUTSIDE the empty-rows branch above: a team with nothing scored is
+    exactly the team whose missing list explains the empty page.
+
+    One cause again. This briefly hedged between two, because a spot that lost a
+    name-key contest was filed here too -- so the sentence could not say why anyone
+    was missing. Ownership is membership now, so a player whose key has a row shows
+    under his team instead of landing on this list, and the only way here is that
+    the model had no row for him at all. -#}
+{% if board.team != 'all' and board.unscored %}
+<p class="muted">
+  not scored: {{ board.unscored|join(', ') }} --
+  no {{ board.base_season }} line (injured, released, or not yet up) or pacing under
+  {{ '%.1f'|format(board.meta.min_sgp) }} SGP, so the model could not price them.
+</p>
 {% endif %}
 {% endif %}
 

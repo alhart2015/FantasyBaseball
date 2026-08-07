@@ -6,6 +6,7 @@ import re
 
 import pytest
 
+from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.board import BoardRow
 from fantasy_baseball.trajectory.sweep import (
     RANK_MOVE,
@@ -17,6 +18,21 @@ from tests._trajectory_panel import synthetic_panel
 
 BASE = 2026
 _HAND_SEQ = itertools.count()
+
+
+def _spot(name: str, team: str, pool: str = "hitter", status: str = "") -> RosterSpot:
+    """One roster spot. Module level so the seven tests below stop re-spelling the
+    six-field constructor -- and the `normalized=name.lower()` convention -- by hand.
+    Mirrors the helper of the same name in tests/test_trajectory/test_roster_join.py.
+    """
+    return RosterSpot(
+        name=name,
+        normalized=name.lower(),
+        player_type=pool,
+        team=team,
+        yahoo_id="0",
+        status=status,
+    )
 
 
 @pytest.fixture(scope="module")
@@ -522,15 +538,122 @@ def test_a_push_landing_mid_derivation_cannot_pin_the_old_board(payload: dict, m
     assert len(after.rows) == 2, "the post-push board must not be pinned to the pre-push rows"
 
 
+def _spots_fixture():
+    """Rosters for the `payload` fixture's six players.
+
+    Two teams with DIFFERENT rosters, plus one rostered player who is not on the
+    board at all ("Never Scored") -- without both, the filter and unscored
+    assertions cannot fail. The ambiguity case needs a name collision, which this
+    fixture deliberately does NOT have: it lives in
+    `test_an_opponents_ambiguous_row_is_flagged_too`, which builds its own
+    payload so the shared module-scoped fixture keeps its asserted arity.
+    """
+
+    return [
+        _spot("Big Bat", "Theirs"),
+        _spot("Small Bat", "Mine"),
+        _spot("Under Water", "Mine"),
+        _spot("Big Arm", "Mine", pool="pitcher"),
+        _spot("Never Scored", "Mine"),
+    ]
+
+
+def test_selecting_a_team_narrows_the_board_to_that_roster(payload: dict) -> None:
+    board = build_board(payload, spots=_spots_fixture(), my_team="Mine", team="Mine")
+    assert {r["name"] for r in board.rows} == {"Small Bat", "Under Water", "Big Arm"}
+    assert board.team == "Mine"
+
+
+def test_a_teams_best_player_keeps_his_league_rank(payload: dict) -> None:
+    """Ranking within the subset would make every team's best player a #1 and
+    destroy the only comparison the board exists for."""
+    everyone = build_board(payload, spots=_spots_fixture(), my_team="Mine")
+    league = {r["name"]: r["rank_total"] for r in everyone.rows}
+    mine = build_board(payload, spots=_spots_fixture(), my_team="Mine", team="Mine")
+
+    assert [r["rank_total"] for r in mine.rows] == [league[r["name"]] for r in mine.rows]
+    assert mine.rows[0]["rank_total"] != 1, "expected a league rank, not a within-team one"
+
+
+def test_an_unknown_team_falls_back_to_the_whole_board(payload: dict) -> None:
+    """The query string is user-editable and survives a team rename."""
+    everyone = build_board(payload, spots=_spots_fixture(), my_team="Mine")
+    junk = build_board(payload, spots=_spots_fixture(), my_team="Mine", team="Nobody FC")
+    assert junk.team == "all"
+    assert len(junk.rows) == len(everyone.rows)
+
+
+def test_the_team_filter_composes_with_the_pool_filter(payload: dict) -> None:
+    board = build_board(
+        payload, spots=_spots_fixture(), my_team="Mine", team="Mine", pool="pitcher"
+    )
+    assert {r["name"] for r in board.rows} == {"Big Arm"}
+
+
+def test_unscored_is_populated_only_for_a_selected_team(payload: dict) -> None:
+    assert build_board(payload, spots=_spots_fixture(), my_team="Mine").unscored == []
+    mine = build_board(payload, spots=_spots_fixture(), my_team="Mine", team="Mine")
+    assert mine.unscored == ["Never Scored"]
+
+
+def test_my_team_leads_the_dropdown(payload: dict) -> None:
+    board = build_board(payload, spots=_spots_fixture(), my_team="Mine")
+    assert board.teams == ("Mine", "Theirs")
+
+
+def test_an_opponents_ambiguous_row_is_flagged_too(payload: dict) -> None:
+    """`mine_ambiguous` only ever fired for my rows. Attributing an opponent's
+    player on a guess is exactly as wrong.
+
+    Reuses the `twin` construction from
+    `test_a_colliding_name_is_flagged_rather_than_claimed` -- duplicate
+    `players[0]` under a new id -- rather than sweeping a fresh panel, and
+    rather than adding a collision to the module-scoped `payload`, whose arity
+    is asserted by `test_top_all_shows_every_scored_row` (`scored == 6`).
+    """
+
+    first = payload["players"][0]
+    twin = dict(payload)
+    twin["players"] = [*payload["players"], {**first, "id": first["id"] + 10_000}]
+    twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
+
+    spots = [_spot(first["name"], "Theirs", first["pool"])]
+
+    board = build_board(twin, top="all", spots=spots, my_team="Mine", team="Theirs")
+    assert len(board.rows) == 2, "both rows match the only key available"
+    assert all(r["owner_ambiguous"] for r in board.rows)
+    assert not any(r["mine"] for r in board.rows), "these are an opponent's rows"
+
+    # The all-teams view keeps today's behaviour: not mine, so not flagged.
+    everyone = build_board(twin, top="all", spots=spots, my_team="Mine")
+    assert not any(r["owner_ambiguous"] for r in everyone.rows)
+
+
+def test_has_rosters_still_tracks_my_own_roster_not_the_read(payload: dict) -> None:
+    """Two different facts. `has_rosters` gates the not-highlighted banner and
+    must stay false when MY roster joined nothing, even though the read
+    succeeded and the dropdown is perfectly usable."""
+
+    others_only = [_spot("Big Bat", "Theirs")]
+    board = build_board(payload, spots=others_only, my_team="Mine")
+    assert board.has_rosters is False
+    assert board.teams == ("Theirs",), "the dropdown still works for other teams"
+
+
 def test_my_players_are_marked(payload: dict) -> None:
     """The first question a reader has on a keeper board is which of these are already
     his. Roster blobs carry no mlbam_id (#284), so the join is (normalized name,
     player_type) -- the same non-unique key the rest of the repo has to live with.
     """
-    board = build_board(payload, top="all", mine={("big bat", "hitter"), ("big arm", "pitcher")})
+
+    spots = [
+        _spot("Big Bat", "Mine"),
+        _spot("Big Arm", "Mine", "pitcher"),
+    ]
+    board = build_board(payload, top="all", spots=spots, my_team="Mine")
     marked = {r["name"] for r in board.rows if r["mine"]}
     assert marked == {"Big Bat", "Big Arm"}
-    assert not any(r["mine_ambiguous"] for r in board.rows)
+    assert not any(r["owner_ambiguous"] for r in board.rows)
 
     unmarked = build_board(payload, top="all")
     assert not any(r["mine"] for r in unmarked.rows), "no roster read -- nothing claimed"
@@ -542,15 +665,24 @@ def test_an_empty_roster_read_is_not_a_successful_one(payload: dict) -> None:
     `live_rosters` returns [] WITHOUT raising when the roster blobs are absent -- its own
     module docstring flags this: getting the asymmetry wrong "drops your own roster
     silently, which reads as 'you own nobody' rather than as an error". The route only
-    caught exceptions, so a cold or half-written `cache:roster` gave `mine=set()`, which
+    caught exceptions, so a cold or half-written `cache:roster` gave `spots=[]`, which
     counted as a successful read: nothing highlighted AND no warning, so the page
     silently asserts the reader owns none of the top 50 keepers.
     """
-    assert build_board(payload, mine=None).has_rosters is False, "no read attempted"
-    assert build_board(payload, mine=set()).has_rosters is False, (
+
+    assert build_board(payload, spots=None, my_team="Mine").has_rosters is False, (
+        "no read attempted"
+    )
+    assert build_board(payload, spots=[], my_team="Mine").has_rosters is False, (
         "an EMPTY read is not a successful one -- it cannot be told from a failed one"
     )
-    assert build_board(payload, mine={("big bat", "hitter")}).has_rosters is True
+    mine_spot = [_spot("Big Bat", "Mine")]
+    assert build_board(payload, spots=mine_spot, my_team="Mine").has_rosters is True
+
+    # Spots present, but all on ANOTHER team: the read succeeded and the dropdown
+    # works, but MY roster still joined nothing.
+    others_spot = [_spot("Big Bat", "Theirs")]
+    assert build_board(payload, spots=others_spot, my_team="Mine").has_rosters is False
 
 
 def test_a_colliding_name_is_flagged_rather_than_claimed(payload: dict) -> None:
@@ -558,14 +690,16 @@ def test_a_colliding_name_is_flagged_rather_than_claimed(payload: dict) -> None:
     hitters called Max Muncy. Marking both as mine on one roster hit would put a player
     the reader does not own on his keeper shortlist, so an ambiguous match says so.
     """
+
     twin = dict(payload)
     first = payload["players"][0]
     twin["players"] = [*payload["players"], {**first, "id": first["id"] + 10_000}]
 
-    board = build_board(twin, top="all", mine={(first["name"].lower(), first["pool"])})
+    spots = [_spot(first["name"], "Mine", first["pool"])]
+    board = build_board(twin, top="all", spots=spots, my_team="Mine")
     hits = [r for r in board.rows if r["mine"]]
     assert len(hits) == 2, "both rows match the only key available"
-    assert all(r["mine_ambiguous"] for r in hits), "and both must say the match is unsure"
+    assert all(r["owner_ambiguous"] for r in hits), "and both must say the match is unsure"
 
 
 def test_the_board_reports_who_it_left_out(payload: dict) -> None:
@@ -609,3 +743,44 @@ def test_a_cache_written_by_another_schema_raises_rather_than_rendering_empty(
     ]
     with pytest.raises(ValueError, match=re.escape("re-run scripts/push_trajectory_board.py")):
         build_board(stale)
+
+
+def test_a_key_two_teams_roster_is_still_mine_and_still_flagged(payload: dict) -> None:
+    """The regression that shipped between 2026-08-07's fix wave and the review after.
+
+    Ownership was derived from whichever spot won a deterministic sort. So when an
+    opponent's team name sorted first, my own rostered player rendered on the DEFAULT
+    all-teams view as neither mine nor ambiguous -- no highlight, no (?) -- and the
+    list that would have named him only appears under a team filter. The reader's
+    page said, silently, "you do not own him".
+
+    "Aardvarks" sorts before any real team here on purpose: under the old winner
+    rule it took the key, and this test failed.
+    """
+    spots = [_spot("Big Bat", "Mine"), _spot("Big Bat", "Aardvarks")]
+    board = build_board(payload, top="all", spots=spots, my_team="Mine")
+
+    big = next(r for r in board.rows if r["name"] == "Big Bat")
+    assert big["mine"], "an opponent rostering the same name does not take my player"
+    assert big["owner_ambiguous"], "and the row must say the attribution is a guess"
+    assert board.has_rosters, "my roster joined a row, whoever else also claims it"
+
+    # And he shows under BOTH teams, because the board cannot tell which is which.
+    for team in ("Mine", "Aardvarks"):
+        rows = build_board(payload, top="all", spots=spots, my_team="Mine", team=team).rows
+        assert any(r["name"] == "Big Bat" for r in rows), f"{team} rosters the name too"
+
+
+def test_the_unscored_list_follows_the_pool_filter(payload: dict) -> None:
+    """It renders under a table that may be showing one pool. Naming a pitcher
+    beneath a hitters-only table reads as a hole in the hitter list."""
+    spots = [
+        _spot("Big Bat", "Mine"),
+        _spot("Unpriced Bat", "Mine"),
+        _spot("Unpriced Arm", "Mine", pool="pitcher"),
+    ]
+    kw = {"top": "all", "spots": spots, "my_team": "Mine", "team": "Mine"}
+
+    assert build_board(payload, **kw).unscored == ["Unpriced Arm", "Unpriced Bat"]
+    assert build_board(payload, pool="hitter", **kw).unscored == ["Unpriced Bat"]
+    assert build_board(payload, pool="pitcher", **kw).unscored == ["Unpriced Arm"]

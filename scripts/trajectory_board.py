@@ -66,35 +66,15 @@ from fantasy_baseball.trajectory.board import board_inputs, player_names, season
 from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
+from fantasy_baseball.trajectory.roster_join import RosterIndex, index_rosters
 from fantasy_baseball.trajectory.sweep import add_ranks, rank_move, sweep_pool, totals
 from fantasy_baseball.utils.name_utils import normalize_name
-
-
-def assign_teams(scored: list[dict], spots: list[RosterSpot]) -> dict[str, list[str]]:
-    """Stamp each scored row with its owning team, and return who never matched.
-
-    Joined on (normalized name, player_type) because roster blobs carry no mlbam_id
-    (#284). The unmatched are returned rather than swallowed: a silently shortened team
-    reads as "he has nobody else worth listing".
-    """
-    by_key = {(s.normalized, s.player_type): s for s in spots}
-    for row in scored:
-        spot = by_key.get((normalize_name(row["name"]), row["pool"]))
-        row["team"] = spot.team if spot else None
-        row["status"] = spot.status if spot else ""
-
-    scored_keys = {(normalize_name(r["name"]), r["pool"]) for r in scored}
-    missing: dict[str, list[str]] = {}
-    for s in spots:
-        if (s.normalized, s.player_type) not in scored_keys:
-            missing.setdefault(s.team, []).append(s.name)
-    return missing
 
 
 def by_team(
     scored: list[dict],
     spots: list[RosterSpot],
-    missing: dict[str, list[str]],
+    index: RosterIndex,
     my_team: str,
     per_team: int,
     base: int,
@@ -109,12 +89,15 @@ def by_team(
     one, span = _header(base, horizons)
 
     def block(team: str, limit: int | None, note: str = "") -> None:
-        """One team's block. Takes the TEAM, never a decorated title -- `missing` is keyed
+        """One team's block. Takes the TEAM, never a decorated title -- the missing list is keyed
         on the raw name, and passing a label like "X -- YOUR TEAM" made the lookup miss, so
         the unmatched-player warning fired for every opposing team and silently never for
         your own: the one roster a keep-or-cut call is made from."""
+        # MEMBERSHIP, matching the web board: a key rostered by two teams appears
+        # under both. `r["team"]` is the single winning team and is what the CSV
+        # carries, but it is not the ownership test.
         rows = sorted(
-            (r for r in scored if r["team"] == team), key=lambda r: r["total"], reverse=True
+            (r for r in scored if team in r["teams"]), key=lambda r: r["total"], reverse=True
         )
         shown = rows if limit is None else rows[:limit]
         # The best `per_team`, NOT the roster and NOT `shown`. Three separate reasons.
@@ -152,14 +135,15 @@ def by_team(
                 f"{r['age']:3d} {r['slot']:>4} {r['total']:6.1f} {r['next']:5.1f}  "
                 f"{band:>14}{flag}{hurt}"
             )
-        if team in missing:
-            print(f"  not scored: {', '.join(sorted(missing[team]))}")
+        missing = index.unscored_for(team)
+        if missing:
+            print(f"  not scored: {', '.join(missing)}")
 
     print(f"\n\n{'=' * 78}\nPER-TEAM  (#{span} and #{one} are LEAGUE ranks)\n{'=' * 78}")
     # Teams come from the ROSTERS, not from the scored rows. A team whose players were all
     # filtered out -- by --min-sgp, by --min-support, or by the join failing wholesale --
     # has no scored rows at all, so deriving the list from `scored` dropped it and its
-    # entire `missing` list with it, leaving nothing on screen to say it existed.
+    # entire missing list with it, leaving nothing on screen to say it existed.
     rostered = {s.team for s in spots}
     if only is not None:
         # One team, in full. `--team` exists so asking about somebody else's roster does
@@ -373,15 +357,34 @@ def main() -> int:
         try:
             spots = live_rosters(config.team_name)
             print(f"\n  {len(spots)} roster spots read from Upstash")
-            missing = assign_teams(scored, spots)
+            # The index is READ-ONLY, so the stamping the CLI needs happens here
+            # rather than inside it -- these rows are the CLI's own and mutating
+            # them is safe, which is not true of the web's cached rows.
+            index = index_rosters(scored, spots, config.team_name)
+            for row in scored:
+                # One lookup, one normalize. `team_for`/`status_for` each normalize
+                # again, so routing through both cost three NFKD passes per row to
+                # read two attributes off one entry.
+                key = (normalize_name(row["name"]), row["pool"])
+                spot = index.spot_of.get(key)
+                row["team"] = spot.team if spot else None
+                row["status"] = spot.status if spot else ""
+                row["teams"] = index.owners_of.get(key, frozenset())
         except Exception as exc:
             if show_teams:
                 raise
             print(f"\n  NOTE: rosters unavailable ({type(exc).__name__}); CSV has no team column.")
-            spots, missing = [], {}
+            spots, index = [], index_rosters([], [], config.team_name)
         if show_teams:
             by_team(
-                scored, spots, missing, config.team_name, args.per_team, season, horizons, args.team
+                scored,
+                spots,
+                index,
+                config.team_name,
+                args.per_team,
+                season,
+                horizons,
+                args.team,
             )
     if args.csv:
         pd.DataFrame(scored).sort_values("rank_total").to_csv(args.csv, index=False)
