@@ -173,9 +173,12 @@ def test_the_band_always_contains_its_own_point_estimate() -> None:
     q10 <= q50 <= q90 makes the containment structural.
 
     A COHORT MOSTLY BELOW REPLACEMENT is what triggers it, which is why the real failures
-    were low-VAR veterans. Flooring the response at zero leaves most comps at exactly 0,
-    so their residuals against a small positive prediction are nearly all negative -- and
-    then even the 90th-percentile residual sits below zero, dragging `p90` under `mean`.
+    were low-VAR veterans. The panel itself piles a mass of careers at exactly 0 (the
+    `max(forward, 0.0)` below), so against a floor of 8 most comps sit near the bottom of
+    the shifted response and their residuals against the prediction are nearly all
+    negative -- then even the 90th-percentile residual sits below zero, dragging `p90`
+    under `mean`. (The pile used to come from the response clamp instead; #331 removed
+    that, and the fixture now has to supply the skew itself, which it does.)
     A smoothly-curved or purely linear population does NOT reproduce it; two earlier
     fixtures passed against the broken code before this one was found."""
     rng = np.random.default_rng(3)

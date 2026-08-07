@@ -288,3 +288,51 @@ def test_rejects_an_empty_horizon() -> None:
         comp_trajectory(
             _panel(_career(1, 2010, 25, [13.0])), kind="hitter", age=25, sgp=13.0, horizons=()
         )
+
+
+def test_the_comps_frame_says_which_years_were_never_played() -> None:
+    """The shifted frame cannot be read without this mask.
+
+    `--show-comps` prints the frame, and on the VAR scale a departed comp renders as
+    `-floor` rather than the raw 0.0 that `played` keys on. At the OF floor that is
+    -9.96, which sits four hundredths from a real -10.00 season -- so "did he retire or
+    was he just bad" is not recoverable from the printed number. The mask is taken
+    BEFORE the shift, for the same reason the survival mask is.
+    """
+    panel = _panel(
+        _career(1, 2010, 25, [13.0, 10.0, 9.0])  # played both forward years
+        + _career(2, 2010, 25, [13.0])  # left the league at h1
+        + _career(3, 2010, 25, [13.0, 0.4, 8.0])  # played, barely, at h1
+    )
+    traj = comp_trajectory(panel, kind="hitter", age=25, sgp=13.0, horizons=(1, 2), replacement=6.0)
+    order = list(traj.comps["mlbam_id"])
+    departed = {pid: bool(traj.departed["h1"][i]) for i, pid in enumerate(order)}
+
+    assert departed[2] is True, "the comp who left is not marked"
+    assert departed[1] is False
+    assert departed[3] is False, "a real bad season was marked as a career ending"
+    # The exact collision the mask exists to resolve: both print as a negative near
+    # the floor, and only one of them is a person who stopped playing.
+    values = {pid: traj.comps["h1"][i] for i, pid in enumerate(order)}
+    assert values[2] == pytest.approx(-6.0)
+    assert values[3] == pytest.approx(-5.6)
+
+
+def test_a_year_not_yet_played_is_not_marked_as_departed() -> None:
+    """NaN means "has not happened yet" and already renders as `--`.
+
+    Folding it into the departed mask would paint an unobservable cell as a career
+    ending -- the same conflation `..._not_yet_observable_are_dropped_not_zeroed`
+    guards on the aggregate side.
+    """
+    panel = _panel(_career(1, 2010, 25, [13.0, 10.0]) + _career(2, 2024, 25, [13.0]))
+    traj = comp_trajectory(
+        panel,
+        kind="hitter",
+        age=25,
+        sgp=13.0,
+        horizons=(1,),
+        last_complete_season=2024,
+        replacement=6.0,
+    )
+    assert not traj.departed["h1"].any()

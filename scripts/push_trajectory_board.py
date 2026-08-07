@@ -33,8 +33,14 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
-#: Longest projected year offered. Each extra year costs ~2.1s per pool per scale, and
-#: five forward years is also what the player chart draws (#324).
+#: Longest projected year offered. Five forward years is also what the player chart
+#: draws (#324).
+#:
+#: Cost, re-measured 2026-08-06 on the 2000-2026 panel: 33.5s at three years, ~52s at
+#: five, so roughly 4-5s per pool per extra year. The figure here used to be quoted "per
+#: pool per scale" -- there is only one scale now (#331 made VAR a shift, so the second
+#: fit went), and the old per-scale number does not reconcile with what one scale costs
+#: today, so this is the measurement rather than the old one halved.
 DEFAULT_MAX_HORIZON = 5
 
 #: Current-season pace below which a player is not fitted. THE SAME CUT
@@ -91,7 +97,13 @@ def _require_scored_pool(kind: str, rows: list, season: int, panel_name: str) ->
 
 
 def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
-    """Sweep both pools on both scales. Returns the payload and the rows scored."""
+    """Sweep both pools, once each. Returns the payload and the rows scored.
+
+    ONE fit per player, on raw SGP; VAR is derived on read (#331). It said "on both
+    scales" because it used to store both, and a reader who believes that is a reader
+    who adds back a `scales` argument or a second `shape_trajectory` call that the
+    payload no longer has anywhere to put.
+    """
     from fantasy_baseball.config import load_config
     from fantasy_baseball.sgp.denominators import get_sgp_denominators
     from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
@@ -159,13 +171,13 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
         complete = live[~live["partial_season"]].reset_index(drop=True)
         produced = sweep_pool(rows, complete, kind, horizons)
         # Guard on what the sweep PRODUCED, not on what it was handed. sweep_pool
-        # independently drops every player whose VAR path has no observable point, so
+        # independently drops every player whose fitted path has no observable point, so
         # a panel whose complete seasons do not span horizon 1 yields hundreds of
         # candidates and zero scored rows -- passing an input-side check and pushing
         # the pool-less board this guard exists to refuse.
         _require_scored_pool(kind, produced, season, panel_path(kind, panel_dir).name)
         swept += produced
-        print(f"    swept both scales in {time.perf_counter() - started:.1f}s", flush=True)
+        print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
 
     payload = to_payload(
         swept,

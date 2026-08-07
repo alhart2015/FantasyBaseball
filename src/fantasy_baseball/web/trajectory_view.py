@@ -22,7 +22,6 @@ from fantasy_baseball.trajectory.sweep import (
     add_ranks,
     from_payload,
     rank_move,
-    require_supported_version,
     totals,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -172,7 +171,6 @@ def build_board(
     (see `trajectory.sweep`) -- and it is also what keeps `rank_next` meaningful, since
     `next` is only populated when horizon 1 is in range.
     """
-    require_supported_version(payload)
     base = int(payload["base_season"])
     max_horizon = int(payload["max_horizon"])
     end_years = [base + h for h in range(1, max_horizon + 1)]
@@ -186,10 +184,11 @@ def build_board(
         scale = "var"
     horizons = tuple(range(1, end_year - base + 1))
 
-    # ONE SCALE ON SCREEN. VAR and SGP are separate fits, so a board mixing them forces
-    # the reader to track which number belongs to which -- and the rank, the band and the
-    # per-year cells then have to agree about a scale that is only implicit. The toggle
-    # makes it explicit and the ambiguity structurally impossible.
+    # ONE SCALE ON SCREEN. The two scales differ by the slot's floor (#331 made that
+    # exact), and a board mixing them forces the reader to track which number belongs to
+    # which -- the rank, the band and the per-year cells then have to agree about a scale
+    # that is only implicit. The toggle makes it explicit and the ambiguity structurally
+    # impossible.
     #
     # RANKED OVER THE WHOLE POOL, then filtered. A pitcher-only view shows LEAGUE ranks,
     # so its top row can read #7 -- correct, and the same rule #322/#323 depend on, where

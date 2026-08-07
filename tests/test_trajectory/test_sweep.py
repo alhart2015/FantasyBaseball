@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 
 import pytest
@@ -70,41 +71,54 @@ def test_a_range_total_is_the_prefix_sum_of_the_cached_years() -> None:
     by_name = {r["name"]: r for r in three}
     for row in one:
         player = next(p for p in swept if p.name == row["name"])
-        assert row["total"] == pytest.approx(player.var[0].mean)
+        var = player.points("var")
+        assert row["total"] == pytest.approx(var[0].mean)
         assert row["years"] == 1
-        assert by_name[row["name"]]["total"] == pytest.approx(sum(y.mean for y in player.var))
+        assert by_name[row["name"]]["total"] == pytest.approx(sum(y.mean for y in var))
 
 
-def test_raw_sgp_is_a_separate_fit_not_var_plus_the_floor() -> None:
-    """The reason the sweep pays for two fits per player.
+def test_var_is_the_raw_fit_minus_the_floor_on_every_column() -> None:
+    """The invariant that replaced the second fit (#331).
 
-    `shape_trajectory(replacement=floor)` fits on `max(forward - floor, 0)`, so the floor
-    is baked into the response AND clamped. For a below-replacement player VAR is 0, and
-    reconstructing his SGP as `VAR + floor` would report it as exactly the floor -- a
-    number he has nothing to do with.
+    This was the exact opposite assertion: VAR fitted on `max(forward - floor, 0)`, so
+    for a below-replacement player VAR read 0.0 and `VAR + floor` reconstructed his SGP
+    as exactly the floor -- a number he had nothing to do with. The clamp is gone, so the
+    two scales are one fit read twice, and the sweep no longer pays for the second.
+
+    Asserted on the BAND as well as the mean. Shifting only the level and leaving p10/p90
+    on the raw scale is the failure that has happened repeatedly on this feature, and it
+    renders as a band that does not contain its own estimate.
     """
-    swept = sweep_pool(_rows(), synthetic_panel(), "hitter", (1,))
+    swept = sweep_pool(_rows(), synthetic_panel(), "hitter", (1, 2, 3))
     below = next(p for p in swept if p.name == "Below Replacement")
-    assert below.var[0].mean == 0.0, "expected the VAR fit to clamp at zero"
-    # The wrong reconstruction lands exactly on the floor, which is the tell.
-    assert below.var[0].mean + below.floor == pytest.approx(below.floor)
-    assert below.sgp[0].mean > 0.0
-    assert below.sgp[0].mean != pytest.approx(below.floor, abs=0.1)
+    assert below.floor > 0, "fixture must net against a real floor"
+
+    for raw, var in zip(below.points("sgp"), below.points("var"), strict=True):
+        assert var.horizon == raw.horizon
+        assert var.mean == pytest.approx(raw.mean - below.floor)
+        assert var.p10 == pytest.approx(raw.p10 - below.floor)
+        assert var.p90 == pytest.approx(raw.p90 - below.floor)
+        # The fit itself did not move, so neither did what describes it.
+        assert (var.n_effective, var.band_fell_back) == (raw.n_effective, raw.band_fell_back)
+
+    # And the load-bearing half: he is genuinely under his floor, so an unclamped VAR
+    # must be NEGATIVE. Without this the fixture would pass with the clamp restored.
+    assert below.points("var")[0].mean < 0.0
 
 
-def test_the_var_only_sweep_skips_the_second_fit() -> None:
-    swept = sweep_pool(_rows(), synthetic_panel(), "hitter", (1,), scales=("var",))
-    assert all(p.var for p in swept)
-    assert all(p.sgp == () for p in swept)
-    # A caller then asking for the scale that was never fitted gets nothing, not a
-    # silently mis-scaled row.
-    assert totals(swept, (1,), "sgp") == []
+def test_totals_serves_both_scales_off_the_one_stored_fit() -> None:
+    """There is no longer a scale a sweep can fail to have fitted (#331), so neither
+    `totals` nor `points` can hand back a silently empty or mis-scaled row."""
+    swept = sweep_pool(_rows(), synthetic_panel(), "hitter", (1,))
+    for scale in ("var", "sgp"):
+        assert all(p.points(scale) for p in swept)
+        assert len(totals(swept, (1,), scale)) == len(swept)
 
 
-@pytest.mark.parametrize("scales", [(), ("sgp",), ("var", "bogus")])
-def test_rejects_a_scale_set_it_cannot_serve(scales: tuple[str, ...]) -> None:
-    with pytest.raises(ValueError, match="scales must be"):
-        sweep_pool(_rows(), synthetic_panel(), "hitter", (1,), scales=scales)
+def test_points_rejects_a_scale_it_cannot_serve() -> None:
+    swept = sweep_pool(_rows(), synthetic_panel(), "hitter", (1,))
+    with pytest.raises(ValueError, match="scale must be one of"):
+        swept[0].points("bogus")
 
 
 def test_a_payload_round_trip_preserves_every_ranked_number() -> None:
@@ -124,12 +138,44 @@ def test_a_payload_round_trip_preserves_every_ranked_number() -> None:
         assert a["p10"] == pytest.approx(b["p10"], abs=1e-5)
 
 
-def test_a_payload_from_another_schema_is_refused_not_misread() -> None:
-    """A compact point is a positional array, so a shape change does not fail loudly on
-    its own -- it indexes to the wrong field and produces confident nonsense."""
+def test_the_old_positional_payload_is_refused_by_shape_not_by_a_version() -> None:
+    """Replaces a `version=99` test, deliberately (2026-08-06, Hart's call).
+
+    Points used to be positional arrays -- `[horizon, mean, p10, p90, n_eff, fell_back]`
+    -- which is why a version register existed: a shape change indexes to the wrong
+    field and produces confident nonsense instead of failing. Named keys removed the
+    failure mode, so the register that guarded it went too, and with it the deploy
+    window where a running build and a stored blob disagree by one integer.
+
+    What has to survive is the REFUSAL. The blob deployed at the time of this change is
+    positional, so the reader still has to say so in words rather than raising
+    `TypeError: list indices must be integers`.
+    """
     payload = to_payload(sweep_pool(_rows(), synthetic_panel(), "hitter", (1,)), base_season=2026)
-    payload["version"] = 99
-    with pytest.raises(ValueError, match="version"):
+    positional = dict(payload)
+    positional["players"] = [
+        dict(
+            p,
+            sgp=[
+                [y["horizon"], y["mean"], y["p10"], y["p90"], y["n_effective"], 0] for y in p["sgp"]
+            ],
+        )
+        for p in payload["players"]
+    ]
+    with pytest.raises(ValueError, match=re.escape("re-run scripts/push_trajectory_board.py")):
+        from_payload(positional)
+
+
+def test_a_point_missing_a_field_fails_loudly_rather_than_shifting_the_rest() -> None:
+    """The property that made the version register unnecessary.
+
+    Drop a field from a positional array and every later field shifts up one -- p90 read
+    as p10, n_effective as p90 -- and the board renders. Drop it from a dict and the
+    read fails on the name of the thing that is missing.
+    """
+    payload = to_payload(sweep_pool(_rows(), synthetic_panel(), "hitter", (1,)), base_season=2026)
+    payload["players"][0]["sgp"][0].pop("p10")
+    with pytest.raises(KeyError, match="p10"):
         from_payload(payload)
 
 
@@ -179,7 +225,7 @@ def test_a_swept_row_matches_shape_trajectory_itself() -> None:
     row = BoardRow(1, "Grounded", "hitter", 27, 18.0, 16.0, "OF", 4.0)
     horizons = (1, 2, 3)
 
-    swept = sweep_pool([row], panel, "hitter", horizons, scales=("var",))
+    swept = sweep_pool([row], panel, "hitter", horizons)
     got = totals(swept, horizons, scale="var")[0]
 
     traj, _ = shape_trajectory(
@@ -223,13 +269,14 @@ def test_the_band_flag_is_scoped_to_the_range_on_screen() -> None:
     """
     panel = synthetic_panel()
     row = BoardRow(1, "Flagged", "hitter", 27, 18.0, 16.0, "OF", 4.0)
-    swept = sweep_pool([row], panel, "hitter", (1, 2, 3), scales=("var",))
+    swept = sweep_pool([row], panel, "hitter", (1, 2, 3))
 
     player = swept[0]
-    # Force a fallback at the FAR horizon only, leaving the near years clean.
+    # Force a fallback at the FAR horizon only, leaving the near years clean. Patched on
+    # the stored RAW path; `points("var")` derives from it and carries the flag through.
     patched = replace(
         player,
-        var=tuple(replace(p, band_fell_back=(p.horizon == 3)) for p in player.var),
+        sgp=tuple(replace(p, band_fell_back=(p.horizon == 3)) for p in player.sgp),
     )
 
     assert totals([patched], (1,), scale="var")[0]["band_fell_back"] is False
@@ -248,15 +295,14 @@ def test_n_eff_reports_the_worst_year_in_the_range() -> None:
         synthetic_panel(),
         "hitter",
         (1, 2, 3),
-        scales=("var",),
     )
     player = swept[0]
     thinning = replace(
         player,
-        var=tuple(replace(pt, n_effective=float(100 - 10 * pt.horizon)) for pt in player.var),
+        sgp=tuple(replace(pt, n_effective=float(100 - 10 * pt.horizon)) for pt in player.sgp),
     )
 
-    assert [pt.n_effective for pt in thinning.var] == [90.0, 80.0, 70.0]
+    assert [pt.n_effective for pt in thinning.points("var")] == [90.0, 80.0, 70.0]
     assert totals([thinning], (1, 2, 3), scale="var")[0]["n_eff"] == 70.0
     assert totals([thinning], (1, 2), scale="var")[0]["n_eff"] == 80.0
     assert totals([thinning], (1,), scale="var")[0]["n_eff"] == 90.0

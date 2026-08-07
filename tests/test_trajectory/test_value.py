@@ -82,21 +82,37 @@ def _cohort(forward: list[float]) -> pd.DataFrame:
     )
 
 
-def test_a_departed_comp_is_worth_ZERO_not_minus_a_floor() -> None:
-    """Subtracting a flat floor afterwards charged attrition the floor a second time:
-    measured at age 30 it turned a +0.46 five-year value into -6.01. A man out of the
-    league is worth 0 to the slot -- the manager starts the replacement he was already
-    being measured against."""
+def test_a_departed_comp_is_worth_MINUS_the_floor() -> None:
+    """REVERSED DELIBERATELY (#331, decision by Hart 2026-08-06).
+
+    This asserted the opposite: `max(sgp - replacement, 0)`, so a comp who left the
+    league scored 0 rather than minus a floor, on the argument that the manager drops him
+    and starts the replacement he was already being measured against.
+
+    The reversal is not really about attrition. In `shape.shape_trajectory` the identical
+    clamp sat on a REGRESSION RESPONSE, where flattening the sub-floor comps changed the
+    fitted slope on `(current, prior)` -- so two players sharing a slot, and therefore a
+    floor, came out in a different ORDER on VAR than on SGP. There is no way to keep the
+    drop-and-replace pricing and the ordering both: any response that treats the sub-floor
+    rows differently is nonlinear in the floor and moves the slope. Ordering won. Out of
+    the league is 0 SGP, so his VAR is minus the floor, and a reader wanting the
+    drop-adjusted number takes `max(var, 0)` at the point of decision.
+
+    Both matchers were reversed together, so the two modes cannot disagree about what a
+    VAR means -- see `test_mode_parity.test_both_modes_shift_var_by_the_floor_unclamped`.
+    """
     # One comp produces 12, one left the league (structural 0).
     panel = _cohort([12.0, 0.0])
     traj = comp_trajectory(
         panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=10.0
     )
-    # max(12-10,0)=2 and max(0-10,0)=0  ->  mean 1.0, NOT (6.0 - 10.0) = -4.0
-    assert traj.path[0].mean == pytest.approx(1.0)
+    # (12-10) and (0-10)  ->  mean -4.0, which is the raw mean 6.0 minus the floor.
+    assert traj.path[0].mean == pytest.approx(-4.0)
+    raw = comp_trajectory(panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,))
+    assert traj.path[0].mean == pytest.approx(raw.path[0].mean - 10.0)
 
 
-def test_flooring_reaches_median_spread_and_the_survivor_mean() -> None:
+def test_the_shift_reaches_median_spread_and_the_survivor_mean() -> None:
     """A post-hoc shift moved `mean` and left the other three level columns on the raw
     scale, so one printed row mixed VAR and SGP."""
     panel = _cohort([14.0, 12.0, 0.0, 11.0])
@@ -104,14 +120,17 @@ def test_flooring_reaches_median_spread_and_the_survivor_mean() -> None:
     var = comp_trajectory(
         panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=10.0
     )
-    assert var.path[0].median == pytest.approx(np.median([4.0, 2.0, 0.0, 1.0]))
+    # The departed comp is at -10.0, not 0.0: unclamped since #331.
+    assert var.path[0].median == pytest.approx(np.median([4.0, 2.0, -10.0, 1.0]))
     assert var.path[0].mean_if_survived == pytest.approx(np.mean([4.0, 2.0, 1.0]))
-    assert var.path[0].spread < raw.path[0].spread  # flooring compresses the low tail
+    # A pure shift leaves every WIDTH alone. It used to compress the low tail, which is
+    # the same nonlinearity that reordered same-slot players in shape mode (#331).
+    assert var.path[0].spread == pytest.approx(raw.path[0].spread)
 
 
 def test_survival_is_read_off_the_RAW_line() -> None:
-    """After flooring, a below-replacement season and a career ending are both 0. The
-    survival column must still tell them apart."""
+    """Shifted, a career ending reads `-replacement` rather than the exact 0 that `played`
+    keys on. The survival column must still tell a departed comp from a bad season."""
     panel = _cohort([14.0, 2.0, 0.0])  # one good, one below replacement, one departed
     traj = comp_trajectory(
         panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=10.0
@@ -133,31 +152,14 @@ def test_no_replacement_leaves_every_number_untouched() -> None:
     )
 
 
-def test_shape_fits_on_var_when_given_a_floor() -> None:
-    """Flooring the RESPONSE, not shifting the fitted mean, is what keeps a departed comp
-    at 0 and keeps every derived statistic on one scale."""
-    rng = np.random.default_rng(3)
-    rows = []
-    for i in range(300):
-        prior, current = float(rng.uniform(12, 30)), float(rng.uniform(12, 30))
-        # Real noise, or both spreads are ~1e-15 and comparing them says nothing.
-        forward = 0.5 * current + 0.4 * prior + float(rng.normal(0, 2.0))
-        rows += [(i, 2010, 26, prior), (i, 2011, 27, current), (i, 2012, 28, max(forward, 0.0))]
-    panel = _panel(rows)
-    kw = {
-        "kind": "hitter",
-        "age": 27,
-        "sgp": 15.0,
-        "prior_sgp": 15.0,
-        "horizons": (1,),
-        "prior_window": 60.0,
-    }
-    raw, _ = shape_trajectory(panel, **kw)
-    var, _ = shape_trajectory(panel, replacement=8.0, **kw)
-    # Every forward value here clears the floor, so VAR is exactly SGP minus it.
-    assert var.path[0].mean == pytest.approx(raw.path[0].mean - 8.0, abs=0.25)
-    # The widths are on the same scale, not left behind on the raw one.
-    assert var.path[0].spread == pytest.approx(raw.path[0].spread, rel=0.15)
+# The shape matcher's "VAR is the raw fit minus the floor, on every statistic" contract
+# lives in test_mode_parity.test_both_modes_shift_var_by_the_floor_unclamped, which
+# asserts it for BOTH matchers over mean/median/p10/p90/mean_if_survived plus the
+# untouched widths. A `test_shape_fits_on_var_when_given_a_floor` here asserted a strict
+# subset of that on its own 300-row panel -- and its population sat entirely ABOVE the
+# floor it was netted against, so no comp was ever sub-floor and restoring the response
+# clamp would have left it green. It was deleted rather than kept as a duplicate that
+# cannot fail on the bug it names.
 
 
 # ------------------------------------------- the class, not the instances
@@ -191,32 +193,45 @@ def test_the_comps_frame_is_on_the_same_scale_as_the_path() -> None:
     var = comp_trajectory(
         panel, kind="hitter", age=27, sgp=13.0, band=1.0, horizons=(1,), replacement=10.0
     )
-    assert sorted(var.comps["h1"]) == [0.0, 2.0, 4.0]
+    assert sorted(var.comps["h1"]) == [-10.0, 2.0, 4.0]
     assert var.comps["h1"].mean() == pytest.approx(var.path[0].mean)
 
 
-def test_shape_never_predicts_below_replacement() -> None:
-    """comp_trajectory is structurally non-negative because it averages floored values;
-    shape's prediction is an unconstrained extrapolation and printed -2.35 for a
-    collapsed veteran. A below-replacement player costs zero, not minus a floor."""
+def test_shape_reports_a_collapsed_veteran_as_NEGATIVE_var() -> None:
+    """REVERSED DELIBERATELY (#331, decision by Hart 2026-08-06).
+
+    This asserted `mean >= 0` and `median >= 0`, clamping the prediction and the median
+    at zero on top of the response clamp, because "a below-replacement player costs zero,
+    not minus a floor -- you drop him and start the replacement".
+
+    Rounding it away is what made a collapsed veteran render identically to a
+    replacement-level one, which is the single most decision-relevant distinction on a
+    keeper board.
+
+    THE NEGATIVITY is all this asserts. That the shifted values equal `raw - floor` is
+    test_mode_parity's contract and is not restated here.
+    """
     rng = np.random.default_rng(5)
     rows = []
     for i in range(200):
         peak, down = float(rng.uniform(18, 26)), float(rng.uniform(0, 3))
         rows += [(i, 2010, 32, peak), (i, 2011, 33, down), (i, 2012, 34, float(rng.uniform(0, 4)))]
     panel = _panel(rows)
-    traj, _ = shape_trajectory(
-        panel,
-        kind="hitter",
-        age=33,
-        sgp=0.5,
-        prior_sgp=24.0,
-        horizons=(1,),
-        prior_window=60.0,
-        replacement=9.96,
-    )
-    assert traj.path[0].mean >= 0.0
-    assert traj.path[0].median >= 0.0
+    kw = {
+        "kind": "hitter",
+        "age": 33,
+        "sgp": 0.5,
+        "prior_sgp": 24.0,
+        "horizons": (1,),
+        "prior_window": 60.0,
+    }
+    var, _ = shape_trajectory(panel, replacement=9.96, **kw)
+
+    # This cohort produces 0-4 SGP against a floor of 9.96, so every one of them is a
+    # negative -- the fixture cannot pass by accident on a clamp-free code path.
+    assert var.path[0].mean < 0.0
+    assert var.path[0].median < 0.0
+    assert var.path[0].p10 < 0.0 and var.path[0].p90 < 0.0
 
 
 @pytest.mark.parametrize(

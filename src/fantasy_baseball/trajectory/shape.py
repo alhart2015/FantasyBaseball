@@ -460,11 +460,35 @@ def shape_trajectory(
     each number can be read rather than trusted.
 
     `replacement` fits the model on VALUE ABOVE REPLACEMENT instead of raw SGP: the
-    response becomes `max(forward - replacement, 0)` while the two anchors stay on the
-    SGP scale the caller supplies them in. Flooring the RESPONSE rather than shifting
-    the fitted mean is what keeps a departed comp worth 0 instead of minus a floor, and
-    it carries through to `spread`, `median` and `mean_if_survived` for free -- shifting
+    response becomes `forward - replacement` while the two anchors stay on the SGP scale
+    the caller supplies them in. Shifting the RESPONSE rather than the fitted mean is
+    what carries the scale into `spread`, `median` and `mean_if_survived` -- shifting
     afterwards moved only the mean and left the other three on a different scale.
+
+    NOTHING IS CLAMPED, and that is load-bearing rather than incidental (#331). The
+    response used to be `max(forward - replacement, 0)` and the prediction, median and
+    band edges were each floored at zero on top of it. Every one of those is a NONLINEAR
+    transform of an otherwise affine relationship, and the response clamp is the
+    dangerous one: it flattens exactly the comps that fall below the floor, which changes
+    the fitted SLOPE on `(current, prior)` -- so two players sharing a slot, and therefore
+    sharing a floor, came out in a DIFFERENT ORDER on VAR than on SGP. The deviation grew
+    with the floor and differed per query (up to 1.63 SGP between two same-floor players
+    at a floor of 18), which is why pitchers -- high floors against a narrow spread of
+    outcomes -- reshuffled far worse than hitters.
+
+    Unclamped, `y_var = y_sgp - replacement` is affine and the intercept column is exactly
+    the vector being subtracted, so the fit moves ONLY its intercept, by `-replacement`.
+    Every prediction shifts by the floor and no residual moves at all: `mean`, `median`,
+    `p10` and `p90` are the raw fit's minus the floor, `se` and `spread` are identical,
+    and same-floor ordering is preserved BY CONSTRUCTION rather than by a test.
+
+    The cost, accepted deliberately (issue #331): a comp who left the league scores a
+    structural 0 and now enters the fit at `-replacement` rather than 0, so the model no
+    longer prices the option to drop him and start the replacement he was measured
+    against. Out of the league is 0 SGP, so his VAR is minus the floor; a reader who wants
+    the drop-adjusted number takes `max(var, 0)` at the point of decision. Both matchers
+    were changed together -- `comps.comp_trajectory` carries the same reversal -- so the
+    two cannot disagree about what a VAR means.
     """
     if prior_window <= 0:
         raise ValueError(f"prior_window must be positive, got {prior_window}")
@@ -555,11 +579,13 @@ def shape_trajectory(
         # nearer horizon in the same query.
         keep = np.flatnonzero(seasons + h <= last)
         y = prepared.forward[h][usable[keep]]
-        # Survival off the RAW line: after flooring, a below-replacement season and a
-        # career ending are both 0 and no longer tell apart.
+        # Survival off the RAW line. Shifted, a career ending reads `-replacement`, which
+        # is also what a season spent exactly at the floor's distance below zero reads --
+        # and only the raw line has the exact 0 that means "not in the league".
         mask = played(y)
-        if replacement:
-            y = np.maximum(y - replacement, 0.0)
+        # SHIFTED, NOT FLOORED. `np.maximum(y - replacement, 0)` here is what reordered
+        # same-slot players across the VAR/SGP toggle (#331); see the docstring.
+        y = y - replacement
         x, w = anchor_columns[keep], weights[keep]
 
         # Gate on the EFFECTIVE size, not the row count. Three rows fit a
@@ -578,14 +604,6 @@ def shape_trajectory(
         coefficients = _weighted_least_squares(x, y, w)
         query = np.array([1.0, sgp, prior_sgp])
         predicted = float(query @ coefficients)
-        # Flooring the RESPONSE is not enough here. `comp_trajectory` averages values
-        # that are already >= 0, so its mean cannot go negative; this is an unconstrained
-        # WLS extrapolation, and on a collapsed veteran it printed -2.35 -- a keeper
-        # apparently COSTING value, when a below-replacement player costs exactly zero
-        # (you drop him and start the replacement). The two matchers disagreed in sign on
-        # the same player, and this is the one that runs by default.
-        if replacement:
-            predicted = max(predicted, 0.0)
 
         # Resampling rows and refitting gives the sampling variability of the fitted
         # MEAN, E[forward | current, prior]. It shrinks as sqrt(n) and contains no residual
@@ -600,8 +618,6 @@ def shape_trajectory(
         # the fit itself barely counted, which for an edge-of-window query is most of
         # the row count.
         median = float(predicted + _weighted_quantile(residuals, w, 0.5))
-        if replacement:
-            median = max(median, 0.0)
         # These are FITTED residuals from a three-parameter model, so their weighted
         # mean square estimates (1 - p/n_eff) * sigma^2, not sigma^2. Without the
         # correction the spread -- the number `PathPoint.spread` tells the reader to
@@ -669,10 +685,6 @@ def shape_trajectory(
         # band already contained the estimate, and can only ever WIDEN elsewhere -- the
         # conservative direction for a keep-or-cut call.
         p10, p90 = min(p10, predicted), max(p90, predicted)
-        if replacement:
-            # Same floor the response carries: below replacement is worth zero, not
-            # negative, so a band reaching under it reports zero rather than a debt.
-            p10, p90 = max(p10, 0.0), max(p90, 0.0)
         survived = mask
         path.append(
             PathPoint(

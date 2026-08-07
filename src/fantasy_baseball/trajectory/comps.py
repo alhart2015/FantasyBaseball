@@ -203,6 +203,18 @@ class Trajectory:
     #: total. A reader of this object can no longer be wrong about what its numbers mean.
     floor: float = 0.0
     slot: str | None = None
+    #: Per-horizon `h{n}` boolean columns, row-aligned to `comps`: True where the comp
+    #: was out of the league that year. Taken BEFORE the floor is netted out, because
+    #: after it a career ending reads `-floor` and is no longer recoverable from the
+    #: value -- at the OF floor that is -9.96, four hundredths from a real -10.00
+    #: season. `played` keys on the raw exact 0.0 for the same reason.
+    #:
+    #: NaN is left False: "has not happened yet" already renders as `--`, and folding
+    #: it in here would paint an unobservable year as a career ending.
+    #:
+    #: Empty for `mode="shape"`, whose `comps` frame is per-HORIZON predictions rather
+    #: than per-comp seasons and which refuses `--show-comps` outright.
+    departed: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
 
     @property
     def extrapolated(self) -> bool:
@@ -298,11 +310,17 @@ def comp_trajectory(
     would average a two-thirds year in as if it were a full one.
 
     `replacement` scores every horizon as VALUE ABOVE REPLACEMENT rather than raw SGP,
-    flooring each comp at zero BEFORE aggregating: `max(sgp - replacement, 0)`. That has
-    to happen here rather than as a shift of the finished mean, because a comp who left
-    the league scores a structural 0 and is worth 0 to a roster slot -- not minus a
-    floor. Subtracting afterwards charges the floor a second time against attrition;
-    measured at age 30 it turned a +0.46 five-year value into -6.01.
+    shifting each comp BEFORE aggregating: `sgp - replacement`. It happens here rather
+    than as a shift of the finished mean so that the median, the survivor mean, the band
+    and the `--show-comps` frame all land on the same scale as the mean -- shifting
+    afterwards left every one of them on the raw scale.
+
+    NOT floored at zero, deliberately (#331). It was `max(sgp - replacement, 0)`, which
+    kept a departed comp at 0 rather than minus a floor. The reversal was forced by the
+    OTHER matcher, where the identical clamp sat on a regression response and reordered
+    players sharing a slot; `shape.shape_trajectory` carries the full argument and the
+    cost accepted with it. It is applied here so the two cannot disagree about what a
+    VAR is -- see `test_mode_parity.test_both_modes_shift_var_by_the_floor_unclamped`.
 
     `last_complete_season` defaults to the panel's maximum and defines observability,
     which is applied PER HORIZON: a 2024 age-25 season has a real age-26 to look at and
@@ -379,27 +397,35 @@ def comp_trajectory(
         width = prior_band if prior_band is not None else band
         comps = comps[(comps["sgp_prior"] - prior_sgp).abs().le(width)].reset_index(drop=True)
 
-    # Keep the pre-floor forwards: survival must stay readable off the RAW line, since
-    # after flooring a below-replacement season and a career ending are both 0.
-    raw_forward = {f"h{h}": comps[f"h{h}"].copy() for h in horizons} if not comps.empty else {}
-    if replacement and not comps.empty:
-        # The FRAME is floored too, not just the aggregates. It is what `--show-comps`
-        # prints, and flooring only the aggregates left it listing raw SGP directly
+    # Survival off the RAW line, so take the mask BEFORE the shift: shifted, a career
+    # ending reads `-replacement` rather than the exact 0 `played` keys on. Only the mask
+    # is kept, not a copy of the values -- `shape_trajectory` does the same thing the same
+    # way, and NaN positions are untouched by a subtraction so it stays aligned.
+    survived_at = (
+        {f"h{h}": played(comps[f"h{h}"].dropna().to_numpy(dtype=float)) for h in horizons}
+        if not comps.empty
+        else {}
+    )
+    # Row-aligned to the frame rather than to the dropna'd arrays `survived_at` uses,
+    # because this one is consumed per PRINTED CELL and has to line up with what the
+    # reader sees. Same raw-0.0 test, same reason for taking it before the shift.
+    departed = pd.DataFrame(
+        {f"h{h}": comps[f"h{h}"] == 0.0 for h in horizons} if not comps.empty else {}
+    )
+    if not comps.empty:
+        # The FRAME is shifted too, not just the aggregates. It is what `--show-comps`
+        # prints, and shifting only the aggregates left it listing raw SGP directly
         # beneath a VAR table -- anyone checking the arithmetic got a different mean
-        # than the row above.
+        # than the row above. Subtraction propagates NaN, so an unobservable horizon
+        # stays unobservable rather than becoming a value.
         for h in horizons:
-            column = comps[f"h{h}"]
-            comps[f"h{h}"] = column.where(column.isna(), (column - replacement).clip(lower=0.0))
+            comps[f"h{h}"] = comps[f"h{h}"] - replacement
 
     rng = np.random.default_rng(seed)
     path = []
     for h in horizons:
         values = comps[f"h{h}"].dropna().to_numpy(dtype=float) if not comps.empty else np.array([])
-        # Survival off the RAW line: after flooring, a below-replacement season and a
-        # career ending are both 0 and no longer tell apart, so the mask is taken from
-        # the pre-floor values kept alongside.
-        raw = raw_forward[f"h{h}"].dropna().to_numpy(dtype=float) if not comps.empty else values
-        survived = values[played(raw)]
+        survived = values[survived_at[f"h{h}"]] if not comps.empty else values
         path.append(
             PathPoint(
                 horizon=h,
@@ -414,8 +440,8 @@ def comp_trajectory(
                 # Straight off the comps, which ARE the empirical distribution here --
                 # no residuals and no normality assumed. Same reason as shape mode: the
                 # outcome spread changes shape by pool and horizon, and one width cannot
-                # carry that. A departed comp's structural 0 is in `values`, so the low
-                # end reflects attrition rather than hiding it.
+                # carry that. A departed comp is in `values` -- at `-replacement` on the
+                # VAR scale -- so the low end reflects attrition rather than hiding it.
                 p10=float(np.percentile(values, 10)) if len(values) else float("nan"),
                 p90=float(np.percentile(values, 90)) if len(values) else float("nan"),
                 # Every comp counts exactly once, so the effective size IS the count and
@@ -439,6 +465,7 @@ def comp_trajectory(
         else None,
         path=tuple(path),
         comps=comps,
+        departed=departed,
         mode="track" if prior_sgp is not None else "current",
         floor=replacement,
         slot=slot,

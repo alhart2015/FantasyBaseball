@@ -178,6 +178,48 @@ def test_both_modes_refuse_an_unusable_bootstrap_count(draws: int) -> None:
         )
 
 
+def test_both_modes_shift_var_by_the_floor_unclamped() -> None:
+    """One definition of VAR across both matchers: raw minus the floor, clamped nowhere.
+
+    They disagreed by construction before #331 -- comps averaged `max(sgp - floor, 0)`
+    over its cohort while shape FITTED that same clamped quantity, and a clamped fit is
+    not a shifted one. It moved the slope, so shape's VAR was not even a fixed offset
+    from its own raw fit, which is what reordered players who share a slot.
+
+    Both were unclamped together. If a future change restores the clamp in one matcher
+    only -- the failure shape this file exists to catch, three times over -- the two
+    modes start reporting different numbers for the same player and this fails.
+    """
+    panel = _population()
+    floor = 9.0
+    query = {"kind": "hitter", "age": 27, "sgp": 10.0, "horizons": (1,)}
+
+    pairs = [
+        (
+            comp_trajectory(panel, band=30.0, **query),
+            comp_trajectory(panel, band=30.0, replacement=floor, slot="C", **query),
+        ),
+        (
+            shape_trajectory(panel, prior_sgp=10.0, prior_window=60.0, **query)[0],
+            shape_trajectory(
+                panel, prior_sgp=10.0, prior_window=60.0, replacement=floor, slot="C", **query
+            )[0],
+        ),
+    ]
+    for raw, var in pairs:
+        for field in ("mean", "median", "p10", "p90", "mean_if_survived"):
+            assert getattr(var.path[0], field) == pytest.approx(
+                getattr(raw.path[0], field) - floor
+            ), f"{raw.mode}: {field} is not the raw value minus the floor"
+        # A shift moves no residual, so nothing that describes WIDTH or support moves.
+        for field in ("spread", "se", "n", "survivors", "n_effective"):
+            assert getattr(var.path[0], field) == pytest.approx(getattr(raw.path[0], field))
+        # Anti-vacuity: this population runs to 20 SGP, so a floor of 9 must actually
+        # push some of these under zero. Without it the assertions above would pass on a
+        # clamped implementation too.
+        assert var.path[0].p10 < 0.0
+
+
 def test_every_mode_is_labelled() -> None:
     """`render` branches on `mode`; an unlabelled estimator would silently take the
     comps layout and mislabel its own columns."""

@@ -7,8 +7,14 @@ which are worth the most over the years I would hold them?
 Ranked on TOTAL VAR over the horizon -- value above the position-aware waiver floor,
 summed across the projected years. Raw SGP would silently penalise every catcher and
 reliever, and a single year would not be a keeper question. The two differ enough to
-flip the order: Mason Miller is 8.9 VAR over three years to Zack Wheeler's 6.9, while on
-raw SGP Wheeler leads him every single year.
+flip the order (2027-29, measured 2026-08-06): Mason Miller is 4.5 VAR to Zack Wheeler's
+-0.0, while on raw SGP Wheeler leads 27.9 to 26.8. Wheeler is the better pitcher and the
+worse KEEPER, because an SP floor of 9.29 is a much higher bar than an RP's 7.42.
+
+Those figures replace pre-#331 ones (8.9 and 6.9) that no VAR this tool computes can
+reproduce: VAR was a clamped refit then and is `raw - years * floor` now. The old text
+also claimed Wheeler led "every single year", which is no longer true either -- he leads
+years one and two, 11.7 to 10.6 and 9.3 to 8.7, and trails in year three, 6.8 to 7.5.
 
 THE ONE THAT ANSWERS MOST QUESTIONS -- top 50 league-wide, your whole roster, the best
 five on every other team, and a CSV of all 551 rows to slice afterwards:
@@ -111,8 +117,31 @@ def by_team(
             (r for r in scored if r["team"] == team), key=lambda r: r["total"], reverse=True
         )
         shown = rows if limit is None else rows[:limit]
-        total = sum(r["total"] for r in rows)
-        head = f"{team}{note}  ({len(rows)} scored, {total:.1f} total {span} VAR)"
+        # The best `per_team`, NOT the roster and NOT `shown`. Three separate reasons.
+        #
+        # Not the roster: VAR is a shift rather than a clamp as of #331, so a below-
+        # replacement player carries a real negative instead of 0.0 and a whole-roster
+        # sum is mostly tail. Measured at the 2027-29 range on live rosters, 93.5% of
+        # scored players are negative and each team's tail runs -62 to -196 against a
+        # best-5 signal of 15 to 73. It ranked Boston Estrellas last in the league on
+        # the depth of its junk while its best five were 4th. Rosters are all 23-26
+        # scored players, so the tail was not even measuring roster SIZE -- it was
+        # measuring how bad the bottom was, which is not a keeper signal at three
+        # keepers a team. Nobody keeps their 20th man.
+        #
+        # Not `shown`: your own block passes `limit=None` to list every player you own,
+        # so summing what is displayed would put your headline on 24 players and every
+        # opponent's on 5 -- and read as a deficit, since your extra rows are the
+        # negative ones. The cap belongs to the number, not the list.
+        #
+        # `per_team` rather than the three slots a keeper decision actually has: five is
+        # the candidate POOL. An opponent without this model may not keep his best
+        # three, so the fourth and fifth names are the ones worth scouting.
+        total = sum(r["total"] for r in rows[:per_team])
+        head = (
+            f"{team}{note}  ({len(rows)} scored, "
+            f"{total:.1f} total {span} VAR from the best {per_team})"
+        )
         print(f"\n{head}\n{'-' * len(head)}")
         for r in shown:
             band = f"{r['p10']:5.1f}..{r['p90']:<5.1f}"
@@ -305,10 +334,10 @@ def main() -> int:
         # full-panel `apply` passes for a frame that is this one minus its partial rows.
         # Verified identical on both pools: same ids, same seasons, max |sgp diff| 0.0.
         complete = live[~live["partial_season"]].reset_index(drop=True)
-        # VAR only. The web board (#321) also caches a raw-SGP fit for its second column,
-        # but that is a SECOND fit per player -- asking for it here would double a 17s run
-        # to serve a column this CLI does not print.
-        swept += sweep_pool(rows, complete, kind, horizons, scales=("var",))
+        # ONE fit, serving both scales. This used to ask for `scales=("var",)` to avoid a
+        # second fit per player the CLI does not print; since #331 VAR is the raw fit
+        # minus the slot's floor, so there is no second fit left to decline.
+        swept += sweep_pool(rows, complete, kind, horizons)
 
     scored = totals(swept, horizons, scale="var")
 
