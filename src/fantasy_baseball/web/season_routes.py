@@ -859,8 +859,9 @@ def register_routes(app: Flask) -> None:
                     )
                     # No roster data means no blocks to show. Fall back rather than
                     # render an empty page -- a bookmark outlives an Upstash outage.
-                    # Reset to "board" rather than inventing a third view value: the
-                    # only values that exist anywhere are the two `select_view` allows.
+                    # Falls back to "board" rather than to a value off `VIEWS`: every
+                    # value this route ever holds is one `select_view` allows, and
+                    # "board" is the one that needs no roster read to render.
                     if not teams_board.blocks:
                         teams_board, view = None, "board"
                 if view == "board":

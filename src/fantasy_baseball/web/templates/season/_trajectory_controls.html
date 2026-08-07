@@ -1,10 +1,12 @@
-{#- The trajectory page's control bar, shared by the league board and the all-teams
-    view.
+{#- The trajectory page's control bar, shared by all three views: the league board,
+    the all-teams view and the single-player chart.
 
-    EVERY MACRO TAKES ITS VALUES EXPLICITLY rather than reading `board.*`. The two
+    EVERY MACRO TAKES ITS VALUES EXPLICITLY rather than reading `board.*`. The three
     views carry different objects: `Board` has `top`/`team`/`teams`, `TeamsBoard` has
-    `per_team` and none of those, because they mean nothing in a grouped view. A
-    partial reaching into `board` would work for one caller and break for the other.
+    `per_team` and none of those, `PlayerView` has `name`/`n` and none of either --
+    because each means nothing in the other views. A partial reaching into `board`
+    would work for one caller and break for the others. `cur` is the exception and the
+    reason this works: `filter_state` levels the three into ONE dict of the same shape.
 
     `filter_state` is the single place that knows the full filter state, and its keys
     ARE the query-string names -- so `board_url` overrides one of them and splats the

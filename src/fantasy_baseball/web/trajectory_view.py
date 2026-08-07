@@ -178,7 +178,12 @@ def _sweep_setup(
 
 
 def _board_meta(payload: dict) -> dict:
-    """The vintage and provenance block, identical for both views.
+    """The vintage and provenance block, identical for all three views.
+
+    TWO callers, though, not three: `build_board` spells the same seven fields inline,
+    with a paragraph of per-field prose about what the league board does with each. So
+    a field added here has to be added there as well -- it is the one copy of this
+    block that nothing forces.
 
     `min_local_support` is in here because its ABSENCE was not something a template
     could route around: without the threshold the (!) flag has no rule to name, so
