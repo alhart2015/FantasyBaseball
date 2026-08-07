@@ -80,6 +80,10 @@ def build_teams_board(
 ) -> TeamsBoard
 ```
 
+`per_team` arrives from a query string, so it is `Any` and is clamped inside:
+`_clamp(per_team, 1, 50, DEFAULT_PER_TEAM)` with `DEFAULT_PER_TEAM = 5`, matching the
+CLI's `--per-team`. `None` means "not supplied" and yields the default.
+
 It reuses `_ranked_rows(payload, horizons, scale)` -- the expensive part, the sweep parse
 plus `add_ranks` -- and `index_rosters`, then groups instead of flattening.
 
@@ -103,7 +107,9 @@ mutation checks that a template test could not have expressed.
 class TeamBlock:
     team: str
     rows: list[dict]        # best `per_team`, league-ranked, total desc
-    scored: int             # rows this team has on the WHOLE board, pre-slice
+    scored: int             # this team's rows AFTER the pool filter, before the
+                            # per_team slice -- so a block reads "5 of 24", and
+                            # under ?pool=hitter it reads "5 of 14"
     total: float            # sum over `rows` -- the best-N total, NOT the roster
     unscored: list[str]
     is_mine: bool
@@ -119,11 +125,18 @@ class TeamsBoard:
     scale: str
     per_team: int
     year_columns: list[int]
+    #: True when `my_team` names no block. The counterpart of the league board's
+    #: `has_rosters`: it drives a one-line banner saying the page could not find the
+    #: reader's own roster, so ten unhighlighted blocks are explained rather than
+    #: read as "you own none of these".
+    mine_missing: bool
     meta: dict
 ```
 
-`scored` is the team's full count and `len(rows)` is what is shown, so a block can say
-"5 of 24" without a second query.
+`scored` is the team's count **after the pool filter and before the `per_team` slice**,
+and `len(rows)` is what is shown, so a block says "5 of 24" -- and "5 of 14" under
+`?pool=hitter`. Counting pre-pool would print a total the visible rows cannot add up to,
+which is the same mismatch `unscored` had before it learned about `pool`.
 
 ### Membership, not a winner
 
@@ -162,11 +175,21 @@ standings the other way is #338.)
 | `end`, `scale`, `pool` | **shared** -- one range and one scale across the page, per #323 |
 | `top` (50) vs `per` (5) | **independent** -- a shared binding means 5 collapses the league board, or 50 puts fifty players in every block |
 
+`board_url` carries **both** `top` and `per` on **every** link, whichever view is
+rendering. They are independent in what they control, not in when they are transmitted:
+emitting `per` only on the teams view would silently reset it to 5 whenever the reader
+flipped to the league board and back -- precisely the hidden-input failure the macro's
+own comment records.
+
 ## Requirements
 
 1. `?view=teams` renders one block per team in `index.teams`; absent or `?view=board`
    renders today's league board unchanged.
-2. Blocks are ordered by best-N total descending, with my own block in that ordering.
+2. Blocks are ordered by best-N total descending, **tie-broken by team name
+   ascending**, with my own block in that ordering. A tie is reachable -- two teams
+   with no scored rows both total 0.0 -- and leaving it to dict order would make the
+   page reorder between reads, which is the same arbitrary-ordering defect
+   `index_rosters` was just fixed for (`06bf2646`).
 3. Within a block, rows are ordered by total descending and carry **league** ranks.
 4. `per_team` slices an already-ranked list; it never re-ranks.
 5. A team with zero scored rows renders, sorts last, and shows its unpriced list.
@@ -174,6 +197,12 @@ standings the other way is #338.)
 7. A row whose key two teams roster appears in both blocks, flagged `owner_ambiguous`.
 8. `end`, `scale` and `pool` survive a view switch; `top` and `per` do not bleed into each
    other.
+9. `mine_missing` is True exactly when no block is marked `is_mine` -- including when
+   `my_team` is None because the config read failed -- and drives a one-line banner. The
+   page never renders ten unhighlighted blocks with no explanation.
+10. A block renders the same per-year columns as the league board -- present when the
+   range spans more than one year, absent when it does not -- driven by the same
+   `year_columns`, so the two views cannot disagree about what a year column means.
 
 ## Edge cases and failure modes
 
@@ -185,16 +214,20 @@ standings the other way is #338.)
 | A team rosters nobody the board scored | Renders with `scored=0`, `total=0.0`, empty `rows`, and its full unpriced list. Requirement 5. |
 | Every team has zero scored rows | Every block renders empty. The page is honest rather than blank; nothing special-cased. |
 | A name two teams roster | Appears in both blocks with `(?)`. Neither block's `scored` double-counts the other's. |
-| My team is not in `index.teams` (rename, or config mismatch) | No block is marked `is_mine`. Blocks still render and sort normally. |
+| My team is not in `index.teams` (rename, or config mismatch) | No block is marked `is_mine`. Blocks still render and sort normally, **and the page says so** -- see `mine_missing` below. Silently rendering ten unhighlighted blocks would read as "none of these are yours", which is a claim the page cannot support. |
 | `pool` filter excludes a team's every row | Same as zero scored rows: block renders with its pool-filtered unpriced list. |
 
 ## Testing expectations
 
 **Unit, `build_teams_board`.** Blocks ordered by best-N total with mine *in* that ordering
-and not above it; a zero-scored team renders and sorts last; a block's top row is not `#1`
-(league ranks survive); `per_team` slices without re-ranking (compare rank sequences at
-two values of N); a colliding key appears in both blocks flagged; `unscored` follows the
-pool filter; `scored` counts the team's whole set while `len(rows)` is the slice.
+and not above it; **two teams tied on total order by name, and the order is identical when
+`spots` is passed reversed** -- the assertion that makes the tie-break a rule rather than
+a coincidence of dict order; a zero-scored team renders and sorts last; a block's top row
+is not `#1` (league ranks survive); `per_team` slices without re-ranking (compare rank
+sequences at two values of N); a colliding key appears in both blocks flagged; `unscored`
+follows the pool filter; **`scored` counts the team's rows after the pool filter and
+before the slice, so it changes under `?pool=hitter` while `len(rows)` may not**;
+`mine_missing` is True when `my_team` matches no block and False when it matches one.
 
 **Route.** `?view=teams` renders blocks; absent and `?view=board` render the league board;
 `top` and `per` do not affect each other across a view switch; `?view=teams` with no
@@ -213,12 +246,18 @@ One PR, three commits:
 
 1. `TeamBlock` / `TeamsBoard` / `build_teams_board` plus unit tests. No caller yet, so it
    lands green and is independently revertible.
-2. `board_url` gains `view` and `per`; the shared control bar renders the view pills.
-   League board unchanged, proven by its existing tests.
-3. The route branch and `trajectory_teams.html`, plus route tests.
+2. `board_url` gains `view` and `per` (threading only -- **no pills yet**). League board
+   unchanged, proven by its existing tests.
+3. The route branch, `trajectory_teams.html`, **and** the view pills, plus route tests.
 
-Commit 1 is standalone. Commits 2 and 3 are the feature. Unlike the dropdown's phasing,
-no commit changes a signature its callers still use -- the lesson from `c96cd79b`, which
-left `/trajectory` returning 500 at that revision.
+Commit 1 is standalone. Commits 2 and 3 are the feature.
+
+**The pills ship in the same commit as the route branch that answers them.** Splitting
+them would put a visible control on the page one commit before `?view=teams` does
+anything -- it would clamp back to `board`, so the pill would render, be clickable, and
+appear broken. That is the same defect shape as `c96cd79b`, where a commit boundary drawn
+between a change and its consumer left `/trajectory` returning 500 at that revision; the
+lesson is not "do not change signatures" but "do not land a caller and its callee in
+different commits", and a control is a caller.
 
 No data migration and no push: the cached payload is untouched.
