@@ -39,13 +39,6 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   {% else %}<p class="muted">Search a player to see his trajectory.</p>{% endif %}
 
 {% else %}
-{#- The disclosed y-axis/table label. On VAR every series was netted against THIS
-    player's own slot floor (`board.floor`) -- spec requirement 6 -- so a reader must
-    be able to find out what number was subtracted without recomputing it; on SGP
-    `board.floor` is 0.0 (nothing netted) and the label stays plain. Computed once,
-    from `board.floor`, not re-derived: `var_offset` is the one place that owns this
-    rule and this template must not become a third spelling of it. -#}
-{% set scale_label = ('VAR (SGP - ' + ('%.2f'|format(board.floor)) + ' slot floor)') if board.scale == 'var' else 'SGP' %}
 <p class="muted">
   {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
   Solid is what happened; dashed is projected, with the shaded band its p10-p90 range.
@@ -67,8 +60,12 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 </p>
 
 <div class="chart-wrapper"><canvas id="trajectory-chart"></canvas></div>
+{#- `axis_label` rather than `scale`/`floor`: the chart used to be handed the raw
+    offset and rebuild the label from it, which made the y-axis title a second
+    spelling of the header below. Ship the finished string and there is nothing
+    left for the two to disagree about. -#}
 <script type="application/json" id="trajectory-chart-data">{{ {
-  "name": board.name, "scale": board.scale, "floor": board.floor, "history": board.history,
+  "name": board.name, "axis_label": board.axis_label, "history": board.history,
   "projection": board.projection, "comps": board.comps} | tojson }}</script>
 
 {% if board.comps %}
@@ -113,7 +110,12 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 </p>
 {% endif %}
 <table class="data-table">
-  <thead><tr><th>Age</th><th>{{ scale_label }}</th><th>p10..p90</th></tr></thead>
+  {#- The disclosed axis/table label, from `PlayerView.axis_label` -- the ONE place it
+      is built. Spec requirement 6: on VAR every series was netted against THIS player's
+      own slot floor, so a reader must be able to find out what was subtracted without
+      recomputing it. This header is also the no-JS fallback for the chart's y-axis
+      title, which now reads the same string off the JSON island. -#}
+  <thead><tr><th>Age</th><th>{{ board.axis_label }}</th><th>p10..p90</th></tr></thead>
   <tbody>
     {% for a, v in board.history %}
     <tr><td>{{ a }}</td><td>{{ '%.1f'|format(v) }}</td><td class="muted">actual</td></tr>

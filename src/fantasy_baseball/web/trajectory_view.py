@@ -653,6 +653,24 @@ class PlayerView:
     end_years: list[int]
     meta: dict = field(default_factory=dict)
 
+    @property
+    def axis_label(self) -> str:
+        """What the value axis is measuring, said in words, for EVERY surface.
+
+        Derived rather than stored, like `Board.span`, so it cannot disagree with the
+        `floor` it names. It was spelled twice and in two languages -- a Jinja `{% set %}`
+        for the table header and a JS template literal for the chart's y-axis -- and the
+        two had to agree about a subtraction, which is precisely the duplicated-rule
+        class `var_offset` was extracted to stop. The chart now reads this through the
+        JSON island (`data.axis_label`) rather than re-deriving it from `floor`.
+
+        `floor` here is the APPLIED offset, so on the SGP scale it is 0.0 and the label
+        must not claim a subtraction that did not happen.
+        """
+        if self.scale != "var":
+            return self.scale.upper()
+        return f"VAR (SGP - {self.floor:.2f} slot floor)"
+
 
 def build_player_view(
     payload: dict,

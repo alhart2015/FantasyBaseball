@@ -2733,7 +2733,13 @@ def test_trajectory_player_view_discloses_the_var_netting_on_axis_and_table(clie
     """Spec requirement 6: on the VAR scale every series is netted against the
     searched player's OWN slot floor, and the axis label must say so -- not just
     repeat "VAR" as if that were self-explanatory. The numbers table's header is the
-    no-JS fallback for the same disclosure (#324 F2)."""
+    no-JS fallback for the same disclosure (#324 F2).
+
+    ONE STRING, BOTH SURFACES. The chart's y-axis title and this header used to be
+    built independently -- a Jinja `{% set %}` and a JS template literal, each
+    interpolating `floor` -- so they could disagree about a subtraction. Asserting they
+    are equal is what makes `PlayerView.axis_label` the only place the rule lives.
+    """
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
         return_value=_trajectory_payload_with_extras(),
@@ -2742,6 +2748,7 @@ def test_trajectory_player_view_discloses_the_var_netting_on_axis_and_table(clie
     body = resp.data.decode()
     # Testy McTestface's slot floor is 4.0 -- see `_trajectory_payload`'s BoardRow.
     assert "<th>VAR (SGP - 4.00 slot floor)</th>" in body
+    assert _chart_island(body)["axis_label"] == "VAR (SGP - 4.00 slot floor)"
     assert "netted against" in body, "the comp caption names the rule too"
 
 
@@ -2755,6 +2762,7 @@ def test_trajectory_player_view_sgp_scale_keeps_a_plain_label(client):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface&scale=sgp")
     body = resp.data.decode()
     assert "<th>SGP</th>" in body
+    assert _chart_island(body)["axis_label"] == "SGP", "the chart says the same thing"
     assert "slot floor" not in body
 
 
@@ -2789,6 +2797,21 @@ def test_trajectory_player_view_explains_a_pre_feature_blob(client):
     assert "<td>" not in comps_section, "no fabricated comp rows"
 
 
+def _chart_island(body: str) -> dict:
+    """The player page's `#trajectory-chart-data` JSON island, parsed.
+
+    Everything the chart is given comes through here, so a test asserting what the
+    chart draws asserts this rather than the JS -- there is no JS runtime in this suite.
+    """
+    match = re.search(
+        r'<script type="application/json" id="trajectory-chart-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match, "the chart's data island"
+    return json.loads(match.group(1))
+
+
 def _trajectory_chart_js_source() -> str:
     return (
         PROJECT_ROOT / "src" / "fantasy_baseball" / "web" / "static" / "trajectory_chart.js"
@@ -2816,14 +2839,25 @@ def test_trajectory_chart_js_disables_the_default_aspect_ratio():
 
 def test_trajectory_chart_js_discloses_the_var_netting_on_the_axis():
     """Spec requirement 6: the y-axis title must say what was subtracted on the VAR
-    scale using `data.floor` (the JSON island's copy of `board.floor`), not just
-    repeat the scale name (#324 F2)."""
+    scale, not just repeat the scale name (#324 F2).
+
+    The label is now built ONCE, server-side, as `PlayerView.axis_label`, and this
+    file reads the finished string -- so what has to be pinned here is that the axis
+    uses it, and the SERVER's rule is pinned where it now lives (see
+    `test_trajectory_player_view_discloses_the_var_netting_on_axis_and_table`, which
+    asserts the chart's island and the table header carry the SAME string). It
+    previously asserted the JS template literal that built a second copy of the same
+    rule, which no longer exists.
+
+    Both halves matter: without the `data.axis_label` read the chart is rebuilding
+    the label locally again, and without `title: { display: true` Chart.js draws no
+    y-axis title at all and the disclosure is silently gone.
+    """
     src = _trajectory_chart_js_source()
-    # `data.floor` and "slot floor" both appear in the comment above the code, so
-    # asserting them alone passes against the pre-fix `data.scale.toUpperCase()`.
-    # Pin the interpolation that actually builds the label, and its use on the axis.
-    assert "`VAR (SGP - ${data.floor.toFixed(2)} slot floor)`" in src
-    assert "text: yAxisTitle" in src
+    assert re.search(r"y: \{ title: \{ display: true, text: data\.axis_label \} \}", src)
+    # And nothing left re-deriving it: the island no longer carries either input.
+    assert "data.floor" not in src
+    assert "data.scale" not in src
 
 
 def test_trajectory_chart_js_filters_the_internal_p10_series_from_tooltips_too():
@@ -2845,14 +2879,7 @@ def test_trajectory_player_chart_data_is_truncated_to_the_projected_horizons(cli
         return_value=_trajectory_payload_with_extras(),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
-    body = resp.data.decode()
-    m = re.search(
-        r'<script type="application/json" id="trajectory-chart-data">(.*?)</script>',
-        body,
-        re.DOTALL,
-    )
-    assert m, "the chart's data island"
-    chart_data = json.loads(m.group(1))
+    chart_data = _chart_island(resp.data.decode())
     assert len(chart_data["projection"]) == 2, "the fixture sweeps 2 horizons"
     assert len(chart_data["comps"][0]["path"]) == 2, "not the fixture's stored 5"
 

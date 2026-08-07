@@ -13,14 +13,15 @@
   const at = (pts, key) => pts.map((p) => ({ x: p.age, y: p[key] }));
 
   // Spec requirement 6: on the VAR scale every series is netted against THIS
-  // player's own slot floor (`data.floor`), not each comp's own -- the axis must say
-  // so, or a reader comparing a comp line to a remembered SGP figure is off by the
-  // floor with no way to find out why. On the SGP scale `floor` is 0.0 (nothing
-  // netted) and the label stays plain.
-  const yAxisTitle =
-    data.scale === "var"
-      ? `VAR (SGP - ${data.floor.toFixed(2)} slot floor)`
-      : data.scale.toUpperCase();
+  // player's own slot floor, not each comp's own -- the axis must say so, or a reader
+  // comparing a comp line to a remembered SGP figure is off by the floor with no way
+  // to find out why.
+  //
+  // SERVER-BUILT (`PlayerView.axis_label`), not rebuilt here from `floor`. This file
+  // used to interpolate its own copy while the template's table header interpolated
+  // another, so one rule about a subtraction was spelled twice in two languages and
+  // the two were free to drift. The island now carries the finished string and no
+  // longer carries `floor` or `scale` at all.
 
   const datasets = [
     // Comps first so later datasets paint over them.
@@ -85,7 +86,7 @@
         parsing: false,
         scales: {
           x: { type: "linear", title: { display: true, text: "age" } },
-          y: { title: { display: true, text: yAxisTitle } },
+          y: { title: { display: true, text: data.axis_label } },
         },
         plugins: {
           legend: { labels: { filter: (item) => item.text !== "_p10" } },
