@@ -2440,7 +2440,15 @@ def test_trajectory_controls_carry_every_filter_on_every_link(client):
             assert param in link, f"{param} missing from {link}"
 
 
-def test_trajectory_teams_view_renders_one_block_per_team(client):
+def test_trajectory_teams_view_renders_a_block_for_every_team_including_empty_ones(client):
+    """`_trajectory_spots()` rosters THREE teams -- Aardvarks and Hart of the Order
+    each have one scored player, and Nobodies has only "Unpriced Prospect", who the
+    board never scored. All three must still render a block: #323's first named
+    failure mode is a team whose players were all filtered out vanishing instead of
+    showing its unpriced list. `build_teams_board` seeds its block map from the
+    ROSTERS (`index.teams`), not from the scored rows, precisely so Nobodies can't
+    silently drop out -- this test pins that guarantee at the template layer.
+    """
     with (
         patch(
             "fantasy_baseball.web.season_routes.read_cache_dict",
@@ -2455,12 +2463,28 @@ def test_trajectory_teams_view_renders_one_block_per_team(client):
     assert resp.status_code == 200
     body = resp.data.decode()
 
+    # Every block emits `class="team-block` regardless of whether it scored
+    # anything -- unlike the "from the best N" summary below, this markup is not
+    # conditional on `block.scored`, so counting it pins the BLOCK count (3) rather
+    # than the scored-block count (2). This is the assertion that actually backs
+    # the test's name.
+    assert body.count('class="team-block') == 3, "one block per rostered team"
+
     # NOT a bare `"Hart of the Order" in body` -- that string is also the site header,
     # so it is present whether or not a single block rendered. Assert on markup only a
     # block emits. (The same trap made a dropdown-ordering test vacuous on #336.)
-    assert body.count("from the best 5") == 2, "one header per team block"
+    assert body.count("from the best 5") == 2, (
+        "one summary per SCORED block; Nobodies has none, so this is 2, not 3"
+    )
     assert "Aardvarks" in body
     assert "Testy McTestface" in body, "a block's rows render"
+
+    # The empty team (Nobodies) must still appear, with its unpriced list -- the
+    # actual content #323 requires -- and must NOT get a summary clause, since
+    # "0 of 0 scored" summarizes nothing.
+    assert "Nobodies" in body, "the zero-scored team's block still renders"
+    assert "Unpriced Prospect" in body, "its unscored list renders"
+    assert "0 of 0 scored" not in body, "no summary clause for a team with nothing scored"
 
 
 def test_trajectory_defaults_to_the_league_board(client):
