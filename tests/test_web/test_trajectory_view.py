@@ -1030,6 +1030,12 @@ def test_an_unknown_name_is_not_found_and_lists_nobody(payload: dict) -> None:
     view = build_player_view(_payload_with_extras(payload), player="Nobody At All")
     assert not view.found
     assert view.candidates == []
+    # `found=False` and `candidates=[]` are both dataclass defaults -- a view that
+    # somehow carried a stray history/projection alongside them would still pass those
+    # two alone. This is the load-bearing half: nothing else on the empty view leaked.
+    assert view.projection == []
+    assert view.history == []
+    assert view.name == "Nobody At All"
 
 
 def test_an_ambiguous_name_lists_candidates_and_renders_no_chart(payload: dict) -> None:
@@ -1081,3 +1087,88 @@ def test_the_var_axis_nets_every_series_against_the_QUERY_players_floor(payload:
         sgp.comps[0]["path"][0]["value"] - floor
     )
     assert [c["name"] for c in var.comps] == [c["name"] for c in sgp.comps], "same comps"
+
+
+def test_a_comp_path_is_truncated_to_the_projected_horizons(payload: dict) -> None:
+    """The fixture's comp paths are stored 5 long; the fixture sweeps 3 horizons.
+
+    Deleting the `[: len(row["sgp"])]` slice leaves every other test in this module
+    green -- this is the one assertion that can catch it. The current push script
+    always produces paths that already agree in length (`closest_paths` raises on a
+    mismatch), so the slice defends a hand-built or future blob, not today's pipeline.
+    """
+    view = build_player_view(_payload_with_extras(payload), player="Big Bat")
+    assert len(view.comps[0]["path"]) == 3, "a comp draws only the projected years"
+
+
+def test_the_projection_and_comp_ages_are_derived_from_the_players_own_age(
+    payload: dict,
+) -> None:
+    """`view.history[*][0]` is a pass-through of a fixture literal and cannot catch an
+    off-by-one in the derived ages. `projection[*]["age"]` and `comps[*]["path"][*]["age"]`
+    are both COMPUTED from `row["age"]` plus a horizon -- that arithmetic is unpinned
+    anywhere else.
+    """
+    view = build_player_view(_payload_with_extras(payload), player="Big Bat")
+    age = view.age
+    assert [p["age"] for p in view.projection] == [age + 1, age + 2, age + 3]
+    assert [pt["age"] for pt in view.comps[0]["path"]] == [age + 1, age + 2, age + 3]
+
+
+def test_the_floor_field_is_the_applied_offset_not_the_raw_slot_floor(payload: dict) -> None:
+    """`PlayerView.floor`'s own docstring calls it "what every series was netted
+    against". Under scale="sgp" nothing was netted, so it must read 0.0 there -- not
+    the slot floor, which a template would otherwise print as the netting rule for a
+    chart where every line is untouched raw SGP.
+    """
+    full = _payload_with_extras(payload)
+    var = build_player_view(full, player="Under Water", scale="var")
+    sgp = build_player_view(full, player="Under Water", scale="sgp")
+    assert var.floor == pytest.approx(6.0), "the slot floor, actually applied"
+    assert sgp.floor == 0.0, "nothing was netted on the SGP scale"
+
+
+def test_extrapolated_is_read_from_the_row_not_hardcoded(payload: dict) -> None:
+    """`Thin Support` is the fixture's purpose-built (!) row -- see its own comment in
+    the `payload` fixture. A hardcoded `extrapolated=False` on the found branch would
+    still pass every other test in this module.
+    """
+    flagged = build_player_view(_payload_with_extras(payload), player="Thin Support")
+    assert flagged.extrapolated is True
+
+    calm = build_player_view(_payload_with_extras(payload), player="Big Bat")
+    assert calm.extrapolated is False
+
+
+def test_ambiguous_candidates_are_ordered_by_id(payload: dict) -> None:
+    """The ambiguity test elsewhere compares a SET, so deleting the `sorted(...)` call
+    passes it. Built with the smaller id appended LAST -- the opposite of the order
+    `hits` would otherwise arrive in -- so only an actual sort produces this list.
+    """
+    twin = _payload_with_extras(payload)
+    first = twin["players"][0]
+    twin["players"] = [*twin["players"], {**first, "id": first["id"] - 10_000}]
+    twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"
+
+    view = build_player_view(twin, player=first["name"])
+    assert [c["id"] for c in view.candidates] == [first["id"] - 10_000, first["id"]]
+
+
+def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> None:
+    """The push script's `groupby` happens to emit ascending; nothing in the payload
+    schema guarantees it. An unsorted blob must still render a left-to-right career,
+    or the chart zigzags -- pinning the PROPERTY, not a fixture literal that is already
+    sorted going in.
+    """
+    full = _payload_with_extras(payload)
+    scrambled = dict(full)
+    scrambled["generated_at"] = f"hand-{next(_HAND_SEQ)}"
+    scrambled["players"] = [
+        {**p, "history": [[27, 20.0], [25, 14.0], [26, 16.0]]} if p["name"] == "Big Bat" else p
+        for p in full["players"]
+    ]
+
+    view = build_player_view(scrambled, player="Big Bat")
+    ages = [pt[0] for pt in view.history]
+    assert ages == sorted(ages), "career must render left-to-right by age"
+    assert ages == [25, 26, 27]

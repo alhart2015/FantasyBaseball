@@ -26,6 +26,7 @@ from fantasy_baseball.trajectory.sweep import (
     from_payload,
     rank_move,
     totals,
+    var_offset,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -681,16 +682,30 @@ def build_player_view(
         )
 
     row = hits[0]
-    floor = float(row["floor"]) if scale == "var" else 0.0
+    # THE offset, from the one place it is defined -- see `var_offset`'s docstring.
+    # Not `float(row["floor"]) if scale == "var" else 0.0` inline: that is a third
+    # spelling of the same rule `SweptPlayer.offset` already carries, and it disagreed
+    # with it silently (any non-"var" scale read as SGP, where `var_offset` raises).
+    floor = var_offset(float(row["floor"]), scale)
     return replace(
         empty,
         name=row["name"],
         age=int(row["age"]),
         slot=row["slot"],
-        floor=float(row["floor"]),
+        # The APPLIED offset, not the raw slot floor: under scale="sgp" nothing was
+        # netted, and this field's own docstring promises "what every series was
+        # netted against". A template reading this to label the chart must not print
+        # "netted against 6.0" over a line that was left alone.
+        floor=floor,
         found=True,
         extrapolated=bool(row.get("extrapolated")),
-        history=[[int(a), float(v) - floor] for a, v in row.get("history", [])],
+        # Sorted by age rather than trusted in payload order: the push script's
+        # groupby happens to emit ascending, but nothing enforces it, and an unsorted
+        # blob would zigzag the chart with every other assertion here still green.
+        history=sorted(
+            ([int(a), float(v) - floor] for a, v in row.get("history", [])),
+            key=lambda pt: pt[0],
+        ),
         projection=[
             {
                 "age": int(row["age"]) + int(pt["horizon"]),
@@ -705,10 +720,14 @@ def build_player_view(
                 "name": c["name"],
                 "season": c["season"],
                 "rmse": c["rmse"],
-                # Truncated to the PROJECTED horizons, not the stored path length.
-                # The payload always stores five, but a board swept to three years draws
-                # three -- a comp running two ages past the projection would be the only
-                # line on the chart with no dashed line beside it to compare against.
+                # Truncated to the PROJECTED horizons, not the stored path length. The
+                # current push script always agrees -- `push_trajectory_board.py`
+                # derives comp paths from the same `horizons` tuple as `row["sgp"]`,
+                # and `closest_paths` raises on a length mismatch, so a produced blob
+                # never needs this slice to do anything. It is defence against a
+                # hand-built or future blob whose comp paths outrun the swept
+                # horizons, not a rule the current pipeline exercises -- cheap and
+                # correct to keep regardless.
                 "path": [
                     {"age": int(row["age"]) + h, "value": float(v) - floor}
                     for h, v in list(enumerate(c["path"], start=1))[: len(row["sgp"])]

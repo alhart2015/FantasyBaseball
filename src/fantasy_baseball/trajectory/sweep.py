@@ -58,6 +58,22 @@ RANK_MOVE = 5
 SCALES = ("var", "sgp")
 
 
+def var_offset(floor: float, scale: str) -> float:
+    """What to subtract from a raw SGP number to read it on `scale`.
+
+    THE definition of the VAR scale, in ONE place. It was spelled twice -- once for the
+    fitted path and again inline in `totals` for the Now column -- and two spellings of
+    this rule is the drift #331 is about: the board printed an unclamped Now beside a
+    clamped forecast, which was only possible because the two columns did not get their
+    scale from the same site. `SweptPlayer.offset` and the trajectory-chart view
+    (`build_player_view`, #324) both delegate here rather than re-deriving it, so a
+    third spelling cannot drift from the first two.
+    """
+    if scale not in SCALES:
+        raise ValueError(f"scale must be one of {SCALES}, got {scale!r}")
+    return 0.0 if scale == "sgp" else floor
+
+
 @dataclass(frozen=True)
 class YearPoint:
     """One projected season, on one scale.
@@ -104,17 +120,9 @@ class SweptPlayer:
     sgp: tuple[YearPoint, ...]
 
     def offset(self, scale: str) -> float:
-        """What to subtract from a raw SGP number to read it on `scale`.
-
-        THE definition of the VAR scale, in ONE place. It was spelled twice -- here for
-        the fitted path and again inline in `totals` for the Now column -- and two
-        spellings of this rule is the drift #331 is about: the board printed an unclamped
-        Now beside a clamped forecast, which was only possible because the two columns
-        did not get their scale from the same site.
-        """
-        if scale not in SCALES:
-            raise ValueError(f"scale must be one of {SCALES}, got {scale!r}")
-        return 0.0 if scale == "sgp" else self.floor
+        """What to subtract from a raw SGP number to read it on `scale`. Delegates to
+        `var_offset`, the module-level home for this rule -- see its docstring."""
+        return var_offset(self.floor, scale)
 
     def points(self, scale: str) -> tuple[YearPoint, ...]:
         """The fitted path on `scale`. "var" is derived, never stored."""
