@@ -111,8 +111,31 @@ def by_team(
             (r for r in scored if r["team"] == team), key=lambda r: r["total"], reverse=True
         )
         shown = rows if limit is None else rows[:limit]
-        total = sum(r["total"] for r in rows)
-        head = f"{team}{note}  ({len(rows)} scored, {total:.1f} total {span} VAR)"
+        # The best `per_team`, NOT the roster and NOT `shown`. Three separate reasons.
+        #
+        # Not the roster: VAR is a shift rather than a clamp as of #331, so a below-
+        # replacement player carries a real negative instead of 0.0 and a whole-roster
+        # sum is mostly tail. Measured at the 2027-29 range on live rosters, 93.5% of
+        # scored players are negative and each team's tail runs -62 to -196 against a
+        # best-5 signal of 15 to 73. It ranked Boston Estrellas last in the league on
+        # the depth of its junk while its best five were 4th. Rosters are all 23-26
+        # scored players, so the tail was not even measuring roster SIZE -- it was
+        # measuring how bad the bottom was, which is not a keeper signal at three
+        # keepers a team. Nobody keeps their 20th man.
+        #
+        # Not `shown`: your own block passes `limit=None` to list every player you own,
+        # so summing what is displayed would put your headline on 24 players and every
+        # opponent's on 5 -- and read as a deficit, since your extra rows are the
+        # negative ones. The cap belongs to the number, not the list.
+        #
+        # `per_team` rather than the three slots a keeper decision actually has: five is
+        # the candidate POOL. An opponent without this model may not keep his best
+        # three, so the fourth and fifth names are the ones worth scouting.
+        total = sum(r["total"] for r in rows[:per_team])
+        head = (
+            f"{team}{note}  ({len(rows)} scored, "
+            f"{total:.1f} total {span} VAR from the best {per_team})"
+        )
         print(f"\n{head}\n{'-' * len(head)}")
         for r in shown:
             band = f"{r['p10']:5.1f}..{r['p90']:<5.1f}"
