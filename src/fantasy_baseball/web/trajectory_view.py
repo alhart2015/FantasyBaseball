@@ -86,6 +86,59 @@ class Board:
         return f"{start}" if self.end_year == start else f"{start}-{str(self.end_year)[-2:]}"
 
 
+#: Players shown per team block. Matches the CLI's `--per-team` default, and is
+#: deliberately NOT the league board's `DEFAULT_TOP`: one binding for both would mean
+#: setting 5 collapses the league board, or 50 puts fifty players in every block.
+DEFAULT_PER_TEAM = 5
+
+
+@dataclass(frozen=True)
+class TeamBlock:
+    """One team's slice of the board."""
+
+    team: str
+    #: The best `per_team`, league-ranked, strongest first.
+    rows: list[dict]
+    #: This team's rows AFTER the pool filter and BEFORE the slice, so a block reads
+    #: "5 of 24" -- and "5 of 14" under ?pool=hitter. Counting pre-pool would print a
+    #: total the visible rows cannot add up to.
+    scored: int
+    #: Sum over `rows` -- the BEST-N total, never the roster total. 7e74b7b1 removed
+    #: the roster version from the CLI after measuring it: 93.5% of scored players
+    #: carry a negative VAR and tails run -62 to -196 against a best-5 signal of 15 to
+    #: 73, so as a sort key it orders the page by depth of junk.
+    total: float
+    unscored: list[str]
+    is_mine: bool
+
+
+@dataclass(frozen=True)
+class TeamsBoard:
+    """Every team's block, ordered by strength."""
+
+    blocks: list[TeamBlock]
+    #: League-wide row count, so a block's #37 is readable as a league position.
+    ranked: int
+    base_season: int
+    end_year: int
+    end_years: list[int]
+    pool: str
+    scale: str
+    per_team: int
+    year_columns: list[int]
+    #: True when `my_team` names no block -- a rename, a config mismatch, or a failed
+    #: config read. Drives a one-line banner, so unhighlighted blocks are explained
+    #: rather than read as "you own none of these".
+    mine_missing: bool
+    meta: dict = field(default_factory=dict)
+
+    @property
+    def span(self) -> str:
+        """Same label the league board prints, from the same rule."""
+        start = self.base_season + 1
+        return f"{start}" if self.end_year == start else f"{start}-{str(self.end_year)[-2:]}"
+
+
 def _clamp_choice(value: Any, allowed: Collection[str], default: str) -> str:
     """A query param that must name one of `allowed`. The enum twin of `_clamp`, and
     for the same reason its docstring gives: these arrive from a URL a user can edit.
@@ -314,5 +367,103 @@ def build_board(
             # renders it from the constant and a hardcoded template string would say
             # "under 10%" about rows now flagged at something else.
             "min_local_support": MIN_LOCAL_SUPPORT,
+        },
+    )
+
+
+def build_teams_board(
+    payload: dict,
+    *,
+    end: Any = None,
+    pool: str = "both",
+    scale: str = "var",
+    spots: Sequence[RosterSpot] | None = None,
+    my_team: str | None = None,
+    per_team: Any = None,
+) -> TeamsBoard:
+    """The same cached sweep, grouped by team instead of flattened.
+
+    Shares `_ranked_rows` with `build_board`, so switching views costs a grouping
+    pass and no refit. A separate function rather than a mode flag on `Board`
+    because `rows`, `scored`, `top`, `team` and `unscored` would all change meaning
+    between the two, which is how a reader ends up asking which fields are live.
+    """
+    base = int(payload["base_season"])
+    max_horizon = int(payload["max_horizon"])
+    end_years = [base + h for h in range(1, max_horizon + 1)]
+
+    end_year = _clamp(end, end_years[0], end_years[-1], end_years[0])
+    pool = _clamp_choice(pool, ("both", "hitter", "pitcher"), "both")
+    scale = _clamp_choice(scale, SCALES, "var")
+    n = _clamp(per_team, 1, 50, DEFAULT_PER_TEAM)
+    horizons = tuple(range(1, end_year - base + 1))
+
+    ranked_rows = _ranked_rows(payload, horizons, scale)
+    index = index_rosters(ranked_rows, spots or [], my_team)
+
+    # BLOCKS COME FROM THE ROSTERS, not the rows. A team whose players were all
+    # filtered out has no rows at all, and deriving the block list from `ranked_rows`
+    # would drop the team AND its unpriced list -- leaving nothing on screen to say
+    # it exists. #323 names this as the failure mode the CLI already guards.
+    grouped: dict[str, list[dict]] = {team: [] for team in index.teams}
+
+    for row in ranked_rows:
+        if pool != "both" and row["pool"] != pool:
+            continue
+        key = (normalize_name(row["name"]), row["pool"])
+        owners = index.owners_of.get(key, frozenset())
+        if not owners:
+            continue
+        cell = {
+            **row,
+            "mine": my_team is not None and my_team in owners,
+            # Every row here is attributed to a team on screen, so an unresolvable
+            # key is always a guess worth flagging -- no `team != "all"` condition
+            # to apply, unlike the league board.
+            "owner_ambiguous": key in index.ambiguous,
+            "rank_move": rank_move(row),
+            "year_cells": _year_cells(row["by_year"], horizons),
+        }
+        for team in owners:
+            if team in grouped:
+                grouped[team].append(cell)
+
+    blocks = []
+    for team, rows in grouped.items():
+        # `add_ranks` ordered by total descending, so ranking IS the sort order.
+        rows.sort(key=lambda r: r["rank_total"])
+        shown = rows[:n]
+        blocks.append(
+            TeamBlock(
+                team=team,
+                rows=shown,
+                scored=len(rows),
+                total=sum(r["total"] for r in shown),
+                unscored=index.unscored_for(team, pool),
+                is_mine=my_team is not None and team == my_team,
+            )
+        )
+    # Name is the tie-break, not decoration: two teams with nothing scored both total
+    # 0.0, and leaving that to dict order makes the page reorder between reads.
+    blocks.sort(key=lambda b: (-b.total, b.team))
+
+    return TeamsBoard(
+        blocks=blocks,
+        ranked=len(ranked_rows),
+        base_season=base,
+        end_year=end_year,
+        end_years=end_years,
+        pool=pool,
+        scale=scale,
+        per_team=n,
+        year_columns=[base + h for h in horizons] if len(horizons) > 1 else [],
+        mine_missing=not any(b.is_mine for b in blocks),
+        meta={
+            "generated_at": payload.get("generated_at"),
+            "panel_vintage": payload.get("panel_vintage"),
+            "season_elapsed": payload.get("season_elapsed"),
+            "min_sgp": payload.get("min_sgp"),
+            "floors": payload.get("floors", {}),
+            "excluded": payload.get("excluded", {}),
         },
     )
