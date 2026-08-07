@@ -28,6 +28,7 @@ def _script():
 def _row(name: str, total: float, team: str) -> dict:
     return {
         "name": name,
+        "pool": "hitter",
         "team": team,
         "status": "",
         "total": total,
@@ -121,3 +122,25 @@ def test_the_headline_says_how_many_players_it_counted(capsys) -> None:
 
     header = next(ln for ln in out.splitlines() if ln.startswith("T"))
     assert "best 5" in header, f"header does not name the counted set: {header!r}"
+
+
+def test_a_rostered_player_the_model_cannot_price_is_named(capsys) -> None:
+    """The output `assign_teams` used to produce, driven end to end.
+
+    All three tests above hand `by_team` an empty `missing` dict, so the map
+    `assign_teams` returned -- the one thing being deleted and re-homed -- had
+    ZERO coverage. Without this test the CLI could stop reporting unscored
+    players entirely and the suite would stay green.
+    """
+    from fantasy_baseball.trajectory.roster_join import index_rosters
+
+    module = _script()
+    scored = [_row("Scored Guy", 12.0, "T")]
+    spots = [_spot("Scored Guy", "T"), _spot("Bench Rookie", "T")]
+    index = index_rosters(scored, spots, "T")
+
+    module.by_team(scored, spots, index.unscored, "OTHER", 5, 2026, (1, 2, 3), None)
+    out = capsys.readouterr().out
+
+    assert "not scored: Bench Rookie" in out
+    assert "Scored Guy" in out, "the scored player still renders"
