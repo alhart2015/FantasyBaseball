@@ -2406,3 +2406,219 @@ def test_trajectory_page_survives_a_team_param_with_no_rosters(client):
         resp = client.get("/trajectory?team=Nobody+FC")
     assert resp.status_code == 200
     assert b"Testy McTestface" in resp.data
+
+
+@pytest.mark.parametrize("view", ["board", "teams"])
+def test_trajectory_controls_carry_every_filter_on_every_link(client, view):
+    """`board_url` is the single place that knows full filter state. A filter it
+    does not emit gets silently reset when any other control is used -- the
+    hidden-input failure the macro's own comment records.
+
+    RUN ON BOTH VIEWS, because the route builds `cur` TWICE -- once per view -- and
+    only the second one was covered here. That is how `team` came to be a hardcoded
+    "all" on the teams branch while its neighbours were pass-throughs: the filter
+    survived the link shape check and died on the round trip.
+    """
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        resp = client.get(
+            f"/trajectory?view={view}&end=2028&pool=hitter&scale=sgp&top=25&per=3&team=Aardvarks"
+        )
+    assert resp.status_code == 200
+    body = resp.data.decode()
+
+    # Every control link must carry all seven, or using one resets the others.
+    links = re.findall(r'href="(/trajectory\?[^"]*)"', body)
+    assert links, "the control bar rendered no links"
+    for link in links:
+        for param in ("end=", "pool=", "scale=", "top=", "per=", "view=", "team="):
+            assert param in link, f"{view}: {param} missing from {link}"
+
+
+def test_a_trajectory_view_round_trip_keeps_the_team_filter(client):
+    """Measured, and the reason the link-shape check above is not enough: on
+    /trajectory?team=Aardvarks the "By team" pill carried team=Aardvarks, but the
+    "League" pill on the page it landed on came back team=all. `top` and `per` both
+    survived the same trip, so the loss was silent and looked like a deliberate reset.
+
+    Asserted in both directions on the SAME filter, so a fix to one branch that
+    leaves the other hardcoded still fails here.
+    """
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        board = client.get("/trajectory?view=board&team=Aardvarks").data.decode()
+        teams = client.get("/trajectory?view=teams&team=Aardvarks").data.decode()
+
+    def pill(body: str, label: str) -> str:
+        match = re.search(rf'href="(/trajectory\?[^"]*)">{label}</a>', body)
+        assert match, f"no {label} pill rendered"
+        return match.group(1)
+
+    assert "team=Aardvarks" in pill(board, "By team"), "board -> teams keeps the filter"
+    assert "team=Aardvarks" in pill(teams, "League"), "teams -> board keeps it too"
+
+
+def test_trajectory_teams_view_renders_a_block_for_every_team_including_empty_ones(client):
+    """`_trajectory_spots()` rosters THREE teams -- Aardvarks and Hart of the Order
+    each have one scored player, and Nobodies has only "Unpriced Prospect", who the
+    board never scored. All three must still render a block: #323's first named
+    failure mode is a team whose players were all filtered out vanishing instead of
+    showing its unpriced list. `build_teams_board` seeds its block map from the
+    ROSTERS (`index.teams`), not from the scored rows, precisely so Nobodies can't
+    silently drop out -- this test pins that guarantee at the template layer.
+    """
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        resp = client.get("/trajectory?view=teams")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+
+    # Every block emits `class="team-block` regardless of whether it scored
+    # anything -- unlike the "from the best N" summary below, this markup is not
+    # conditional on `block.scored`, so counting it pins the BLOCK count (3) rather
+    # than the scored-block count (2). This is the assertion that actually backs
+    # the test's name.
+    assert body.count('class="team-block') == 3, "one block per rostered team"
+
+    # NOT a bare `"Hart of the Order" in body` -- that string is also the site header,
+    # so it is present whether or not a single block rendered. Assert on markup only a
+    # block emits. (The same trap made a dropdown-ordering test vacuous on #336.)
+    assert body.count("from the best 5") == 2, (
+        "one summary per SCORED block; Nobodies has none, so this is 2, not 3"
+    )
+    assert "Aardvarks" in body
+    assert "Testy McTestface" in body, "a block's rows render"
+
+    # The empty team (Nobodies) must still appear, with its unpriced list -- the
+    # actual content #323 requires -- and must NOT get a summary clause, since
+    # "0 of 0 scored" summarizes nothing.
+    assert "Nobodies" in body, "the zero-scored team's block still renders"
+    assert "Unpriced Prospect" in body, "its unscored list renders"
+    assert "0 of 0 scored" not in body, "no summary clause for a team with nothing scored"
+
+
+def test_trajectory_teams_view_discloses_its_vintage(client):
+    """`?view=teams` is a bookmarkable, shareable URL that a trade conversation starts
+    from, and the board does NOT move with a dashboard refresh -- it is as fresh as the
+    last offline push. The league board says so; this view rendered none of the three
+    vintage fields `meta` carries, so it gave no signal the numbers may be weeks old.
+    """
+    payload = dict(
+        _trajectory_payload(),
+        generated_at="2026-08-07T09:00:00",
+        season_elapsed=0.7,
+        panel_vintage={"hitter": "h.csv", "pitcher": "p.csv"},
+    )
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        resp = client.get("/trajectory?view=teams")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+
+    assert "2026-08-07T09:00:00" in body, "the build timestamp"
+    assert "h.csv / p.csv" in body, "the panels it was fitted on"
+    assert "70% complete" in body, "how much of the base season the pacing rests on"
+    assert "does not refresh with the dashboard" in body
+
+
+def test_trajectory_teams_view_keeps_a_flagged_rows_marker(client):
+    """The league board marks a row evaluated outside its own support (!) and a
+    band-fallback row (!!). The teams view printed both as bare totals -- and those
+    totals are summed into `block.total`, which ORDERS the page, so a block could sort
+    above its neighbour on precisely the estimates the model is least sure about.
+
+    The flags are set on the payload rather than shaped out of the panel: `extrapolated`
+    is per player and `band_fell_back` per year, so setting them directly is the only way
+    to reach BOTH branches of the template's elif from one render.
+    """
+    payload = _trajectory_payload()
+    # A distinct vintage: `_ranked_rows` caches on `generated_at` plus the shape, and
+    # these mutations change neither -- without this the other route tests' rows are
+    # served here, unflagged.
+    payload["generated_at"] = "2026-08-07T09:00:00-flagged"
+    payload["players"][0]["extrapolated"] = 1
+    for year in payload["players"][1]["sgp"]:
+        year["band_fell_back"] = 1
+
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        teams = client.get("/trajectory?view=teams").data.decode()
+        board = client.get("/trajectory?view=board").data.decode()
+
+    # ON THE MARKUP THE FLAG EMITS, never on a bare "(!)" in the page. Both templates
+    # ALSO explain the flags in prose -- `<strong>(!)</strong>` in the teams view's
+    # vintage line and in the league board's footer -- so a substring check passes with
+    # every flag deleted. Measured: it did. (Same trap as the dropdown-ordering test on
+    # #336, where "Hart of the Order" was also the site header.)
+    for body, where in ((teams, "teams view"), (board, "league board")):
+        assert ">(!)</span>" in body, f"{where}: the thin-support marker"
+        assert ">(!!)</span>" in body, f"{where}: the band-fallback marker"
+    # Rendered from the constant, not restated as prose -- #310 may move the threshold.
+    assert "Under 10% of the fitting weight" in teams
+
+
+def test_trajectory_defaults_to_the_league_board(client):
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        plain = client.get("/trajectory")
+        explicit = client.get("/trajectory?view=board")
+        junk = client.get("/trajectory?view=nonsense")
+    for resp in (plain, explicit, junk):
+        assert resp.status_code == 200
+        assert "All teams" in resp.data.decode(), "the league board's team dropdown"
+
+
+def test_trajectory_teams_view_falls_back_when_no_rosters_arrived(client):
+    """A stale bookmark must degrade to the league board, not render an empty page."""
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload(),
+        ),
+        patch("fantasy_baseball.data.rosters.live_rosters", return_value=[]),
+    ):
+        resp = client.get("/trajectory?view=teams")
+    assert resp.status_code == 200
+    assert "Testy McTestface" in resp.data.decode(), "the league board rendered instead"

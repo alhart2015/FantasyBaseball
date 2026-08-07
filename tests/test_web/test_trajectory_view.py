@@ -13,7 +13,7 @@ from fantasy_baseball.trajectory.sweep import (
     sweep_pool,
     to_payload,
 )
-from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, build_board
+from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, build_board, build_teams_board
 from tests._trajectory_panel import synthetic_panel
 
 BASE = 2026
@@ -784,3 +784,202 @@ def test_the_unscored_list_follows_the_pool_filter(payload: dict) -> None:
     assert build_board(payload, **kw).unscored == ["Unpriced Arm", "Unpriced Bat"]
     assert build_board(payload, pool="hitter", **kw).unscored == ["Unpriced Bat"]
     assert build_board(payload, pool="pitcher", **kw).unscored == ["Unpriced Arm"]
+
+
+def _teams_fixture():
+    """Rosters for the `payload` fixture, shaped so every assertion below can fail.
+
+    THREE things are load-bearing and none may be dropped:
+      * two teams with DIFFERENT rosters, or the ordering assertion is trivial;
+      * "Mine" is deliberately the WEAKER of the two, so "my block is not promoted
+        to the top" cannot pass by accident;
+      * two teams with NO scored rows ("Empty FC", "Aardvark FC"), which is both
+        the render-an-empty-team case and the only way to reach a total tie.
+    """
+    return [
+        _spot("Big Bat", "Rivals"),
+        _spot("Big Arm", "Rivals", pool="pitcher"),
+        _spot("Small Bat", "Mine"),
+        _spot("Small Arm", "Mine", pool="pitcher"),
+        _spot("Never Scored", "Mine"),
+        _spot("Ghost", "Empty FC"),
+        _spot("Phantom", "Aardvark FC"),
+    ]
+
+
+def test_blocks_are_ordered_by_strength_and_mine_is_not_promoted(payload: dict) -> None:
+    """The comparison IS the view. Sorting my own block to the top would destroy
+    the ordering that justifies including it at all."""
+    board = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine")
+
+    names = [b.team for b in board.blocks]
+    assert names[0] == "Rivals", "the strongest roster reads first"
+    assert names.index("Mine") == 1, "mine sits where its strength puts it"
+    assert [b.total for b in board.blocks] == sorted((b.total for b in board.blocks), reverse=True)
+    assert next(b for b in board.blocks if b.is_mine).team == "Mine"
+    assert not board.mine_missing
+
+
+def test_teams_tied_on_total_are_ordered_by_name_not_by_roster_order(payload: dict) -> None:
+    """Three teams total 0.0: "Aardvark FC" and "Empty FC" from `_teams_fixture`, plus
+    "Zebra FC" -- added here as `my_team`, with a player of its own that is not on the
+    board. That third team is load-bearing and cannot be dropped back to just the
+    original two.
+
+    `index_rosters` promotes `my_team` to the FRONT of `index.teams`, which is also
+    `grouped`'s insertion order. Python's `sort` is stable, so with NO tie-break at all
+    a three-way tie would simply keep that insertion order -- and "Zebra FC" being
+    FIRST into `grouped` would put it first among the ties too, the opposite of where
+    its name sorts. The original two-team version of this test used only "Aardvark FC"
+    and "Empty FC", both of which -- coincidentally -- already sit in alphabetical
+    order in `index.teams`' own insertion order, so a stable sort with no tie-break at
+    all reproduced the "correct" answer by accident and the assertion could not fail.
+    Only because "Zebra FC" is alphabetically LAST of the three, while being FIRST by
+    insertion order, does this version actually distinguish "sorted by name" from
+    "insertion order, stable-sorted."
+    """
+    spots = [*_teams_fixture(), _spot("Zebra Ghost", "Zebra FC")]
+    forward = build_teams_board(payload, spots=spots, my_team="Zebra FC")
+    reverse = build_teams_board(payload, spots=list(reversed(spots)), my_team="Zebra FC")
+
+    empties = [b.team for b in forward.blocks if b.total == 0.0]
+    assert empties == ["Aardvark FC", "Empty FC", "Zebra FC"], "ties break on name, ascending"
+    assert [b.team for b in reverse.blocks] == [b.team for b in forward.blocks]
+
+
+def test_a_team_with_nothing_scored_still_renders_with_its_unpriced_list(payload: dict) -> None:
+    """#323's first named failure mode. Building the block list from the ROWS would
+    drop this team and its unpriced list, leaving nothing on screen to say it exists."""
+    board = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine")
+
+    ghost = next(b for b in board.blocks if b.team == "Empty FC")
+    assert ghost.rows == []
+    assert ghost.scored == 0
+    assert ghost.total == 0.0
+    assert ghost.unscored == ["Ghost"]
+    assert board.blocks[-1].total == 0.0, "and it sorts last"
+
+
+def test_a_blocks_rows_carry_league_ranks(payload: dict) -> None:
+    """Within-team ranks would make every team's best player read #1."""
+    league = {r["name"]: r["rank_total"] for r in build_board(payload, top="all").rows}
+    board = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine")
+
+    for block in board.blocks:
+        for row in block.rows:
+            assert row["rank_total"] == league[row["name"]]
+    assert any(b.rows and b.rows[0]["rank_total"] != 1 for b in board.blocks)
+
+
+def test_per_team_slices_without_re_ranking(payload: dict) -> None:
+    """N is a slice of an already-ranked list, so the first row must not move.
+
+    "Mine" is the load-bearing block and cannot be dropped for "Rivals" alone. Rows
+    reach `grouped` in `totals()` order -- every hitter, then every pitcher -- because
+    `add_ranks` ranks off a temporary sorted view and leaves its input untouched.
+    "Rivals" is appended [Big Bat(#1), Big Arm(#2)], which is ALREADY rank order, so
+    deleting the per-block sort left this test green while `per_team` sliced the wrong
+    players, `total` summed the wrong ones, and the block ordering the whole view exists
+    to compare went with them. "Mine" is appended [Small Bat(#5), Small Arm(#4)] -- the
+    opposite of rank order -- so at per_team=1 the surviving row is the sort's answer.
+    """
+    one = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team=1)
+    two = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team=2)
+
+    rivals_one = next(b for b in one.blocks if b.team == "Rivals")
+    rivals_two = next(b for b in two.blocks if b.team == "Rivals")
+    assert len(rivals_one.rows) == 1
+    assert len(rivals_two.rows) == 2
+    assert rivals_one.rows[0]["name"] == rivals_two.rows[0]["name"]
+    assert rivals_one.scored == rivals_two.scored, "scored is the team's set, not the slice"
+
+    mine_two = next(b for b in two.blocks if b.team == "Mine")
+    assert [r["name"] for r in mine_two.rows] == ["Small Arm", "Small Bat"], (
+        "the fixture must append these OUT of rank order, or the slice below cannot fail"
+    )
+    mine_one = next(b for b in one.blocks if b.team == "Mine")
+    assert [r["name"] for r in mine_one.rows] == ["Small Arm"], (
+        "per_team=1 keeps the better-ranked row, not the first one appended"
+    )
+    assert mine_one.total == mine_two.rows[0]["total"], "and the block total follows it"
+
+
+def test_scored_follows_the_pool_filter_and_unscored_does_too(payload: dict) -> None:
+    """A block that says "5 of 24" under a hitters-only table must mean 24 hitters,
+    or the visible rows cannot add up to the number printed beside them."""
+    both = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine")
+    hitters = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", pool="hitter")
+
+    pitchers = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", pool="pitcher")
+
+    assert next(b for b in both.blocks if b.team == "Rivals").scored == 2
+    assert next(b for b in hitters.blocks if b.team == "Rivals").scored == 1
+    assert next(b for b in pitchers.blocks if b.team == "Rivals").scored == 1
+    assert next(b for b in both.blocks if b.team == "Mine").unscored == ["Never Scored"]
+    assert next(b for b in hitters.blocks if b.team == "Mine").unscored == ["Never Scored"]
+    # THE HALF THAT CAN FAIL. "Never Scored" is a hitter, so `both` and `hitter` name him
+    # either way -- dropping the `pool` argument from `unscored_for` left both green. Only
+    # the pitcher view expects a DIFFERENT list, and an unpriced hitter under a
+    # pitchers-only block reads as a hole in the pitching staff.
+    assert next(b for b in pitchers.blocks if b.team == "Mine").unscored == []
+
+
+def test_a_name_two_teams_roster_appears_in_both_blocks_flagged(payload: dict) -> None:
+    """Membership, not a winner. Attributing the row to one team would take the
+    other owner's player off his own block with nothing on screen to say so."""
+    spots = [*_teams_fixture(), _spot("Big Bat", "Mine")]
+    board = build_teams_board(payload, spots=spots, my_team="Mine")
+
+    holders = [b.team for b in board.blocks if any(r["name"] == "Big Bat" for r in b.rows)]
+    assert sorted(holders) == ["Mine", "Rivals"]
+    for block in board.blocks:
+        for row in block.rows:
+            if row["name"] == "Big Bat":
+                assert row["owner_ambiguous"], "the board cannot tell which Big Bat"
+
+
+def test_mine_missing_when_my_team_names_no_block(payload: dict) -> None:
+    """Ten unhighlighted blocks read as "you own none of these" -- a claim the page
+    cannot support when the truth is that it never found the reader's roster."""
+    board = build_teams_board(payload, spots=_teams_fixture(), my_team="Renamed FC")
+    assert board.mine_missing
+    assert not any(b.is_mine for b in board.blocks)
+
+    assert not build_teams_board(payload, spots=_teams_fixture(), my_team="Mine").mine_missing
+    assert build_teams_board(payload, spots=_teams_fixture(), my_team=None).mine_missing
+
+
+def test_a_teams_block_carries_the_flag_threshold_and_its_flagged_rows(payload: dict) -> None:
+    """The (!) rule is a tuned constant behind an open issue (#310), so the template
+    renders the threshold from `meta` rather than restating it as prose -- exactly as the
+    league board does. `TeamsBoard.meta` did not carry it, which meant the teams view
+    could not have rendered the flag even if it wanted to: it was dropped structurally,
+    and every block total then summed extrapolated rows with nothing on screen to say so.
+    """
+    from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
+
+    spots = [*_teams_fixture(), _spot("Thin Support", "Mine")]
+    board = build_teams_board(payload, spots=spots, my_team="Mine")
+
+    assert board.meta["min_local_support"] == MIN_LOCAL_SUPPORT
+    assert board.meta["min_local_support"] == build_board(payload).meta["min_local_support"], (
+        "both views flag on the same rule, so both must read the same constant"
+    )
+
+    mine = next(b for b in board.blocks if b.team == "Mine")
+    flagged = [r for r in mine.rows if r["extrapolated"]]
+    assert [r["name"] for r in flagged] == ["Thin Support"], (
+        "the fixture must put an extrapolated row in a block, or the flag is unreachable"
+    )
+    assert mine.total == pytest.approx(sum(r["total"] for r in mine.rows)), (
+        "and it is summed into the total that orders the page like any other row"
+    )
+
+
+def test_per_team_and_end_year_clamp_junk_from_the_query_string(payload: dict) -> None:
+    """These arrive from a URL a reader can edit."""
+    board = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team="junk")
+    assert board.per_team == 5
+    assert build_teams_board(payload, spots=_teams_fixture(), per_team=0).per_team == 1
+    assert build_teams_board(payload, spots=_teams_fixture(), per_team=999).per_team == 50
+    assert build_teams_board(payload, spots=_teams_fixture(), end="nonsense").end_year == 2027

@@ -1,0 +1,94 @@
+{% extends "season/base.html" %}
+{% block title %}Trajectory by Team -- Season Dashboard{% endblock %}
+{% block content %}
+{% import "season/_trajectory_controls.html" as ctl %}
+
+<div class="page-trajectory">
+<div class="page-header">
+    <h2>Trajectory Board -- by team</h2>
+</div>
+
+{% if error %}
+  <p class="warning">{{ error }}</p>
+{% else %}
+
+<p class="muted">
+  The best {{ board.per_team }} on every roster over {{ board.span }}, strongest team first.
+  Ranks are LEAGUE ranks -- a block's top row reads its position among all
+  {{ board.ranked }} scored players, not its position on that roster.
+</p>
+
+{{ ctl.controls(cur, board.end_years, board.blocks | map(attribute='team') | list) }}
+
+{#- THE SAME VINTAGE DISCLOSURE THE LEAGUE BOARD PRINTS, and needed harder here: this
+    is a bookmarkable, shareable URL that a trade conversation starts from, so a page
+    with no staleness signal invites acting on numbers that may be weeks old. -#}
+<p class="muted trajectory-vintage">
+  Start year is locked at {{ board.base_season + 1 }}.
+  {% if board.meta.generated_at %}Built {{ board.meta.generated_at }}{% endif %}
+  {% if board.meta.panel_vintage %}from {{ board.meta.panel_vintage.hitter }} / {{ board.meta.panel_vintage.pitcher }}{% endif %}
+  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% complete, and every fit is built on the paced full-year figure{% endif %}.
+  This board does not refresh with the dashboard; it is as fresh as the last
+  <code>push_trajectory_board.py</code> run.
+  Rows marked <strong>(!)</strong> or <strong>(!!)</strong> are counted in their block's
+  total like any other, so a block can be ordered above its neighbour on estimates the
+  model is least sure about -- read those rows' bands before comparing rosters.
+</p>
+
+{% if board.mine_missing %}
+<p class="muted"><strong>None of these blocks is marked as yours</strong> -- the page could
+not match your team name to any roster it read, so no block is highlighted. That is a
+statement about the lookup, not about what you own.</p>
+{% endif %}
+
+{% for block in board.blocks %}
+<div class="team-block{% if block.is_mine %} user-team{% endif %}">
+  <h3>{{ block.team }}
+    {%- if block.scored %}
+    <span class="muted">({{ block.rows | length }} of {{ block.scored }} scored,
+    {{ '%.1f'|format(block.total) }} {{ board.span }} {{ board.scale|upper }} from the best {{ board.per_team }})</span>
+    {%- endif %}
+  </h3>
+  {% if block.rows %}
+  <table class="data-table trajectory-table">
+    <thead>
+      <tr>
+        <th title="League-wide rank over the whole scored pool">#</th>
+        <th>Player</th>
+        <th>Age</th>
+        <th>Slot</th>
+        <th class="sorted">{{ board.span }} {{ board.scale|upper }}</th>
+        {% for y in board.year_columns %}
+        <th title="{{ board.scale|upper }} in {{ y }} alone">'{{ (y|string)[2:] }}</th>
+        {% endfor %}
+      </tr>
+    </thead>
+    <tbody>
+      {% for r in block.rows %}
+      <tr>
+        <td>{{ r.rank_total }}</td>
+        <td>{{ r.name }}
+          {{ ctl.row_flags(r, board.meta.min_local_support) }}
+        </td>
+        <td>{{ r.age }}</td>
+        <td>{{ r.slot }}</td>
+        <td>{{ '%.1f'|format(r.total) }}</td>
+        {% for cell in r.year_cells %}
+        <td>{% if cell is not none %}{{ '%.1f'|format(cell) }}{% else %}--{% endif %}</td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted">Nothing on this roster was scored at this timeframe.</p>
+  {% endif %}
+  {% if block.unscored %}
+  {{ ctl.unscored_note(block.unscored, board.base_season, board.meta.min_sgp) }}
+  {% endif %}
+</div>
+{% endfor %}
+
+{% endif %}
+</div>
+{% endblock %}

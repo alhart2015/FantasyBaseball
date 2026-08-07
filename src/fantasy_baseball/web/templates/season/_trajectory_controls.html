@@ -1,0 +1,128 @@
+{#- The trajectory page's control bar, shared by the league board and the all-teams
+    view.
+
+    EVERY MACRO TAKES ITS VALUES EXPLICITLY rather than reading `board.*`. The two
+    views carry different objects: `Board` has `top`/`team`/`teams`, `TeamsBoard` has
+    `per_team` and none of those, because they mean nothing in a grouped view. A
+    partial reaching into `board` would work for one caller and break for the other.
+
+    `board_url` remains the single place that knows the full filter state. The selects
+    once lived in a <form> with a hidden input per filter, so the state was encoded
+    twice and missing an input silently reset that filter whenever a dropdown changed.
+    Every parameter is therefore emitted on every link, whichever view is rendering --
+    `per` included on the league board, `top` included on the teams view. -#}
+
+{% macro board_url(cur, end=None, pool=None, top=None, scale=None, team=None,
+                   view=None, per=None) -%}
+{{ url_for('trajectory',
+           end=end if end is not none else cur.end_year,
+           pool=pool if pool is not none else cur.pool,
+           top=top if top is not none else cur.top,
+           scale=scale if scale is not none else cur.scale,
+           team=team if team is not none else cur.team,
+           view=view if view is not none else cur.view,
+           per=per if per is not none else cur.per) }}
+{%- endmacro %}
+
+{% macro controls(cur, end_years, teams) -%}
+<div class="trajectory-controls">
+  {% if teams %}
+  <span class="pill-group">
+    <a class="pill {% if cur.view == 'board' %}active{% endif %}" href="{{ board_url(cur, view='board') }}">League</a>
+    <a class="pill {% if cur.view == 'teams' %}active{% endif %}" href="{{ board_url(cur, view='teams') }}">By team</a>
+  </span>
+  {% endif %}
+  <label>Through
+    <select onchange="location = this.value">
+      {% for y in end_years %}
+      <option value="{{ board_url(cur, end=y) }}" {% if y == cur.end_year %}selected{% endif %}>{{ y }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% if cur.view == 'board' %}
+  <label>Top
+    <select onchange="location = this.value">
+      {% for n in [25, 50, 100, 250, 'all'] %}
+      <option value="{{ board_url(cur, top=n) }}" {% if n == cur.top %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% if teams %}
+  <label>Team
+    <select onchange="location = this.value">
+      <option value="{{ board_url(cur, team='all') }}" {% if cur.team == 'all' %}selected{% endif %}>All teams</option>
+      {% for t in teams %}
+      <option value="{{ board_url(cur, team=t) }}" {% if t == cur.team %}selected{% endif %}>{{ t }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  {% else %}
+  <label>Per team
+    <select onchange="location = this.value">
+      {% for n in [3, 5, 10, 25] %}
+      <option value="{{ board_url(cur, per=n) }}" {% if n == cur.per %}selected{% endif %}>{{ n }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  {% endif %}
+  <span class="pill-group">
+    {% for value, label in [('both', 'Both'), ('hitter', 'Hitters'), ('pitcher', 'Pitchers')] %}
+    <a class="pill {% if cur.pool == value %}active{% endif %}" href="{{ board_url(cur, pool=value) }}">{{ label }}</a>
+    {% endfor %}
+  </span>
+  <span class="pill-group">
+    {% for value, label in [('var', 'VAR'), ('sgp', 'SGP')] %}
+    <a class="pill {% if cur.scale == value %}active{% endif %}" href="{{ board_url(cur, scale=value) }}">{{ label }}</a>
+    {% endfor %}
+  </span>
+  <noscript>
+    <span class="pill-group">
+      {% for y in end_years %}
+      <a class="pill {% if y == cur.end_year %}active{% endif %}" href="{{ board_url(cur, end=y) }}">{{ y }}</a>
+      {% endfor %}
+    </span>
+    {% if cur.view == 'board' %}
+    <span class="pill-group">
+      {% for n in [25, 50, 100, 250, 'all'] %}
+      <a class="pill {% if n == cur.top %}active{% endif %}" href="{{ board_url(cur, top=n) }}">{{ n }}</a>
+      {% endfor %}
+    </span>
+    {% if teams %}
+    <span class="pill-group">
+      <a class="pill {% if cur.team == 'all' %}active{% endif %}" href="{{ board_url(cur, team='all') }}">All teams</a>
+      {% for t in teams %}
+      <a class="pill {% if t == cur.team %}active{% endif %}" href="{{ board_url(cur, team=t) }}">{{ t }}</a>
+      {% endfor %}
+    </span>
+    {% endif %}
+    {% else %}
+    <span class="pill-group">
+      {% for n in [3, 5, 10, 25] %}
+      <a class="pill {% if n == cur.per %}active{% endif %}" href="{{ board_url(cur, per=n) }}">{{ n }}</a>
+      {% endfor %}
+    </span>
+    {% endif %}
+  </noscript>
+</div>
+{%- endmacro %}
+
+{#- The per-row reliability flags, shared by both views. Byte-identical markup in two
+    templates is how a wording change lands in one and not the other -- the same reason
+    the control bar above became a macro. #310 will touch this copy. -#}
+{% macro row_flags(r, min_local_support) -%}
+{%- if r.owner_ambiguous %} <span class="flag flag-extrap" title="This name is not unique -- either the board carries more than one player under it, or more than one team rosters one. Roster blobs have no MLBAM id (#284), so the name is the only join available and it cannot tell them apart. Who owns this row is a guess; check before acting on it.">(?)</span>
+{%- endif %}
+{%- if r.band_fell_back %} <span class="flag flag-band" title="The band on at least one year in this range fell back to the whole cohort's residual scatter -- the understated interval the reweighting exists to replace. It happens on the deepest extrapolations, the ones most in need of a wide band.">(!!)</span>
+{%- elif r.extrapolated %} <span class="flag flag-extrap" title="Under {{ '%.0f'|format(min_local_support * 100) }}% of the fitting weight sits near this player's own current season, so the line was evaluated outside its own support. Read the band, not the point estimate.">(!)</span>
+{%- endif %}
+{%- endmacro %}
+
+{#- The roster players this board could not price. One cause: no row matched. -#}
+{% macro unscored_note(names, base_season, min_sgp) -%}
+<p class="muted">
+  not scored: {{ names|join(', ') }} --
+  no {{ base_season }} line (injured, released, or not yet up) or pacing under
+  {{ '%.1f'|format(min_sgp) }} SGP, so the model could not price them.
+</p>
+{%- endmacro %}

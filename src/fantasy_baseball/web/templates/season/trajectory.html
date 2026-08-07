@@ -2,14 +2,7 @@
 {% block title %}Trajectory Board -- Season Dashboard{% endblock %}
 {% block content %}
 
-{% macro board_url(end=None, pool=None, top=None, scale=None, team=None) -%}
-{{ url_for('trajectory',
-           end=end if end is not none else board.end_year,
-           pool=pool if pool is not none else board.pool,
-           top=top if top is not none else board.top,
-           scale=scale if scale is not none else board.scale,
-           team=team if team is not none else board.team) }}
-{%- endmacro %}
+{% import "season/_trajectory_controls.html" as ctl %}
 
 <div class="page-trajectory">
 <div class="page-header">
@@ -39,67 +32,7 @@
   {%- endif %}
 </p>
 
-{#- Every control is a URL built by `board_url`, the single place that knows the full
-    filter state. The selects previously lived in a <form> and needed a hidden input per
-    filter to carry the ones they did not own -- so the state was encoded twice, in two
-    mechanisms, and adding a filter meant remembering both. Missing the hidden input
-    silently reset that filter whenever a dropdown changed. -#}
-<div class="trajectory-controls">
-  <label>Through
-    <select onchange="location = this.value">
-      {% for y in board.end_years %}
-      <option value="{{ board_url(end=y) }}" {% if y == board.end_year %}selected{% endif %}>{{ y }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  <label>Top
-    <select onchange="location = this.value">
-      {% for n in [25, 50, 100, 250, 'all'] %}
-      <option value="{{ board_url(top=n) }}" {% if n == board.top %}selected{% endif %}>{{ n }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  {% if board.teams %}
-  <label>Team
-    <select onchange="location = this.value">
-      <option value="{{ board_url(team='all') }}" {% if board.team == 'all' %}selected{% endif %}>All teams</option>
-      {% for t in board.teams %}
-      <option value="{{ board_url(team=t) }}" {% if t == board.team %}selected{% endif %}>{{ t }}</option>
-      {% endfor %}
-    </select>
-  </label>
-  {% endif %}
-  <span class="pill-group">
-    {% for value, label in [('both', 'Both'), ('hitter', 'Hitters'), ('pitcher', 'Pitchers')] %}
-    <a class="pill {% if board.pool == value %}active{% endif %}" href="{{ board_url(pool=value) }}">{{ label }}</a>
-    {% endfor %}
-  </span>
-  <span class="pill-group">
-    {% for value, label in [('var', 'VAR'), ('sgp', 'SGP')] %}
-    <a class="pill {% if board.scale == value %}active{% endif %}" href="{{ board_url(scale=value) }}">{{ label }}</a>
-    {% endfor %}
-  </span>
-  <noscript>
-    <span class="pill-group">
-      {% for y in board.end_years %}
-      <a class="pill {% if y == board.end_year %}active{% endif %}" href="{{ board_url(end=y) }}">{{ y }}</a>
-      {% endfor %}
-    </span>
-    <span class="pill-group">
-      {% for n in [25, 50, 100, 250, 'all'] %}
-      <a class="pill {% if n == board.top %}active{% endif %}" href="{{ board_url(top=n) }}">{{ n }}</a>
-      {% endfor %}
-    </span>
-      {% if board.teams %}
-      <span class="pill-group">
-        <a class="pill {% if board.team == 'all' %}active{% endif %}" href="{{ board_url(team='all') }}">All teams</a>
-        {% for t in board.teams %}
-        <a class="pill {% if t == board.team %}active{% endif %}" href="{{ board_url(team=t) }}">{{ t }}</a>
-        {% endfor %}
-      </span>
-      {% endif %}
-  </noscript>
-</div>
+{{ ctl.controls(cur, board.end_years, board.teams) }}
 
 <p class="muted trajectory-vintage">
   Showing {{ board.rows|length }} of {{ board.scored }}{% if board.pool != 'both' %} {{ board.pool }}s{% endif %} scored{% if board.ranked != board.scored %}, ranked against all {{ board.ranked }} -- the # column is a league-wide position, so it runs past this count{% endif %}.
@@ -155,11 +88,7 @@
       </td>
       <td class="team-name">
         {{ r.name }}
-        {%- if r.owner_ambiguous %} <span class="flag flag-extrap" title="This name is not unique -- either the board carries more than one player under it, or more than one team rosters one. Roster blobs have no MLBAM id (#284), so the name is the only join available and it cannot tell them apart. Who owns this row is a guess; check before acting on it.">(?)</span>
-        {%- endif %}
-        {%- if r.band_fell_back %} <span class="flag flag-band" title="The band on at least one year in this range fell back to the whole cohort's residual scatter -- the understated interval the reweighting exists to replace. It happens on the deepest extrapolations, the ones most in need of a wide band.">(!!)</span>
-        {%- elif r.extrapolated %} <span class="flag flag-extrap" title="Under {{ '%.0f'|format(board.meta.min_local_support * 100) }}% of the fitting weight sits near this player's own current season, so the line was evaluated outside its own support. Read the band, not the point estimate.">(!)</span>
-        {%- endif %}
+        {{ ctl.row_flags(r, board.meta.min_local_support) }}
       </td>
       <td>{{ r.age }}</td>
       <td>{{ r.slot }}</td>
@@ -220,11 +149,7 @@
     under his team instead of landing on this list, and the only way here is that
     the model had no row for him at all. -#}
 {% if board.team != 'all' and board.unscored %}
-<p class="muted">
-  not scored: {{ board.unscored|join(', ') }} --
-  no {{ board.base_season }} line (injured, released, or not yet up) or pacing under
-  {{ '%.1f'|format(board.meta.min_sgp) }} SGP, so the model could not price them.
-</p>
+{{ ctl.unscored_note(board.unscored, board.base_season, board.meta.min_sgp) }}
 {% endif %}
 {% endif %}
 

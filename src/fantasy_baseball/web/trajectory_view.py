@@ -13,7 +13,7 @@ Render. The board therefore does NOT move with a dashboard refresh, which is why
 
 from __future__ import annotations
 
-from collections.abc import Collection, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -84,6 +84,156 @@ class Board:
         in, and the CLI header made the same choice."""
         start = self.base_season + 1
         return f"{start}" if self.end_year == start else f"{start}-{str(self.end_year)[-2:]}"
+
+
+#: The pool filter's choices. `SCALES` next door is a shared constant for exactly
+#: this reason; this tuple was hand-spelled in both builders, which is the drift
+#: `_clamp_choice`'s own docstring was written to stop.
+POOLS = ("both", "hitter", "pitcher")
+
+#: Players shown per team block. Matches the CLI's `--per-team` default, and is
+#: deliberately NOT the league board's `DEFAULT_TOP`: one binding for both would mean
+#: setting 5 collapses the league board, or 50 puts fifty players in every block.
+DEFAULT_PER_TEAM = 5
+
+
+@dataclass(frozen=True)
+class TeamBlock:
+    """One team's slice of the board."""
+
+    team: str
+    #: The best `per_team`, league-ranked, strongest first.
+    rows: list[dict]
+    #: This team's rows AFTER the pool filter and BEFORE the slice, so a block reads
+    #: "5 of 24" -- and "5 of 14" under ?pool=hitter. Counting pre-pool would print a
+    #: total the visible rows cannot add up to.
+    scored: int
+    unscored: list[str]
+    is_mine: bool
+
+    @property
+    def total(self) -> float:
+        """The BEST-N total, never the roster total -- `rows` is already the slice.
+
+        Derived rather than stored because it was being summed one line after `rows`
+        was assigned from the same list. 7e74b7b1 removed the roster version from the
+        CLI after measuring it: 93.5% of scored players carry a negative VAR and tails
+        run -62 to -196 against a best-5 signal of 15 to 73, so as a sort key the
+        roster total orders the page by depth of junk.
+        """
+        return float(sum(r["total"] for r in self.rows))
+
+
+@dataclass(frozen=True)
+class TeamsBoard:
+    """Every team's block, ordered by strength."""
+
+    blocks: list[TeamBlock]
+    #: League-wide row count, so a block's #37 is readable as a league position.
+    ranked: int
+    base_season: int
+    end_year: int
+    end_years: list[int]
+    pool: str
+    scale: str
+    per_team: int
+    year_columns: list[int]
+    meta: dict = field(default_factory=dict)
+
+    @property
+    def mine_missing(self) -> bool:
+        """No block is the reader's own -- a rename, a config mismatch, or a failed
+        config read. Drives a one-line banner, so unhighlighted blocks are explained
+        rather than read as "you own none of these". Derived, like `span`."""
+        return not any(b.is_mine for b in self.blocks)
+
+    @property
+    def span(self) -> str:
+        """Same label the league board prints, from the same rule."""
+        start = self.base_season + 1
+        return f"{start}" if self.end_year == start else f"{start}-{str(self.end_year)[-2:]}"
+
+
+def _sweep_setup(
+    payload: dict, end: Any, pool: str, scale: str
+) -> tuple[int, int, list[int], str, str, tuple[int, ...], list[dict]]:
+    """Everything both board builders need before they diverge.
+
+    `build_board` and `build_teams_board` parsed the payload, clamped `end`/`pool`/
+    `scale` and derived `horizons` with identical code, so a change to any of it had
+    to be made twice with nothing forcing the second edit. What they do NOT share is
+    what comes after -- one flattens, the other groups -- which is why this returns
+    the shared prefix rather than trying to be a common body.
+    """
+    base = int(payload["base_season"])
+    max_horizon = int(payload["max_horizon"])
+    end_years = [base + h for h in range(1, max_horizon + 1)]
+    end_year = _clamp(end, end_years[0], end_years[-1], end_years[0])
+    pool = _clamp_choice(pool, POOLS, "both")
+    scale = _clamp_choice(scale, SCALES, "var")
+    horizons = tuple(range(1, end_year - base + 1))
+    return base, end_year, end_years, pool, scale, horizons, _ranked_rows(payload, horizons, scale)
+
+
+def _board_meta(payload: dict) -> dict:
+    """The vintage and provenance block, identical for both views.
+
+    `min_local_support` is in here because its ABSENCE was not something a template
+    could route around: without the threshold the (!) flag has no rule to name, so
+    the teams view dropped the flags entirely and every block total silently summed
+    unmarked extrapolated rows.
+    """
+    return {
+        "generated_at": payload.get("generated_at"),
+        "panel_vintage": payload.get("panel_vintage"),
+        "season_elapsed": payload.get("season_elapsed"),
+        "min_sgp": payload.get("min_sgp"),
+        "floors": payload.get("floors", {}),
+        "excluded": payload.get("excluded", {}),
+        "min_local_support": MIN_LOCAL_SUPPORT,
+    }
+
+
+def _annotate(
+    row: dict,
+    *,
+    key: tuple[str, str],
+    owners: frozenset[str],
+    my_team: str | None,
+    index: Any,
+    horizons: tuple[int, ...],
+    always_attributed: bool,
+) -> dict:
+    """A board row plus the four per-row annotations both views render.
+
+    A COPY, never a mutation: these rows come from `_ranked_rows`, a cache shared
+    across requests. `always_attributed` is the one genuine difference -- on the
+    teams view every row is shown under some team, so an unresolvable key is always
+    a guess worth flagging; on the league board at `team=all` most rows are
+    attributed to nobody and flagging them all would be noise.
+
+    `year_cells` is aligned to the year columns BY HORIZON, one entry each, None
+    where a player has no point for that year. Each horizon is a separate fit, so
+    `by_year` carries no guarantee of being a prefix; rendering it positionally and
+    padding the tail would put a year-2 figure under the year-1 header for any path
+    with a hole. Defensive -- no such gap has been reproduced from the model -- but
+    the alignment is free here and the assumption is not worth carrying in a
+    template, let alone in two of them.
+
+    `rank_move` is the keeper signal in one number: a player far better over the
+    range than next year is who you hold rather than who you start. Only the league
+    board renders it; it is computed here anyway so the two views' rows stay one
+    shape, which is what lets a future column move between them without a second
+    derivation appearing.
+    """
+    is_mine = my_team is not None and my_team in owners
+    return {
+        **row,
+        "mine": is_mine,
+        "owner_ambiguous": (always_attributed or is_mine) and key in index.ambiguous,
+        "rank_move": rank_move(row),
+        "year_cells": _year_cells(row["by_year"], horizons),
+    }
 
 
 def _clamp_choice(value: Any, allowed: Collection[str], default: str) -> str:
@@ -198,16 +348,11 @@ def build_board(
     (see `trajectory.sweep`) -- and it is also what keeps `rank_next` meaningful, since
     `next` is only populated when horizon 1 is in range.
     """
-    base = int(payload["base_season"])
-    max_horizon = int(payload["max_horizon"])
-    end_years = [base + h for h in range(1, max_horizon + 1)]
-
-    end_year = _clamp(end, end_years[0], end_years[-1], end_years[0])
+    base, end_year, end_years, pool, scale, horizons, ranked_rows = _sweep_setup(
+        payload, end, pool, scale
+    )
     show_all = str(top).lower() == "all"
     top_n = None if show_all else _clamp(top, 1, 5000, DEFAULT_TOP)
-    pool = _clamp_choice(pool, ("both", "hitter", "pitcher"), "both")
-    scale = _clamp_choice(scale, SCALES, "var")
-    horizons = tuple(range(1, end_year - base + 1))
 
     # ONE SCALE ON SCREEN. The two scales differ by the slot's floor (#331 made that
     # exact), and a board mixing them forces the reader to track which number belongs to
@@ -218,7 +363,6 @@ def build_board(
     # RANKED OVER THE WHOLE POOL, then filtered. A pitcher-only view shows LEAGUE ranks,
     # so its top row can read #7 -- correct, and the same rule #322/#323 depend on, where
     # ranking within a subset would make every team's best player a #1.
-    ranked_rows = _ranked_rows(payload, horizons, scale)
 
     # ONE index serves both the highlight and the filter. The route used to build
     # the ownership set itself, which meant two places decided what a roster spot
@@ -243,37 +387,31 @@ def build_board(
         owners = index.owners_of.get(key, frozenset())
         if team != "all" and team not in owners:
             continue
-        move = rank_move(row)
-        is_mine = my_team is not None and my_team in owners
+        # `always_attributed` is the whole difference between the two views: under a
+        # team filter every row shown is being claimed for that team, so an
+        # unresolvable key is always a guess; at `team=all` most rows are claimed for
+        # nobody and flagging them all would be noise.
         rows.append(
             {
-                **row,
-                "mine": is_mine,
-                # Flagged whenever the row is being ATTRIBUTED to a team on
-                # screen and the join cannot tell which player it is. In the
-                # all-teams view that is `mine` alone, exactly as before; under a
-                # team filter it is any row shown, because putting an opponent's
-                # player on a guess is as wrong as putting mine.
-                "owner_ambiguous": (is_mine or team != "all") and key in index.ambiguous,
-                # The MOVE between the two ranks is the keeper signal in one number: a
-                # player far better over the range than next year is who you hold rather
-                # than who you start. See `_rank_move` for when it is withheld.
-                "rank_move": move,
-                # Per-year cells ALIGNED TO THE YEAR COLUMNS by horizon, one entry each,
-                # None where this player has no point for that year. Each horizon is a
-                # separate fit, so `by_year` carries no guarantee of being a prefix;
-                # rendering it positionally and padding the tail would put a year-2
-                # figure under the year-1 header for any path with a hole. Defensive --
-                # no such gap has been reproduced from the model -- but the alignment is
-                # free here and the assumption is not worth carrying in the template.
-                "year_cells": _year_cells(row["by_year"], horizons),
+                **_annotate(
+                    row,
+                    key=key,
+                    owners=owners,
+                    my_team=my_team,
+                    index=index,
+                    horizons=horizons,
+                    always_attributed=team != "all",
+                ),
             }
         )
 
     scored = len(rows)
     ranked = len(ranked_rows)
-    # `add_ranks` already ordered by total descending with a name tie-break, so ranking
-    # IS the sort order -- no second sort key, and nothing to get wrong about NaNs.
+    # THIS SORT CREATES THE ORDER -- the rows do not arrive in it. `add_ranks` stamps
+    # ranks off a temporary sorted view and leaves its input in `totals()` order, which
+    # is every hitter and then every pitcher. Ranking by `rank_total` rather than by
+    # `total` is what makes it a re-use of the existing order rather than a second
+    # ranking: one key, already computed, and nothing to get wrong about NaNs.
     rows.sort(key=lambda r: r["rank_total"])
 
     return Board(
@@ -315,4 +453,138 @@ def build_board(
             # "under 10%" about rows now flagged at something else.
             "min_local_support": MIN_LOCAL_SUPPORT,
         },
+    )
+
+
+#: The two views `/trajectory` renders. A junk or absent value is the league board.
+VIEWS = ("board", "teams")
+
+
+def filter_state(view: str, board: Any, args: Mapping[str, str]) -> dict:
+    """The page's full filter state, as ONE dict, derived in ONE place.
+
+    The two views carry different models -- `Board` has `top`/`team`, `TeamsBoard` has
+    `per_team`, and neither has the other's -- so whichever field the rendering view
+    does not own has to come from the query string instead. That asymmetry is real.
+    What was not real was spelling it out twice: the route built a seven-key dict per
+    branch by hand, and one of those fourteen values was written as a literal `"all"`
+    where its neighbours were pass-throughs. The effect was that /trajectory?team=X ->
+    "By team" -> "League" came back unfiltered, and the test that should have caught it
+    ran on only one of the two views.
+
+    A field a view owns is read off the model, so it is already clamped. A field it does
+    not own passes through raw: the OTHER builder owns that clamp, and clamping in two
+    places is how two spellings drift apart.
+    """
+    owned = view == "teams"
+    return {
+        "view": view,
+        "end_year": board.end_year if board else 0,
+        "pool": board.pool if board else "both",
+        "scale": board.scale if board else "var",
+        # Owned by `build_teams_board` on the teams view; by the query string otherwise.
+        "per": board.per_team if (owned and board) else args.get("per", DEFAULT_PER_TEAM),
+        # Owned by `build_board` on the league view; by the query string otherwise.
+        "top": args.get("top", DEFAULT_TOP) if owned else (board.top if board else DEFAULT_TOP),
+        "team": args.get("team", "all") if owned else (board.team if board else "all"),
+    }
+
+
+def select_view(value: Any) -> str:
+    """Which view a query string is asking for, clamped to one that exists.
+
+    Public because the ROUTE has to branch before it can build a view model, so it
+    cannot learn this from the returned object the way it learns `pool` or `scale`.
+    Exported deliberately rather than having the route import `_clamp_choice`:
+    reaching across a module boundary for a private helper is how that helper stops
+    being free to change.
+    """
+    return _clamp_choice(value, VIEWS, "board")
+
+
+def build_teams_board(
+    payload: dict,
+    *,
+    end: Any = None,
+    pool: str = "both",
+    scale: str = "var",
+    spots: Sequence[RosterSpot] | None = None,
+    my_team: str | None = None,
+    per_team: Any = None,
+) -> TeamsBoard:
+    """The same cached sweep, grouped by team instead of flattened.
+
+    Shares `_ranked_rows` with `build_board`, so switching views costs a grouping
+    pass and no refit. A separate function rather than a mode flag on `Board`
+    because `rows`, `scored`, `top`, `team` and `unscored` would all change meaning
+    between the two, which is how a reader ends up asking which fields are live.
+    """
+    base, end_year, end_years, pool, scale, horizons, ranked_rows = _sweep_setup(
+        payload, end, pool, scale
+    )
+    n = _clamp(per_team, 1, 50, DEFAULT_PER_TEAM)
+    index = index_rosters(ranked_rows, spots or [], my_team)
+
+    # BLOCKS COME FROM THE ROSTERS, not the rows. A team whose players were all
+    # filtered out has no rows at all, and deriving the block list from `ranked_rows`
+    # would drop the team AND its unpriced list -- leaving nothing on screen to say
+    # it exists. #323 names this as the failure mode the CLI already guards.
+    grouped: dict[str, list[dict]] = {team: [] for team in index.teams}
+
+    # The RAW row goes in the bucket; annotation waits until after the slice below.
+    # Enriching first built a dict and a year-cell list for every owned row and then
+    # threw most of them away -- at the default N, roughly half.
+    for row in ranked_rows:
+        if pool != "both" and row["pool"] != pool:
+            continue
+        owners = index.owners_of.get((normalize_name(row["name"]), row["pool"]), frozenset())
+        for team in owners:
+            if team in grouped:
+                grouped[team].append(row)
+
+    blocks = []
+    for team, rows in grouped.items():
+        # THIS SORT CREATES THE ORDER, and it is load-bearing three times over. Rows
+        # arrive in `totals()` order -- every hitter, then every pitcher -- because
+        # `add_ranks` ranks off a temporary sorted view and leaves its input alone. Drop
+        # it and the `[:n]` below slices the wrong players, `total` sums the wrong ones,
+        # and the block ordering this whole view exists to compare is wrong with it.
+        rows.sort(key=lambda r: r["rank_total"])
+        blocks.append(
+            TeamBlock(
+                team=team,
+                rows=[
+                    _annotate(
+                        row,
+                        key=(normalize_name(row["name"]), row["pool"]),
+                        owners=index.owners_of.get(
+                            (normalize_name(row["name"]), row["pool"]), frozenset()
+                        ),
+                        my_team=my_team,
+                        index=index,
+                        horizons=horizons,
+                        always_attributed=True,
+                    )
+                    for row in rows[:n]
+                ],
+                scored=len(rows),
+                unscored=index.unscored_for(team, pool),
+                is_mine=my_team is not None and team == my_team,
+            )
+        )
+    # Name is the tie-break, not decoration: two teams with nothing scored both total
+    # 0.0, and leaving that to dict order makes the page reorder between reads.
+    blocks.sort(key=lambda b: (-b.total, b.team))
+
+    return TeamsBoard(
+        blocks=blocks,
+        ranked=len(ranked_rows),
+        base_season=base,
+        end_year=end_year,
+        end_years=end_years,
+        pool=pool,
+        scale=scale,
+        per_team=n,
+        year_columns=[base + h for h in horizons] if len(horizons) > 1 else [],
+        meta=_board_meta(payload),
     )
