@@ -13,7 +13,12 @@ from fantasy_baseball.trajectory.sweep import (
     sweep_pool,
     to_payload,
 )
-from fantasy_baseball.web.trajectory_view import DEFAULT_TOP, build_board, build_teams_board
+from fantasy_baseball.web.trajectory_view import (
+    DEFAULT_TOP,
+    build_board,
+    build_player_view,
+    build_teams_board,
+)
 from tests._trajectory_panel import synthetic_panel
 
 BASE = 2026
@@ -983,3 +988,96 @@ def test_per_team_and_end_year_clamp_junk_from_the_query_string(payload: dict) -
     assert build_teams_board(payload, spots=_teams_fixture(), per_team=0).per_team == 1
     assert build_teams_board(payload, spots=_teams_fixture(), per_team=999).per_team == 50
     assert build_teams_board(payload, spots=_teams_fixture(), end="nonsense").end_year == 2027
+
+
+def _payload_with_extras(payload: dict) -> dict:
+    """The `payload` fixture plus the two keys the push script bakes.
+
+    Built here rather than in the fixture so every OTHER test keeps exercising the
+    `.get(..., [])` fallback path for a blob that predates this feature.
+    """
+    out = dict(payload)
+    out["generated_at"] = f"hand-{next(_HAND_SEQ)}"
+    out["players"] = [
+        {
+            **p,
+            "history": [[25, 14.0], [26, 16.0], [27, 20.0]],
+            "comps": [
+                {
+                    "name": f"Comp {i}",
+                    "season": 2010 + i,
+                    "rmse": 0.5 * i,
+                    "path": [10.0 - i, 9.0 - i, 8.0 - i, 7.0 - i, 6.0 - i],
+                }
+                for i in range(1, 8)
+            ],
+        }
+        for p in payload["players"]
+    ]
+    return out
+
+
+def test_a_player_is_found_by_name_with_his_career_and_projection(payload: dict) -> None:
+    view = build_player_view(_payload_with_extras(payload), player="Big Bat")
+    assert view.found
+    assert view.name == "Big Bat"
+    assert [pt[0] for pt in view.history] == [25, 26, 27], "career ascends by age"
+    assert len(view.projection) == 3, "the fixture sweeps three horizons"
+    assert all(p["p10"] <= p["mean"] <= p["p90"] for p in view.projection)
+
+
+def test_an_unknown_name_is_not_found_and_lists_nobody(payload: dict) -> None:
+    view = build_player_view(_payload_with_extras(payload), player="Nobody At All")
+    assert not view.found
+    assert view.candidates == []
+
+
+def test_an_ambiguous_name_lists_candidates_and_renders_no_chart(payload: dict) -> None:
+    """Two players can share a normalized name -- the live board carries two hitters
+    called Max Muncy. Guessing puts one man's career under another's name."""
+    twin = _payload_with_extras(payload)
+    first = twin["players"][0]
+    twin["players"] = [*twin["players"], {**first, "id": first["id"] + 10_000}]
+    twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"
+
+    view = build_player_view(twin, player=first["name"])
+    assert not view.found, "an ambiguous name renders no chart"
+    assert len(view.candidates) == 2
+    assert {c["id"] for c in view.candidates} == {first["id"], first["id"] + 10_000}
+
+
+def test_comps_are_sliced_to_n_and_n_is_clamped(payload: dict) -> None:
+    full = _payload_with_extras(payload)
+    assert len(build_player_view(full, player="Big Bat").comps) == 5, "default"
+    assert len(build_player_view(full, player="Big Bat", n=3).comps) == 3
+    assert len(build_player_view(full, player="Big Bat", n=999).comps) == 7, "what exists"
+    assert len(build_player_view(full, player="Big Bat", n="junk").comps) == 5
+    assert len(build_player_view(full, player="Big Bat", n=0).comps) == 1
+
+
+def test_a_payload_without_the_new_keys_still_renders_the_projection(payload: dict) -> None:
+    """A blob pushed before this feature. #332 took /trajectory down by refusing one it
+    could largely read; this renders what it has and lets the page say what is missing.
+    """
+    view = build_player_view(payload, player="Big Bat")
+    assert view.found
+    assert view.projection, "the fit is in every payload"
+    assert view.history == []
+    assert view.comps == []
+
+
+def test_the_var_axis_nets_every_series_against_the_QUERY_players_floor(payload: dict) -> None:
+    """Career, projection and comps alike. Netting each comp against its own slot would
+    put lines on one axis that are not comparable -- the mixed-scale defect of #331."""
+    full = _payload_with_extras(payload)
+    var = build_player_view(full, player="Under Water", scale="var")
+    sgp = build_player_view(full, player="Under Water", scale="sgp")
+    floor = var.floor
+    assert floor > 0, "fixture must net against a real floor"
+
+    assert var.history[0][1] == pytest.approx(sgp.history[0][1] - floor)
+    assert var.projection[0]["mean"] == pytest.approx(sgp.projection[0]["mean"] - floor)
+    assert var.comps[0]["path"][0]["value"] == pytest.approx(
+        sgp.comps[0]["path"][0]["value"] - floor
+    )
+    assert [c["name"] for c in var.comps] == [c["name"] for c in sgp.comps], "same comps"

@@ -14,7 +14,7 @@ Render. The board therefore does NOT move with a dashboard refresh, which is why
 from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any
 
 from fantasy_baseball.data.rosters import RosterSpot
@@ -587,4 +587,133 @@ def build_teams_board(
         per_team=n,
         year_columns=[base + h for h in horizons] if len(horizons) > 1 else [],
         meta=_board_meta(payload),
+    )
+
+
+#: Comps drawn by default. The payload stores `MAX_COMPS` (10); this is what the chart
+#: shows until asked otherwise.
+DEFAULT_COMPS = 5
+
+#: The clamp ceiling for `n`. Mirrors the push script's `MAX_COMPS`; the two are
+#: asserted equal in the route test.
+MAX_COMPS_SHOWN = 10
+
+
+@dataclass(frozen=True)
+class PlayerView:
+    """One player's chart: what happened, what is predicted, and what it looked like
+    when this shape played out before."""
+
+    name: str
+    age: int
+    slot: str
+    #: The replacement level EVERY series on the VAR axis is netted against -- his own.
+    #: Not each comp's own slot floor: the chart asks what a trajectory would be worth in
+    #: THIS player's slot, and per-comp floors would put non-comparable lines on one axis.
+    floor: float
+    scale: str
+    n: int
+    #: [[age, value], ...] realized, ascending. Empty for a payload predating the feature.
+    history: list[list[float]]
+    #: [{age, mean, p10, p90}, ...] one per projected year.
+    projection: list[dict]
+    #: [{name, season, rmse, path: [{age, value}, ...]}, ...] closest first.
+    comps: list[dict]
+    #: Populated ONLY when the name was ambiguous; the caller renders these instead of a
+    #: chart. Guessing puts one man's career under another's name.
+    candidates: list[dict]
+    found: bool
+    extrapolated: bool
+    base_season: int
+    end_years: list[int]
+    meta: dict = field(default_factory=dict)
+
+
+def build_player_view(
+    payload: dict,
+    *,
+    player: str,
+    scale: str = "var",
+    n: Any = None,
+) -> PlayerView:
+    """One player's career, projection and comps, on one scale.
+
+    Resolved BY NAME, never by an id from the query string. CLAUDE.md names a
+    hand-carried id as a defect class that has twice landed on a real row belonging to
+    someone else, and `player_trajectory.py` already refuses a `--mlbam-id` that
+    disagrees with its `--player`.
+    """
+    scale = _clamp_choice(scale, SCALES, "var")
+    want = _clamp(n, 1, MAX_COMPS_SHOWN, DEFAULT_COMPS)
+    base = int(payload["base_season"])
+    max_horizon = int(payload["max_horizon"])
+    end_years = [base + h for h in range(1, max_horizon + 1)]
+
+    target = normalize_name(player or "")
+    hits = [p for p in payload.get("players", []) if normalize_name(p["name"]) == target]
+
+    empty = PlayerView(
+        name=player or "",
+        age=0,
+        slot="",
+        floor=0.0,
+        scale=scale,
+        n=want,
+        history=[],
+        projection=[],
+        comps=[],
+        candidates=[],
+        found=False,
+        extrapolated=False,
+        base_season=base,
+        end_years=end_years,
+        meta=_board_meta(payload),
+    )
+    if not hits:
+        return empty
+    if len(hits) > 1:
+        return replace(
+            empty,
+            candidates=[
+                {"id": p["id"], "name": p["name"], "age": p["age"], "slot": p["slot"]}
+                for p in sorted(hits, key=lambda p: p["id"])
+            ],
+        )
+
+    row = hits[0]
+    floor = float(row["floor"]) if scale == "var" else 0.0
+    return replace(
+        empty,
+        name=row["name"],
+        age=int(row["age"]),
+        slot=row["slot"],
+        floor=float(row["floor"]),
+        found=True,
+        extrapolated=bool(row.get("extrapolated")),
+        history=[[int(a), float(v) - floor] for a, v in row.get("history", [])],
+        projection=[
+            {
+                "age": int(row["age"]) + int(pt["horizon"]),
+                "mean": float(pt["mean"]) - floor,
+                "p10": float(pt["p10"]) - floor,
+                "p90": float(pt["p90"]) - floor,
+            }
+            for pt in row["sgp"]
+        ],
+        comps=[
+            {
+                "name": c["name"],
+                "season": c["season"],
+                "rmse": c["rmse"],
+                # Truncated to the PROJECTED horizons, not the stored path length.
+                # The payload always stores five, but a board swept to three years draws
+                # three -- a comp running two ages past the projection would be the only
+                # line on the chart with no dashed line beside it to compare against.
+                "path": [
+                    {"age": int(row["age"]) + h, "value": float(v) - floor}
+                    for h, v in list(enumerate(c["path"], start=1))[: len(row["sgp"])]
+                ],
+            }
+            for c in row.get("comps", [])[:want]
+        ],
     )
