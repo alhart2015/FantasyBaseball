@@ -21,6 +21,7 @@ from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.roster_join import index_rosters
 from fantasy_baseball.trajectory.sweep import (
+    POSITIONAL_PAYLOAD_ERROR,
     SCALES,
     add_ranks,
     from_payload,
@@ -701,6 +702,14 @@ def build_player_view(
         )
 
     row = hits[0]
+    # Reads `row["sgp"]` points directly rather than through `from_payload`/`_unpack`
+    # (they carry no floor to net against, and this function needs one player, not the
+    # whole pool) -- which makes this a SECOND reader of the point schema. Without this
+    # guard, a legacy positional-points blob raises `TypeError: list indices must be
+    # integers or slices, not str` out of `pt["horizon"]` below, uncaught by the route's
+    # `except (ValueError, KeyError)` and a 500 where `/trajectory` degrades cleanly.
+    if row["sgp"] and not isinstance(row["sgp"][0], dict):
+        raise ValueError(POSITIONAL_PAYLOAD_ERROR)
     # THE offset, from the one place it is defined -- see `var_offset`'s docstring.
     # Not `float(row["floor"]) if scale == "var" else 0.0` inline: that is a third
     # spelling of the same rule `SweptPlayer.offset` already carries, and it disagreed

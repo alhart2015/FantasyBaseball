@@ -142,7 +142,13 @@ def test_the_payload_carries_career_history_and_comps(monkeypatch) -> None:
     assert scored > 0
     player = payload["players"][0]
 
-    assert player["history"], "every scored player has at least his current season"
+    # NOT "every scored player has at least his current season" -- history excludes
+    # the current season by construction (`complete = live[~live["partial_season"]]`
+    # in build_payload), which is exactly what #324's F3 review caught: a debut rookie
+    # with no prior complete season legitimately has `history == []`. This assertion
+    # passes only because `players[0]` in the real panel happens to have prior
+    # seasons; it says nothing about every player.
+    assert player["history"], "players[0] has prior complete seasons in the real panel"
     ages = [row[0] for row in player["history"]]
     assert ages == sorted(ages), "history ascends by age so a line can be drawn from it"
     assert all(len(row) == 2 for row in player["history"])

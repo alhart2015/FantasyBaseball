@@ -309,16 +309,23 @@ def _pack(point: YearPoint) -> dict[str, float]:
     }
 
 
+#: Shared between `_unpack` and `web.trajectory_view.build_player_view`, which reads
+#: `row["sgp"]` points directly rather than through `from_payload`/`_unpack` (#324) --
+#: two independent readers of the same point schema. One message, not two spellings
+#: of the same one-time migration note that could drift apart on the next edit.
+POSITIONAL_PAYLOAD_ERROR = (
+    "trajectory board payload stores points as positional arrays, which this "
+    "build no longer reads; re-run scripts/push_trajectory_board.py"
+)
+
+
 def _unpack(packed: dict[str, float], age: int) -> YearPoint:
     if not isinstance(packed, dict):
         # The blob deployed when this landed is positional, and `packed[0]` on a list
         # would read as a TypeError about integer indices -- true, and useless. Say
         # what to do instead. Self-limiting: once prod is re-pushed it never fires,
         # and unlike a version register nothing has to be remembered to keep it honest.
-        raise ValueError(
-            "trajectory board payload stores points as positional arrays, which this "
-            "build no longer reads; re-run scripts/push_trajectory_board.py"
-        )
+        raise ValueError(POSITIONAL_PAYLOAD_ERROR)
     horizon = int(packed["horizon"])
     return YearPoint(
         horizon=horizon,

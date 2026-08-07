@@ -12,6 +12,16 @@
 
   const at = (pts, key) => pts.map((p) => ({ x: p.age, y: p[key] }));
 
+  // Spec requirement 6: on the VAR scale every series is netted against THIS
+  // player's own slot floor (`data.floor`), not each comp's own -- the axis must say
+  // so, or a reader comparing a comp line to a remembered SGP figure is off by the
+  // floor with no way to find out why. On the SGP scale `floor` is 0.0 (nothing
+  // netted) and the label stays plain.
+  const yAxisTitle =
+    data.scale === "var"
+      ? `VAR (SGP - ${data.floor.toFixed(2)} slot floor)`
+      : data.scale.toUpperCase();
+
   const datasets = [
     // Comps first so later datasets paint over them.
     ...data.comps.map((c) => ({
@@ -64,13 +74,26 @@
       type: "line",
       data: { datasets },
       options: {
+        // `.chart-wrapper` fixes the box at 360px (season.css); Chart.js's own
+        // defaults are `responsive: true, maintainAspectRatio: true` at a 2:1
+        // ratio, which ignores that box entirely and draws a canvas roughly
+        // twice the box's height -- painting over the honesty paragraph below
+        // it. `season_trends.js`'s `buildChart` sets this same pair for the
+        // same reason; match it rather than inherit the default.
+        responsive: true,
+        maintainAspectRatio: false,
         parsing: false,
         scales: {
           x: { type: "linear", title: { display: true, text: "age" } },
-          y: { title: { display: true, text: data.scale.toUpperCase() } },
+          y: { title: { display: true, text: yAxisTitle } },
         },
         plugins: {
           legend: { labels: { filter: (item) => item.text !== "_p10" } },
+          // The legend filter above hides the internal fill-target dataset from the
+          // legend; Chart.js's default tooltip has no such filter, so hovering near
+          // the lower band edge would otherwise show a series literally called
+          // "_p10". Same rule, both surfaces.
+          tooltip: { filter: (item) => item.dataset.label !== "_p10" },
         },
       },
     });

@@ -2702,6 +2702,69 @@ def test_trajectory_player_view_unknown_name_does_not_500(client):
     assert "No player named" in resp.data.decode()
 
 
+def test_trajectory_player_view_degrades_on_a_legacy_positional_points_blob(client):
+    """`build_player_view` reads `row["sgp"]` points directly rather than through
+    `from_payload`/`_unpack` -- a second, independent reader of the point schema. A
+    payload storing points positionally (the pre-#332 shape the league board already
+    degrades against, via `from_payload` -> `_unpack`) must not 500 the player view
+    just because it has its own reader."""
+    payload = _trajectory_payload()
+    payload["players"] = [
+        {**p, "sgp": [[1, 14.0, 10.0, 18.0, 100.0, 0], [2, 15.0, 11.0, 19.0, 90.0, 0]]}
+        for p in payload["players"]
+    ]
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=payload,
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    assert "re-run scripts/push_trajectory_board.py" in resp.data.decode()
+
+
+def test_trajectory_player_view_discloses_the_var_netting_on_axis_and_table(client):
+    """Spec requirement 6: on the VAR scale every series is netted against the
+    searched player's OWN slot floor, and the axis label must say so -- not just
+    repeat "VAR" as if that were self-explanatory. The numbers table's header is the
+    no-JS fallback for the same disclosure (#324 F2)."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface&scale=var")
+    body = resp.data.decode()
+    # Testy McTestface's slot floor is 4.0 -- see `_trajectory_payload`'s BoardRow.
+    assert "<th>VAR (SGP - 4.00 slot floor)</th>" in body
+    assert "netted against" in body, "the comp caption names the rule too"
+
+
+def test_trajectory_player_view_sgp_scale_keeps_a_plain_label(client):
+    """Nothing is netted on the SGP scale (`board.floor` is 0.0 there) -- the label
+    must not claim a subtraction that did not happen."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface&scale=sgp")
+    body = resp.data.decode()
+    assert "<th>SGP</th>" in body
+    assert "slot floor" not in body
+
+
+def test_trajectory_player_view_discloses_vintage_and_the_history_gap(client):
+    """Sibling templates (trajectory.html, trajectory_teams.html) both print the
+    build vintage / pace note; this one printed neither. Also explains why the solid
+    line stops a year before the dashed one starts (#324 F3)."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    body = resp.data.decode()
+    assert "Built 2026-08-07T09:00:00" in body, "the same vintage stamp the sibling views print"
+    assert "still in progress" in body, "explains the gap between history and projection"
+
+
 def test_trajectory_player_view_explains_a_pre_feature_blob(client):
     """A blob pushed before this feature carries no `history`/`comps` keys at all --
     the shape currently deployed in production. The page must say what's missing
@@ -2717,6 +2780,45 @@ def test_trajectory_player_view_explains_a_pre_feature_blob(client):
     assert body.count("predates") == 2, "one note for the missing comps, one for history"
     comps_section = body[body.index("Closest realized paths") : body.index("The numbers")]
     assert "<td>" not in comps_section, "no fabricated comp rows"
+
+
+def _trajectory_chart_js_source() -> str:
+    return (
+        PROJECT_ROOT / "src" / "fantasy_baseball" / "web" / "static" / "trajectory_chart.js"
+    ).read_text()
+
+
+def test_trajectory_chart_js_disables_the_default_aspect_ratio():
+    """No JS runtime lives in this suite, so this is a source-text assertion, not a
+    faked browser check -- honest per #324 F8's instruction not to write one that
+    cannot fail.
+
+    Chart.js's OWN defaults (`responsive: true, maintainAspectRatio: true`, ratio 2)
+    ignore `.chart-wrapper`'s fixed 360px box (season.css) and draw the canvas at
+    roughly twice its height, painting over the honesty paragraph beneath it
+    (#324 F1). `season_trends.js`'s `buildChart` sets this same pair for the same
+    box; `trajectory_chart.js` must match it rather than inherit the default."""
+    src = _trajectory_chart_js_source()
+    assert "maintainAspectRatio: false" in src
+    assert "responsive: true" in src
+
+
+def test_trajectory_chart_js_discloses_the_var_netting_on_the_axis():
+    """Spec requirement 6: the y-axis title must say what was subtracted on the VAR
+    scale using `data.floor` (the JSON island's copy of `board.floor`), not just
+    repeat the scale name (#324 F2)."""
+    src = _trajectory_chart_js_source()
+    assert "data.floor" in src
+    assert "slot floor" in src
+
+
+def test_trajectory_chart_js_filters_the_internal_p10_series_from_tooltips_too():
+    """`_p10` is the internal fill-target dataset, already hidden from the legend by
+    label; Chart.js's default tooltip has no such filter, so a hover near the lower
+    band edge would otherwise show a series literally called "_p10" (#324 F6)."""
+    src = _trajectory_chart_js_source()
+    assert "tooltip: { filter:" in src
+    assert 'item.dataset.label !== "_p10"' in src
 
 
 def test_trajectory_player_chart_data_is_truncated_to_the_projected_horizons(client):

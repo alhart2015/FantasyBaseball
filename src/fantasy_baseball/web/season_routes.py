@@ -818,24 +818,27 @@ def register_routes(app: Flask) -> None:
         payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
         board, teams_board, player_view, error = None, None, None, None
         if payload:
+            view = select_view(request.args.get("view"))
+            spots: list = []
+            my_team = None
             # LIVE rosters, not the local mirror: which players are mine is exactly the
             # state that goes stale silently, and a trade since the last sync would mark
             # the wrong rows. A failure here must not take the page down -- the board is
             # still worth reading unmarked -- so it degrades to no highlighting, and
             # `has_rosters` lets the template distinguish that from "you own none of
-            # these".
-            spots: list = []
-            my_team = None
-            try:
-                from fantasy_baseball.data.rosters import live_rosters
+            # these". Skipped on the player view: `build_player_view` takes neither
+            # `spots` nor `my_team`, so a search would pay for a live Yahoo call and
+            # discard the result every time.
+            if view != "player":
+                try:
+                    from fantasy_baseball.data.rosters import live_rosters
 
-                my_team = _load_config().team_name
-                # Every team's spots, not just mine: the dropdown filters to any
-                # roster, and `build_board` derives ownership from the same read.
-                spots = list(live_rosters(my_team))
-            except Exception:
-                logger.warning("trajectory: live roster read failed; rendering unmarked")
-            view = select_view(request.args.get("view"))
+                    my_team = _load_config().team_name
+                    # Every team's spots, not just mine: the dropdown filters to any
+                    # roster, and `build_board` derives ownership from the same read.
+                    spots = list(live_rosters(my_team))
+                except Exception:
+                    logger.warning("trajectory: live roster read failed; rendering unmarked")
             try:
                 if view == "player":
                     player_view = build_player_view(

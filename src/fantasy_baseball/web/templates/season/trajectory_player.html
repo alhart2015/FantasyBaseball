@@ -40,6 +40,13 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   {% else %}<p class="muted">Search a player to see his trajectory.</p>{% endif %}
 
 {% else %}
+{#- The disclosed y-axis/table label. On VAR every series was netted against THIS
+    player's own slot floor (`board.floor`) -- spec requirement 6 -- so a reader must
+    be able to find out what number was subtracted without recomputing it; on SGP
+    `board.floor` is 0.0 (nothing netted) and the label stays plain. Computed once,
+    from `board.floor`, not re-derived: `var_offset` is the one place that owns this
+    rule and this template must not become a third spelling of it. -#}
+{% set scale_label = ('VAR (SGP - ' + ('%.2f'|format(board.floor)) + ' slot floor)') if board.scale == 'var' else 'SGP' %}
 <p class="muted">
   {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
   Solid is what happened; dashed is projected, with the shaded band its p10-p90 range.
@@ -47,9 +54,22 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   support -- read the band, not the point estimate.{% endif %}
 </p>
 
+{#- THE SAME VINTAGE DISCLOSURE trajectory.html and trajectory_teams.html print --
+    this page reads the same `meta`/`base_season` and had never shown either. -#}
+<p class="muted trajectory-vintage">
+  {% if board.meta.generated_at %}Built {{ board.meta.generated_at }}{% endif %}
+  {% if board.meta.panel_vintage %}from {{ board.meta.panel_vintage.hitter }} / {{ board.meta.panel_vintage.pitcher }}{% endif %}
+  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% complete, and every fit is built on the paced full-year figure{% endif %}.
+  This board does not refresh with the dashboard; it is as fresh as the last
+  <code>push_trajectory_board.py</code> run.
+  {% if board.history %}The career line above stops before {{ board.base_season }} on
+  purpose -- that season is still in progress, and its paced full-year figure (not a
+  partial-season point) is exactly what the projection is built from.{% endif %}
+</p>
+
 <div class="chart-wrapper"><canvas id="trajectory-chart"></canvas></div>
 <script type="application/json" id="trajectory-chart-data">{{ {
-  "name": board.name, "scale": board.scale, "history": board.history,
+  "name": board.name, "scale": board.scale, "floor": board.floor, "history": board.history,
   "projection": board.projection, "comps": board.comps} | tojson }}</script>
 
 {% if board.comps %}
@@ -58,8 +78,12 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   These are the closest realized paths to the projection -- chosen ON the outcome, so
   they illustrate what this shape looked like when it played out and are
   <strong>not evidence for the forecast</strong>. The honest uncertainty is the shaded
-  band, which is wider than they are by construction. A comp needs five realized seasons
-  to be scored on the same horizons, so none is recent.
+  band, which in practice is wider than they are; a comp can occasionally still land
+  outside it. A comp needs five realized seasons to be scored on the same horizons, so
+  none is recent.
+  {% if board.scale == 'var' %}Every comp's path above is also netted against
+  {{ board.name }}'s own slot floor ({{ '%.2f'|format(board.floor) }}), not each
+  comp's own -- the axis compares shapes on one line, not raw SGP.{% endif %}
 </p>
 <table class="data-table">
   <thead><tr><th>Player</th><th>Season</th><th>RMSE</th>
@@ -90,7 +114,7 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 </p>
 {% endif %}
 <table class="data-table">
-  <thead><tr><th>Age</th><th>{{ board.scale|upper }}</th><th>p10..p90</th></tr></thead>
+  <thead><tr><th>Age</th><th>{{ scale_label }}</th><th>p10..p90</th></tr></thead>
   <tbody>
     {% for a, v in board.history %}
     <tr><td>{{ a }}</td><td>{{ '%.1f'|format(v) }}</td><td class="muted">actual</td></tr>
