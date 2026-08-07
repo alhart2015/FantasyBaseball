@@ -31,24 +31,39 @@ from fantasy_baseball.utils.name_utils import normalize_name
 class RosterIndex:
     """Everything a board needs to know about who owns which row."""
 
-    #: (normalized name, pool) -> the spot that won the key. ONE dict rather than a
-    #: parallel `team_of` / `status_of` pair: both were built from this same mapping
-    #: and each held a single attribute off it, so every further field a consumer
-    #: wanted meant a third parallel dict keyed identically.
+    #: (normalized name, pool) -> EVERY team rostering that key, usually one.
+    #:
+    #: OWNERSHIP IS MEMBERSHIP, NOT A WINNER, and conflating the two was a real bug.
+    #: "Which team does this row belong to" needs a single answer and so needs a
+    #: winner; "do I own a player under this key" is a set test and needs none.
+    #: Deriving the second from the first meant that when an opponent's spot sorted
+    #: first, my own rostered player rendered as neither mine nor ambiguous -- worse
+    #: than the arbitrary-attribution bug the winner was introduced to fix, because
+    #: the reader saw no marking at all rather than a wrong one.
+    #:
+    #: A row whose key is rostered by two teams therefore shows under BOTH, flagged.
+    #: Hiding the one you own is worse than showing one you do not, clearly marked --
+    #: the same rule the board-side collision already followed.
+    owners_of: dict[tuple[str, str], frozenset[str]]
+    #: (normalized name, pool) -> the spot that won the key, for the places that
+    #: genuinely need ONE: the CLI's `[IL10]` suffix and its CSV `team` column.
+    #: Deterministic (see `index_rosters`), never used to decide ownership.
     spot_of: dict[tuple[str, str], RosterSpot]
     #: Keys the join cannot resolve, from EITHER side: more than one board row under
     #: the key, or more than one roster spot under it. Both mean a consumer
     #: attributing such a row to a team is guessing, and must say so on screen.
     ambiguous: set[tuple[str, str]]
-    #: Roster players this board cannot attribute a row to, per team. Two causes,
-    #: deliberately in one list: nothing on the board matched the name at all, and
-    #: the name matched but another team's spot won the key. The reader is asking
-    #: the same question in both cases -- "where is my guy?" -- and the answer is
-    #: the same, that this page is not showing him a row for that player. Rendering
-    #: it is what keeps "the model could not price him" from reading as "he ranked
-    #: last", and what keeps a collision loser from vanishing off his owner's page
-    #: with nothing on screen to say he was ever there.
-    unscored: dict[str, list[str]]
+    #: Roster spots with NO board row under their key, per team. ONE cause: the
+    #: model could not price the player. It briefly carried a second -- "another
+    #: spot won the key" -- back when ownership was winner-derived, and that forced
+    #: every consumer's copy to hedge about which cause applied. Membership
+    #: ownership removes the second cause outright: a spot whose key has a row is
+    #: shown under its team, so it is not missing and has no business here.
+    #:
+    #: Spots rather than names so a consumer can filter by pool -- the list renders
+    #: under a table that may be showing hitters only, and naming a pitcher there
+    #: reads as a hole in the hitter list.
+    unscored_spots: dict[str, list[RosterSpot]]
     #: Teams owning at least one spot that WON a scored row. Falls out of the same
     #: pass that builds `unscored` -- a spot not pushed there is a spot that matched
     #: -- so a caller asking "did this team join anything" gets a set lookup instead
@@ -58,7 +73,13 @@ class RosterIndex:
     #: alphabetical when `my_team` is None or names no team on any roster.
     teams: tuple[str, ...] = ()
 
+    def owners_for(self, name: str, pool: str) -> frozenset[str]:
+        """Every team rostering this key. The ownership question."""
+        return self.owners_of.get((normalize_name(name), pool), frozenset())
+
     def team_for(self, name: str, pool: str) -> str | None:
+        """The single team to print in a one-team-per-row context. NOT ownership --
+        use `owners_for` for "is this mine" or "does this team hold him"."""
         spot = self.spot_of.get((normalize_name(name), pool))
         return spot.team if spot else None
 
@@ -68,6 +89,17 @@ class RosterIndex:
 
     def is_ambiguous(self, name: str, pool: str) -> bool:
         return (normalize_name(name), pool) in self.ambiguous
+
+    def unscored_for(self, team: str, pool: str = "both") -> list[str]:
+        """Names this team rosters that the board has no row for, sorted.
+
+        `pool` filters to match the table the list renders under; "both" keeps all.
+        """
+        return sorted(
+            s.name
+            for s in self.unscored_spots.get(team, ())
+            if pool == "both" or s.player_type == pool
+        )
 
 
 def index_rosters(
@@ -100,16 +132,19 @@ def index_rosters(
         key = (normalize_name(row["name"]), row["pool"])
         counts[key] = counts.get(key, 0) + 1
 
-    unscored: dict[str, list[str]] = {}
+    owners: dict[tuple[str, str], set[str]] = {}
+    unscored_spots: dict[str, list[RosterSpot]] = {}
     matched: set[str] = set()
     for spot in spots:
         key = (spot.normalized, spot.player_type)
-        # `is not` and not `!=`: two spots for the same player on the same team
-        # are distinct roster entries even though the dataclass compares equal.
-        if key not in counts or by_key[key] is not spot:
-            unscored.setdefault(spot.team, []).append(spot.name)
-        else:
+        owners.setdefault(key, set()).add(spot.team)
+        # Purely "did the board price anyone under this key". It used to also send
+        # the loser of a key contest here, which put a player on the missing list
+        # while his row sat on screen under the winning team.
+        if key in counts:
             matched.add(spot.team)
+        else:
+            unscored_spots.setdefault(spot.team, []).append(spot)
 
     rostered = {s.team for s in spots}
     # `my_team in rostered` rather than `is not None`: a renamed or mistyped team
@@ -118,10 +153,11 @@ def index_rosters(
     teams = promoted + tuple(sorted(rostered - set(promoted)))
 
     return RosterIndex(
+        owners_of={k: frozenset(v) for k, v in owners.items()},
         spot_of=by_key,
         ambiguous={k for k, c in counts.items() if c > 1}
         | {k for k, c in spot_counts.items() if c > 1},
-        unscored=unscored,
+        unscored_spots=unscored_spots,
         matched_teams=frozenset(matched),
         teams=teams,
     )

@@ -43,41 +43,65 @@ def test_a_name_matching_two_board_rows_is_ambiguous() -> None:
     assert not index.is_ambiguous("Elly De La Cruz", "hitter")
 
 
-def test_two_spots_sharing_a_key_are_ambiguous_and_the_loser_is_listed() -> None:
-    """The SPOT side of the same collision, with one board row to fight over.
+def test_two_teams_rostering_one_key_BOTH_own_the_row() -> None:
+    """The SPOT side of the collision, with one board row to fight over.
 
-    Two different humans, two different teams, one key. Whichever spot wins, the
-    single row renders under a team that may not own him -- so it must carry the
-    (?) flag -- and the team that lost must still see the name somewhere rather
-    than have the player disappear off its page with no explanation.
+    This asserted the opposite until 2026-08-07: that one spot won the key and the
+    LOSER was listed as unscored. That was the bug. Ownership derived from a single
+    winner meant my own rostered player rendered under the other team, unhighlighted
+    and unflagged, and the list that would have named him only appears on a filtered
+    view. Membership is not a contest -- both teams roster the name, neither is
+    missing him, and the (?) flag is what says the board cannot tell which is which.
     """
     rows = [_row("Max Muncy")]
     spots = [_spot("Max Muncy", "Zebras"), _spot("Max Muncy", "Aardvarks")]
-    index = index_rosters(rows, spots, "Mine")
+    index = index_rosters(rows, spots, "Zebras")
 
     assert index.is_ambiguous("Max Muncy", "hitter")
+    assert index.owners_for("Max Muncy", "hitter") == frozenset({"Zebras", "Aardvarks"})
+    assert index.unscored_for("Zebras") == [], "a matched key is not a missing player"
+    assert index.unscored_for("Aardvarks") == []
+    assert index.matched_teams == frozenset({"Zebras", "Aardvarks"})
+
+    # `team_for` still answers with ONE team, for the CSV column and the [IL10]
+    # suffix, and it stays a fixed function of the data rather than roster order.
     winner = index.team_for("Max Muncy", "hitter")
     assert winner in ("Zebras", "Aardvarks")
-    loser = "Aardvarks" if winner == "Zebras" else "Zebras"
-    assert index.unscored.get(loser) == ["Max Muncy"], "the displaced spot must not vanish"
-    assert winner not in index.unscored
-
-    # The winner is a function of the data, not of roster iteration order.
-    assert index_rosters(rows, list(reversed(spots)), "Mine").team_for("Max Muncy", "hitter") == (
+    assert index_rosters(rows, list(reversed(spots)), "Zebras").team_for("Max Muncy", "hitter") == (
         winner
     )
 
 
-def test_two_spots_and_two_rows_sharing_a_key_are_ambiguous() -> None:
-    """Both sides colliding at once -- two Max Muncys on the board, two owners."""
-    rows = [_row("Max Muncy"), _row("Max Muncy")]
-    spots = [_spot("Max Muncy", "Zebras"), _spot("Max Muncy", "Aardvarks")]
+def test_one_team_rostering_two_players_under_a_key_is_not_missing_either() -> None:
+    """Both halves colliding on ONE roster -- two Luis Garcias, same team.
+
+    The loser used to land in `unscored`, so the page listed a player as missing
+    directly beneath his own visible row.
+    """
+    rows = [_row("Luis Garcia", "pitcher"), _row("Luis Garcia", "pitcher")]
+    spots = [
+        _spot("Luis Garcia", "Mine", pool="pitcher"),
+        _spot("Luis Garcia", "Mine", pool="pitcher"),
+    ]
     index = index_rosters(rows, spots, "Mine")
 
-    assert index.is_ambiguous("Max Muncy", "hitter")
-    winner = index.team_for("Max Muncy", "hitter")
-    loser = "Aardvarks" if winner == "Zebras" else "Zebras"
-    assert index.unscored.get(loser) == ["Max Muncy"]
+    assert index.is_ambiguous("Luis Garcia", "pitcher")
+    assert index.owners_for("Luis Garcia", "pitcher") == frozenset({"Mine"})
+    assert index.unscored_for("Mine") == [], "his row is on screen; he is not missing"
+
+
+def test_unscored_can_be_filtered_to_the_pool_on_screen() -> None:
+    """The list renders under a table that may be showing one pool, so naming a
+    player from the other reads as a hole in that pool rather than as a note."""
+    spots = [
+        _spot("Unpriced Bat", "Mine"),
+        _spot("Unpriced Arm", "Mine", pool="pitcher"),
+    ]
+    index = index_rosters([], spots, "Mine")
+
+    assert index.unscored_for("Mine") == ["Unpriced Arm", "Unpriced Bat"]
+    assert index.unscored_for("Mine", "hitter") == ["Unpriced Bat"]
+    assert index.unscored_for("Mine", "pitcher") == ["Unpriced Arm"]
 
 
 def test_the_same_name_in_two_pools_is_not_ambiguous() -> None:
@@ -98,7 +122,8 @@ def test_roster_players_with_no_scored_row_are_grouped_by_team() -> None:
         _spot("Their Rookie", "Theirs"),
     ]
     index = index_rosters(rows, spots, "Mine")
-    assert index.unscored == {"Mine": ["Rookie"], "Theirs": ["Their Rookie"]}
+    assert index.unscored_for("Mine") == ["Rookie"]
+    assert index.unscored_for("Theirs") == ["Their Rookie"]
 
 
 def test_team_and_status_are_looked_up_by_normalized_name_and_pool() -> None:

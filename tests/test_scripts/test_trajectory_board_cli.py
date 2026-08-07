@@ -11,6 +11,7 @@ import importlib.util
 import pathlib
 
 from fantasy_baseball.data.rosters import RosterSpot
+from fantasy_baseball.trajectory.roster_join import index_rosters
 
 PROJECT_ROOT = pathlib.Path(__file__).resolve().parents[2]
 
@@ -30,6 +31,9 @@ def _row(name: str, total: float, team: str) -> dict:
         "name": name,
         "pool": "hitter",
         "team": team,
+        # Ownership is MEMBERSHIP: a key rostered by two teams belongs to both, and
+        # `block()` filters on this rather than on the single `team` above.
+        "teams": frozenset({team}),
         "status": "",
         "total": total,
         "next": total / 3,
@@ -78,7 +82,9 @@ def test_the_team_headline_sums_per_team_not_the_whole_roster(capsys) -> None:
     scored += [_row(f"Fine {i}", 12.0, "THIN") for i in range(5)]
     spots = [_spot(r["name"], r["team"]) for r in scored]
 
-    module.by_team(scored, spots, {}, "THIN", 5, 2026, (1, 2, 3), None)
+    module.by_team(
+        scored, spots, index_rosters(scored, spots, "THIN"), "THIN", 5, 2026, (1, 2, 3), None
+    )
     out = capsys.readouterr().out
 
     assert _headline(out, "DEEP") == 60.0, "opposing team headlined its whole roster"
@@ -99,7 +105,9 @@ def test_your_own_team_caps_the_headline_while_still_listing_everyone(capsys) ->
     scored += [_row(f"Mine tail {i}", -30.0, "MINE") for i in range(9)]
     spots = [_spot(r["name"], r["team"]) for r in scored]
 
-    module.by_team(scored, spots, {}, "MINE", 5, 2026, (1, 2, 3), None)
+    module.by_team(
+        scored, spots, index_rosters(scored, spots, "MINE"), "MINE", 5, 2026, (1, 2, 3), None
+    )
     out = capsys.readouterr().out
 
     assert _headline(out, "MINE") == 50.0, "your headline summed the tail"
@@ -117,7 +125,9 @@ def test_the_headline_says_how_many_players_it_counted(capsys) -> None:
     scored = [_row(f"P{i}", 10.0, "T") for i in range(8)]
     spots = [_spot(r["name"], r["team"]) for r in scored]
 
-    module.by_team(scored, spots, {}, "OTHER", 5, 2026, (1, 2, 3), None)
+    module.by_team(
+        scored, spots, index_rosters(scored, spots, "OTHER"), "OTHER", 5, 2026, (1, 2, 3), None
+    )
     out = capsys.readouterr().out
 
     header = next(ln for ln in out.splitlines() if ln.startswith("T"))
@@ -132,14 +142,13 @@ def test_a_rostered_player_the_model_cannot_price_is_named(capsys) -> None:
     ZERO coverage. Without this test the CLI could stop reporting unscored
     players entirely and the suite would stay green.
     """
-    from fantasy_baseball.trajectory.roster_join import index_rosters
-
     module = _script()
     scored = [_row("Scored Guy", 12.0, "T")]
     spots = [_spot("Scored Guy", "T"), _spot("Bench Rookie", "T")]
-    index = index_rosters(scored, spots, "T")
 
-    module.by_team(scored, spots, index.unscored, "OTHER", 5, 2026, (1, 2, 3), None)
+    module.by_team(
+        scored, spots, index_rosters(scored, spots, "T"), "OTHER", 5, 2026, (1, 2, 3), None
+    )
     out = capsys.readouterr().out
 
     assert "not scored: Bench Rookie" in out

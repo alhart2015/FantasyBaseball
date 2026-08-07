@@ -743,3 +743,44 @@ def test_a_cache_written_by_another_schema_raises_rather_than_rendering_empty(
     ]
     with pytest.raises(ValueError, match=re.escape("re-run scripts/push_trajectory_board.py")):
         build_board(stale)
+
+
+def test_a_key_two_teams_roster_is_still_mine_and_still_flagged(payload: dict) -> None:
+    """The regression that shipped between 2026-08-07's fix wave and the review after.
+
+    Ownership was derived from whichever spot won a deterministic sort. So when an
+    opponent's team name sorted first, my own rostered player rendered on the DEFAULT
+    all-teams view as neither mine nor ambiguous -- no highlight, no (?) -- and the
+    list that would have named him only appears under a team filter. The reader's
+    page said, silently, "you do not own him".
+
+    "Aardvarks" sorts before any real team here on purpose: under the old winner
+    rule it took the key, and this test failed.
+    """
+    spots = [_spot("Big Bat", "Mine"), _spot("Big Bat", "Aardvarks")]
+    board = build_board(payload, top="all", spots=spots, my_team="Mine")
+
+    big = next(r for r in board.rows if r["name"] == "Big Bat")
+    assert big["mine"], "an opponent rostering the same name does not take my player"
+    assert big["owner_ambiguous"], "and the row must say the attribution is a guess"
+    assert board.has_rosters, "my roster joined a row, whoever else also claims it"
+
+    # And he shows under BOTH teams, because the board cannot tell which is which.
+    for team in ("Mine", "Aardvarks"):
+        rows = build_board(payload, top="all", spots=spots, my_team="Mine", team=team).rows
+        assert any(r["name"] == "Big Bat" for r in rows), f"{team} rosters the name too"
+
+
+def test_the_unscored_list_follows_the_pool_filter(payload: dict) -> None:
+    """It renders under a table that may be showing one pool. Naming a pitcher
+    beneath a hitters-only table reads as a hole in the hitter list."""
+    spots = [
+        _spot("Big Bat", "Mine"),
+        _spot("Unpriced Bat", "Mine"),
+        _spot("Unpriced Arm", "Mine", pool="pitcher"),
+    ]
+    kw = {"top": "all", "spots": spots, "my_team": "Mine", "team": "Mine"}
+
+    assert build_board(payload, **kw).unscored == ["Unpriced Arm", "Unpriced Bat"]
+    assert build_board(payload, pool="hitter", **kw).unscored == ["Unpriced Bat"]
+    assert build_board(payload, pool="pitcher", **kw).unscored == ["Unpriced Arm"]

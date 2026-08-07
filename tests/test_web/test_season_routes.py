@@ -2363,13 +2363,14 @@ def test_trajectory_page_lists_a_selected_teams_unpriced_players(client):
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "Nothing scored at this timeframe" in body, "no rows, so placement is meaningful"
-    # "not shown here", not "not scored": the list carries two causes and a collision
-    # loser WAS scored. The heading was reworded when that second cause was added --
-    # see the comment on this block in trajectory.html.
-    assert "not shown here:" in body
+    # Back to "not scored" and one cause. It briefly read "not shown here" and
+    # hedged between two, because a spot losing a name-key contest was filed here
+    # too. Ownership is membership now, so a player whose key has a row shows under
+    # his team instead of landing here, and the only way onto this list is that the
+    # board had no row for him at all.
+    assert "not scored:" in body
     assert "Unpriced Prospect" in body
-    assert "could not price them" in body, "the no-line cause is still named"
-    assert "#284" in body, "and so is the name-collision cause"
+    assert "could not price them" in body
 
 
 def test_trajectory_page_hides_the_dropdown_when_no_rosters_arrived(client):

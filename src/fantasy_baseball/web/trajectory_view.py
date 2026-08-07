@@ -237,12 +237,14 @@ def build_board(
         # on top of the one `index_rosters` already did -- three per row, for one
         # lookup pair. The dicts they wrap are public; use them.
         key = (normalize_name(row["name"]), row["pool"])
-        spot = index.spot_of.get(key)
-        owner = spot.team if spot else None
-        if team != "all" and owner != team:
+        # MEMBERSHIP, not the winning spot's team. Two owners of one key both see
+        # the row (flagged); deriving this from a single winner silently took the
+        # loser's own player off his page -- see `RosterIndex.owners_of`.
+        owners = index.owners_of.get(key, frozenset())
+        if team != "all" and team not in owners:
             continue
         move = rank_move(row)
-        is_mine = my_team is not None and owner == my_team
+        is_mine = my_team is not None and my_team in owners
         rows.append(
             {
                 **row,
@@ -286,7 +288,9 @@ def build_board(
         scale=scale,
         team=team,
         teams=index.teams,
-        unscored=sorted(index.unscored.get(team, [])) if team != "all" else [],
+        # Filtered to the pool on screen: this list sits under a table that may be
+        # showing hitters only, and naming a pitcher there reads as a hole in it.
+        unscored=index.unscored_for(team, pool) if team != "all" else [],
         # MY roster joined something -- deliberately NOT "the read returned
         # data". This gates the not-highlighted banner, and a successful read
         # where my own roster joined nothing must still show it.
