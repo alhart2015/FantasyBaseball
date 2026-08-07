@@ -18,6 +18,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any
 
 from fantasy_baseball.data.rosters import RosterSpot
+from fantasy_baseball.trajectory.comp_paths import MAX_COMPS
 from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.roster_join import index_rosters
 from fantasy_baseball.trajectory.sweep import (
@@ -616,12 +617,10 @@ def build_teams_board(
 
 
 #: Comps drawn by default. The payload stores `MAX_COMPS` (10); this is what the chart
-#: shows until asked otherwise.
+#: shows until asked otherwise. Deliberately NOT the same constant: this one is a
+#: display preference and that one is a storage ceiling, and binding them would mean
+#: changing what is drawn to change what is kept.
 DEFAULT_COMPS = 5
-
-#: The clamp ceiling for `n`. Mirrors the push script's `MAX_COMPS`; the two are
-#: asserted equal in the route test.
-MAX_COMPS_SHOWN = 10
 
 
 @dataclass(frozen=True)
@@ -687,7 +686,9 @@ def build_player_view(
     disagrees with its `--player`.
     """
     scale = _clamp_choice(scale, SCALES, "var")
-    want = _clamp(n, 1, MAX_COMPS_SHOWN, DEFAULT_COMPS)
+    # The ceiling is the push script's STORED count, from the one place it is defined:
+    # the blob is built hours earlier, so `n` can only slice what is already in it.
+    want = _clamp(n, 1, MAX_COMPS, DEFAULT_COMPS)
     base = int(payload["base_season"])
     max_horizon = int(payload["max_horizon"])
     end_years = [base + h for h in range(1, max_horizon + 1)]

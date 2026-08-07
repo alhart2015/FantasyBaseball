@@ -54,11 +54,10 @@ DEFAULT_MAX_HORIZON = 5
 #: does change RANKS, and a young player pacing low is exactly the ambiguous keeper call.
 MIN_SGP = 0.0
 
-#: Comps stored per player. TEN, not the five the chart shows by default: `N` is a
-#: display control and this blob is built hours earlier by another process, so the
-#: control can only ever slice what was stored. Ten is the control's ceiling, so every
-#: legal N is servable. Costs ~370 bytes a player over five.
-MAX_COMPS = 10
+#: Comps stored per player -- the SAME constant the view clamps `n` against, imported
+#: rather than re-declared here. See its docstring in `comp_paths`; a second literal
+#: beside this one is what the deleted parity test existed to police.
+from fantasy_baseball.trajectory.comp_paths import MAX_COMPS
 
 
 class EmptyPoolError(RuntimeError):

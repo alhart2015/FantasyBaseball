@@ -3011,16 +3011,7 @@ def test_the_three_trajectory_views_coexist(client):
     assert "trajectory-chart" in player.data.decode()
 
 
-def test_the_stored_and_displayed_comp_ceilings_agree(client):
-    """The view clamps N to a ceiling; the push script stores that many. If they drift,
-    the control asks for comps the blob never carried."""
-    import importlib.util
-
-    from fantasy_baseball.web.trajectory_view import MAX_COMPS_SHOWN
-
-    spec = importlib.util.spec_from_file_location(
-        "push_trajectory_board", PROJECT_ROOT / "scripts" / "push_trajectory_board.py"
-    )
-    push = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(push)
-    assert push.MAX_COMPS == MAX_COMPS_SHOWN
+# `test_the_stored_and_displayed_comp_ceilings_agree` was here: it asserted the view's
+# clamp ceiling equalled the push script's stored count. Both are now the one
+# `comp_paths.MAX_COMPS`, so the parity it policed is structural and there is nothing
+# left for the two to drift apart on.

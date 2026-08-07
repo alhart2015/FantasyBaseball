@@ -25,6 +25,17 @@ import numpy as np
 
 from fantasy_baseball.trajectory.shape import Prepared
 
+#: Comps per player: what `push_trajectory_board.py` STORES and what the chart's `n`
+#: control may ASK FOR. One number, because they are one requirement -- the blob is
+#: built hours earlier by another process, so the control can only ever slice what was
+#: stored, and a ceiling above the stored count asks for comps that do not exist.
+#:
+#: Ten, not the five the chart draws by default: every legal `n` has to be servable.
+#: Costs ~370 bytes a player over five. It lives HERE, beside `closest_paths`, because
+#: this is the module both sides go through; it was defined twice, once per side, and
+#: kept honest by a test asserting the two literals were equal.
+MAX_COMPS = 10
+
 
 @dataclass(frozen=True)
 class CompPath:
