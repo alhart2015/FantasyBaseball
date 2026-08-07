@@ -114,6 +114,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
     from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
     from fantasy_baseball.trajectory.comp_paths import closest_paths
+    from fantasy_baseball.trajectory.comps import collapse_split_seasons
     from fantasy_baseball.trajectory.era import era_normalize
     from fantasy_baseball.trajectory.panel import (
         load_scored_panel,
@@ -191,7 +192,18 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
         # and far cheaper than widening `sweep_pool`'s signature, which the CLI and its
         # tests also call.
         prepared = prepare(complete, kind=kind, horizons=horizons)
-        by_id = {int(i): g for i, g in complete.groupby("mlbam_id")}
+        # THROUGH THE SHARED COLLAPSE, like every other reader of this panel. A
+        # mid-season trade can put two rows on one player-year, and `collapse_split_seasons`
+        # is where that rule lives -- `collapsed_index`'s docstring names it as the single
+        # site precisely so the fitting side and a lookup side cannot spell it differently.
+        # The career line drawn here was a third reader that skipped it.
+        #
+        # A NO-OP TODAY, and it must stay one: measured 2026-08-07 against the live
+        # 2000-2026 panels, ZERO duplicate (mlbam_id, season) pairs in either complete
+        # frame (16,408 hitter / 17,947 pitcher rows), and the function early-returns the
+        # panel unchanged when there are none. This is consistency insurance against a
+        # future panel build, not a fix for anything currently wrong.
+        by_id = {int(i): g for i, g in collapse_split_seasons(complete).groupby("mlbam_id")}
 
         for player in produced:
             seasons = by_id.get(player.mlbam_id)
