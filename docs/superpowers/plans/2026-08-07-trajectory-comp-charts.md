@@ -19,7 +19,10 @@
 - **Do not loosen a failing test to make it pass.** Task 1 edits four test assertions; its justification is written into the task and the commit message. No other task may edit an existing assertion.
 - **Numeric defaults must not use `x or default`** -- `0.0` is falsy. Use `d.get(k, default)` or an explicit `is not None` check.
 - **End-of-effort verification** (Task 13): `pytest -v`, `ruff check .`, `ruff format --check .`, `vulture`, and `mypy` if any touched file is under `[tool.mypy].files`.
-- **Do NOT run `scripts/push_trajectory_board.py`** at any point in this plan. It writes to the same prod Upstash the live Render build reads. See Task 14's deploy gate.
+- **Never run bare `scripts/push_trajectory_board.py`** before Task 14. It writes to the same prod Upstash the live Render build reads. Two flags make it safe and both already exist: `--dry-run` (sweeps and reports sizes, writes nothing anywhere) and `--local` (writes to the local SQLite store instead of prod, "so the dashboard can be checked against a real board before anything reaches Render"). Task 12 uses `--local`.
+- **`PlayerView` field placement.** Three new fields are added across Tasks 3 and 9: `paced`, `paced_label`, `comp_careers`. All three carry defaults, and `meta` is the dataclass's FIRST defaulted field. **Insert all three immediately before `meta`, in that order, and nowhere else.** Putting a defaulted field before `projection`/`candidates`/`found` raises `TypeError: non-default argument follows default argument` at import and takes the whole web app down.
+- **Loading the push script in tests.** It is a script, not a package module. `tests/test_scripts/test_push_trajectory_board.py` has a `_script()` helper that loads it via `importlib`; the builder it exposes is **`build_payload`** (singular). Use `module = _script()` then `module.build_payload(...)`.
+- **Tests that drive the real panel must be skipped when it is absent.** `data/trajectory/` and `data/cache/keeper_skills` are gitignored, so they do not exist on a fresh clone or on CI. Reuse the module's existing `PANEL_DIR` constant (`tests/test_scripts/test_push_trajectory_board.py:50`) and copy the `skipif` decorator from `test_the_chart_data_carries_career_history_and_comps` verbatim.
 
 ---
 
@@ -131,28 +134,33 @@ changes. Prerequisite for the paced-point suppression rule (#346)."
 - Consumes: `calendar` (the era-normalized hitter panel including partials) and `season`, both already local in the payload builder
 - Produces: `payload["base_season_partial"]: bool`, surfaced as `Board.meta["base_season_partial"]` / `PlayerView.meta["base_season_partial"]`. **Absent means `True`** -- every currently-deployed blob is mid-season.
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Write the failing reader test**
 
-Add to `tests/test_scripts/test_push_trajectory_board.py`:
+Add to `tests/test_web/test_trajectory_view.py` -- it exercises `_board_meta`, which is a `web` function, so it belongs beside the other view tests and not in the script suite:
 
 ```python
-def test_the_payload_records_whether_the_base_season_is_still_running() -> None:
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [({"base_season_partial": False}, False), ({"base_season_partial": True}, True), ({}, True)],
+)
+def test_the_board_meta_reports_whether_the_base_season_was_still_running(
+    stored: dict, expected: bool
+) -> None:
     """`paced_label` must not call a finished season a pace, and only the push can
-    tell: `partial_season` is a panel column, and the board carries no other signal
-    that survives to the reader."""
+    tell: `partial_season` is a panel column and nothing else survives to the reader.
+
+    An EMPTY payload is an old blob, which was necessarily written mid-season -- so
+    True is both the compatible default and the true one. `dict.get` with a default
+    rather than `or`, per CLAUDE.md: `False or True` is `True`.
+    """
     from fantasy_baseball.web.trajectory_view import _board_meta
 
-    assert _board_meta({"base_season_partial": False})["base_season_partial"] is False
-    assert _board_meta({"base_season_partial": True})["base_season_partial"] is True
-    # An old blob predates the field. Mid-season is what every deployed blob means,
-    # and it is also the safe default: it labels the point a pace, which is what the
-    # suppression rule in `build_player_view` has already decided is drawable.
-    assert _board_meta({})["base_season_partial"] is True
+    assert _board_meta(stored)["base_season_partial"] is expected
 ```
 
 - [ ] **Step 2: Run it to verify it fails**
 
-Run: `pytest tests/test_scripts/test_push_trajectory_board.py::test_the_payload_records_whether_the_base_season_is_still_running -v`
+Run: `pytest tests/test_web/test_trajectory_view.py -k base_season_was_still_running -v`
 Expected: FAIL with `KeyError: 'base_season_partial'`
 
 - [ ] **Step 3: Add the field to `_board_meta`**
@@ -171,7 +179,7 @@ In `src/fantasy_baseball/web/trajectory_view.py`, inside `_board_meta`'s returne
 
 - [ ] **Step 4: Run the test to verify it passes**
 
-Run: `pytest tests/test_scripts/test_push_trajectory_board.py::test_the_payload_records_whether_the_base_season_is_still_running -v`
+Run: `pytest tests/test_web/test_trajectory_view.py -k base_season_was_still_running -v`
 Expected: PASS
 
 - [ ] **Step 5: Write the flag on the push side**
@@ -189,15 +197,39 @@ In `scripts/push_trajectory_board.py`, in the `to_payload(...)` call, beside `se
         ),
 ```
 
-- [ ] **Step 6: Run the push-script suite**
+- [ ] **Step 6: Assert the WRITER, not just the reader's default**
 
-Run: `pytest tests/test_scripts/test_push_trajectory_board.py -v`
-Expected: PASS
+Add to `tests/test_scripts/test_push_trajectory_board.py`, copying the skip guard verbatim from `test_the_chart_data_carries_career_history_and_comps`:
 
-- [ ] **Step 7: Commit**
+```python
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "drives the real build_payload, which loads data/trajectory/*_pt_panel_*.csv and "
+        "data/cache/keeper_skills -- both gitignored, so this cannot run on a fresh clone"
+    ),
+)
+def test_the_push_stamps_whether_the_base_season_is_still_running() -> None:
+    """Read off the PANEL, never off today's date. `_live_seasons` in build_pt_panel.py
+    flags a season partial iff `year >= today.year`, so the reader has to follow the
+    panel the board was actually built from."""
+    module = _script()
+    payload, _, _ = module.build_payload(max_horizon=3, panel_dir=PANEL_DIR)
+
+    assert payload["base_season_partial"] is True, (
+        "the shipped 2000-2026 panels were built during the 2026 season"
+    )
+```
+
+- [ ] **Step 7: Run both suites**
+
+Run: `pytest tests/test_scripts/test_push_trajectory_board.py tests/test_web/test_trajectory_view.py -v`
+Expected: PASS (the writer test SKIPs on a machine with no `data/trajectory/`).
+
+- [ ] **Step 8: Commit**
 
 ```bash
-git add scripts/push_trajectory_board.py src/fantasy_baseball/web/trajectory_view.py tests/test_scripts/test_push_trajectory_board.py
+git add scripts/push_trajectory_board.py src/fantasy_baseball/web/trajectory_view.py tests/test_scripts/test_push_trajectory_board.py tests/test_web/test_trajectory_view.py
 git commit -m "feat(trajectory): record whether the base season was still running (#346)"
 ```
 
@@ -317,7 +349,7 @@ Expected: FAIL with `AttributeError: 'PlayerView' object has no attribute 'paced
 
 - [ ] **Step 3: Add the two fields to `PlayerView`**
 
-In `src/fantasy_baseball/web/trajectory_view.py`, in the `PlayerView` dataclass, after the `history` field:
+In `src/fantasy_baseball/web/trajectory_view.py`, in the `PlayerView` dataclass, **immediately before the `meta` field** -- see Global Constraints. `meta` is the first field carrying a default, so anything defaulted must go from here on. Placing these after `history` (where they read most naturally) puts a defaulted field ahead of eight non-defaulted ones and raises `TypeError` at import.
 
 ```python
     #: The PACED base season as [age, value], floor-netted exactly like `history`.
@@ -340,7 +372,7 @@ In `src/fantasy_baseball/web/trajectory_view.py`, in the `PlayerView` dataclass,
     paced_label: str = ""
 ```
 
-Because these carry defaults, they must come after every other defaulted field or before none -- place them immediately before `meta`, which is the first defaulted field, and give them defaults as shown so field ordering stays legal.
+Both carry the defaults shown, which is what lets the `empty` view (built with keyword arguments) stay unchanged: a not-found player gets `paced=None` and `paced_label=""` for free.
 
 - [ ] **Step 4: Populate them in `build_player_view`**
 
@@ -367,12 +399,10 @@ In `build_player_view`, after `floor = sp.offset(scale)` and after `extras, mism
 and pass `history=history, paced=paced,` plus:
 
 ```python
-        paced_label=(
-            f"{base} pace" if _board_meta(payload)["base_season_partial"] else str(base)
-        ),
+        paced_label=f"{base} pace" if empty.meta["base_season_partial"] else str(base),
 ```
 
-`base` is already bound at the top of the function. `paced_label` is set on the RESOLVED view only -- `empty` keeps its `""` default, which is what the not-found test asserts.
+`base` is already bound at the top of the function, and `empty.meta` is already `_board_meta(payload)` -- read it off there rather than calling `_board_meta` a second time. `paced_label` is set on the RESOLVED view only; `empty` keeps its `""` default, which is what the not-found test asserts.
 
 - [ ] **Step 5: Run the tests**
 
@@ -399,16 +429,65 @@ git commit -m "feat(trajectory): draw the paced base season, suppressed once it 
 - Consumes: `PlayerView.paced`, `PlayerView.paced_label` (Task 3)
 - Produces: `#trajectory-chart-data` gains `paced` and `paced_label` keys; the numbers table gains a `pace` row
 
-- [ ] **Step 1: Write the failing test**
+- [ ] **Step 1: Add the two-key cache helper, then the failing test**
 
-Add to `tests/test_web/test_season_routes.py`, beside the other trajectory page tests:
+The player route reads **two** cache keys: the board via `read_cache_dict` and the chart blob via `read_cache(CacheKey.TRAJECTORY_CHART_DATA)` (`season_routes.py:864`). The existing trajectory route tests patch only the first, inline. Every test in Tasks 4, 5 and 10 needs both -- a test that patches only the board gets zero comps and Task 10's card count fails for a reason unrelated to the code under test.
+
+Add this helper to `tests/test_web/test_season_routes.py`, beside `_trajectory_payload()` (line 2264). Import `contextmanager` from `contextlib` at the top of the file if it is not already imported:
+
+```python
+@contextmanager
+def _trajectory_cache(payload, chart=None):
+    """Both keys the player view reads. The board arrives through `read_cache_dict`
+    and the chart extras through `read_cache` -- patching only the first renders a
+    player page with no career line and no comps, which looks like a code failure and
+    is not one."""
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload),
+        patch("fantasy_baseball.web.season_routes.read_cache", return_value=chart),
+    ):
+        yield
+
+
+def _trajectory_chart(payload):
+    """The chart blob the player view pairs with `payload`.
+
+    Stamped identically: `_chart_extras` refuses a pair whose vintages differ, and a
+    refused pair renders an empty view that every assertion below would pass against
+    for the wrong reason.
+
+    NO comp ids and no `careers` yet -- both arrive in Phase B (Tasks 7 and 8), and
+    `to_chart_payload` does not accept `careers=` until Task 8. Task 10 extends this
+    helper once it does.
+    """
+    from fantasy_baseball.trajectory.sweep import to_chart_payload
+
+    return to_chart_payload(
+        {
+            (p["id"], p["pool"]): {
+                "history": [[24, 14.0], [25, 16.0], [26, 20.0]],
+                "comps": [
+                    {"name": f"Comp {i}", "season": 2010 + i, "rmse": 0.5 * i,
+                     "path": [10.0 - i] * 3}
+                    for i in range(1, 4)
+                ],
+            }
+            for p in payload["players"]
+        },
+        generated_at=str(payload["generated_at"]),
+    )
+```
+
+The `path` length must match the payload's horizon count -- read what `_trajectory_payload()` passes as `max_horizon` and use that many entries.
+
+Then the test:
 
 ```python
 def test_the_player_page_ships_the_paced_point_to_the_chart(client):
     """The gap at the base season is the most useful point on the chart. It has to
     reach the JS island, not just the view model."""
     payload = _trajectory_payload()
-    with _patched_cache(payload):
+    with _trajectory_cache(payload):
         html = client.get("/trajectory?view=player&player=Big Bat").data.decode()
 
     assert '"paced"' in html, "the island carries the point"
@@ -416,7 +495,7 @@ def test_the_player_page_ships_the_paced_point_to_the_chart(client):
     assert "pace</td>" in html, "the numbers table marks the row"
 ```
 
-Match the existing file's fixture helpers -- reuse whatever the neighbouring trajectory route tests use to install a payload (`_trajectory_payload()` exists at line 2264); if the patch helper has a different name, use that name rather than inventing `_patched_cache`.
+Read `_trajectory_payload()` before writing the test and use a player name it actually contains -- `"Big Bat"` is the `test_trajectory_view.py` fixture's name, and this file's helper may differ.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -531,7 +610,10 @@ def test_the_trajectory_pages_do_not_explain_how_to_read_themselves(client):
     """Reading instructions are out; disclosure about the DATA stays. The two are
     easy to conflate, so both halves are asserted here."""
     payload = _trajectory_payload()
-    with _patched_cache(payload):
+    # WITH a chart blob. Without one `board.comps` is empty, the whole
+    # `{% if board.comps %}` branch never renders, and the honesty-paragraph assertion
+    # below passes before the paragraph is deleted -- a guard that guards nothing.
+    with _trajectory_cache(payload, chart=_trajectory_chart(payload)):
         player = client.get("/trajectory?view=player&player=Big Bat").data.decode()
         board = client.get("/trajectory").data.decode()
         teams = client.get("/trajectory?view=teams").data.decode()
@@ -839,17 +921,29 @@ Expected: PASS
 In `tests/test_scripts/test_push_trajectory_board.py`:
 
 ```python
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "drives the real build_payload, which loads data/trajectory/*_pt_panel_*.csv and "
+        "data/cache/keeper_skills -- both gitignored, so this cannot run on a fresh clone"
+    ),
+)
 def test_the_push_stores_one_career_per_comp_and_no_more() -> None:
     """Every id a stored comp names must resolve to an arc, or its card draws nothing;
     every id BEYOND that set is dead weight in a blob the player page fetches."""
-    _, chart, _ = build_payloads(panel_dir=FIXTURE_PANEL_DIR, max_horizon=3)
+    module = _script()
+    _, chart, _ = module.build_payload(max_horizon=3, panel_dir=PANEL_DIR)
 
+    # The pool comes off the PLAYER key the comp is stored under, not off the comp:
+    # a comp is always drawn from its own pool's `prepared`, so a hitter's comps are
+    # hitters. Rebuilding the pair here is what makes the assertion about `chart_key`
+    # rather than about the id alone.
     referenced = {
         f"{c['id']}:{key.split(':')[1]}"
         for key, block in chart["players"].items()
         for c in block["comps"]
     }
-    assert referenced, "the fixture produces comps"
+    assert referenced, "the real panel produces comps"
     assert set(chart["careers"]) == referenced
 
     for arc in chart["careers"].values():
@@ -858,7 +952,7 @@ def test_the_push_stores_one_career_per_comp_and_no_more() -> None:
         assert len(set(ages)) == len(ages), "one point per age; split seasons collapsed"
 ```
 
-Use this file's existing helper for invoking the payload builder against a fixture panel; if it invokes the builder differently, follow that call and keep the assertions.
+`_script()`, `PANEL_DIR` and the `skipif` text all already exist in this file -- see `test_the_chart_data_carries_career_history_and_comps`. Do not invent new ones.
 
 - [ ] **Step 6: Run it to verify it fails**
 
@@ -1036,11 +1130,14 @@ def test_a_two_way_comps_two_careers_do_not_collide(payload: dict) -> None:
     hitter = build_player_view(payload, player="Big Bat", chart=blob)
     pitcher = build_player_view(payload, player="Big Arm", chart=blob)
 
-    assert hitter.comp_careers[0]["career"] == [[22, 1.0 - 4.0], [23, 2.0 - 4.0]]
+    # Floors off the payload, never hardcoded -- the fixture's rows are at
+    # test_trajectory_view.py:51-66 and a literal here goes stale the moment one moves.
+    h_floor = next(p["floor"] for p in payload["players"] if p["name"] == "Big Bat")
+    assert hitter.comp_careers[0]["career"] == [[22, 1.0 - h_floor], [23, 2.0 - h_floor]]
     assert pitcher.comp_careers[0]["career"][0][1] > 50
 ```
 
-Adjust `"Big Arm"` to whatever the fixture's first pitcher is named, and the `- 4.0` to that hitter's `floor` -- read them off the `payload` fixture rather than hardcoding if the values differ.
+`"Big Bat"` (id 1, hitter, floor 4.0) and `"Big Arm"` (id 3, pitcher, floor 3.0) are the fixture's rows at `tests/test_web/test_trajectory_view.py:52` and `:65`. Both players are age 27 and the fixture sweeps three horizons.
 
 - [ ] **Step 2: Run them to verify they fail**
 
@@ -1076,7 +1173,7 @@ Update the docstring's "Returns `({}, True)`" sentence to describe the triple.
 
 - [ ] **Step 4: Add the field to `PlayerView`**
 
-After the `comps` field:
+**Immediately before `meta`**, after the `paced_label` Task 3 added -- see Global Constraints. Not after `comps`, which would put a defaulted field ahead of `candidates`/`pid`/`found` and raise `TypeError` at import.
 
 ```python
     #: One entry per RENDERED comp, parallel to `comps` and in the same order:
@@ -1162,14 +1259,36 @@ def test_the_player_page_gives_every_comp_its_own_canvas(client):
     """A comp stacked on the subject's chart shows a forward path and nothing else.
     Each one gets its own card so his whole arc is readable."""
     payload = _trajectory_payload()
-    with _patched_cache(payload):
+    with _trajectory_cache(payload, chart=_trajectory_chart(payload)):
         html = client.get("/trajectory?view=player&player=Big Bat&n=3").data.decode()
 
     assert html.count('id="comp-chart-') == 3
     assert '"comp_careers"' in html, "the island carries the arcs"
 ```
 
-This test needs `_trajectory_payload()`'s chart blob to carry ids and careers. If that helper builds no chart blob at all, extend it the same way Task 9 extended `_chart()`; if the route test installs a chart key separately, extend that.
+Extend the `_trajectory_chart(payload)` helper Task 4 added, now that Tasks 7 and 8 have shipped comp ids and `careers=`. Add `"id": 100 + i` to each comp dict, and add the `careers` argument:
+
+```python
+    from fantasy_baseball.trajectory.sweep import chart_key, to_chart_payload
+```
+
+```python
+                "comps": [
+                    {"id": 100 + i, "name": f"Comp {i}", "season": 2010 + i,
+                     "rmse": 0.5 * i, "path": [10.0 - i] * 3}
+                    for i in range(1, 4)
+                ],
+```
+
+```python
+        careers={
+            chart_key(100 + i, pool): [[20 + j, float(i + j)] for j in range(6)]
+            for i in range(1, 4)
+            for pool in ("hitter", "pitcher")
+        },
+```
+
+and drop the docstring paragraph saying ids and careers are not there yet.
 
 - [ ] **Step 2: Run it to verify it fails**
 
@@ -1198,7 +1317,7 @@ Inside the existing `{% if board.comps %}` branch, after `</table>`:
     The grid is skipped entirely when NO comp has a stored arc -- an old blob, or a
     push that wrote comps before careers existed. Ten identical notices in a ten-cell
     grid is noise about a single cause. -#}
-{% if board.comp_careers | selectattr('career') | first is defined %}
+{% if board.comp_careers | selectattr('career') | list %}
 <div class="comp-grid">
   {% for c in board.comp_careers %}
   <div class="comp-card">
@@ -1421,9 +1540,13 @@ Open `http://localhost:5000/trajectory?view=player&player=CJ%20Abrams` (adjust t
 - [ ] The browser console has no errors
 - [ ] `/trajectory` and `/trajectory?view=teams` still render, minus their explainer sentences
 
-**The cards will show "No stored comp careers" against the currently-cached blob** -- it was written before Task 8. That is the correct degradation, and it is what Task 13's checks and Task 14's deploy gate exist for. To see real arcs, rebuild the blob into a THROWAWAY local file rather than pushing:
+**The cards will show "No stored comp careers" against the currently-cached blob** -- it was written before Task 8. That is the correct degradation, and confirming it is worth doing on its own. To then see real arcs, rebuild the blob into the LOCAL store:
 
-Run: `python scripts/push_trajectory_board.py --dry-run` if that flag exists; otherwise read the script's `main()` for a local-output flag. **Do not run the plain command** -- it writes to prod Upstash.
+Run: `python scripts/push_trajectory_board.py --local`
+
+`--local` writes to the local SQLite store instead of prod -- its own help text says it exists "so the dashboard can be checked against a real board before anything reaches Render." Restart the dashboard with `--no-sync` afterwards and reload.
+
+**Do not run the command without `--local`.** The bare form writes prod Upstash, which the live Render build reads. (`--dry-run` is the other safe flag, but it writes nothing at all, so it cannot feed the dashboard.)
 
 - [ ] **Step 4: Commit any fixes**
 
@@ -1437,7 +1560,24 @@ git commit -am "fix(trajectory): <what the browser showed>"
 
 **Files:** whatever the checks flag
 
-- [ ] **Step 1: Full suite**
+- [ ] **Step 1: Amend `comp_paths.py`'s docstring FIRST**
+
+This is a content change, so it must land before the checks below rather than after them -- a rewrapped docstring is exactly what `ruff format --check` catches, and a check that ran on the previous tree proves nothing about this one.
+
+The module docstring says a consumer drawing comp paths "without the p10-p90 band beside them is making the forecast look more certain than it is." The card grid is such a consumer, deliberately. Amend that paragraph so the code does not read as violating a standing instruction (spec, Requirement 3):
+
+```python
+THE RESULT IS SELECTED ON THE OUTCOME. These are the paths that happened to land closest
+out of ~1,200. That makes them a fair illustration of what this shape looked like when it
+played out, and it makes them NOT evidence for the prediction. Any surface presenting
+them AS the forecast's range must draw the p10-p90 band beside them, or it makes the
+forecast look more certain than it is -- which is why the main chart on /trajectory
+carries the band and the comps are thin and faint on it. The per-comp career cards below
+it (#346) are a different question -- what this player's whole arc looked like, and where
+the match sits in it -- and carry no band because they make no claim about the spread.
+```
+
+- [ ] **Step 2: Full suite**
 
 Run: `pytest -n auto -q`
 Expected: all pass. Re-run any failure without `-n auto` to read it cleanly.
@@ -1541,7 +1681,7 @@ gh issue close 346 --comment "Shipped in <PR link>."
 | R2 boundary test, four named surfaces | 6 |
 | R2 finding referenced from `paced`'s docstring | 3 (Step 3) |
 | R3 five clause deletions, paragraphs preserved | 5 |
-| R3 `comp_paths.py` docstring amendment | 13 (Step 6) |
+| R3 `comp_paths.py` docstring amendment | 13 (Step 1, before the checks) |
 | R4 comp `id` | 7 |
 | R4 deduped `careers` map, per-pool keys | 8 |
 | R4 `comp_careers` + `match_age` + floor-netting | 9 |
