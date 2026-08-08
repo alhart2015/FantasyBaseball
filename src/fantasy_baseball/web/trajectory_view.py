@@ -749,7 +749,9 @@ def _narrow(hits: list[dict], field: str, wanted: Any) -> list[dict]:
     return kept or hits
 
 
-def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[dict, dict, bool]:
+def _chart_extras(
+    payload: dict, chart: Any, mlbam_id: int, pool: str
+) -> tuple[dict, Mapping, bool]:
     """One player's stored `{history, comps}`, the comp-career map, and whether the
     pair was REFUSED.
 
@@ -775,6 +777,10 @@ def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[
     and keyed by `chart_key`. Absent on every blob written before that feature, and not
     a mapping if some future writer stores something else there -- both are `{}`, never
     an exception, for the same #332 reason the refusals above are refusals.
+
+    Typed `Mapping`, not `dict`: it is handed straight back off the cached blob and only
+    ever read through `.get`. Copying it into a dict to satisfy the narrower annotation
+    would duplicate ~300 KB on every player-page request for nothing.
     """
     if chart is None:
         return {}, {}, False

@@ -8,8 +8,12 @@ the thing a chart of that prediction actually draws.
 
 THE RESULT IS SELECTED ON THE OUTCOME. These are the paths that happened to land closest
 out of ~1,200. That makes them a fair illustration of what this shape looked like when it
-played out, and it makes them NOT evidence for the prediction. A consumer that draws them
-without the p10-p90 band beside them is making the forecast look more certain than it is.
+played out, and it makes them NOT evidence for the prediction. Any surface presenting
+them AS the forecast's range must draw the p10-p90 band beside them, or it makes the
+forecast look more certain than it is -- which is why the main chart on /trajectory
+carries the band and the comps are thin and faint on it. The per-comp career cards below
+it (#346) are a different question -- what this player's whole arc looked like, and where
+the match sits in it -- and carry no band because they make no claim about the spread.
 
 Everything needed is already on `Prepared`: `forward[h]` is realized SGP for every history
 row at +h, with `age`, `season` and `mlbam_id` alongside. The match is a broadcast subtract
