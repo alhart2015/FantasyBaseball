@@ -26,11 +26,17 @@
 </form>
 
 {% if board.candidates %}
+{#- LINKS, not text. These used to be plain <li>s and the search form's only input was
+    `player`, so there was no query string that could pick one -- the name was a
+    permanent dead end. Each link carries `pid` AND `ppool`: the id separates same-pool
+    namesakes (two hitters named Max Muncy), the pool separates a two-way player, whose
+    two rows can share both id and age. -#}
 <p class="warning">More than one player is named "{{ board.name }}" on this board. Roster
 blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:</p>
 <ul>
   {% for c in board.candidates %}
-  <li>{{ c.name }} -- age {{ c.age }}, {{ c.slot }} (id {{ c.id }})</li>
+  <li><a href="{{ ctl.board_url(cur, player=c.name, pid=c.id, ppool=c.pool) }}">{{ c.name }}</a>
+    -- age {{ c.age }}, {{ c.slot }} ({{ c.pool }}, id {{ c.id }})</li>
   {% endfor %}
 </ul>
 

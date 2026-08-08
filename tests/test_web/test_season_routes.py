@@ -2797,6 +2797,72 @@ def test_trajectory_player_view_explains_a_pre_feature_blob(client):
     assert "<td>" not in comps_section, "no fabricated comp rows"
 
 
+def _two_way_trajectory_payload():
+    """The route fixture with `Testy McTestface` carried by a hitter row AND a pitcher
+    row -- the live board's Shohei Ohtani shape, where the two rows share an id and an
+    age and differ only by slot and pool."""
+    payload = _trajectory_payload_with_extras()
+    hitter = payload["players"][0]
+    payload["players"] = [
+        *payload["players"],
+        {**hitter, "pool": "pitcher", "slot": "SP", "floor": 3.0},
+    ]
+    return payload
+
+
+def test_trajectory_player_candidates_are_links_that_resolve_the_ambiguity(client):
+    """An ambiguous name was a PERMANENT dead end: the candidates rendered as plain
+    `<li>` text and the search form's only input was `player`, so no query string could
+    pick one. On the live board this fires for Ohtani, whose two rows share id 660271
+    AND age 31 -- the list offered two lines identical in the field it named.
+
+    Two narrowing keys, deliberately NOT the board's `pool` filter: `ppool` separates a
+    two-way player, `pid` separates same-pool namesakes (the live board has two hitters
+    named Max Muncy, sharing neither).
+    """
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_two_way_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+
+    candidates = body[body.index("More than one player") : body.index("</ul>")]
+    assert "pitcher" in candidates and "hitter" in candidates, "the pool is the discriminator"
+    links = re.findall(r'href="(/trajectory\?[^"]*)"', candidates)
+    assert links, "a candidate a reader cannot click is a dead end"
+    assert all("pid=" in link and "ppool=" in link for link in links)
+
+    picked = next(link for link in links if "ppool=pitcher" in link)
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_two_way_trajectory_payload(),
+    ):
+        resolved = client.get(picked.replace("&amp;", "&"))
+    assert resolved.status_code == 200
+    resolved_body = resolved.data.decode()
+    assert "More than one player" not in resolved_body, "the pick resolved it"
+    assert "trajectory-chart" in resolved_body
+    assert ", SP." in resolved_body, "the PITCHER row, not the hitter one"
+
+
+def test_trajectory_player_narrowing_survives_a_control_click(client):
+    """`pid`/`ppool` are in `filter_state`, so every control link carries them the way
+    `player` and `n` do. Without that, toggling the scale on a resolved two-way player
+    drops him straight back to the candidate list."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_two_way_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface&ppool=pitcher")
+    body = resp.data.decode()
+    links = re.findall(r'href="(/trajectory\?[^"]*)"', body)
+    assert links
+    for link in links:
+        assert "ppool=pitcher" in link, f"narrowing dropped from {link}"
+
+
 def _chart_island(body: str) -> dict:
     """The player page's `#trajectory-chart-data` JSON island, parsed.
 

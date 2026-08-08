@@ -1064,6 +1064,71 @@ def test_an_ambiguous_name_lists_candidates_and_renders_no_chart(payload: dict) 
     assert {c["id"] for c in view.candidates} == {first["id"], first["id"] + 10_000}
 
 
+def _two_way(payload: dict) -> dict:
+    """A payload where one name is carried by a hitter row AND a pitcher row.
+
+    The live board's shape for Shohei Ohtani: the two rows share an mlbam_id AND an age,
+    differing only by slot and pool -- so the id is not the discriminator and only the
+    pool is.
+    """
+    twin = _payload_with_extras(payload)
+    hitter = twin["players"][0]
+    twin["players"] = [
+        *twin["players"],
+        {**hitter, "pool": "pitcher", "slot": "SP", "floor": 3.0},
+    ]
+    twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
+    return twin
+
+
+def test_a_candidate_list_names_the_pool_it_offers_as_the_discriminator(payload: dict) -> None:
+    """Two rows differing ONLY by pool render two identical lines without it."""
+    view = build_player_view(_two_way(payload), player="Big Bat")
+    assert not view.found
+    assert {c["pool"] for c in view.candidates} == {"hitter", "pitcher"}
+
+
+def test_a_two_way_name_is_resolved_by_the_pool_selector(payload: dict) -> None:
+    """`ppool`, NOT the board's `pool` filter: that one is the hitter/pitcher pill the
+    player view merely passes through, and overloading it couples a board filter to name
+    resolution."""
+    twin = _two_way(payload)
+    pitcher = build_player_view(twin, player="Big Bat", ppool="pitcher")
+    assert pitcher.found and pitcher.slot == "SP"
+    hitter = build_player_view(twin, player="Big Bat", ppool="hitter")
+    assert hitter.found and hitter.slot == "OF"
+
+
+def test_same_pool_namesakes_are_resolved_by_the_id_selector(payload: dict) -> None:
+    """The live board carries two hitters called Max Muncy: same pool, different ids,
+    so the pool selector cannot separate them and only `pid` can."""
+    twin, first = _payload_with_a_twin(payload, 10_000)
+    view = build_player_view(twin, player=first["name"], pid=str(first["id"] + 10_000))
+    assert view.found
+    assert view.pid == str(first["id"] + 10_000)
+
+
+def test_a_resolved_view_carries_its_own_narrowing_forward(payload: dict) -> None:
+    """Every control link is built from `filter_state`, which reads these off the view.
+    A resolved player whose view reported no narrowing would fall back to the candidate
+    list the moment a scale pill was clicked."""
+    twin = _two_way(payload)
+    view = build_player_view(twin, player="Big Bat", ppool="pitcher")
+    assert (view.pid, view.ppool) == (str(twin["players"][0]["id"]), "pitcher")
+
+
+def test_narrowing_that_matches_nothing_falls_back_to_the_full_candidate_list(
+    payload: dict,
+) -> None:
+    """The search form is a GET that re-submits every key in `filter_state`, so a new
+    name arrives carrying the PREVIOUS player's `pid`. Honouring it strictly would show
+    "no player named X" for a player who is on the board -- a second dead end in place of
+    the one this fixes."""
+    twin, first = _payload_with_a_twin(payload, 10_000)
+    view = build_player_view(twin, player=first["name"], pid="999999", ppool="pitcher")
+    assert len(view.candidates) == 2, "a stale narrowing is ignored, not obeyed"
+
+
 def test_comps_are_sliced_to_n_and_n_is_clamped(payload: dict) -> None:
     full = _payload_with_extras(payload)
     assert len(build_player_view(full, player="Big Bat").comps) == 5, "default"

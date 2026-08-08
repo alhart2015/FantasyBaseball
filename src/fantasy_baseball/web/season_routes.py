@@ -846,6 +846,11 @@ def register_routes(app: Flask) -> None:
                         player=request.args.get("player", ""),
                         scale=request.args.get("scale", "var"),
                         n=request.args.get("n"),
+                        # The candidate-list narrowing. Distinct names from `pool`,
+                        # which is the board's hitter/pitcher filter this view only
+                        # passes through -- see `build_player_view`.
+                        pid=request.args.get("pid"),
+                        ppool=request.args.get("ppool"),
                     )
                 if view == "teams":
                     teams_board = build_teams_board(

@@ -516,6 +516,12 @@ def filter_state(view: str, board: Any, args: Mapping[str, str]) -> dict:
         # another view does not drop the searched name.
         "player": board.name if (owned_player and board) else args.get("player", ""),
         "n": board.n if (owned_player and board) else args.get("n", DEFAULT_COMPS),
+        # The player view's NAME-NARROWING keys, owned by it and passed through
+        # elsewhere exactly like `player` and `n`. Deliberately not `pool`: that is the
+        # board's hitter/pitcher filter, two lines up, and one key cannot mean both a
+        # board filter and a tie-break between two rows sharing a name.
+        "pid": board.pid if (owned_player and board) else args.get("pid", ""),
+        "ppool": board.ppool if (owned_player and board) else args.get("ppool", ""),
     }
 
 
@@ -647,8 +653,15 @@ class PlayerView:
     #: [{name, season, rmse, path: [{age, value}, ...]}, ...] closest first.
     comps: list[dict]
     #: Populated ONLY when the name was ambiguous; the caller renders these instead of a
-    #: chart. Guessing puts one man's career under another's name.
+    #: chart, as LINKS carrying `pid`/`ppool`. Guessing puts one man's career under
+    #: another's name; offering an unselectable list makes the name a permanent dead end.
     candidates: list[dict]
+    #: The narrowing that RESOLVED this view, echoed back so `filter_state` can put it on
+    #: every control link. Empty when the name resolved on its own, and empty on the
+    #: candidate page -- a link there gets its narrowing from the candidate it names.
+    #: Strings because they are query-string values and go straight back out as such.
+    pid: str
+    ppool: str
     found: bool
     extrapolated: bool
     base_season: int
@@ -674,12 +687,29 @@ class PlayerView:
         return f"VAR (SGP - {self.floor:.2f} slot floor)"
 
 
+def _narrow(hits: list[dict], field: str, wanted: Any) -> list[dict]:
+    """`hits` restricted to rows whose `field` reads `wanted`, when that helps.
+
+    A blank or absent `wanted` is not a filter. Neither is one that matches NOTHING: the
+    player page's search form is a GET that re-submits every key in `filter_state`, so a
+    new name always arrives carrying the PREVIOUS player's narrowing. Obeying it strictly
+    would report "no player named X" for a player who is on the board -- swapping one
+    dead end for another. Compared as strings because these arrive from a query string.
+    """
+    if wanted in (None, ""):
+        return hits
+    kept = [p for p in hits if str(p[field]) == str(wanted)]
+    return kept or hits
+
+
 def build_player_view(
     payload: dict,
     *,
     player: str,
     scale: str = "var",
     n: Any = None,
+    pid: Any = None,
+    ppool: Any = None,
 ) -> PlayerView:
     """One player's career, projection and comps, on one scale.
 
@@ -687,6 +717,14 @@ def build_player_view(
     hand-carried id as a defect class that has twice landed on a real row belonging to
     someone else, and `player_trajectory.py` already refuses a `--mlbam-id` that
     disagrees with its `--player`.
+
+    `pid` and `ppool` NARROW that name's hits; they never select on their own. An id
+    naming a row this name does not match is discarded, so the rule the CLI enforces --
+    the id must agree with the name -- holds here too, and the resolved row is always one
+    the searched name produced.
+
+    THEY ARE NOT `pool`. That key is the board's hitter/pitcher filter, which this view
+    only passes through; overloading it would couple a board filter to name resolution.
     """
     scale = _clamp_choice(scale, SCALES, "var")
     # The ceiling is the push script's STORED count, from the one place it is defined:
@@ -698,6 +736,8 @@ def build_player_view(
 
     target = normalize_name(player or "")
     hits = [p for p in payload.get("players", []) if normalize_name(p["name"]) == target]
+    hits = _narrow(hits, "id", pid)
+    hits = _narrow(hits, "pool", ppool)
 
     empty = PlayerView(
         name=player or "",
@@ -710,6 +750,8 @@ def build_player_view(
         projection=[],
         comps=[],
         candidates=[],
+        pid="",
+        ppool="",
         found=False,
         extrapolated=False,
         base_season=base,
@@ -722,8 +764,17 @@ def build_player_view(
         return replace(
             empty,
             candidates=[
-                {"id": p["id"], "name": p["name"], "age": p["age"], "slot": p["slot"]}
-                for p in sorted(hits, key=lambda p: p["id"])
+                {
+                    "id": p["id"],
+                    "name": p["name"],
+                    "age": p["age"],
+                    "slot": p["slot"],
+                    # THE DISCRIMINATOR, not decoration. Ohtani's two rows share an id
+                    # and an age and differ only by slot and pool, so a list without it
+                    # offers two lines identical in every field it prints.
+                    "pool": p["pool"],
+                }
+                for p in sorted(hits, key=lambda p: (p["id"], p["pool"]))
             ],
         )
 
@@ -745,6 +796,11 @@ def build_player_view(
         name=sp.name,
         age=sp.age,
         slot=sp.slot,
+        # The RESOLVED row's own key, whatever narrowing (if any) got here. Echoed back
+        # so every control link carries a fully-resolved identity and a scale toggle
+        # cannot drop a two-way player back onto the candidate list.
+        pid=str(sp.mlbam_id),
+        ppool=sp.pool,
         # The APPLIED offset, not the raw slot floor: under scale="sgp" nothing was
         # netted, and this field's own docstring promises "what every series was
         # netted against". A template reading this to label the chart must not print
