@@ -21,7 +21,6 @@ the board's -- see `_chart_extras`.
 from __future__ import annotations
 
 import re
-
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, NoReturn

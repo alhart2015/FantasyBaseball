@@ -18,9 +18,9 @@ from fantasy_baseball.trajectory.sweep import (
 )
 from fantasy_baseball.web.trajectory_view import (
     DEFAULT_COMPS,
+    DEFAULT_TOP,
     FIND_MIN_CHARS,
     FIND_RESULT_CAP,
-    DEFAULT_TOP,
     PlayerView,
     build_board,
     build_player_view,
