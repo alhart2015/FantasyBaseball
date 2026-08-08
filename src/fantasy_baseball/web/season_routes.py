@@ -1808,10 +1808,18 @@ def register_routes(app: Flask) -> None:
         Reads the board key the trajectory views already read; `_ranked_rows` holds a
         parsed copy per vintage, so this is a scan of the rows and no extra I/O.
         """
-        from fantasy_baseball.web.trajectory_view import FIND_MIN_CHARS, find_players
+        from fantasy_baseball.web.trajectory_view import (
+            FIND_MIN_CHARS,
+            find_players_counted,
+            normalized_query,
+        )
 
-        q = request.args.get("q", "").strip()
-        if len(q) < FIND_MIN_CHARS:
+        # Length checked on what MATCHING actually compares, not on the raw string.
+        # Checking the raw one let a two-character query that normalizes to one through,
+        # and the matcher then returned nothing -- an accepted-but-empty 200 reading as
+        # "nobody matched" for input this endpoint had just called long enough.
+        q = request.args.get("q", "")
+        if len(normalized_query(q)) < FIND_MIN_CHARS:
             return jsonify({"error": f"q must be at least {FIND_MIN_CHARS} characters"}), 400
 
         payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
@@ -1823,7 +1831,11 @@ def register_routes(app: Flask) -> None:
             return jsonify({"error": "trajectory board cache is cold"}), 503
 
         try:
-            return jsonify({"players": find_players(payload, q)})
+            players, total = find_players_counted(payload, q)
+            # `total` so the page can say "25 of 312". A silent cap makes a truncated
+            # list identical to a complete one, and a reader whose player fell past the
+            # cut concludes he is not on the board.
+            return jsonify({"players": players, "total": total, "capped": total > len(players)})
         except (ValueError, KeyError) as exc:
             # `find_players` parses the WHOLE board, so a legacy or stale blob raises
             # here exactly as it does in the page's builders -- and `/trajectory` wraps

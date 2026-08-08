@@ -18,12 +18,16 @@ from fantasy_baseball.trajectory.sweep import (
 )
 from fantasy_baseball.web.trajectory_view import (
     DEFAULT_COMPS,
+    FIND_MIN_CHARS,
+    FIND_RESULT_CAP,
     DEFAULT_TOP,
     PlayerView,
     build_board,
     build_player_view,
     build_teams_board,
     find_players,
+    find_players_counted,
+    normalized_query,
 )
 from tests._trajectory_panel import synthetic_panel
 
@@ -1868,3 +1872,56 @@ def test_a_null_max_horizon_fails_as_a_payload_error_not_a_TypeError() -> None:
     blob["max_horizon"] = None
     with pytest.raises(ValueError, match="max_horizon"):
         find_players(blob, "bat")
+
+
+# --------------------------------------------------------------------------
+# #350 follow-up: the search contract, enumerated.
+#
+# Three findings shared one question -- what does a query mean, and what does the
+# caller learn about the answer? Fixed together: one owner for the length rule,
+# whitespace handled where the code cannot rely on someone else's docstring, and a
+# truncated list that says it is truncated.
+# --------------------------------------------------------------------------
+
+
+def test_whitespace_between_name_parts_does_not_end_the_search() -> None:
+    """`normalize_name`'s docstring claims it "removes extra whitespace". It does not.
+    find_players trusted that claim, so a copy-pasted double space was a dead end --
+    the exact failure #350 exists to remove, reintroduced one layer up.
+
+    Collapsed HERE rather than by fixing name_utils: that function is a join key for
+    keeper matching and the draft board, and changing what it returns would silently
+    re-key every one of those callers.
+    """
+    blob = _named_payload([(1, "Bobby Witt Jr.", "hitter", 27, "SS", [5.0, 5.0, 5.0])])
+    for query in ("Bobby  Witt", "  Witt  ", "bobby\twitt"):
+        assert [h["name"] for h in find_players(blob, query)] == ["Bobby Witt Jr."], query
+
+
+def test_a_query_that_shortens_under_normalization_is_short(payload: dict) -> None:
+    """One owner for the minimum-length rule. The route checked the raw string and the
+    matcher re-checked the normalized one, so a two-character query that normalizes to
+    one returned an accepted-but-empty 200 -- "nobody matched" for something the API
+    had just called long enough.
+    """
+    # 'e' + combining acute: two codepoints raw, one after accent stripping. macOS and
+    # several IMEs emit this form.
+    assert find_players(payload, "e\u0301") == []
+    assert normalized_query("e\u0301") == "e"
+    assert len(normalized_query("e\u0301")) < FIND_MIN_CHARS, "the route must see this too"
+
+
+def test_a_truncated_suggestion_list_says_so() -> None:
+    """The cap was silent on both surfaces, so 25-of-300 looked identical to 25-of-25.
+    A reader searching `mar` on the live board would see his player missing and conclude
+    he is not on it -- which is the conclusion the whole feature exists to prevent.
+    """
+    blob = _named_payload(
+        [(i, f"Batter {i:03d}", "hitter", 27, "OF", [5.0, 5.0, 5.0]) for i in range(40)]
+    )
+    hits, total = find_players_counted(blob, "batter")
+    assert len(hits) == FIND_RESULT_CAP
+    assert total == 40, "the caller must be able to tell 25-of-40 from 25-of-25"
+
+    exact, exact_total = find_players_counted(blob, "batter 001")
+    assert exact_total == len(exact) == 1, "an untruncated list reports its real total"

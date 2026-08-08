@@ -18,19 +18,25 @@
   /* The list is BUILT HERE, not in the template. An empty <ul> in the markup is a
    * listbox that never fills for a reader without JS, and it would land ahead of the
    * candidate list the page renders below -- where being the first `</ul>` in the
-   * document is load-bearing for how that block is read. The combobox ARIA goes on
-   * with it, so the input never advertises a control that does not exist. */
+   * document is load-bearing for how that block is read. */
   var list = document.createElement('ul');
   list.id = 'traj-suggest';
   list.className = 'traj-suggest';
-  list.setAttribute('role', 'listbox');
   list.hidden = true;
-  form.appendChild(list);
 
-  input.setAttribute('role', 'combobox');
-  input.setAttribute('aria-autocomplete', 'list');
-  input.setAttribute('aria-controls', 'traj-suggest');
-  input.setAttribute('aria-expanded', 'false');
+  /* Appended to the LABEL, not the form. `top: 100%` on a positioned form drops the
+   * list below the whole flex row -- under the Search button's line box -- and
+   * left-aligns it to the label text rather than to the input.
+   *
+   * NO combobox ARIA. The previous version set role=combobox / listbox / option with
+   * no arrow keys, no aria-activedescendant, and an <a> inside each option (interactive
+   * content in an option is ignored by AT). Announcing a pattern that is not
+   * implemented is worse for a screen-reader user than announcing nothing: this is a
+   * list of links, so it ships as one. The players page it mirrors has no keyboard
+   * navigation either, and #350 did not ask for it. */
+  var anchor = input.parentElement || form;
+  anchor.classList.add('traj-suggest-anchor');
+  anchor.appendChild(list);
 
   var DEBOUNCE_MS = 150;
   var MIN_CHARS = 2;
@@ -40,10 +46,16 @@
   // list for a query the box no longer holds.
   var loadSeq = 0;
 
-  function hide() {
+  /* THE ONLY WAY THE LIST CLOSES. The old `hide()` cleared the DOM but left the
+   * debounce timer scheduled and `loadSeq` untouched, so a list dismissed inside the
+   * 150 ms window -- or while a fetch was in flight -- reopened over the page the
+   * reader had just dismissed. Cancelling the timer and bumping the sequence together
+   * is what makes dismissal mean dismissed; separating them is how it regressed. */
+  function dismiss() {
+    clearTimeout(timer);
+    loadSeq++;
     list.hidden = true;
     list.innerHTML = '';
-    input.setAttribute('aria-expanded', 'false');
   }
 
   /* The query string for a suggestion, built from THE FORM'S OWN HIDDEN INPUTS.
@@ -66,18 +78,24 @@
     // this feature exists to stop happening.
     params.set('pid', hit.id);
     params.set('ppool', hit.pool);
-    return form.action.split('?')[0] + '?' + params.toString();
+    // Through URL, not a split on '?'. A form with no action reflects the document
+    // URL including its fragment, and the fragment sits AFTER the query -- so
+    // splitting on '?' leaves it attached and every parameter lands inside the hash.
+    var base = new URL(form.getAttribute('action') || window.location.href,
+                       window.location.href);
+    base.search = params.toString();
+    base.hash = '';
+    return base.pathname + base.search;
   }
 
-  function render(players) {
+  function render(players, total) {
     list.innerHTML = '';
     if (!players.length) {
-      hide();
+      list.hidden = true;
       return;
     }
     players.forEach(function (hit) {
       var li = document.createElement('li');
-      li.setAttribute('role', 'option');
       var a = document.createElement('a');
       a.href = urlFor(hit);
       // textContent, not innerHTML: these names come from the board payload and one of
@@ -93,8 +111,17 @@
       li.appendChild(a);
       list.appendChild(li);
     });
+    if (total > players.length) {
+      // A silent cap makes 25-of-312 look like 25-of-25, and a reader whose player
+      // fell past the cut concludes he is not on the board -- the conclusion this
+      // feature exists to prevent.
+      var note = document.createElement('li');
+      note.className = 'traj-suggest-note';
+      note.textContent = 'showing ' + players.length + ' of ' + total +
+        ' - type more to narrow';
+      list.appendChild(note);
+    }
     list.hidden = false;
-    input.setAttribute('aria-expanded', 'true');
   }
 
   function search(q) {
@@ -105,12 +132,12 @@
         if (reqId !== loadSeq) return;
         // A cold board answers 503 with an `error`. Silently hiding is right: the form
         // below still works and the page it submits to reports the cold cache properly.
-        if (data.error || !data.players) { hide(); return; }
-        render(data.players);
+        if (data.error || !data.players) { list.hidden = true; return; }
+        render(data.players, data.total || data.players.length);
       })
       .catch(function () {
         if (reqId !== loadSeq) return;
-        hide();
+        list.hidden = true;
       });
   }
 
@@ -119,10 +146,7 @@
     timer = setTimeout(function () {
       var q = input.value.trim();
       if (q.length < MIN_CHARS) {
-        // Bump the sequence so a fetch already in flight cannot render after the box
-        // has been cleared back below the minimum.
-        loadSeq++;
-        hide();
+        dismiss();
         return;
       }
       search(q);
@@ -131,9 +155,14 @@
 
   // Escape closes without submitting; a click elsewhere dismisses.
   input.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') hide();
+    if (event.key === 'Escape') dismiss();
   });
   document.addEventListener('click', function (event) {
-    if (!form.contains(event.target)) hide();
+    if (!form.contains(event.target)) dismiss();
+  });
+  // Tabbing away left the list open over the content below. `relatedTarget` inside the
+  // list means the reader is tabbing INTO a suggestion, which must not close it.
+  input.addEventListener('focusout', function (event) {
+    if (!list.contains(event.relatedTarget)) dismiss();
   });
 })();

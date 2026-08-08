@@ -20,6 +20,8 @@ the board's -- see `_chart_extras`.
 
 from __future__ import annotations
 
+import re
+
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, NoReturn
@@ -785,6 +787,41 @@ def _board_horizons(payload: dict) -> tuple[int, ...]:
         ) from exc
 
 
+_WHITESPACE = re.compile(r"\s+")
+
+
+def normalized_query(query: str) -> str:
+    """A search string reduced to what matching actually compares.
+
+    `normalize_name` lowercases and strips accents, and its docstring claims it
+    "removes extra whitespace" -- it does not. `find_players` trusted that claim, so a
+    copy-pasted double space was a dead end: exactly the failure this feature exists to
+    remove. Collapsed here rather than in `name_utils` because that function is a join
+    key for keeper matching and the draft board, and changing what it returns would
+    silently re-key every one of those callers.
+
+    THE ONE OWNER OF THE LENGTH RULE. The route used to length-check the raw string
+    while the matcher re-checked the normalized one, so a two-character query that
+    normalized to one was accepted and then returned nothing -- "no match" for input
+    the API had just called long enough, which is the absent-vs-no-match conflation
+    #350 exists to remove.
+    """
+    return _WHITESPACE.sub(" ", normalize_name(query or "")).strip()
+
+
+def find_players_counted(
+    payload: dict, query: str, *, cap: int = FIND_RESULT_CAP
+) -> tuple[list[dict], int]:
+    """`find_players`, plus how many matched BEFORE the cap.
+
+    The cap was silent on both surfaces, so 25-of-300 rendered identically to
+    25-of-25. A reader whose player fell past the cut sees him missing and concludes he
+    is not on the board -- the conclusion the feature exists to prevent.
+    """
+    hits = _find(payload, query, cap=None)
+    return hits[:cap], len(hits)
+
+
 def find_players(payload: dict, query: str, *, cap: int = FIND_RESULT_CAP) -> list[dict]:
     """Board rows whose name contains `query`, best offer first.
 
@@ -808,8 +845,12 @@ def find_players(payload: dict, query: str, *, cap: int = FIND_RESULT_CAP) -> li
     it per scale would cost a second ranked copy per vintage to reorder rows the user is
     choosing between by name.
     """
-    needle = normalize_name(query or "")
-    # Length checked on the NORMALIZED string: "  b  " is one character of query.
+    return _find(payload, query, cap=cap)
+
+
+def _find(payload: dict, query: str, *, cap: int | None) -> list[dict]:
+    """The scan. `cap=None` returns every match, for the truncation count."""
+    needle = normalized_query(query)
     if len(needle) < FIND_MIN_CHARS:
         return []
 
@@ -823,7 +864,7 @@ def find_players(payload: dict, query: str, *, cap: int = FIND_RESULT_CAP) -> li
 
     scored: list[tuple[int, int, dict]] = []
     for row in rows:
-        name = normalize_name(row["name"])
+        name = normalized_query(row["name"])
         if needle == name:
             tier = 0
         elif name.startswith(needle):
@@ -846,7 +887,7 @@ def find_players(payload: dict, query: str, *, cap: int = FIND_RESULT_CAP) -> li
             "age": row["age"],
             "slot": row["slot"],
         }
-        for _, _, row in scored[:cap]
+        for _, _, row in (scored if cap is None else scored[:cap])
     ]
 
 

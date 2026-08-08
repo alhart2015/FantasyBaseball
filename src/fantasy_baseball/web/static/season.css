@@ -3949,8 +3949,12 @@ td[style*="--neg"] {
 
 /* Suggestion list for the trajectory player search (#350). Joins the shared card
    chrome above rather than introducing a fourth palette; only the metrics that make
-   it a dropdown live here. */
-.trajectory-search { position: relative; }
+   it a dropdown live here.
+
+   Positioned on the LABEL that wraps the input, not on the form: anchoring to the form
+   drops the list below the whole flex row, under the Search button's line box, and
+   left-aligns it to the label text instead of to the input. */
+.traj-suggest-anchor { position: relative; }
 .traj-suggest {
   position: absolute;
   z-index: 20;
@@ -3976,3 +3980,12 @@ td[style*="--neg"] {
 .traj-suggest a:hover,
 .traj-suggest a:focus { background: var(--surface-soft); }
 .traj-suggest-meta { color: var(--ink-soft); font-size: 12px; }
+/* The truncation notice. Not a link -- it is a statement about the list, and making
+   it clickable would offer a 26th player that does not exist. */
+.traj-suggest-note {
+  padding: 5px 10px;
+  color: var(--ink-soft);
+  font-size: 12px;
+  font-style: italic;
+  border-top: 1px solid var(--line);
+}
