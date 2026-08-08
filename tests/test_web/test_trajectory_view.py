@@ -2014,3 +2014,70 @@ def test_resolution_and_matching_agree_about_whitespace() -> None:
     assert view.found is True, "the resolver must collapse whitespace like the matcher"
     assert view.name == "Bobby Witt Jr."
     assert view.candidates == [], "and must not offer the player it just resolved"
+
+
+# --------------------------------------------------------------------------
+# #350 follow-up: base_season, the other half of the same pair.
+#
+# The batch that routed `max_horizon` through a guard left `base_season` -- read
+# one line above it, by the same functions, with the same `int(...)` -- reading the
+# way `max_horizon` had just stopped reading. Same states, same readers, so the
+# invariant is "the payload's scalar fields are validated", not "max_horizon is".
+# --------------------------------------------------------------------------
+
+
+def _base_season_readers():
+    """Every reader that turns `base_season` into a year. `find_players` is absent on
+    purpose: it derives horizons but never the base, so listing it here would assert a
+    read that does not happen."""
+    return [
+        pytest.param(lambda b: build_player_view(b, player="Big Bat", chart=None), id="player"),
+        pytest.param(lambda b: build_board(b, top="all"), id="board"),
+        pytest.param(lambda b: build_teams_board(b, spots=[], my_team=None), id="teams"),
+    ]
+
+
+@pytest.mark.parametrize("bad", [None, "twenty", []])
+@pytest.mark.parametrize("call", _base_season_readers())
+def test_an_unusable_base_season_is_reported_by_every_reader(call, bad) -> None:
+    """`int(None)` is a TypeError and the route catches only ValueError/KeyError, so a
+    null here is an unhandled 500 -- exactly the hole that was closed for max_horizon.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    blob["base_season"] = bad
+    with pytest.raises(ValueError, match="base_season"):
+        call(blob)
+
+
+@pytest.mark.parametrize("call", _base_season_readers())
+def test_a_missing_base_season_names_the_fix_not_just_the_field(call) -> None:
+    """A bare `KeyError('base_season')` renders as a banner reading literally
+    `'base_season'`, which tells the reader nothing about what to do."""
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    del blob["base_season"]
+    with pytest.raises(ValueError, match="push_trajectory_board"):
+        call(blob)
+
+
+def test_a_fractional_max_horizon_is_rejected_rather_than_truncated() -> None:
+    """`int(3.7)` is 3, so the payload silently scored three horizons while the guard's
+    own message claimed it rejects anything that is not a whole number. A quiet horizon
+    short is the failure the guard exists to prevent, not a rounding question.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    blob["max_horizon"] = 3.7
+    with pytest.raises(ValueError, match="whole number"):
+        find_players(blob, "bat")
+
+
+def test_the_stale_board_message_reads_as_a_sentence_for_a_payload_level_key() -> None:
+    """`_raise_stale_board(exc, where="")` formatted "payload  is missing" -- a double
+    space, invisible in HTML and visible in every log line and pinned test.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    del blob["max_horizon"]
+    with pytest.raises(ValueError) as caught:
+        find_players(blob, "bat")
+    message = str(caught.value)
+    assert "  " not in message, f"double space in {message!r}"
+    assert message.startswith("trajectory board payload is missing"), message

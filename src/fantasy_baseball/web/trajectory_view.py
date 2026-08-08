@@ -174,7 +174,7 @@ def _sweep_setup(
     what comes after -- one flattens, the other groups -- which is why this returns
     the shared prefix rather than trying to be a common body.
     """
-    base = int(payload["base_season"])
+    base = _board_base_season(payload)
     horizons_all = _board_horizons(payload)
     end_years = [base + h for h in horizons_all]
     end_year = _clamp(end, end_years[0], end_years[-1], end_years[0])
@@ -767,10 +767,71 @@ def _raise_stale_board(exc: KeyError, *, where: str = "row") -> NoReturn:
     # An argless KeyError would IndexError inside the error handler, which replaces a
     # bad message with a worse traceback.
     field = exc.args[0] if exc.args else "an unnamed field"
+    # Joined rather than interpolated: `where=""` names the payload itself, and
+    # "payload {where} is" left a double space there -- invisible in HTML, and visible
+    # in every log line and in the tests that pin the sentence.
+    subject = " ".join(part for part in ("trajectory board payload", where) if part)
     raise ValueError(
-        f"trajectory board payload {where} is missing {field!r}, which this "
+        f"{subject} is missing {field!r}, which this "
         "build requires; re-run scripts/push_trajectory_board.py"
     ) from exc
+
+
+def _whole_number(raw: Any) -> int | None:
+    """`raw` as an int if it IS one, else None. Never truncates.
+
+    `int(3.7)` is 3, so a guard built on `int()` accepted a fractional horizon and
+    scored one season fewer than the payload claimed -- while its own message said it
+    rejects anything that is not a whole number. Booleans are excluded even though
+    `bool` is an `int` subclass: `max_horizon=True` is a corrupt payload, not one.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw) if raw.is_integer() else None
+    if isinstance(raw, str):
+        try:
+            return int(raw.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _required_int(payload: dict, field: str) -> int:
+    """A payload scalar the page cannot proceed without, validated in ONE place.
+
+    `max_horizon` and `base_season` are read together by every board builder and were
+    validated separately -- one through a guard, the other through a bare
+    `int(payload[...])` on the next line. That asymmetry is the whole defect: a missing
+    key raised a KeyError that renders as a banner naming only the field, and a null
+    raised a TypeError, which the route's (ValueError, KeyError) handler does not catch
+    at all, so it reached the reader as an unhandled 500.
+
+    Not `.get(field, <default>)`: a default silently ranks a single horizon or dates the
+    board to the wrong year, which is a wrong answer with no error.
+    """
+    try:
+        raw = payload[field]
+    except KeyError as exc:
+        # NOT a bare KeyError. It renders as a banner reading literally 'max_horizon',
+        # which is the same unactionable failure `_raise_stale_board` exists to remove
+        # for 'now' -- and it was reintroduced here, for a different key, in the batch
+        # that added that helper.
+        _raise_stale_board(exc, where="")
+    value = _whole_number(raw)
+    if value is None:
+        raise ValueError(
+            f"trajectory board payload has {field}={raw!r}, which is not a whole "
+            "number; re-run scripts/push_trajectory_board.py"
+        )
+    return value
+
+
+def _board_base_season(payload: dict) -> int:
+    """The season the board's horizons count forward from. REQUIRED."""
+    return _required_int(payload, "base_season")
 
 
 def _board_horizons(payload: dict) -> tuple[int, ...]:
@@ -781,26 +842,10 @@ def _board_horizons(payload: dict) -> tuple[int, ...]:
     unsearchable while the rest of the page still lists them -- a wrong answer with no
     error. Every other reader in this module treats the field as required.
     """
-    try:
-        raw = payload["max_horizon"]
-    except KeyError as exc:
-        # NOT a bare KeyError. It renders as a banner reading literally 'max_horizon',
-        # which is the same unactionable failure `_raise_stale_board` exists to remove
-        # for 'now' -- and it was reintroduced here, for a different key, in the batch
-        # that added that helper.
-        _raise_stale_board(exc, where="")
-    try:
-        horizon = int(raw)
-    except (TypeError, ValueError) as exc:
-        # `int(None)` is a TypeError, which neither the route nor the endpoint catches,
-        # so it reaches the reader as an unhandled 500 rather than a reported payload.
-        raise ValueError(
-            f"trajectory board payload has max_horizon={raw!r}, which is not a whole "
-            "number; re-run scripts/push_trajectory_board.py"
-        ) from exc
+    horizon = _required_int(payload, "max_horizon")
     if horizon < 1:
         raise ValueError(
-            f"trajectory board payload has max_horizon={raw!r}, which scores no "
+            f"trajectory board payload has max_horizon={horizon!r}, which scores no "
             "seasons; re-run scripts/push_trajectory_board.py"
         )
     return tuple(range(1, horizon + 1))
@@ -1027,7 +1072,7 @@ def build_player_view(
     # The ceiling is the push script's STORED count, from the one place it is defined:
     # the blob is built hours earlier, so `n` can only slice what is already in it.
     want = _clamp(n, 1, MAX_COMPS, DEFAULT_COMPS)
-    base = int(payload["base_season"])
+    base = _board_base_season(payload)
     horizons_all = _board_horizons(payload)
     end_years = [base + h for h in horizons_all]
 
