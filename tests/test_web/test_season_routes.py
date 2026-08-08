@@ -2656,37 +2656,66 @@ def test_trajectory_teams_view_falls_back_when_no_rosters_arrived(client):
     assert "Testy McTestface" in resp.data.decode(), "the league board rendered instead"
 
 
-def _trajectory_payload_with_extras():
-    """The route fixture plus the keys the push script bakes."""
-    payload = _trajectory_payload()
-    payload["players"] = [
+def _trajectory_chart(payload):
+    """The `cache:trajectory_chart_data` blob paired with `payload` (#344).
+
+    A SECOND key, carrying the board's own `generated_at` -- the player view refuses
+    extras stamped for a different board, and only that view reads them at all.
+    """
+    from fantasy_baseball.trajectory.sweep import to_chart_payload
+
+    return to_chart_payload(
         {
-            **p,
-            "history": [[25, 14.0], [26, 16.0]],
-            "comps": [
-                {
-                    "name": "Andre Ethier",
-                    "season": 2007,
-                    "rmse": 1.25,
-                    "path": [12.7, 14.4, 12.1, 9.2, 12.2],
-                },
-                {
-                    "name": "Bryan Reynolds",
-                    "season": 2020,
-                    "rmse": 1.31,
-                    "path": [11.0, 12.0, 11.5, 10.0, 9.5],
-                },
-            ],
-        }
-        for p in payload["players"]
-    ]
-    return payload
+            (p["id"], p["pool"]): {
+                "history": [[25, 14.0], [26, 16.0]],
+                "comps": [
+                    {
+                        "name": "Andre Ethier",
+                        "season": 2007,
+                        "rmse": 1.25,
+                        "path": [12.7, 14.4, 12.1, 9.2, 12.2],
+                    },
+                    {
+                        "name": "Bryan Reynolds",
+                        "season": 2020,
+                        "rmse": 1.31,
+                        "path": [11.0, 12.0, 11.5, 10.0, 9.5],
+                    },
+                ],
+            }
+            for p in payload["players"]
+        },
+        generated_at=str(payload["generated_at"]),
+    )
+
+
+def _trajectory_reads(board, chart=None, seen=None):
+    """A `read_cache_dict` side effect serving the board and chart keys SEPARATELY.
+
+    `return_value` cannot express this any more: the two trajectory keys hold different
+    blobs, and handing the board back for both would put a list where the chart lookup
+    expects a mapping. `seen` collects the keys asked for, which is how the board and
+    teams tests assert that they never reach for the chart data at all.
+    """
+
+    def read(key):
+        if seen is not None:
+            seen.append(key)
+        return chart if key is CacheKey.TRAJECTORY_CHART_DATA else board
+
+    return read
+
+
+def _trajectory_board_and_chart():
+    """The route fixture and the chart blob that pairs with it."""
+    payload = _trajectory_payload()
+    return payload, _trajectory_chart(payload)
 
 
 def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload_with_extras(),
+        side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     assert resp.status_code == 200
@@ -2705,7 +2734,7 @@ def test_trajectory_player_view_states_the_five_year_comp_rule(client):
     """A reader who notices no comp is recent must find the rule, not infer a bug."""
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload_with_extras(),
+        side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     assert "five realized seasons" in resp.data.decode()
@@ -2714,7 +2743,7 @@ def test_trajectory_player_view_states_the_five_year_comp_rule(client):
 def test_trajectory_player_view_with_no_name_renders_the_search_box(client):
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload_with_extras(),
+        side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
     ):
         resp = client.get("/trajectory?view=player")
     assert resp.status_code == 200
@@ -2724,7 +2753,7 @@ def test_trajectory_player_view_with_no_name_renders_the_search_box(client):
 def test_trajectory_player_view_unknown_name_does_not_500(client):
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload_with_extras(),
+        side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
     ):
         resp = client.get("/trajectory?view=player&player=Nobody+At+All")
     assert resp.status_code == 200
@@ -2769,7 +2798,7 @@ def test_trajectory_player_view_discloses_the_var_netting_on_axis_and_table(clie
     """
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload_with_extras(),
+        side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface&scale=var")
     body = resp.data.decode()
@@ -2784,7 +2813,7 @@ def test_trajectory_player_view_sgp_scale_keeps_a_plain_label(client):
     must not claim a subtraction that did not happen."""
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload_with_extras(),
+        side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface&scale=sgp")
     body = resp.data.decode()
@@ -2799,7 +2828,7 @@ def test_trajectory_player_view_discloses_vintage_and_the_history_gap(client):
     line stops a year before the dashed one starts (#324 F3)."""
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload_with_extras(),
+        side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     body = resp.data.decode()
@@ -2807,34 +2836,69 @@ def test_trajectory_player_view_discloses_vintage_and_the_history_gap(client):
     assert "still in progress" in body, "explains the gap between history and projection"
 
 
-def test_trajectory_player_view_explains_a_pre_feature_blob(client):
-    """A blob pushed before this feature carries no `history`/`comps` keys at all --
-    the shape currently deployed in production. The page must say what's missing
-    rather than rendering an empty comps table as if the model scored zero comps."""
+def test_trajectory_player_view_explains_a_missing_chart_key(client):
+    """A board with no `cache:trajectory_chart_data` beside it -- the shape currently
+    deployed in production, and the shape between a reader deploy and the first push
+    that writes the new key. The page must say what's missing rather than rendering an
+    empty comps table as if the model scored zero comps.
+
+    NOT the mismatch note: nothing arrived, so nothing disagrees with the board, and the
+    fix is "push it", not "the two blobs are out of step"."""
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload(),
+        side_effect=_trajectory_reads(_trajectory_payload()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "trajectory-chart" in body, "the projection still renders regardless"
     assert body.count("predates") == 2, "one note for the missing comps, one for history"
+    assert "different build" not in body, "nothing arrived, so nothing can mismatch"
     comps_section = body[body.index("Closest realized paths") : body.index("The numbers")]
     assert "<td>" not in comps_section, "no fabricated comp rows"
+
+
+def test_trajectory_player_view_refuses_chart_data_from_another_build(client):
+    """The failure mode the split creates (#344). Two keys can be refreshed
+    independently, so a board from noon can sit beside extras from Tuesday -- a stale
+    career line under a fresh projection, silent, with both halves plausible.
+
+    Asserts the chart is NOT DRAWN, not merely that a note appeared: everything the
+    chart is handed goes through the JSON island, so an implementation that printed the
+    warning and drew the stale line anyway fails here.
+    """
+    board, chart = _trajectory_board_and_chart()
+    chart["generated_at"] = "2020-01-01T00:00:00-05:00"
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        side_effect=_trajectory_reads(board, chart),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+
+    island = _chart_island(body)
+    assert island["history"] == [], "a career line from another build must not be drawn"
+    assert island["comps"] == [], "nor its comps"
+    assert island["projection"], "the board's own fit is unaffected"
+    assert "<td>Andre Ethier</td>" not in body, "and no comp table rows either"
+
+    assert "different build" in body, "the mismatch has its own explanation"
+    assert "predates" not in body, "which is NOT the predates-the-feature note"
 
 
 def _two_way_trajectory_payload():
     """The route fixture with `Testy McTestface` carried by a hitter row AND a pitcher
     row -- the live board's Shohei Ohtani shape, where the two rows share an id and an
-    age and differ only by slot and pool."""
-    payload = _trajectory_payload_with_extras()
+    age and differ only by slot and pool. Returns the board and its paired chart blob,
+    which is keyed `(id, pool)` and so carries a separate entry for each of the two."""
+    payload = _trajectory_payload()
     hitter = payload["players"][0]
     payload["players"] = [
         *payload["players"],
         {**hitter, "pool": "pitcher", "slot": "SP", "floor": 3.0},
     ]
-    return payload
+    return payload, _trajectory_chart(payload)
 
 
 def test_trajectory_player_candidates_are_links_that_resolve_the_ambiguity(client):
@@ -2849,7 +2913,7 @@ def test_trajectory_player_candidates_are_links_that_resolve_the_ambiguity(clien
     """
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_two_way_trajectory_payload(),
+        side_effect=_trajectory_reads(*_two_way_trajectory_payload()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     assert resp.status_code == 200
@@ -2864,7 +2928,7 @@ def test_trajectory_player_candidates_are_links_that_resolve_the_ambiguity(clien
     picked = next(link for link in links if "ppool=pitcher" in link)
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_two_way_trajectory_payload(),
+        side_effect=_trajectory_reads(*_two_way_trajectory_payload()),
     ):
         resolved = client.get(picked.replace("&amp;", "&"))
     assert resolved.status_code == 200
@@ -2880,7 +2944,7 @@ def test_trajectory_player_narrowing_survives_a_control_click(client):
     drops him straight back to the candidate list."""
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_two_way_trajectory_payload(),
+        side_effect=_trajectory_reads(*_two_way_trajectory_payload()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface&ppool=pitcher")
     body = resp.data.decode()
@@ -2925,7 +2989,7 @@ def test_trajectory_player_view_offers_the_by_team_pill(client):
     """
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload_with_extras(),
+        side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     assert resp.status_code == 200
@@ -3016,7 +3080,7 @@ def test_trajectory_player_chart_data_is_truncated_to_the_projected_horizons(cli
     would draw off the end of the chart's x-axis."""
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=_trajectory_payload_with_extras(),
+        side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
     ):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     chart_data = _chart_island(resp.data.decode())
@@ -3027,12 +3091,12 @@ def test_trajectory_player_chart_data_is_truncated_to_the_projected_horizons(cli
 def test_trajectory_player_view_ambiguous_name_renders_no_chart(client):
     """Two players sharing a normalized name must not silently pick one -- the
     disambiguation list renders instead of a chart for either man's career."""
-    payload = _trajectory_payload_with_extras()
+    payload = _trajectory_payload()
     first = payload["players"][0]
     payload["players"] = [*payload["players"], {**first, "id": first["id"] + 10_000}]
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
-        return_value=payload,
+        side_effect=_trajectory_reads(payload, _trajectory_chart(payload)),
     ):
         resp = client.get(f"/trajectory?view=player&player={first['name'].replace(' ', '+')}")
     assert resp.status_code == 200
@@ -3138,7 +3202,7 @@ def test_the_three_trajectory_views_coexist(client):
     with (
         patch(
             "fantasy_baseball.web.season_routes.read_cache_dict",
-            return_value=_trajectory_payload_with_extras(),
+            side_effect=_trajectory_reads(*_trajectory_board_and_chart()),
         ),
         patch("fantasy_baseball.data.rosters.live_rosters", return_value=_trajectory_spots()),
     ):
@@ -3149,6 +3213,40 @@ def test_the_three_trajectory_views_coexist(client):
     assert "All teams" in board.data.decode()
     assert "team-block" in teams.data.decode()
     assert "trajectory-chart" in player.data.decode()
+
+
+@pytest.mark.parametrize("url", ["/trajectory", "/trajectory?view=teams"])
+def test_the_default_views_never_read_the_chart_data_key(client, url):
+    """THE POINT OF THE SPLIT (#344). History and comps left the board because only the
+    player view renders them; a board or teams request that still reached for them would
+    have moved ~1.1 MB of Upstash egress and a JSON parse, not removed it.
+
+    Asserts on WHICH KEYS ARE READ, not on the output: both views render identically
+    whether or not the extra read happened, so output can never catch the regression.
+    """
+    board, chart = _trajectory_board_and_chart()
+    seen: list = []
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            side_effect=_trajectory_reads(board, chart, seen),
+        ),
+        patch("fantasy_baseball.data.rosters.live_rosters", return_value=_trajectory_spots()),
+    ):
+        resp = client.get(url)
+    assert resp.status_code == 200
+    assert CacheKey.TRAJECTORY_BOARD in seen, "the board itself is still read"
+    assert CacheKey.TRAJECTORY_CHART_DATA not in seen
+
+    # And the player view DOES read it -- otherwise this test passes on a route that
+    # never reads the key at all, and the chart would silently be gone.
+    seen.clear()
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        side_effect=_trajectory_reads(board, chart, seen),
+    ):
+        client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert CacheKey.TRAJECTORY_CHART_DATA in seen
 
 
 # `test_the_stored_and_displayed_comp_ceilings_agree` was here: it asserted the view's

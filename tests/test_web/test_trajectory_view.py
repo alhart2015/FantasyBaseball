@@ -3,6 +3,7 @@ from __future__ import annotations
 import itertools
 import math
 import re
+from typing import Any
 
 import pytest
 
@@ -10,11 +11,14 @@ from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.board import BoardRow
 from fantasy_baseball.trajectory.sweep import (
     RANK_MOVE,
+    chart_key,
     sweep_pool,
+    to_chart_payload,
     to_payload,
 )
 from fantasy_baseball.web.trajectory_view import (
     DEFAULT_TOP,
+    PlayerView,
     build_board,
     build_player_view,
     build_teams_board,
@@ -990,35 +994,41 @@ def test_per_team_and_end_year_clamp_junk_from_the_query_string(payload: dict) -
     assert build_teams_board(payload, spots=_teams_fixture(), end="nonsense").end_year == 2027
 
 
-def _payload_with_extras(payload: dict) -> dict:
-    """The `payload` fixture plus the two keys the push script bakes.
+def _chart(payload: dict) -> dict:
+    """The chart blob that PAIRS with `payload`: its stamp, keyed `(id, pool)`.
 
-    Built here rather than in the fixture so every OTHER test keeps exercising the
-    `.get(..., [])` fallback path for a blob that predates this feature.
+    A second cache key (#344), not a section of the board -- only this view reads career
+    history and comps, and inline they more than doubled the blob every other view
+    fetches. Tests that want the "no chart stored" path simply pass no chart.
     """
-    out = dict(payload)
-    out["generated_at"] = f"hand-{next(_HAND_SEQ)}"
-    out["players"] = [
+    return to_chart_payload(
         {
-            **p,
-            "history": [[25, 14.0], [26, 16.0], [27, 20.0]],
-            "comps": [
-                {
-                    "name": f"Comp {i}",
-                    "season": 2010 + i,
-                    "rmse": 0.5 * i,
-                    "path": [10.0 - i, 9.0 - i, 8.0 - i, 7.0 - i, 6.0 - i],
-                }
-                for i in range(1, 8)
-            ],
-        }
-        for p in payload["players"]
-    ]
-    return out
+            (p["id"], p["pool"]): {
+                "history": [[25, 14.0], [26, 16.0], [27, 20.0]],
+                "comps": [
+                    {
+                        "name": f"Comp {i}",
+                        "season": 2010 + i,
+                        "rmse": 0.5 * i,
+                        "path": [10.0 - i, 9.0 - i, 8.0 - i, 7.0 - i, 6.0 - i],
+                    }
+                    for i in range(1, 8)
+                ],
+            }
+            for p in payload["players"]
+        },
+        generated_at=str(payload["generated_at"]),
+    )
+
+
+def _view(payload: dict, **kwargs: Any) -> PlayerView:
+    """`build_player_view` handed the chart blob paired with `payload`. The normal case;
+    the un-paired ones are spelled out at their own tests."""
+    return build_player_view(payload, chart=_chart(payload), **kwargs)
 
 
 def _payload_with_a_twin(payload: dict, id_offset: int) -> tuple[dict, dict]:
-    """`_payload_with_extras` plus a second player under `players[0]`'s NAME.
+    """The `payload` fixture plus a second player under `players[0]`'s NAME.
 
     Returns the payload and the original row, so a caller can assert against
     `first["id"]` and `first["id"] + id_offset`. The SIGN of the offset is the whole
@@ -1026,7 +1036,7 @@ def _payload_with_a_twin(payload: dict, id_offset: int) -> tuple[dict, dict]:
     anyway, which a candidate-ordering assertion cannot distinguish from a real sort),
     a negative one appends the smaller and only an actual `sorted()` produces it.
     """
-    twin = _payload_with_extras(payload)
+    twin = dict(payload)
     first = twin["players"][0]
     twin["players"] = [*twin["players"], {**first, "id": first["id"] + id_offset}]
     twin["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
@@ -1034,7 +1044,7 @@ def _payload_with_a_twin(payload: dict, id_offset: int) -> tuple[dict, dict]:
 
 
 def test_a_player_is_found_by_name_with_his_career_and_projection(payload: dict) -> None:
-    view = build_player_view(_payload_with_extras(payload), player="Big Bat")
+    view = _view(payload, player="Big Bat")
     assert view.found
     assert view.name == "Big Bat"
     assert [pt[0] for pt in view.history] == [25, 26, 27], "career ascends by age"
@@ -1043,7 +1053,7 @@ def test_a_player_is_found_by_name_with_his_career_and_projection(payload: dict)
 
 
 def test_an_unknown_name_is_not_found_and_lists_nobody(payload: dict) -> None:
-    view = build_player_view(_payload_with_extras(payload), player="Nobody At All")
+    view = _view(payload, player="Nobody At All")
     assert not view.found
     assert view.candidates == []
     # `found=False` and `candidates=[]` are both dataclass defaults -- a view that
@@ -1058,7 +1068,7 @@ def test_an_ambiguous_name_lists_candidates_and_renders_no_chart(payload: dict) 
     """Two players can share a normalized name -- the live board carries two hitters
     called Max Muncy. Guessing puts one man's career under another's name."""
     twin, first = _payload_with_a_twin(payload, 10_000)
-    view = build_player_view(twin, player=first["name"])
+    view = _view(twin, player=first["name"])
     assert not view.found, "an ambiguous name renders no chart"
     assert len(view.candidates) == 2
     assert {c["id"] for c in view.candidates} == {first["id"], first["id"] + 10_000}
@@ -1071,7 +1081,7 @@ def _two_way(payload: dict) -> dict:
     differing only by slot and pool -- so the id is not the discriminator and only the
     pool is.
     """
-    twin = _payload_with_extras(payload)
+    twin = dict(payload)
     hitter = twin["players"][0]
     twin["players"] = [
         *twin["players"],
@@ -1083,7 +1093,7 @@ def _two_way(payload: dict) -> dict:
 
 def test_a_candidate_list_names_the_pool_it_offers_as_the_discriminator(payload: dict) -> None:
     """Two rows differing ONLY by pool render two identical lines without it."""
-    view = build_player_view(_two_way(payload), player="Big Bat")
+    view = _view(_two_way(payload), player="Big Bat")
     assert not view.found
     assert {c["pool"] for c in view.candidates} == {"hitter", "pitcher"}
 
@@ -1093,9 +1103,9 @@ def test_a_two_way_name_is_resolved_by_the_pool_selector(payload: dict) -> None:
     player view merely passes through, and overloading it couples a board filter to name
     resolution."""
     twin = _two_way(payload)
-    pitcher = build_player_view(twin, player="Big Bat", ppool="pitcher")
+    pitcher = _view(twin, player="Big Bat", ppool="pitcher")
     assert pitcher.found and pitcher.slot == "SP"
-    hitter = build_player_view(twin, player="Big Bat", ppool="hitter")
+    hitter = _view(twin, player="Big Bat", ppool="hitter")
     assert hitter.found and hitter.slot == "OF"
 
 
@@ -1103,7 +1113,7 @@ def test_same_pool_namesakes_are_resolved_by_the_id_selector(payload: dict) -> N
     """The live board carries two hitters called Max Muncy: same pool, different ids,
     so the pool selector cannot separate them and only `pid` can."""
     twin, first = _payload_with_a_twin(payload, 10_000)
-    view = build_player_view(twin, player=first["name"], pid=str(first["id"] + 10_000))
+    view = _view(twin, player=first["name"], pid=str(first["id"] + 10_000))
     assert view.found
     assert view.pid == str(first["id"] + 10_000)
 
@@ -1113,7 +1123,7 @@ def test_a_resolved_view_carries_its_own_narrowing_forward(payload: dict) -> Non
     A resolved player whose view reported no narrowing would fall back to the candidate
     list the moment a scale pill was clicked."""
     twin = _two_way(payload)
-    view = build_player_view(twin, player="Big Bat", ppool="pitcher")
+    view = _view(twin, player="Big Bat", ppool="pitcher")
     assert (view.pid, view.ppool) == (str(twin["players"][0]["id"]), "pitcher")
 
 
@@ -1125,36 +1135,89 @@ def test_narrowing_that_matches_nothing_falls_back_to_the_full_candidate_list(
     "no player named X" for a player who is on the board -- a second dead end in place of
     the one this fixes."""
     twin, first = _payload_with_a_twin(payload, 10_000)
-    view = build_player_view(twin, player=first["name"], pid="999999", ppool="pitcher")
+    view = _view(twin, player=first["name"], pid="999999", ppool="pitcher")
     assert len(view.candidates) == 2, "a stale narrowing is ignored, not obeyed"
 
 
 def test_comps_are_sliced_to_n_and_n_is_clamped(payload: dict) -> None:
-    full = _payload_with_extras(payload)
-    assert len(build_player_view(full, player="Big Bat").comps) == 5, "default"
-    assert len(build_player_view(full, player="Big Bat", n=3).comps) == 3
-    assert len(build_player_view(full, player="Big Bat", n=999).comps) == 7, "what exists"
-    assert len(build_player_view(full, player="Big Bat", n="junk").comps) == 5
-    assert len(build_player_view(full, player="Big Bat", n=0).comps) == 1
+    assert len(_view(payload, player="Big Bat").comps) == 5, "default"
+    assert len(_view(payload, player="Big Bat", n=3).comps) == 3
+    assert len(_view(payload, player="Big Bat", n=999).comps) == 7, "what exists"
+    assert len(_view(payload, player="Big Bat", n="junk").comps) == 5
+    assert len(_view(payload, player="Big Bat", n=0).comps) == 1
 
 
-def test_a_payload_without_the_new_keys_still_renders_the_projection(payload: dict) -> None:
-    """A blob pushed before this feature. #332 took /trajectory down by refusing one it
-    could largely read; this renders what it has and lets the page say what is missing.
+def test_a_board_with_no_chart_data_still_renders_the_projection(payload: dict) -> None:
+    """The shape prod holds: a board, and no `cache:trajectory_chart_data` at all. #332
+    took /trajectory down by refusing a blob it could largely read; this renders what it
+    has and lets the page say what is missing.
+
+    NOT a mismatch. Nothing arrived, so there is nothing to disagree with the board, and
+    the page must give the "predates / not pushed yet" explanation rather than the
+    out-of-step one.
     """
     view = build_player_view(payload, player="Big Bat")
     assert view.found
     assert view.projection, "the fit is in every payload"
     assert view.history == []
     assert view.comps == []
+    assert view.chart_vintage_mismatch is False
+
+
+def test_chart_data_stamped_for_another_board_is_refused_not_drawn(payload: dict) -> None:
+    """The failure the split creates, and the reason for the stamp.
+
+    Two keys can be refreshed independently, so a board from noon can sit beside extras
+    from Tuesday. Drawn together that is a stale career line under a fresh projection --
+    silent, and both halves look plausible. The extras are dropped and the view says
+    which of the two things went wrong.
+    """
+    stale = _chart(payload)
+    stale["generated_at"] = "2020-01-01T00:00:00-05:00"
+
+    view = build_player_view(payload, player="Big Bat", chart=stale)
+    assert view.found and view.projection, "the board's own fit is unaffected"
+    assert view.history == [], "a career line from another build is not drawn"
+    assert view.comps == []
+    assert view.chart_vintage_mismatch is True
+
+
+def test_a_chart_blob_with_no_stamp_is_refused_rather_than_paired(payload: dict) -> None:
+    """`None == None` would read as a match and pair two blobs on no evidence at all.
+
+    Reachable from either side: a hand-built payload or an older push carries no
+    `generated_at`, and the guard must refuse the pair rather than infer one.
+    """
+    unstamped = _chart(payload)
+    unstamped.pop("generated_at")
+    assert build_player_view(payload, player="Big Bat", chart=unstamped).chart_vintage_mismatch
+
+    board = dict(payload)
+    board.pop("generated_at")
+    assert build_player_view(board, player="Big Bat", chart=_chart(payload)).chart_vintage_mismatch
+
+
+def test_the_chart_lookup_keeps_the_pool_so_a_two_way_player_keeps_his_own_career(
+    payload: dict,
+) -> None:
+    """The reader half of `chart_key`. On a bare id the hitter row would draw the
+    pitcher's career -- the live board's Ohtani, whose two rows share id and age."""
+    twin = _two_way(payload)
+    chart = _chart(twin)
+    hitter_key = chart_key(twin["players"][0]["id"], "hitter")
+    chart["players"][hitter_key] = {"history": [[24, 99.0]], "comps": []}
+
+    hitter = build_player_view(twin, chart=chart, player="Big Bat", ppool="hitter", scale="sgp")
+    pitcher = build_player_view(twin, chart=chart, player="Big Bat", ppool="pitcher", scale="sgp")
+    assert hitter.history == [[24, 99.0]], "the hitter row read the hitter's entry"
+    assert pitcher.history == [[25, 14.0], [26, 16.0], [27, 20.0]], "and not the other way"
 
 
 def test_the_var_axis_nets_every_series_against_the_QUERY_players_floor(payload: dict) -> None:
     """Career, projection and comps alike. Netting each comp against its own slot would
     put lines on one axis that are not comparable -- the mixed-scale defect of #331."""
-    full = _payload_with_extras(payload)
-    var = build_player_view(full, player="Under Water", scale="var")
-    sgp = build_player_view(full, player="Under Water", scale="sgp")
+    var = _view(payload, player="Under Water", scale="var")
+    sgp = _view(payload, player="Under Water", scale="sgp")
     floor = var.floor
     assert floor > 0, "fixture must net against a real floor"
 
@@ -1174,7 +1237,7 @@ def test_a_comp_path_is_truncated_to_the_projected_horizons(payload: dict) -> No
     always produces paths that already agree in length (`closest_paths` raises on a
     mismatch), so the slice defends a hand-built or future blob, not today's pipeline.
     """
-    view = build_player_view(_payload_with_extras(payload), player="Big Bat")
+    view = _view(payload, player="Big Bat")
     assert len(view.comps[0]["path"]) == 3, "a comp draws only the projected years"
 
 
@@ -1186,7 +1249,7 @@ def test_the_projection_and_comp_ages_are_derived_from_the_players_own_age(
     are both COMPUTED from `row["age"]` plus a horizon -- that arithmetic is unpinned
     anywhere else.
     """
-    view = build_player_view(_payload_with_extras(payload), player="Big Bat")
+    view = _view(payload, player="Big Bat")
     age = view.age
     assert [p["age"] for p in view.projection] == [age + 1, age + 2, age + 3]
     assert [pt["age"] for pt in view.comps[0]["path"]] == [age + 1, age + 2, age + 3]
@@ -1198,9 +1261,8 @@ def test_the_floor_field_is_the_applied_offset_not_the_raw_slot_floor(payload: d
     the slot floor, which a template would otherwise print as the netting rule for a
     chart where every line is untouched raw SGP.
     """
-    full = _payload_with_extras(payload)
-    var = build_player_view(full, player="Under Water", scale="var")
-    sgp = build_player_view(full, player="Under Water", scale="sgp")
+    var = _view(payload, player="Under Water", scale="var")
+    sgp = _view(payload, player="Under Water", scale="sgp")
     assert var.floor == pytest.approx(6.0), "the slot floor, actually applied"
     assert sgp.floor == 0.0, "nothing was netted on the SGP scale"
 
@@ -1210,10 +1272,10 @@ def test_extrapolated_is_read_from_the_row_not_hardcoded(payload: dict) -> None:
     the `payload` fixture. A hardcoded `extrapolated=False` on the found branch would
     still pass every other test in this module.
     """
-    flagged = build_player_view(_payload_with_extras(payload), player="Thin Support")
+    flagged = _view(payload, player="Thin Support")
     assert flagged.extrapolated is True
 
-    calm = build_player_view(_payload_with_extras(payload), player="Big Bat")
+    calm = _view(payload, player="Big Bat")
     assert calm.extrapolated is False
 
 
@@ -1223,7 +1285,7 @@ def test_ambiguous_candidates_are_ordered_by_id(payload: dict) -> None:
     `hits` would otherwise arrive in -- so only an actual sort produces this list.
     """
     twin, first = _payload_with_a_twin(payload, -10_000)
-    view = build_player_view(twin, player=first["name"])
+    view = _view(twin, player=first["name"])
     assert [c["id"] for c in view.candidates] == [first["id"] - 10_000, first["id"]]
 
 
@@ -1233,15 +1295,11 @@ def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> N
     or the chart zigzags -- pinning the PROPERTY, not a fixture literal that is already
     sorted going in.
     """
-    full = _payload_with_extras(payload)
-    scrambled = dict(full)
-    scrambled["generated_at"] = f"hand-{next(_HAND_SEQ)}"
-    scrambled["players"] = [
-        {**p, "history": [[27, 20.0], [25, 14.0], [26, 16.0]]} if p["name"] == "Big Bat" else p
-        for p in full["players"]
-    ]
+    scrambled = _chart(payload)
+    key = chart_key(payload["players"][0]["id"], payload["players"][0]["pool"])
+    scrambled["players"][key] = {"history": [[27, 20.0], [25, 14.0], [26, 16.0]], "comps": []}
 
-    view = build_player_view(scrambled, player="Big Bat")
+    view = build_player_view(payload, player="Big Bat", chart=scrambled)
     ages = [pt[0] for pt in view.history]
     assert ages == sorted(ages), "career must render left-to-right by age"
     assert ages == [25, 26, 27]

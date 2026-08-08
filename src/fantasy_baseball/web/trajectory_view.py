@@ -9,6 +9,13 @@ The page is a PURE READER of `cache:trajectory_board`, written offline by
 `data/trajectory/` and `data/cache/keeper_skills`, both gitignored and so absent on
 Render. The board therefore does NOT move with a dashboard refresh, which is why
 `Board.meta` carries the vintage and the template prints it.
+
+TWO KEYS, AND ONLY ONE VIEW READS BOTH (#344). Career history and comps live in
+`cache:trajectory_chart_data`, written by the same script in the same run. Only
+`build_player_view` takes it; `build_board` and `build_teams_board` neither receive nor
+need it, which is what keeps ~1.1 MB off the two default views. Because the two blobs
+can be refreshed independently, the chart is drawn only when its `generated_at` matches
+the board's -- see `_chart_extras`.
 """
 
 from __future__ import annotations
@@ -24,6 +31,7 @@ from fantasy_baseball.trajectory.roster_join import index_rosters
 from fantasy_baseball.trajectory.sweep import (
     SCALES,
     add_ranks,
+    chart_key,
     from_payload,
     player_from_row,
     rank_move,
@@ -637,7 +645,8 @@ class PlayerView:
     floor: float
     scale: str
     n: int
-    #: [[age, value], ...] realized, ascending. Empty for a payload predating the feature.
+    #: [[age, value], ...] realized, ascending. Empty when no chart data was paired with
+    #: this board -- see `chart_vintage_mismatch` for the two ways that happens.
     history: list[list[float]]
     #: [{age, mean, p10, p90}, ...] one per projected year.
     projection: list[dict]
@@ -658,6 +667,13 @@ class PlayerView:
     base_season: int
     end_years: list[int]
     meta: dict = field(default_factory=dict)
+    #: The chart data that arrived is stamped for a DIFFERENT board than this one, so
+    #: `history` and `comps` were dropped rather than drawn. A distinct state from
+    #: "no chart data at all", and the page must say so distinctly: a missing blob means
+    #: the board predates the feature (or the push never wrote it), a mismatched one
+    #: means the two keys are out of step and one re-push fixes it. Saying "predates"
+    #: for a mismatch sends a reader looking in the wrong place.
+    chart_vintage_mismatch: bool = False
 
     @property
     def axis_label(self) -> str:
@@ -693,6 +709,41 @@ def _narrow(hits: list[dict], field: str, wanted: Any) -> list[dict]:
     return kept or hits
 
 
+def _chart_extras(payload: dict, chart: dict | None, mlbam_id: int, pool: str) -> tuple[dict, bool]:
+    """One player's stored `{history, comps}`, and whether the pair was REFUSED.
+
+    The vintage guard (#344). `cache:trajectory_chart_data` is a second blob, written
+    beside the board but stored separately, so the two can end up out of step -- a
+    board refreshed at noon beside extras from Tuesday. Drawn together, that is a stale
+    career line under a fresh projection: silent, and both halves look plausible. So the
+    extras are used ONLY when their stamp equals the board's, and are otherwise treated
+    as absent.
+
+    An absent stamp on EITHER side refuses too. A hand-built or pre-vintage payload gives
+    `None`, and `None == None` would read as a match and pair two blobs on no evidence at
+    all.
+
+    Returns `({}, True)` for a refusal so the caller can tell it from `({}, False)`,
+    which is "no chart data arrived" -- different causes, different fixes, and the page
+    names them separately.
+    """
+    if not chart:
+        return {}, False
+    board_at, chart_at = payload.get("generated_at"), chart.get("generated_at")
+    if board_at in (None, "") or chart_at in (None, "") or str(board_at) != str(chart_at):
+        return {}, True
+    players = chart.get("players")
+    if not isinstance(players, Mapping):
+        # A blob this build cannot read -- the board's `players` is a LIST, so this also
+        # catches the board being handed in by mistake. Refused rather than raised: the
+        # extras are auxiliary, and #332 is the standing reminder that refusing a page
+        # over data it could largely render is how /trajectory goes down. The mismatch
+        # note is the right one anyway -- a foreign shape is a writer out of step with
+        # this reader, and the fix is the same re-push.
+        return {}, True
+    return players.get(chart_key(mlbam_id, pool), {}), False
+
+
 def build_player_view(
     payload: dict,
     *,
@@ -701,8 +752,15 @@ def build_player_view(
     n: Any = None,
     pid: Any = None,
     ppool: Any = None,
+    chart: dict | None = None,
 ) -> PlayerView:
     """One player's career, projection and comps, on one scale.
+
+    `chart` is the `cache:trajectory_chart_data` blob -- career history and comps, which
+    live outside the board because this is the only view that reads them (#344). It is
+    OPTIONAL: a missing key renders the projection alone, which is the shape prod held
+    before the split ever ran. What is not optional is the pairing check -- see
+    `_chart_extras`.
 
     Resolved BY NAME, never by an id from the query string. CLAUDE.md names a
     hand-carried id as a defect class that has twice landed on a real row belonging to
@@ -798,6 +856,10 @@ def build_player_view(
     # spelling of the same rule `SweptPlayer.offset` already carries, and it disagreed
     # with it silently (any non-"var" scale read as SGP, where `var_offset` raises).
     floor = sp.offset(scale)
+    # KEYED ON THE RESOLVED ROW's `(mlbam_id, pool)`, never the searched name or the
+    # bare id: a two-way player has one entry per pool, and the id alone would hand the
+    # hitter row the pitcher's career.
+    extras, mismatch = _chart_extras(payload, chart, sp.mlbam_id, sp.pool)
     return replace(
         empty,
         name=sp.name,
@@ -818,8 +880,9 @@ def build_player_view(
         # Sorted by age rather than trusted in payload order: the push script's
         # groupby happens to emit ascending, but nothing enforces it, and an unsorted
         # blob would zigzag the chart with every other assertion here still green.
+        chart_vintage_mismatch=mismatch,
         history=sorted(
-            ([int(a), float(v) - floor] for a, v in row.get("history", [])),
+            ([int(a), float(v) - floor] for a, v in extras.get("history", [])),
             key=lambda pt: pt[0],
         ),
         # `points(scale)` applies the offset; `YearPoint.age` is already `age + horizon`.
@@ -844,6 +907,6 @@ def build_player_view(
                     for h, v in enumerate(c["path"][: len(sp.sgp)], start=1)
                 ],
             }
-            for c in row.get("comps", [])[:want]
+            for c in extras.get("comps", [])[:want]
         ],
     )

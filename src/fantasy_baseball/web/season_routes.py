@@ -806,6 +806,12 @@ def register_routes(app: Flask) -> None:
         which is deployed, so `scripts/push_trajectory_board.py` computes it offline and
         writes `cache:trajectory_board`. A cold or stale-schema cache is reported rather
         than silently rendering an empty board that looks like "nobody scored".
+
+        THE PLAYER VIEW READS A SECOND KEY, and the other two must not (#344). Career
+        history and comps live in `cache:trajectory_chart_data` precisely because the
+        league board and the By-team view -- the defaults -- render none of it; reading
+        it here unconditionally would hand back the ~1.1 MB per request the split exists
+        to remove.
         """
         from fantasy_baseball.web.trajectory_view import (
             build_board,
@@ -843,6 +849,12 @@ def register_routes(app: Flask) -> None:
                 if view == "player":
                     player_view = build_player_view(
                         payload,
+                        # INSIDE this branch, deliberately. The board and teams views
+                        # render neither history nor comps, so a read hoisted beside the
+                        # board read above would charge them both for a blob larger than
+                        # the board itself. `build_player_view` refuses extras whose
+                        # vintage disagrees with the board's rather than pairing them.
+                        chart=read_cache_dict(CacheKey.TRAJECTORY_CHART_DATA),
                         player=request.args.get("player", ""),
                         scale=request.args.get("scale", "var"),
                         n=request.args.get("n"),
