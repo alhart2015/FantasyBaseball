@@ -785,7 +785,23 @@ def build_player_view(
     # legacy-positional-blob refusal are each spelled ONCE, in `sweep`. Hand-unpacking
     # here re-spelled all three, and the guard had to be re-derived to keep a legacy
     # blob raising a `ValueError` the route degrades on rather than a `TypeError` 500.
-    sp = player_from_row(row)
+    try:
+        sp = player_from_row(row)
+    except KeyError as exc:
+        # `player_from_row` reads six fields this view never uses -- `id`, `pool`,
+        # `now`, `prior`, `support`, `extrapolated` -- so a stale blob missing any of
+        # them raises `KeyError('now')`, the route catches it, and `str(exc)` renders a
+        # red banner reading literally `'now'`. That names the field and nothing else:
+        # no hint that the payload is the problem or that a re-push fixes it.
+        #
+        # Re-raised HERE rather than loosened in `player_from_row`: the strictness is
+        # right -- a missing field must fail on its own name, which is exactly what
+        # `_pack`'s docstring says named keys bought. What was missing is the same
+        # actionable sentence `_unpack` already gives the positional-blob case.
+        raise ValueError(
+            f"trajectory board payload row is missing {exc.args[0]!r}, which this "
+            "build requires; re-run scripts/push_trajectory_board.py"
+        ) from exc
     # THE offset, from the one place it is defined -- see `var_offset`'s docstring.
     # Not `float(row["floor"]) if scale == "var" else 0.0` inline: that is a third
     # spelling of the same rule `SweptPlayer.offset` already carries, and it disagreed

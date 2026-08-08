@@ -2885,6 +2885,31 @@ def test_trajectory_player_narrowing_survives_a_control_click(client):
         assert "ppool=pitcher" in link, f"narrowing dropped from {link}"
 
 
+def test_trajectory_player_view_names_the_fix_for_a_row_missing_a_field(client):
+    """A one-word banner is not an error message.
+
+    `player_from_row` requires `id`, `pool`, `now`, `prior`, `support` and
+    `extrapolated`, none of which this view uses. A stale blob missing one raised
+    `KeyError('now')`, the route caught it, and `str(exc)` rendered a red banner reading
+    literally `'now'` -- no indication the payload was the problem. `_unpack` already
+    gives the positional-blob case an actionable sentence; this is the same one.
+    """
+    payload = _trajectory_payload()
+    payload["players"] = [
+        {k: v for k, v in p.items() if k != "now"} for p in payload["players"]
+    ]
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=payload,
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "re-run scripts/push_trajectory_board.py" in body, "say what to do"
+    # Jinja escapes the quotes around the field name, hence the entities.
+    assert "missing &#39;now&#39;" in body, "and still name the field that is missing"
+
+
 def test_trajectory_player_view_offers_the_by_team_pill(client):
     """The player view was a one-way door: `_trajectory_controls.html` gates the "By
     team" pill on `{% if teams %}` and this template passed `[]`, so there was no link
