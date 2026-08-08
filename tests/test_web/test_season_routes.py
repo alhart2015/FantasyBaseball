@@ -2423,12 +2423,34 @@ def test_trajectory_controls_carry_every_filter_on_every_link(client, view):
     neighbours were pass-throughs: the filter survived the link shape check and died
     on the round trip.
 
-    EXPECTED PARAMS COME FROM `filter_state` ITSELF, not from a literal tuple. The
-    tuple was the fourth hand-written copy of the filter list and it had already
-    drifted two behind -- it named seven while `board_url` emitted nine, so `player`
-    and `n` were added to the links with no test that they stayed there.
+    THE LITERAL BELOW IS THE GUARD, and duplicating the list is the point of it. This
+    once read `expected = [f"{n}=" for n in filter_state(view, None, {})]`, deriving
+    its expectation from the very thing it guards: a key DELETED from `filter_state`
+    shrank both sides and the test stayed green. Measured -- deleting `"per"` left all
+    173 tests in this file passing, while a reader on /trajectory?view=teams&per=25 who
+    clicked a scale pill silently dropped back to 5 rows per team.
+
+    The equality assertion keeps the literal honest in the other direction: a filter
+    ADDED to `filter_state` and not to the links is what the derived version did catch,
+    and the earlier literal had drifted two behind before it was removed.
     """
-    expected = [f"{name}=" for name in filter_state(view, None, {})]
+    names = [
+        "view",
+        "end",
+        "pool",
+        "scale",
+        "per",
+        "top",
+        "team",
+        "player",
+        "n",
+        "pid",
+        "ppool",
+    ]
+    assert sorted(names) == sorted(filter_state(view, None, {})), (
+        "the literal above and `filter_state` must name the same filters -- add to both"
+    )
+    expected = [f"{name}=" for name in names]
     with (
         patch(
             "fantasy_baseball.web.season_routes.read_cache_dict",
