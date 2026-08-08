@@ -3807,7 +3807,8 @@ td[style*="--neg"] {
    its differing box metrics below. */
 .chart-wrapper,
 .dist-wrapper,
-.comp-card {
+.comp-card,
+.traj-suggest {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -3944,3 +3945,34 @@ td[style*="--neg"] {
 /* Fixed height for the same reason .chart-wrapper has one: Chart.js's default
    maintainAspectRatio ignores the box and draws roughly twice its height. */
 .comp-card-chart { position: relative; height: 180px; }
+
+
+/* Suggestion list for the trajectory player search (#350). Joins the shared card
+   chrome above rather than introducing a fourth palette; only the metrics that make
+   it a dropdown live here. */
+.trajectory-search { position: relative; }
+.traj-suggest {
+  position: absolute;
+  z-index: 20;
+  top: 100%;
+  left: 0;
+  margin: 2px 0 0;
+  padding: 4px 0;
+  list-style: none;
+  /* Wide enough for "Ronald Acuna Jr. -- age 28, OF (hitter)" without wrapping, and
+     capped so a 25-hit list scrolls instead of running off the viewport. */
+  min-width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+}
+.traj-suggest li { margin: 0; }
+.traj-suggest a {
+  display: block;
+  padding: 5px 10px;
+  text-decoration: none;
+  color: var(--ink);
+  white-space: nowrap;
+}
+.traj-suggest a:hover,
+.traj-suggest a:focus { background: var(--surface-soft); }
+.traj-suggest-meta { color: var(--ink-soft); font-size: 12px; }

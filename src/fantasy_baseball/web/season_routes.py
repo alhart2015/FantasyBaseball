@@ -1794,6 +1794,36 @@ def register_routes(app: Flask) -> None:
                 break
         return jsonify({"players": rows})
 
+    @app.route("/api/trajectory/find")
+    def api_trajectory_find():
+        """Name suggestions for the trajectory player search (#350).
+
+        A SEPARATE endpoint from `/api/players/find`, which cannot be reused: that one
+        scans `ros_projections`, and this page can only resolve names carried by
+        `cache:trajectory_board`. The board drops everyone with no current-season line
+        and everyone pacing under MIN_SGP, so a suggestion from the wider population
+        would produce a link that then renders "no player named X on this board" --
+        worse than the current dead end, because the page offered it.
+
+        Reads the board key the trajectory views already read; `_ranked_rows` holds a
+        parsed copy per vintage, so this is a scan of the rows and no extra I/O.
+        """
+        from fantasy_baseball.web.trajectory_view import FIND_MIN_CHARS, find_players
+
+        q = request.args.get("q", "").strip()
+        if len(q) < FIND_MIN_CHARS:
+            return jsonify({"error": f"q must be at least {FIND_MIN_CHARS} characters"}), 400
+
+        payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
+        if not payload:
+            # 503, not an empty 200. An empty list reads as "nobody matched", which
+            # would make a cold or never-pushed cache look like a working search --
+            # the same conflation between "absent" and "no match" that #350 exists to
+            # remove from the page itself.
+            return jsonify({"error": "trajectory board cache is cold"}), 503
+
+        return jsonify({"players": find_players(payload, q)})
+
     @app.route("/api/players/lookup")
     def api_player_lookup():
         """Exact (name, player_type) resolution for the auto-compare URL.

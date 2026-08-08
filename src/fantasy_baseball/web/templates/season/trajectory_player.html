@@ -26,7 +26,19 @@
   {% for name, value in cur.items() if name != 'player' %}
   <input type="hidden" name="{{ name }}" value="{{ value }}">
   {% endfor %}
-  <label>Player <input name="player" value="{{ board.name }}" placeholder="Juan Soto"></label>
+  {#- `autocomplete="off"` so the browser's own history dropdown does not sit on top of
+      the suggestion list.
+
+      The list element itself is NOT here: `trajectory_suggest.js` creates it, along
+      with the combobox ARIA that describes it. An empty <ul> in the markup would be a
+      listbox that never fills and an `aria-controls` pointing at nothing for a reader
+      without JS -- and it would sit ahead of the candidate list below, where the first
+      `</ul>` in the page is load-bearing for how that block is read.
+
+      With JS off this stays exactly the GET form it has always been, which is why the
+      server-side substring fallback lands the same fix without any of this. -#}
+  <label>Player <input name="player" id="traj-player" value="{{ board.name }}"
+    placeholder="Witt" autocomplete="off"></label>
   <button type="submit">Search</button>
 </form>
 
@@ -36,8 +48,17 @@
     permanent dead end. Each link carries `pid` AND `ppool`: the id separates same-pool
     namesakes (two hitters named Max Muncy), the pool separates a two-way player, whose
     two rows can share both id and age. -#}
+{#- TWO PATHS FILL THIS LIST and they are different claims (#350). An exact name that
+    matched two rows IS a collision on this board. A substring that matched some rows is
+    not -- saying "more than one player is named bat" there would assert something false
+    about the board. `board.suggested` is which one happened. -#}
+{% if board.suggested %}
+<p class="warning">No player is named exactly "{{ board.name }}" on this board.
+Closest matches -- pick one:</p>
+{% else %}
 <p class="warning">More than one player is named "{{ board.name }}" on this board. Roster
 blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:</p>
+{% endif %}
 <ul>
   {% for c in board.candidates %}
   <li><a href="{{ ctl.board_url(cur, player=c.name, pid=c.id, ppool=c.pool) }}">{{ c.name }}</a>
@@ -187,4 +208,5 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     duplicating it -- see the module docstring in trajectory_chart.js. -#}
 <script src="{{ url_for('static', filename='season_trends.js') }}"></script>
 <script src="{{ url_for('static', filename='trajectory_chart.js') }}"></script>
+<script src="{{ url_for('static', filename='trajectory_suggest.js') }}"></script>
 {% endblock %}

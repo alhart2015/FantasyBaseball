@@ -1735,6 +1735,10 @@ def test_a_partial_name_falls_back_to_candidates_instead_of_a_dead_end(
     """
     view = build_player_view(payload, player="bat", chart=None)
     assert view.found is False
+    # The discriminator the page needs: "more than one player is named bat, pick one"
+    # is a claim about the board, and it is false here. Without this flag the page
+    # would assert a name collision that did not happen.
+    assert view.suggested is True
     names = [c["name"] for c in view.candidates]
     assert "Big Bat" in names and "Small Bat" in names, names
     for candidate in view.candidates:
@@ -1748,3 +1752,20 @@ def test_a_name_absent_from_the_board_still_reports_absent(payload: dict) -> Non
     view = build_player_view(payload, player="Nobody Here", chart=None)
     assert view.found is False
     assert view.candidates == []
+    assert view.suggested is False
+
+
+def test_an_ambiguous_exact_name_is_a_collision_not_a_suggestion() -> None:
+    """Both paths fill `candidates`, and the page says something different about each.
+    An exact name matching two rows IS a collision; a substring match is not.
+    """
+    blob = _named_payload(
+        [
+            (1, "Max Muncy", "hitter", 35, "1B", [7.0, 7.0, 7.0]),
+            (2, "Max Muncy", "hitter", 22, "SS", [6.0, 6.0, 6.0]),
+        ]
+    )
+    view = build_player_view(blob, player="Max Muncy", chart=None)
+    assert view.found is False
+    assert len(view.candidates) == 2
+    assert view.suggested is False, "an exact-name collision is not a suggestion"

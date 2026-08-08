@@ -657,7 +657,8 @@ class PlayerView:
     #: The age at which he matched the subject is `PlayerView.age`, identical on every
     #: card: `closest_paths` selects on `prepared.age == float(age)`, an exact match.
     comps: list[dict]
-    #: Populated ONLY when the name was ambiguous; the caller renders these instead of a
+    #: Populated when the name was ambiguous OR when it matched nothing exactly and the
+    #: substring fallback found something (#350). The caller renders these instead of a
     #: chart, as LINKS carrying `pid`/`ppool`. Guessing puts one man's career under
     #: another's name; offering an unselectable list makes the name a permanent dead end.
     candidates: list[dict]
@@ -669,6 +670,12 @@ class PlayerView:
     ppool: str
     found: bool
     extrapolated: bool
+    #: True when `candidates` came from the substring fallback rather than from an
+    #: exact-name collision (#350). THE TWO READ DIFFERENTLY: "more than one player is
+    #: named Max Muncy, pick one" is a statement about the board, and it is false of a
+    #: list produced by typing `bat`. Without this the page would assert a collision
+    #: that did not happen.
+    suggested: bool
     base_season: int
     end_years: list[int]
     #: The PACED base season as [age, value], floor-netted exactly like `history`.
@@ -944,6 +951,7 @@ def build_player_view(
         ppool="",
         found=False,
         extrapolated=False,
+        suggested=False,
         base_season=base,
         end_years=end_years,
         meta=_board_meta(payload),
@@ -963,6 +971,7 @@ def build_player_view(
             return empty
         return replace(
             empty,
+            suggested=True,
             candidates=[
                 {
                     "id": s["id"],

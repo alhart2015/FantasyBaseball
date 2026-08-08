@@ -3360,3 +3360,75 @@ def test_the_default_views_never_read_the_chart_data_key(client, url):
 # clamp ceiling equalled the push script's stored count. Both are now the one
 # `comp_paths.MAX_COMPS`, so the parity it policed is structural and there is nothing
 # left for the two to drift apart on.
+
+
+# --------------------------------------------------------------------------
+# #350: /api/trajectory/find
+# --------------------------------------------------------------------------
+
+
+def test_trajectory_find_suggests_a_substring_match_from_the_board(client):
+    """The endpoint the type-ahead calls. Searches the BOARD, not ros_projections:
+    the two populations differ, and suggesting a name the board does not carry would
+    hand back a link that renders "no player named X on this board".
+    """
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/api/trajectory/find?q=test")
+    assert resp.status_code == 200
+    players = resp.get_json()["players"]
+    assert players, "a substring of a board name must suggest that name"
+    assert "Testy McTestface" in {p["name"] for p in players}
+    for hit in players:
+        # What a resolving link needs. Without these the suggestion lands on the
+        # candidate-disambiguation page instead of the player.
+        assert hit["id"] is not None
+        assert hit["pool"] in ("hitter", "pitcher")
+
+
+def test_trajectory_find_rejects_a_one_character_query(client):
+    """Mirrors /api/players/find, so the two searches behave the same way."""
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/api/trajectory/find?q=t")
+    assert resp.status_code == 400
+
+
+def test_trajectory_find_missing_q_returns_400(client):
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/api/trajectory/find")
+    assert resp.status_code == 400
+
+
+def test_trajectory_find_reports_a_cold_board_rather_than_an_empty_list(client):
+    """An empty 200 is indistinguishable from "nobody matched", which would make a cold
+    or unpushed cache look like a working search that found nothing.
+    """
+    with _trajectory_cache(None, None):
+        resp = client.get("/api/trajectory/find?q=test")
+    assert resp.status_code == 503
+    assert "error" in resp.get_json()
+
+
+def test_a_partial_name_renders_closest_matches_not_a_collision_claim(client):
+    """The page makes two different claims off one `candidates` list (#350). Saying
+    "more than one player is named test" when the reader typed a substring asserts
+    something false about the board.
+    """
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/trajectory?view=player&player=test")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "Closest matches" in body
+    assert "More than one player is named" not in body
+    assert "Testy McTestface" in body, "the suggestion is offered as a link"
+
+
+def test_the_search_input_degrades_to_the_plain_get_form(client):
+    """The suggestion list is layered on the existing form, not a replacement for it.
+    A reader with JS off must still submit a name.
+    """
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    body = resp.data.decode()
+    assert '<form method="get" class="trajectory-search">' in body
+    assert 'name="player"' in body
+    assert 'type="submit"' in body
