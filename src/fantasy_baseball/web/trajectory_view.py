@@ -841,7 +841,7 @@ def build_player_view(
                 # correct to keep regardless.
                 "path": [
                     {"age": sp.age + h, "value": float(v) - floor}
-                    for h, v in list(enumerate(c["path"], start=1))[: len(sp.sgp)]
+                    for h, v in enumerate(c["path"][: len(sp.sgp)], start=1)
                 ],
             }
             for c in row.get("comps", [])[:want]
