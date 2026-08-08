@@ -2732,11 +2732,16 @@ def test_trajectory_player_view_unknown_name_does_not_500(client):
 
 
 def test_trajectory_player_view_degrades_on_a_legacy_positional_points_blob(client):
-    """`build_player_view` reads `row["sgp"]` points directly rather than through
-    `from_payload`/`_unpack` -- a second, independent reader of the point schema. A
-    payload storing points positionally (the pre-#332 shape the league board already
-    degrades against, via `from_payload` -> `_unpack`) must not 500 the player view
-    just because it has its own reader."""
+    """A pre-#332 blob storing points positionally must degrade, not 500.
+
+    That shape is what is deployed in production today, and the guard against it lives
+    in `_unpack` -- ONE guard, because since 757fb9fc there is one reader: the player
+    view goes through `player_from_row` instead of unpacking `row["sgp"]` itself. This
+    docstring used to describe that deleted second reader and told a future editor the
+    duplication was deliberate. What it guards now is that the single guard's
+    `ValueError` still reaches this page as a degraded banner rather than a 500 -- the
+    route catches `ValueError`, so a change that let a `TypeError` escape instead
+    would break exactly here."""
     payload = _trajectory_payload()
     payload["players"] = [
         {**p, "sgp": [[1, 14.0, 10.0, 18.0, 100.0, 0], [2, 15.0, 11.0, 19.0, 90.0, 0]]}
