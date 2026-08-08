@@ -221,3 +221,26 @@ regression_churn:  true    prev=[3 findings from pass 4], current=[1 from pass 7
 
 Which is the whole point: the run that churned now says so, and the signal that
 was right about decay is untouched.
+
+### A limit the first real use surfaced
+
+Pass 9 of that same branch was the browser-verified enumeration the escalation asked
+for. It fixed the two confirmed defects, refuted three by measurement, and its own
+self-review then caught two defects the batch had just written -- before committing,
+and one of them by the new browser gate. Both were recorded with `--regression`,
+because they were, and `regression_churn` fires again on 7 -> 9.
+
+That is factually right and operationally misleading. **The signal cannot see the
+difference between a defect caught by the NEXT pass and one caught in-batch by the
+hand that wrote it.** The first means the loop is losing; the second is the loop
+working exactly as intended. The distinction is not decay, it is not provenance --
+it is latency between writing a defect and catching it, which nothing currently
+records.
+
+Do not paper this over by letting a fixer clear the flag: sticky provenance is what
+keeps the record honest. Two candidates worth measuring on the next branch that has
+flags: charge a regression only when the pass that observed it is later than the pass
+that wrote the code (needs the writing pass recorded on the finding, not inferred), or
+carry a `caught_in_batch` marker set when the observation and the fix land in the same
+pass. Pick one on evidence from more than one run, the way this trigger's own count
+rule was picked.
