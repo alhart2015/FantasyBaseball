@@ -831,14 +831,14 @@ def build_player_view(
                 "name": c["name"],
                 "season": c["season"],
                 "rmse": c["rmse"],
-                # Truncated to the PROJECTED horizons, not the stored path length. The
-                # current push script always agrees -- `push_trajectory_board.py`
-                # derives comp paths from the same `horizons` tuple as `row["sgp"]`,
-                # and `closest_paths` raises on a length mismatch, so a produced blob
-                # never needs this slice to do anything. It is defence against a
-                # hand-built or future blob whose comp paths outrun the swept
-                # horizons, not a rule the current pipeline exercises -- cheap and
-                # correct to keep regardless.
+                # Truncated to the PROJECTED horizons, not the stored path length. A
+                # produced blob never needs this slice to do anything: comp paths come
+                # off the same `horizons` tuple as `row["sgp"]`, and a player whose
+                # observable path is SHORTER than those horizons gets no comps at all
+                # (`push_trajectory_board.player_comps`) rather than a long path beside
+                # a short projection. So this is defence against a hand-built or future
+                # blob, not a rule the current pipeline exercises -- cheap and correct
+                # to keep regardless.
                 "path": [
                     {"age": sp.age + h, "value": float(v) - floor}
                     for h, v in enumerate(c["path"][: len(sp.sgp)], start=1)
