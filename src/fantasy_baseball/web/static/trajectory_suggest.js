@@ -171,7 +171,14 @@
     clearTimeout(timer);
     timer = setTimeout(function () {
       var q = input.value.trim();
-      if (q.length < MIN_CHARS) {
+      // Counted the way the SERVER counts. Counting raw characters here let a
+      // decomposed glyph ("e" + U+0301: two code units, one letter) pass this gate,
+      // fetch, and come back 400 -- which the catch below hides, so the reader got no
+      // suggestions and no reason. Mirrors normalized_query: strip combining marks,
+      // collapse runs of whitespace.
+      var folded = q.normalize('NFD').replace(/[\u0300-\u036f]/g, '')
+                    .replace(/\s+/g, ' ').trim();
+      if (folded.length < MIN_CHARS) {
         dismiss();
         return;
       }

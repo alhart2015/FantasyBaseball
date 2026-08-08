@@ -1820,7 +1820,18 @@ def register_routes(app: Flask) -> None:
         # "nobody matched" for input this endpoint had just called long enough.
         q = request.args.get("q", "")
         if len(normalized_query(q)) < FIND_MIN_CHARS:
-            return jsonify({"error": f"q must be at least {FIND_MIN_CHARS} characters"}), 400
+            # Says what the rule IS. "at least 2 characters" is false for a query that
+            # is two characters as typed and one after accents and spacing are folded
+            # -- a decomposed glyph from macOS or an IME -- so the reader was told a
+            # 2-character string was not 2 characters.
+            return jsonify(
+                {
+                    "error": (
+                        f"q must contain at least {FIND_MIN_CHARS} letters once accents "
+                        "and repeated spaces are folded"
+                    )
+                }
+            ), 400
 
         payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
         if not payload:
