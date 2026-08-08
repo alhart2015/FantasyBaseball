@@ -1769,3 +1769,102 @@ def test_an_ambiguous_exact_name_is_a_collision_not_a_suggestion() -> None:
     assert view.found is False
     assert len(view.candidates) == 2
     assert view.suggested is False, "an exact-name collision is not a suggestion"
+
+
+# --------------------------------------------------------------------------
+# #350 follow-up: the stale-blob invariant, enumerated.
+#
+# `find_players` parses the WHOLE board, and `build_player_view`'s miss path now
+# calls it. Every state a legacy or stale blob can be in therefore reaches code
+# that previously only ran on a resolved row. Enumerated together rather than
+# patched one facet at a time.
+# --------------------------------------------------------------------------
+
+
+def _stale_payload(**overrides) -> dict:
+    """A board whose rows lack `now` -- the shape an older push wrote."""
+    blob = {
+        "base_season": BASE,
+        "max_horizon": 3,
+        "generated_at": f"stale-{next(_HAND_SEQ)}",
+        "players": [
+            {
+                "id": 1,
+                "name": "Big Bat",
+                "pool": "hitter",
+                "age": 27,
+                "slot": "OF",
+                "floor": 0.0,
+                "prior": 10.0,
+                "support": 0.9,
+                "extrapolated": 0,
+                "sgp": [
+                    {
+                        "horizon": 1,
+                        "mean": 5.0,
+                        "p10": 0.0,
+                        "p90": 10.0,
+                        "n_effective": 50.0,
+                        "band_fell_back": 0,
+                    }
+                ],
+            }
+        ],
+    }
+    blob.update(overrides)
+    return blob
+
+
+def test_a_stale_blob_names_the_fix_rather_than_the_missing_field() -> None:
+    """State 1: searching a stale board. `find_players` parses every row, so it hits
+    the same missing field the resolve path does -- and must give the same actionable
+    sentence, not the bare `'now'` a raw KeyError renders as a banner.
+    """
+    with pytest.raises(ValueError) as caught:
+        find_players(_stale_payload(), "bat")
+    message = str(caught.value)
+    assert "'now'" in message, "the field must still be named"
+    assert "push_trajectory_board" in message, "and the fix must be named with it"
+
+
+def test_a_miss_on_a_stale_blob_reports_the_blob_not_a_missing_player() -> None:
+    """State 2: the regression this enumeration exists to close. A name miss used to
+    return a clean `empty`; the fallback made it raise a bare KeyError, which the route
+    renders as a banner reading literally `'now'`.
+
+    It still raises -- "No player named X on this board" would be a LIE about a board
+    that cannot be read at all -- but it raises the sentence that says what to do.
+    """
+    with pytest.raises(ValueError, match="push_trajectory_board"):
+        build_player_view(_stale_payload(), player="Nobody At All", chart=None)
+
+
+def test_an_exact_hit_on_a_stale_blob_keeps_its_original_message() -> None:
+    """State 3: the path that already had this guard must be unchanged by the hoist."""
+    with pytest.raises(ValueError, match="push_trajectory_board"):
+        build_player_view(_stale_payload(), player="Big Bat", chart=None)
+
+
+def test_a_missing_max_horizon_fails_instead_of_silently_ranking_one_year() -> None:
+    """State 4: `payload.get("max_horizon", 1)` silently ranked a single horizon, which
+    drops every player with no horizon-1 point from the suggestions while the rest of
+    the page still lists them -- unsearchable, with no error. Every other reader in
+    this module treats the field as required.
+    """
+    # A HEALTHY row, so the only thing wrong with this payload is the missing key.
+    # Built off the stale fixture it would raise on `now` instead and pass for the
+    # wrong reason.
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    del blob["max_horizon"]
+    with pytest.raises(KeyError):
+        find_players(blob, "bat")
+
+
+def test_a_null_max_horizon_fails_as_a_payload_error_not_a_TypeError() -> None:
+    """State 5: `int(None)` raised TypeError, which neither the route nor the endpoint
+    catches -- an unhandled 500 rather than a reported bad payload.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    blob["max_horizon"] = None
+    with pytest.raises(ValueError, match="max_horizon"):
+        find_players(blob, "bat")

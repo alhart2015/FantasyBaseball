@@ -1822,7 +1822,19 @@ def register_routes(app: Flask) -> None:
             # remove from the page itself.
             return jsonify({"error": "trajectory board cache is cold"}), 503
 
-        return jsonify({"players": find_players(payload, q)})
+        try:
+            return jsonify({"players": find_players(payload, q)})
+        except (ValueError, KeyError) as exc:
+            # `find_players` parses the WHOLE board, so a legacy or stale blob raises
+            # here exactly as it does in the page's builders -- and `/trajectory` wraps
+            # those for the same reason. Without this the blob is an unhandled 500, and
+            # the type-ahead's own `.catch` hides it: the reader sees a search that
+            # silently never suggests while the server logs a 500 per keystroke.
+            #
+            # 503 rather than 500: the board is unusable, which is the same condition
+            # as the cold cache above and is fixed the same way.
+            logger.warning("trajectory find: unreadable board payload: %s", exc)
+            return jsonify({"error": str(exc)}), 503
 
     @app.route("/api/players/lookup")
     def api_player_lookup():

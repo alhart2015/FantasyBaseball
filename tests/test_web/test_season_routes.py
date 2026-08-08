@@ -3432,3 +3432,23 @@ def test_the_search_input_degrades_to_the_plain_get_form(client):
     assert '<form method="get" class="trajectory-search">' in body
     assert 'name="player"' in body
     assert 'type="submit"' in body
+
+
+def test_trajectory_find_reports_a_stale_board_rather_than_500ing(client):
+    """The endpoint half of the stale-blob invariant (#350 follow-up).
+
+    `find_players` parses the whole board, so a legacy or stale blob raises there. The
+    /trajectory route wraps its builders; this endpoint did not, so the same blob was
+    an unhandled 500 -- and the JS `.catch` swallows it, leaving a type-ahead that
+    silently never suggests while the server logs a 500 per keystroke.
+    """
+    stale, chart = _trajectory_board_and_chart()
+    for row in stale["players"]:
+        row.pop("now", None)
+    stale["generated_at"] = "stale-for-find"  # do not share the parse cache
+
+    with _trajectory_cache(stale, chart):
+        resp = client.get("/api/trajectory/find?q=test")
+    assert resp.status_code == 503, "a board that cannot be parsed is not a 500"
+    body = resp.get_json()
+    assert "push_trajectory_board" in body["error"], "say what to do, not just what broke"

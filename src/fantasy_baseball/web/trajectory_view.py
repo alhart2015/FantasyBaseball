@@ -22,7 +22,7 @@ from __future__ import annotations
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, NoReturn
 
 from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.comp_paths import MAX_COMPS
@@ -749,6 +749,42 @@ FIND_MIN_CHARS = 2
 FIND_RESULT_CAP = 25
 
 
+def _raise_stale_board(exc: KeyError) -> NoReturn:
+    """The one sentence a stale board gets, wherever it is discovered.
+
+    A bare `KeyError('now')` reaches the reader as a red banner containing literally
+    `'now'`: it names the field and nothing else, with no hint that the payload is the
+    problem or that a re-push fixes it. Spelled ONCE because there are now two callers
+    that can hit it -- resolving a row, and scanning every row to suggest names -- and
+    the second was added ABOVE the first, which silently bypassed the guard the first
+    one had.
+    """
+    raise ValueError(
+        f"trajectory board payload row is missing {exc.args[0]!r}, which this "
+        "build requires; re-run scripts/push_trajectory_board.py"
+    ) from exc
+
+
+def _board_horizons(payload: dict) -> tuple[int, ...]:
+    """Every horizon this board carries. `max_horizon` is REQUIRED.
+
+    Not `.get("max_horizon", 1)`: a default silently ranks a single horizon, which
+    drops every player with no horizon-1 point out of `totals()` and makes them
+    unsearchable while the rest of the page still lists them -- a wrong answer with no
+    error. Every other reader in this module treats the field as required.
+    """
+    raw = payload["max_horizon"]  # KeyError names the field, which is the right failure
+    try:
+        return tuple(range(1, int(raw) + 1))
+    except (TypeError, ValueError) as exc:
+        # `int(None)` is a TypeError that neither the route nor the endpoint catches,
+        # so it reaches the reader as an unhandled 500 rather than a reported payload.
+        raise ValueError(
+            f"trajectory board payload has max_horizon={raw!r}, which is not a whole "
+            "number; re-run scripts/push_trajectory_board.py"
+        ) from exc
+
+
 def find_players(payload: dict, query: str, *, cap: int = FIND_RESULT_CAP) -> list[dict]:
     """Board rows whose name contains `query`, best offer first.
 
@@ -777,9 +813,13 @@ def find_players(payload: dict, query: str, *, cap: int = FIND_RESULT_CAP) -> li
     if len(needle) < FIND_MIN_CHARS:
         return []
 
-    max_horizon = int(payload.get("max_horizon", 1))
-    horizons = tuple(range(1, max_horizon + 1))
-    rows = _ranked_rows(payload, horizons, "var")
+    horizons = _board_horizons(payload)
+    try:
+        rows = _ranked_rows(payload, horizons, "var")
+    except KeyError as exc:
+        # This scans EVERY row, so a stale board is discovered here rather than on the
+        # one resolved row -- and it must say the same thing when it is.
+        _raise_stale_board(exc)
 
     scored: list[tuple[int, int, dict]] = []
     for row in rows:
@@ -1021,10 +1061,7 @@ def build_player_view(
         # right -- a missing field must fail on its own name, which is exactly what
         # `_pack`'s docstring says named keys bought. What was missing is the same
         # actionable sentence `_unpack` already gives the positional-blob case.
-        raise ValueError(
-            f"trajectory board payload row is missing {exc.args[0]!r}, which this "
-            "build requires; re-run scripts/push_trajectory_board.py"
-        ) from exc
+        _raise_stale_board(exc)
     # THE offset, from the one place it is defined -- see `var_offset`'s docstring.
     # Not `float(row["floor"]) if scale == "var" else 0.0` inline: that is a third
     # spelling of the same rule `SweptPlayer.offset` already carries, and it disagreed
