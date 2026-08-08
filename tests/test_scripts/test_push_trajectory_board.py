@@ -390,3 +390,22 @@ def test_the_chart_data_carries_career_history_and_comps(monkeypatch) -> None:
         assert len(first["path"]) == 5
         rmses = [c["rmse"] for c in player["comps"]]
         assert rmses == sorted(rmses), "closest first"
+
+
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "drives the real build_payload, which loads data/trajectory/*_pt_panel_*.csv and "
+        "data/cache/keeper_skills -- both gitignored, so this cannot run on a fresh clone"
+    ),
+)
+def test_the_push_stamps_whether_the_base_season_is_still_running() -> None:
+    """Read off the PANEL, never off today's date. `_live_seasons` in build_pt_panel.py
+    flags a season partial iff `year >= today.year`, so the reader has to follow the
+    panel the board was actually built from."""
+    module = _script()
+    payload, _, _ = module.build_payload(max_horizon=3, panel_dir=PANEL_DIR)
+
+    assert payload["base_season_partial"] is True, (
+        "the shipped 2000-2026 panels were built during the 2026 season"
+    )

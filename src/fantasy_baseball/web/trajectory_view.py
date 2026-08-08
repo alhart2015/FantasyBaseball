@@ -214,6 +214,13 @@ def _board_meta(payload: dict) -> dict:
         "floors": payload.get("floors", {}),
         "excluded": payload.get("excluded", {}),
         "min_local_support": MIN_LOCAL_SUPPORT,
+        # Whether the base season was still running when this board was built, which is
+        # what stops `paced_label` calling a finished year a "pace". Defaults TRUE:
+        # every blob written before this field existed was written mid-season, and the
+        # suppression rule in `build_player_view` -- not this flag -- decides whether
+        # the point is drawn at all. `dict.get` with a default rather than `or`, per
+        # CLAUDE.md: `False or True` is `True` and would invert a real answer.
+        "base_season_partial": bool(payload.get("base_season_partial", True)),
     }
 
 

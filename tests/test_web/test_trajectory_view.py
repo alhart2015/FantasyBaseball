@@ -1335,6 +1335,25 @@ def test_ambiguous_candidates_are_ordered_by_id(payload: dict) -> None:
     assert [c["id"] for c in view.candidates] == [first["id"] - 10_000, first["id"]]
 
 
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [({"base_season_partial": False}, False), ({"base_season_partial": True}, True), ({}, True)],
+)
+def test_the_board_meta_reports_whether_the_base_season_was_still_running(
+    stored: dict, expected: bool
+) -> None:
+    """`paced_label` must not call a finished season a pace, and only the push can
+    tell: `partial_season` is a panel column and nothing else survives to the reader.
+
+    An EMPTY payload is an old blob, which was necessarily written mid-season -- so
+    True is both the compatible default and the true one. `dict.get` with a default
+    rather than `or`, per CLAUDE.md: `False or True` is `True`.
+    """
+    from fantasy_baseball.web.trajectory_view import _board_meta
+
+    assert _board_meta(stored)["base_season_partial"] is expected
+
+
 def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> None:
     """The push script's `groupby` happens to emit ascending; nothing in the payload
     schema guarantees it. An unsorted blob must still render a left-to-right career,

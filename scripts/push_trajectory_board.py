@@ -297,6 +297,14 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         max_horizon=max_horizon,
         min_sgp=MIN_SGP,
         season_elapsed=round(elapsed, 4),
+        # Whether `season` was still in progress when this panel was built. Read off
+        # the panel rather than the calendar date: `_live_seasons` in build_pt_panel.py
+        # flags a season partial iff `year >= today.year`, so a panel rebuilt in
+        # January un-flags the season that just ended -- and the reader must follow the
+        # panel it was actually built from, not today's date.
+        base_season_partial=bool(
+            calendar.loc[calendar["season"] == season, "partial_season"].any()
+        ),
         generated_at=generated_at,
         # The vintage a reader must be shown. Filenames, not a timestamp: the panel is a
         # build artifact whose span is what identifies it.
