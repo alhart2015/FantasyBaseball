@@ -1004,7 +1004,11 @@ def _chart(payload: dict) -> dict:
     return to_chart_payload(
         {
             (p["id"], p["pool"]): {
-                "history": [[25, 14.0], [26, 16.0], [27, 20.0]],
+                # The subject's OWN base-season age is never in here: the push builds
+                # history from `complete = live[~live["partial_season"]]`, which excludes
+                # the season in progress by construction. These players are 27, so the
+                # career stops at 26 -- a blob the writer could actually have written.
+                "history": [[24, 14.0], [25, 16.0], [26, 20.0]],
                 "comps": [
                     {
                         "name": f"Comp {i}",
@@ -1047,7 +1051,7 @@ def test_a_player_is_found_by_name_with_his_career_and_projection(payload: dict)
     view = _view(payload, player="Big Bat")
     assert view.found
     assert view.name == "Big Bat"
-    assert [pt[0] for pt in view.history] == [25, 26, 27], "career ascends by age"
+    assert [pt[0] for pt in view.history] == [24, 25, 26], "career ascends by age"
     assert len(view.projection) == 3, "the fixture sweeps three horizons"
     assert all(p["p10"] <= p["mean"] <= p["p90"] for p in view.projection)
 
@@ -1252,7 +1256,7 @@ def test_the_chart_lookup_keeps_the_pool_so_a_two_way_player_keeps_his_own_caree
     hitter = build_player_view(twin, chart=chart, player="Big Bat", ppool="hitter", scale="sgp")
     pitcher = build_player_view(twin, chart=chart, player="Big Bat", ppool="pitcher", scale="sgp")
     assert hitter.history == [[24, 99.0]], "the hitter row read the hitter's entry"
-    assert pitcher.history == [[25, 14.0], [26, 16.0], [27, 20.0]], "and not the other way"
+    assert pitcher.history == [[24, 14.0], [25, 16.0], [26, 20.0]], "and not the other way"
 
 
 def test_the_var_axis_nets_every_series_against_the_QUERY_players_floor(payload: dict) -> None:
@@ -1339,9 +1343,9 @@ def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> N
     """
     scrambled = _chart(payload)
     key = chart_key(payload["players"][0]["id"], payload["players"][0]["pool"])
-    scrambled["players"][key] = {"history": [[27, 20.0], [25, 14.0], [26, 16.0]], "comps": []}
+    scrambled["players"][key] = {"history": [[26, 20.0], [24, 14.0], [25, 16.0]], "comps": []}
 
     view = build_player_view(payload, player="Big Bat", chart=scrambled)
     ages = [pt[0] for pt in view.history]
     assert ages == sorted(ages), "career must render left-to-right by age"
-    assert ages == [25, 26, 27]
+    assert ages == [24, 25, 26]
