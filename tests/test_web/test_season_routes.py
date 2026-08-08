@@ -2900,9 +2900,7 @@ def test_trajectory_player_view_names_the_fix_for_a_row_missing_a_field(client):
     gives the positional-blob case an actionable sentence; this is the same one.
     """
     payload = _trajectory_payload()
-    payload["players"] = [
-        {k: v for k, v in p.items() if k != "now"} for p in payload["players"]
-    ]
+    payload["players"] = [{k: v for k, v in p.items() if k != "now"} for p in payload["players"]]
     with patch(
         "fantasy_baseball.web.season_routes.read_cache_dict",
         return_value=payload,
