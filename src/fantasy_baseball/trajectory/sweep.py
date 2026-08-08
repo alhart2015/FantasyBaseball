@@ -98,10 +98,14 @@ class YearPoint:
 class SweptPlayer:
     """One player, fitted ONCE on raw SGP, at every horizon the sweep reached."""
 
-    #: The only unique key on a board row. Names are NOT unique even within a pool -- the
-    #: live board carries two hitters called Max Muncy -- so anything joining, charting or
-    #: linking a row must key on this. #324 needs it to name comps; #284 is the roster
-    #: side of the same problem.
+    #: HALF the unique key on a board row, which is `(mlbam_id, pool)`. Names are NOT
+    #: unique even within a pool -- the live board carries two hitters called Max Muncy --
+    #: and the id alone is not unique either, because a two-way player is produced ONCE
+    #: PER POOL (see `test_a_two_way_player_keeps_one_line_per_pool`). Anything joining,
+    #: charting or linking a row must key on the PAIR: this comment used to call the id
+    #: "the only unique key", and that belief is what keyed `to_payload`'s `extras` on the
+    #: bare id, so Ohtani's hitter row carried his pitching career line and pitcher comps.
+    #: #324 needs the id to name comps; #284 is the roster side of the same problem.
     mlbam_id: int
     name: str
     pool: str
@@ -339,14 +343,19 @@ def _unpack(packed: dict[str, float], age: int) -> YearPoint:
 def to_payload(
     players: Iterable[SweptPlayer],
     *,
-    extras: dict[int, dict] | None = None,
+    extras: dict[tuple[int, str], dict] | None = None,
     **meta: Any,
 ) -> dict:
     """Serialize a sweep for the KV. `meta` carries the vintage the reader must show.
 
     `extras` is per-player data the SWEEP does not produce -- career history and comps,
-    which need the panel and the people cache rather than the fit. Keyed by mlbam_id and
-    merged in here so `SweptPlayer` does not grow fields that only one consumer wants.
+    which need the panel and the people cache rather than the fit. Merged in here so
+    `SweptPlayer` does not grow fields that only one consumer wants.
+
+    KEYED ON `(mlbam_id, pool)`, the unique key on a board row -- see `SweptPlayer`. It
+    was keyed on the bare id, which a two-way player breaks: he is swept once per pool,
+    so the pitcher pass overwrote the hitter's entry and both rows rendered the pitcher's
+    career line and pitcher comps.
     """
     per_player = extras or {}
     return {
@@ -365,7 +374,7 @@ def to_payload(
                 "extrapolated": int(p.extrapolated),
                 # RAW only; VAR is derived on read. See the module docstring.
                 "sgp": [_pack(y) for y in p.sgp],
-                **per_player.get(p.mlbam_id, {}),
+                **per_player.get((p.mlbam_id, p.pool), {}),
             }
             for p in players
         ],

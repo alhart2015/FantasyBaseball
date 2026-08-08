@@ -149,7 +149,11 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     elapsed = season_elapsed_fraction(calendar, season)
 
     swept = []
-    extras: dict[int, dict] = {}
+    # KEYED ON `(mlbam_id, pool)`, never the bare id. This dict lives OUTSIDE the pool
+    # loop, and a two-way player is produced once per pool -- so on a bare id the pitcher
+    # pass overwrote the hitter's entry and Ohtani's hitter row rendered his pitching
+    # career line and pitcher comps. See `SweptPlayer.mlbam_id`.
+    extras: dict[tuple[int, str], dict] = {}
     excluded = {"low_sgp": 0, "no_current_line": 0}
     for kind in ("hitter", "pitcher"):
         live = calendar if kind == "hitter" else load(kind)
@@ -221,7 +225,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
                 age=player.age,
                 n=MAX_COMPS,
             )
-            extras[player.mlbam_id] = {
+            extras[(player.mlbam_id, player.pool)] = {
                 "history": history,
                 "comps": [
                     {

@@ -193,6 +193,44 @@ def test_a_two_way_player_keeps_one_line_per_pool() -> None:
     assert len({(r["id"], r["pool"]) for r in scored}) == 2
 
 
+def test_extras_are_keyed_on_the_pool_as_well_as_the_id() -> None:
+    """A two-way player's two rows must keep their OWN history and comps.
+
+    `extras` was keyed on the bare mlbam_id, so the pitcher pass overwrote the hitter's
+    entry and BOTH rows rendered the pitcher's career line and pitcher comps. Reproduced
+    on the live board: id 660271 appears twice, once as a UTIL hitter and once as an SP.
+    The unique key on a board row is `(mlbam_id, pool)` -- the same defect class as
+    CLAUDE.md's `name::player_type` rule.
+    """
+    rows = [
+        BoardRow(660271, "Shohei Ohtani", "hitter", 31, 16.6, 22.6, "UTIL", 4.0),
+        BoardRow(660271, "Shohei Ohtani", "pitcher", 31, 13.2, 12.0, "SP", 3.0),
+    ]
+    swept = sweep_pool(rows[:1], synthetic_panel(), "hitter", (1,)) + sweep_pool(
+        rows[1:], synthetic_panel(), "pitcher", (1,)
+    )
+    payload = to_payload(
+        swept,
+        extras={
+            (660271, "hitter"): {
+                "history": [[30, 16.0]],
+                "comps": [{"name": "A Bat", "season": 2011, "rmse": 1.0, "path": [15.0]}],
+            },
+            (660271, "pitcher"): {
+                "history": [[30, 12.0]],
+                "comps": [{"name": "An Arm", "season": 2012, "rmse": 2.0, "path": [11.0]}],
+            },
+        },
+        base_season=2026,
+    )
+    by_pool = {p["pool"]: p for p in payload["players"]}
+    assert set(by_pool) == {"hitter", "pitcher"}
+    assert by_pool["hitter"]["history"] == [[30, 16.0]]
+    assert by_pool["pitcher"]["history"] == [[30, 12.0]]
+    assert [c["name"] for c in by_pool["hitter"]["comps"]] == ["A Bat"]
+    assert [c["name"] for c in by_pool["pitcher"]["comps"]] == ["An Arm"]
+
+
 def test_ranks_run_over_the_whole_pool_and_break_ties_by_name() -> None:
     scored = [
         {"name": "B", "total": 5.0, "next": 1.0},
