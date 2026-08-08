@@ -673,6 +673,30 @@ class PlayerView:
     extrapolated: bool
     base_season: int
     end_years: list[int]
+    #: The PACED base season as [age, value], floor-netted exactly like `history`.
+    #:
+    #: NOT part of `history`, which means "realized complete seasons" -- several
+    #: template branches key on `not board.history` to report a missing or mismatched
+    #: chart blob, and folding a board-sourced point into a chart-blob-sourced list
+    #: would make that check stop meaning what it says. It is DRAWN as the same line.
+    #:
+    #: The VALUE is straight-line prorated realized stats, never a projection blend:
+    #: `board_inputs` -> `_paced` -> `prorate_partial` divides realized SGP by the
+    #: elapsed fraction. No ROS projection reaches this model (#346), which
+    #: tests/test_trajectory/test_no_ros_dependency.py keeps true.
+    #:
+    #: `None` when the player was not found, or when `age` is ALREADY a realized row in
+    #: `history` -- see the suppression rule in `build_player_view`.
+    #:
+    #: Defaulted, and placed here rather than beside `history` where it reads more
+    #: naturally: `meta` below is the first field carrying a default, so a defaulted
+    #: field any earlier puts one ahead of `projection`/`candidates`/`found` and raises
+    #: `TypeError: non-default argument follows default argument` at import.
+    paced: list[float] | None = None
+    #: What to call the paced point, finished server-side. Same rule as `axis_label`:
+    #: ship the string, not the ingredients, so the chart and the table cannot disagree
+    #: about whether the season is over.
+    paced_label: str = ""
     meta: dict = field(default_factory=dict)
     #: The chart data that arrived is stamped for a DIFFERENT board than this one, so
     #: `history` and `comps` were dropped rather than drawn. A distinct state from
@@ -880,6 +904,24 @@ def build_player_view(
     # bare id: a two-way player has one entry per pool, and the id alone would hand the
     # hitter row the pitcher's career.
     extras, mismatch = _chart_extras(payload, chart, sp.mlbam_id, sp.pool)
+    # Sorted by age rather than trusted in payload order: the push script's groupby
+    # happens to emit ascending, but nothing enforces it, and an unsorted blob would
+    # zigzag the chart with every other assertion here still green.
+    history = sorted(
+        ([int(a), float(v) - floor] for a, v in extras.get("history", [])),
+        key=lambda pt: pt[0],
+    )
+    # THE SUPPRESSION RULE. `_live_seasons` (build_pt_panel.py) flags a season partial
+    # iff `year >= today.year`, so a panel rebuilt in January un-flags the season that
+    # just ended: it enters `complete`, lands in `history`, and `base_season` still
+    # names it. Appending `now` beside it draws two points at one age, one of them
+    # labelled a pace, on a finished year.
+    #
+    # Decided from `history` rather than from the stored `base_season_partial` flag
+    # because this works on EVERY blob, including ones written before that flag existed.
+    # The flag labels the point; this decides whether there is one.
+    realized_ages = {pt[0] for pt in history}
+    paced = None if sp.age in realized_ages else [sp.age, float(sp.now) - floor]
     return replace(
         empty,
         name=sp.name,
@@ -897,14 +939,10 @@ def build_player_view(
         floor=floor,
         found=True,
         extrapolated=sp.extrapolated,
-        # Sorted by age rather than trusted in payload order: the push script's
-        # groupby happens to emit ascending, but nothing enforces it, and an unsorted
-        # blob would zigzag the chart with every other assertion here still green.
         chart_vintage_mismatch=mismatch,
-        history=sorted(
-            ([int(a), float(v) - floor] for a, v in extras.get("history", [])),
-            key=lambda pt: pt[0],
-        ),
+        history=history,
+        paced=paced,
+        paced_label=f"{base} pace" if empty.meta["base_season_partial"] else str(base),
         # `points(scale)` applies the offset; `YearPoint.age` is already `age + horizon`.
         projection=[
             {"age": p.age, "mean": p.mean, "p10": p.p10, "p90": p.p90} for p in sp.points(scale)

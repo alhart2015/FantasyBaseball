@@ -1335,6 +1335,94 @@ def test_ambiguous_candidates_are_ordered_by_id(payload: dict) -> None:
     assert [c["id"] for c in view.candidates] == [first["id"] - 10_000, first["id"]]
 
 
+def _chart_including_base_age(payload: dict) -> dict:
+    """A chart blob whose history runs THROUGH the subject's base-season age.
+
+    The panel produces this only after the season ends and the panel is rebuilt --
+    `_live_seasons` un-flags the finished year, it enters `complete`, and it lands in
+    `history` while `base_season` still names it. Hand-built here because the fixture
+    (correctly) does not contain it.
+    """
+    return to_chart_payload(
+        {
+            (p["id"], p["pool"]): {
+                "history": [[25, 16.0], [26, 20.0], [27, 21.0]],
+                "comps": [],
+            }
+            for p in payload["players"]
+        },
+        generated_at=str(payload["generated_at"]),
+    )
+
+
+def test_the_paced_season_is_the_boards_now_netted_against_the_same_floor(
+    payload: dict,
+) -> None:
+    """The gap at the base season was the most useful point on the chart. `now` is
+    already in the board payload -- this only draws it."""
+    row = next(p for p in payload["players"] if p["name"] == "Big Bat")
+    var = _view(payload, player="Big Bat", scale="var")
+    sgp = _view(payload, player="Big Bat", scale="sgp")
+
+    assert var.paced == [row["age"], pytest.approx(row["now"] - row["floor"])]
+    assert sgp.paced == [row["age"], pytest.approx(row["now"])]
+
+
+def test_the_paced_season_is_ordered_after_every_realized_one(payload: dict) -> None:
+    """The chart concatenates history + paced into one line with no re-sort, so the
+    paced age must be strictly the largest."""
+    view = _view(payload, player="Big Bat")
+    assert view.paced is not None
+    assert view.history, "the fixture stores a career"
+    assert max(pt[0] for pt in view.history) < view.paced[0]
+
+
+def test_a_base_season_already_realized_gets_no_paced_point(payload: dict) -> None:
+    """The offseason case. A panel rebuilt after the season ends un-flags it, so it
+    enters `history` -- and appending `now` beside it would draw two points at one age,
+    one of them labelled a pace, on a finished year."""
+    view = build_player_view(payload, player="Big Bat", chart=_chart_including_base_age(payload))
+    assert view.age == 27, "the fixture's players are 27, which this blob's history covers"
+    assert view.paced is None
+    assert [pt[0] for pt in view.history] == [25, 26, 27], "history is left alone"
+
+
+def test_the_paced_point_survives_a_chart_blob_that_does_not(payload: dict) -> None:
+    """`now` comes from the BOARD, so it is never stale against the projection beside
+    it. A refused chart blob costs the career line and the comps, not the anchor."""
+    stale = _chart(payload)
+    stale["generated_at"] = "some other build"
+    view = build_player_view(payload, player="Big Bat", chart=stale)
+
+    assert view.history == [] and view.comps == []
+    assert view.chart_vintage_mismatch
+    assert view.paced is not None, "board data, not chart data"
+
+
+def test_an_unfound_player_has_no_paced_point(payload: dict) -> None:
+    view = _view(payload, player="Nobody At All")
+    assert view.paced is None
+    assert view.paced_label == ""
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [(True, "2026 pace"), (False, "2026"), (None, "2026 pace")],
+)
+def test_the_paced_label_follows_the_boards_own_partial_flag(
+    payload: dict, stored: object, expected: str
+) -> None:
+    """Built server-side like `axis_label`: the chart and the table read one string and
+    cannot disagree about whether the season is finished. `None` is an old blob, which
+    was written mid-season."""
+    blob = {**payload}
+    if stored is not None:
+        blob["base_season_partial"] = stored
+    blob["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
+    view = build_player_view(blob, player="Big Bat", chart=None)
+    assert view.paced_label == expected
+
+
 @pytest.mark.parametrize(
     ("stored", "expected"),
     [({"base_season_partial": False}, False), ({"base_season_partial": True}, True), ({}, True)],
