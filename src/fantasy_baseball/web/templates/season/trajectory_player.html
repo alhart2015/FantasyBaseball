@@ -81,7 +81,8 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 <script type="application/json" id="trajectory-chart-data">{{ {
   "name": board.name, "axis_label": board.axis_label, "history": board.history,
   "paced": board.paced, "paced_label": board.paced_label,
-  "projection": board.projection, "comps": board.comps} | tojson }}</script>
+  "projection": board.projection, "comps": board.comps,
+  "comp_careers": board.comp_careers} | tojson }}</script>
 
 {% if board.comps %}
 <h3>Closest realized paths <span class="muted">({{ board.comps | length }})</span></h3>
@@ -95,6 +96,35 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     {% endfor %}
   </tbody>
 </table>
+
+{#- ONE CARD PER COMP. Stacked on the projection a comp is five grey points across the
+    subject's projected ages -- it shows the forward path and nothing about the player
+    it belongs to. The whole arc, with the match age marked, is what makes "Bogaerts at
+    25" mean something.
+
+    Skipped entirely when NO comp has a stored arc: an old blob, or a push that wrote
+    comps before careers existed. Ten identical notices in a ten-cell grid is noise
+    about a single cause. -#}
+{% if board.comp_careers | selectattr('career') | list %}
+<div class="comp-grid">
+  {% for c in board.comp_careers %}
+  <div class="comp-card">
+    <h4>{{ c.name }}
+      <span class="muted">{{ c.season }} -- RMSE {{ '%.2f'|format(c.rmse) }}</span></h4>
+    {% if c.career %}
+    <div class="comp-card-chart"><canvas id="comp-chart-{{ loop.index0 }}"></canvas></div>
+    {% else %}
+    <p class="muted">No stored career -- re-run <code>push_trajectory_board.py</code>.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">
+  No stored comp careers -- this board predates them. A re-push of
+  <code>push_trajectory_board.py</code> will fill them in.
+</p>
+{% endif %}
 {% else %}
 <h3>Closest realized paths</h3>
 {#- TWO CAUSES, TWO MESSAGES. A mismatch is not a missing feature: the chart data is

@@ -3920,3 +3920,29 @@ td[style*="--neg"] {
   cursor: pointer;
 }
 .trajectory-search button:hover { border-color: var(--accent); }
+
+/* Per-comp career cards (#346). Small multiples: each comp's whole arc with the match
+   age marked, rather than a forward path stacked on the subject's chart. Theme vars
+   only, so the grid follows light/dark like every other surface. */
+.comp-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 12px;
+  margin: 12px 0 18px;
+}
+.comp-card {
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.comp-card h4 {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--ink);
+}
+.comp-card h4 .muted { font-size: 11px; font-weight: normal; }
+/* Fixed height for the same reason .chart-wrapper has one: Chart.js's default
+   maintainAspectRatio ignores the box and draws roughly twice its height. */
+.comp-card-chart { position: relative; height: 180px; }
+.comp-card-chart canvas { display: block; width: 100%; height: 100%; }

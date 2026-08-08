@@ -2662,8 +2662,12 @@ def _trajectory_chart(payload):
 
     A SECOND key, carrying the board's own `generated_at` -- the player view refuses
     extras stamped for a different board, and only that view reads them at all.
+
+    Comps carry `id`s and the blob carries a deduped `careers` map (#346), because that
+    is what a real push writes: a fixture without them exercises only the
+    old-blob degradation path and never the one the page is built for.
     """
-    from fantasy_baseball.trajectory.sweep import to_chart_payload
+    from fantasy_baseball.trajectory.sweep import chart_key, to_chart_payload
 
     return to_chart_payload(
         {
@@ -2671,12 +2675,14 @@ def _trajectory_chart(payload):
                 "history": [[25, 14.0], [26, 16.0]],
                 "comps": [
                     {
+                        "id": 110,
                         "name": "Andre Ethier",
                         "season": 2007,
                         "rmse": 1.25,
                         "path": [12.7, 14.4, 12.1, 9.2, 12.2],
                     },
                     {
+                        "id": 111,
                         "name": "Bryan Reynolds",
                         "season": 2020,
                         "rmse": 1.31,
@@ -2685,6 +2691,10 @@ def _trajectory_chart(payload):
                 ],
             }
             for p in payload["players"]
+        },
+        careers={
+            chart_key(comp_id, "hitter"): [[22 + j, 8.0 + j] for j in range(7)]
+            for comp_id in (110, 111)
         },
         generated_at=str(payload["generated_at"]),
     )
@@ -3104,6 +3114,36 @@ def test_trajectory_chart_js_filters_the_internal_p10_series_from_tooltips_too()
     src = _trajectory_chart_js_source()
     assert re.search(r"tooltip:\s*\{\s*filter:", src)
     assert 'item.dataset.label !== "_p10"' in src
+
+
+def test_the_player_page_gives_every_comp_its_own_canvas(client):
+    """A comp stacked on the subject's chart shows a forward path and nothing else.
+    Each one gets its own card so his whole arc is readable, with the match age marked."""
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface&n=2")
+    body = resp.data.decode()
+
+    assert body.count('id="comp-chart-') == 2, "one canvas per rendered comp"
+    island = _chart_island(body)
+    assert len(island["comp_careers"]) == 2
+    # The whole arc, not the five forward points the stacked overlay already showed.
+    assert len(island["comp_careers"][0]["career"]) == 7
+    assert all(c["match_age"] == 27 for c in island["comp_careers"]), (
+        "the match age is the subject's own, identical on every card"
+    )
+
+
+def test_a_board_with_comps_but_no_stored_careers_says_so_once(client):
+    """Every currently-deployed blob predates the careers map. Ten identical notices in
+    a ten-cell grid is noise about a single cause -- the grid collapses to one line."""
+    board, chart = _trajectory_board_and_chart()
+    del chart["careers"]
+    with _trajectory_cache(board, chart):
+        body = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
+
+    assert "<td>Andre Ethier</td>" in body, "the comps table is unaffected"
+    assert 'id="comp-chart-' not in body, "no canvases to draw into"
+    assert body.count("No stored comp careers") == 1
 
 
 def test_the_trajectory_pages_do_not_explain_how_to_read_themselves(client):
