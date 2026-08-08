@@ -1858,9 +1858,15 @@ def test_a_missing_max_horizon_fails_instead_of_silently_ranking_one_year() -> N
     # A HEALTHY row, so the only thing wrong with this payload is the missing key.
     # Built off the stale fixture it would raise on `now` instead and pass for the
     # wrong reason.
+    #
+    # ASSERTION CHANGED, deliberately: this originally pinned a bare KeyError, which a
+    # later verification pass identified as the defect rather than the requirement -- it
+    # renders as a banner reading literally 'max_horizon'. The behaviour it must have is
+    # pinned by test_a_missing_max_horizon_names_the_fix_not_just_the_field; what stays
+    # here is the original point, that a missing key must FAIL rather than default.
     blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
     del blob["max_horizon"]
-    with pytest.raises(KeyError):
+    with pytest.raises(ValueError):
         find_players(blob, "bat")
 
 
@@ -1946,3 +1952,65 @@ def test_the_view_model_already_carries_the_excluded_counts(payload: dict) -> No
     excluded = view.meta.get("excluded") or {}
     assert excluded.get("total") == 19
     assert excluded.get("no_current_line") == 12
+
+
+# --------------------------------------------------------------------------
+# #350 follow-up: max_horizon, enumerated across every reader.
+#
+# The previous batch routed ONE of three readers through a guard and claimed the
+# hole was closed. Every reader, every payload state, one owner.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [None, "three", 0.5, []])
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda b: find_players(b, "bat"), id="find"),
+        pytest.param(lambda b: build_player_view(b, player="Big Bat", chart=None), id="player"),
+        pytest.param(lambda b: build_board(b, top="all"), id="board"),
+    ],
+)
+def test_an_unusable_max_horizon_is_reported_by_every_reader(call, bad) -> None:
+    """`int(None)` raised TypeError, which neither the route nor the endpoint catches,
+    so it reached the reader as an unhandled 500. Fixing it in `_board_horizons` alone
+    left the two readers the PAGE actually uses still raising it.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    blob["max_horizon"] = bad
+    with pytest.raises(ValueError, match="max_horizon"):
+        call(blob)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda b: find_players(b, "bat"), id="find"),
+        pytest.param(lambda b: build_player_view(b, player="Big Bat", chart=None), id="player"),
+        pytest.param(lambda b: build_board(b, top="all"), id="board"),
+    ],
+)
+def test_a_missing_max_horizon_names_the_fix_not_just_the_field(call) -> None:
+    """A bare `KeyError('max_horizon')` renders as a banner reading literally
+    `'max_horizon'` -- the exact unactionable message `_raise_stale_board` was written
+    in the same batch to eliminate for `'now'`, reintroduced for a different key.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    del blob["max_horizon"]
+    with pytest.raises(ValueError, match="push_trajectory_board"):
+        call(blob)
+
+
+def test_resolution_and_matching_agree_about_whitespace() -> None:
+    """The whitespace collapse landed in the matcher but not the resolver, so the two
+    disagreed about what a name is. A double-spaced name missed resolution, then matched
+    as a tier-0 EXACT hit in the fallback -- and the page printed "No player is named
+    exactly X on this board" directly above a one-item list containing exactly X.
+
+    False, and the more confusing failure for reading it: the page contradicts itself.
+    """
+    blob = _named_payload([(1, "Bobby Witt Jr.", "hitter", 26, "SS", [9.0, 9.0, 9.0])])
+    view = build_player_view(blob, player="Bobby  Witt Jr.", chart=None)
+    assert view.found is True, "the resolver must collapse whitespace like the matcher"
+    assert view.name == "Bobby Witt Jr."
+    assert view.candidates == [], "and must not offer the player it just resolved"

@@ -24,19 +24,40 @@
   list.className = 'traj-suggest';
   list.hidden = true;
 
-  /* Appended to the LABEL, not the form. `top: 100%` on a positioned form drops the
-   * list below the whole flex row -- under the Search button's line box -- and
-   * left-aligns it to the label text rather than to the input.
+  /* Appended to the FORM, and positioned from the INPUT's own offset.
    *
-   * NO combobox ARIA. The previous version set role=combobox / listbox / option with
-   * no arrow keys, no aria-activedescendant, and an <a> inside each option (interactive
+   * It briefly lived inside the <label> to fix the alignment, which was wrong three
+   * ways: a <ul> is not valid label content, a label forwards clicks to its control
+   * (so the truncation notice focused the search box), and it put up to 26 links
+   * between the input and the Search button in tab order. It did not even fix the
+   * alignment -- the label is the first flex item, so its left edge and the form's are
+   * the same x, and `left: 0` still started the list under the word "Player".
+   *
+   * Measuring the input is what actually anchors it, and it keeps the list last in the
+   * form so tab order stays input -> Search -> suggestions.
+   *
+   * NO combobox ARIA. An earlier version set role=combobox / listbox / option with no
+   * arrow keys, no aria-activedescendant, and an <a> inside each option (interactive
    * content in an option is ignored by AT). Announcing a pattern that is not
    * implemented is worse for a screen-reader user than announcing nothing: this is a
    * list of links, so it ships as one. The players page it mirrors has no keyboard
    * navigation either, and #350 did not ask for it. */
-  var anchor = input.parentElement || form;
-  anchor.classList.add('traj-suggest-anchor');
-  anchor.appendChild(list);
+  form.classList.add('traj-suggest-anchor');
+  form.appendChild(list);
+
+  function place() {
+    list.style.left = input.offsetLeft + 'px';
+    list.style.top = input.offsetTop + input.offsetHeight + 2 + 'px';
+    list.style.minWidth = Math.max(input.offsetWidth, 320) + 'px';
+  }
+
+  /* Keeps focus on the input through a mousedown on the list, which is what makes the
+   * click land. Browsers that do not focus a link on mousedown (Safari, iOS Safari)
+   * deliver `focusout` with a null relatedTarget, and `dismiss()` emptied the list
+   * between mousedown and click -- so tapping a suggestion did nothing at all and the
+   * feature was unusable on those browsers. Introduced by the focusout fix; this is
+   * what that fix needed to be safe. */
+  list.addEventListener('mousedown', function (event) { event.preventDefault(); });
 
   var DEBOUNCE_MS = 150;
   var MIN_CHARS = 2;
@@ -88,7 +109,7 @@
     return base.pathname + base.search;
   }
 
-  function render(players, total) {
+  function render(players, capped, total) {
     list.innerHTML = '';
     if (!players.length) {
       list.hidden = true;
@@ -111,7 +132,7 @@
       li.appendChild(a);
       list.appendChild(li);
     });
-    if (total > players.length) {
+    if (capped) {
       // A silent cap makes 25-of-312 look like 25-of-25, and a reader whose player
       // fell past the cut concludes he is not on the board -- the conclusion this
       // feature exists to prevent.
@@ -121,6 +142,7 @@
         ' - type more to narrow';
       list.appendChild(note);
     }
+    place();
     list.hidden = false;
   }
 
@@ -133,7 +155,11 @@
         // A cold board answers 503 with an `error`. Silently hiding is right: the form
         // below still works and the page it submits to reports the cold cache properly.
         if (data.error || !data.players) { list.hidden = true; return; }
-        render(data.players, data.total || data.players.length);
+        // `data.capped` is the server's answer, not a rule respelled here. Not
+        // `data.total || ...`: a real 0 is falsy, and CLAUDE.md names that pattern.
+        var total = data.total === undefined ? data.players.length : data.total;
+        render(data.players, data.capped === undefined ? total > data.players.length
+                                                       : data.capped, total);
       })
       .catch(function () {
         if (reqId !== loadSeq) return;

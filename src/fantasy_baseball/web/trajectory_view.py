@@ -175,8 +175,8 @@ def _sweep_setup(
     the shared prefix rather than trying to be a common body.
     """
     base = int(payload["base_season"])
-    max_horizon = int(payload["max_horizon"])
-    end_years = [base + h for h in range(1, max_horizon + 1)]
+    horizons_all = _board_horizons(payload)
+    end_years = [base + h for h in horizons_all]
     end_year = _clamp(end, end_years[0], end_years[-1], end_years[0])
     pool = _clamp_choice(pool, POOLS, "both")
     scale = _clamp_choice(scale, SCALES, "var")
@@ -750,8 +750,12 @@ FIND_MIN_CHARS = 2
 FIND_RESULT_CAP = 25
 
 
-def _raise_stale_board(exc: KeyError) -> NoReturn:
+def _raise_stale_board(exc: KeyError, *, where: str = "row") -> NoReturn:
     """The one sentence a stale board gets, wherever it is discovered.
+
+    `where` names WHAT is missing the key. Saying "row is missing 'max_horizon'" sends
+    the reader looking for a bad player row over a key that lives on the payload -- and
+    "row is missing 'players'" sends them looking for a row in a payload that has none.
 
     A bare `KeyError('now')` reaches the reader as a red banner containing literally
     `'now'`: it names the field and nothing else, with no hint that the payload is the
@@ -760,8 +764,11 @@ def _raise_stale_board(exc: KeyError) -> NoReturn:
     the second was added ABOVE the first, which silently bypassed the guard the first
     one had.
     """
+    # An argless KeyError would IndexError inside the error handler, which replaces a
+    # bad message with a worse traceback.
+    field = exc.args[0] if exc.args else "an unnamed field"
     raise ValueError(
-        f"trajectory board payload row is missing {exc.args[0]!r}, which this "
+        f"trajectory board payload {where} is missing {field!r}, which this "
         "build requires; re-run scripts/push_trajectory_board.py"
     ) from exc
 
@@ -774,16 +781,29 @@ def _board_horizons(payload: dict) -> tuple[int, ...]:
     unsearchable while the rest of the page still lists them -- a wrong answer with no
     error. Every other reader in this module treats the field as required.
     """
-    raw = payload["max_horizon"]  # KeyError names the field, which is the right failure
     try:
-        return tuple(range(1, int(raw) + 1))
+        raw = payload["max_horizon"]
+    except KeyError as exc:
+        # NOT a bare KeyError. It renders as a banner reading literally 'max_horizon',
+        # which is the same unactionable failure `_raise_stale_board` exists to remove
+        # for 'now' -- and it was reintroduced here, for a different key, in the batch
+        # that added that helper.
+        _raise_stale_board(exc, where="")
+    try:
+        horizon = int(raw)
     except (TypeError, ValueError) as exc:
-        # `int(None)` is a TypeError that neither the route nor the endpoint catches,
+        # `int(None)` is a TypeError, which neither the route nor the endpoint catches,
         # so it reaches the reader as an unhandled 500 rather than a reported payload.
         raise ValueError(
             f"trajectory board payload has max_horizon={raw!r}, which is not a whole "
             "number; re-run scripts/push_trajectory_board.py"
         ) from exc
+    if horizon < 1:
+        raise ValueError(
+            f"trajectory board payload has max_horizon={raw!r}, which scores no "
+            "seasons; re-run scripts/push_trajectory_board.py"
+        )
+    return tuple(range(1, horizon + 1))
 
 
 _WHITESPACE = re.compile(r"\s+")
@@ -1008,11 +1028,16 @@ def build_player_view(
     # the blob is built hours earlier, so `n` can only slice what is already in it.
     want = _clamp(n, 1, MAX_COMPS, DEFAULT_COMPS)
     base = int(payload["base_season"])
-    max_horizon = int(payload["max_horizon"])
-    end_years = [base + h for h in range(1, max_horizon + 1)]
+    horizons_all = _board_horizons(payload)
+    end_years = [base + h for h in horizons_all]
 
-    target = normalize_name(player or "")
-    hits = [p for p in payload.get("players", []) if normalize_name(p["name"]) == target]
+    # THROUGH THE SAME FUNCTION THE MATCHER USES. Resolving with bare `normalize_name`
+    # while `_find` compared the whitespace-collapsed form made the two disagree about
+    # what a name is: a double-spaced name missed here, then matched as a tier-0 exact
+    # hit below, and the page printed "no player is named exactly X" above a list
+    # containing exactly X.
+    target = normalized_query(player)
+    hits = [p for p in payload.get("players", []) if normalized_query(p["name"]) == target]
     hits = _narrow(hits, "id", pid)
     hits = _narrow(hits, "pool", ppool)
 

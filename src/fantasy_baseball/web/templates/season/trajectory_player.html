@@ -29,11 +29,11 @@
   {#- `autocomplete="off"` so the browser's own history dropdown does not sit on top of
       the suggestion list.
 
-      The list element itself is NOT here: `trajectory_suggest.js` creates it, along
-      with the combobox ARIA that describes it. An empty <ul> in the markup would be a
-      listbox that never fills and an `aria-controls` pointing at nothing for a reader
-      without JS -- and it would sit ahead of the candidate list below, where the first
-      `</ul>` in the page is load-bearing for how that block is read.
+      The list element itself is NOT here: `trajectory_suggest.js` creates it. An empty
+      <ul> in the markup would be dead weight for a reader without JS, and it would sit
+      ahead of the candidate list below, where being the first `</ul>` in the page is
+      load-bearing for how that block is read. The JS deliberately sets no ARIA roles --
+      its own comment says why, and this one used to claim the opposite.
 
       With JS off this stays exactly the GET form it has always been, which is why the
       server-side substring fallback lands the same fix without any of this. -#}

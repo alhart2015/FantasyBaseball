@@ -3951,9 +3951,10 @@ td[style*="--neg"] {
    chrome above rather than introducing a fourth palette; only the metrics that make
    it a dropdown live here.
 
-   Positioned on the LABEL that wraps the input, not on the form: anchoring to the form
-   drops the list below the whole flex row, under the Search button's line box, and
-   left-aligns it to the label text instead of to the input. */
+   Positioned on the FORM, with `left`/`top`/`min-width` set from the input's measured
+   offset in trajectory_suggest.js. A CSS-only anchor cannot reach the input: it is not
+   the form's only flex item, so no static `left` lands under it, and a <ul> inside the
+   <label> is invalid content that forwards its clicks to the search box. */
 .traj-suggest-anchor { position: relative; }
 .traj-suggest {
   position: absolute;
@@ -3965,7 +3966,6 @@ td[style*="--neg"] {
   list-style: none;
   /* Wide enough for "Ronald Acuna Jr. -- age 28, OF (hitter)" without wrapping, and
      capped so a 25-hit list scrolls instead of running off the viewport. */
-  min-width: 320px;
   max-height: 320px;
   overflow-y: auto;
 }
