@@ -17,6 +17,7 @@ from fantasy_baseball.trajectory.sweep import (
     to_payload,
 )
 from fantasy_baseball.web.trajectory_view import (
+    DEFAULT_COMPS,
     DEFAULT_TOP,
     PlayerView,
     build_board,
@@ -1004,9 +1005,15 @@ def _chart(payload: dict) -> dict:
     return to_chart_payload(
         {
             (p["id"], p["pool"]): {
-                "history": [[25, 14.0], [26, 16.0], [27, 20.0]],
+                # The subject's OWN base-season age is never in here: the push builds
+                # history from `complete = live[~live["partial_season"]]`, which excludes
+                # the season in progress by construction. These players are 27, so the
+                # career stops at 26 -- a blob the writer could actually have written.
+                "history": [[24, 14.0], [25, 16.0], [26, 20.0]],
                 "comps": [
                     {
+                        # The join key into `careers` below. Ids, never names (#284).
+                        "id": 100 + i,
                         "name": f"Comp {i}",
                         "season": 2010 + i,
                         "rmse": 0.5 * i,
@@ -1016,6 +1023,21 @@ def _chart(payload: dict) -> dict:
                 ],
             }
             for p in payload["players"]
+        },
+        # Deduped at the top level and keyed by pool, exactly as the push writes it: a
+        # two-way comp has one arc per pool and a bare id would collapse them.
+        #
+        # Ages 22-30 SPAN the fixture players' age of 27 on purpose: a comp is selected
+        # on an exact age match, so a stored arc that stopped before the subject's age
+        # could not have been a comp at all, and a test asserting the match age is
+        # drawable needs a fixture that could really have been written.
+        #
+        # The first value is `float(i)`, so an arc identifies which comp it belongs to
+        # -- that is what makes the id join assertable rather than merely non-empty.
+        careers={
+            chart_key(100 + i, pool): [[22 + j, float(i + j)] for j in range(9)]
+            for i in range(1, 8)
+            for pool in ("hitter", "pitcher")
         },
         generated_at=str(payload["generated_at"]),
     )
@@ -1047,7 +1069,7 @@ def test_a_player_is_found_by_name_with_his_career_and_projection(payload: dict)
     view = _view(payload, player="Big Bat")
     assert view.found
     assert view.name == "Big Bat"
-    assert [pt[0] for pt in view.history] == [25, 26, 27], "career ascends by age"
+    assert [pt[0] for pt in view.history] == [24, 25, 26], "career ascends by age"
     assert len(view.projection) == 3, "the fixture sweeps three horizons"
     assert all(p["p10"] <= p["mean"] <= p["p90"] for p in view.projection)
 
@@ -1252,7 +1274,7 @@ def test_the_chart_lookup_keeps_the_pool_so_a_two_way_player_keeps_his_own_caree
     hitter = build_player_view(twin, chart=chart, player="Big Bat", ppool="hitter", scale="sgp")
     pitcher = build_player_view(twin, chart=chart, player="Big Bat", ppool="pitcher", scale="sgp")
     assert hitter.history == [[24, 99.0]], "the hitter row read the hitter's entry"
-    assert pitcher.history == [[25, 14.0], [26, 16.0], [27, 20.0]], "and not the other way"
+    assert pitcher.history == [[24, 14.0], [25, 16.0], [26, 20.0]], "and not the other way"
 
 
 def test_the_var_axis_nets_every_series_against_the_QUERY_players_floor(payload: dict) -> None:
@@ -1331,6 +1353,204 @@ def test_ambiguous_candidates_are_ordered_by_id(payload: dict) -> None:
     assert [c["id"] for c in view.candidates] == [first["id"] - 10_000, first["id"]]
 
 
+def test_every_comp_carries_the_career_belonging_to_HIS_OWN_id(payload: dict) -> None:
+    """A comp drawn as five forward points says nothing about the comp. The card needs
+    his whole arc -- and it needs HIS.
+
+    Each fixture arc starts at `float(i)` for comp id `100 + i`, so this asserts the
+    join actually went through `chart_key(c["id"], pool)` rather than landing on a
+    neighbour. That is the guard that matters now: the two lists this used to compare
+    for parity were merged into one, so alignment is structural and comparing the merged
+    list to itself asserts nothing -- what can still go wrong is the LOOKUP, which is the
+    #284 defect class (a chart joined on a name, or on the wrong index).
+    """
+    view = _view(payload, player="Big Bat", n=3)
+    floor = next(p["floor"] for p in payload["players"] if p["name"] == "Big Bat")
+
+    assert len(view.comps) == 3
+    assert [c["name"] for c in view.comps] == ["Comp 1", "Comp 2", "Comp 3"]
+    for i, entry in enumerate(view.comps, start=1):
+        assert entry["career"], "every fixture comp has an arc"
+        ages = [pt[0] for pt in entry["career"]]
+        assert ages == sorted(ages)
+        assert entry["career"][0][1] == pytest.approx(float(i) - floor), (
+            f"{entry['name']} must carry id {100 + i}'s arc, not another comp's"
+        )
+
+
+def test_every_comp_was_observed_at_the_age_he_matched_at(payload: dict) -> None:
+    """`closest_paths` selects on `prepared.age == float(age)` -- an EXACT match -- so a
+    comp necessarily has a season at the subject's own age, which is where every card
+    draws its match rule (`data.age`, shipped once).
+
+    Asserted against the stored ARC, not against a number the view synthesized: the
+    previous version of this test compared `c["path"][0]["age"]` to `view.age + 1`, and
+    both sides came from `sp.age` inside `build_player_view`, so it held by construction
+    and could not fail whatever `closest_paths` returned. This one fails if a card is
+    handed an arc that does not cover the age its rule is drawn at.
+    """
+    view = _view(payload, player="Big Bat")
+    assert view.comps
+    for c in view.comps:
+        assert any(pt[0] == view.age for pt in c["career"]), (
+            f"{c['name']} matched at {view.age} but his stored arc does not cover it"
+        )
+
+
+def test_a_comp_career_is_netted_against_the_QUERY_players_floor(payload: dict) -> None:
+    """Same rule the comp PATHS already follow: the card asks what this arc would be
+    worth in the subject's slot, so per-comp floors would put non-comparable lines on
+    one axis."""
+    row = next(p for p in payload["players"] if p["name"] == "Big Bat")
+    var = _view(payload, player="Big Bat", scale="var")
+    sgp = _view(payload, player="Big Bat", scale="sgp")
+
+    assert var.comps[0]["career"][0][1] == pytest.approx(
+        sgp.comps[0]["career"][0][1] - row["floor"]
+    )
+
+
+def test_a_blob_with_no_careers_yields_empty_arcs_rather_than_raising(payload: dict) -> None:
+    """Every currently-deployed blob predates this feature. The page must render."""
+    blob = _chart(payload)
+    del blob["careers"]
+    view = build_player_view(payload, player="Big Bat", chart=blob)
+
+    assert view.comps, "the comps themselves still render"
+    assert len(view.comps) == DEFAULT_COMPS, "and are sliced to `n` as usual"
+    assert all(c["path"] for c in view.comps), "with their forward paths intact"
+    assert all(c["career"] == [] for c in view.comps)
+
+
+def test_a_careers_map_of_the_wrong_shape_is_refused_not_raised(payload: dict) -> None:
+    """Refused rather than raised, for the reason #332 stands as: refusing a page over
+    auxiliary data it could largely render is how /trajectory goes down."""
+    blob = _chart(payload)
+    blob["careers"] = [["not", "a", "mapping"]]
+    view = build_player_view(payload, player="Big Bat", chart=blob)
+
+    assert all(c["career"] == [] for c in view.comps)
+
+
+def test_a_comp_stored_without_an_id_gets_an_empty_arc(payload: dict) -> None:
+    """An older push wrote comps with no `id`. That is a missing join key, not a crash."""
+    blob = _chart(payload)
+    for block in blob["players"].values():
+        for comp in block["comps"]:
+            comp.pop("id", None)
+    view = build_player_view(payload, player="Big Bat", chart=blob)
+
+    assert all(c["career"] == [] for c in view.comps)
+
+
+def test_a_two_way_comps_two_careers_do_not_collide(payload: dict) -> None:
+    """One id, two pools, two different arcs. Keying on the bare id hands the hitter
+    card the pitching career -- the same collapse `chart_key` exists to stop."""
+    blob = _chart(payload)
+    # Through `chart_key`, never a hand-written "101:hitter": it is imported at the top
+    # of this file and the `_chart` fixture above builds its keys with it, so a literal
+    # here would be a second spelling of the very join this test exists to police -- and
+    # would keep writing the old shape if that format ever changed.
+    first_comp_id = 101
+    blob["careers"][chart_key(first_comp_id, "hitter")] = [[22, 1.0], [23, 2.0]]
+    blob["careers"][chart_key(first_comp_id, "pitcher")] = [[22, 90.0], [23, 91.0]]
+
+    hitter = build_player_view(payload, player="Big Bat", chart=blob)
+    pitcher = build_player_view(payload, player="Big Arm", chart=blob)
+
+    # Floors off the payload, never hardcoded: a literal here goes stale the moment a
+    # fixture row moves.
+    h_floor = next(p["floor"] for p in payload["players"] if p["name"] == "Big Bat")
+    assert hitter.comps[0]["career"] == [[22, 1.0 - h_floor], [23, 2.0 - h_floor]]
+    assert pitcher.comps[0]["career"][0][1] > 50
+
+
+def _chart_including_base_age(payload: dict) -> dict:
+    """`_chart` with the subject's own base-season age added to his career history.
+
+    The panel produces this only after the season ends and the panel is rebuilt --
+    `_live_seasons` un-flags the finished year, it enters `complete`, and it lands in
+    `history` while `base_season` still names it.
+
+    Built by MUTATING `_chart` rather than calling `to_chart_payload` again: the tuple
+    key shape and the board-paired stamp are that helper's contract, and a second
+    spelling of them here would keep passing against a shape the writer had stopped
+    producing. Same pattern the neighbouring blob tests use.
+    """
+    blob = _chart(payload)
+    for key in blob["players"]:
+        blob["players"][key] = {"history": [[25, 16.0], [26, 20.0], [27, 21.0]], "comps": []}
+    return blob
+
+
+def test_the_paced_season_is_the_boards_now_netted_against_the_same_floor(
+    payload: dict,
+) -> None:
+    """The gap at the base season was the most useful point on the chart. `now` is
+    already in the board payload -- this only draws it."""
+    row = next(p for p in payload["players"] if p["name"] == "Big Bat")
+    var = _view(payload, player="Big Bat", scale="var")
+    sgp = _view(payload, player="Big Bat", scale="sgp")
+
+    assert var.paced == [row["age"], pytest.approx(row["now"] - row["floor"])]
+    assert sgp.paced == [row["age"], pytest.approx(row["now"])]
+
+
+def test_the_paced_season_is_ordered_after_every_realized_one(payload: dict) -> None:
+    """The chart concatenates history + paced into one line with no re-sort, so the
+    paced age must be strictly the largest."""
+    view = _view(payload, player="Big Bat")
+    assert view.paced is not None
+    assert view.history, "the fixture stores a career"
+    assert max(pt[0] for pt in view.history) < view.paced[0]
+
+
+def test_a_base_season_already_realized_gets_no_paced_point(payload: dict) -> None:
+    """The offseason case. A panel rebuilt after the season ends un-flags it, so it
+    enters `history` -- and appending `now` beside it would draw two points at one age,
+    one of them labelled a pace, on a finished year."""
+    view = build_player_view(payload, player="Big Bat", chart=_chart_including_base_age(payload))
+    assert view.age == 27, "the fixture's players are 27, which this blob's history covers"
+    assert view.paced is None
+    assert [pt[0] for pt in view.history] == [25, 26, 27], "history is left alone"
+
+
+def test_the_paced_point_survives_a_chart_blob_that_does_not(payload: dict) -> None:
+    """`now` comes from the BOARD, so it is never stale against the projection beside
+    it. A refused chart blob costs the career line and the comps, not the anchor."""
+    stale = _chart(payload)
+    stale["generated_at"] = "some other build"
+    view = build_player_view(payload, player="Big Bat", chart=stale)
+
+    assert view.history == [] and view.comps == []
+    assert view.chart_vintage_mismatch
+    assert view.paced is not None, "board data, not chart data"
+
+
+def test_an_unfound_player_has_no_paced_point(payload: dict) -> None:
+    view = _view(payload, player="Nobody At All")
+    assert view.paced is None
+    assert view.paced_label == ""
+
+
+@pytest.mark.parametrize(
+    ("stored", "expected"),
+    [(True, "2026 pace"), (False, "2026"), (None, "2026 pace")],
+)
+def test_the_paced_label_follows_the_boards_own_partial_flag(
+    payload: dict, stored: object, expected: str
+) -> None:
+    """Built server-side like `axis_label`: the chart and the table read one string and
+    cannot disagree about whether the season is finished. `None` is an old blob, which
+    was written mid-season."""
+    blob = {**payload}
+    if stored is not None:
+        blob["base_season_partial"] = stored
+    blob["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
+    view = build_player_view(blob, player="Big Bat", chart=None)
+    assert view.paced_label == expected
+
+
 def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> None:
     """The push script's `groupby` happens to emit ascending; nothing in the payload
     schema guarantees it. An unsorted blob must still render a left-to-right career,
@@ -1339,9 +1559,9 @@ def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> N
     """
     scrambled = _chart(payload)
     key = chart_key(payload["players"][0]["id"], payload["players"][0]["pool"])
-    scrambled["players"][key] = {"history": [[27, 20.0], [25, 14.0], [26, 16.0]], "comps": []}
+    scrambled["players"][key] = {"history": [[26, 20.0], [24, 14.0], [25, 16.0]], "comps": []}
 
     view = build_player_view(payload, player="Big Bat", chart=scrambled)
     ages = [pt[0] for pt in view.history]
     assert ages == sorted(ages), "career must render left-to-right by age"
-    assert ages == [25, 26, 27]
+    assert ages == [24, 25, 26]

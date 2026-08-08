@@ -11,6 +11,50 @@
   const data = JSON.parse(node.textContent);
 
   const at = (pts, key) => pts.map((p) => ({ x: p.age, y: p[key] }));
+  // Its sibling for the `[[age, value]]` pair arrays -- history and comp careers ship
+  // in that shape, `projection` ships as objects.
+  const pairs = (rows) => rows.map(([age, v]) => ({ x: age, y: v }));
+
+  // WHAT HAPPENED, as one series: realized seasons then the paced base season. Drawn
+  // as the main chart's career line AND as the head of the faint subject overlay on
+  // every comp card, so it is built once -- the two used to spell the paced point's
+  // join independently, and a change to how it attaches would have made the big chart
+  // and the cards disagree about the same player's own line.
+  const career = [
+    ...pairs(data.history),
+    ...(data.paced ? [{ x: data.paced[0], y: data.paced[1] }] : []),
+  ];
+  // ...and where it is going. This is what a comp card compares its arc against.
+  const subject = [...career, ...at(data.projection, "mean")];
+  // Per-point styling for the career line: everything plain except the paced base
+  // season, which gets an open marker -- it is a full-season pace off a partial year,
+  // not a finished season, and it must not read as one.
+  const pacedPoint = (plain, open) =>
+    career.map((_, i) => (data.paced && i === career.length - 1 ? open : plain));
+
+  // A dashed vertical rule at the age where the comp matched the subject. Ten lines of
+  // canvas rather than the chartjs-plugin-annotation CDN bundle: a second external
+  // script is a second thing that can fail to load, and `ensureChartJs` would have to
+  // grow a dependency-ordering concept to serve it.
+  const matchLine = {
+    id: "matchLine",
+    afterDatasetsDraw(chart, _args, opts) {
+      if (typeof opts.age !== "number") return;
+      const x = chart.scales.x.getPixelForValue(opts.age);
+      const { top, bottom, left, right } = chart.chartArea;
+      if (x < left || x > right) return;
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = "rgba(120,120,120,0.8)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
+      ctx.stroke();
+      ctx.restore();
+    },
+  };
 
   // Spec requirement 6: on the VAR scale every series is netted against THIS
   // player's own slot floor, not each comp's own -- the axis must say so, or a reader
@@ -54,11 +98,18 @@
       order: 1,
     },
     {
+      // ONE line, history running into the paced base season. The paced point is
+      // styled per point rather than split into its own dataset: a second dataset
+      // would be a second legend entry and a visible seam at the join, and the whole
+      // point of this change is that there is no gap there.
       label: data.name,
-      data: data.history.map(([age, v]) => ({ x: age, y: v })),
+      data: career,
       borderColor: "#4e79a7",
       borderWidth: 2.5,
-      pointRadius: 2,
+      pointRadius: pacedPoint(2, 5),
+      pointBackgroundColor: pacedPoint("#4e79a7", "transparent"),
+      pointBorderColor: "#4e79a7",
+      pointBorderWidth: pacedPoint(1, 2),
       order: 0,
     },
   ];
@@ -94,9 +145,87 @@
           // legend; Chart.js's default tooltip has no such filter, so hovering near
           // the lower band edge would otherwise show a series literally called
           // "_p10". Same rule, both surfaces.
-          tooltip: { filter: (item) => item.dataset.label !== "_p10" },
+          tooltip: {
+            filter: (item) => item.dataset.label !== "_p10",
+            callbacks: {
+              // The paced point is the LAST point of the career line and looks like
+              // any other on hover. Say which it is: a full-season pace off a partial
+              // year is a different claim from a finished season.
+              label: (item) => {
+                const base = `${item.dataset.label}: ${item.formattedValue}`;
+                const isPaced =
+                  data.paced &&
+                  item.dataset.label === data.name &&
+                  item.dataIndex === career.length - 1;
+                return isPaced ? `${base} (${data.paced_label})` : base;
+              },
+            },
+          },
         },
       },
+    });
+
+    // ONE SMALL CHART PER COMP. Each draws the comp's WHOLE career, the subject faint
+    // underneath, and a dashed rule at the age where the two matched.
+    // The SAME list the table and the card headers iterate, so a card cannot title
+    // itself from one array and draw itself from another.
+    data.comps.forEach((comp, i) => {
+      const el = document.getElementById(`comp-chart-${i}`);
+      // Absent when this comp had no stored arc -- the template rendered a note in
+      // place of the canvas. Skip it rather than treating it as a failure.
+      if (!el || !comp.career || !comp.career.length) return;
+      new Chart(el.getContext("2d"), {
+        type: "line",
+        data: {
+          datasets: [
+            {
+              // The SUBJECT, faint and underneath. He is the reason this card is on
+              // the page; without him the arc is just a stranger's career.
+              label: data.name,
+              data: subject,
+              borderColor: "rgba(78,121,167,0.35)",
+              borderWidth: 1,
+              borderDash: [3, 3],
+              pointRadius: 0,
+              order: 1,
+            },
+            {
+              label: comp.name,
+              data: pairs(comp.career),
+              borderColor: "#59a14f",
+              borderWidth: 2,
+              pointRadius: 1.5,
+              order: 0,
+            },
+          ],
+        },
+        plugins: [matchLine],
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          parsing: false,
+          // X-DOMAIN: whatever Chart.js autoscales over BOTH series -- the comp's
+          // career and the subject's drawn ages. Clipping to the comp's career alone
+          // would cut off the subject's projection whenever the comp retired young,
+          // which is the half of the card being compared. And no domain is shared
+          // across cards: forcing one would squeeze a 20-season career into a
+          // 6-season card and shrink the region around the match line, which is the
+          // part being read. The match line is the shared reference, not the axis.
+          scales: {
+            x: { type: "linear", title: { display: true, text: "age" } },
+            // Title off: at 180px tall the axis label costs more width than it
+            // explains, and the full-size chart directly above already carries it.
+            y: { title: { display: false, text: data.axis_label } },
+          },
+          plugins: {
+            legend: { display: false },
+            // The subject's own age, identical on every card: `closest_paths` selects
+            // on an EXACT age match, so the rule sits at the same x throughout, which
+            // is what makes the grid comparable. One number, shipped once.
+            matchLine: { age: data.age },
+          },
+        },
+      });
     });
   }).catch(() => {
     // Chart.js failed to load from the CDN. The table already renders the

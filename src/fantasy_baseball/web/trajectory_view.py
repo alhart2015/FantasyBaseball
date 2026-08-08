@@ -139,8 +139,6 @@ class TeamsBoard:
     """Every team's block, ordered by strength."""
 
     blocks: list[TeamBlock]
-    #: League-wide row count, so a block's #37 is readable as a league position.
-    ranked: int
     base_season: int
     end_year: int
     end_years: list[int]
@@ -612,7 +610,6 @@ def build_teams_board(
 
     return TeamsBoard(
         blocks=blocks,
-        ranked=len(ranked_rows),
         base_season=base,
         end_year=end_year,
         end_years=end_years,
@@ -650,7 +647,15 @@ class PlayerView:
     history: list[list[float]]
     #: [{age, mean, p10, p90}, ...] one per projected year.
     projection: list[dict]
-    #: [{name, season, rmse, path: [{age, value}, ...]}, ...] closest first.
+    #: [{name, season, rmse, path: [{age, value}, ...], career: [[age, value], ...]},
+    #: ...] closest first. `path` is his forward path over the projected ages, drawn on
+    #: the main chart; `career` is his WHOLE arc, drawn on his own card, and is empty
+    #: when the blob carries no entry for him. ONE list, because a card titles itself and
+    #: draws itself from the same entry -- a second parallel list would have to stay the
+    #: same length and order forever, enforced by nothing but construction.
+    #:
+    #: The age at which he matched the subject is `PlayerView.age`, identical on every
+    #: card: `closest_paths` selects on `prepared.age == float(age)`, an exact match.
     comps: list[dict]
     #: Populated ONLY when the name was ambiguous; the caller renders these instead of a
     #: chart, as LINKS carrying `pid`/`ppool`. Guessing puts one man's career under
@@ -666,6 +671,30 @@ class PlayerView:
     extrapolated: bool
     base_season: int
     end_years: list[int]
+    #: The PACED base season as [age, value], floor-netted exactly like `history`.
+    #:
+    #: NOT part of `history`, which means "realized complete seasons" -- several
+    #: template branches key on `not board.history` to report a missing or mismatched
+    #: chart blob, and folding a board-sourced point into a chart-blob-sourced list
+    #: would make that check stop meaning what it says. It is DRAWN as the same line.
+    #:
+    #: The VALUE is straight-line prorated realized stats, never a projection blend:
+    #: `board_inputs` -> `_paced` -> `prorate_partial` divides realized SGP by the
+    #: elapsed fraction. No ROS projection reaches this model (#346), which
+    #: tests/test_trajectory/test_no_ros_dependency.py keeps true.
+    #:
+    #: `None` when the player was not found, or when `age` is ALREADY a realized row in
+    #: `history` -- see the suppression rule in `build_player_view`.
+    #:
+    #: Defaulted, and placed here rather than beside `history` where it reads more
+    #: naturally: `meta` below is the first field carrying a default, so a defaulted
+    #: field any earlier puts one ahead of `projection`/`candidates`/`found` and raises
+    #: `TypeError: non-default argument follows default argument` at import.
+    paced: list[float] | None = None
+    #: What to call the paced point, finished server-side. Same rule as `axis_label`:
+    #: ship the string, not the ingredients, so the chart and the table cannot disagree
+    #: about whether the season is over.
+    paced_label: str = ""
     meta: dict = field(default_factory=dict)
     #: The chart data that arrived is stamped for a DIFFERENT board than this one, so
     #: `history` and `comps` were dropped rather than drawn. A distinct state from
@@ -709,8 +738,28 @@ def _narrow(hits: list[dict], field: str, wanted: Any) -> list[dict]:
     return kept or hits
 
 
-def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[dict, bool]:
-    """One player's stored `{history, comps}`, and whether the pair was REFUSED.
+def _netted(pairs: Any, floor: float) -> list[list[float]]:
+    """Stored `[[age, sgp], ...]` as floor-netted points, ascending by age.
+
+    ONE rule for both stored arcs -- the subject's career and a comp's -- because a comp
+    card draws them on one axis and the two must mean the same thing. They were spelled
+    separately and only one of them sorted.
+
+    Sorted rather than trusted in stored order: the push script's groupby happens to emit
+    ascending, but nothing in the wire format enforces it, and an unsorted blob would
+    zigzag the line with every other assertion still green.
+    """
+    return sorted(
+        ([int(a), float(v) - floor] for a, v in pairs),
+        key=lambda pt: pt[0],
+    )
+
+
+def _chart_extras(
+    payload: dict, chart: Any, mlbam_id: int, pool: str
+) -> tuple[dict, Mapping, bool]:
+    """One player's stored `{history, comps}`, the comp-career map, and whether the
+    pair was REFUSED.
 
     The vintage guard (#344). `cache:trajectory_chart_data` is a second blob, written
     beside the board but stored separately, so the two can end up out of step -- a
@@ -724,14 +773,23 @@ def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[
     sides, and `None == None` would read as a match and pair two blobs on no evidence at
     all. Empty strings pair the same way and are refused for the same reason.
 
-    Returns `({}, True)` for a refusal so the caller can tell it from `({}, False)`,
-    which is "no chart data arrived" -- different causes, different fixes, and the page
-    names them separately. `None` is the ONLY input that reads as "nothing arrived":
-    anything else was stored by somebody, so an unreadable shape is a writer out of step
-    with this reader (a refusal), not a key that was never pushed.
+    Returns `({}, {}, True)` for a refusal so the caller can tell it from
+    `({}, {}, False)`, which is "no chart data arrived" -- different causes, different
+    fixes, and the page names them separately. `None` is the ONLY input that reads as
+    "nothing arrived": anything else was stored by somebody, so an unreadable shape is a
+    writer out of step with this reader (a refusal), not a key that was never pushed.
+
+    The SECOND element is `careers` (#346): comp arcs, deduped across the whole board
+    and keyed by `chart_key`. Absent on every blob written before that feature, and not
+    a mapping if some future writer stores something else there -- both are `{}`, never
+    an exception, for the same #332 reason the refusals above are refusals.
+
+    Typed `Mapping`, not `dict`: it is handed straight back off the cached blob and only
+    ever read through `.get`. Copying it into a dict to satisfy the narrower annotation
+    would duplicate ~300 KB on every player-page request for nothing.
     """
     if chart is None:
-        return {}, False
+        return {}, {}, False
     if not isinstance(chart, Mapping):
         # STORED, but not a mapping -- a JSON array under this key, which is what the
         # board itself would serialize as if it were written here by mistake. Refused
@@ -741,18 +799,23 @@ def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[
         # key with `read_cache` and not `read_cache_dict` -- the latter narrows a stored
         # list to None, which is indistinguishable from a key that was never written and
         # would print "this board predates the feature" at a blob that is merely stale.
-        return {}, True
+        return {}, {}, True
     board_at, chart_at = payload.get("generated_at"), chart.get("generated_at")
     if board_at in (None, "") or chart_at in (None, "") or str(board_at) != str(chart_at):
-        return {}, True
+        return {}, {}, True
     players = chart.get("players")
     if not isinstance(players, Mapping):
         # The same refusal one level in: the BOARD's `players` is a list, so this is the
         # board written to the chart key by mistake, stamped identically because the one
         # push produced both. `players.get` on a list is an AttributeError, which the
         # route does not catch and which 500s the page.
-        return {}, True
-    return players.get(chart_key(mlbam_id, pool), {}), False
+        return {}, {}, True
+    careers = chart.get("careers")
+    return (
+        players.get(chart_key(mlbam_id, pool), {}),
+        careers if isinstance(careers, Mapping) else {},
+        False,
+    )
 
 
 def build_player_view(
@@ -872,7 +935,19 @@ def build_player_view(
     # KEYED ON THE RESOLVED ROW's `(mlbam_id, pool)`, never the searched name or the
     # bare id: a two-way player has one entry per pool, and the id alone would hand the
     # hitter row the pitcher's career.
-    extras, mismatch = _chart_extras(payload, chart, sp.mlbam_id, sp.pool)
+    extras, careers, mismatch = _chart_extras(payload, chart, sp.mlbam_id, sp.pool)
+    history = _netted(extras.get("history", []), floor)
+    # THE SUPPRESSION RULE. `_live_seasons` (build_pt_panel.py) flags a season partial
+    # iff `year >= today.year`, so a panel rebuilt in January un-flags the season that
+    # just ended: it enters `complete`, lands in `history`, and `base_season` still
+    # names it. Appending `now` beside it draws two points at one age, one of them
+    # labelled a pace, on a finished year.
+    #
+    # Decided from `history` rather than from the stored `base_season_partial` flag
+    # because this works on EVERY blob, including ones written before that flag existed.
+    # The flag labels the point; this decides whether there is one.
+    realized_ages = {pt[0] for pt in history}
+    paced = None if sp.age in realized_ages else [sp.age, float(sp.now) - floor]
     return replace(
         empty,
         name=sp.name,
@@ -890,13 +965,15 @@ def build_player_view(
         floor=floor,
         found=True,
         extrapolated=sp.extrapolated,
-        # Sorted by age rather than trusted in payload order: the push script's
-        # groupby happens to emit ascending, but nothing enforces it, and an unsorted
-        # blob would zigzag the chart with every other assertion here still green.
         chart_vintage_mismatch=mismatch,
-        history=sorted(
-            ([int(a), float(v) - floor] for a, v in extras.get("history", [])),
-            key=lambda pt: pt[0],
+        history=history,
+        paced=paced,
+        # Read off the payload, not out of `meta`: the league and teams boards share
+        # `_board_meta` and neither renders this, so routing it through there put a key
+        # on two views that have no use for it. Default True -- every blob written
+        # before the flag existed was written mid-season.
+        paced_label=(
+            f"{base} pace" if bool(payload.get("base_season_partial", True)) else str(base)
         ),
         # `points(scale)` applies the offset; `YearPoint.age` is already `age + horizon`.
         projection=[
@@ -919,7 +996,24 @@ def build_player_view(
                     {"age": sp.age + h, "value": float(v) - floor}
                     for h, v in enumerate(c["path"][: len(sp.sgp)], start=1)
                 ],
+                # HIS WHOLE ARC, on the same entry as his forward path rather than in a
+                # second list beside it. A parallel list would have to stay the same
+                # length and order forever, enforced by nothing but construction, and
+                # the card that titles itself from one and draws from the other is a
+                # single off-by-one from putting one man's name over another's career.
+                #
+                # `c.get("id")` -- an older push wrote comps with no id at all, which is
+                # a missing join key rather than an error. `chart_key` is never called
+                # with None: the lookup short-circuits first.
+                #
+                # Netted against the SUBJECT's floor, like `path` above and for the same
+                # reason: the card asks what this arc would be worth in his slot, and
+                # per-comp floors would put non-comparable lines on one axis.
+                "career": _netted(careers.get(chart_key(c["id"], sp.pool), []), floor)
+                if c.get("id") is not None
+                else [],
             }
+            # Sliced ONCE, here. This is the only comp list there is.
             for c in extras.get("comps", [])[:want]
         ],
     )

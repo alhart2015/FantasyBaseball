@@ -140,7 +140,21 @@ def test_a_player_observable_at_fewer_horizons_than_the_sweep_loses_only_his_com
 
     full = module.player_comps(prepared, _swept(3), horizons, {})
     assert full is not None and full, "a full-length path still gets its comps"
-    assert set(full[0]) == {"name", "season", "rmse", "path"}
+    assert set(full[0]) == {"id", "name", "season", "rmse", "path"}
+
+
+def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
+    """A comp used to be a display NAME and four numbers. Joining a chart to a name is
+    the defect class #284 exists for -- two players share one normalized name and one
+    of them gets the other's career drawn under his own. The per-comp career cards
+    (#346) look their arc up by `chart_key(id, pool)`, so the id has to be stored."""
+    module = _script()
+    horizons = (1, 2, 3)
+    comps = module.player_comps(_prepared(horizons), _swept(3), horizons, {})
+
+    assert comps, "the fixture player has comps"
+    assert all(isinstance(c["id"], int) for c in comps)
+    assert all(c["id"] > 0 for c in comps)
 
 
 def test_local_stays_local_even_when_render_is_already_set(monkeypatch, tmp_path) -> None:
@@ -386,7 +400,92 @@ def test_the_chart_data_carries_career_history_and_comps(monkeypatch) -> None:
     assert len(player["comps"]) <= module.MAX_COMPS
     if player["comps"]:
         first = player["comps"][0]
-        assert set(first) == {"name", "season", "rmse", "path"}
+        assert set(first) == {"id", "name", "season", "rmse", "path"}
         assert len(first["path"]) == 5
         rmses = [c["rmse"] for c in player["comps"]]
         assert rmses == sorted(rmses), "closest first"
+
+
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "drives the real build_payload, which loads data/trajectory/*_pt_panel_*.csv and "
+        "data/cache/keeper_skills -- both gitignored, so this cannot run on a fresh clone"
+    ),
+)
+def test_the_push_stamps_whether_the_base_season_is_still_running() -> None:
+    """Read off the PANEL, never off today's date. `_live_seasons` in build_pt_panel.py
+    flags a season partial iff `year >= today.year`, so the reader has to follow the
+    panel the board was actually built from."""
+    module = _script()
+    payload, _, _ = module.build_payload(max_horizon=3, panel_dir=PANEL_DIR)
+
+    assert payload["base_season_partial"] is True, (
+        "the shipped 2000-2026 panels were built during the 2026 season"
+    )
+
+
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "drives the real build_payload, which loads data/trajectory/*_pt_panel_*.csv and "
+        "data/cache/keeper_skills -- both gitignored, so this cannot run on a fresh clone"
+    ),
+)
+def test_the_push_stores_one_career_per_comp_and_no_more() -> None:
+    """Every id a stored comp names must resolve to an arc, or its card draws nothing;
+    every id BEYOND that set is dead weight in a blob the player page fetches."""
+    module = _script()
+    _, chart, _ = module.build_payload(max_horizon=3, panel_dir=PANEL_DIR)
+
+    # The pool comes off the PLAYER key the comp is stored under, not off the comp: a
+    # comp is always drawn from its own pool's `prepared`, so a hitter's comps are
+    # hitters. Rebuilding the pair here is what makes this an assertion about
+    # `chart_key` rather than about the bare id.
+    referenced = {
+        f"{c['id']}:{key.split(':')[1]}"
+        for key, block in chart["players"].items()
+        for c in block["comps"]
+    }
+    assert referenced, "the real panel produces comps"
+    assert set(chart["careers"]) == referenced
+
+    for arc in chart["careers"].values():
+        ages = [pt[0] for pt in arc]
+        assert ages == sorted(ages), "an arc is drawn left to right without a re-sort"
+        assert len(set(ages)) == len(ages), "one point per age; split seasons collapsed"
+
+
+def test_a_missed_season_is_a_ZERO_in_the_arc_not_a_bridge_across_it() -> None:
+    """A year the player did not play is a real 0, and the card has to say so.
+
+    `load_scored_panel` drops a season with no rows (`observed` False, `pa <= 0`, or
+    filtered by `_in_role`), so a career with a lost year arrives here as a frame with a
+    HOLE in it. The forward path those same comps are matched and scored on takes the
+    opposite convention -- `shape.prepare` reindexes and `np.nan_to_num(..., nan=0.0)`,
+    with the comment "a missing key means he was out of the league that year -- a real
+    0". So an arc that simply skips the age draws a straight line through a year the
+    comps table on the same page prints as 0.0, and the card exists precisely to show
+    where the busts are.
+
+    Filled only BETWEEN observed seasons: before his debut and after his last year he
+    was not a zero, he was absent, and the career span is what the arc is about.
+    """
+    import pandas as pd
+
+    module = _script()
+    gapped = pd.DataFrame({"age": [26, 27, 29, 30], "sgp": [10.0, 12.0, 8.0, 6.0]})
+
+    assert module._arc(gapped) == [[26, 10.0], [27, 12.0], [28, 0.0], [29, 8.0], [30, 6.0]]
+
+
+def test_an_arc_with_no_holes_is_unchanged_and_a_missing_player_is_empty() -> None:
+    """The fill must not perturb the common case, and an id the frame does not hold is
+    still an absent card rather than a fabricated flat line at zero."""
+    import pandas as pd
+
+    module = _script()
+    solid = pd.DataFrame({"age": [24, 25, 26], "sgp": [3.0, 4.0, 5.0]})
+
+    assert module._arc(solid) == [[24, 3.0], [25, 4.0], [26, 5.0]]
+    assert module._arc(None) == []

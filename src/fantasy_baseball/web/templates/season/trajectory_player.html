@@ -63,7 +63,6 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 {% endset %}
 <p class="muted">
   {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
-  Solid is what happened; dashed is projected, with the shaded band its p10-p90 range.
   {% if board.extrapolated %}<strong>(!)</strong> This fit was evaluated outside its own
   support -- read the band, not the point estimate.{% endif %}
 </p>
@@ -72,9 +71,6 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     this page reads the same `meta`/`base_season` and had never shown either. -#}
 <p class="muted trajectory-vintage">
   {{ ctl.vintage_note(board) }}
-  {% if board.history %}The career line above stops before {{ board.base_season }} on
-  purpose -- that season is still in progress, and its paced full-year figure (not a
-  partial-season point) is exactly what the projection is built from.{% endif %}
 </p>
 
 <div class="chart-wrapper"><canvas id="trajectory-chart"></canvas></div>
@@ -84,21 +80,11 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     left for the two to disagree about. -#}
 <script type="application/json" id="trajectory-chart-data">{{ {
   "name": board.name, "axis_label": board.axis_label, "history": board.history,
+  "paced": board.paced, "paced_label": board.paced_label, "age": board.age,
   "projection": board.projection, "comps": board.comps} | tojson }}</script>
 
 {% if board.comps %}
 <h3>Closest realized paths <span class="muted">({{ board.comps | length }})</span></h3>
-<p class="muted">
-  These are the closest realized paths to the projection -- chosen ON the outcome, so
-  they illustrate what this shape looked like when it played out and are
-  <strong>not evidence for the forecast</strong>. The honest uncertainty is the shaded
-  band, which in practice is wider than they are; a comp can occasionally still land
-  outside it. A comp needs five realized seasons to be scored on the same horizons, so
-  none is recent.
-  {% if board.scale == 'var' %}Every comp's path above is also netted against
-  {{ board.name }}'s own slot floor ({{ '%.2f'|format(board.floor) }}), not each
-  comp's own -- the axis compares shapes on one line, not raw SGP.{% endif %}
-</p>
 <table class="data-table">
   <thead><tr><th>Player</th><th>Season</th><th>RMSE</th>
     {% for pt in board.projection %}<th>{{ pt.age }}</th>{% endfor %}</tr></thead>
@@ -109,6 +95,35 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     {% endfor %}
   </tbody>
 </table>
+
+{#- ONE CARD PER COMP. Stacked on the projection a comp is five grey points across the
+    subject's projected ages -- it shows the forward path and nothing about the player
+    it belongs to. The whole arc, with the match age marked, is what makes "Bogaerts at
+    25" mean something.
+
+    Skipped entirely when NO comp has a stored arc: an old blob, or a push that wrote
+    comps before careers existed. Ten identical notices in a ten-cell grid is noise
+    about a single cause. -#}
+{% if board.comps | selectattr('career') | first %}
+<div class="comp-grid">
+  {% for c in board.comps %}
+  <div class="comp-card">
+    <h4>{{ c.name }}
+      <span class="muted">{{ c.season }} -- RMSE {{ '%.2f'|format(c.rmse) }}</span></h4>
+    {% if c.career %}
+    <div class="comp-card-chart"><canvas id="comp-chart-{{ loop.index0 }}"></canvas></div>
+    {% else %}
+    <p class="muted">No stored career -- re-run <code>push_trajectory_board.py</code>.</p>
+    {% endif %}
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<p class="muted">
+  No stored comp careers -- this board predates them. A re-push of
+  <code>push_trajectory_board.py</code> will fill them in.
+</p>
+{% endif %}
 {% else %}
 <h3>Closest realized paths</h3>
 {#- TWO CAUSES, TWO MESSAGES. A mismatch is not a missing feature: the chart data is
@@ -150,6 +165,13 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     {% for a, v in board.history %}
     <tr><td>{{ a }}</td><td>{{ '%.1f'|format(v) }}</td><td class="muted">actual</td></tr>
     {% endfor %}
+    {#- The base season at its full-year pace. Absent once that season is realized --
+        a panel rebuilt after it ends puts it in `history` above instead, and
+        `build_player_view` suppresses this rather than printing it twice. -#}
+    {% if board.paced %}
+    <tr><td>{{ board.paced[0] }}</td><td>{{ '%.1f'|format(board.paced[1]) }}</td>
+      <td class="muted">pace</td></tr>
+    {% endif %}
     {% for pt in board.projection %}
     <tr><td>{{ pt.age }}</td><td>{{ '%.1f'|format(pt.mean) }}</td>
       <td>{{ '%.1f'|format(pt.p10) }}..{{ '%.1f'|format(pt.p90) }}</td></tr>

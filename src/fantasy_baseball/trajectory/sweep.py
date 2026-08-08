@@ -385,7 +385,12 @@ def chart_key(mlbam_id: int, pool: str) -> str:
     return f"{mlbam_id}:{pool}"
 
 
-def to_chart_payload(extras: dict[tuple[int, str], dict], *, generated_at: str) -> dict:
+def to_chart_payload(
+    extras: dict[tuple[int, str], dict],
+    *,
+    generated_at: str,
+    careers: dict[str, list] | None = None,
+) -> dict:
     """Serialize the per-player chart extras -- career history and comps -- for the KV.
 
     A SECOND blob beside the board, not a section of it (#344). Only the player view
@@ -401,10 +406,21 @@ def to_chart_payload(extras: dict[tuple[int, str], dict], *, generated_at: str) 
     These are the fields the SWEEP does not produce: they need the panel and the people
     cache rather than the fit, which is why they are assembled by the push script and
     passed in here rather than hung off `SweptPlayer`.
+
+    `careers` is the per-comp arc map (#346), keyed the same way `players` is. It is
+    optional and always WRITTEN, empty or not: a key whose presence depends on the
+    writer's vintage makes every reader carry a second branch for the same state.
+    `careers or {}` is safe where CLAUDE.md warns against `x or default` -- the value is
+    a dict, not a number, and an empty one means exactly what `None` does here.
     """
     return {
         "generated_at": generated_at,
         "players": {chart_key(mlbam_id, pool): data for (mlbam_id, pool), data in extras.items()},
+        # COMP CAREERS, deduped across the whole board rather than nested under each
+        # comp. The same arc is a comp for many players -- nesting writes it once per
+        # (player, comp) pair, roughly 5x the entries for the same information. Keyed
+        # by `chart_key` like `players`, so a two-way comp keeps one career per pool.
+        "careers": dict(careers or {}),
     }
 
 

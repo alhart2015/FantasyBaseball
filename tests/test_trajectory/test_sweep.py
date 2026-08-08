@@ -246,6 +246,28 @@ def test_the_chart_payload_survives_a_json_round_trip_with_both_pools_intact() -
     assert restored["players"][chart_key(660271, "pitcher")]["history"] == [[30, 12.0]]
 
 
+def test_the_chart_payload_carries_comp_careers_beside_the_players() -> None:
+    """Comp careers are deduped at the TOP level, not nested under each comp: comps
+    repeat heavily across the board's ~1,169 players, and nesting writes the same arc
+    thousands of times. Keyed like `players`, because a two-way comp has one career
+    per pool and a bare id would hand the hitter card the pitching arc."""
+    payload = to_chart_payload(
+        {(1, "hitter"): {"history": [[24, 5.0]], "comps": []}},
+        careers={chart_key(9, "hitter"): [[21, 3.0], [22, 7.5]]},
+        generated_at="2026-08-07T12:00:00",
+    )
+
+    assert payload["careers"] == {"9:hitter": [[21, 3.0], [22, 7.5]]}
+    assert payload["players"]["1:hitter"]["history"] == [[24, 5.0]]
+
+
+def test_a_chart_payload_written_without_careers_still_has_the_key() -> None:
+    """The reader treats a missing key and an empty map the same way, but a writer
+    that omits it entirely makes every blob's shape depend on its vintage."""
+    payload = to_chart_payload({}, generated_at="2026-08-07T12:00:00")
+    assert payload["careers"] == {}
+
+
 def test_the_board_payload_no_longer_carries_chart_data() -> None:
     """The 762 KB -> 1,861 KB growth #344 was opened about.
 

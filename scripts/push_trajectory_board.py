@@ -69,6 +69,44 @@ MIN_SGP = 0.0
 from fantasy_baseball.trajectory.comp_paths import MAX_COMPS, closest_paths
 
 
+def _arc(seasons) -> list[list[float]]:
+    """One player's stored career as ``[[age, sgp], ...]``, ascending, ``[]`` when absent.
+
+    ONE spelling for the two arcs a chart pairs on a single axis -- the subject's own
+    history and a comp's whole career. They came off the same `by_id` frame through two
+    hand-copied comprehensions, one of which sorted and one of which did not, so the
+    blob's two `[[age, sgp]]` lists carried different ordering guarantees for no reason
+    a reader could find.
+
+    **A MISSED SEASON IS A ZERO, NOT A GAP.** `load_scored_panel` drops a season the
+    player did not play (`observed` False, `pa <= 0`) and `_in_role` drops one he played
+    in the other role, so a career with a lost year arrives here as a frame with a hole
+    in it. `shape.prepare` takes the opposite convention on the very same data -- it
+    reindexes and `np.nan_to_num(..., nan=0.0)`, commented "a missing key means he was
+    out of the league that year -- a real 0" -- and that zero is part of the RMSE that
+    made him a comp and is what the comps table prints. An arc that skipped the age drew
+    a straight line through a year the rest of the page shows as nothing, on a card whose
+    whole job is showing where the busts sit in the arc.
+
+    Filled only BETWEEN observed seasons. Before his debut and after his last year he was
+    not a zero, he was absent, and the career span is what the arc is about.
+
+    Sorted (implicitly, by iterating the span) even though `groupby` happens to emit
+    ascending: nothing in the panel contract promises it, and `_netted` on the read side
+    sorts for the same reason.
+    """
+    if seasons is None:
+        return []
+    # Ages within one player are distinct: `collapse_split_seasons` gives one row per
+    # (mlbam_id, season) and age advances with the season, so nothing is collapsed here.
+    scored = {
+        int(a): round(float(s), 4) for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
+    }
+    if not scored:
+        return []
+    return [[age, scored.get(age, 0.0)] for age in range(min(scored), max(scored) + 1)]
+
+
 def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> list[dict] | None:
     """One player's stored comp block, or ``None`` when his path is too short to match.
 
@@ -93,6 +131,11 @@ def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> li
         return None
     return [
         {
+            # THE JOIN KEY for the stored career map, not decoration. `chart_key(id,
+            # pool)` is how a per-comp card finds the arc it draws; a display name
+            # cannot do it (#284), and two players sharing one normalized name is
+            # common enough to matter.
+            "id": c.mlbam_id,
             "name": names.get(c.mlbam_id, str(c.mlbam_id)),
             "season": c.season,
             "rmse": round(c.rmse, 3),
@@ -169,7 +212,12 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         season_elapsed_fraction,
     )
     from fantasy_baseball.trajectory.shape import prepare
-    from fantasy_baseball.trajectory.sweep import sweep_pool, to_chart_payload, to_payload
+    from fantasy_baseball.trajectory.sweep import (
+        chart_key,
+        sweep_pool,
+        to_chart_payload,
+        to_payload,
+    )
     from fantasy_baseball.utils.time_utils import local_now
 
     config = load_config(PROJECT_ROOT / "config" / "league.yaml")
@@ -202,6 +250,10 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
     # hitter row rendered his pitching career line and pitcher comps. See
     # `SweptPlayer.mlbam_id`.
     extras: dict[tuple[int, str], dict] = {}
+    # Deduped comp careers, keyed by `chart_key(id, pool)` -- see `to_chart_payload`.
+    # Outside the pool loop like `extras`, because the key already carries the pool and
+    # a two-way comp gets one entry per pool under distinct keys.
+    careers: dict[str, list] = {}
     excluded = {"low_sgp": 0, "no_current_line": 0}
     for kind in ("hitter", "pitcher"):
         live = calendar if kind == "hitter" else load(kind)
@@ -259,21 +311,26 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
 
         short_paths = 0
         for player in produced:
-            seasons = by_id.get(player.mlbam_id)
-            history = (
-                [
-                    [int(a), round(float(s), 4)]
-                    for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
-                ]
-                if seasons is not None
-                else []
-            )
+            history = _arc(by_id.get(player.mlbam_id))
             # None means his observable path is shorter than the swept horizons, so no
             # honest match exists -- see `player_comps`. He keeps his row and his career
             # line; only the comps go.
             comps = player_comps(prepared, player, horizons, names)
             if comps is None:
                 short_paths += 1
+            else:
+                # THE SAME `by_id` the subject's own history comes from, so a comp's arc
+                # and the subject overlay drawn on top of it are on one scale by
+                # construction. Resolved per pool, because `by_id` is per pool: a hitter
+                # comp looked up in the pitcher frame would draw the wrong career.
+                #
+                # An id `by_id` does not hold writes nothing: comps come from the same
+                # `prepared` this frame built, so absence is a defect, and an empty card
+                # is the honest rendering of one rather than a fabricated arc.
+                for comp in comps:
+                    key = chart_key(comp["id"], kind)
+                    if key not in careers and (arc := _arc(by_id.get(comp["id"]))):
+                        careers[key] = arc
             extras[(player.mlbam_id, player.pool)] = {
                 "history": history,
                 "comps": comps if comps is not None else [],
@@ -297,6 +354,14 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         max_horizon=max_horizon,
         min_sgp=MIN_SGP,
         season_elapsed=round(elapsed, 4),
+        # Whether `season` was still in progress when this panel was built. Read off
+        # the panel rather than the calendar date: `_live_seasons` in build_pt_panel.py
+        # flags a season partial iff `year >= today.year`, so a panel rebuilt in
+        # January un-flags the season that just ended -- and the reader must follow the
+        # panel it was actually built from, not today's date.
+        base_season_partial=bool(
+            calendar.loc[calendar["season"] == season, "partial_season"].any()
+        ),
         generated_at=generated_at,
         # The vintage a reader must be shown. Filenames, not a timestamp: the panel is a
         # build artifact whose span is what identifies it.
@@ -304,7 +369,11 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         floors={slot: round(v, 4) for slot, v in sorted(levels.items())},
         excluded={**excluded, "total": excluded["low_sgp"] + excluded["no_current_line"]},
     )
-    return payload, to_chart_payload(extras, generated_at=generated_at), len(swept)
+    return (
+        payload,
+        to_chart_payload(extras, careers=careers, generated_at=generated_at),
+        len(swept),
+    )
 
 
 def _target_store(*, local: bool):
