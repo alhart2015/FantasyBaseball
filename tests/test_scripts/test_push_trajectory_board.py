@@ -140,7 +140,21 @@ def test_a_player_observable_at_fewer_horizons_than_the_sweep_loses_only_his_com
 
     full = module.player_comps(prepared, _swept(3), horizons, {})
     assert full is not None and full, "a full-length path still gets its comps"
-    assert set(full[0]) == {"name", "season", "rmse", "path"}
+    assert set(full[0]) == {"id", "name", "season", "rmse", "path"}
+
+
+def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
+    """A comp used to be a display NAME and four numbers. Joining a chart to a name is
+    the defect class #284 exists for -- two players share one normalized name and one
+    of them gets the other's career drawn under his own. The per-comp career cards
+    (#346) look their arc up by `chart_key(id, pool)`, so the id has to be stored."""
+    module = _script()
+    horizons = (1, 2, 3)
+    comps = module.player_comps(_prepared(horizons), _swept(3), horizons, {})
+
+    assert comps, "the fixture player has comps"
+    assert all(isinstance(c["id"], int) for c in comps)
+    assert all(c["id"] > 0 for c in comps)
 
 
 def test_local_stays_local_even_when_render_is_already_set(monkeypatch, tmp_path) -> None:
@@ -386,7 +400,7 @@ def test_the_chart_data_carries_career_history_and_comps(monkeypatch) -> None:
     assert len(player["comps"]) <= module.MAX_COMPS
     if player["comps"]:
         first = player["comps"][0]
-        assert set(first) == {"name", "season", "rmse", "path"}
+        assert set(first) == {"id", "name", "season", "rmse", "path"}
         assert len(first["path"]) == 5
         rmses = [c["rmse"] for c in player["comps"]]
         assert rmses == sorted(rmses), "closest first"

@@ -93,6 +93,11 @@ def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> li
         return None
     return [
         {
+            # THE JOIN KEY for the stored career map, not decoration. `chart_key(id,
+            # pool)` is how a per-comp card finds the arc it draws; a display name
+            # cannot do it (#284), and two players sharing one normalized name is
+            # common enough to matter.
+            "id": c.mlbam_id,
             "name": names.get(c.mlbam_id, str(c.mlbam_id)),
             "season": c.season,
             "rmse": round(c.rmse, 3),
