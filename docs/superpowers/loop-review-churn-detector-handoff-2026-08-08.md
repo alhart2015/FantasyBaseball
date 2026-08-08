@@ -1,5 +1,8 @@
 # Handoff: the churn detector did not fire on a run that churned
 
+**Status: implemented 2026-08-08.** What shipped is at the bottom; the analysis
+below is unchanged and is what the implementation was built from.
+
 **Date:** 2026-08-08
 **Branch that produced the evidence:** `feat/350-trajectory-player-search`
 **Ledger (still on disk):** `.git/loop-review/feat-350-trajectory-player-search/`
@@ -165,3 +168,56 @@ carry it are, in the ledger's own words:
 - moving the list into the `<label>`, which broke tab order and label semantics (pass 4)
 - the `<ul>` inside a `<label>` being invalid content (pass 4)
 - the list moving back onto the form breaking the `focusout` guard's premise (pass 7)
+
+---
+
+## What shipped (2026-08-08)
+
+Provenance is recorded, not inferred. The file-overlap signal was not built.
+
+**`ledger.py`**
+
+- `add --regression` and `triage --regression` both set it. Two entry points
+  because the arbitrator usually learns provenance while premise-checking, after
+  the observe -- and re-observing a fixed finding to carry the flag would count
+  as drift, which is a different escalation with a different remediation.
+- Sticky through `fold`: nothing can un-introduce a defect, so a later pass that
+  restates the finding without the flag does not clear it.
+- `pass_regressions(dir)` charges each flagged finding to the pass that first saw
+  it, dropping refuted and wontfix -- a premise-check that rejected the finding
+  has already said it was not a regression, and a false alarm must not escalate.
+- `detect_churn` returns `regression_churn` as a **separate key** from `churn`.
+  Not one boolean, because the remediations are opposites: churn means enumerate
+  the theme, regression churn means stop and hand back.
+- `status` gains `regressions_by_pass`; `open` and `list` mark each item.
+
+**The trigger is a count, not a fraction.** Both of the last two observing passes
+must carry at least one flagged finding. The handoff asked for a threshold fitted
+on more than one run; only one run has provenance recorded (3/14 then 1/9), so a
+fraction would have been a guess wearing a number. The count rule is what the
+handoff's own stop rule says in prose, it keeps a single bad fix from escalating,
+and the docstring names the run it came from. Refit when a second run has flags.
+
+**Prompts.** All three `lr-*` agent definitions now require a `provenance:
+introduced-here | pre-existing` line per finding. They were already saying it
+unprompted; nothing captured it.
+
+**Stop rule.** `reference/arbitration.md` section 5 and SKILL.md's escalation
+list carry the handback wording verbatim.
+
+**Verification.** `selftest.py`, 168 -> 187 checks, covering all five items of the
+plan above: #280's shape still fires the original rule; 28/14/9 with 3 and 1
+flagged fires the new one where the old one is silent; healthy decay fires
+neither; the flag survives fold and a re-observation; a flagless ledger's
+`status`, `subsystems` and decay verdict are unchanged.
+
+End-to-end on this branch's real ledger, after flagging the four findings above
+with `triage --regression`:
+
+```
+churn:             false   (counts dropped 14 -> 9, as before)
+regression_churn:  true    prev=[3 findings from pass 4], current=[1 from pass 7]
+```
+
+Which is the whole point: the run that churned now says so, and the signal that
+was right about decay is untouched.
