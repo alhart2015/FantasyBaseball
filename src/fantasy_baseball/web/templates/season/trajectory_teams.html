@@ -18,18 +18,16 @@
   {{ board.ranked }} scored players, not its position on that roster.
 </p>
 
-{{ ctl.controls(cur, board.end_years, board.blocks | map(attribute='team') | list) }}
+{#- This IS the teams view, so it exists by construction. -#}
+{% set team_names = board.blocks | map(attribute='team') | list %}
+{{ ctl.controls(cur, board.end_years, team_names, true) }}
 
 {#- THE SAME VINTAGE DISCLOSURE THE LEAGUE BOARD PRINTS, and needed harder here: this
     is a bookmarkable, shareable URL that a trade conversation starts from, so a page
     with no staleness signal invites acting on numbers that may be weeks old. -#}
 <p class="muted trajectory-vintage">
   Start year is locked at {{ board.base_season + 1 }}.
-  {% if board.meta.generated_at %}Built {{ board.meta.generated_at }}{% endif %}
-  {% if board.meta.panel_vintage %}from {{ board.meta.panel_vintage.hitter }} / {{ board.meta.panel_vintage.pitcher }}{% endif %}
-  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% complete, and every fit is built on the paced full-year figure{% endif %}.
-  This board does not refresh with the dashboard; it is as fresh as the last
-  <code>push_trajectory_board.py</code> run.
+  {{ ctl.vintage_note(board) }}
   Rows marked <strong>(!)</strong> or <strong>(!!)</strong> are counted in their block's
   total like any other, so a block can be ordered above its neighbour on estimates the
   model is least sure about -- read those rows' bands before comparing rosters.

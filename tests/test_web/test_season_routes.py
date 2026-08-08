@@ -1,5 +1,6 @@
 import json
 import re
+from pathlib import Path
 from typing import ClassVar
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +11,9 @@ from fantasy_baseball.data.cache_keys import redis_key
 from fantasy_baseball.data.kv_store import get_kv
 from fantasy_baseball.web.season_app import create_app
 from fantasy_baseball.web.season_data import CacheKey
+from fantasy_baseball.web.trajectory_view import VIEWS, filter_state
+
+PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
 
 @pytest.fixture
@@ -2408,17 +2412,45 @@ def test_trajectory_page_survives_a_team_param_with_no_rosters(client):
     assert b"Testy McTestface" in resp.data
 
 
-@pytest.mark.parametrize("view", ["board", "teams"])
+@pytest.mark.parametrize("view", VIEWS)
 def test_trajectory_controls_carry_every_filter_on_every_link(client, view):
-    """`board_url` is the single place that knows full filter state. A filter it
-    does not emit gets silently reset when any other control is used -- the
-    hidden-input failure the macro's own comment records.
+    """`filter_state` is the single place that knows full filter state. A filter it
+    names that a link does not emit gets silently reset when any other control is
+    used -- the hidden-input failure the macro's own comment records.
 
-    RUN ON BOTH VIEWS, because the route builds `cur` TWICE -- once per view -- and
-    only the second one was covered here. That is how `team` came to be a hardcoded
-    "all" on the teams branch while its neighbours were pass-throughs: the filter
-    survived the link shape check and died on the round trip.
+    RUN ON EVERY VIEW, because the route builds `cur` ONCE PER VIEW. Covering only
+    one is how `team` came to be a hardcoded "all" on the teams branch while its
+    neighbours were pass-throughs: the filter survived the link shape check and died
+    on the round trip.
+
+    THE LITERAL BELOW IS THE GUARD, and duplicating the list is the point of it. This
+    once read `expected = [f"{n}=" for n in filter_state(view, None, {})]`, deriving
+    its expectation from the very thing it guards: a key DELETED from `filter_state`
+    shrank both sides and the test stayed green. Measured -- deleting `"per"` left all
+    173 tests in this file passing, while a reader on /trajectory?view=teams&per=25 who
+    clicked a scale pill silently dropped back to 5 rows per team.
+
+    The equality assertion keeps the literal honest in the other direction: a filter
+    ADDED to `filter_state` and not to the links is what the derived version did catch,
+    and the earlier literal had drifted two behind before it was removed.
     """
+    names = [
+        "view",
+        "end",
+        "pool",
+        "scale",
+        "per",
+        "top",
+        "team",
+        "player",
+        "n",
+        "pid",
+        "ppool",
+    ]
+    assert sorted(names) == sorted(filter_state(view, None, {})), (
+        "the literal above and `filter_state` must name the same filters -- add to both"
+    )
+    expected = [f"{name}=" for name in names]
     with (
         patch(
             "fantasy_baseball.web.season_routes.read_cache_dict",
@@ -2435,11 +2467,11 @@ def test_trajectory_controls_carry_every_filter_on_every_link(client, view):
     assert resp.status_code == 200
     body = resp.data.decode()
 
-    # Every control link must carry all seven, or using one resets the others.
+    # Every control link must carry every one of them, or using one resets the others.
     links = re.findall(r'href="(/trajectory\?[^"]*)"', body)
     assert links, "the control bar rendered no links"
     for link in links:
-        for param in ("end=", "pool=", "scale=", "top=", "per=", "view=", "team="):
+        for param in expected:
             assert param in link, f"{view}: {param} missing from {link}"
 
 
@@ -2622,3 +2654,504 @@ def test_trajectory_teams_view_falls_back_when_no_rosters_arrived(client):
         resp = client.get("/trajectory?view=teams")
     assert resp.status_code == 200
     assert "Testy McTestface" in resp.data.decode(), "the league board rendered instead"
+
+
+def _trajectory_payload_with_extras():
+    """The route fixture plus the keys the push script bakes."""
+    payload = _trajectory_payload()
+    payload["players"] = [
+        {
+            **p,
+            "history": [[25, 14.0], [26, 16.0]],
+            "comps": [
+                {
+                    "name": "Andre Ethier",
+                    "season": 2007,
+                    "rmse": 1.25,
+                    "path": [12.7, 14.4, 12.1, 9.2, 12.2],
+                },
+                {
+                    "name": "Bryan Reynolds",
+                    "season": 2020,
+                    "rmse": 1.31,
+                    "path": [11.0, 12.0, 11.5, 10.0, 9.5],
+                },
+            ],
+        }
+        for p in payload["players"]
+    ]
+    return payload
+
+
+def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "trajectory-chart" in body, "the canvas the chart draws into"
+    assert "closest realized paths" in body, "labelled as illustration, not evidence"
+    # The TABLE markup, not the `#trajectory-chart-data` JSON island -- that island
+    # also serializes `board.comps` verbatim, so a plain substring match on "Andre
+    # Ethier"/"1.25" is satisfied by the JSON alone and stays green even if the
+    # honesty table renders nothing.
+    assert "<td>Andre Ethier</td>" in body, "comps are named in the table"
+    assert "<td>1.25</td>" in body, "each comp shows its RMSE in the table"
+
+
+def test_trajectory_player_view_states_the_five_year_comp_rule(client):
+    """A reader who notices no comp is recent must find the rule, not infer a bug."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert "five realized seasons" in resp.data.decode()
+
+
+def test_trajectory_player_view_with_no_name_renders_the_search_box(client):
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player")
+    assert resp.status_code == 200
+    assert 'name="player"' in resp.data.decode(), "the search input"
+
+
+def test_trajectory_player_view_unknown_name_does_not_500(client):
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Nobody+At+All")
+    assert resp.status_code == 200
+    assert "No player named" in resp.data.decode()
+
+
+def test_trajectory_player_view_degrades_on_a_legacy_positional_points_blob(client):
+    """A pre-#332 blob storing points positionally must degrade, not 500.
+
+    That shape is what is deployed in production today, and the guard against it lives
+    in `_unpack` -- ONE guard, because since 757fb9fc there is one reader: the player
+    view goes through `player_from_row` instead of unpacking `row["sgp"]` itself. This
+    docstring used to describe that deleted second reader and told a future editor the
+    duplication was deliberate. What it guards now is that the single guard's
+    `ValueError` still reaches this page as a degraded banner rather than a 500 -- the
+    route catches `ValueError`, so a change that let a `TypeError` escape instead
+    would break exactly here."""
+    payload = _trajectory_payload()
+    payload["players"] = [
+        {**p, "sgp": [[1, 14.0, 10.0, 18.0, 100.0, 0], [2, 15.0, 11.0, 19.0, 90.0, 0]]}
+        for p in payload["players"]
+    ]
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=payload,
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    assert "re-run scripts/push_trajectory_board.py" in resp.data.decode()
+
+
+def test_trajectory_player_view_discloses_the_var_netting_on_axis_and_table(client):
+    """Spec requirement 6: on the VAR scale every series is netted against the
+    searched player's OWN slot floor, and the axis label must say so -- not just
+    repeat "VAR" as if that were self-explanatory. The numbers table's header is the
+    no-JS fallback for the same disclosure (#324 F2).
+
+    ONE STRING, BOTH SURFACES. The chart's y-axis title and this header used to be
+    built independently -- a Jinja `{% set %}` and a JS template literal, each
+    interpolating `floor` -- so they could disagree about a subtraction. Asserting they
+    are equal is what makes `PlayerView.axis_label` the only place the rule lives.
+    """
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface&scale=var")
+    body = resp.data.decode()
+    # Testy McTestface's slot floor is 4.0 -- see `_trajectory_payload`'s BoardRow.
+    assert "<th>VAR (SGP - 4.00 slot floor)</th>" in body
+    assert _chart_island(body)["axis_label"] == "VAR (SGP - 4.00 slot floor)"
+    assert "netted against" in body, "the comp caption names the rule too"
+
+
+def test_trajectory_player_view_sgp_scale_keeps_a_plain_label(client):
+    """Nothing is netted on the SGP scale (`board.floor` is 0.0 there) -- the label
+    must not claim a subtraction that did not happen."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface&scale=sgp")
+    body = resp.data.decode()
+    assert "<th>SGP</th>" in body
+    assert _chart_island(body)["axis_label"] == "SGP", "the chart says the same thing"
+    assert "slot floor" not in body
+
+
+def test_trajectory_player_view_discloses_vintage_and_the_history_gap(client):
+    """Sibling templates (trajectory.html, trajectory_teams.html) both print the
+    build vintage / pace note; this one printed neither. Also explains why the solid
+    line stops a year before the dashed one starts (#324 F3)."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    body = resp.data.decode()
+    assert "Built 2026-08-07T09:00:00" in body, "the same vintage stamp the sibling views print"
+    assert "still in progress" in body, "explains the gap between history and projection"
+
+
+def test_trajectory_player_view_explains_a_pre_feature_blob(client):
+    """A blob pushed before this feature carries no `history`/`comps` keys at all --
+    the shape currently deployed in production. The page must say what's missing
+    rather than rendering an empty comps table as if the model scored zero comps."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "trajectory-chart" in body, "the projection still renders regardless"
+    assert body.count("predates") == 2, "one note for the missing comps, one for history"
+    comps_section = body[body.index("Closest realized paths") : body.index("The numbers")]
+    assert "<td>" not in comps_section, "no fabricated comp rows"
+
+
+def _two_way_trajectory_payload():
+    """The route fixture with `Testy McTestface` carried by a hitter row AND a pitcher
+    row -- the live board's Shohei Ohtani shape, where the two rows share an id and an
+    age and differ only by slot and pool."""
+    payload = _trajectory_payload_with_extras()
+    hitter = payload["players"][0]
+    payload["players"] = [
+        *payload["players"],
+        {**hitter, "pool": "pitcher", "slot": "SP", "floor": 3.0},
+    ]
+    return payload
+
+
+def test_trajectory_player_candidates_are_links_that_resolve_the_ambiguity(client):
+    """An ambiguous name was a PERMANENT dead end: the candidates rendered as plain
+    `<li>` text and the search form's only input was `player`, so no query string could
+    pick one. On the live board this fires for Ohtani, whose two rows share id 660271
+    AND age 31 -- the list offered two lines identical in the field it named.
+
+    Two narrowing keys, deliberately NOT the board's `pool` filter: `ppool` separates a
+    two-way player, `pid` separates same-pool namesakes (the live board has two hitters
+    named Max Muncy, sharing neither).
+    """
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_two_way_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+
+    candidates = body[body.index("More than one player") : body.index("</ul>")]
+    assert "pitcher" in candidates and "hitter" in candidates, "the pool is the discriminator"
+    links = re.findall(r'href="(/trajectory\?[^"]*)"', candidates)
+    assert links, "a candidate a reader cannot click is a dead end"
+    assert all("pid=" in link and "ppool=" in link for link in links)
+
+    picked = next(link for link in links if "ppool=pitcher" in link)
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_two_way_trajectory_payload(),
+    ):
+        resolved = client.get(picked.replace("&amp;", "&"))
+    assert resolved.status_code == 200
+    resolved_body = resolved.data.decode()
+    assert "More than one player" not in resolved_body, "the pick resolved it"
+    assert "trajectory-chart" in resolved_body
+    assert ", SP." in resolved_body, "the PITCHER row, not the hitter one"
+
+
+def test_trajectory_player_narrowing_survives_a_control_click(client):
+    """`pid`/`ppool` are in `filter_state`, so every control link carries them the way
+    `player` and `n` do. Without that, toggling the scale on a resolved two-way player
+    drops him straight back to the candidate list."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_two_way_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface&ppool=pitcher")
+    body = resp.data.decode()
+    links = re.findall(r'href="(/trajectory\?[^"]*)"', body)
+    assert links
+    for link in links:
+        assert "ppool=pitcher" in link, f"narrowing dropped from {link}"
+
+
+def test_trajectory_player_view_names_the_fix_for_a_row_missing_a_field(client):
+    """A one-word banner is not an error message.
+
+    `player_from_row` requires `id`, `pool`, `now`, `prior`, `support` and
+    `extrapolated`, none of which this view uses. A stale blob missing one raised
+    `KeyError('now')`, the route caught it, and `str(exc)` rendered a red banner reading
+    literally `'now'` -- no indication the payload was the problem. `_unpack` already
+    gives the positional-blob case an actionable sentence; this is the same one.
+    """
+    payload = _trajectory_payload()
+    payload["players"] = [{k: v for k, v in p.items() if k != "now"} for p in payload["players"]]
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=payload,
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "re-run scripts/push_trajectory_board.py" in body, "say what to do"
+    # Jinja escapes the quotes around the field name, hence the entities.
+    assert "missing &#39;now&#39;" in body, "and still name the field that is missing"
+
+
+def test_trajectory_player_view_offers_the_by_team_pill(client):
+    """The player view was a one-way door: `_trajectory_controls.html` gates the "By
+    team" pill on `{% if teams %}` and this template passed `[]`, so there was no link
+    back to the teams view.
+
+    It passes `[]` because the player branch deliberately SKIPS the `live_rosters()`
+    read -- a real per-request Yahoo call `build_player_view` has no use for. That skip
+    stays. The macro was conflating two questions: does the teams view exist (what the
+    pill needs) and which teams populate the dropdown (what the list is for).
+    """
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "view=teams" in body, "no link back to the teams view"
+    # And the dropdown the team LIST feeds stays absent -- the skip is what makes the
+    # player view cheap, and this is what proves the two questions were separated
+    # rather than the roster read quietly re-added.
+    assert "All teams" not in body
+
+
+def _chart_island(body: str) -> dict:
+    """The player page's `#trajectory-chart-data` JSON island, parsed.
+
+    Everything the chart is given comes through here, so a test asserting what the
+    chart draws asserts this rather than the JS -- there is no JS runtime in this suite.
+    """
+    match = re.search(
+        r'<script type="application/json" id="trajectory-chart-data">(.*?)</script>',
+        body,
+        re.DOTALL,
+    )
+    assert match, "the chart's data island"
+    return json.loads(match.group(1))
+
+
+def _trajectory_chart_js_source() -> str:
+    return (
+        PROJECT_ROOT / "src" / "fantasy_baseball" / "web" / "static" / "trajectory_chart.js"
+    ).read_text()
+
+
+def test_trajectory_chart_js_disables_the_default_aspect_ratio():
+    """No JS runtime lives in this suite, so this is a source-text assertion, not a
+    faked browser check -- honest per #324 F8's instruction not to write one that
+    cannot fail.
+
+    Chart.js's OWN defaults (`responsive: true, maintainAspectRatio: true`, ratio 2)
+    ignore `.chart-wrapper`'s fixed 360px box (season.css) and draw the canvas at
+    roughly twice its height, painting over the honesty paragraph beneath it
+    (#324 F1). `season_trends.js`'s `buildChart` sets this same pair for the same
+    box; `trajectory_chart.js` must match it rather than inherit the default."""
+    src = _trajectory_chart_js_source()
+    # Anchored on the option lines themselves, not a bare substring: the comment
+    # above quotes `responsive: true, maintainAspectRatio: true` to explain the
+    # defaults, so a substring check is satisfied by the prose that documents the
+    # BROKEN form and stays green with the real option deleted.
+    assert re.search(r"^\s*maintainAspectRatio: false,$", src, re.M)
+    assert re.search(r"^\s*responsive: true,$", src, re.M)
+
+
+def test_trajectory_chart_js_discloses_the_var_netting_on_the_axis():
+    """Spec requirement 6: the y-axis title must say what was subtracted on the VAR
+    scale, not just repeat the scale name (#324 F2).
+
+    The label is now built ONCE, server-side, as `PlayerView.axis_label`, and this
+    file reads the finished string -- so what has to be pinned here is that the axis
+    uses it, and the SERVER's rule is pinned where it now lives (see
+    `test_trajectory_player_view_discloses_the_var_netting_on_axis_and_table`, which
+    asserts the chart's island and the table header carry the SAME string). It
+    previously asserted the JS template literal that built a second copy of the same
+    rule, which no longer exists.
+
+    Both halves matter: without the `data.axis_label` read the chart is rebuilding
+    the label locally again, and without `title: { display: true` Chart.js draws no
+    y-axis title at all and the disclosure is silently gone.
+    """
+    src = _trajectory_chart_js_source()
+    assert re.search(r"y: \{ title: \{ display: true, text: data\.axis_label \} \}", src)
+    # And nothing left re-deriving it: the island no longer carries either input.
+    assert "data.floor" not in src
+    assert "data.scale" not in src
+
+
+def test_trajectory_chart_js_filters_the_internal_p10_series_from_tooltips_too():
+    """`_p10` is the internal fill-target dataset, already hidden from the legend by
+    label; Chart.js's default tooltip has no such filter, so a hover near the lower
+    band edge would otherwise show a series literally called "_p10" (#324 F6)."""
+    src = _trajectory_chart_js_source()
+    assert "tooltip: { filter:" in src
+    assert 'item.dataset.label !== "_p10"' in src
+
+
+def test_trajectory_player_chart_data_is_truncated_to_the_projected_horizons(client):
+    """The fixture's comp paths are stored 5 long; `_trajectory_payload` sweeps 2
+    horizons. The route must serve what `build_player_view` already truncated, not
+    the raw stored path -- a page showing 5 comp points against a 2-point projection
+    would draw off the end of the chart's x-axis."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    chart_data = _chart_island(resp.data.decode())
+    assert len(chart_data["projection"]) == 2, "the fixture sweeps 2 horizons"
+    assert len(chart_data["comps"][0]["path"]) == 2, "not the fixture's stored 5"
+
+
+def test_trajectory_player_view_ambiguous_name_renders_no_chart(client):
+    """Two players sharing a normalized name must not silently pick one -- the
+    disambiguation list renders instead of a chart for either man's career."""
+    payload = _trajectory_payload_with_extras()
+    first = payload["players"][0]
+    payload["players"] = [*payload["players"], {**first, "id": first["id"] + 10_000}]
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=payload,
+    ):
+        resp = client.get(f"/trajectory?view=player&player={first['name'].replace(' ', '+')}")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "trajectory-chart" not in body, "an ambiguous name must not render a chart"
+    assert "More than one player is named" in body
+
+
+def test_trajectory_end_and_pool_survive_a_round_trip_through_the_player_view(client):
+    """`filter_state` gives `end_year`/`pool` to `PlayerView` the same treatment as
+    `top`/`team`: a pass-through from the query string, not a hardcoded default. A
+    League -> Player -> League round trip must land back on the same timeframe and
+    pool, not silently reset to `end_years[0]`/"both" -- the literal-`"all"` bug this
+    module's docstring already names, one field over.
+    """
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&end=2028&pool=pitcher")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    # The League pill's own link is the round trip: it must carry the values
+    # forward rather than resetting them.
+    league_href = re.search(r'href="([^"]*)">League</a>', body).group(1)
+    assert "end=2028" in league_href
+    assert "pool=pitcher" in league_href
+
+
+def test_trajectory_search_form_carries_the_filters_it_passes_through(client):
+    """The search form is the other round trip. It is a GET form, so every filter it
+    omits is silently reset on submit -- the exact failure `_trajectory_controls.html`'s
+    docstring names ("missing an input silently reset that filter"). The pass-through in
+    `filter_state` is worth nothing if searching a second player drops the state on the
+    way out.
+    """
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player&end=2028&pool=pitcher&top=25&team=Aardvarks")
+    assert resp.status_code == 200
+    form = re.search(
+        r'<form method="get" class="trajectory-search">(.*?)</form>',
+        resp.data.decode(),
+        re.S,
+    ).group(1)
+    for name, value in (
+        ("end", "2028"),
+        ("pool", "pitcher"),
+        ("top", "25"),
+        ("team", "Aardvarks"),
+    ):
+        assert f'name="{name}" value="{value}"' in form, f"search drops {name}"
+
+
+def test_trajectory_player_view_hides_the_inert_through_and_pool_controls(client):
+    """The "Through" dropdown and the pool pills do nothing on the player view --
+    `build_player_view` takes no `end` and searches one resolved name, not a pool.
+    Offering them invites a reader to believe they filter something."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "<label>Through" not in body
+    assert ">Hitters<" not in body and ">Pitchers<" not in body
+
+
+def test_trajectory_player_view_renders_no_per_team_selector(client):
+    """The Top/Team/Per-team block is a three-way branch now; a bare `else` would
+    show the teams view's "Per team" selector on the player page, which has no
+    per-team concept at all."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?view=player")
+    assert resp.status_code == 200
+    assert "Per team" not in resp.data.decode()
+
+
+def test_trajectory_player_and_n_pass_through_on_the_league_board(client):
+    """`filter_state`'s `player`/`n` fields are the player view's own pass-through
+    story in reverse: on every OTHER view they must come from the query string, so a
+    search in progress survives a trip to League and back."""
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload(),
+    ):
+        resp = client.get("/trajectory?player=Testy+McTestface&n=7")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    player_href = re.search(r'href="([^"]*)">Player</a>', body).group(1)
+    assert "player=Testy" in player_href
+    assert "n=7" in player_href
+
+
+def test_the_three_trajectory_views_coexist(client):
+    """Each renders its own thing, and the other two are still reachable."""
+    with (
+        patch(
+            "fantasy_baseball.web.season_routes.read_cache_dict",
+            return_value=_trajectory_payload_with_extras(),
+        ),
+        patch("fantasy_baseball.data.rosters.live_rosters", return_value=_trajectory_spots()),
+    ):
+        board = client.get("/trajectory")
+        teams = client.get("/trajectory?view=teams")
+        player = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert all(r.status_code == 200 for r in (board, teams, player))
+    assert "All teams" in board.data.decode()
+    assert "team-block" in teams.data.decode()
+    assert "trajectory-chart" in player.data.decode()
+
+
+# `test_the_stored_and_displayed_comp_ceilings_agree` was here: it asserted the view's
+# clamp ceiling equalled the push script's stored count. Both are now the one
+# `comp_paths.MAX_COMPS`, so the parity it policed is structural and there is nothing
+# left for the two to drift apart on.

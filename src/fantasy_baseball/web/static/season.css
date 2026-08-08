@@ -3881,3 +3881,42 @@ td[style*="--neg"] {
   margin-bottom: 10px;
 }
 .trajectory-footer p:last-child { margin-bottom: 0; }
+/* Player trajectory (#324). Reuses .chart-wrapper for the canvas card; only the
+   search form is specific to this view. */
+.trajectory-search {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 14px;
+}
+.trajectory-search label {
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+.trajectory-search input[type="text"],
+.trajectory-search input:not([type]) {
+  font: inherit;
+  font-size: 13px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 8px;
+  min-width: 220px;
+}
+.trajectory-search button {
+  font: inherit;
+  font-size: 12px;
+  color: var(--ink);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 5px 12px;
+  cursor: pointer;
+}
+.trajectory-search button:hover { border-color: var(--accent); }

@@ -324,6 +324,11 @@ class Prepared:
     current: np.ndarray
     prior: np.ndarray
     season: np.ndarray
+    #: MLBAM id per history row, aligned to every other array here. `prepare` already
+    #: builds this to reindex `forward` and then dropped it, so anything wanting to NAME
+    #: a matched row had to rebuild `build_history` alongside and trust that two row
+    #: orders agreed. Carrying it makes that class of silent misalignment unreachable.
+    mlbam_id: np.ndarray
     #: horizon -> forward SGP for every history row, 0 where he was out of the league.
     #: Rows whose `season + horizon` runs past `last` are unobservable and are masked
     #: off per query rather than being trusted here.
@@ -373,6 +378,7 @@ def prepare(
         current=history["current"].to_numpy(dtype=float),
         prior=history["prior"].to_numpy(dtype=float),
         season=seasons,
+        mlbam_id=ids,
         forward=forward,
     )
 

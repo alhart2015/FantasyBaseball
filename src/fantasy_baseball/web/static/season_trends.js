@@ -270,4 +270,8 @@
     loaded = true;
     buildTrends();
   };
+
+  // Exposed so a second page (trajectory_chart.js) can reuse the loader --
+  // its race guard and CDN reference belong in exactly one place.
+  window.ensureChartJs = ensureChartJs;
 })();

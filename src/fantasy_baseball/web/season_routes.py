@@ -809,33 +809,49 @@ def register_routes(app: Flask) -> None:
         """
         from fantasy_baseball.web.trajectory_view import (
             build_board,
+            build_player_view,
             build_teams_board,
             filter_state,
             select_view,
         )
 
         payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
-        board, teams_board, error = None, None, None
+        board, teams_board, player_view, error = None, None, None, None
         if payload:
+            view = select_view(request.args.get("view"))
+            spots: list = []
+            my_team = None
             # LIVE rosters, not the local mirror: which players are mine is exactly the
             # state that goes stale silently, and a trade since the last sync would mark
             # the wrong rows. A failure here must not take the page down -- the board is
             # still worth reading unmarked -- so it degrades to no highlighting, and
             # `has_rosters` lets the template distinguish that from "you own none of
-            # these".
-            spots: list = []
-            my_team = None
-            try:
-                from fantasy_baseball.data.rosters import live_rosters
+            # these". Skipped on the player view: `build_player_view` takes neither
+            # `spots` nor `my_team`, so a search would pay for a live Yahoo call and
+            # discard the result every time.
+            if view != "player":
+                try:
+                    from fantasy_baseball.data.rosters import live_rosters
 
-                my_team = _load_config().team_name
-                # Every team's spots, not just mine: the dropdown filters to any
-                # roster, and `build_board` derives ownership from the same read.
-                spots = list(live_rosters(my_team))
-            except Exception:
-                logger.warning("trajectory: live roster read failed; rendering unmarked")
-            view = select_view(request.args.get("view"))
+                    my_team = _load_config().team_name
+                    # Every team's spots, not just mine: the dropdown filters to any
+                    # roster, and `build_board` derives ownership from the same read.
+                    spots = list(live_rosters(my_team))
+                except Exception:
+                    logger.warning("trajectory: live roster read failed; rendering unmarked")
             try:
+                if view == "player":
+                    player_view = build_player_view(
+                        payload,
+                        player=request.args.get("player", ""),
+                        scale=request.args.get("scale", "var"),
+                        n=request.args.get("n"),
+                        # The candidate-list narrowing. Distinct names from `pool`,
+                        # which is the board's hitter/pitcher filter this view only
+                        # passes through -- see `build_player_view`.
+                        pid=request.args.get("pid"),
+                        ppool=request.args.get("ppool"),
+                    )
                 if view == "teams":
                     teams_board = build_teams_board(
                         payload,
@@ -848,8 +864,9 @@ def register_routes(app: Flask) -> None:
                     )
                     # No roster data means no blocks to show. Fall back rather than
                     # render an empty page -- a bookmark outlives an Upstash outage.
-                    # Reset to "board" rather than inventing a third view value: the
-                    # only values that exist anywhere are the two `select_view` allows.
+                    # Falls back to "board" rather than to a value off `VIEWS`: every
+                    # value this route ever holds is one `select_view` allows, and
+                    # "board" is the one that needs no roster read to render.
                     if not teams_board.blocks:
                         teams_board, view = None, "board"
                 if view == "board":
@@ -867,6 +884,16 @@ def register_routes(app: Flask) -> None:
                 error = str(exc)
         else:
             view = "board"
+
+        if view == "player" and player_view is not None:
+            return render_template(
+                "season/trajectory_player.html",
+                meta=read_meta(),
+                active_page="trajectory",
+                board=player_view,
+                error=error,
+                cur=filter_state("player", player_view, request.args),
+            )
 
         if view == "teams" and teams_board is not None:
             return render_template(

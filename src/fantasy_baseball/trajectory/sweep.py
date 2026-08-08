@@ -58,6 +58,22 @@ RANK_MOVE = 5
 SCALES = ("var", "sgp")
 
 
+def var_offset(floor: float, scale: str) -> float:
+    """What to subtract from a raw SGP number to read it on `scale`.
+
+    THE definition of the VAR scale, in ONE place. It was spelled twice -- once for the
+    fitted path and again inline in `totals` for the Now column -- and two spellings of
+    this rule is the drift #331 is about: the board printed an unclamped Now beside a
+    clamped forecast, which was only possible because the two columns did not get their
+    scale from the same site. `SweptPlayer.offset` delegates here rather than
+    re-deriving it, and the trajectory-chart view (`build_player_view`, #324) reaches
+    it through that method rather than spelling the rule a third time.
+    """
+    if scale not in SCALES:
+        raise ValueError(f"scale must be one of {SCALES}, got {scale!r}")
+    return 0.0 if scale == "sgp" else floor
+
+
 @dataclass(frozen=True)
 class YearPoint:
     """One projected season, on one scale.
@@ -82,10 +98,14 @@ class YearPoint:
 class SweptPlayer:
     """One player, fitted ONCE on raw SGP, at every horizon the sweep reached."""
 
-    #: The only unique key on a board row. Names are NOT unique even within a pool -- the
-    #: live board carries two hitters called Max Muncy -- so anything joining, charting or
-    #: linking a row must key on this. #324 needs it to name comps; #284 is the roster
-    #: side of the same problem.
+    #: HALF the unique key on a board row, which is `(mlbam_id, pool)`. Names are NOT
+    #: unique even within a pool -- the live board carries two hitters called Max Muncy --
+    #: and the id alone is not unique either, because a two-way player is produced ONCE
+    #: PER POOL (see `test_a_two_way_player_keeps_one_line_per_pool`). Anything joining,
+    #: charting or linking a row must key on the PAIR: this comment used to call the id
+    #: "the only unique key", and that belief is what keyed `to_payload`'s `extras` on the
+    #: bare id, so Ohtani's hitter row carried his pitching career line and pitcher comps.
+    #: #324 needs the id to name comps; #284 is the roster side of the same problem.
     mlbam_id: int
     name: str
     pool: str
@@ -104,17 +124,9 @@ class SweptPlayer:
     sgp: tuple[YearPoint, ...]
 
     def offset(self, scale: str) -> float:
-        """What to subtract from a raw SGP number to read it on `scale`.
-
-        THE definition of the VAR scale, in ONE place. It was spelled twice -- here for
-        the fitted path and again inline in `totals` for the Now column -- and two
-        spellings of this rule is the drift #331 is about: the board printed an unclamped
-        Now beside a clamped forecast, which was only possible because the two columns
-        did not get their scale from the same site.
-        """
-        if scale not in SCALES:
-            raise ValueError(f"scale must be one of {SCALES}, got {scale!r}")
-        return 0.0 if scale == "sgp" else self.floor
+        """What to subtract from a raw SGP number to read it on `scale`. Delegates to
+        `var_offset`, the module-level home for this rule -- see its docstring."""
+        return var_offset(self.floor, scale)
 
     def points(self, scale: str) -> tuple[YearPoint, ...]:
         """The fitted path on `scale`. "var" is derived, never stored."""
@@ -307,6 +319,11 @@ def _unpack(packed: dict[str, float], age: int) -> YearPoint:
         # would read as a TypeError about integer indices -- true, and useless. Say
         # what to do instead. Self-limiting: once prod is re-pushed it never fires,
         # and unlike a version register nothing has to be remembered to keep it honest.
+        #
+        # ONE guard, because there is one reader. The message used to be a module
+        # constant shared with `web.trajectory_view.build_player_view`, which unpacked
+        # `row["sgp"]` itself and so needed its own copy of this check; that reader now
+        # goes through `player_from_row` and inherits this one (#324).
         raise ValueError(
             "trajectory board payload stores points as positional arrays, which this "
             "build no longer reads; re-run scripts/push_trajectory_board.py"
@@ -323,8 +340,24 @@ def _unpack(packed: dict[str, float], age: int) -> YearPoint:
     )
 
 
-def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
-    """Serialize a sweep for the KV. `meta` carries the vintage the reader must show."""
+def to_payload(
+    players: Iterable[SweptPlayer],
+    *,
+    extras: dict[tuple[int, str], dict] | None = None,
+    **meta: Any,
+) -> dict:
+    """Serialize a sweep for the KV. `meta` carries the vintage the reader must show.
+
+    `extras` is per-player data the SWEEP does not produce -- career history and comps,
+    which need the panel and the people cache rather than the fit. Merged in here so
+    `SweptPlayer` does not grow fields that only one consumer wants.
+
+    KEYED ON `(mlbam_id, pool)`, the unique key on a board row -- see `SweptPlayer`. It
+    was keyed on the bare id, which a two-way player breaks: he is swept once per pool,
+    so the pitcher pass overwrote the hitter's entry and both rows rendered the pitcher's
+    career line and pitcher comps.
+    """
+    per_player = extras or {}
     return {
         **meta,
         "players": [
@@ -341,10 +374,37 @@ def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
                 "extrapolated": int(p.extrapolated),
                 # RAW only; VAR is derived on read. See the module docstring.
                 "sgp": [_pack(y) for y in p.sgp],
+                **per_player.get((p.mlbam_id, p.pool), {}),
             }
             for p in players
         ],
     }
+
+
+def player_from_row(row: dict) -> SweptPlayer:
+    """ONE cached payload row as a `SweptPlayer`.
+
+    Split out of `from_payload` for the consumers that want a single player rather than
+    the pool -- the trajectory chart (#324) resolves one name and has no use for the
+    other 1,168 fits. Before this existed that view unpacked `row["sgp"]` itself, which
+    made it a second reader of the point schema: it re-spelled `age + horizon`, re-spelled
+    the floor subtraction `SweptPlayer.points` already owns, and carried its own copy of
+    `_unpack`'s positional-blob guard to keep a legacy blob from 500ing it.
+    """
+    age = int(row["age"])
+    return SweptPlayer(
+        mlbam_id=int(row["id"]),
+        name=row["name"],
+        pool=row["pool"],
+        age=age,
+        slot=row["slot"],
+        floor=float(row["floor"]),
+        now=float(row["now"]),
+        prior=float(row["prior"]),
+        support=float(row["support"]),
+        extrapolated=bool(row["extrapolated"]),
+        sgp=tuple(_unpack(y, age) for y in row["sgp"]),
+    )
 
 
 def from_payload(payload: dict) -> list[SweptPlayer]:
@@ -358,25 +418,7 @@ def from_payload(payload: dict) -> list[SweptPlayer]:
     actually wrong, rather than being screened by a schema register up front -- see
     `_pack` for why that register existed and why named fields replaced it.
     """
-    players = []
-    for row in payload["players"]:
-        age = int(row["age"])
-        players.append(
-            SweptPlayer(
-                mlbam_id=int(row["id"]),
-                name=row["name"],
-                pool=row["pool"],
-                age=age,
-                slot=row["slot"],
-                floor=float(row["floor"]),
-                now=float(row["now"]),
-                prior=float(row["prior"]),
-                support=float(row["support"]),
-                extrapolated=bool(row["extrapolated"]),
-                sgp=tuple(_unpack(y, age) for y in row["sgp"]),
-            )
-        )
-    return players
+    return [player_from_row(row) for row in payload["players"]]
 
 
 def rank_move(row: dict) -> int:

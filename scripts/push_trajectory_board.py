@@ -54,6 +54,46 @@ DEFAULT_MAX_HORIZON = 5
 #: does change RANKS, and a young player pacing low is exactly the ambiguous keeper call.
 MIN_SGP = 0.0
 
+#: Comps stored per player -- the SAME constant the view clamps `n` against, imported
+#: rather than re-declared here. See its docstring in `comp_paths`; a second literal
+#: beside this one is what the deleted parity test existed to police.
+from fantasy_baseball.trajectory.comp_paths import MAX_COMPS, closest_paths
+
+
+def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> list[dict] | None:
+    """One player's stored comp block, or ``None`` when his path is too short to match.
+
+    ``player.sgp`` is ``traj.observable`` -- the points with ``n > 0`` -- and the
+    candidate mask ``seasons + h <= last`` shrinks as the horizon grows, so a player can
+    be observable at h=1..3 and not at h=4..5. ``sweep_pool`` keeps him: it drops a
+    player only when the path is ENTIRELY empty. ``closest_paths`` then raises on
+    ``len(predicted) != len(prepared.horizons)``, and nothing caught it -- one such
+    player discarded the whole ~52s sweep and pushed nothing. Latent on the default
+    horizon, directly reachable via ``--max-horizon``.
+
+    SKIPPED, NEVER PADDED. ``forward`` stores a real 0.0 for "out of the league", so
+    padding the short tail with zeros would match him against the cohort that stopped
+    playing -- a confident wrong answer in place of an honest gap. The page already
+    renders an empty comps list with an explanation, so an absent block degrades.
+
+    Names are attached HERE, not in ``closest_paths``: naming needs the people cache, and
+    keeping it out of that module is what lets it be tested with no data files. An
+    unknown id renders as its id rather than vanishing -- a comp is still a comp.
+    """
+    if len(player.sgp) != len(horizons):
+        return None
+    return [
+        {
+            "name": names.get(c.mlbam_id, str(c.mlbam_id)),
+            "season": c.season,
+            "rmse": round(c.rmse, 3),
+            "path": [round(v, 3) for v in c.path],
+        }
+        for c in closest_paths(
+            prepared, [point.mean for point in player.sgp], age=player.age, n=MAX_COMPS
+        )
+    ]
+
 
 class EmptyPoolError(RuntimeError):
     """Raised when a pool scores zero players, so the push is refused.
@@ -108,12 +148,14 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     from fantasy_baseball.sgp.denominators import get_sgp_denominators
     from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
     from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
+    from fantasy_baseball.trajectory.comps import collapse_split_seasons
     from fantasy_baseball.trajectory.era import era_normalize
     from fantasy_baseball.trajectory.panel import (
         load_scored_panel,
         panel_path,
         season_elapsed_fraction,
     )
+    from fantasy_baseball.trajectory.shape import prepare
     from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
     from fantasy_baseball.utils.time_utils import local_now
 
@@ -141,6 +183,11 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     elapsed = season_elapsed_fraction(calendar, season)
 
     swept = []
+    # KEYED ON `(mlbam_id, pool)`, never the bare id. This dict lives OUTSIDE the pool
+    # loop, and a two-way player is produced once per pool -- so on a bare id the pitcher
+    # pass overwrote the hitter's entry and Ohtani's hitter row rendered his pitching
+    # career line and pitcher comps. See `SweptPlayer.mlbam_id`.
+    extras: dict[tuple[int, str], dict] = {}
     excluded = {"low_sgp": 0, "no_current_line": 0}
     for kind in ("hitter", "pitcher"):
         live = calendar if kind == "hitter" else load(kind)
@@ -177,10 +224,60 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
         # the pool-less board this guard exists to refuse.
         _require_scored_pool(kind, produced, season, panel_path(kind, panel_dir).name)
         swept += produced
+
+        # `sweep_pool` builds its own prepared state and does not return it. Preparing a
+        # second time costs one vectorized reindex per pool -- cheap next to the sweep,
+        # and far cheaper than widening `sweep_pool`'s signature, which the CLI and its
+        # tests also call.
+        prepared = prepare(complete, kind=kind, horizons=horizons)
+        # THROUGH THE SHARED COLLAPSE, like every other reader of this panel. A
+        # mid-season trade can put two rows on one player-year, and `collapse_split_seasons`
+        # is where that rule lives -- `collapsed_index`'s docstring names it as the single
+        # site precisely so the fitting side and a lookup side cannot spell it differently.
+        # The career line drawn here was a third reader that skipped it.
+        #
+        # A NO-OP TODAY, and it must stay one: measured 2026-08-07 against the live
+        # 2000-2026 panels, ZERO duplicate (mlbam_id, season) pairs in either complete
+        # frame (16,408 hitter / 17,947 pitcher rows), and the function early-returns the
+        # panel unchanged when there are none. This is consistency insurance against a
+        # future panel build, not a fix for anything currently wrong.
+        by_id = {int(i): g for i, g in collapse_split_seasons(complete).groupby("mlbam_id")}
+
+        short_paths = 0
+        for player in produced:
+            seasons = by_id.get(player.mlbam_id)
+            history = (
+                [
+                    [int(a), round(float(s), 4)]
+                    for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
+                ]
+                if seasons is not None
+                else []
+            )
+            # None means his observable path is shorter than the swept horizons, so no
+            # honest match exists -- see `player_comps`. He keeps his row and his career
+            # line; only the comps go.
+            comps = player_comps(prepared, player, horizons, names)
+            if comps is None:
+                short_paths += 1
+            extras[(player.mlbam_id, player.pool)] = {
+                "history": history,
+                "comps": comps if comps is not None else [],
+            }
         print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
+        if short_paths:
+            # SAID OUT LOUD. A push that quietly drops comps for part of the pool
+            # renders exactly like one that did not, and the page's "none stored" note
+            # reads as "this player has no comps" rather than "this run skipped them".
+            print(
+                f"    {short_paths} observable at fewer than {len(horizons)} horizons; "
+                f"comps skipped for those (their rows and career lines are intact)",
+                flush=True,
+            )
 
     payload = to_payload(
         swept,
+        extras=extras,
         base_season=season,
         max_horizon=max_horizon,
         min_sgp=MIN_SGP,

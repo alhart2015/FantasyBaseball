@@ -1,0 +1,145 @@
+{% extends "season/base.html" %}
+{% block title %}Player Trajectory -- Season Dashboard{% endblock %}
+{% block content %}
+{% import "season/_trajectory_controls.html" as ctl %}
+
+<div class="page-trajectory">
+<div class="page-header"><h2>Player Trajectory</h2></div>
+
+{% if error %}<p class="warning">{{ error }}</p>{% else %}
+
+{#- NO TEAM LIST, but the pill is still offered. This branch skips the per-request
+    `live_rosters()` Yahoo call -- `build_player_view` takes neither `spots` nor
+    `my_team` -- so it cannot populate the dropdown. That is not a reason to hide the
+    only link back to the teams view; if rosters turn out to be unreadable there, the
+    route already falls back to the league board. -#}
+{{ ctl.controls(cur, board.end_years, [], true) }}
+
+<form method="get" class="trajectory-search">
+  {#- THE WHOLE FILTER STATE, from the one place that enumerates it. `cur`'s keys ARE
+      the query-string names, so this loop carries `view`/`scale`/`n` (this view's own
+      state) alongside `top`/`team`/`end`/`pool` (filters it merely passes through and
+      that mean nothing here). This is a GET form, so any name it omits is silently
+      reset on submit -- the failure _trajectory_controls.html's own comment names for
+      a missing dropdown input, and the reason the list is not hand-written here.
+      `player` is excluded because the visible input below owns it. -#}
+  {% for name, value in cur.items() if name != 'player' %}
+  <input type="hidden" name="{{ name }}" value="{{ value }}">
+  {% endfor %}
+  <label>Player <input name="player" value="{{ board.name }}" placeholder="Juan Soto"></label>
+  <button type="submit">Search</button>
+</form>
+
+{% if board.candidates %}
+{#- LINKS, not text. These used to be plain <li>s and the search form's only input was
+    `player`, so there was no query string that could pick one -- the name was a
+    permanent dead end. Each link carries `pid` AND `ppool`: the id separates same-pool
+    namesakes (two hitters named Max Muncy), the pool separates a two-way player, whose
+    two rows can share both id and age. -#}
+<p class="warning">More than one player is named "{{ board.name }}" on this board. Roster
+blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:</p>
+<ul>
+  {% for c in board.candidates %}
+  <li><a href="{{ ctl.board_url(cur, player=c.name, pid=c.id, ppool=c.pool) }}">{{ c.name }}</a>
+    -- age {{ c.age }}, {{ c.slot }} ({{ c.pool }}, id {{ c.id }})</li>
+  {% endfor %}
+</ul>
+
+{% elif not board.found %}
+  {% if board.name %}<p>No player named "{{ board.name }}" on this board.</p>
+  {% else %}<p class="muted">Search a player to see his trajectory.</p>{% endif %}
+
+{% else %}
+<p class="muted">
+  {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
+  Solid is what happened; dashed is projected, with the shaded band its p10-p90 range.
+  {% if board.extrapolated %}<strong>(!)</strong> This fit was evaluated outside its own
+  support -- read the band, not the point estimate.{% endif %}
+</p>
+
+{#- THE SAME VINTAGE DISCLOSURE trajectory.html and trajectory_teams.html print --
+    this page reads the same `meta`/`base_season` and had never shown either. -#}
+<p class="muted trajectory-vintage">
+  {{ ctl.vintage_note(board) }}
+  {% if board.history %}The career line above stops before {{ board.base_season }} on
+  purpose -- that season is still in progress, and its paced full-year figure (not a
+  partial-season point) is exactly what the projection is built from.{% endif %}
+</p>
+
+<div class="chart-wrapper"><canvas id="trajectory-chart"></canvas></div>
+{#- `axis_label` rather than `scale`/`floor`: the chart used to be handed the raw
+    offset and rebuild the label from it, which made the y-axis title a second
+    spelling of the header below. Ship the finished string and there is nothing
+    left for the two to disagree about. -#}
+<script type="application/json" id="trajectory-chart-data">{{ {
+  "name": board.name, "axis_label": board.axis_label, "history": board.history,
+  "projection": board.projection, "comps": board.comps} | tojson }}</script>
+
+{% if board.comps %}
+<h3>Closest realized paths <span class="muted">({{ board.comps | length }})</span></h3>
+<p class="muted">
+  These are the closest realized paths to the projection -- chosen ON the outcome, so
+  they illustrate what this shape looked like when it played out and are
+  <strong>not evidence for the forecast</strong>. The honest uncertainty is the shaded
+  band, which in practice is wider than they are; a comp can occasionally still land
+  outside it. A comp needs five realized seasons to be scored on the same horizons, so
+  none is recent.
+  {% if board.scale == 'var' %}Every comp's path above is also netted against
+  {{ board.name }}'s own slot floor ({{ '%.2f'|format(board.floor) }}), not each
+  comp's own -- the axis compares shapes on one line, not raw SGP.{% endif %}
+</p>
+<table class="data-table">
+  <thead><tr><th>Player</th><th>Season</th><th>RMSE</th>
+    {% for pt in board.projection %}<th>{{ pt.age }}</th>{% endfor %}</tr></thead>
+  <tbody>
+    {% for c in board.comps %}
+    <tr><td>{{ c.name }}</td><td>{{ c.season }}</td><td>{{ '%.2f'|format(c.rmse) }}</td>
+      {% for pt in c.path %}<td>{{ '%.1f'|format(pt.value) }}</td>{% endfor %}</tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<h3>Closest realized paths</h3>
+<p class="muted">
+  None stored. Either this board predates the closest-comp feature (#324) and a
+  re-push of <code>push_trajectory_board.py</code> will fill it in, or this player has
+  no scored comps yet.
+</p>
+{% endif %}
+
+<h3>The numbers</h3>
+{% if not board.history %}
+<p class="muted">
+  No realized-season history in this blob. Either this board predates the
+  career-history feature (#324) and a re-push of <code>push_trajectory_board.py</code>
+  will fill it in, or this player has no realized MLB season in the panel yet -- only
+  the projection below is available either way.
+</p>
+{% endif %}
+<table class="data-table">
+  {#- The disclosed axis/table label, from `PlayerView.axis_label` -- the ONE place it
+      is built. Spec requirement 6: on VAR every series was netted against THIS player's
+      own slot floor, so a reader must be able to find out what was subtracted without
+      recomputing it. This header is also the no-JS fallback for the chart's y-axis
+      title, which now reads the same string off the JSON island. -#}
+  <thead><tr><th>Age</th><th>{{ board.axis_label }}</th><th>p10..p90</th></tr></thead>
+  <tbody>
+    {% for a, v in board.history %}
+    <tr><td>{{ a }}</td><td>{{ '%.1f'|format(v) }}</td><td class="muted">actual</td></tr>
+    {% endfor %}
+    {% for pt in board.projection %}
+    <tr><td>{{ pt.age }}</td><td>{{ '%.1f'|format(pt.mean) }}</td>
+      <td>{{ '%.1f'|format(pt.p10) }}..{{ '%.1f'|format(pt.p90) }}</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+{% endif %}
+</div>
+{#- season_trends.js owns the Chart.js loader (`ensureChartJs`, exposed on `window`)
+    and the CDN reference; it defines them at load time without eager side effects
+    on a non-standings page, so including it here reuses that loader rather than
+    duplicating it -- see the module docstring in trajectory_chart.js. -#}
+<script src="{{ url_for('static', filename='season_trends.js') }}"></script>
+<script src="{{ url_for('static', filename='trajectory_chart.js') }}"></script>
+{% endblock %}
