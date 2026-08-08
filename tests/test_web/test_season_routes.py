@@ -2885,6 +2885,30 @@ def test_trajectory_player_narrowing_survives_a_control_click(client):
         assert "ppool=pitcher" in link, f"narrowing dropped from {link}"
 
 
+def test_trajectory_player_view_offers_the_by_team_pill(client):
+    """The player view was a one-way door: `_trajectory_controls.html` gates the "By
+    team" pill on `{% if teams %}` and this template passed `[]`, so there was no link
+    back to the teams view.
+
+    It passes `[]` because the player branch deliberately SKIPS the `live_rosters()`
+    read -- a real per-request Yahoo call `build_player_view` has no use for. That skip
+    stays. The macro was conflating two questions: does the teams view exist (what the
+    pill needs) and which teams populate the dropdown (what the list is for).
+    """
+    with patch(
+        "fantasy_baseball.web.season_routes.read_cache_dict",
+        return_value=_trajectory_payload_with_extras(),
+    ):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "view=teams" in body, "no link back to the teams view"
+    # And the dropdown the team LIST feeds stays absent -- the skip is what makes the
+    # player view cheap, and this is what proves the two questions were separated
+    # rather than the roster read quietly re-added.
+    assert "All teams" not in body
+
+
 def _chart_island(body: str) -> dict:
     """The player page's `#trajectory-chart-data` JSON island, parsed.
 

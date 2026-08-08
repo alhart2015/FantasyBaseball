@@ -8,7 +8,12 @@
 
 {% if error %}<p class="warning">{{ error }}</p>{% else %}
 
-{{ ctl.controls(cur, board.end_years, []) }}
+{#- NO TEAM LIST, but the pill is still offered. This branch skips the per-request
+    `live_rosters()` Yahoo call -- `build_player_view` takes neither `spots` nor
+    `my_team` -- so it cannot populate the dropdown. That is not a reason to hide the
+    only link back to the teams view; if rosters turn out to be unreadable there, the
+    route already falls back to the league board. -#}
+{{ ctl.controls(cur, board.end_years, [], true) }}
 
 <form method="get" class="trajectory-search">
   {#- THE WHOLE FILTER STATE, from the one place that enumerates it. `cur`'s keys ARE

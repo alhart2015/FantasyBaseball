@@ -18,7 +18,9 @@
   {{ board.ranked }} scored players, not its position on that roster.
 </p>
 
-{{ ctl.controls(cur, board.end_years, board.blocks | map(attribute='team') | list) }}
+{#- This IS the teams view, so it exists by construction. -#}
+{% set team_names = board.blocks | map(attribute='team') | list %}
+{{ ctl.controls(cur, board.end_years, team_names, true) }}
 
 {#- THE SAME VINTAGE DISCLOSURE THE LEAGUE BOARD PRINTS, and needed harder here: this
     is a bookmarkable, shareable URL that a trade conversation starts from, so a page

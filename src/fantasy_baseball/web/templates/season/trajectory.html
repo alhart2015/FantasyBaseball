@@ -32,7 +32,9 @@
   {%- endif %}
 </p>
 
-{{ ctl.controls(cur, board.end_years, board.teams) }}
+{#- `offer_teams_view` is the team list here: no roster data means no blocks to
+    group by, and the route falls back to this view anyway. -#}
+{{ ctl.controls(cur, board.end_years, board.teams, board.teams) }}
 
 <p class="muted trajectory-vintage">
   Showing {{ board.rows|length }} of {{ board.scored }}{% if board.pool != 'both' %} {{ board.pool }}s{% endif %} scored{% if board.ranked != board.scored %}, ranked against all {{ board.ranked }} -- the # column is a league-wide position, so it runs past this count{% endif %}.

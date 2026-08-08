@@ -21,7 +21,13 @@
 {{ url_for('trajectory', **dict(cur, **kwargs)) }}
 {%- endmacro %}
 
-{% macro controls(cur, end_years, teams) -%}
+{#- `offer_teams_view` and `teams` answer DIFFERENT questions and the macro used to
+    conflate them: does the teams view exist (what the "By team" pill needs) versus
+    which teams populate the dropdown (what the list is for). The player view has no
+    team list -- it deliberately skips the per-request `live_rosters()` Yahoo call,
+    which `build_player_view` has no use for -- so gating the pill on the list made
+    that page a one-way door with no link back to the teams view. -#}
+{% macro controls(cur, end_years, teams, offer_teams_view) -%}
 {#- The "Through" dropdown and the pool pills filter a RANKED LIST, which the player
     view does not have -- it fits one resolved name over the full history. Offering
     them there invites a reader to believe they filter something. Set once: the same
@@ -30,7 +36,7 @@
 <div class="trajectory-controls">
   <span class="pill-group">
     <a class="pill {% if cur.view == 'board' %}active{% endif %}" href="{{ board_url(cur, view='board') }}">League</a>
-    {% if teams %}
+    {% if offer_teams_view %}
     <a class="pill {% if cur.view == 'teams' %}active{% endif %}" href="{{ board_url(cur, view='teams') }}">By team</a>
     {% endif %}
     <a class="pill {% if cur.view == 'player' %}active{% endif %}" href="{{ board_url(cur, view='player') }}">Player</a>
