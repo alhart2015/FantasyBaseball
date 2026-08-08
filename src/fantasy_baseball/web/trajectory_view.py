@@ -178,17 +178,25 @@ def _sweep_setup(
 
 
 def _board_meta(payload: dict) -> dict:
-    """The vintage and provenance block, identical for all three views.
-
-    TWO callers, though, not three: `build_board` spells the same seven fields inline,
-    with a paragraph of per-field prose about what the league board does with each. So
-    a field added here has to be added there as well -- it is the one copy of this
-    block that nothing forces.
+    """The vintage and provenance block, identical for all three views -- and now built
+    HERE for all three. `build_board` used to spell the same seven fields inline, so a
+    field added here had to be remembered into there as well.
 
     `min_local_support` is in here because its ABSENCE was not something a template
     could route around: without the threshold the (!) flag has no rule to name, so
     the teams view dropped the flags entirely and every block total silently summed
-    unmarked extrapolated rows.
+    unmarked extrapolated rows. That is the cost of the copy, already paid once.
+
+    `excluded` is who is NOT on the board. A shortened board reads as "these are the
+    best players" when it is "these are the ones the model can price", and the larger
+    exclusion is the silent one: a player with no current-season line was never a
+    candidate, so he is absent with no row and no flag.
+
+    `min_local_support` travels as the RULE behind the (!) flag, not just the verdict.
+    It is a tuned number with a measured table behind it and an open issue (#310) to
+    change the estimator it guards, so the page must not restate it as prose: the CLI
+    renders it from the constant and a hardcoded template string would say "under 10%"
+    about rows now flagged at something else.
     """
     return {
         "generated_at": payload.get("generated_at"),
@@ -442,24 +450,7 @@ def build_board(
         has_rosters=my_team in index.matched_teams if my_team else False,
         # A per-year breakout only earns its columns once the range spans more than one.
         year_columns=[base + h for h in horizons] if len(horizons) > 1 else [],
-        meta={
-            "generated_at": payload.get("generated_at"),
-            "panel_vintage": payload.get("panel_vintage"),
-            "season_elapsed": payload.get("season_elapsed"),
-            "min_sgp": payload.get("min_sgp"),
-            "floors": payload.get("floors", {}),
-            # Who is NOT on the board. A shortened board reads as "these are the best
-            # players" when it is "these are the ones the model can price", and the
-            # larger exclusion is the silent one: a player with no current-season line
-            # was never a candidate, so he is absent with no row and no flag.
-            "excluded": payload.get("excluded", {}),
-            # The RULE behind the (!) flag, not just the verdict. It is a tuned number
-            # with a measured table behind it and an open issue (#310) to change the
-            # estimator it guards, so the page must not restate it as prose: the CLI
-            # renders it from the constant and a hardcoded template string would say
-            # "under 10%" about rows now flagged at something else.
-            "min_local_support": MIN_LOCAL_SUPPORT,
-        },
+        meta=_board_meta(payload),
     )
 
 
