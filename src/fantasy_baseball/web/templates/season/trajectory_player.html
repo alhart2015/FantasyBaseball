@@ -84,6 +84,7 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     left for the two to disagree about. -#}
 <script type="application/json" id="trajectory-chart-data">{{ {
   "name": board.name, "axis_label": board.axis_label, "history": board.history,
+  "paced": board.paced, "paced_label": board.paced_label,
   "projection": board.projection, "comps": board.comps} | tojson }}</script>
 
 {% if board.comps %}
@@ -150,6 +151,13 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     {% for a, v in board.history %}
     <tr><td>{{ a }}</td><td>{{ '%.1f'|format(v) }}</td><td class="muted">actual</td></tr>
     {% endfor %}
+    {#- The base season at its full-year pace. Absent once that season is realized --
+        a panel rebuilt after it ends puts it in `history` above instead, and
+        `build_player_view` suppresses this rather than printing it twice. -#}
+    {% if board.paced %}
+    <tr><td>{{ board.paced[0] }}</td><td>{{ '%.1f'|format(board.paced[1]) }}</td>
+      <td class="muted">pace</td></tr>
+    {% endif %}
     {% for pt in board.projection %}
     <tr><td>{{ pt.age }}</td><td>{{ '%.1f'|format(pt.mean) }}</td>
       <td>{{ '%.1f'|format(pt.p10) }}..{{ '%.1f'|format(pt.p90) }}</td></tr>

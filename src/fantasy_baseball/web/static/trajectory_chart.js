@@ -53,14 +53,30 @@
       pointRadius: 2,
       order: 1,
     },
-    {
-      label: data.name,
-      data: data.history.map(([age, v]) => ({ x: age, y: v })),
-      borderColor: "#4e79a7",
-      borderWidth: 2.5,
-      pointRadius: 2,
-      order: 0,
-    },
+    (() => {
+      // ONE line, history + the paced base season. The paced point is styled per
+      // point rather than split into its own dataset: a second dataset would be a
+      // second legend entry and a visible seam at the join, and the whole point of
+      // this change is that there is no gap there.
+      const career = data.history.map(([age, v]) => ({ x: age, y: v }));
+      if (data.paced) career.push({ x: data.paced[0], y: data.paced[1] });
+      const last = career.length - 1;
+      const paced = (filled, hollow) =>
+        career.map((_, i) => (data.paced && i === last ? hollow : filled));
+      return {
+        label: data.name,
+        data: career,
+        borderColor: "#4e79a7",
+        borderWidth: 2.5,
+        // An OPEN marker on the paced point: it is a full-season pace off a partial
+        // year, not a finished season, and it must not read as one.
+        pointRadius: paced(2, 5),
+        pointBackgroundColor: paced("#4e79a7", "transparent"),
+        pointBorderColor: "#4e79a7",
+        pointBorderWidth: paced(1, 2),
+        order: 0,
+      };
+    })(),
   ];
 
   if (typeof window.ensureChartJs !== "function") {
@@ -94,7 +110,22 @@
           // legend; Chart.js's default tooltip has no such filter, so hovering near
           // the lower band edge would otherwise show a series literally called
           // "_p10". Same rule, both surfaces.
-          tooltip: { filter: (item) => item.dataset.label !== "_p10" },
+          tooltip: {
+            filter: (item) => item.dataset.label !== "_p10",
+            callbacks: {
+              // The paced point is the LAST point of the career line and looks like
+              // any other on hover. Say which it is: a full-season pace off a partial
+              // year is a different claim from a finished season.
+              label: (item) => {
+                const base = `${item.dataset.label}: ${item.formattedValue}`;
+                const isPaced =
+                  data.paced &&
+                  item.dataset.label === data.name &&
+                  item.dataIndex === item.dataset.data.length - 1;
+                return isPaced ? `${base} (${data.paced_label})` : base;
+              },
+            },
+          },
         },
       },
     });

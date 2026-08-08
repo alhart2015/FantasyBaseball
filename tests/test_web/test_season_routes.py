@@ -3084,10 +3084,32 @@ def test_trajectory_chart_js_discloses_the_var_netting_on_the_axis():
 def test_trajectory_chart_js_filters_the_internal_p10_series_from_tooltips_too():
     """`_p10` is the internal fill-target dataset, already hidden from the legend by
     label; Chart.js's default tooltip has no such filter, so a hover near the lower
-    band edge would otherwise show a series literally called "_p10" (#324 F6)."""
+    band edge would otherwise show a series literally called "_p10" (#324 F6).
+
+    Matched on the FILTER, not on the one-line spelling `tooltip: { filter:` this used
+    to assert. That literal broke the moment the tooltip grew a second key (#346's
+    paced-point label) -- a formatting fact about a block, not the rule being pinned.
+    """
     src = _trajectory_chart_js_source()
-    assert "tooltip: { filter:" in src
+    assert re.search(r"tooltip:\s*\{\s*filter:", src)
     assert 'item.dataset.label !== "_p10"' in src
+
+
+def test_the_player_page_ships_the_paced_point_to_the_chart(client):
+    """The gap at the base season is the most useful point on the chart. It has to
+    reach the JS island, not just the view model -- and it comes off the BOARD's `now`,
+    so it is there even though the chart blob's history stops a year earlier."""
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    body = resp.data.decode()
+    island = _chart_island(body)
+
+    assert island["paced"], "the island carries the point"
+    assert island["paced_label"] == "2026 pace", "and says what it is"
+    assert island["paced"][0] > max(pt[0] for pt in island["history"]), (
+        "the paced season is the career line's last point"
+    )
+    assert "pace</td>" in body, "the numbers table marks the row"
 
 
 def test_trajectory_player_chart_data_is_truncated_to_the_projected_horizons(client):
