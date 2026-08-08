@@ -143,12 +143,19 @@ def resolved(page):
 
 
 def open_list(page, server, query=SHARED):
-    """Type into the real input and wait for the real endpoint to answer."""
+    """Type into the real input and wait for the real endpoint to answer.
+
+    Waits for VISIBLE, not merely attached. `render` appends options one at a time to a
+    list that is already in the document and unhides it only at the end, so an attached
+    -state wait can return mid-loop -- and a test that then counts options is reading a
+    half-built list. It passes on an idle machine and fails under a loaded one, which is
+    the worst shape a gate can have.
+    """
     page.goto(server + "/trajectory?view=player")
     page.wait_for_selector("#traj-player")
     page.click("#traj-player")
     page.fill("#traj-player", query)
-    page.wait_for_selector('#traj-suggest a[role="option"]', timeout=10_000)
+    page.wait_for_selector('#traj-suggest a[role="option"]', state="visible", timeout=15_000)
 
 
 def test_a_mouse_click_on_a_suggestion_resolves_the_player(page, server):
@@ -193,7 +200,10 @@ def test_one_tab_reaches_the_search_button(page, server):
     button is what moved this list once already."""
     open_list(page, server)
     page.keyboard.press("Tab")
-    page.wait_for_timeout(150)
+    page.wait_for_function(
+        "() => document.activeElement !== document.getElementById('traj-player')",
+        timeout=15_000,
+    )
     focused = page.evaluate("() => document.activeElement.tagName")
     assert focused == "BUTTON", f"Tab should land on Search, landed on {focused}"
 
@@ -203,7 +213,7 @@ def test_arrow_keys_and_enter_choose_a_suggestion(page, server):
     is unreachable by keyboard entirely -- which is what shipped, in both engines."""
     open_list(page, server)
     page.keyboard.press("ArrowDown")
-    page.wait_for_timeout(120)
+    page.wait_for_selector('#traj-suggest a[aria-selected="true"]', timeout=15_000)
     state = page.evaluate(
         """() => {
             const input = document.getElementById('traj-player');
@@ -269,7 +279,18 @@ def test_the_list_stays_anchored_to_the_input_across_a_reflow(page, server):
     open_list(page, server)
     for width in (900, 600, 420):
         page.set_viewport_size({"width": width, "height": 900})
-        page.wait_for_timeout(120)
+        # Wait for layout to STOP moving rather than sleeping a guessed interval: the
+        # reposition runs off the resize event, and a fixed wait is only ever tuned to
+        # the machine that wrote it.
+        page.wait_for_function(
+            """() => {
+                const l = document.getElementById('traj-suggest').getBoundingClientRect();
+                const settled = window.__trajLast === Math.round(l.left);
+                window.__trajLast = Math.round(l.left);
+                return settled;
+            }""",
+            timeout=15_000,
+        )
         geo = page.evaluate(
             """() => {
                 const l = document.getElementById('traj-suggest').getBoundingClientRect();
@@ -316,13 +337,66 @@ def test_escape_and_an_outside_click_dismiss(page, server):
     page the reader had just dismissed."""
     open_list(page, server)
     page.keyboard.press("Escape")
-    page.wait_for_timeout(300)
-    assert page.evaluate("() => document.getElementById('traj-suggest').hidden")
+    page.wait_for_function("() => document.getElementById('traj-suggest').hidden", timeout=15_000)
     assert not page.evaluate(
         "() => document.getElementById('traj-player').getAttribute('aria-activedescendant')"
     ), "a dismissed list must not leave AT pointing at a row that is gone"
 
     open_list(page, server)
     page.mouse.click(5, 5)
-    page.wait_for_timeout(300)
-    assert page.evaluate("() => document.getElementById('traj-suggest').hidden")
+    page.wait_for_function("() => document.getElementById('traj-suggest').hidden", timeout=15_000)
+
+
+def _aria(page):
+    return page.evaluate(
+        """() => {
+            const input = document.getElementById('traj-player');
+            return {
+                hidden: document.getElementById('traj-suggest').hidden,
+                expanded: input.getAttribute('aria-expanded'),
+                active: input.getAttribute('aria-activedescendant'),
+                described: input.getAttribute('aria-describedby'),
+            };
+        }"""
+    )
+
+
+def test_a_query_that_matches_nothing_closes_the_listbox(page, server):
+    """Hiding the list is not the same as closing it. A bare `hidden = true` left
+    aria-expanded="true" behind, so AT announced an open listbox -- and, after an
+    ArrowDown, a selected row -- over a list the sighted reader can no longer see."""
+    open_list(page, server)
+    page.keyboard.press("ArrowDown")
+    page.fill("#traj-player", "zzqq")
+    page.wait_for_function("() => document.getElementById('traj-suggest').hidden", timeout=15_000)
+    state = _aria(page)
+    assert state["hidden"], "no matches means no list"
+    assert state["expanded"] == "false", "a hidden listbox must not report itself open"
+    assert state["active"] is None, "and must not still point at a row"
+
+
+def test_a_cold_board_closes_the_listbox_rather_than_freezing_it(page, server):
+    """The endpoint answers 503 with an `error` when the board cache is cold. Hiding
+    silently is right -- the form below still works -- but the widget's state has to
+    follow, and the close path must not bump the request sequence and discard a fetch
+    that is still in flight."""
+    open_list(page, server)
+    page.keyboard.press("ArrowDown")
+    page.route(
+        "**/api/trajectory/find*",
+        lambda route: route.fulfill(
+            status=503, content_type="application/json", body='{"error": "cold board"}'
+        ),
+    )
+    page.fill("#traj-player", "arl")
+    page.wait_for_function("() => document.getElementById('traj-suggest').hidden", timeout=15_000)
+    state = _aria(page)
+    assert state["hidden"] and state["expanded"] == "false", state
+    assert state["active"] is None and state["described"] is None, state
+
+    # And it recovers: the next successful query reopens, which a loadSeq bump inside
+    # the error path would have made intermittent.
+    page.unroute("**/api/trajectory/find*")
+    page.fill("#traj-player", "arlo")
+    page.wait_for_selector('#traj-suggest a[role="option"]', timeout=10_000)
+    assert _aria(page)["expanded"] == "true"

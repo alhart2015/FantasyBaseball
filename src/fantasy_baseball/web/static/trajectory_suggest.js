@@ -143,9 +143,21 @@
   function dismiss() {
     clearTimeout(timer);
     loadSeq++;
+    collapse();
+    list.innerHTML = '';
+  }
+
+  /* Closed, without claiming the reader asked for it.
+   *
+   * Split out of `dismiss` because the three places that close the list on their own --
+   * an empty result set, a cold-board `error`, a failed fetch -- must not bump
+   * `loadSeq`: doing that from inside one response handler discards a DIFFERENT
+   * request that is still in flight. They also must not leave `aria-expanded="true"`
+   * on a hidden list, which is what a bare `list.hidden = true` did: sighted readers
+   * see nothing while AT still announces an open listbox and a selected row. */
+  function collapse() {
     clearActive();
     list.hidden = true;
-    list.innerHTML = '';
     input.setAttribute('aria-expanded', 'false');
     input.removeAttribute('aria-describedby');
   }
@@ -184,8 +196,7 @@
     list.innerHTML = '';
     clearActive();
     if (!players.length) {
-      list.hidden = true;
-      input.setAttribute('aria-expanded', 'false');
+      collapse();
       return;
     }
     players.forEach(function (hit, index) {
@@ -242,7 +253,7 @@
         if (reqId !== loadSeq) return;
         // A cold board answers 503 with an `error`. Silently hiding is right: the form
         // below still works and the page it submits to reports the cold cache properly.
-        if (data.error || !data.players) { list.hidden = true; return; }
+        if (data.error || !data.players) { collapse(); return; }
         // `data.capped` is the server's answer, not a rule respelled here. Not
         // `data.total || ...`: a real 0 is falsy, and CLAUDE.md names that pattern.
         var total = data.total === undefined ? data.players.length : data.total;
@@ -251,7 +262,7 @@
       })
       .catch(function () {
         if (reqId !== loadSeq) return;
-        list.hidden = true;
+        collapse();
       });
   }
 
