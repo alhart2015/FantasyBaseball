@@ -63,7 +63,6 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 {% endset %}
 <p class="muted">
   {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
-  Solid is what happened; dashed is projected, with the shaded band its p10-p90 range.
   {% if board.extrapolated %}<strong>(!)</strong> This fit was evaluated outside its own
   support -- read the band, not the point estimate.{% endif %}
 </p>
@@ -72,9 +71,6 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     this page reads the same `meta`/`base_season` and had never shown either. -#}
 <p class="muted trajectory-vintage">
   {{ ctl.vintage_note(board) }}
-  {% if board.history %}The career line above stops before {{ board.base_season }} on
-  purpose -- that season is still in progress, and its paced full-year figure (not a
-  partial-season point) is exactly what the projection is built from.{% endif %}
 </p>
 
 <div class="chart-wrapper"><canvas id="trajectory-chart"></canvas></div>
@@ -89,17 +85,6 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 
 {% if board.comps %}
 <h3>Closest realized paths <span class="muted">({{ board.comps | length }})</span></h3>
-<p class="muted">
-  These are the closest realized paths to the projection -- chosen ON the outcome, so
-  they illustrate what this shape looked like when it played out and are
-  <strong>not evidence for the forecast</strong>. The honest uncertainty is the shaded
-  band, which in practice is wider than they are; a comp can occasionally still land
-  outside it. A comp needs five realized seasons to be scored on the same horizons, so
-  none is recent.
-  {% if board.scale == 'var' %}Every comp's path above is also netted against
-  {{ board.name }}'s own slot floor ({{ '%.2f'|format(board.floor) }}), not each
-  comp's own -- the axis compares shapes on one line, not raw SGP.{% endif %}
-</p>
 <table class="data-table">
   <thead><tr><th>Player</th><th>Season</th><th>RMSE</th>
     {% for pt in board.projection %}<th>{{ pt.age }}</th>{% endfor %}</tr></thead>

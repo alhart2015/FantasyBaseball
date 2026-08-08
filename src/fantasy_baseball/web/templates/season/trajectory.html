@@ -22,14 +22,6 @@
 
 <p class="muted">
   Of everyone you could hold, who is worth the most over {{ board.span }}.
-  {% if board.scale == 'var' -%}
-  Showing <strong>VAR</strong> -- value above the position-aware waiver floor. The default,
-  because raw SGP quietly penalises every catcher and reliever.
-  {%- else -%}
-  Showing <strong>raw SGP</strong>, which does not net out the waiver floor -- so catchers
-  and relievers rank lower here than their roster value warrants. Switch to VAR to correct
-  for that; the gap between the two views is the correction.
-  {%- endif %}
 </p>
 
 {#- `offer_teams_view` is the team list here: no roster data means no blocks to

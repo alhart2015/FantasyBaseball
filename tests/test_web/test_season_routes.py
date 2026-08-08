@@ -2749,7 +2749,10 @@ def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
     assert resp.status_code == 200
     body = resp.data.decode()
     assert "trajectory-chart" in body, "the canvas the chart draws into"
-    assert "closest realized paths" in body, "labelled as illustration, not evidence"
+    # The HEADING, which survives. This matched the lowercase "closest realized paths"
+    # inside the explanatory paragraph until #346 removed it; the section it was
+    # standing in for is the table below, and the heading is what marks it.
+    assert "Closest realized paths" in body, "the comps section rendered"
     # The TABLE markup, not the `#trajectory-chart-data` JSON island -- that island
     # also serializes `board.comps` verbatim, so a plain substring match on "Andre
     # Ethier"/"1.25" is satisfied by the JSON alone and stays green even if the
@@ -2758,11 +2761,12 @@ def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
     assert "<td>1.25</td>" in body, "each comp shows its RMSE in the table"
 
 
-def test_trajectory_player_view_states_the_five_year_comp_rule(client):
-    """A reader who notices no comp is recent must find the rule, not infer a bug."""
-    with _trajectory_cache(*_trajectory_board_and_chart()):
-        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
-    assert "five realized seasons" in resp.data.decode()
+# REMOVED in #346: test_trajectory_player_view_states_the_five_year_comp_rule.
+# It asserted the sentence "A comp needs five realized seasons to be scored on the same
+# horizons, so none is recent", which was deleted along with the rest of the page's
+# reading instructions at the owner's explicit request. The rule it described is
+# unchanged and still lives in `comp_paths.closest_paths`'s candidate mask and its
+# docstring; what went away is the page stating it. No behavior lost a guard.
 
 
 def test_trajectory_player_view_with_no_name_renders_the_search_box(client):
@@ -2811,6 +2815,10 @@ def test_trajectory_player_view_discloses_the_var_netting_on_axis_and_table(clie
     built independently -- a Jinja `{% set %}` and a JS template literal, each
     interpolating `floor` -- so they could disagree about a subtraction. Asserting they
     are equal is what makes `PlayerView.axis_label` the only place the rule lives.
+
+    A third assertion here checked that the comps caption also said "netted against".
+    #346 removed that caption; the disclosure it duplicated is these two lines, which
+    are the ones that were load-bearing.
     """
     with _trajectory_cache(*_trajectory_board_and_chart()):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface&scale=var")
@@ -2818,7 +2826,6 @@ def test_trajectory_player_view_discloses_the_var_netting_on_axis_and_table(clie
     # Testy McTestface's slot floor is 4.0 -- see `_trajectory_payload`'s BoardRow.
     assert "<th>VAR (SGP - 4.00 slot floor)</th>" in body
     assert _chart_island(body)["axis_label"] == "VAR (SGP - 4.00 slot floor)"
-    assert "netted against" in body, "the comp caption names the rule too"
 
 
 def test_trajectory_player_view_sgp_scale_keeps_a_plain_label(client):
@@ -2832,15 +2839,19 @@ def test_trajectory_player_view_sgp_scale_keeps_a_plain_label(client):
     assert "slot floor" not in body
 
 
-def test_trajectory_player_view_discloses_vintage_and_the_history_gap(client):
-    """Sibling templates (trajectory.html, trajectory_teams.html) both print the
-    build vintage / pace note; this one printed neither. Also explains why the solid
-    line stops a year before the dashed one starts (#324 F3)."""
+def test_trajectory_player_view_discloses_its_vintage(client):
+    """Sibling templates (trajectory.html, trajectory_teams.html) both print the build
+    vintage; this one printed none (#324 F3).
+
+    It also used to print a sentence explaining why the solid line stopped a year
+    before the dashed one started. #346 closed that gap by drawing the paced season
+    instead, so the sentence was both unwanted and false; the vintage half is what this
+    test was really protecting and it is unchanged.
+    """
     with _trajectory_cache(*_trajectory_board_and_chart()):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     body = resp.data.decode()
     assert "Built 2026-08-07T09:00:00" in body, "the same vintage stamp the sibling views print"
-    assert "still in progress" in body, "explains the gap between history and projection"
 
 
 def test_trajectory_player_view_explains_a_missing_chart_key(client):
@@ -3093,6 +3104,48 @@ def test_trajectory_chart_js_filters_the_internal_p10_series_from_tooltips_too()
     src = _trajectory_chart_js_source()
     assert re.search(r"tooltip:\s*\{\s*filter:", src)
     assert 'item.dataset.label !== "_p10"' in src
+
+
+def test_the_trajectory_pages_do_not_explain_how_to_read_themselves(client):
+    """Reading instructions are out; disclosure about the DATA stays. The two are easy
+    to conflate, so both halves are asserted here.
+
+    WITH a chart blob: without one `board.comps` is empty, the whole
+    `{% if board.comps %}` branch never renders, and the honesty-paragraph assertion
+    would pass before the paragraph was ever deleted -- a guard that guards nothing.
+    """
+    board, chart = _trajectory_board_and_chart()
+    with _trajectory_cache(board, chart):
+        player = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
+        league = client.get("/trajectory").data.decode()
+    # The teams view needs a roster read: with none it has no blocks to group by and
+    # the route falls back to the league board, so asserting against it would be
+    # asserting against the wrong page.
+    with (
+        _trajectory_cache(board, chart),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        teams = client.get("/trajectory?view=teams").data.decode()
+
+    assert "Andre Ethier" in player, "the comps section really did render"
+    assert "Solid is what happened" not in player
+    assert "on purpose" not in player
+    assert "not evidence for the forecast" not in player
+    assert "value above the position-aware waiver floor" not in league
+    assert "Ranks are LEAGUE ranks" not in teams
+
+    # The kept half. These are facts about the build and the roster join, not
+    # instructions for reading a chart.
+    for page in (player, league, teams):
+        assert "2026-08-07T09:00:00" in page, "the vintage disclosure survives"
+    assert "Of everyone you could hold" in league
+    assert "strongest team first" in teams
+    # Each page's own header sentence survives the deletion of the explainer that
+    # followed it -- the clause went, the paragraph did not.
+    assert "Start year is locked" in league and "Start year is locked" in teams
 
 
 def test_the_player_page_ships_the_paced_point_to_the_chart(client):
