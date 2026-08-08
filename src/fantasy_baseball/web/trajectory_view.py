@@ -697,6 +697,15 @@ class PlayerView:
     #: ship the string, not the ingredients, so the chart and the table cannot disagree
     #: about whether the season is over.
     paced_label: str = ""
+    #: One entry per RENDERED comp, parallel to `comps` and in the same order:
+    #: `{name, season, rmse, match_age, career}`. `career` is his WHOLE arc, floor-netted
+    #: like every other series, and is empty when the blob carries no entry for him.
+    #:
+    #: `name`/`season`/`rmse` are re-carried from `comps` rather than looked up by index
+    #: on the other side: one list, one card, no zip -- a card indexing into a second
+    #: array to title itself is one off-by-one from putting one man's name over
+    #: another's arc.
+    comp_careers: list[dict] = field(default_factory=list)
     meta: dict = field(default_factory=dict)
     #: The chart data that arrived is stamped for a DIFFERENT board than this one, so
     #: `history` and `comps` were dropped rather than drawn. A distinct state from
@@ -740,8 +749,9 @@ def _narrow(hits: list[dict], field: str, wanted: Any) -> list[dict]:
     return kept or hits
 
 
-def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[dict, bool]:
-    """One player's stored `{history, comps}`, and whether the pair was REFUSED.
+def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[dict, dict, bool]:
+    """One player's stored `{history, comps}`, the comp-career map, and whether the
+    pair was REFUSED.
 
     The vintage guard (#344). `cache:trajectory_chart_data` is a second blob, written
     beside the board but stored separately, so the two can end up out of step -- a
@@ -755,14 +765,19 @@ def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[
     sides, and `None == None` would read as a match and pair two blobs on no evidence at
     all. Empty strings pair the same way and are refused for the same reason.
 
-    Returns `({}, True)` for a refusal so the caller can tell it from `({}, False)`,
-    which is "no chart data arrived" -- different causes, different fixes, and the page
-    names them separately. `None` is the ONLY input that reads as "nothing arrived":
-    anything else was stored by somebody, so an unreadable shape is a writer out of step
-    with this reader (a refusal), not a key that was never pushed.
+    Returns `({}, {}, True)` for a refusal so the caller can tell it from
+    `({}, {}, False)`, which is "no chart data arrived" -- different causes, different
+    fixes, and the page names them separately. `None` is the ONLY input that reads as
+    "nothing arrived": anything else was stored by somebody, so an unreadable shape is a
+    writer out of step with this reader (a refusal), not a key that was never pushed.
+
+    The SECOND element is `careers` (#346): comp arcs, deduped across the whole board
+    and keyed by `chart_key`. Absent on every blob written before that feature, and not
+    a mapping if some future writer stores something else there -- both are `{}`, never
+    an exception, for the same #332 reason the refusals above are refusals.
     """
     if chart is None:
-        return {}, False
+        return {}, {}, False
     if not isinstance(chart, Mapping):
         # STORED, but not a mapping -- a JSON array under this key, which is what the
         # board itself would serialize as if it were written here by mistake. Refused
@@ -772,18 +787,23 @@ def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[
         # key with `read_cache` and not `read_cache_dict` -- the latter narrows a stored
         # list to None, which is indistinguishable from a key that was never written and
         # would print "this board predates the feature" at a blob that is merely stale.
-        return {}, True
+        return {}, {}, True
     board_at, chart_at = payload.get("generated_at"), chart.get("generated_at")
     if board_at in (None, "") or chart_at in (None, "") or str(board_at) != str(chart_at):
-        return {}, True
+        return {}, {}, True
     players = chart.get("players")
     if not isinstance(players, Mapping):
         # The same refusal one level in: the BOARD's `players` is a list, so this is the
         # board written to the chart key by mistake, stamped identically because the one
         # push produced both. `players.get` on a list is an AttributeError, which the
         # route does not catch and which 500s the page.
-        return {}, True
-    return players.get(chart_key(mlbam_id, pool), {}), False
+        return {}, {}, True
+    careers = chart.get("careers")
+    return (
+        players.get(chart_key(mlbam_id, pool), {}),
+        careers if isinstance(careers, Mapping) else {},
+        False,
+    )
 
 
 def build_player_view(
@@ -903,7 +923,7 @@ def build_player_view(
     # KEYED ON THE RESOLVED ROW's `(mlbam_id, pool)`, never the searched name or the
     # bare id: a two-way player has one entry per pool, and the id alone would hand the
     # hitter row the pitcher's career.
-    extras, mismatch = _chart_extras(payload, chart, sp.mlbam_id, sp.pool)
+    extras, careers, mismatch = _chart_extras(payload, chart, sp.mlbam_id, sp.pool)
     # Sorted by age rather than trusted in payload order: the push script's groupby
     # happens to emit ascending, but nothing enforces it, and an unsorted blob would
     # zigzag the chart with every other assertion here still green.
@@ -922,6 +942,10 @@ def build_player_view(
     # The flag labels the point; this decides whether there is one.
     realized_ages = {pt[0] for pt in history}
     paced = None if sp.age in realized_ages else [sp.age, float(sp.now) - floor]
+    # The comps ACTUALLY RENDERED, sliced once. `comps` and `comp_careers` below are
+    # parallel lists the template zips by position, so slicing twice is one edit away
+    # from putting one comp's name over another's arc.
+    shown = extras.get("comps", [])[:want]
     return replace(
         empty,
         name=sp.name,
@@ -965,6 +989,33 @@ def build_player_view(
                     for h, v in enumerate(c["path"][: len(sp.sgp)], start=1)
                 ],
             }
-            for c in extras.get("comps", [])[:want]
+            for c in shown
+        ],
+        comp_careers=[
+            {
+                "name": c["name"],
+                "season": c["season"],
+                "rmse": c["rmse"],
+                # THE SUBJECT'S age, and correct for every card: `closest_paths` selects
+                # on `prepared.age == float(age)`, an EXACT match, so a comp's age in his
+                # match season IS this one. Stored per card rather than read off the view
+                # so the card is self-contained, and pinned by a test in case the matcher
+                # ever grows a tolerance window.
+                "match_age": sp.age,
+                # `c.get("id")` -- an older push wrote comps with no id at all, which is
+                # a missing join key rather than an error. `chart_key` is never called
+                # with None: the lookup short-circuits first.
+                #
+                # Netted against the SUBJECT's floor, like `path` above and for the same
+                # reason: the card asks what this arc would be worth in his slot, and
+                # per-comp floors would put non-comparable lines on one axis.
+                "career": [
+                    [int(a), float(v) - floor]
+                    for a, v in careers.get(chart_key(c["id"], sp.pool), [])
+                ]
+                if c.get("id") is not None
+                else [],
+            }
+            for c in shown
         ],
     )
