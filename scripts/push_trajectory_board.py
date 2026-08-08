@@ -174,7 +174,12 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         season_elapsed_fraction,
     )
     from fantasy_baseball.trajectory.shape import prepare
-    from fantasy_baseball.trajectory.sweep import sweep_pool, to_chart_payload, to_payload
+    from fantasy_baseball.trajectory.sweep import (
+        chart_key,
+        sweep_pool,
+        to_chart_payload,
+        to_payload,
+    )
     from fantasy_baseball.utils.time_utils import local_now
 
     config = load_config(PROJECT_ROOT / "config" / "league.yaml")
@@ -207,6 +212,10 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
     # hitter row rendered his pitching career line and pitcher comps. See
     # `SweptPlayer.mlbam_id`.
     extras: dict[tuple[int, str], dict] = {}
+    # Deduped comp careers, keyed by `chart_key(id, pool)` -- see `to_chart_payload`.
+    # Outside the pool loop like `extras`, because the key already carries the pool and
+    # a two-way comp gets one entry per pool under distinct keys.
+    careers: dict[str, list] = {}
     excluded = {"low_sgp": 0, "no_current_line": 0}
     for kind in ("hitter", "pitcher"):
         live = calendar if kind == "hitter" else load(kind)
@@ -263,6 +272,9 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         by_id = {int(i): g for i, g in collapse_split_seasons(complete).groupby("mlbam_id")}
 
         short_paths = 0
+        # Comp ids seen in THIS pool. Per pool because `by_id` is per pool: resolving a
+        # hitter comp against the pitcher frame would draw the wrong career.
+        wanted: set[int] = set()
         for player in produced:
             seasons = by_id.get(player.mlbam_id)
             history = (
@@ -279,10 +291,28 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
             comps = player_comps(prepared, player, horizons, names)
             if comps is None:
                 short_paths += 1
+            else:
+                wanted.update(c["id"] for c in comps)
             extras[(player.mlbam_id, player.pool)] = {
                 "history": history,
                 "comps": comps if comps is not None else [],
             }
+
+        # THE SAME `by_id` the subject's own history comes from, so a comp's arc and the
+        # subject overlay drawn on top of it are on one scale by construction. An id
+        # absent from it writes nothing: comps come from the same `prepared` this frame
+        # built, so absence is a defect, and an empty card is the honest rendering of
+        # one rather than a fabricated arc.
+        for comp_id in sorted(wanted):
+            seasons = by_id.get(comp_id)
+            if seasons is None:
+                continue
+            careers[chart_key(comp_id, kind)] = [
+                [int(a), round(float(s), 4)]
+                for a, s in sorted(
+                    zip(seasons["age"], seasons["sgp"], strict=True), key=lambda pt: pt[0]
+                )
+            ]
         print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
         if short_paths:
             # SAID OUT LOUD. A push that quietly drops comps for part of the pool
@@ -317,7 +347,11 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         floors={slot: round(v, 4) for slot, v in sorted(levels.items())},
         excluded={**excluded, "total": excluded["low_sgp"] + excluded["no_current_line"]},
     )
-    return payload, to_chart_payload(extras, generated_at=generated_at), len(swept)
+    return (
+        payload,
+        to_chart_payload(extras, careers=careers, generated_at=generated_at),
+        len(swept),
+    )
 
 
 def _target_store(*, local: bool):

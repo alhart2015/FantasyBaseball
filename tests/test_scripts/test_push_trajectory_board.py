@@ -423,3 +423,34 @@ def test_the_push_stamps_whether_the_base_season_is_still_running() -> None:
     assert payload["base_season_partial"] is True, (
         "the shipped 2000-2026 panels were built during the 2026 season"
     )
+
+
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "drives the real build_payload, which loads data/trajectory/*_pt_panel_*.csv and "
+        "data/cache/keeper_skills -- both gitignored, so this cannot run on a fresh clone"
+    ),
+)
+def test_the_push_stores_one_career_per_comp_and_no_more() -> None:
+    """Every id a stored comp names must resolve to an arc, or its card draws nothing;
+    every id BEYOND that set is dead weight in a blob the player page fetches."""
+    module = _script()
+    _, chart, _ = module.build_payload(max_horizon=3, panel_dir=PANEL_DIR)
+
+    # The pool comes off the PLAYER key the comp is stored under, not off the comp: a
+    # comp is always drawn from its own pool's `prepared`, so a hitter's comps are
+    # hitters. Rebuilding the pair here is what makes this an assertion about
+    # `chart_key` rather than about the bare id.
+    referenced = {
+        f"{c['id']}:{key.split(':')[1]}"
+        for key, block in chart["players"].items()
+        for c in block["comps"]
+    }
+    assert referenced, "the real panel produces comps"
+    assert set(chart["careers"]) == referenced
+
+    for arc in chart["careers"].values():
+        ages = [pt[0] for pt in arc]
+        assert ages == sorted(ages), "an arc is drawn left to right without a re-sort"
+        assert len(set(ages)) == len(ages), "one point per age; split seasons collapsed"
