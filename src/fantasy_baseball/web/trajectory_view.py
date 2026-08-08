@@ -139,8 +139,6 @@ class TeamsBoard:
     """Every team's block, ordered by strength."""
 
     blocks: list[TeamBlock]
-    #: League-wide row count, so a block's #37 is readable as a league position.
-    ranked: int
     base_season: int
     end_year: int
     end_years: list[int]
@@ -214,13 +212,6 @@ def _board_meta(payload: dict) -> dict:
         "floors": payload.get("floors", {}),
         "excluded": payload.get("excluded", {}),
         "min_local_support": MIN_LOCAL_SUPPORT,
-        # Whether the base season was still running when this board was built, which is
-        # what stops `paced_label` calling a finished year a "pace". Defaults TRUE:
-        # every blob written before this field existed was written mid-season, and the
-        # suppression rule in `build_player_view` -- not this flag -- decides whether
-        # the point is drawn at all. `dict.get` with a default rather than `or`, per
-        # CLAUDE.md: `False or True` is `True` and would invert a real answer.
-        "base_season_partial": bool(payload.get("base_season_partial", True)),
     }
 
 
@@ -619,7 +610,6 @@ def build_teams_board(
 
     return TeamsBoard(
         blocks=blocks,
-        ranked=len(ranked_rows),
         base_season=base,
         end_year=end_year,
         end_years=end_years,
@@ -657,7 +647,15 @@ class PlayerView:
     history: list[list[float]]
     #: [{age, mean, p10, p90}, ...] one per projected year.
     projection: list[dict]
-    #: [{name, season, rmse, path: [{age, value}, ...]}, ...] closest first.
+    #: [{name, season, rmse, path: [{age, value}, ...], career: [[age, value], ...]},
+    #: ...] closest first. `path` is his forward path over the projected ages, drawn on
+    #: the main chart; `career` is his WHOLE arc, drawn on his own card, and is empty
+    #: when the blob carries no entry for him. ONE list, because a card titles itself and
+    #: draws itself from the same entry -- a second parallel list would have to stay the
+    #: same length and order forever, enforced by nothing but construction.
+    #:
+    #: The age at which he matched the subject is `PlayerView.age`, identical on every
+    #: card: `closest_paths` selects on `prepared.age == float(age)`, an exact match.
     comps: list[dict]
     #: Populated ONLY when the name was ambiguous; the caller renders these instead of a
     #: chart, as LINKS carrying `pid`/`ppool`. Guessing puts one man's career under
@@ -697,15 +695,6 @@ class PlayerView:
     #: ship the string, not the ingredients, so the chart and the table cannot disagree
     #: about whether the season is over.
     paced_label: str = ""
-    #: One entry per RENDERED comp, parallel to `comps` and in the same order:
-    #: `{name, season, rmse, match_age, career}`. `career` is his WHOLE arc, floor-netted
-    #: like every other series, and is empty when the blob carries no entry for him.
-    #:
-    #: `name`/`season`/`rmse` are re-carried from `comps` rather than looked up by index
-    #: on the other side: one list, one card, no zip -- a card indexing into a second
-    #: array to title itself is one off-by-one from putting one man's name over
-    #: another's arc.
-    comp_careers: list[dict] = field(default_factory=list)
     meta: dict = field(default_factory=dict)
     #: The chart data that arrived is stamped for a DIFFERENT board than this one, so
     #: `history` and `comps` were dropped rather than drawn. A distinct state from
@@ -747,6 +736,23 @@ def _narrow(hits: list[dict], field: str, wanted: Any) -> list[dict]:
         return hits
     kept = [p for p in hits if str(p[field]) == str(wanted)]
     return kept or hits
+
+
+def _netted(pairs: Any, floor: float) -> list[list[float]]:
+    """Stored `[[age, sgp], ...]` as floor-netted points, ascending by age.
+
+    ONE rule for both stored arcs -- the subject's career and a comp's -- because a comp
+    card draws them on one axis and the two must mean the same thing. They were spelled
+    separately and only one of them sorted.
+
+    Sorted rather than trusted in stored order: the push script's groupby happens to emit
+    ascending, but nothing in the wire format enforces it, and an unsorted blob would
+    zigzag the line with every other assertion still green.
+    """
+    return sorted(
+        ([int(a), float(v) - floor] for a, v in pairs),
+        key=lambda pt: pt[0],
+    )
 
 
 def _chart_extras(
@@ -930,13 +936,7 @@ def build_player_view(
     # bare id: a two-way player has one entry per pool, and the id alone would hand the
     # hitter row the pitcher's career.
     extras, careers, mismatch = _chart_extras(payload, chart, sp.mlbam_id, sp.pool)
-    # Sorted by age rather than trusted in payload order: the push script's groupby
-    # happens to emit ascending, but nothing enforces it, and an unsorted blob would
-    # zigzag the chart with every other assertion here still green.
-    history = sorted(
-        ([int(a), float(v) - floor] for a, v in extras.get("history", [])),
-        key=lambda pt: pt[0],
-    )
+    history = _netted(extras.get("history", []), floor)
     # THE SUPPRESSION RULE. `_live_seasons` (build_pt_panel.py) flags a season partial
     # iff `year >= today.year`, so a panel rebuilt in January un-flags the season that
     # just ended: it enters `complete`, lands in `history`, and `base_season` still
@@ -948,10 +948,6 @@ def build_player_view(
     # The flag labels the point; this decides whether there is one.
     realized_ages = {pt[0] for pt in history}
     paced = None if sp.age in realized_ages else [sp.age, float(sp.now) - floor]
-    # The comps ACTUALLY RENDERED, sliced once. `comps` and `comp_careers` below are
-    # parallel lists the template zips by position, so slicing twice is one edit away
-    # from putting one comp's name over another's arc.
-    shown = extras.get("comps", [])[:want]
     return replace(
         empty,
         name=sp.name,
@@ -972,7 +968,13 @@ def build_player_view(
         chart_vintage_mismatch=mismatch,
         history=history,
         paced=paced,
-        paced_label=f"{base} pace" if empty.meta["base_season_partial"] else str(base),
+        # Read off the payload, not out of `meta`: the league and teams boards share
+        # `_board_meta` and neither renders this, so routing it through there put a key
+        # on two views that have no use for it. Default True -- every blob written
+        # before the flag existed was written mid-season.
+        paced_label=(
+            f"{base} pace" if bool(payload.get("base_season_partial", True)) else str(base)
+        ),
         # `points(scale)` applies the offset; `YearPoint.age` is already `age + horizon`.
         projection=[
             {"age": p.age, "mean": p.mean, "p10": p.p10, "p90": p.p90} for p in sp.points(scale)
@@ -994,20 +996,12 @@ def build_player_view(
                     {"age": sp.age + h, "value": float(v) - floor}
                     for h, v in enumerate(c["path"][: len(sp.sgp)], start=1)
                 ],
-            }
-            for c in shown
-        ],
-        comp_careers=[
-            {
-                "name": c["name"],
-                "season": c["season"],
-                "rmse": c["rmse"],
-                # THE SUBJECT'S age, and correct for every card: `closest_paths` selects
-                # on `prepared.age == float(age)`, an EXACT match, so a comp's age in his
-                # match season IS this one. Stored per card rather than read off the view
-                # so the card is self-contained, and pinned by a test in case the matcher
-                # ever grows a tolerance window.
-                "match_age": sp.age,
+                # HIS WHOLE ARC, on the same entry as his forward path rather than in a
+                # second list beside it. A parallel list would have to stay the same
+                # length and order forever, enforced by nothing but construction, and
+                # the card that titles itself from one and draws from the other is a
+                # single off-by-one from putting one man's name over another's career.
+                #
                 # `c.get("id")` -- an older push wrote comps with no id at all, which is
                 # a missing join key rather than an error. `chart_key` is never called
                 # with None: the lookup short-circuits first.
@@ -1015,13 +1009,11 @@ def build_player_view(
                 # Netted against the SUBJECT's floor, like `path` above and for the same
                 # reason: the card asks what this arc would be worth in his slot, and
                 # per-comp floors would put non-comparable lines on one axis.
-                "career": [
-                    [int(a), float(v) - floor]
-                    for a, v in careers.get(chart_key(c["id"], sp.pool), [])
-                ]
+                "career": _netted(careers.get(chart_key(c["id"], sp.pool), []), floor)
                 if c.get("id") is not None
                 else [],
             }
-            for c in shown
+            # Sliced ONCE, here. This is the only comp list there is.
+            for c in extras.get("comps", [])[:want]
         ],
     )

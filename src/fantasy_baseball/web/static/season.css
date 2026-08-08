@@ -3806,7 +3806,8 @@ td[style*="--neg"] {
    sibling views read the same and a theme edit touches one place. Each adds only
    its differing box metrics below. */
 .chart-wrapper,
-.dist-wrapper {
+.dist-wrapper,
+.comp-card {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -3824,7 +3825,8 @@ td[style*="--neg"] {
   height: 520px;
   margin-top: 12px;
 }
-.dist-wrapper canvas { display: block; width: 100%; height: 100%; }
+.dist-wrapper canvas,
+.comp-card-chart canvas { display: block; width: 100%; height: 100%; }
 
 /* Trajectory board (#321). Reuses .data-table, .pill and .card; only the controls
    row, the two flag glyphs and the numeric column alignment are specific to it. */
@@ -3930,12 +3932,9 @@ td[style*="--neg"] {
   gap: 12px;
   margin: 12px 0 18px;
 }
-.comp-card {
-  background: var(--surface);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 10px 12px;
-}
+/* Chrome comes from the shared card rule above -- only the box metrics live here,
+   the same split .chart-wrapper and .dist-wrapper follow. */
+.comp-card { padding: 10px 12px; }
 .comp-card h4 {
   margin: 0 0 6px;
   font-size: 13px;
@@ -3945,4 +3944,3 @@ td[style*="--neg"] {
 /* Fixed height for the same reason .chart-wrapper has one: Chart.js's default
    maintainAspectRatio ignores the box and draws roughly twice its height. */
 .comp-card-chart { position: relative; height: 180px; }
-.comp-card-chart canvas { display: block; width: 100%; height: 100%; }

@@ -3125,12 +3125,14 @@ def test_the_player_page_gives_every_comp_its_own_canvas(client):
 
     assert body.count('id="comp-chart-') == 2, "one canvas per rendered comp"
     island = _chart_island(body)
-    assert len(island["comp_careers"]) == 2
-    # The whole arc, not the five forward points the stacked overlay already showed.
-    assert len(island["comp_careers"][0]["career"]) == 7
-    assert all(c["match_age"] == 27 for c in island["comp_careers"]), (
-        "the match age is the subject's own, identical on every card"
-    )
+    assert len(island["comps"]) == 2
+    # The whole arc, not the five forward points the stacked overlay already showed --
+    # and it rides on the comp entry, so a card cannot title itself from one array and
+    # draw itself from another.
+    assert len(island["comps"][0]["career"]) == 7
+    # The match line's x, shipped ONCE: comps are selected on an exact age match, so it
+    # is the same age on every card and there is nothing per-comp to disagree about.
+    assert island["age"] == 27
 
 
 def test_a_board_with_comps_but_no_stored_careers_says_so_once(client):

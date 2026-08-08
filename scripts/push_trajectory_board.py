@@ -69,6 +69,27 @@ MIN_SGP = 0.0
 from fantasy_baseball.trajectory.comp_paths import MAX_COMPS, closest_paths
 
 
+def _arc(seasons) -> list[list[float]]:
+    """One player's stored career as ``[[age, sgp], ...]``, ascending, ``[]`` when absent.
+
+    ONE spelling for the two arcs a chart pairs on a single axis -- the subject's own
+    history and a comp's whole career. They came off the same `by_id` frame through two
+    hand-copied comprehensions, one of which sorted and one of which did not, so the
+    blob's two `[[age, sgp]]` lists carried different ordering guarantees for no reason
+    a reader could find.
+
+    Sorted here even though `groupby` happens to emit ascending: nothing in the panel
+    contract promises it, and `_netted` on the read side sorts for the same reason.
+    Measured at ~14 ms across both pools against a sweep of 33-52 s.
+    """
+    if seasons is None:
+        return []
+    return sorted(
+        ([int(a), round(float(s), 4)] for a, s in zip(seasons["age"], seasons["sgp"], strict=True)),
+        key=lambda pt: pt[0],
+    )
+
+
 def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> list[dict] | None:
     """One player's stored comp block, or ``None`` when his path is too short to match.
 
@@ -272,19 +293,8 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         by_id = {int(i): g for i, g in collapse_split_seasons(complete).groupby("mlbam_id")}
 
         short_paths = 0
-        # Comp ids seen in THIS pool. Per pool because `by_id` is per pool: resolving a
-        # hitter comp against the pitcher frame would draw the wrong career.
-        wanted: set[int] = set()
         for player in produced:
-            seasons = by_id.get(player.mlbam_id)
-            history = (
-                [
-                    [int(a), round(float(s), 4)]
-                    for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
-                ]
-                if seasons is not None
-                else []
-            )
+            history = _arc(by_id.get(player.mlbam_id))
             # None means his observable path is shorter than the swept horizons, so no
             # honest match exists -- see `player_comps`. He keeps his row and his career
             # line; only the comps go.
@@ -292,27 +302,22 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
             if comps is None:
                 short_paths += 1
             else:
-                wanted.update(c["id"] for c in comps)
+                # THE SAME `by_id` the subject's own history comes from, so a comp's arc
+                # and the subject overlay drawn on top of it are on one scale by
+                # construction. Resolved per pool, because `by_id` is per pool: a hitter
+                # comp looked up in the pitcher frame would draw the wrong career.
+                #
+                # An id `by_id` does not hold writes nothing: comps come from the same
+                # `prepared` this frame built, so absence is a defect, and an empty card
+                # is the honest rendering of one rather than a fabricated arc.
+                for comp in comps:
+                    key = chart_key(comp["id"], kind)
+                    if key not in careers and (arc := _arc(by_id.get(comp["id"]))):
+                        careers[key] = arc
             extras[(player.mlbam_id, player.pool)] = {
                 "history": history,
                 "comps": comps if comps is not None else [],
             }
-
-        # THE SAME `by_id` the subject's own history comes from, so a comp's arc and the
-        # subject overlay drawn on top of it are on one scale by construction. An id
-        # absent from it writes nothing: comps come from the same `prepared` this frame
-        # built, so absence is a defect, and an empty card is the honest rendering of
-        # one rather than a fabricated arc.
-        for comp_id in sorted(wanted):
-            seasons = by_id.get(comp_id)
-            if seasons is None:
-                continue
-            careers[chart_key(comp_id, kind)] = [
-                [int(a), round(float(s), 4)]
-                for a, s in sorted(
-                    zip(seasons["age"], seasons["sgp"], strict=True), key=lambda pt: pt[0]
-                )
-            ]
         print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
         if short_paths:
             # SAID OUT LOUD. A push that quietly drops comps for part of the pool

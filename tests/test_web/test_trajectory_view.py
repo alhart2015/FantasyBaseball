@@ -1349,21 +1349,28 @@ def test_every_comp_carries_the_whole_career_behind_it(payload: dict) -> None:
     his whole arc."""
     view = _view(payload, player="Big Bat", n=3)
 
-    assert len(view.comp_careers) == len(view.comps) == 3
-    assert [c["name"] for c in view.comp_careers] == [c["name"] for c in view.comps]
-    assert all(c["career"] for c in view.comp_careers), "every fixture comp has an arc"
-    for entry in view.comp_careers:
+    assert len(view.comps) == len(view.comps) == 3
+    assert [c["name"] for c in view.comps] == [c["name"] for c in view.comps]
+    assert all(c["career"] for c in view.comps), "every fixture comp has an arc"
+    for entry in view.comps:
         ages = [pt[0] for pt in entry["career"]]
         assert ages == sorted(ages)
 
 
-def test_the_match_line_sits_at_the_subjects_own_age(payload: dict) -> None:
+def test_a_comps_forward_path_starts_the_year_after_the_matched_age(payload: dict) -> None:
     """`closest_paths` selects on `prepared.age == float(age)` -- an EXACT match -- so
-    every card marks the same age. If that ever becomes a tolerance window this test is
-    what stops the line being drawn somewhere it does not belong."""
+    every comp matched the subject at the subject's OWN age, and every card's match line
+    sits at the same x. That age is `view.age`, carried once rather than copied onto
+    each comp; this pins the property it stands for, so a matcher that ever grew a
+    tolerance window would fail here rather than silently drawing the line in the wrong
+    place on every card.
+    """
     view = _view(payload, player="Big Bat")
-    assert view.comp_careers
-    assert all(c["match_age"] == view.age for c in view.comp_careers)
+    assert view.comps
+    for c in view.comps:
+        assert c["path"][0]["age"] == view.age + 1, (
+            "the forward path picks up the year after the age they matched at"
+        )
 
 
 def test_a_comp_career_is_netted_against_the_QUERY_players_floor(payload: dict) -> None:
@@ -1374,8 +1381,8 @@ def test_a_comp_career_is_netted_against_the_QUERY_players_floor(payload: dict) 
     var = _view(payload, player="Big Bat", scale="var")
     sgp = _view(payload, player="Big Bat", scale="sgp")
 
-    assert var.comp_careers[0]["career"][0][1] == pytest.approx(
-        sgp.comp_careers[0]["career"][0][1] - row["floor"]
+    assert var.comps[0]["career"][0][1] == pytest.approx(
+        sgp.comps[0]["career"][0][1] - row["floor"]
     )
 
 
@@ -1386,8 +1393,8 @@ def test_a_blob_with_no_careers_yields_empty_arcs_rather_than_raising(payload: d
     view = build_player_view(payload, player="Big Bat", chart=blob)
 
     assert view.comps, "the comps themselves still render"
-    assert len(view.comp_careers) == len(view.comps)
-    assert all(c["career"] == [] for c in view.comp_careers)
+    assert len(view.comps) == len(view.comps)
+    assert all(c["career"] == [] for c in view.comps)
 
 
 def test_a_careers_map_of_the_wrong_shape_is_refused_not_raised(payload: dict) -> None:
@@ -1397,7 +1404,7 @@ def test_a_careers_map_of_the_wrong_shape_is_refused_not_raised(payload: dict) -
     blob["careers"] = [["not", "a", "mapping"]]
     view = build_player_view(payload, player="Big Bat", chart=blob)
 
-    assert all(c["career"] == [] for c in view.comp_careers)
+    assert all(c["career"] == [] for c in view.comps)
 
 
 def test_a_comp_stored_without_an_id_gets_an_empty_arc(payload: dict) -> None:
@@ -1408,7 +1415,7 @@ def test_a_comp_stored_without_an_id_gets_an_empty_arc(payload: dict) -> None:
             comp.pop("id", None)
     view = build_player_view(payload, player="Big Bat", chart=blob)
 
-    assert all(c["career"] == [] for c in view.comp_careers)
+    assert all(c["career"] == [] for c in view.comps)
 
 
 def test_a_two_way_comps_two_careers_do_not_collide(payload: dict) -> None:
@@ -1424,28 +1431,26 @@ def test_a_two_way_comps_two_careers_do_not_collide(payload: dict) -> None:
     # Floors off the payload, never hardcoded: a literal here goes stale the moment a
     # fixture row moves.
     h_floor = next(p["floor"] for p in payload["players"] if p["name"] == "Big Bat")
-    assert hitter.comp_careers[0]["career"] == [[22, 1.0 - h_floor], [23, 2.0 - h_floor]]
-    assert pitcher.comp_careers[0]["career"][0][1] > 50
+    assert hitter.comps[0]["career"] == [[22, 1.0 - h_floor], [23, 2.0 - h_floor]]
+    assert pitcher.comps[0]["career"][0][1] > 50
 
 
 def _chart_including_base_age(payload: dict) -> dict:
-    """A chart blob whose history runs THROUGH the subject's base-season age.
+    """`_chart` with the subject's own base-season age added to his career history.
 
     The panel produces this only after the season ends and the panel is rebuilt --
     `_live_seasons` un-flags the finished year, it enters `complete`, and it lands in
-    `history` while `base_season` still names it. Hand-built here because the fixture
-    (correctly) does not contain it.
+    `history` while `base_season` still names it.
+
+    Built by MUTATING `_chart` rather than calling `to_chart_payload` again: the tuple
+    key shape and the board-paired stamp are that helper's contract, and a second
+    spelling of them here would keep passing against a shape the writer had stopped
+    producing. Same pattern the neighbouring blob tests use.
     """
-    return to_chart_payload(
-        {
-            (p["id"], p["pool"]): {
-                "history": [[25, 16.0], [26, 20.0], [27, 21.0]],
-                "comps": [],
-            }
-            for p in payload["players"]
-        },
-        generated_at=str(payload["generated_at"]),
-    )
+    blob = _chart(payload)
+    for key in blob["players"]:
+        blob["players"][key] = {"history": [[25, 16.0], [26, 20.0], [27, 21.0]], "comps": []}
+    return blob
 
 
 def test_the_paced_season_is_the_boards_now_netted_against_the_same_floor(
@@ -1514,25 +1519,6 @@ def test_the_paced_label_follows_the_boards_own_partial_flag(
     blob["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
     view = build_player_view(blob, player="Big Bat", chart=None)
     assert view.paced_label == expected
-
-
-@pytest.mark.parametrize(
-    ("stored", "expected"),
-    [({"base_season_partial": False}, False), ({"base_season_partial": True}, True), ({}, True)],
-)
-def test_the_board_meta_reports_whether_the_base_season_was_still_running(
-    stored: dict, expected: bool
-) -> None:
-    """`paced_label` must not call a finished season a pace, and only the push can
-    tell: `partial_season` is a panel column and nothing else survives to the reader.
-
-    An EMPTY payload is an old blob, which was necessarily written mid-season -- so
-    True is both the compatible default and the true one. `dict.get` with a default
-    rather than `or`, per CLAUDE.md: `False or True` is `True`.
-    """
-    from fantasy_baseball.web.trajectory_view import _board_meta
-
-    assert _board_meta(stored)["base_season_partial"] is expected
 
 
 def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> None:

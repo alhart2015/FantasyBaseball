@@ -80,9 +80,8 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     left for the two to disagree about. -#}
 <script type="application/json" id="trajectory-chart-data">{{ {
   "name": board.name, "axis_label": board.axis_label, "history": board.history,
-  "paced": board.paced, "paced_label": board.paced_label,
-  "projection": board.projection, "comps": board.comps,
-  "comp_careers": board.comp_careers} | tojson }}</script>
+  "paced": board.paced, "paced_label": board.paced_label, "age": board.age,
+  "projection": board.projection, "comps": board.comps} | tojson }}</script>
 
 {% if board.comps %}
 <h3>Closest realized paths <span class="muted">({{ board.comps | length }})</span></h3>
@@ -105,9 +104,9 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     Skipped entirely when NO comp has a stored arc: an old blob, or a push that wrote
     comps before careers existed. Ten identical notices in a ten-cell grid is noise
     about a single cause. -#}
-{% if board.comp_careers | selectattr('career') | list %}
+{% if board.comps | selectattr('career') | first %}
 <div class="comp-grid">
-  {% for c in board.comp_careers %}
+  {% for c in board.comps %}
   <div class="comp-card">
     <h4>{{ c.name }}
       <span class="muted">{{ c.season }} -- RMSE {{ '%.2f'|format(c.rmse) }}</span></h4>

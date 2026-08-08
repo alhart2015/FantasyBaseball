@@ -11,15 +11,26 @@
   const data = JSON.parse(node.textContent);
 
   const at = (pts, key) => pts.map((p) => ({ x: p.age, y: p[key] }));
+  // Its sibling for the `[[age, value]]` pair arrays -- history and comp careers ship
+  // in that shape, `projection` ships as objects.
+  const pairs = (rows) => rows.map(([age, v]) => ({ x: age, y: v }));
 
-  // The subject's own arc, as ONE series: realized seasons, the paced base season,
-  // then the projected means. Built once and reused by every comp card -- the card
-  // asks "how does this comp's shape compare to his", and that needs him on it.
-  const subject = [
-    ...data.history.map(([age, v]) => ({ x: age, y: v })),
+  // WHAT HAPPENED, as one series: realized seasons then the paced base season. Drawn
+  // as the main chart's career line AND as the head of the faint subject overlay on
+  // every comp card, so it is built once -- the two used to spell the paced point's
+  // join independently, and a change to how it attaches would have made the big chart
+  // and the cards disagree about the same player's own line.
+  const career = [
+    ...pairs(data.history),
     ...(data.paced ? [{ x: data.paced[0], y: data.paced[1] }] : []),
-    ...at(data.projection, "mean"),
   ];
+  // ...and where it is going. This is what a comp card compares its arc against.
+  const subject = [...career, ...at(data.projection, "mean")];
+  // Per-point styling for the career line: everything plain except the paced base
+  // season, which gets an open marker -- it is a full-season pace off a partial year,
+  // not a finished season, and it must not read as one.
+  const pacedPoint = (plain, open) =>
+    career.map((_, i) => (data.paced && i === career.length - 1 ? open : plain));
 
   // A dashed vertical rule at the age where the comp matched the subject. Ten lines of
   // canvas rather than the chartjs-plugin-annotation CDN bundle: a second external
@@ -86,30 +97,21 @@
       pointRadius: 2,
       order: 1,
     },
-    (() => {
-      // ONE line, history + the paced base season. The paced point is styled per
-      // point rather than split into its own dataset: a second dataset would be a
-      // second legend entry and a visible seam at the join, and the whole point of
-      // this change is that there is no gap there.
-      const career = data.history.map(([age, v]) => ({ x: age, y: v }));
-      if (data.paced) career.push({ x: data.paced[0], y: data.paced[1] });
-      const last = career.length - 1;
-      const paced = (filled, hollow) =>
-        career.map((_, i) => (data.paced && i === last ? hollow : filled));
-      return {
-        label: data.name,
-        data: career,
-        borderColor: "#4e79a7",
-        borderWidth: 2.5,
-        // An OPEN marker on the paced point: it is a full-season pace off a partial
-        // year, not a finished season, and it must not read as one.
-        pointRadius: paced(2, 5),
-        pointBackgroundColor: paced("#4e79a7", "transparent"),
-        pointBorderColor: "#4e79a7",
-        pointBorderWidth: paced(1, 2),
-        order: 0,
-      };
-    })(),
+    {
+      // ONE line, history running into the paced base season. The paced point is
+      // styled per point rather than split into its own dataset: a second dataset
+      // would be a second legend entry and a visible seam at the join, and the whole
+      // point of this change is that there is no gap there.
+      label: data.name,
+      data: career,
+      borderColor: "#4e79a7",
+      borderWidth: 2.5,
+      pointRadius: pacedPoint(2, 5),
+      pointBackgroundColor: pacedPoint("#4e79a7", "transparent"),
+      pointBorderColor: "#4e79a7",
+      pointBorderWidth: pacedPoint(1, 2),
+      order: 0,
+    },
   ];
 
   if (typeof window.ensureChartJs !== "function") {
@@ -154,7 +156,7 @@
                 const isPaced =
                   data.paced &&
                   item.dataset.label === data.name &&
-                  item.dataIndex === item.dataset.data.length - 1;
+                  item.dataIndex === career.length - 1;
                 return isPaced ? `${base} (${data.paced_label})` : base;
               },
             },
@@ -165,7 +167,9 @@
 
     // ONE SMALL CHART PER COMP. Each draws the comp's WHOLE career, the subject faint
     // underneath, and a dashed rule at the age where the two matched.
-    (data.comp_careers || []).forEach((comp, i) => {
+    // The SAME list the table and the card headers iterate, so a card cannot title
+    // itself from one array and draw itself from another.
+    data.comps.forEach((comp, i) => {
       const el = document.getElementById(`comp-chart-${i}`);
       // Absent when this comp had no stored arc -- the template rendered a note in
       // place of the canvas. Skip it rather than treating it as a failure.
@@ -187,7 +191,7 @@
             },
             {
               label: comp.name,
-              data: comp.career.map(([age, v]) => ({ x: age, y: v })),
+              data: pairs(comp.career),
               borderColor: "#59a14f",
               borderWidth: 2,
               pointRadius: 1.5,
@@ -215,7 +219,10 @@
           },
           plugins: {
             legend: { display: false },
-            matchLine: { age: comp.match_age },
+            // The subject's own age, identical on every card: `closest_paths` selects
+            // on an EXACT age match, so the rule sits at the same x throughout, which
+            // is what makes the grid comparable. One number, shipped once.
+            matchLine: { age: data.age },
           },
         },
       });
