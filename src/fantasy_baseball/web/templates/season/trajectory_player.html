@@ -68,6 +68,16 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 
 {% elif not board.found %}
   {% if board.name %}<p>No player named "{{ board.name }}" on this board.</p>
+  {#- AC9 (#350): that sentence is equally true of a typo and of a player the board
+      deliberately left out, so on its own it cannot tell a reader which happened. The
+      counts are already on `meta` and the league view prints them; naming them here is
+      what makes "he is not on the board" a different statement from "you mistyped". -#}
+  {% if board.meta.excluded and board.meta.excluded.total %}
+  <p class="muted">This board excluded {{ board.meta.excluded.total }} players --
+    {{ board.meta.excluded.no_current_line }} with no current-season line and
+    {{ board.meta.excluded.low_sgp }} pacing under the minimum. A player left out that
+    way will not be found here even when the name is spelled correctly.</p>
+  {% endif %}
   {% else %}<p class="muted">Search a player to see his trajectory.</p>{% endif %}
 
 {% else %}

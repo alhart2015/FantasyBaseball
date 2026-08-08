@@ -3452,3 +3452,23 @@ def test_trajectory_find_reports_a_stale_board_rather_than_500ing(client):
     assert resp.status_code == 503, "a board that cannot be parsed is not a 500"
     body = resp.get_json()
     assert "push_trajectory_board" in body["error"], "say what to do, not just what broke"
+
+
+def test_an_absent_player_is_distinguished_from_an_excluded_one(client):
+    """#350 AC9: "not on this board" is true of a typo AND of a player the board left
+    out -- no current-season line, or pacing under MIN_SGP. The board counts both and
+    the league view prints them; the player view refused without ever saying so, which
+    is what made the two read alike.
+    """
+    board, chart = _trajectory_board_and_chart()
+    # The shared fixture carries no `excluded` block, so without this the template
+    # correctly renders nothing and the test would assert against a payload that
+    # cannot produce the behaviour.
+    board["excluded"] = {"low_sgp": 7, "no_current_line": 12, "total": 19}
+    board["generated_at"] = "excluded-fixture"  # do not share the parse cache
+    with _trajectory_cache(board, chart):
+        resp = client.get("/trajectory?view=player&player=Zzzz+Nobody")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "No player named" in body, "the refusal itself stays"
+    assert "excluded" in body.lower(), "and it now says what the board left out"

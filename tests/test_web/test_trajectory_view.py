@@ -1925,3 +1925,24 @@ def test_a_truncated_suggestion_list_says_so() -> None:
 
     exact, exact_total = find_players_counted(blob, "batter 001")
     assert exact_total == len(exact) == 1, "an untruncated list reports its real total"
+
+
+def test_suggestions_reach_the_template_without_being_rebuilt() -> None:
+    """The fallback re-projected each suggestion into a dict with exactly the keys it
+    already had. A field added to `find_players` would silently not reach the page.
+    """
+    blob = _named_payload([(7, "Bobby Witt Jr.", "hitter", 26, "SS", [9.0, 9.0, 9.0])])
+    view = build_player_view(blob, player="witt", chart=None)
+    assert view.candidates == find_players(blob, "witt")
+
+
+def test_the_view_model_already_carries_the_excluded_counts(payload: dict) -> None:
+    """AC9's data half. The counts reach the view; rendering them is the template's
+    job, pinned in test_season_routes.py -- asserted here so a change to `_board_meta`
+    fails on its own name rather than as a missing string in rendered HTML.
+    """
+    view = build_player_view(payload, player="Nobody Here", chart=None)
+    assert view.found is False and view.candidates == []
+    excluded = view.meta.get("excluded") or {}
+    assert excluded.get("total") == 19
+    assert excluded.get("no_current_line") == 12

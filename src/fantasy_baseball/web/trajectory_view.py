@@ -1049,20 +1049,9 @@ def build_player_view(
         suggestions = find_players(payload, player or "")
         if not suggestions:
             return empty
-        return replace(
-            empty,
-            suggested=True,
-            candidates=[
-                {
-                    "id": s["id"],
-                    "name": s["name"],
-                    "age": s["age"],
-                    "slot": s["slot"],
-                    "pool": s["pool"],
-                }
-                for s in suggestions
-            ],
-        )
+        # `find_players` already returns exactly the keys the template reads. Rebuilding
+        # them here was a no-op that would silently drop any field added to it later.
+        return replace(empty, suggested=True, candidates=suggestions)
     if len(hits) > 1:
         return replace(
             empty,
