@@ -12,6 +12,39 @@
 
   const at = (pts, key) => pts.map((p) => ({ x: p.age, y: p[key] }));
 
+  // The subject's own arc, as ONE series: realized seasons, the paced base season,
+  // then the projected means. Built once and reused by every comp card -- the card
+  // asks "how does this comp's shape compare to his", and that needs him on it.
+  const subject = [
+    ...data.history.map(([age, v]) => ({ x: age, y: v })),
+    ...(data.paced ? [{ x: data.paced[0], y: data.paced[1] }] : []),
+    ...at(data.projection, "mean"),
+  ];
+
+  // A dashed vertical rule at the age where the comp matched the subject. Ten lines of
+  // canvas rather than the chartjs-plugin-annotation CDN bundle: a second external
+  // script is a second thing that can fail to load, and `ensureChartJs` would have to
+  // grow a dependency-ordering concept to serve it.
+  const matchLine = {
+    id: "matchLine",
+    afterDatasetsDraw(chart, _args, opts) {
+      if (typeof opts.age !== "number") return;
+      const x = chart.scales.x.getPixelForValue(opts.age);
+      const { top, bottom, left, right } = chart.chartArea;
+      if (x < left || x > right) return;
+      const ctx = chart.ctx;
+      ctx.save();
+      ctx.setLineDash([4, 4]);
+      ctx.strokeStyle = "rgba(120,120,120,0.8)";
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(x, top);
+      ctx.lineTo(x, bottom);
+      ctx.stroke();
+      ctx.restore();
+    },
+  };
+
   // Spec requirement 6: on the VAR scale every series is netted against THIS
   // player's own slot floor, not each comp's own -- the axis must say so, or a reader
   // comparing a comp line to a remembered SGP figure is off by the floor with no way
@@ -128,6 +161,64 @@
           },
         },
       },
+    });
+
+    // ONE SMALL CHART PER COMP. Each draws the comp's WHOLE career, the subject faint
+    // underneath, and a dashed rule at the age where the two matched.
+    (data.comp_careers || []).forEach((comp, i) => {
+      const el = document.getElementById(`comp-chart-${i}`);
+      // Absent when this comp had no stored arc -- the template rendered a note in
+      // place of the canvas. Skip it rather than treating it as a failure.
+      if (!el || !comp.career || !comp.career.length) return;
+      new Chart(el.getContext("2d"), {
+        type: "line",
+        data: {
+          datasets: [
+            {
+              // The SUBJECT, faint and underneath. He is the reason this card is on
+              // the page; without him the arc is just a stranger's career.
+              label: data.name,
+              data: subject,
+              borderColor: "rgba(78,121,167,0.35)",
+              borderWidth: 1,
+              borderDash: [3, 3],
+              pointRadius: 0,
+              order: 1,
+            },
+            {
+              label: comp.name,
+              data: comp.career.map(([age, v]) => ({ x: age, y: v })),
+              borderColor: "#59a14f",
+              borderWidth: 2,
+              pointRadius: 1.5,
+              order: 0,
+            },
+          ],
+        },
+        plugins: [matchLine],
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          parsing: false,
+          // X-DOMAIN: whatever Chart.js autoscales over BOTH series -- the comp's
+          // career and the subject's drawn ages. Clipping to the comp's career alone
+          // would cut off the subject's projection whenever the comp retired young,
+          // which is the half of the card being compared. And no domain is shared
+          // across cards: forcing one would squeeze a 20-season career into a
+          // 6-season card and shrink the region around the match line, which is the
+          // part being read. The match line is the shared reference, not the axis.
+          scales: {
+            x: { type: "linear", title: { display: true, text: "age" } },
+            // Title off: at 180px tall the axis label costs more width than it
+            // explains, and the full-size chart directly above already carries it.
+            y: { title: { display: false, text: data.axis_label } },
+          },
+          plugins: {
+            legend: { display: false },
+            matchLine: { age: comp.match_age },
+          },
+        },
+      });
     });
   }).catch(() => {
     // Chart.js failed to load from the CDN. The table already renders the
