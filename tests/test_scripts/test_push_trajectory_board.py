@@ -454,3 +454,38 @@ def test_the_push_stores_one_career_per_comp_and_no_more() -> None:
         ages = [pt[0] for pt in arc]
         assert ages == sorted(ages), "an arc is drawn left to right without a re-sort"
         assert len(set(ages)) == len(ages), "one point per age; split seasons collapsed"
+
+
+def test_a_missed_season_is_a_ZERO_in_the_arc_not_a_bridge_across_it() -> None:
+    """A year the player did not play is a real 0, and the card has to say so.
+
+    `load_scored_panel` drops a season with no rows (`observed` False, `pa <= 0`, or
+    filtered by `_in_role`), so a career with a lost year arrives here as a frame with a
+    HOLE in it. The forward path those same comps are matched and scored on takes the
+    opposite convention -- `shape.prepare` reindexes and `np.nan_to_num(..., nan=0.0)`,
+    with the comment "a missing key means he was out of the league that year -- a real
+    0". So an arc that simply skips the age draws a straight line through a year the
+    comps table on the same page prints as 0.0, and the card exists precisely to show
+    where the busts are.
+
+    Filled only BETWEEN observed seasons: before his debut and after his last year he
+    was not a zero, he was absent, and the career span is what the arc is about.
+    """
+    import pandas as pd
+
+    module = _script()
+    gapped = pd.DataFrame({"age": [26, 27, 29, 30], "sgp": [10.0, 12.0, 8.0, 6.0]})
+
+    assert module._arc(gapped) == [[26, 10.0], [27, 12.0], [28, 0.0], [29, 8.0], [30, 6.0]]
+
+
+def test_an_arc_with_no_holes_is_unchanged_and_a_missing_player_is_empty() -> None:
+    """The fill must not perturb the common case, and an id the frame does not hold is
+    still an absent card rather than a fabricated flat line at zero."""
+    import pandas as pd
+
+    module = _script()
+    solid = pd.DataFrame({"age": [24, 25, 26], "sgp": [3.0, 4.0, 5.0]})
+
+    assert module._arc(solid) == [[24, 3.0], [25, 4.0], [26, 5.0]]
+    assert module._arc(None) == []

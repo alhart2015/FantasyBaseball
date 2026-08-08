@@ -17,6 +17,7 @@ from fantasy_baseball.trajectory.sweep import (
     to_payload,
 )
 from fantasy_baseball.web.trajectory_view import (
+    DEFAULT_COMPS,
     DEFAULT_TOP,
     PlayerView,
     build_board,
@@ -1025,8 +1026,16 @@ def _chart(payload: dict) -> dict:
         },
         # Deduped at the top level and keyed by pool, exactly as the push writes it: a
         # two-way comp has one arc per pool and a bare id would collapse them.
+        #
+        # Ages 22-30 SPAN the fixture players' age of 27 on purpose: a comp is selected
+        # on an exact age match, so a stored arc that stopped before the subject's age
+        # could not have been a comp at all, and a test asserting the match age is
+        # drawable needs a fixture that could really have been written.
+        #
+        # The first value is `float(i)`, so an arc identifies which comp it belongs to
+        # -- that is what makes the id join assertable rather than merely non-empty.
         careers={
-            chart_key(100 + i, pool): [[20 + j, float(i + j)] for j in range(6)]
+            chart_key(100 + i, pool): [[22 + j, float(i + j)] for j in range(9)]
             for i in range(1, 8)
             for pool in ("hitter", "pitcher")
         },
@@ -1344,32 +1353,47 @@ def test_ambiguous_candidates_are_ordered_by_id(payload: dict) -> None:
     assert [c["id"] for c in view.candidates] == [first["id"] - 10_000, first["id"]]
 
 
-def test_every_comp_carries_the_whole_career_behind_it(payload: dict) -> None:
+def test_every_comp_carries_the_career_belonging_to_HIS_OWN_id(payload: dict) -> None:
     """A comp drawn as five forward points says nothing about the comp. The card needs
-    his whole arc."""
-    view = _view(payload, player="Big Bat", n=3)
+    his whole arc -- and it needs HIS.
 
-    assert len(view.comps) == len(view.comps) == 3
-    assert [c["name"] for c in view.comps] == [c["name"] for c in view.comps]
-    assert all(c["career"] for c in view.comps), "every fixture comp has an arc"
-    for entry in view.comps:
+    Each fixture arc starts at `float(i)` for comp id `100 + i`, so this asserts the
+    join actually went through `chart_key(c["id"], pool)` rather than landing on a
+    neighbour. That is the guard that matters now: the two lists this used to compare
+    for parity were merged into one, so alignment is structural and comparing the merged
+    list to itself asserts nothing -- what can still go wrong is the LOOKUP, which is the
+    #284 defect class (a chart joined on a name, or on the wrong index).
+    """
+    view = _view(payload, player="Big Bat", n=3)
+    floor = next(p["floor"] for p in payload["players"] if p["name"] == "Big Bat")
+
+    assert len(view.comps) == 3
+    assert [c["name"] for c in view.comps] == ["Comp 1", "Comp 2", "Comp 3"]
+    for i, entry in enumerate(view.comps, start=1):
+        assert entry["career"], "every fixture comp has an arc"
         ages = [pt[0] for pt in entry["career"]]
         assert ages == sorted(ages)
+        assert entry["career"][0][1] == pytest.approx(float(i) - floor), (
+            f"{entry['name']} must carry id {100 + i}'s arc, not another comp's"
+        )
 
 
-def test_a_comps_forward_path_starts_the_year_after_the_matched_age(payload: dict) -> None:
-    """`closest_paths` selects on `prepared.age == float(age)` -- an EXACT match -- so
-    every comp matched the subject at the subject's OWN age, and every card's match line
-    sits at the same x. That age is `view.age`, carried once rather than copied onto
-    each comp; this pins the property it stands for, so a matcher that ever grew a
-    tolerance window would fail here rather than silently drawing the line in the wrong
-    place on every card.
+def test_every_comp_was_observed_at_the_age_he_matched_at(payload: dict) -> None:
+    """`closest_paths` selects on `prepared.age == float(age)` -- an EXACT match -- so a
+    comp necessarily has a season at the subject's own age, which is where every card
+    draws its match rule (`data.age`, shipped once).
+
+    Asserted against the stored ARC, not against a number the view synthesized: the
+    previous version of this test compared `c["path"][0]["age"]` to `view.age + 1`, and
+    both sides came from `sp.age` inside `build_player_view`, so it held by construction
+    and could not fail whatever `closest_paths` returned. This one fails if a card is
+    handed an arc that does not cover the age its rule is drawn at.
     """
     view = _view(payload, player="Big Bat")
     assert view.comps
     for c in view.comps:
-        assert c["path"][0]["age"] == view.age + 1, (
-            "the forward path picks up the year after the age they matched at"
+        assert any(pt[0] == view.age for pt in c["career"]), (
+            f"{c['name']} matched at {view.age} but his stored arc does not cover it"
         )
 
 
@@ -1393,7 +1417,8 @@ def test_a_blob_with_no_careers_yields_empty_arcs_rather_than_raising(payload: d
     view = build_player_view(payload, player="Big Bat", chart=blob)
 
     assert view.comps, "the comps themselves still render"
-    assert len(view.comps) == len(view.comps)
+    assert len(view.comps) == DEFAULT_COMPS, "and are sliced to `n` as usual"
+    assert all(c["path"] for c in view.comps), "with their forward paths intact"
     assert all(c["career"] == [] for c in view.comps)
 
 
@@ -1422,8 +1447,13 @@ def test_a_two_way_comps_two_careers_do_not_collide(payload: dict) -> None:
     """One id, two pools, two different arcs. Keying on the bare id hands the hitter
     card the pitching career -- the same collapse `chart_key` exists to stop."""
     blob = _chart(payload)
-    blob["careers"]["101:hitter"] = [[22, 1.0], [23, 2.0]]
-    blob["careers"]["101:pitcher"] = [[22, 90.0], [23, 91.0]]
+    # Through `chart_key`, never a hand-written "101:hitter": it is imported at the top
+    # of this file and the `_chart` fixture above builds its keys with it, so a literal
+    # here would be a second spelling of the very join this test exists to police -- and
+    # would keep writing the old shape if that format ever changed.
+    first_comp_id = 101
+    blob["careers"][chart_key(first_comp_id, "hitter")] = [[22, 1.0], [23, 2.0]]
+    blob["careers"][chart_key(first_comp_id, "pitcher")] = [[22, 90.0], [23, 91.0]]
 
     hitter = build_player_view(payload, player="Big Bat", chart=blob)
     pitcher = build_player_view(payload, player="Big Arm", chart=blob)

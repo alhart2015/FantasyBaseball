@@ -78,16 +78,33 @@ def _arc(seasons) -> list[list[float]]:
     blob's two `[[age, sgp]]` lists carried different ordering guarantees for no reason
     a reader could find.
 
-    Sorted here even though `groupby` happens to emit ascending: nothing in the panel
-    contract promises it, and `_netted` on the read side sorts for the same reason.
-    Measured at ~14 ms across both pools against a sweep of 33-52 s.
+    **A MISSED SEASON IS A ZERO, NOT A GAP.** `load_scored_panel` drops a season the
+    player did not play (`observed` False, `pa <= 0`) and `_in_role` drops one he played
+    in the other role, so a career with a lost year arrives here as a frame with a hole
+    in it. `shape.prepare` takes the opposite convention on the very same data -- it
+    reindexes and `np.nan_to_num(..., nan=0.0)`, commented "a missing key means he was
+    out of the league that year -- a real 0" -- and that zero is part of the RMSE that
+    made him a comp and is what the comps table prints. An arc that skipped the age drew
+    a straight line through a year the rest of the page shows as nothing, on a card whose
+    whole job is showing where the busts sit in the arc.
+
+    Filled only BETWEEN observed seasons. Before his debut and after his last year he was
+    not a zero, he was absent, and the career span is what the arc is about.
+
+    Sorted (implicitly, by iterating the span) even though `groupby` happens to emit
+    ascending: nothing in the panel contract promises it, and `_netted` on the read side
+    sorts for the same reason.
     """
     if seasons is None:
         return []
-    return sorted(
-        ([int(a), round(float(s), 4)] for a, s in zip(seasons["age"], seasons["sgp"], strict=True)),
-        key=lambda pt: pt[0],
-    )
+    # Ages within one player are distinct: `collapse_split_seasons` gives one row per
+    # (mlbam_id, season) and age advances with the season, so nothing is collapsed here.
+    scored = {
+        int(a): round(float(s), 4) for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
+    }
+    if not scored:
+        return []
+    return [[age, scored.get(age, 0.0)] for age in range(min(scored), max(scored) + 1)]
 
 
 def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> list[dict] | None:
