@@ -665,9 +665,10 @@ def test_pass_meta():
         check("fix_files merged from end", meta[1]["fix_files"] == ["src/a.py"])
         check("gate file recorded", meta[1]["gate_file"] == "gates-pass-0.txt")
         check("pass 2 gating", meta[2]["dimensions"] == ["correctness"])
-        # A pass with no metadata must yield empty lists, not KeyError.
+        # A pass with no metadata must yield empty containers, not KeyError.
         ledger._append(path, {"pass": 3, "event": "start"})
         check("absent meta defaults", ledger.pass_meta(directory)[3]["scope"] == [])
+        check("absent skipped defaults", ledger.pass_meta(directory)[3]["skipped"] == {})
     finally:
         shutil.rmtree(directory, ignore_errors=True)
 ```
@@ -698,12 +699,17 @@ def pass_meta(directory: str) -> dict:
             continue
         slot = per.setdefault(
             number,
-            {"scope": [], "dimensions": [], "fix_files": [], "gate_file": None, "sha": None},
+            {"scope": [], "dimensions": [], "fix_files": [],
+             "skipped": {}, "gate_file": None, "sha": None},
         )
         for key in ("scope", "dimensions", "fix_files"):
             value = rec.get(key)
             if value:
                 slot[key] = [norm_path(v) if key != "dimensions" else v for v in value]
+        # Skip reasons merge rather than replace: a dimension recorded as skipped
+        # on the start event must survive whatever the end event carries.
+        if rec.get("skipped"):
+            slot["skipped"].update(rec["skipped"])
         for key in ("gate_file", "sha"):
             if rec.get(key) is not None:
                 slot[key] = rec[key]
@@ -1503,6 +1509,24 @@ def test_goal_resolution():
     got = goal.resolve("feat/no-number", runner=dead_runner)
     check("asks when nothing found", got["source"] == "ask", str(got))
     check("no fabricated goal", got["goal"] is None, str(got))
+
+    # A number that parses but belongs to an unrelated issue must NOT be adopted.
+    # feat/2026-cleanup parses to 2026; if issue 2026 is about something else,
+    # accepting it hands the intent reviewer the wrong contract entirely.
+    check("plausible overlap", goal.plausible("keeper board rework",
+                                              "feat/277-keeper-board") is True)
+    check("implausible rejected", goal.plausible("Upgrade CI runners to 22.04",
+                                                 "feat/2026-cleanup") is False)
+    check("short branch words ignored", goal.plausible("x", "feat/2026-a") is False)
+
+    def wrong_issue_runner(args):
+        if args[:2] == ["issue", "view"]:
+            return json.dumps({"title": "Upgrade CI runners", "body": "bump ubuntu"})
+        return json.dumps({"title": "cleanup pass", "body": "tidy the cleanup module"})
+
+    got = goal.resolve("feat/2026-cleanup", runner=wrong_issue_runner)
+    check("implausible issue falls through", got["source"] == "pr", str(got))
+    check("implausible issue not recorded", got["issue"] is None, str(got))
 ```
 
 Register `test_goal_resolution()` in `main()` and add `import goal` to `selftest.py`.
@@ -1549,6 +1573,32 @@ def issue_number_from_body(body: str) -> int | None:
     return int(match.group(1)) if match else None
 
 
+_STOPWORDS = {"feat", "fix", "chore", "docs", "refactor", "test", "the", "and", "a"}
+
+
+def _words(text: str) -> set[str]:
+    """Content words of 3+ characters, lowercased."""
+    return {
+        w for w in re.split(r"[^a-z0-9]+", (text or "").lower())
+        if len(w) >= 3 and w not in _STOPWORDS and not w.isdigit()
+    }
+
+
+def plausible(issue_title: str, branch: str) -> bool:
+    """Does this issue look like it belongs to this branch?
+
+    A branch name yields a number by pattern, and that number resolves to a REAL
+    issue whether or not it is the right one -- feat/2026-cleanup parses to 2026,
+    and issue 2026 exists. Adopting it would hand the intent reviewer a contract
+    from an unrelated piece of work, and every finding it produced would be
+    judged against the wrong goal. One shared content word is a deliberately low
+    bar: the check exists to catch the year-number and version-number accidents,
+    not to second-guess a genuine issue whose title is worded differently from
+    its branch.
+    """
+    return bool(_words(issue_title) & _words(branch))
+
+
 def _gh(args: list[str]) -> str:
     return subprocess.check_output(["gh", *args], text=True, stderr=subprocess.DEVNULL)
 
@@ -1580,9 +1630,16 @@ def resolve(branch: str, runner=None) -> dict:
 
     if number is not None:
         try:
-            text = _as_goal(run(["issue", "view", str(number), "--json", "title,body"]))
-            if text:
+            payload = run(["issue", "view", str(number), "--json", "title,body"])
+            text = _as_goal(payload)
+            title = json.loads(payload).get("title") or ""
+            # The number parsed; that does not make it the right issue. A bare
+            # id trusted without confirmation resolves to a real row belonging
+            # to someone else, and the result looks plausible enough to stop
+            # checking -- so confirm before adopting it.
+            if text and plausible(title, branch):
                 return {"goal": text, "source": "issue", "issue": number}
+            number = None  # do not carry an implausible number into the PR result
         except Exception:
             pass  # unauthenticated, offline, or the number does not exist
 
@@ -2184,7 +2241,7 @@ Skill files live outside this repo; this commit records plan progress only."
 
 **Interfaces:**
 - Consumes: `ledger.dimensions_for_pass` (Task 8), `ledger.subsystem_candidates` (Task 7), `gates.derive`/`gates.pin` (Task 9), `goal.resolve` (Task 10), `ledger.pass_meta` (Task 4).
-- Produces: `ledger.py dimensions`, `ledger.py subsystems`, `gates.py --pin`, `gates.py --run`, `goal.py` as a bare CLI; and `ledger.gate_file_for_pass(pass_no: int, directory: str) -> str`.
+- Produces: `ledger.py dimensions` (with `--record` persisting skip reasons), `ledger.py subsystems`, `cost.py budget --budget <usd|none>`, `gates.py --pin`, `gates.py --run`, `goal.py` as a bare CLI; and `ledger.gate_file_for_pass(pass_no: int, directory: str) -> str`.
 
 The functions from Tasks 4-10 have no command surface yet. `SKILL.md` (Task 16) invokes all of them from the shell, so without this task it would document commands that do not exist.
 
@@ -2224,6 +2281,26 @@ def test_cli_surfaces():
                                   "--dimensions", "correctness",
                                   "--gate-file", "gates-pass-1.txt", "--sha", "abc"])
         check("pass flags parse", args.scope == ["a.py", "b.py"] and args.sha == "abc")
+
+        # R5.3: a skipped dimension and its reason must be readable by a later
+        # session, not merely printed to a terminal nobody kept.
+        ledger._append(os.path.join(directory, "passes.jsonl"), {
+            "pass": 2, "event": "start", "dimensions": ["correctness"],
+            "skipped": {"quality": "no prior yield and no new code in scope",
+                        "intent": "no prior yield and no new code in scope"},
+        })
+        meta = ledger.pass_meta(directory)
+        check("skip reasons persisted",
+              meta[2]["skipped"]["quality"].startswith("no prior yield"),
+              str(meta[2].get("skipped")))
+        check("skipped names every gated dimension",
+              set(meta[2]["skipped"]) == {"quality", "intent"},
+              str(meta[2]["skipped"]))
+
+        # cost.py budget flag parses both a number and the disable form.
+        check("budget disable", cost.parse_budget("none") is None)
+        check("budget value", cost.parse_budget("12.5") == 12.5)
+        check("budget default", cost.parse_budget(None) == cost.DEFAULT_BUDGET_USD)
     finally:
         shutil.rmtree(directory, ignore_errors=True)
 ```
@@ -2261,6 +2338,9 @@ def gate_file_for_pass(pass_no: int, directory: str) -> str:
 Add the two command handlers to `ledger.py` before `build_parser`:
 
 ```python
+SKIP_REASON = "no prior yield and no new code in scope"
+
+
 def cmd_dimensions(args) -> int:
     directory = ledger_dir(args.branch)
     records = fold(directory)
@@ -2269,12 +2349,23 @@ def cmd_dimensions(args) -> int:
         args.new_file.lower() == "true",
         args.added_lines,
     )
+    skipped = {}
     for dimension in ("correctness", "quality", "intent"):
         if dimension in chosen:
             print(f"RUN   {dimension:12s} {chosen[dimension]}")
         else:
-            print(f"SKIP  {dimension:12s} no prior yield and no new code in scope")
-    _emit({"run": sorted(chosen), "reasons": chosen,
+            skipped[dimension] = SKIP_REASON
+            print(f"SKIP  {dimension:12s} {SKIP_REASON}")
+    if args.record:
+        # Persist the decision, not just print it: R5.3 exists so a later
+        # session can tell coverage it had from coverage it merely looks like
+        # it had. A terminal nobody kept is not a record.
+        _append(
+            os.path.join(directory, "passes.jsonl"),
+            {"pass": args.pass_no, "event": "start",
+             "dimensions": sorted(chosen), "skipped": skipped},
+        )
+    _emit({"run": sorted(chosen), "reasons": chosen, "skipped": skipped,
            "gate_file": gate_file_for_pass(args.pass_no, directory)})
     return 0
 
@@ -2299,6 +2390,8 @@ And register them in `build_parser`, after the `pass` subparser block:
     dm.add_argument("--new-file", dest="new_file", default="false",
                     choices=["true", "false"])
     dm.add_argument("--added-lines", dest="added_lines", type=int, default=0)
+    dm.add_argument("--record", action="store_true",
+                    help="persist the run/skip decision to the pass record")
     dm.set_defaults(func=cmd_dimensions)
 
     sy = sub.add_parser("subsystems", help="escalation candidates (2+ open findings)")
@@ -2310,7 +2403,6 @@ Add a CLI to the bottom of `gates.py`:
 
 ```python
 def _config_path() -> str:
-    import subprocess
     import sys as _sys
 
     _sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -2363,6 +2455,47 @@ if __name__ == "__main__":
     import sys
 
     sys.exit(main())
+```
+
+Add `parse_budget` and the `budget` subcommand to `cost.py`. Insert the helper above `main`:
+
+```python
+def parse_budget(raw: str | None) -> float | None:
+    """`None` -> the default; the string 'none' -> disabled; else a dollar figure."""
+    if raw is None:
+        return DEFAULT_BUDGET_USD
+    if raw.strip().lower() == "none":
+        return None
+    return float(raw)
+```
+
+Add the subcommand in `main`:
+
+```python
+    bg = sub.add_parser("budget", help="spend so far against the threshold")
+    bg.add_argument("--budget", dest="budget",
+                    help=f"dollars, or 'none' to disable (default {DEFAULT_BUDGET_USD})")
+```
+
+and the dispatch branch:
+
+```python
+    if args.cmd == "budget":
+        limit = parse_budget(args.budget)
+        status = budget_status(directory, limit)
+        if not status["evaluable"]:
+            print("no cost data recorded yet -- budget cannot be evaluated")
+            return 0
+        print(f"known ${status['known']:.2f}, total ${status['total']:.2f}"
+              + (f", limit ${limit:.2f}" if limit is not None else ", no limit"))
+        if status["estimated_agents"]:
+            print(f"  {status['estimated_agents']} agent(s) estimated at the running mean")
+        if status["over"]:
+            # Warn and hand the decision back. Every fix is already committed, so
+            # stopping is safe -- but whether to stop is the user's call, and an
+            # automatic abort would leave a half-hardened branch with no decision.
+            print("\nOVER BUDGET. Ask the user whether to continue before the next pass.")
+    return 0
 ```
 
 Add a CLI to the bottom of `goal.py`:
@@ -2486,8 +2619,12 @@ intent reviewer runs on the wrong contract.
 
 ```bash
 python $LR/scripts/ledger.py dimensions --pass N \
-  --new-file <true|false> --added-lines <n>
+  --new-file <true|false> --added-lines <n> --record
 ```
+
+`--record` writes the run/skip decision and its reason to the pass record. Use
+it every pass: a later session reading the ledger needs to tell coverage the
+loop had from coverage it merely looks like it had.
 
 `correctness` runs every pass. `quality` and `intent` run on pass 1, when they
 have earned it with a confirmed finding on this branch, or when the scope holds
@@ -2516,7 +2653,7 @@ python $LR/scripts/ledger.py add --pass N --source lr-correctness \
 ```
 
 **4. Arbitrate.** See `reference/arbitration.md`. Check
-`ledger.py subsystems --pass N` before choosing what to fix: two or more open,
+`ledger.py subsystems` before choosing what to fix: two or more open,
 triaged, at-or-above-threshold findings sharing a file or theme means stop
 fixing facets and enumerate the invariant instead.
 
@@ -2531,9 +2668,11 @@ python $LR/scripts/gates.py --run > "$(python $LR/scripts/ledger.py path)/gates-
 python $LR/scripts/ledger.py pass --pass N --event end \
   --fix-files <files the fixes touched> --sha "$(git rev-parse HEAD)"
 python $LR/scripts/cost.py collect --pass N
+python $LR/scripts/cost.py budget
 ```
 
-Then check the stop rule and the budget.
+Then check the stop rule. If `budget` reports OVER BUDGET, stop and ask before
+opening the next pass.
 ````
 
 - [ ] **Step 3: Add a Cost section to `SKILL.md`** immediately before `## The stop rule`
@@ -2559,8 +2698,12 @@ the arbitrator real work. A cheaper tier that raises either is not cheaper.
 Do not tier any dimension down from one run. Three to five branches, then
 `cost.py bakeoff` to confirm before committing to it.
 
-The budget warns at USD 15.00 by default (`--budget <usd>`, or `--budget none`).
-It warns and asks; it never aborts on its own. Every fix is already committed, so
+```bash
+python $LR/scripts/cost.py budget --budget 25    # or --budget none to disable
+```
+
+The budget warns at USD 15.00 by default. It warns and asks; it never aborts on
+its own. Every fix is already committed, so
 stopping is safe at any point -- but whether to stop is yours, not the loop's.
 Agents whose transcripts could not be read are charged the running mean rather
 than zero, and the report says how many.
@@ -2602,10 +2745,11 @@ to the cap and stays silent on the ones whose findings decayed to zero.
 Add to the command list:
 
 ```bash
-$L dimensions --pass 3 --new-file false --added-lines 12   # which finders to run
-$L subsystems --pass 3                                      # escalation candidates
+$L dimensions --pass 3 --new-file false --added-lines 12 --record
+$L subsystems --threshold medium                            # escalation candidates
 python <skill>/scripts/cost.py collect --pass 3             # attribute spend
 python <skill>/scripts/cost.py report                       # cost per confirmed finding
+python <skill>/scripts/cost.py budget                       # spend vs threshold
 python <skill>/scripts/gates.py --pin                       # resolve gate commands
 python <skill>/scripts/goal.py                              # resolve the branch goal
 ```
