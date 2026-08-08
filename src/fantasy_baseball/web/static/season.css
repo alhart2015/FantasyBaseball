@@ -3807,8 +3807,7 @@ td[style*="--neg"] {
    its differing box metrics below. */
 .chart-wrapper,
 .dist-wrapper,
-.comp-card,
-.traj-suggest {
+.comp-card {
   position: relative;
   background: var(--surface);
   border: 1px solid var(--line);
@@ -3956,6 +3955,9 @@ td[style*="--neg"] {
    the form's only flex item, so no static `left` lands under it, and a <ul> inside the
    <label> is invalid content that forwards its clicks to the search box. */
 .traj-suggest-anchor { position: relative; }
+/* Card chrome spelled here rather than joined to the .chart-wrapper group above: this
+   is the one member that needs `position: absolute`, so joining the group meant
+   setting `position: relative` and overriding it two rules later. */
 .traj-suggest {
   position: absolute;
   z-index: 20;
@@ -3964,8 +3966,13 @@ td[style*="--neg"] {
   margin: 2px 0 0;
   padding: 4px 0;
   list-style: none;
+  background: var(--surface);
+  border: 1px solid var(--line);
+  border-radius: 8px;
   /* Wide enough for "Ronald Acuna Jr. -- age 28, OF (hitter)" without wrapping, and
-     capped so a 25-hit list scrolls instead of running off the viewport. */
+     capped so a 25-hit list scrolls instead of running off the viewport. Width and
+     left come from trajectory_suggest.js, which clamps both to the form so the list
+     cannot overhang a phone. */
   max-height: 320px;
   overflow-y: auto;
 }
@@ -3975,10 +3982,19 @@ td[style*="--neg"] {
   padding: 5px 10px;
   text-decoration: none;
   color: var(--ink);
+  /* One row per player, ellipsised rather than wrapped: below 320px of room the JS
+     clamps the list narrower than a long name, and a name running under the border is
+     less readable than one that says it was cut. */
   white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .traj-suggest a:hover,
-.traj-suggest a:focus { background: var(--surface-soft); }
+.traj-suggest a:focus,
+/* The keyboard cursor. Options are not tab stops -- focus stays in the input and
+   ArrowDown moves `aria-selected` -- so without this the keyboard reader has no
+   visible position in the list. */
+.traj-suggest a[aria-selected="true"] { background: var(--surface-soft); }
 .traj-suggest-meta { color: var(--ink-soft); font-size: 12px; }
 /* The truncation notice. Not a link -- it is a statement about the list, and making
    it clickable would offer a 26th player that does not exist. */

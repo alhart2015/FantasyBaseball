@@ -7,6 +7,14 @@
  *
  * Mirrors the players page (templates/season/players.html): input listener, 150 ms
  * debounce, 2-character minimum, and the same stale-response guard.
+ *
+ * THE INVARIANT, enumerated once in a browser rather than patched a modality at a time:
+ * every way a reader can reach this list -- mouse, touch, keyboard, assistive tech,
+ * scrollbar -- must reach it, and nothing may dismiss it while the reader is still
+ * using it. Three consecutive review passes each found one modality broken by the fix
+ * for the previous one (tab order, then the focus guard, then the scrollbar), because
+ * no gate in this repo could see DOM behaviour. tests/test_web/test_trajectory_suggest_browser.py
+ * now drives all of it in Chromium and WebKit; run it after touching this file.
  */
 (function () {
   'use strict';
@@ -23,6 +31,7 @@
   list.id = 'traj-suggest';
   list.className = 'traj-suggest';
   list.hidden = true;
+  list.setAttribute('role', 'listbox');
 
   /* Appended to the FORM, and positioned from the INPUT's own offset.
    *
@@ -34,29 +43,88 @@
    * the same x, and `left: 0` still started the list under the word "Player".
    *
    * Measuring the input is what actually anchors it, and it keeps the list last in the
-   * form so tab order stays input -> Search -> suggestions.
-   *
-   * NO combobox ARIA. An earlier version set role=combobox / listbox / option with no
-   * arrow keys, no aria-activedescendant, and an <a> inside each option (interactive
-   * content in an option is ignored by AT). Announcing a pattern that is not
-   * implemented is worse for a screen-reader user than announcing nothing: this is a
-   * list of links, so it ships as one. The players page it mirrors has no keyboard
-   * navigation either, and #350 did not ask for it. */
+   * form so tab order stays input -> Search, with the suggestions reached by ArrowDown
+   * rather than by Tab. */
   form.classList.add('traj-suggest-anchor');
   form.appendChild(list);
 
+  /* THE COMBOBOX PATTERN, implemented rather than announced.
+   *
+   * An earlier version set role=combobox/listbox/option with no arrow keys and no
+   * aria-activedescendant, so it announced a widget that did not exist; the fix for
+   * that deleted the ARIA and left the list keyboard-unreachable in both engines --
+   * measured, not assumed: Tab from the input lands on Search, and the focus guard
+   * empties the list on the way past, so no number of Tabs ever reaches a suggestion.
+   *
+   * So: the options are NOT tab stops (`tabindex="-1"`), the input keeps focus, and
+   * ArrowDown/ArrowUp/Enter drive the list through `aria-activedescendant`. That is
+   * the one arrangement where the list is reachable by keyboard AND the Search button
+   * is still one Tab away.
+   *
+   * role=option sits ON the anchor rather than on a wrapping <li>: an <a> inside an
+   * option is interactive content that AT ignores, and the anchor is what carries the
+   * href a mouse click and a middle-click both need. */
+  input.setAttribute('role', 'combobox');
+  input.setAttribute('aria-controls', list.id);
+  input.setAttribute('aria-autocomplete', 'list');
+  input.setAttribute('aria-expanded', 'false');
+
+  var active = -1;
+
+  function options() {
+    return list.querySelectorAll('a[role="option"]');
+  }
+
+  function setActive(index) {
+    var opts = options();
+    if (!opts.length) return;
+    if (active >= 0 && opts[active]) opts[active].removeAttribute('aria-selected');
+    active = (index + opts.length) % opts.length;
+    var chosen = opts[active];
+    chosen.setAttribute('aria-selected', 'true');
+    input.setAttribute('aria-activedescendant', chosen.id);
+    // `nearest`, so arrowing down one row scrolls one row instead of jumping the
+    // active option to the middle of a 25-row list.
+    chosen.scrollIntoView({ block: 'nearest' });
+  }
+
+  function clearActive() {
+    var opts = options();
+    if (active >= 0 && opts[active]) opts[active].removeAttribute('aria-selected');
+    active = -1;
+    input.removeAttribute('aria-activedescendant');
+  }
+
+  /* Sized and placed from the INPUT, then clamped to the FORM.
+   *
+   * The 320px floor is what keeps "Ronald Acuna Jr. - age 28, OF (hitter)" on one line,
+   * but `left = input.offsetLeft` plus that floor ran 14px off the right edge of a
+   * 375px phone in both engines. Below 320px of room the list gives up the floor and
+   * slides left instead of overflowing: a suggestion the reader cannot see is not a
+   * suggestion. Left and top are measured inside the form, which is the offset parent,
+   * so both the input and the list move together when the page reflows.
+   */
   function place() {
-    list.style.left = input.offsetLeft + 'px';
+    var room = form.clientWidth;
+    var width = Math.min(Math.max(input.offsetWidth, 320), room);
+    list.style.width = width + 'px';
+    list.style.left = Math.max(0, Math.min(input.offsetLeft, room - width)) + 'px';
     list.style.top = input.offsetTop + input.offsetHeight + 2 + 'px';
-    list.style.minWidth = Math.max(input.offsetWidth, 320) + 'px';
   }
 
   /* Keeps focus on the input through a mousedown on the list, which is what makes the
    * click land. Browsers that do not focus a link on mousedown (Safari, iOS Safari)
    * deliver `focusout` with a null relatedTarget, and `dismiss()` emptied the list
    * between mousedown and click -- so tapping a suggestion did nothing at all and the
-   * feature was unusable on those browsers. Introduced by the focusout fix; this is
-   * what that fix needed to be safe. */
+   * feature was unusable on those browsers.
+   *
+   * UNCONDITIONAL, and a later pass should not narrow it to `event.target.closest('a')`
+   * on the theory that it cancels a drag on the list's own scrollbar. Measured, both
+   * engines: WebKit dispatches that mousedown (target: the UL) and scrolls anyway,
+   * cancelled or not, and Chromium never routes a scrollbar band to the DOM at all --
+   * its overlay scrollbar takes 2px of layout and the pointer at the right edge hits
+   * the option. Narrowing buys nothing and costs a dismissal when a click lands on the
+   * list's padding or on the truncation notice. */
   list.addEventListener('mousedown', function (event) { event.preventDefault(); });
 
   var DEBOUNCE_MS = 150;
@@ -75,8 +143,11 @@
   function dismiss() {
     clearTimeout(timer);
     loadSeq++;
+    clearActive();
     list.hidden = true;
     list.innerHTML = '';
+    input.setAttribute('aria-expanded', 'false');
+    input.removeAttribute('aria-describedby');
   }
 
   /* The query string for a suggestion, built from THE FORM'S OWN HIDDEN INPUTS.
@@ -111,14 +182,22 @@
 
   function render(players, capped, total) {
     list.innerHTML = '';
+    clearActive();
     if (!players.length) {
       list.hidden = true;
+      input.setAttribute('aria-expanded', 'false');
       return;
     }
-    players.forEach(function (hit) {
+    players.forEach(function (hit, index) {
       var li = document.createElement('li');
       var a = document.createElement('a');
       a.href = urlFor(hit);
+      a.id = 'traj-suggest-opt-' + index;
+      a.setAttribute('role', 'option');
+      // Not a tab stop. Tab is the way OUT of the widget (to Search); ArrowDown is the
+      // way in. 25 tab stops between a search box and its button is the complaint that
+      // moved this list once already.
+      a.tabIndex = -1;
       // textContent, not innerHTML: these names come from the board payload and one of
       // them is going into the DOM on every keystroke.
       a.textContent = hit.name;
@@ -138,12 +217,21 @@
       // feature exists to prevent.
       var note = document.createElement('li');
       note.className = 'traj-suggest-note';
+      note.id = 'traj-suggest-note';
+      // Not an option: it is a statement about the list, and a listbox child that is
+      // not an option confuses the count AT reports. Pointed at from the input instead,
+      // so it is announced rather than silently dropped.
+      note.setAttribute('role', 'presentation');
       note.textContent = 'showing ' + players.length + ' of ' + total +
         ' - type more to narrow';
       list.appendChild(note);
+      input.setAttribute('aria-describedby', note.id);
+    } else {
+      input.removeAttribute('aria-describedby');
     }
     place();
     list.hidden = false;
+    input.setAttribute('aria-expanded', 'true');
   }
 
   function search(q) {
@@ -186,10 +274,28 @@
     }, DEBOUNCE_MS);
   });
 
-  // Escape closes without submitting; a click elsewhere dismisses.
   input.addEventListener('keydown', function (event) {
-    if (event.key === 'Escape') dismiss();
+    if (event.key === 'Escape') {
+      dismiss();
+      return;
+    }
+    if (list.hidden || !options().length) return;
+    if (event.key === 'ArrowDown') {
+      // From nothing selected, ArrowDown picks the first row -- which is the board's
+      // best match, so the common case is one key and Enter.
+      setActive(active + 1);
+      event.preventDefault();
+    } else if (event.key === 'ArrowUp') {
+      setActive(active <= 0 ? options().length - 1 : active - 1);
+      event.preventDefault();
+    } else if (event.key === 'Enter' && active >= 0) {
+      // Only with a row selected. With none, Enter submits the form, which is the
+      // JS-off behaviour and the server-side fallback the issue asked to keep.
+      event.preventDefault();
+      options()[active].click();
+    }
   });
+
   document.addEventListener('click', function (event) {
     if (!form.contains(event.target)) dismiss();
   });
@@ -197,5 +303,10 @@
   // list means the reader is tabbing INTO a suggestion, which must not close it.
   input.addEventListener('focusout', function (event) {
     if (!list.contains(event.relatedTarget)) dismiss();
+  });
+  // The width now depends on the form's, so a reflow that narrows the form has to
+  // re-clamp or the list goes back to overhanging the viewport it was just fitted to.
+  window.addEventListener('resize', function () {
+    if (!list.hidden) place();
   });
 })();
