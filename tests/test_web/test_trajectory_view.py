@@ -19,10 +19,15 @@ from fantasy_baseball.trajectory.sweep import (
 from fantasy_baseball.web.trajectory_view import (
     DEFAULT_COMPS,
     DEFAULT_TOP,
+    FIND_MIN_CHARS,
+    FIND_RESULT_CAP,
     PlayerView,
     build_board,
     build_player_view,
     build_teams_board,
+    find_players,
+    find_players_counted,
+    normalized_query,
 )
 from tests._trajectory_panel import synthetic_panel
 
@@ -1565,3 +1570,514 @@ def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> N
     ages = [pt[0] for pt in view.history]
     assert ages == sorted(ages), "career must render left-to-right by age"
     assert ages == [24, 25, 26]
+
+
+# --------------------------------------------------------------------------
+# #350: suggest-as-you-type search over the board
+# --------------------------------------------------------------------------
+
+
+def _named_payload(rows: list[tuple[int, str, str, int, str, list[float]]]) -> dict:
+    """A payload with per-row control of id/name/pool/age/slot.
+
+    `_hand_payload` above numbers ids sequentially and pins every row to one hitter
+    slot, which cannot express the three shapes this search has to get right: two
+    players sharing a name, one player appearing in both pools, and an accented name.
+    """
+    return {
+        "base_season": BASE,
+        "max_horizon": 3,
+        "generated_at": f"named-{next(_HAND_SEQ)}",
+        "players": [
+            {
+                "id": pid,
+                "name": name,
+                "pool": pool,
+                "age": age,
+                "slot": slot,
+                "floor": 0.0,
+                "now": 10.0,
+                "prior": 10.0,
+                "support": 0.9,
+                "extrapolated": 0,
+                "sgp": [
+                    {
+                        "horizon": h,
+                        "mean": m,
+                        "p10": m - 5,
+                        "p90": m + 5,
+                        "n_effective": 50.0,
+                        "band_fell_back": 0,
+                    }
+                    for h, m in enumerate(means, start=1)
+                ],
+            }
+            for pid, name, pool, age, slot, means in rows
+        ],
+    }
+
+
+def test_search_matches_a_substring_not_just_a_prefix(payload: dict) -> None:
+    """The headline complaint: `Witt` must find `Bobby Witt Jr.`. Here `bat` must find
+    both Bats, neither of which starts with it.
+    """
+    names = [h["name"] for h in find_players(payload, "bat")]
+    assert "Big Bat" in names and "Small Bat" in names, names
+
+
+def test_search_ignores_case_and_accents() -> None:
+    """Through `normalize_name`, the SAME function `build_player_view` resolves with.
+    A suggestion the resolver would then fail on is worse than no suggestion.
+    """
+    blob = _named_payload([(1, "Yoan Moncada", "hitter", 27, "3B", [5.0, 5.0, 5.0])])
+    for query in ("moncada", "MONCADA", "Moncada"):
+        assert [h["name"] for h in find_players(blob, query)] == ["Yoan Moncada"], query
+
+
+def test_exact_beats_prefix_beats_substring() -> None:
+    """Ordering is stated in the issue so it is not invented per implementation.
+
+    `Bat` is exactly one row's name, the prefix of another and inside a third; a
+    ranking that only sorted by board rank would bury the exact match.
+    """
+    blob = _named_payload(
+        [
+            # Deliberately WORST by board rank, so a rank-only sort would put it last.
+            (1, "Bat", "hitter", 27, "OF", [1.0, 1.0, 1.0]),
+            (2, "Batting Glove", "hitter", 27, "OF", [9.0, 9.0, 9.0]),
+            (3, "Big Bat", "hitter", 27, "OF", [8.0, 8.0, 8.0]),
+        ]
+    )
+    assert [h["name"] for h in find_players(blob, "Bat")] == [
+        "Bat",
+        "Batting Glove",
+        "Big Bat",
+    ]
+
+
+def test_ties_within_a_tier_break_by_board_rank() -> None:
+    """Two equally-good matches are offered better-player-first."""
+    blob = _named_payload(
+        [
+            (1, "Bat Weak", "hitter", 27, "OF", [1.0, 1.0, 1.0]),
+            (2, "Bat Strong", "hitter", 27, "OF", [9.0, 9.0, 9.0]),
+        ]
+    )
+    assert [h["name"] for h in find_players(blob, "bat")] == ["Bat Strong", "Bat Weak"]
+
+
+def test_search_needs_two_characters(payload: dict) -> None:
+    """Mirrors /api/players/find. One character over 1,169 rows is noise, not a
+    suggestion, and the cap would decide the list instead of the query.
+    """
+    assert find_players(payload, "b") == []
+    assert find_players(payload, "") == []
+    assert find_players(payload, "  ") == []
+    assert find_players(payload, "ba") != []
+
+
+def test_search_is_capped() -> None:
+    blob = _named_payload(
+        [(i, f"Batter {i:03d}", "hitter", 27, "OF", [5.0, 5.0, 5.0]) for i in range(40)]
+    )
+    assert len(find_players(blob, "batter")) == 25
+    assert len(find_players(blob, "batter", cap=3)) == 3
+
+
+def test_every_suggestion_carries_the_fields_a_link_needs(payload: dict) -> None:
+    """`id` and `pool` are required, not decorative: they are what `board_url` needs to
+    produce a link that resolves straight to the player instead of the candidate page.
+    """
+    for hit in find_players(payload, "ba"):
+        assert set(hit) == {"name", "id", "pool", "age", "slot"}, hit
+        assert hit["id"] is not None and hit["pool"] in ("hitter", "pitcher")
+
+
+def test_two_players_sharing_a_name_are_both_offered_and_distinguishable() -> None:
+    """The live board has two Max Muncys. Collapsing them would hide one player."""
+    blob = _named_payload(
+        [
+            (1, "Max Muncy", "hitter", 35, "1B", [7.0, 7.0, 7.0]),
+            (2, "Max Muncy", "hitter", 22, "SS", [6.0, 6.0, 6.0]),
+        ]
+    )
+    hits = find_players(blob, "muncy")
+    assert len(hits) == 2, hits
+    assert {h["id"] for h in hits} == {1, 2}
+    assert {h["age"] for h in hits} == {35, 22}
+
+
+def test_a_two_way_player_is_offered_once_per_pool() -> None:
+    """Ohtani's two rows share an id and an age and differ only by pool and slot, so a
+    list keyed on name or id alone offers one row where the board has two.
+    """
+    blob = _named_payload(
+        [
+            (660271, "Shohei Ohtani", "hitter", 31, "DH", [9.0, 9.0, 9.0]),
+            (660271, "Shohei Ohtani", "pitcher", 31, "SP", [4.0, 4.0, 4.0]),
+        ]
+    )
+    hits = find_players(blob, "ohtani")
+    assert len(hits) == 2, hits
+    assert {h["pool"] for h in hits} == {"hitter", "pitcher"}
+
+
+def test_an_exact_name_still_resolves_rather_than_suggesting(payload: dict) -> None:
+    """The fallback must not fire when the name resolves. A working search that started
+    returning a one-item candidate list instead of the player would be a regression.
+    """
+    view = build_player_view(payload, player="Big Bat", chart=None)
+    assert view.found is True
+    assert view.candidates == []
+
+
+def test_a_partial_name_falls_back_to_candidates_instead_of_a_dead_end(
+    payload: dict,
+) -> None:
+    """The server-side half of #350, which works with JS off: `bat` matched nothing
+    exactly, so offer what it does match rather than refusing.
+    """
+    view = build_player_view(payload, player="bat", chart=None)
+    assert view.found is False
+    # The discriminator the page needs: "more than one player is named bat, pick one"
+    # is a claim about the board, and it is false here. Without this flag the page
+    # would assert a name collision that did not happen.
+    assert view.suggested is True
+    names = [c["name"] for c in view.candidates]
+    assert "Big Bat" in names and "Small Bat" in names, names
+    for candidate in view.candidates:
+        assert candidate["id"] is not None and candidate["pool"]
+
+
+def test_a_name_absent_from_the_board_still_reports_absent(payload: dict) -> None:
+    """A typo and a real exclusion must not read the same. Substring found nothing, so
+    this stays the refusal -- with no candidates to imply otherwise.
+    """
+    view = build_player_view(payload, player="Nobody Here", chart=None)
+    assert view.found is False
+    assert view.candidates == []
+    assert view.suggested is False
+
+
+def test_an_ambiguous_exact_name_is_a_collision_not_a_suggestion() -> None:
+    """Both paths fill `candidates`, and the page says something different about each.
+    An exact name matching two rows IS a collision; a substring match is not.
+    """
+    blob = _named_payload(
+        [
+            (1, "Max Muncy", "hitter", 35, "1B", [7.0, 7.0, 7.0]),
+            (2, "Max Muncy", "hitter", 22, "SS", [6.0, 6.0, 6.0]),
+        ]
+    )
+    view = build_player_view(blob, player="Max Muncy", chart=None)
+    assert view.found is False
+    assert len(view.candidates) == 2
+    assert view.suggested is False, "an exact-name collision is not a suggestion"
+
+
+# --------------------------------------------------------------------------
+# #350 follow-up: the stale-blob invariant, enumerated.
+#
+# `find_players` parses the WHOLE board, and `build_player_view`'s miss path now
+# calls it. Every state a legacy or stale blob can be in therefore reaches code
+# that previously only ran on a resolved row. Enumerated together rather than
+# patched one facet at a time.
+# --------------------------------------------------------------------------
+
+
+def _stale_payload(**overrides) -> dict:
+    """A board whose rows lack `now` -- the shape an older push wrote."""
+    blob = {
+        "base_season": BASE,
+        "max_horizon": 3,
+        "generated_at": f"stale-{next(_HAND_SEQ)}",
+        "players": [
+            {
+                "id": 1,
+                "name": "Big Bat",
+                "pool": "hitter",
+                "age": 27,
+                "slot": "OF",
+                "floor": 0.0,
+                "prior": 10.0,
+                "support": 0.9,
+                "extrapolated": 0,
+                "sgp": [
+                    {
+                        "horizon": 1,
+                        "mean": 5.0,
+                        "p10": 0.0,
+                        "p90": 10.0,
+                        "n_effective": 50.0,
+                        "band_fell_back": 0,
+                    }
+                ],
+            }
+        ],
+    }
+    blob.update(overrides)
+    return blob
+
+
+def test_a_stale_blob_names_the_fix_rather_than_the_missing_field() -> None:
+    """State 1: searching a stale board. `find_players` parses every row, so it hits
+    the same missing field the resolve path does -- and must give the same actionable
+    sentence, not the bare `'now'` a raw KeyError renders as a banner.
+    """
+    with pytest.raises(ValueError) as caught:
+        find_players(_stale_payload(), "bat")
+    message = str(caught.value)
+    assert "'now'" in message, "the field must still be named"
+    assert "push_trajectory_board" in message, "and the fix must be named with it"
+
+
+def test_a_miss_on_a_stale_blob_reports_the_blob_not_a_missing_player() -> None:
+    """State 2: the regression this enumeration exists to close. A name miss used to
+    return a clean `empty`; the fallback made it raise a bare KeyError, which the route
+    renders as a banner reading literally `'now'`.
+
+    It still raises -- "No player named X on this board" would be a LIE about a board
+    that cannot be read at all -- but it raises the sentence that says what to do.
+    """
+    with pytest.raises(ValueError, match="push_trajectory_board"):
+        build_player_view(_stale_payload(), player="Nobody At All", chart=None)
+
+
+def test_an_exact_hit_on_a_stale_blob_keeps_its_original_message() -> None:
+    """State 3: the path that already had this guard must be unchanged by the hoist."""
+    with pytest.raises(ValueError, match="push_trajectory_board"):
+        build_player_view(_stale_payload(), player="Big Bat", chart=None)
+
+
+def test_a_missing_max_horizon_fails_instead_of_silently_ranking_one_year() -> None:
+    """State 4: `payload.get("max_horizon", 1)` silently ranked a single horizon, which
+    drops every player with no horizon-1 point from the suggestions while the rest of
+    the page still lists them -- unsearchable, with no error. Every other reader in
+    this module treats the field as required.
+    """
+    # A HEALTHY row, so the only thing wrong with this payload is the missing key.
+    # Built off the stale fixture it would raise on `now` instead and pass for the
+    # wrong reason.
+    #
+    # ASSERTION CHANGED, deliberately: this originally pinned a bare KeyError, which a
+    # later verification pass identified as the defect rather than the requirement -- it
+    # renders as a banner reading literally 'max_horizon'. The behaviour it must have is
+    # pinned by test_a_missing_max_horizon_names_the_fix_not_just_the_field; what stays
+    # here is the original point, that a missing key must FAIL rather than default.
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    del blob["max_horizon"]
+    with pytest.raises(ValueError):
+        find_players(blob, "bat")
+
+
+def test_a_null_max_horizon_fails_as_a_payload_error_not_a_TypeError() -> None:
+    """State 5: `int(None)` raised TypeError, which neither the route nor the endpoint
+    catches -- an unhandled 500 rather than a reported bad payload.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    blob["max_horizon"] = None
+    with pytest.raises(ValueError, match="max_horizon"):
+        find_players(blob, "bat")
+
+
+# --------------------------------------------------------------------------
+# #350 follow-up: the search contract, enumerated.
+#
+# Three findings shared one question -- what does a query mean, and what does the
+# caller learn about the answer? Fixed together: one owner for the length rule,
+# whitespace handled where the code cannot rely on someone else's docstring, and a
+# truncated list that says it is truncated.
+# --------------------------------------------------------------------------
+
+
+def test_whitespace_between_name_parts_does_not_end_the_search() -> None:
+    """`normalize_name`'s docstring claims it "removes extra whitespace". It does not.
+    find_players trusted that claim, so a copy-pasted double space was a dead end --
+    the exact failure #350 exists to remove, reintroduced one layer up.
+
+    Collapsed HERE rather than by fixing name_utils: that function is a join key for
+    keeper matching and the draft board, and changing what it returns would silently
+    re-key every one of those callers.
+    """
+    blob = _named_payload([(1, "Bobby Witt Jr.", "hitter", 27, "SS", [5.0, 5.0, 5.0])])
+    for query in ("Bobby  Witt", "  Witt  ", "bobby\twitt"):
+        assert [h["name"] for h in find_players(blob, query)] == ["Bobby Witt Jr."], query
+
+
+def test_a_query_that_shortens_under_normalization_is_short(payload: dict) -> None:
+    """One owner for the minimum-length rule. The route checked the raw string and the
+    matcher re-checked the normalized one, so a two-character query that normalizes to
+    one returned an accepted-but-empty 200 -- "nobody matched" for something the API
+    had just called long enough.
+    """
+    # 'e' + combining acute: two codepoints raw, one after accent stripping. macOS and
+    # several IMEs emit this form.
+    assert find_players(payload, "e\u0301") == []
+    assert normalized_query("e\u0301") == "e"
+    assert len(normalized_query("e\u0301")) < FIND_MIN_CHARS, "the route must see this too"
+
+
+def test_a_truncated_suggestion_list_says_so() -> None:
+    """The cap was silent on both surfaces, so 25-of-300 looked identical to 25-of-25.
+    A reader searching `mar` on the live board would see his player missing and conclude
+    he is not on it -- which is the conclusion the whole feature exists to prevent.
+    """
+    blob = _named_payload(
+        [(i, f"Batter {i:03d}", "hitter", 27, "OF", [5.0, 5.0, 5.0]) for i in range(40)]
+    )
+    hits, total = find_players_counted(blob, "batter")
+    assert len(hits) == FIND_RESULT_CAP
+    assert total == 40, "the caller must be able to tell 25-of-40 from 25-of-25"
+
+    exact, exact_total = find_players_counted(blob, "batter 001")
+    assert exact_total == len(exact) == 1, "an untruncated list reports its real total"
+
+
+def test_suggestions_reach_the_template_without_being_rebuilt() -> None:
+    """The fallback re-projected each suggestion into a dict with exactly the keys it
+    already had. A field added to `find_players` would silently not reach the page.
+    """
+    blob = _named_payload([(7, "Bobby Witt Jr.", "hitter", 26, "SS", [9.0, 9.0, 9.0])])
+    view = build_player_view(blob, player="witt", chart=None)
+    assert view.candidates == find_players(blob, "witt")
+
+
+def test_the_view_model_already_carries_the_excluded_counts(payload: dict) -> None:
+    """AC9's data half. The counts reach the view; rendering them is the template's
+    job, pinned in test_season_routes.py -- asserted here so a change to `_board_meta`
+    fails on its own name rather than as a missing string in rendered HTML.
+    """
+    view = build_player_view(payload, player="Nobody Here", chart=None)
+    assert view.found is False and view.candidates == []
+    excluded = view.meta.get("excluded") or {}
+    assert excluded.get("total") == 19
+    assert excluded.get("no_current_line") == 12
+
+
+# --------------------------------------------------------------------------
+# #350 follow-up: max_horizon, enumerated across every reader.
+#
+# The previous batch routed ONE of three readers through a guard and claimed the
+# hole was closed. Every reader, every payload state, one owner.
+# --------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("bad", [None, "three", 0.5, []])
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda b: find_players(b, "bat"), id="find"),
+        pytest.param(lambda b: build_player_view(b, player="Big Bat", chart=None), id="player"),
+        pytest.param(lambda b: build_board(b, top="all"), id="board"),
+    ],
+)
+def test_an_unusable_max_horizon_is_reported_by_every_reader(call, bad) -> None:
+    """`int(None)` raised TypeError, which neither the route nor the endpoint catches,
+    so it reached the reader as an unhandled 500. Fixing it in `_board_horizons` alone
+    left the two readers the PAGE actually uses still raising it.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    blob["max_horizon"] = bad
+    with pytest.raises(ValueError, match="max_horizon"):
+        call(blob)
+
+
+@pytest.mark.parametrize(
+    "call",
+    [
+        pytest.param(lambda b: find_players(b, "bat"), id="find"),
+        pytest.param(lambda b: build_player_view(b, player="Big Bat", chart=None), id="player"),
+        pytest.param(lambda b: build_board(b, top="all"), id="board"),
+    ],
+)
+def test_a_missing_max_horizon_names_the_fix_not_just_the_field(call) -> None:
+    """A bare `KeyError('max_horizon')` renders as a banner reading literally
+    `'max_horizon'` -- the exact unactionable message `_raise_stale_board` was written
+    in the same batch to eliminate for `'now'`, reintroduced for a different key.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    del blob["max_horizon"]
+    with pytest.raises(ValueError, match="push_trajectory_board"):
+        call(blob)
+
+
+def test_resolution_and_matching_agree_about_whitespace() -> None:
+    """The whitespace collapse landed in the matcher but not the resolver, so the two
+    disagreed about what a name is. A double-spaced name missed resolution, then matched
+    as a tier-0 EXACT hit in the fallback -- and the page printed "No player is named
+    exactly X on this board" directly above a one-item list containing exactly X.
+
+    False, and the more confusing failure for reading it: the page contradicts itself.
+    """
+    blob = _named_payload([(1, "Bobby Witt Jr.", "hitter", 26, "SS", [9.0, 9.0, 9.0])])
+    view = build_player_view(blob, player="Bobby  Witt Jr.", chart=None)
+    assert view.found is True, "the resolver must collapse whitespace like the matcher"
+    assert view.name == "Bobby Witt Jr."
+    assert view.candidates == [], "and must not offer the player it just resolved"
+
+
+# --------------------------------------------------------------------------
+# #350 follow-up: base_season, the other half of the same pair.
+#
+# The batch that routed `max_horizon` through a guard left `base_season` -- read
+# one line above it, by the same functions, with the same `int(...)` -- reading the
+# way `max_horizon` had just stopped reading. Same states, same readers, so the
+# invariant is "the payload's scalar fields are validated", not "max_horizon is".
+# --------------------------------------------------------------------------
+
+
+def _base_season_readers():
+    """Every reader that turns `base_season` into a year. `find_players` is absent on
+    purpose: it derives horizons but never the base, so listing it here would assert a
+    read that does not happen."""
+    return [
+        pytest.param(lambda b: build_player_view(b, player="Big Bat", chart=None), id="player"),
+        pytest.param(lambda b: build_board(b, top="all"), id="board"),
+        pytest.param(lambda b: build_teams_board(b, spots=[], my_team=None), id="teams"),
+    ]
+
+
+@pytest.mark.parametrize("bad", [None, "twenty", []])
+@pytest.mark.parametrize("call", _base_season_readers())
+def test_an_unusable_base_season_is_reported_by_every_reader(call, bad) -> None:
+    """`int(None)` is a TypeError and the route catches only ValueError/KeyError, so a
+    null here is an unhandled 500 -- exactly the hole that was closed for max_horizon.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    blob["base_season"] = bad
+    with pytest.raises(ValueError, match="base_season"):
+        call(blob)
+
+
+@pytest.mark.parametrize("call", _base_season_readers())
+def test_a_missing_base_season_names_the_fix_not_just_the_field(call) -> None:
+    """A bare `KeyError('base_season')` renders as a banner reading literally
+    `'base_season'`, which tells the reader nothing about what to do."""
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    del blob["base_season"]
+    with pytest.raises(ValueError, match="push_trajectory_board"):
+        call(blob)
+
+
+def test_a_fractional_max_horizon_is_rejected_rather_than_truncated() -> None:
+    """`int(3.7)` is 3, so the payload silently scored three horizons while the guard's
+    own message claimed it rejects anything that is not a whole number. A quiet horizon
+    short is the failure the guard exists to prevent, not a rounding question.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    blob["max_horizon"] = 3.7
+    with pytest.raises(ValueError, match="whole number"):
+        find_players(blob, "bat")
+
+
+def test_the_stale_board_message_reads_as_a_sentence_for_a_payload_level_key() -> None:
+    """`_raise_stale_board(exc, where="")` formatted "payload  is missing" -- a double
+    space, invisible in HTML and visible in every log line and pinned test.
+    """
+    blob = _named_payload([(1, "Big Bat", "hitter", 27, "OF", [5.0, 5.0, 5.0])])
+    del blob["max_horizon"]
+    with pytest.raises(ValueError) as caught:
+        find_players(blob, "bat")
+    message = str(caught.value)
+    assert "  " not in message, f"double space in {message!r}"
+    assert message.startswith("trajectory board payload is missing"), message

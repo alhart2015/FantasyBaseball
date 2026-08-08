@@ -28,5 +28,8 @@
       "Bash(cp:*)",
       "Bash(claude mcp:*)"
     ]
+  },
+  "enabledPlugins": {
+    "superpowers@claude-plugins-official": true
   }
 }

@@ -20,9 +20,10 @@ the board's -- see `_chart_extras`.
 
 from __future__ import annotations
 
+import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import Any
+from typing import Any, NoReturn
 
 from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.comp_paths import MAX_COMPS
@@ -173,9 +174,9 @@ def _sweep_setup(
     what comes after -- one flattens, the other groups -- which is why this returns
     the shared prefix rather than trying to be a common body.
     """
-    base = int(payload["base_season"])
-    max_horizon = int(payload["max_horizon"])
-    end_years = [base + h for h in range(1, max_horizon + 1)]
+    base = _board_base_season(payload)
+    horizons_all = _board_horizons(payload)
+    end_years = [base + h for h in horizons_all]
     end_year = _clamp(end, end_years[0], end_years[-1], end_years[0])
     pool = _clamp_choice(pool, POOLS, "both")
     scale = _clamp_choice(scale, SCALES, "var")
@@ -657,7 +658,8 @@ class PlayerView:
     #: The age at which he matched the subject is `PlayerView.age`, identical on every
     #: card: `closest_paths` selects on `prepared.age == float(age)`, an exact match.
     comps: list[dict]
-    #: Populated ONLY when the name was ambiguous; the caller renders these instead of a
+    #: Populated when the name was ambiguous OR when it matched nothing exactly and the
+    #: substring fallback found something (#350). The caller renders these instead of a
     #: chart, as LINKS carrying `pid`/`ppool`. Guessing puts one man's career under
     #: another's name; offering an unselectable list makes the name a permanent dead end.
     candidates: list[dict]
@@ -669,6 +671,12 @@ class PlayerView:
     ppool: str
     found: bool
     extrapolated: bool
+    #: True when `candidates` came from the substring fallback rather than from an
+    #: exact-name collision (#350). THE TWO READ DIFFERENTLY: "more than one player is
+    #: named Max Muncy, pick one" is a statement about the board, and it is false of a
+    #: list produced by typing `bat`. Without this the page would assert a collision
+    #: that did not happen.
+    suggested: bool
     base_season: int
     end_years: list[int]
     #: The PACED base season as [age, value], floor-netted exactly like `history`.
@@ -736,6 +744,215 @@ def _narrow(hits: list[dict], field: str, wanted: Any) -> list[dict]:
         return hits
     kept = [p for p in hits if str(p[field]) == str(wanted)]
     return kept or hits
+
+
+FIND_MIN_CHARS = 2
+FIND_RESULT_CAP = 25
+
+
+def _raise_stale_board(exc: KeyError, *, where: str = "row") -> NoReturn:
+    """The one sentence a stale board gets, wherever it is discovered.
+
+    `where` names WHAT is missing the key. Saying "row is missing 'max_horizon'" sends
+    the reader looking for a bad player row over a key that lives on the payload -- and
+    "row is missing 'players'" sends them looking for a row in a payload that has none.
+
+    A bare `KeyError('now')` reaches the reader as a red banner containing literally
+    `'now'`: it names the field and nothing else, with no hint that the payload is the
+    problem or that a re-push fixes it. Spelled ONCE because there are now two callers
+    that can hit it -- resolving a row, and scanning every row to suggest names -- and
+    the second was added ABOVE the first, which silently bypassed the guard the first
+    one had.
+    """
+    # An argless KeyError would IndexError inside the error handler, which replaces a
+    # bad message with a worse traceback.
+    field = exc.args[0] if exc.args else "an unnamed field"
+    # Joined rather than interpolated: `where=""` names the payload itself, and
+    # "payload {where} is" left a double space there -- invisible in HTML, and visible
+    # in every log line and in the tests that pin the sentence.
+    subject = " ".join(part for part in ("trajectory board payload", where) if part)
+    raise ValueError(
+        f"{subject} is missing {field!r}, which this "
+        "build requires; re-run scripts/push_trajectory_board.py"
+    ) from exc
+
+
+def _whole_number(raw: Any) -> int | None:
+    """`raw` as an int if it IS one, else None. Never truncates.
+
+    `int(3.7)` is 3, so a guard built on `int()` accepted a fractional horizon and
+    scored one season fewer than the payload claimed -- while its own message said it
+    rejects anything that is not a whole number. Booleans are excluded even though
+    `bool` is an `int` subclass: `max_horizon=True` is a corrupt payload, not one.
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        return raw
+    if isinstance(raw, float):
+        return int(raw) if raw.is_integer() else None
+    if isinstance(raw, str):
+        try:
+            return int(raw.strip())
+        except ValueError:
+            return None
+    return None
+
+
+def _required_int(payload: dict, field: str) -> int:
+    """A payload scalar the page cannot proceed without, validated in ONE place.
+
+    `max_horizon` and `base_season` are read together by every board builder and were
+    validated separately -- one through a guard, the other through a bare
+    `int(payload[...])` on the next line. That asymmetry is the whole defect: a missing
+    key raised a KeyError that renders as a banner naming only the field, and a null
+    raised a TypeError, which the route's (ValueError, KeyError) handler does not catch
+    at all, so it reached the reader as an unhandled 500.
+
+    Not `.get(field, <default>)`: a default silently ranks a single horizon or dates the
+    board to the wrong year, which is a wrong answer with no error.
+    """
+    try:
+        raw = payload[field]
+    except KeyError as exc:
+        # NOT a bare KeyError. It renders as a banner reading literally 'max_horizon',
+        # which is the same unactionable failure `_raise_stale_board` exists to remove
+        # for 'now' -- and it was reintroduced here, for a different key, in the batch
+        # that added that helper.
+        _raise_stale_board(exc, where="")
+    value = _whole_number(raw)
+    if value is None:
+        raise ValueError(
+            f"trajectory board payload has {field}={raw!r}, which is not a whole "
+            "number; re-run scripts/push_trajectory_board.py"
+        )
+    return value
+
+
+def _board_base_season(payload: dict) -> int:
+    """The season the board's horizons count forward from. REQUIRED."""
+    return _required_int(payload, "base_season")
+
+
+def _board_horizons(payload: dict) -> tuple[int, ...]:
+    """Every horizon this board carries. `max_horizon` is REQUIRED.
+
+    Not `.get("max_horizon", 1)`: a default silently ranks a single horizon, which
+    drops every player with no horizon-1 point out of `totals()` and makes them
+    unsearchable while the rest of the page still lists them -- a wrong answer with no
+    error. Every other reader in this module treats the field as required.
+    """
+    horizon = _required_int(payload, "max_horizon")
+    if horizon < 1:
+        raise ValueError(
+            f"trajectory board payload has max_horizon={horizon!r}, which scores no "
+            "seasons; re-run scripts/push_trajectory_board.py"
+        )
+    return tuple(range(1, horizon + 1))
+
+
+_WHITESPACE = re.compile(r"\s+")
+
+
+def normalized_query(query: str) -> str:
+    """A search string reduced to what matching actually compares.
+
+    `normalize_name` lowercases and strips accents, and its docstring claims it
+    "removes extra whitespace" -- it does not. `find_players` trusted that claim, so a
+    copy-pasted double space was a dead end: exactly the failure this feature exists to
+    remove. Collapsed here rather than in `name_utils` because that function is a join
+    key for keeper matching and the draft board, and changing what it returns would
+    silently re-key every one of those callers.
+
+    THE ONE OWNER OF THE LENGTH RULE. The route used to length-check the raw string
+    while the matcher re-checked the normalized one, so a two-character query that
+    normalized to one was accepted and then returned nothing -- "no match" for input
+    the API had just called long enough, which is the absent-vs-no-match conflation
+    #350 exists to remove.
+    """
+    return _WHITESPACE.sub(" ", normalize_name(query or "")).strip()
+
+
+def find_players_counted(
+    payload: dict, query: str, *, cap: int = FIND_RESULT_CAP
+) -> tuple[list[dict], int]:
+    """`find_players`, plus how many matched BEFORE the cap.
+
+    The cap was silent on both surfaces, so 25-of-300 rendered identically to
+    25-of-25. A reader whose player fell past the cut sees him missing and concludes he
+    is not on the board -- the conclusion the feature exists to prevent.
+    """
+    hits = _find(payload, query, cap=None)
+    return hits[:cap], len(hits)
+
+
+def find_players(payload: dict, query: str, *, cap: int = FIND_RESULT_CAP) -> list[dict]:
+    """Board rows whose name contains `query`, best offer first.
+
+    THE SHARED MATCHER. `/api/trajectory/find` and `build_player_view`'s fallback both
+    call it, so a suggestion can never be a name the resolver then fails on -- which is
+    the failure that would make this feature worse than the dead end it replaces.
+    Matching goes through `normalize_name`, the same function resolution uses.
+
+    Searches the BOARD, not `ros_projections`. The two populations differ by a lot: the
+    board drops everyone with no current-season line and everyone pacing under MIN_SGP.
+    Suggesting a name from the wider set would offer a row that then renders "no player
+    named X on this board".
+
+    Substring, not prefix -- `Witt` has to find `Bobby Witt Jr.`, and that is the
+    complaint. Ranked exact, then prefix, then substring, and inside a tier by the
+    board's own `rank_total` so the better player is offered first. Ranks come from
+    `_ranked_rows`, which holds a parsed copy per vintage, so this is a scan and no I/O.
+
+    Ranked on the DEFAULT timeframe and scale (every horizon, VAR) rather than on
+    whatever the caller has on screen. A suggestion list is a name picker: re-deriving
+    it per scale would cost a second ranked copy per vintage to reorder rows the user is
+    choosing between by name.
+    """
+    return _find(payload, query, cap=cap)
+
+
+def _find(payload: dict, query: str, *, cap: int | None) -> list[dict]:
+    """The scan. `cap=None` returns every match, for the truncation count."""
+    needle = normalized_query(query)
+    if len(needle) < FIND_MIN_CHARS:
+        return []
+
+    horizons = _board_horizons(payload)
+    try:
+        rows = _ranked_rows(payload, horizons, "var")
+    except KeyError as exc:
+        # This scans EVERY row, so a stale board is discovered here rather than on the
+        # one resolved row -- and it must say the same thing when it is.
+        _raise_stale_board(exc)
+
+    scored: list[tuple[int, int, dict]] = []
+    for row in rows:
+        name = normalized_query(row["name"])
+        if needle == name:
+            tier = 0
+        elif name.startswith(needle):
+            tier = 1
+        elif needle in name:
+            tier = 2
+        else:
+            continue
+        scored.append((tier, int(row["rank_total"]), row))
+
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return [
+        {
+            "name": row["name"],
+            # REQUIRED, not decoration. `board_url(..., pid=, ppool=)` needs both to
+            # build a link that lands on the player instead of the candidate page, and
+            # a two-way player's two rows differ only by `pool`.
+            "id": row["id"],
+            "pool": row["pool"],
+            "age": row["age"],
+            "slot": row["slot"],
+        }
+        for _, _, row in (scored if cap is None else scored[:cap])
+    ]
 
 
 def _netted(pairs: Any, floor: float) -> list[list[float]]:
@@ -855,12 +1072,17 @@ def build_player_view(
     # The ceiling is the push script's STORED count, from the one place it is defined:
     # the blob is built hours earlier, so `n` can only slice what is already in it.
     want = _clamp(n, 1, MAX_COMPS, DEFAULT_COMPS)
-    base = int(payload["base_season"])
-    max_horizon = int(payload["max_horizon"])
-    end_years = [base + h for h in range(1, max_horizon + 1)]
+    base = _board_base_season(payload)
+    horizons_all = _board_horizons(payload)
+    end_years = [base + h for h in horizons_all]
 
-    target = normalize_name(player or "")
-    hits = [p for p in payload.get("players", []) if normalize_name(p["name"]) == target]
+    # THROUGH THE SAME FUNCTION THE MATCHER USES. Resolving with bare `normalize_name`
+    # while `_find` compared the whitespace-collapsed form made the two disagree about
+    # what a name is: a double-spaced name missed here, then matched as a tier-0 exact
+    # hit below, and the page printed "no player is named exactly X" above a list
+    # containing exactly X.
+    target = normalized_query(player)
+    hits = [p for p in payload.get("players", []) if normalized_query(p["name"]) == target]
     hits = _narrow(hits, "id", pid)
     hits = _narrow(hits, "pool", ppool)
 
@@ -879,12 +1101,27 @@ def build_player_view(
         ppool="",
         found=False,
         extrapolated=False,
+        suggested=False,
         base_season=base,
         end_years=end_years,
         meta=_board_meta(payload),
     )
     if not hits:
-        return empty
+        # THE DEAD END, replaced. An exact miss falls back to the same substring matcher
+        # the suggestion box uses, so `bat` lands on a candidate list rather than on "No
+        # player named "bat" on this board." Works with JS off, which is why the issue
+        # recommends landing it first.
+        #
+        # A name that substring-matches NOTHING still returns `empty`, candidates and
+        # all: that sentence has to stay distinguishable from a typo, because a player
+        # genuinely absent from the board -- no current line, or pacing under MIN_SGP --
+        # is a real answer and not a search failure.
+        suggestions = find_players(payload, player or "")
+        if not suggestions:
+            return empty
+        # `find_players` already returns exactly the keys the template reads. Rebuilding
+        # them here was a no-op that would silently drop any field added to it later.
+        return replace(empty, suggested=True, candidates=suggestions)
     if len(hits) > 1:
         return replace(
             empty,
@@ -923,10 +1160,7 @@ def build_player_view(
         # right -- a missing field must fail on its own name, which is exactly what
         # `_pack`'s docstring says named keys bought. What was missing is the same
         # actionable sentence `_unpack` already gives the positional-blob case.
-        raise ValueError(
-            f"trajectory board payload row is missing {exc.args[0]!r}, which this "
-            "build requires; re-run scripts/push_trajectory_board.py"
-        ) from exc
+        _raise_stale_board(exc)
     # THE offset, from the one place it is defined -- see `var_offset`'s docstring.
     # Not `float(row["floor"]) if scale == "var" else 0.0` inline: that is a third
     # spelling of the same rule `SweptPlayer.offset` already carries, and it disagreed

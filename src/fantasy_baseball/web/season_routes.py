@@ -1794,6 +1794,71 @@ def register_routes(app: Flask) -> None:
                 break
         return jsonify({"players": rows})
 
+    @app.route("/api/trajectory/find")
+    def api_trajectory_find():
+        """Name suggestions for the trajectory player search (#350).
+
+        A SEPARATE endpoint from `/api/players/find`, which cannot be reused: that one
+        scans `ros_projections`, and this page can only resolve names carried by
+        `cache:trajectory_board`. The board drops everyone with no current-season line
+        and everyone pacing under MIN_SGP, so a suggestion from the wider population
+        would produce a link that then renders "no player named X on this board" --
+        worse than the current dead end, because the page offered it.
+
+        Reads the board key the trajectory views already read; `_ranked_rows` holds a
+        parsed copy per vintage, so this is a scan of the rows and no extra I/O.
+        """
+        from fantasy_baseball.web.trajectory_view import (
+            FIND_MIN_CHARS,
+            find_players_counted,
+            normalized_query,
+        )
+
+        # Length checked on what MATCHING actually compares, not on the raw string.
+        # Checking the raw one let a two-character query that normalizes to one through,
+        # and the matcher then returned nothing -- an accepted-but-empty 200 reading as
+        # "nobody matched" for input this endpoint had just called long enough.
+        q = request.args.get("q", "")
+        if len(normalized_query(q)) < FIND_MIN_CHARS:
+            # Says what the rule IS. "at least 2 characters" is false for a query that
+            # is two characters as typed and one after accents and spacing are folded
+            # -- a decomposed glyph from macOS or an IME -- so the reader was told a
+            # 2-character string was not 2 characters.
+            return jsonify(
+                {
+                    "error": (
+                        f"q must contain at least {FIND_MIN_CHARS} letters once accents "
+                        "and repeated spaces are folded"
+                    )
+                }
+            ), 400
+
+        payload = read_cache_dict(CacheKey.TRAJECTORY_BOARD)
+        if not payload:
+            # 503, not an empty 200. An empty list reads as "nobody matched", which
+            # would make a cold or never-pushed cache look like a working search --
+            # the same conflation between "absent" and "no match" that #350 exists to
+            # remove from the page itself.
+            return jsonify({"error": "trajectory board cache is cold"}), 503
+
+        try:
+            players, total = find_players_counted(payload, q)
+            # `total` so the page can say "25 of 312". A silent cap makes a truncated
+            # list identical to a complete one, and a reader whose player fell past the
+            # cut concludes he is not on the board.
+            return jsonify({"players": players, "total": total, "capped": total > len(players)})
+        except (ValueError, KeyError) as exc:
+            # `find_players` parses the WHOLE board, so a legacy or stale blob raises
+            # here exactly as it does in the page's builders -- and `/trajectory` wraps
+            # those for the same reason. Without this the blob is an unhandled 500, and
+            # the type-ahead's own `.catch` hides it: the reader sees a search that
+            # silently never suggests while the server logs a 500 per keystroke.
+            #
+            # 503 rather than 500: the board is unusable, which is the same condition
+            # as the cold cache above and is fixed the same way.
+            logger.warning("trajectory find: unreadable board payload: %s", exc)
+            return jsonify({"error": str(exc)}), 503
+
     @app.route("/api/players/lookup")
     def api_player_lookup():
         """Exact (name, player_type) resolution for the auto-compare URL.

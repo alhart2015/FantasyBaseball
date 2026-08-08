@@ -26,7 +26,19 @@
   {% for name, value in cur.items() if name != 'player' %}
   <input type="hidden" name="{{ name }}" value="{{ value }}">
   {% endfor %}
-  <label>Player <input name="player" value="{{ board.name }}" placeholder="Juan Soto"></label>
+  {#- `autocomplete="off"` so the browser's own history dropdown does not sit on top of
+      the suggestion list.
+
+      The list element itself is NOT here: `trajectory_suggest.js` creates it. An empty
+      <ul> in the markup would be dead weight for a reader without JS, and it would sit
+      ahead of the candidate list below, where being the first `</ul>` in the page is
+      load-bearing for how that block is read. The JS also owns the combobox ARIA and
+      the arrow-key navigation that backs it, so nothing here may claim either.
+
+      With JS off this stays exactly the GET form it has always been, which is why the
+      server-side substring fallback lands the same fix without any of this. -#}
+  <label>Player <input name="player" id="traj-player" value="{{ board.name }}"
+    placeholder="Witt" autocomplete="off"></label>
   <button type="submit">Search</button>
 </form>
 
@@ -36,8 +48,17 @@
     permanent dead end. Each link carries `pid` AND `ppool`: the id separates same-pool
     namesakes (two hitters named Max Muncy), the pool separates a two-way player, whose
     two rows can share both id and age. -#}
+{#- TWO PATHS FILL THIS LIST and they are different claims (#350). An exact name that
+    matched two rows IS a collision on this board. A substring that matched some rows is
+    not -- saying "more than one player is named bat" there would assert something false
+    about the board. `board.suggested` is which one happened. -#}
+{% if board.suggested %}
+<p class="warning">No player is named exactly "{{ board.name }}" on this board.
+Closest matches -- pick one:</p>
+{% else %}
 <p class="warning">More than one player is named "{{ board.name }}" on this board. Roster
 blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:</p>
+{% endif %}
 <ul>
   {% for c in board.candidates %}
   <li><a href="{{ ctl.board_url(cur, player=c.name, pid=c.id, ppool=c.pool) }}">{{ c.name }}</a>
@@ -47,6 +68,16 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 
 {% elif not board.found %}
   {% if board.name %}<p>No player named "{{ board.name }}" on this board.</p>
+  {#- AC9 (#350): that sentence is equally true of a typo and of a player the board
+      deliberately left out, so on its own it cannot tell a reader which happened. The
+      counts are already on `meta` and the league view prints them; naming them here is
+      what makes "he is not on the board" a different statement from "you mistyped". -#}
+  {% if board.meta.excluded and board.meta.excluded.total %}
+  <p class="muted">This board excluded {{ board.meta.excluded.total }} players --
+    {{ board.meta.excluded.no_current_line }} with no current-season line and
+    {{ board.meta.excluded.low_sgp }} pacing under the minimum. A player left out that
+    way will not be found here even when the name is spelled correctly.</p>
+  {% endif %}
   {% else %}<p class="muted">Search a player to see his trajectory.</p>{% endif %}
 
 {% else %}
@@ -187,4 +218,5 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     duplicating it -- see the module docstring in trajectory_chart.js. -#}
 <script src="{{ url_for('static', filename='season_trends.js') }}"></script>
 <script src="{{ url_for('static', filename='trajectory_chart.js') }}"></script>
+<script src="{{ url_for('static', filename='trajectory_suggest.js') }}"></script>
 {% endblock %}

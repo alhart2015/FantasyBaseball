@@ -3360,3 +3360,115 @@ def test_the_default_views_never_read_the_chart_data_key(client, url):
 # clamp ceiling equalled the push script's stored count. Both are now the one
 # `comp_paths.MAX_COMPS`, so the parity it policed is structural and there is nothing
 # left for the two to drift apart on.
+
+
+# --------------------------------------------------------------------------
+# #350: /api/trajectory/find
+# --------------------------------------------------------------------------
+
+
+def test_trajectory_find_suggests_a_substring_match_from_the_board(client):
+    """The endpoint the type-ahead calls. Searches the BOARD, not ros_projections:
+    the two populations differ, and suggesting a name the board does not carry would
+    hand back a link that renders "no player named X on this board".
+    """
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/api/trajectory/find?q=test")
+    assert resp.status_code == 200
+    players = resp.get_json()["players"]
+    assert players, "a substring of a board name must suggest that name"
+    assert "Testy McTestface" in {p["name"] for p in players}
+    for hit in players:
+        # What a resolving link needs. Without these the suggestion lands on the
+        # candidate-disambiguation page instead of the player.
+        assert hit["id"] is not None
+        assert hit["pool"] in ("hitter", "pitcher")
+
+
+def test_trajectory_find_rejects_a_one_character_query(client):
+    """Mirrors /api/players/find, so the two searches behave the same way."""
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/api/trajectory/find?q=t")
+    assert resp.status_code == 400
+
+
+def test_trajectory_find_missing_q_returns_400(client):
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/api/trajectory/find")
+    assert resp.status_code == 400
+
+
+def test_trajectory_find_reports_a_cold_board_rather_than_an_empty_list(client):
+    """An empty 200 is indistinguishable from "nobody matched", which would make a cold
+    or unpushed cache look like a working search that found nothing.
+    """
+    with _trajectory_cache(None, None):
+        resp = client.get("/api/trajectory/find?q=test")
+    assert resp.status_code == 503
+    assert "error" in resp.get_json()
+
+
+def test_a_partial_name_renders_closest_matches_not_a_collision_claim(client):
+    """The page makes two different claims off one `candidates` list (#350). Saying
+    "more than one player is named test" when the reader typed a substring asserts
+    something false about the board.
+    """
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/trajectory?view=player&player=test")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "Closest matches" in body
+    assert "More than one player is named" not in body
+    assert "Testy McTestface" in body, "the suggestion is offered as a link"
+
+
+def test_the_search_input_degrades_to_the_plain_get_form(client):
+    """The suggestion list is layered on the existing form, not a replacement for it.
+    A reader with JS off must still submit a name.
+    """
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    body = resp.data.decode()
+    assert '<form method="get" class="trajectory-search">' in body
+    assert 'name="player"' in body
+    assert 'type="submit"' in body
+
+
+def test_trajectory_find_reports_a_stale_board_rather_than_500ing(client):
+    """The endpoint half of the stale-blob invariant (#350 follow-up).
+
+    `find_players` parses the whole board, so a legacy or stale blob raises there. The
+    /trajectory route wraps its builders; this endpoint did not, so the same blob was
+    an unhandled 500 -- and the JS `.catch` swallows it, leaving a type-ahead that
+    silently never suggests while the server logs a 500 per keystroke.
+    """
+    stale, chart = _trajectory_board_and_chart()
+    for row in stale["players"]:
+        row.pop("now", None)
+    stale["generated_at"] = "stale-for-find"  # do not share the parse cache
+
+    with _trajectory_cache(stale, chart):
+        resp = client.get("/api/trajectory/find?q=test")
+    assert resp.status_code == 503, "a board that cannot be parsed is not a 500"
+    body = resp.get_json()
+    assert "push_trajectory_board" in body["error"], "say what to do, not just what broke"
+
+
+def test_an_absent_player_is_distinguished_from_an_excluded_one(client):
+    """#350 AC9: "not on this board" is true of a typo AND of a player the board left
+    out -- no current-season line, or pacing under MIN_SGP. The board counts both and
+    the league view prints them; the player view refused without ever saying so, which
+    is what made the two read alike.
+    """
+    board, chart = _trajectory_board_and_chart()
+    # The shared fixture carries no `excluded` block, so without this the template
+    # correctly renders nothing and the test would assert against a payload that
+    # cannot produce the behaviour.
+    board["excluded"] = {"low_sgp": 7, "no_current_line": 12, "total": 19}
+    board["generated_at"] = "excluded-fixture"  # do not share the parse cache
+    with _trajectory_cache(board, chart):
+        resp = client.get("/trajectory?view=player&player=Zzzz+Nobody")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "No player named" in body, "the refusal itself stays"
+    assert "excluded" in body.lower(), "and it now says what the board left out"
