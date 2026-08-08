@@ -80,6 +80,69 @@ def test_the_guard_checks_what_the_sweep_produced_not_what_it_was_given(monkeypa
     assert "scored 0 players" in str(exc.value)
 
 
+def _swept(n_points: int):
+    """One `SweptPlayer` whose observable path carries `n_points` horizons."""
+    from fantasy_baseball.trajectory.sweep import SweptPlayer, YearPoint
+
+    return SweptPlayer(
+        mlbam_id=1,
+        name="Short Path",
+        pool="hitter",
+        age=27,
+        slot="OF",
+        floor=4.0,
+        now=12.0,
+        prior=11.0,
+        support=0.5,
+        extrapolated=False,
+        sgp=tuple(
+            YearPoint(
+                horizon=h,
+                age=27 + h,
+                mean=12.0,
+                p10=9.0,
+                p90=15.0,
+                n_effective=50.0,
+                band_fell_back=False,
+            )
+            for h in range(1, n_points + 1)
+        ),
+    )
+
+
+def _prepared(horizons):
+    from fantasy_baseball.trajectory.shape import prepare
+    from tests._trajectory_panel import synthetic_panel
+
+    return prepare(synthetic_panel(), kind="hitter", horizons=horizons)
+
+
+def test_a_player_observable_at_fewer_horizons_than_the_sweep_loses_only_his_comps() -> None:
+    """One short path must not discard the whole ~52s sweep.
+
+    `player.sgp` is `traj.observable` -- points with `n > 0` only -- and the candidate
+    mask `seasons + h <= last` shrinks as h grows, so a player can be observable at
+    h=1..3 and not at h=4..5. `sweep_pool` keeps him (it drops only an ENTIRELY empty
+    path), `closest_paths` raises when `len(predicted) != len(prepared.horizons)`, and
+    nothing catches it, so the push writes nothing at all. Directly reachable via the
+    documented `--max-horizon` flag.
+
+    HIS COMPS ARE SKIPPED, not padded. `forward` stores a real 0.0 for "out of the
+    league", so padding the path with zeros would match him against a cohort that
+    stopped playing -- and the page already renders an empty comps list with an
+    explanation of why.
+    """
+    module = _script()
+    horizons = (1, 2, 3)
+    prepared = _prepared(horizons)
+
+    assert module.player_comps(prepared, _swept(2), horizons, {}) is None, "skipped"
+
+    full = module.player_comps(prepared, _swept(3), horizons, {})
+    assert full is not None and full, "a full-length path still gets its comps"
+    assert set(full[0]) == {"name", "season", "rmse", "path"}
+
+
 def test_local_stays_local_even_when_render_is_already_set(monkeypatch, tmp_path) -> None:
     """`--local` exists to keep an unverified board OFF Render.
 

@@ -57,7 +57,42 @@ MIN_SGP = 0.0
 #: Comps stored per player -- the SAME constant the view clamps `n` against, imported
 #: rather than re-declared here. See its docstring in `comp_paths`; a second literal
 #: beside this one is what the deleted parity test existed to police.
-from fantasy_baseball.trajectory.comp_paths import MAX_COMPS
+from fantasy_baseball.trajectory.comp_paths import MAX_COMPS, closest_paths
+
+
+def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> list[dict] | None:
+    """One player's stored comp block, or ``None`` when his path is too short to match.
+
+    ``player.sgp`` is ``traj.observable`` -- the points with ``n > 0`` -- and the
+    candidate mask ``seasons + h <= last`` shrinks as the horizon grows, so a player can
+    be observable at h=1..3 and not at h=4..5. ``sweep_pool`` keeps him: it drops a
+    player only when the path is ENTIRELY empty. ``closest_paths`` then raises on
+    ``len(predicted) != len(prepared.horizons)``, and nothing caught it -- one such
+    player discarded the whole ~52s sweep and pushed nothing. Latent on the default
+    horizon, directly reachable via ``--max-horizon``.
+
+    SKIPPED, NEVER PADDED. ``forward`` stores a real 0.0 for "out of the league", so
+    padding the short tail with zeros would match him against the cohort that stopped
+    playing -- a confident wrong answer in place of an honest gap. The page already
+    renders an empty comps list with an explanation, so an absent block degrades.
+
+    Names are attached HERE, not in ``closest_paths``: naming needs the people cache, and
+    keeping it out of that module is what lets it be tested with no data files. An
+    unknown id renders as its id rather than vanishing -- a comp is still a comp.
+    """
+    if len(player.sgp) != len(horizons):
+        return None
+    return [
+        {
+            "name": names.get(c.mlbam_id, str(c.mlbam_id)),
+            "season": c.season,
+            "rmse": round(c.rmse, 3),
+            "path": [round(v, 3) for v in c.path],
+        }
+        for c in closest_paths(
+            prepared, [point.mean for point in player.sgp], age=player.age, n=MAX_COMPS
+        )
+    ]
 
 
 class EmptyPoolError(RuntimeError):
@@ -113,7 +148,6 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     from fantasy_baseball.sgp.denominators import get_sgp_denominators
     from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
     from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
-    from fantasy_baseball.trajectory.comp_paths import closest_paths
     from fantasy_baseball.trajectory.comps import collapse_split_seasons
     from fantasy_baseball.trajectory.era import era_normalize
     from fantasy_baseball.trajectory.panel import (
@@ -209,6 +243,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
         # future panel build, not a fix for anything currently wrong.
         by_id = {int(i): g for i, g in collapse_split_seasons(complete).groupby("mlbam_id")}
 
+        short_paths = 0
         for player in produced:
             seasons = by_id.get(player.mlbam_id)
             history = (
@@ -219,29 +254,26 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
                 if seasons is not None
                 else []
             )
-            comps = closest_paths(
-                prepared,
-                [point.mean for point in player.sgp],
-                age=player.age,
-                n=MAX_COMPS,
-            )
+            # None means his observable path is shorter than the swept horizons, so no
+            # honest match exists -- see `player_comps`. He keeps his row and his career
+            # line; only the comps go.
+            comps = player_comps(prepared, player, horizons, names)
+            if comps is None:
+                short_paths += 1
             extras[(player.mlbam_id, player.pool)] = {
                 "history": history,
-                "comps": [
-                    {
-                        # Named HERE, not in `closest_paths`: naming needs the people
-                        # cache, and keeping it out of that module is what lets it be
-                        # tested with no data files. An unknown id renders as its id
-                        # rather than vanishing -- a comp is still a comp.
-                        "name": names.get(c.mlbam_id, str(c.mlbam_id)),
-                        "season": c.season,
-                        "rmse": round(c.rmse, 3),
-                        "path": [round(v, 3) for v in c.path],
-                    }
-                    for c in comps
-                ],
+                "comps": comps if comps is not None else [],
             }
         print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
+        if short_paths:
+            # SAID OUT LOUD. A push that quietly drops comps for part of the pool
+            # renders exactly like one that did not, and the page's "none stored" note
+            # reads as "this player has no comps" rather than "this run skipped them".
+            print(
+                f"    {short_paths} observable at fewer than {len(horizons)} horizons; "
+                f"comps skipped for those (their rows and career lines are intact)",
+                flush=True,
+            )
 
     payload = to_payload(
         swept,
