@@ -225,6 +225,81 @@ def _fake_payloads(module, monkeypatch):
     return board, chart
 
 
+def _stub_the_sweep(monkeypatch):
+    """Make `build_payload` runnable with no panel on disk, so what it STAMPS can be
+    pinned on a fresh clone.
+
+    Everything `build_payload` imports it imports inside the function, so each stub goes
+    on the source module the way the empty-pool test already patches `sweep_pool`. The
+    fit itself is left real -- it runs against the shared synthetic panel -- because the
+    property under test is about the timestamp, and a stub that also faked the sweep
+    could not tell a payload from a chart.
+    """
+    import pathlib
+    import types
+
+    import pandas as pd
+
+    from fantasy_baseball.trajectory.board import BoardRow
+    from tests._trajectory_panel import synthetic_panel
+
+    panel = synthetic_panel()
+    # The production panel carries this; the shared fixture does not, and `build_payload`
+    # splits on it to keep the in-progress season out of the comp pool.
+    panel["partial_season"] = False
+
+    # One row per pool, keyed by kind: `build_payload` sweeps both, and a stub that
+    # returned the same row twice would let a hitter into the pitcher pool.
+    rows = {
+        "hitter": [BoardRow(1, "Big Bat", "hitter", 27, 20.0, 19.0, "OF", 4.0)],
+        "pitcher": [BoardRow(2, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0)],
+    }
+    stubs = {
+        "fantasy_baseball.config.load_config": lambda _p: types.SimpleNamespace(sgp_overrides=None),
+        "fantasy_baseball.sgp.denominators.get_sgp_denominators": lambda _o: {},
+        "fantasy_baseball.sgp.replacement.position_aware_replacement_levels": lambda _d: {
+            "OF": 4.0
+        },
+        "fantasy_baseball.trajectory.panel.load_scored_panel": lambda _k, **_kw: panel.copy(),
+        "fantasy_baseball.trajectory.panel.panel_path": lambda k, _d: pathlib.Path(f"{k}.csv"),
+        "fantasy_baseball.trajectory.panel.season_elapsed_fraction": lambda _df, _s: 0.7,
+        "fantasy_baseball.trajectory.era.era_normalize": lambda df, _k, **_kw: df,
+        "fantasy_baseball.trajectory.board.player_names": lambda _c: pd.Series(dtype=object),
+        "fantasy_baseball.trajectory.board.season_slots": lambda _c, _s: {},
+        "fantasy_baseball.trajectory.board.board_inputs": lambda *_a, **kw: rows[kw["kind"]],
+    }
+    for target, stub in stubs.items():
+        monkeypatch.setattr(target, stub)
+
+
+def test_both_payloads_carry_ONE_stamp_taken_ONCE(monkeypatch) -> None:
+    """The pairing the player view checks is an equality test on `generated_at`.
+
+    A second `local_now()` call is nearly invisible: the stamp is truncated to seconds,
+    so two adjacent calls almost always produce the same string and every other test
+    stays green. It would fail only when the two calls straddle a second boundary --
+    an intermittent "every career line vanished on this push", which is far harder to
+    diagnose than a permanent break. So the clock is made to return a DIFFERENT value on
+    every call, and the two payloads still have to agree.
+    """
+    module = _script()
+    _stub_the_sweep(monkeypatch)
+
+    stamps = iter(["2026-08-07T09:00:00", "2026-08-07T09:00:01", "2026-08-07T09:00:02"])
+
+    class _Clock:
+        def isoformat(self, timespec: str = "seconds") -> str:
+            return next(stamps)
+
+    monkeypatch.setattr("fantasy_baseball.utils.time_utils.local_now", _Clock)
+
+    payload, chart, scored = module.build_payload(max_horizon=1, panel_dir=None)
+
+    assert scored == 2, "the stub swept one player per pool"
+    assert payload["generated_at"] == chart["generated_at"]
+    assert payload["generated_at"] == "2026-08-07T09:00:00", "the FIRST reading, taken once"
+
+
 def test_the_chart_data_is_written_before_the_board(monkeypatch, capsys) -> None:
     """A successful board write must imply its extras are already stored.
 

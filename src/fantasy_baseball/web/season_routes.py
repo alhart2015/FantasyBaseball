@@ -35,6 +35,7 @@ from fantasy_baseball.web.season_data import (
     CacheKey,
     coerce_basis,
     format_distributions_for_display,
+    read_cache,
     read_cache_dict,
     read_cache_list,
     read_meta,
@@ -854,7 +855,13 @@ def register_routes(app: Flask) -> None:
                         # board read above would charge them both for a blob larger than
                         # the board itself. `build_player_view` refuses extras whose
                         # vintage disagrees with the board's rather than pairing them.
-                        chart=read_cache_dict(CacheKey.TRAJECTORY_CHART_DATA),
+                        #
+                        # `read_cache`, NOT `read_cache_dict`: the narrowing one returns
+                        # None for a stored list, which is indistinguishable from a key
+                        # that was never written -- and the page would then blame the
+                        # board for predating the feature when the real state is two
+                        # blobs out of step. Same single read either way.
+                        chart=read_cache(CacheKey.TRAJECTORY_CHART_DATA),
                         player=request.args.get("player", ""),
                         scale=request.args.get("scale", "var"),
                         n=request.args.get("n"),

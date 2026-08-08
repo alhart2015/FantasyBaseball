@@ -1197,6 +1197,48 @@ def test_a_chart_blob_with_no_stamp_is_refused_rather_than_paired(payload: dict)
     assert build_player_view(board, player="Big Bat", chart=_chart(payload)).chart_vintage_mismatch
 
 
+@pytest.mark.parametrize("stamp", [None, ""], ids=["both-absent", "both-empty"])
+def test_two_blobs_with_the_SAME_missing_stamp_are_still_refused(payload: dict, stamp) -> None:
+    """What `in (None, "")` buys over a plain `!=`.
+
+    The one-sided cases are refused by inequality alone, so they cannot catch a guard
+    reduced to `str(board_at) != str(chart_at)`. These can: two blobs that agree on
+    having NO vintage compare equal, and pairing them is pairing on no evidence -- the
+    exact reasoning the vintage check exists for.
+    """
+    board, chart = dict(payload), _chart(payload)
+    if stamp is None:
+        board.pop("generated_at")
+        chart.pop("generated_at")
+    else:
+        board["generated_at"] = chart["generated_at"] = stamp
+
+    view = build_player_view(board, player="Big Bat", chart=chart)
+    assert view.chart_vintage_mismatch is True
+    assert view.history == [] and view.comps == []
+
+
+def test_a_chart_blob_of_a_foreign_shape_is_refused_rather_than_raised(payload: dict) -> None:
+    """The board written to the chart key -- one push produced both, so the stamps agree
+    and the vintage check waves it through.
+
+    Two levels, because `read_cache` hands back whatever was stored: a top-level list
+    (the board is not a list, but any JSON array under this key lands here) and a
+    mapping whose `players` is the board's LIST of rows. Both reach an attribute lookup
+    that a list does not have; the route catches only `(ValueError, KeyError)`, so an
+    unguarded `AttributeError` is a Flask 500 on a page whose projection renders fine.
+    """
+    board_shaped = {"generated_at": payload["generated_at"], "players": payload["players"]}
+    view = build_player_view(payload, player="Big Bat", chart=board_shaped)
+    assert view.chart_vintage_mismatch is True, "an unreadable blob is out of step, not absent"
+    assert view.history == [] and view.comps == []
+    assert view.projection, "and the board's own fit still renders"
+
+    top_level_list = build_player_view(payload, player="Big Bat", chart=payload["players"])
+    assert top_level_list.chart_vintage_mismatch is True
+    assert top_level_list.projection
+
+
 def test_the_chart_lookup_keeps_the_pool_so_a_two_way_player_keeps_his_own_career(
     payload: dict,
 ) -> None:

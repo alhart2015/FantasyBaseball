@@ -709,7 +709,7 @@ def _narrow(hits: list[dict], field: str, wanted: Any) -> list[dict]:
     return kept or hits
 
 
-def _chart_extras(payload: dict, chart: dict | None, mlbam_id: int, pool: str) -> tuple[dict, bool]:
+def _chart_extras(payload: dict, chart: Any, mlbam_id: int, pool: str) -> tuple[dict, bool]:
     """One player's stored `{history, comps}`, and whether the pair was REFUSED.
 
     The vintage guard (#344). `cache:trajectory_chart_data` is a second blob, written
@@ -719,27 +719,38 @@ def _chart_extras(payload: dict, chart: dict | None, mlbam_id: int, pool: str) -
     extras are used ONLY when their stamp equals the board's, and are otherwise treated
     as absent.
 
-    An absent stamp on EITHER side refuses too. A hand-built or pre-vintage payload gives
-    `None`, and `None == None` would read as a match and pair two blobs on no evidence at
-    all.
+    An absent stamp on EITHER side refuses too, which is what the `in (None, "")` clause
+    buys over a plain `!=`: a hand-built or pre-vintage payload gives `None` on both
+    sides, and `None == None` would read as a match and pair two blobs on no evidence at
+    all. Empty strings pair the same way and are refused for the same reason.
 
     Returns `({}, True)` for a refusal so the caller can tell it from `({}, False)`,
     which is "no chart data arrived" -- different causes, different fixes, and the page
-    names them separately.
+    names them separately. `None` is the ONLY input that reads as "nothing arrived":
+    anything else was stored by somebody, so an unreadable shape is a writer out of step
+    with this reader (a refusal), not a key that was never pushed.
     """
-    if not chart:
+    if chart is None:
         return {}, False
+    if not isinstance(chart, Mapping):
+        # STORED, but not a mapping -- a JSON array under this key, which is what the
+        # board itself would serialize as if it were written here by mistake. Refused
+        # rather than raised: the extras are auxiliary, and #332 is the standing
+        # reminder that refusing a page over data it could largely render is how
+        # /trajectory goes down. Reaching this at all is why the route reads the chart
+        # key with `read_cache` and not `read_cache_dict` -- the latter narrows a stored
+        # list to None, which is indistinguishable from a key that was never written and
+        # would print "this board predates the feature" at a blob that is merely stale.
+        return {}, True
     board_at, chart_at = payload.get("generated_at"), chart.get("generated_at")
     if board_at in (None, "") or chart_at in (None, "") or str(board_at) != str(chart_at):
         return {}, True
     players = chart.get("players")
     if not isinstance(players, Mapping):
-        # A blob this build cannot read -- the board's `players` is a LIST, so this also
-        # catches the board being handed in by mistake. Refused rather than raised: the
-        # extras are auxiliary, and #332 is the standing reminder that refusing a page
-        # over data it could largely render is how /trajectory goes down. The mismatch
-        # note is the right one anyway -- a foreign shape is a writer out of step with
-        # this reader, and the fix is the same re-push.
+        # The same refusal one level in: the BOARD's `players` is a list, so this is the
+        # board written to the chart key by mistake, stamped identically because the one
+        # push produced both. `players.get` on a list is an AttributeError, which the
+        # route does not catch and which 500s the page.
         return {}, True
     return players.get(chart_key(mlbam_id, pool), {}), False
 
@@ -752,15 +763,17 @@ def build_player_view(
     n: Any = None,
     pid: Any = None,
     ppool: Any = None,
-    chart: dict | None = None,
+    chart: Any = None,
 ) -> PlayerView:
     """One player's career, projection and comps, on one scale.
 
     `chart` is the `cache:trajectory_chart_data` blob -- career history and comps, which
     live outside the board because this is the only view that reads them (#344). It is
     OPTIONAL: a missing key renders the projection alone, which is the shape prod held
-    before the split ever ran. What is not optional is the pairing check -- see
-    `_chart_extras`.
+    before the split ever ran. Typed as whatever the KV handed back rather than as a
+    dict, because that is what it is -- `_chart_extras` decides whether the thing is
+    readable and whether it pairs with this board, and both answers are refusals rather
+    than exceptions.
 
     Resolved BY NAME, never by an id from the query string. CLAUDE.md names a
     hand-carried id as a defect class that has twice landed on a real row belonging to
