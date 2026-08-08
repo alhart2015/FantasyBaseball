@@ -738,6 +738,71 @@ def _narrow(hits: list[dict], field: str, wanted: Any) -> list[dict]:
     return kept or hits
 
 
+FIND_MIN_CHARS = 2
+FIND_RESULT_CAP = 25
+
+
+def find_players(payload: dict, query: str, *, cap: int = FIND_RESULT_CAP) -> list[dict]:
+    """Board rows whose name contains `query`, best offer first.
+
+    THE SHARED MATCHER. `/api/trajectory/find` and `build_player_view`'s fallback both
+    call it, so a suggestion can never be a name the resolver then fails on -- which is
+    the failure that would make this feature worse than the dead end it replaces.
+    Matching goes through `normalize_name`, the same function resolution uses.
+
+    Searches the BOARD, not `ros_projections`. The two populations differ by a lot: the
+    board drops everyone with no current-season line and everyone pacing under MIN_SGP.
+    Suggesting a name from the wider set would offer a row that then renders "no player
+    named X on this board".
+
+    Substring, not prefix -- `Witt` has to find `Bobby Witt Jr.`, and that is the
+    complaint. Ranked exact, then prefix, then substring, and inside a tier by the
+    board's own `rank_total` so the better player is offered first. Ranks come from
+    `_ranked_rows`, which holds a parsed copy per vintage, so this is a scan and no I/O.
+
+    Ranked on the DEFAULT timeframe and scale (every horizon, VAR) rather than on
+    whatever the caller has on screen. A suggestion list is a name picker: re-deriving
+    it per scale would cost a second ranked copy per vintage to reorder rows the user is
+    choosing between by name.
+    """
+    needle = normalize_name(query or "")
+    # Length checked on the NORMALIZED string: "  b  " is one character of query.
+    if len(needle) < FIND_MIN_CHARS:
+        return []
+
+    max_horizon = int(payload.get("max_horizon", 1))
+    horizons = tuple(range(1, max_horizon + 1))
+    rows = _ranked_rows(payload, horizons, "var")
+
+    scored: list[tuple[int, int, dict]] = []
+    for row in rows:
+        name = normalize_name(row["name"])
+        if needle == name:
+            tier = 0
+        elif name.startswith(needle):
+            tier = 1
+        elif needle in name:
+            tier = 2
+        else:
+            continue
+        scored.append((tier, int(row["rank_total"]), row))
+
+    scored.sort(key=lambda item: (item[0], item[1]))
+    return [
+        {
+            "name": row["name"],
+            # REQUIRED, not decoration. `board_url(..., pid=, ppool=)` needs both to
+            # build a link that lands on the player instead of the candidate page, and
+            # a two-way player's two rows differ only by `pool`.
+            "id": row["id"],
+            "pool": row["pool"],
+            "age": row["age"],
+            "slot": row["slot"],
+        }
+        for _, _, row in scored[:cap]
+    ]
+
+
 def _netted(pairs: Any, floor: float) -> list[list[float]]:
     """Stored `[[age, sgp], ...]` as floor-netted points, ascending by age.
 
@@ -884,7 +949,31 @@ def build_player_view(
         meta=_board_meta(payload),
     )
     if not hits:
-        return empty
+        # THE DEAD END, replaced. An exact miss falls back to the same substring matcher
+        # the suggestion box uses, so `bat` lands on a candidate list rather than on "No
+        # player named "bat" on this board." Works with JS off, which is why the issue
+        # recommends landing it first.
+        #
+        # A name that substring-matches NOTHING still returns `empty`, candidates and
+        # all: that sentence has to stay distinguishable from a typo, because a player
+        # genuinely absent from the board -- no current line, or pacing under MIN_SGP --
+        # is a real answer and not a search failure.
+        suggestions = find_players(payload, player or "")
+        if not suggestions:
+            return empty
+        return replace(
+            empty,
+            candidates=[
+                {
+                    "id": s["id"],
+                    "name": s["name"],
+                    "age": s["age"],
+                    "slot": s["slot"],
+                    "pool": s["pool"],
+                }
+                for s in suggestions
+            ],
+        )
     if len(hits) > 1:
         return replace(
             empty,

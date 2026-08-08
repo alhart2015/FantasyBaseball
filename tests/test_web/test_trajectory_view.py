@@ -23,6 +23,7 @@ from fantasy_baseball.web.trajectory_view import (
     build_board,
     build_player_view,
     build_teams_board,
+    find_players,
 )
 from tests._trajectory_panel import synthetic_panel
 
@@ -1565,3 +1566,185 @@ def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> N
     ages = [pt[0] for pt in view.history]
     assert ages == sorted(ages), "career must render left-to-right by age"
     assert ages == [24, 25, 26]
+
+
+# --------------------------------------------------------------------------
+# #350: suggest-as-you-type search over the board
+# --------------------------------------------------------------------------
+
+
+def _named_payload(rows: list[tuple[int, str, str, int, str, list[float]]]) -> dict:
+    """A payload with per-row control of id/name/pool/age/slot.
+
+    `_hand_payload` above numbers ids sequentially and pins every row to one hitter
+    slot, which cannot express the three shapes this search has to get right: two
+    players sharing a name, one player appearing in both pools, and an accented name.
+    """
+    return {
+        "base_season": BASE,
+        "max_horizon": 3,
+        "generated_at": f"named-{next(_HAND_SEQ)}",
+        "players": [
+            {
+                "id": pid,
+                "name": name,
+                "pool": pool,
+                "age": age,
+                "slot": slot,
+                "floor": 0.0,
+                "now": 10.0,
+                "prior": 10.0,
+                "support": 0.9,
+                "extrapolated": 0,
+                "sgp": [
+                    {
+                        "horizon": h,
+                        "mean": m,
+                        "p10": m - 5,
+                        "p90": m + 5,
+                        "n_effective": 50.0,
+                        "band_fell_back": 0,
+                    }
+                    for h, m in enumerate(means, start=1)
+                ],
+            }
+            for pid, name, pool, age, slot, means in rows
+        ],
+    }
+
+
+def test_search_matches_a_substring_not_just_a_prefix(payload: dict) -> None:
+    """The headline complaint: `Witt` must find `Bobby Witt Jr.`. Here `bat` must find
+    both Bats, neither of which starts with it.
+    """
+    names = [h["name"] for h in find_players(payload, "bat")]
+    assert "Big Bat" in names and "Small Bat" in names, names
+
+
+def test_search_ignores_case_and_accents() -> None:
+    """Through `normalize_name`, the SAME function `build_player_view` resolves with.
+    A suggestion the resolver would then fail on is worse than no suggestion.
+    """
+    blob = _named_payload([(1, "Yoan Moncada", "hitter", 27, "3B", [5.0, 5.0, 5.0])])
+    for query in ("moncada", "MONCADA", "Moncada"):
+        assert [h["name"] for h in find_players(blob, query)] == ["Yoan Moncada"], query
+
+
+def test_exact_beats_prefix_beats_substring() -> None:
+    """Ordering is stated in the issue so it is not invented per implementation.
+
+    `Bat` is exactly one row's name, the prefix of another and inside a third; a
+    ranking that only sorted by board rank would bury the exact match.
+    """
+    blob = _named_payload(
+        [
+            # Deliberately WORST by board rank, so a rank-only sort would put it last.
+            (1, "Bat", "hitter", 27, "OF", [1.0, 1.0, 1.0]),
+            (2, "Batting Glove", "hitter", 27, "OF", [9.0, 9.0, 9.0]),
+            (3, "Big Bat", "hitter", 27, "OF", [8.0, 8.0, 8.0]),
+        ]
+    )
+    assert [h["name"] for h in find_players(blob, "Bat")] == [
+        "Bat",
+        "Batting Glove",
+        "Big Bat",
+    ]
+
+
+def test_ties_within_a_tier_break_by_board_rank() -> None:
+    """Two equally-good matches are offered better-player-first."""
+    blob = _named_payload(
+        [
+            (1, "Bat Weak", "hitter", 27, "OF", [1.0, 1.0, 1.0]),
+            (2, "Bat Strong", "hitter", 27, "OF", [9.0, 9.0, 9.0]),
+        ]
+    )
+    assert [h["name"] for h in find_players(blob, "bat")] == ["Bat Strong", "Bat Weak"]
+
+
+def test_search_needs_two_characters(payload: dict) -> None:
+    """Mirrors /api/players/find. One character over 1,169 rows is noise, not a
+    suggestion, and the cap would decide the list instead of the query.
+    """
+    assert find_players(payload, "b") == []
+    assert find_players(payload, "") == []
+    assert find_players(payload, "  ") == []
+    assert find_players(payload, "ba") != []
+
+
+def test_search_is_capped() -> None:
+    blob = _named_payload(
+        [(i, f"Batter {i:03d}", "hitter", 27, "OF", [5.0, 5.0, 5.0]) for i in range(40)]
+    )
+    assert len(find_players(blob, "batter")) == 25
+    assert len(find_players(blob, "batter", cap=3)) == 3
+
+
+def test_every_suggestion_carries_the_fields_a_link_needs(payload: dict) -> None:
+    """`id` and `pool` are required, not decorative: they are what `board_url` needs to
+    produce a link that resolves straight to the player instead of the candidate page.
+    """
+    for hit in find_players(payload, "ba"):
+        assert set(hit) == {"name", "id", "pool", "age", "slot"}, hit
+        assert hit["id"] is not None and hit["pool"] in ("hitter", "pitcher")
+
+
+def test_two_players_sharing_a_name_are_both_offered_and_distinguishable() -> None:
+    """The live board has two Max Muncys. Collapsing them would hide one player."""
+    blob = _named_payload(
+        [
+            (1, "Max Muncy", "hitter", 35, "1B", [7.0, 7.0, 7.0]),
+            (2, "Max Muncy", "hitter", 22, "SS", [6.0, 6.0, 6.0]),
+        ]
+    )
+    hits = find_players(blob, "muncy")
+    assert len(hits) == 2, hits
+    assert {h["id"] for h in hits} == {1, 2}
+    assert {h["age"] for h in hits} == {35, 22}
+
+
+def test_a_two_way_player_is_offered_once_per_pool() -> None:
+    """Ohtani's two rows share an id and an age and differ only by pool and slot, so a
+    list keyed on name or id alone offers one row where the board has two.
+    """
+    blob = _named_payload(
+        [
+            (660271, "Shohei Ohtani", "hitter", 31, "DH", [9.0, 9.0, 9.0]),
+            (660271, "Shohei Ohtani", "pitcher", 31, "SP", [4.0, 4.0, 4.0]),
+        ]
+    )
+    hits = find_players(blob, "ohtani")
+    assert len(hits) == 2, hits
+    assert {h["pool"] for h in hits} == {"hitter", "pitcher"}
+
+
+def test_an_exact_name_still_resolves_rather_than_suggesting(payload: dict) -> None:
+    """The fallback must not fire when the name resolves. A working search that started
+    returning a one-item candidate list instead of the player would be a regression.
+    """
+    view = build_player_view(payload, player="Big Bat", chart=None)
+    assert view.found is True
+    assert view.candidates == []
+
+
+def test_a_partial_name_falls_back_to_candidates_instead_of_a_dead_end(
+    payload: dict,
+) -> None:
+    """The server-side half of #350, which works with JS off: `bat` matched nothing
+    exactly, so offer what it does match rather than refusing.
+    """
+    view = build_player_view(payload, player="bat", chart=None)
+    assert view.found is False
+    names = [c["name"] for c in view.candidates]
+    assert "Big Bat" in names and "Small Bat" in names, names
+    for candidate in view.candidates:
+        assert candidate["id"] is not None and candidate["pool"]
+
+
+def test_a_name_absent_from_the_board_still_reports_absent(payload: dict) -> None:
+    """A typo and a real exclusion must not read the same. Substring found nothing, so
+    this stays the refusal -- with no candidates to imply otherwise.
+    """
+    view = build_player_view(payload, player="Nobody Here", chart=None)
+    assert view.found is False
+    assert view.candidates == []
