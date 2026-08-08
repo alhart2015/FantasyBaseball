@@ -6,8 +6,17 @@ pipeline and cannot be: the fit reads `data/trajectory/*.csv` and
 dashboard is a pure reader of what this writes.
 
     python scripts/push_trajectory_board.py                 # sweep + push to prod
-    python scripts/push_trajectory_board.py --dry-run       # sweep, report size, no write
+    python scripts/push_trajectory_board.py --dry-run       # sweep, report sizes, no write
     python scripts/push_trajectory_board.py --max-horizon 3 # shorter dropdown, faster
+
+TWO KEYS, ONE VINTAGE (#344). `cache:trajectory_board` is the board every view reads;
+`cache:trajectory_chart_data` is the per-player career history and comps that ONLY the
+player chart reads. They were one blob, and carrying the extras inline more than doubled
+what the two default views had to fetch and parse to render rows that never show them.
+Both are stamped with the SAME `generated_at`, computed once in `build_payload`, and the
+player view refuses to draw extras whose stamp disagrees with the board's -- a stale
+career line under a fresh projection renders perfectly and is simply wrong. The chart
+data is written FIRST, so a successful board write implies its extras are already there.
 
 The board is only as fresh as the last run of this script, which is why the payload
 carries its own vintage and the page prints it. Re-run it when the panel is rebuilt
@@ -136,13 +145,17 @@ def _require_scored_pool(kind: str, rows: list, season: int, panel_name: str) ->
     )
 
 
-def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
-    """Sweep both pools, once each. Returns the payload and the rows scored.
+def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
+    """Sweep both pools, once each. Returns the board, the chart data, and rows scored.
 
     ONE fit per player, on raw SGP; VAR is derived on read (#331). It said "on both
     scales" because it used to store both, and a reader who believes that is a reader
     who adds back a `scales` argument or a second `shape_trajectory` call that the
     payload no longer has anywhere to put.
+
+    TWO payloads, ONE `generated_at`, computed here and threaded into both. Calling
+    `local_now()` twice would stamp them seconds apart, and the player view's pairing
+    check is an equality test -- it would refuse every chart this script writes.
     """
     from fantasy_baseball.config import load_config
     from fantasy_baseball.sgp.denominators import get_sgp_denominators
@@ -156,7 +169,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
         season_elapsed_fraction,
     )
     from fantasy_baseball.trajectory.shape import prepare
-    from fantasy_baseball.trajectory.sweep import sweep_pool, to_payload
+    from fantasy_baseball.trajectory.sweep import sweep_pool, to_chart_payload, to_payload
     from fantasy_baseball.utils.time_utils import local_now
 
     config = load_config(PROJECT_ROOT / "config" / "league.yaml")
@@ -183,10 +196,11 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
     elapsed = season_elapsed_fraction(calendar, season)
 
     swept = []
-    # KEYED ON `(mlbam_id, pool)`, never the bare id. This dict lives OUTSIDE the pool
-    # loop, and a two-way player is produced once per pool -- so on a bare id the pitcher
-    # pass overwrote the hitter's entry and Ohtani's hitter row rendered his pitching
-    # career line and pitcher comps. See `SweptPlayer.mlbam_id`.
+    # KEYED ON `(mlbam_id, pool)`, never the bare id -- `chart_key` serializes the pair.
+    # This dict lives OUTSIDE the pool loop, and a two-way player is produced once per
+    # pool, so on a bare id the pitcher pass overwrote the hitter's entry and Ohtani's
+    # hitter row rendered his pitching career line and pitcher comps. See
+    # `SweptPlayer.mlbam_id`.
     extras: dict[tuple[int, str], dict] = {}
     excluded = {"low_sgp": 0, "no_current_line": 0}
     for kind in ("hitter", "pitcher"):
@@ -275,21 +289,22 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, int]:
                 flush=True,
             )
 
+    # ONE stamp for both blobs -- see this function's docstring.
+    generated_at = local_now().isoformat(timespec="seconds")
     payload = to_payload(
         swept,
-        extras=extras,
         base_season=season,
         max_horizon=max_horizon,
         min_sgp=MIN_SGP,
         season_elapsed=round(elapsed, 4),
-        generated_at=local_now().isoformat(timespec="seconds"),
+        generated_at=generated_at,
         # The vintage a reader must be shown. Filenames, not a timestamp: the panel is a
         # build artifact whose span is what identifies it.
         panel_vintage={k: panel_path(k, panel_dir).name for k in ("hitter", "pitcher")},
         floors={slot: round(v, 4) for slot, v in sorted(levels.items())},
         excluded={**excluded, "total": excluded["low_sgp"] + excluded["no_current_line"]},
     )
-    return payload, len(swept)
+    return payload, to_chart_payload(extras, generated_at=generated_at), len(swept)
 
 
 def _target_store(*, local: bool):
@@ -344,13 +359,18 @@ def main() -> int:
         panel_dir = PROJECT_ROOT / panel_dir
 
     started = time.perf_counter()
-    payload, scored = build_payload(args.max_horizon, panel_dir)
+    payload, chart, scored = build_payload(args.max_horizon, panel_dir)
     body = json.dumps(payload, separators=(",", ":"))
+    chart_body = json.dumps(chart, separators=(",", ":"))
     print(
         f"\n  {scored} players scored to {args.max_horizon} years "
         f"in {time.perf_counter() - started:.1f}s"
     )
-    print(f"  payload {len(body) / 1024:.0f} KB  (base {payload['base_season']})")
+    # SEPARATELY. They are two keys with two very different read profiles -- every view
+    # pays the board, only the player chart pays the extras -- and one combined figure
+    # hides exactly the number #344 was opened about.
+    print(f"  board      {len(body) / 1024:.0f} KB  (base {payload['base_season']})")
+    print(f"  chart data {len(chart_body) / 1024:.0f} KB  ({len(chart['players'])} players)")
 
     if args.dry_run:
         print("\n  --dry-run: nothing written to prod")
@@ -360,17 +380,39 @@ def main() -> int:
     from fantasy_baseball.web.season_data import unwrap_cache_envelope, write_cache_to
 
     target = _target_store(local=args.local)
+    # CHART DATA FIRST. The two blobs are paired by `generated_at` and the player view
+    # refuses a pair that disagrees, so the ordering decides which way a half-finished
+    # push degrades: extras-then-board means a written board always has its extras
+    # already stored, and a crash between the two leaves the OLD board beside the new
+    # extras -- a mismatch the reader catches. The reverse order would leave the new
+    # board beside stale extras, which is the same mismatch but with a window where the
+    # page's only correct behaviour is to refuse a chart it could have drawn.
+    write_cache_to(target, CacheKey.TRAJECTORY_CHART_DATA, chart)
     write_cache_to(target, CacheKey.TRAJECTORY_BOARD, payload)
 
-    # Read it back. A push that silently wrote nothing leaves the dashboard on a stale
+    # Read them back. A push that silently wrote nothing leaves the dashboard on a stale
     # board that still renders, which is the failure this project keeps re-learning.
+    # BOTH keys, and both stamps printed: the pairing is what the player view checks, so
+    # an operator has to be able to see it agree without opening the KV.
     stored = json.loads(target.get(redis_key(CacheKey.TRAJECTORY_BOARD)))
     data = unwrap_cache_envelope(stored)
+    stored_chart = json.loads(target.get(redis_key(CacheKey.TRAJECTORY_CHART_DATA)))
+    chart_data = unwrap_cache_envelope(stored_chart)
+    where = "local SQLite" if args.local else "prod Upstash"
     print(
-        f"\n  wrote to {'local SQLite' if args.local else 'prod Upstash'}: "
+        f"\n  wrote to {where}: "
         f"{len(data['players'])} players, generated {data['generated_at']}, "
         f"panel {data['panel_vintage']}"
     )
+    print(
+        f"  chart data: {len(chart_data['players'])} players, "
+        f"generated {chart_data['generated_at']}"
+    )
+    if chart_data["generated_at"] != data["generated_at"]:
+        print(
+            "  WARNING: the two stamps disagree, so the player view will refuse to draw "
+            "career lines and comps. Re-run this script."
+        )
     return 0
 
 

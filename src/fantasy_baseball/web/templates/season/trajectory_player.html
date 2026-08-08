@@ -50,6 +50,17 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   {% else %}<p class="muted">Search a player to see his trajectory.</p>{% endif %}
 
 {% else %}
+{#- The mismatch explanation, set once and printed wherever a reader goes looking for
+    the data it is about (#344). Distinct from the "predates" notes below on purpose:
+    those mean the feature is newer than the blob, this means the two blobs are out of
+    step -- different cause, different fix. -#}
+{% set mismatch_note %}
+  The stored career history and comps belong to a <strong>different build</strong> of
+  this board -- they carry a different timestamp -- so they are not drawn. Pairing them
+  would put a stale career line under a fresh projection, which renders perfectly and is
+  simply wrong. The projection below comes from the board on screen and is unaffected;
+  re-run <code>push_trajectory_board.py</code>, which writes both keys together.
+{% endset %}
 <p class="muted">
   {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
   Solid is what happened; dashed is projected, with the shaded band its p10-p90 range.
@@ -100,15 +111,27 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 </table>
 {% else %}
 <h3>Closest realized paths</h3>
+{#- TWO CAUSES, TWO MESSAGES. A mismatch is not a missing feature: the chart data is
+    there, stamped for a different board than the one on screen, and one re-push fixes
+    it. Telling that reader the board "predates" anything sends him looking in the
+    wrong place. Same fork below for the career line -- the note appears where a reader
+    is already looking, and the mismatch sentence is set once at the top of this
+    branch. -#}
+{% if board.chart_vintage_mismatch %}
+<p class="muted">{{ mismatch_note }}</p>
+{% else %}
 <p class="muted">
   None stored. Either this board predates the closest-comp feature (#324) and a
   re-push of <code>push_trajectory_board.py</code> will fill it in, or this player has
   no scored comps yet.
 </p>
 {% endif %}
+{% endif %}
 
 <h3>The numbers</h3>
-{% if not board.history %}
+{% if board.chart_vintage_mismatch %}
+<p class="muted">{{ mismatch_note }}</p>
+{% elif not board.history %}
 <p class="muted">
   No realized-season history in this blob. Either this board predates the
   career-history feature (#324) and a re-push of <code>push_trajectory_board.py</code>

@@ -41,6 +41,21 @@ class CacheKey(StrEnum):
     #: pipeline: the fit needs `data/trajectory/` and `data/cache/keeper_skills`, both
     #: gitignored and so absent on Render. Read-only to the web app.
     TRAJECTORY_BOARD = "trajectory_board"
+    #: Per-player career history and comps for the trajectory PLAYER chart -- written
+    #: offline by the same script, in the same run, and read-only to the web app like
+    #: the board it pairs with.
+    #:
+    #: SPLIT OUT OF THE BOARD (#344), not additional data. These two fields took the
+    #: board blob from 762 KB to 1,861 KB while only `build_player_view` read them, so
+    #: the league board and the By-team view -- the two default views -- paid ~1.1 MB of
+    #: egress and a JSON parse per request to carry rows they never render. Read ONLY on
+    #: the player view; a board or teams request must not touch this key.
+    #:
+    #: PAIRED BY VINTAGE. It carries the same `generated_at` as the board written beside
+    #: it, and the player view refuses to draw extras whose stamp does not match the
+    #: board it is rendering -- otherwise a board refreshed at noon draws a career line
+    #: from Tuesday under a fresh projection, with both halves looking plausible.
+    TRAJECTORY_CHART_DATA = "trajectory_chart_data"
 
 
 def redis_key(key: CacheKey) -> str:

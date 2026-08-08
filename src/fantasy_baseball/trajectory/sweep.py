@@ -103,8 +103,9 @@ class SweptPlayer:
     #: and the id alone is not unique either, because a two-way player is produced ONCE
     #: PER POOL (see `test_a_two_way_player_keeps_one_line_per_pool`). Anything joining,
     #: charting or linking a row must key on the PAIR: this comment used to call the id
-    #: "the only unique key", and that belief is what keyed `to_payload`'s `extras` on the
-    #: bare id, so Ohtani's hitter row carried his pitching career line and pitcher comps.
+    #: "the only unique key", and that belief is what keyed the chart extras on the bare
+    #: id, so Ohtani's hitter row carried his pitching career line and pitcher comps.
+    #: `chart_key` is where that pair is now spelled, once, for writer and reader alike.
     #: #324 needs the id to name comps; #284 is the roster side of the same problem.
     mlbam_id: int
     name: str
@@ -340,24 +341,15 @@ def _unpack(packed: dict[str, float], age: int) -> YearPoint:
     )
 
 
-def to_payload(
-    players: Iterable[SweptPlayer],
-    *,
-    extras: dict[tuple[int, str], dict] | None = None,
-    **meta: Any,
-) -> dict:
+def to_payload(players: Iterable[SweptPlayer], **meta: Any) -> dict:
     """Serialize a sweep for the KV. `meta` carries the vintage the reader must show.
 
-    `extras` is per-player data the SWEEP does not produce -- career history and comps,
-    which need the panel and the people cache rather than the fit. Merged in here so
-    `SweptPlayer` does not grow fields that only one consumer wants.
-
-    KEYED ON `(mlbam_id, pool)`, the unique key on a board row -- see `SweptPlayer`. It
-    was keyed on the bare id, which a two-way player breaks: he is swept once per pool,
-    so the pitcher pass overwrote the hitter's entry and both rows rendered the pitcher's
-    career line and pitcher comps.
+    WHAT THE CHART NEEDS IS NOT IN HERE. Career history and comps used to be merged into
+    every row of this payload, which took it from 762 KB to 1,861 KB while only
+    `build_player_view` read them -- so the league board and the By-team view, the two
+    default views, each carried ~1.1 MB they never render. They live in their own blob
+    now (`to_chart_payload`, #344) and this payload is exactly what all three views use.
     """
-    per_player = extras or {}
     return {
         **meta,
         "players": [
@@ -374,10 +366,45 @@ def to_payload(
                 "extrapolated": int(p.extrapolated),
                 # RAW only; VAR is derived on read. See the module docstring.
                 "sgp": [_pack(y) for y in p.sgp],
-                **per_player.get((p.mlbam_id, p.pool), {}),
             }
             for p in players
         ],
+    }
+
+
+def chart_key(mlbam_id: int, pool: str) -> str:
+    """The chart blob's key for ONE board row, spelled once for writer and reader.
+
+    `(mlbam_id, pool)` is the unique key on a board row -- see `SweptPlayer.mlbam_id` --
+    and JSON object keys must be strings, so the pair is joined here rather than at
+    either end. A bare id is the defect this collapses two ways: a two-way player is
+    swept ONCE PER POOL, so keying on the id alone let the pitcher pass overwrite the
+    hitter's entry and Ohtani's hitter row rendered his pitching career and pitcher
+    comps.
+    """
+    return f"{mlbam_id}:{pool}"
+
+
+def to_chart_payload(extras: dict[tuple[int, str], dict], *, generated_at: str) -> dict:
+    """Serialize the per-player chart extras -- career history and comps -- for the KV.
+
+    A SECOND blob beside the board, not a section of it (#344). Only the player view
+    reads it; the league board and the By-team view never do, which is the whole point
+    of the split.
+
+    `generated_at` is the BOARD'S stamp, passed in rather than taken here, so the two
+    blobs a single push writes carry one identical vintage. The player view compares
+    them and refuses to draw extras that do not match the board it is rendering -- two
+    keys can be refreshed independently, and a stale career line under a fresh
+    projection is wrong in a way that renders perfectly.
+
+    These are the fields the SWEEP does not produce: they need the panel and the people
+    cache rather than the fit, which is why they are assembled by the push script and
+    passed in here rather than hung off `SweptPlayer`.
+    """
+    return {
+        "generated_at": generated_at,
+        "players": {chart_key(mlbam_id, pool): data for (mlbam_id, pool), data in extras.items()},
     }
 
 
