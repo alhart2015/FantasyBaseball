@@ -183,6 +183,88 @@ def test_the_push_never_mutates_render(monkeypatch) -> None:
     )
 
 
+class _RecordingStore:
+    """A KV that remembers the ORDER it was written in. Enough of the interface for
+    `write_cache_to` (which only calls `set`) and the script's read-back (`get`)."""
+
+    def __init__(self) -> None:
+        self.writes: list[str] = []
+        self.values: dict[str, str] = {}
+
+    def set(self, key: str, value: str) -> None:
+        self.writes.append(key)
+        self.values[key] = value
+
+    def get(self, key: str) -> str | None:
+        return self.values.get(key)
+
+
+def _fake_payloads(module, monkeypatch):
+    """Patch `build_payload` to a two-player board and its paired chart data.
+
+    Lets `main()` be driven end to end without the gitignored panel -- the ordering and
+    the dry-run behaviour are properties of `main`, not of the sweep.
+    """
+    from fantasy_baseball.trajectory.sweep import to_chart_payload
+
+    stamp = "2026-08-07T09:00:00-04:00"
+    board = {
+        "generated_at": stamp,
+        "base_season": 2026,
+        "panel_vintage": {"hitter": "h.csv", "pitcher": "p.csv"},
+        "players": [{"id": 1, "pool": "hitter"}, {"id": 1, "pool": "pitcher"}],
+    }
+    chart = to_chart_payload(
+        {
+            (1, "hitter"): {"history": [[26, 14.0]], "comps": []},
+            (1, "pitcher"): {"history": [[26, 9.0]], "comps": []},
+        },
+        generated_at=stamp,
+    )
+    monkeypatch.setattr(module, "build_payload", lambda *a, **k: (board, chart, 2))
+    return board, chart
+
+
+def test_the_chart_data_is_written_before_the_board(monkeypatch, capsys) -> None:
+    """A successful board write must imply its extras are already stored.
+
+    The two blobs are paired by `generated_at` and the player view refuses a pair that
+    disagrees, so the write ORDER decides how a half-finished push degrades. Extras
+    first: a crash between the two leaves the OLD board beside new extras, which the
+    reader catches. Board first would publish a fresh board beside stale extras and
+    silently drop every career line until the next run.
+    """
+    module = _script()
+    _fake_payloads(module, monkeypatch)
+    store = _RecordingStore()
+    monkeypatch.setattr(module, "_target_store", lambda *, local: store)
+    monkeypatch.setattr("sys.argv", ["push_trajectory_board.py", "--local"])
+
+    assert module.main() == 0
+    assert store.writes == ["cache:trajectory_chart_data", "cache:trajectory_board"]
+    assert "chart data: 2 players" in capsys.readouterr().out, "the read-back names both"
+
+
+def test_dry_run_reports_both_sizes_and_writes_nothing(monkeypatch, capsys) -> None:
+    """The two keys have very different read profiles -- every view pays the board, only
+    the player chart pays the extras -- so one combined figure hides the number #344 was
+    opened about. And a --dry-run that touches the KV is the whole reason the flag
+    exists.
+    """
+    module = _script()
+    _fake_payloads(module, monkeypatch)
+    store = _RecordingStore()
+    monkeypatch.setattr(module, "_target_store", lambda *, local: store)
+    monkeypatch.setattr("sys.argv", ["push_trajectory_board.py", "--dry-run"])
+
+    assert module.main() == 0
+    assert store.writes == [], "--dry-run writes nothing"
+
+    out = capsys.readouterr().out
+    assert "board" in out and "chart data" in out, "both keys are sized"
+    assert len([line for line in out.splitlines() if "KB" in line]) == 2, "two sizes, not one"
+
+
 @pytest.mark.skipif(
     not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
     reason=(
@@ -190,20 +272,30 @@ def test_the_push_never_mutates_render(monkeypatch) -> None:
         "data/cache/keeper_skills -- both gitignored, so this cannot run on a fresh clone"
     ),
 )
-def test_the_payload_carries_career_history_and_comps(monkeypatch) -> None:
-    """Both are computed where the panel lives and travel in the same blob.
+def test_the_chart_data_carries_career_history_and_comps(monkeypatch) -> None:
+    """Both are computed where the panel lives and travel in their OWN blob.
 
     The dashboard has no panel and never will -- `data/trajectory/` is gitignored and
     absent on Render -- so anything the chart needs has to be baked here or it does not
-    exist at request time.
+    exist at request time. It rides in `cache:trajectory_chart_data` rather than in the
+    board (#344): only the player view reads it, and inline it more than doubled what
+    the two default views had to fetch.
     """
+    from fantasy_baseball.trajectory.sweep import chart_key
+
     module = _script()
-    payload, scored = module.build_payload(
+    payload, chart, scored = module.build_payload(
         max_horizon=5, panel_dir=PROJECT_ROOT / "data" / "trajectory"
     )
 
     assert scored > 0
-    player = payload["players"][0]
+    # PAIRED: the player view compares these two stamps and refuses to draw a chart
+    # whose extras do not match the board it is rendering.
+    assert chart["generated_at"] == payload["generated_at"]
+
+    row = payload["players"][0]
+    assert "history" not in row and "comps" not in row, "the board carries neither"
+    player = chart["players"][chart_key(row["id"], row["pool"])]
 
     # NOT "every scored player has at least his current season" -- history excludes
     # the current season by construction (`complete = live[~live["partial_season"]]`

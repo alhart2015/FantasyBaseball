@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import replace
 
@@ -10,8 +11,10 @@ from fantasy_baseball.trajectory.shape import shape_trajectory
 from fantasy_baseball.trajectory.sweep import (
     SWEEP_DRAWS,
     add_ranks,
+    chart_key,
     from_payload,
     sweep_pool,
+    to_chart_payload,
     to_payload,
     totals,
 )
@@ -193,42 +196,69 @@ def test_a_two_way_player_keeps_one_line_per_pool() -> None:
     assert len({(r["id"], r["pool"]) for r in scored}) == 2
 
 
-def test_extras_are_keyed_on_the_pool_as_well_as_the_id() -> None:
+def _two_way_extras() -> dict[tuple[int, str], dict]:
+    """Ohtani's two rows, each with its OWN career line and comps."""
+    return {
+        (660271, "hitter"): {
+            "history": [[30, 16.0]],
+            "comps": [{"name": "A Bat", "season": 2011, "rmse": 1.0, "path": [15.0]}],
+        },
+        (660271, "pitcher"): {
+            "history": [[30, 12.0]],
+            "comps": [{"name": "An Arm", "season": 2012, "rmse": 2.0, "path": [11.0]}],
+        },
+    }
+
+
+def test_chart_extras_are_keyed_on_the_pool_as_well_as_the_id() -> None:
     """A two-way player's two rows must keep their OWN history and comps.
 
-    `extras` was keyed on the bare mlbam_id, so the pitcher pass overwrote the hitter's
-    entry and BOTH rows rendered the pitcher's career line and pitcher comps. Reproduced
-    on the live board: id 660271 appears twice, once as a UTIL hitter and once as an SP.
-    The unique key on a board row is `(mlbam_id, pool)` -- the same defect class as
-    CLAUDE.md's `name::player_type` rule.
+    The extras were keyed on the bare mlbam_id, so the pitcher pass overwrote the
+    hitter's entry and BOTH rows rendered the pitcher's career line and pitcher comps.
+    Reproduced on the live board: id 660271 appears twice, once as a UTIL hitter and
+    once as an SP. The unique key on a board row is `(mlbam_id, pool)` -- the same
+    defect class as CLAUDE.md's `name::player_type` rule.
+
+    Moved here from the board payload with the extras themselves (#344). The pair now
+    has to survive a JSON object key, which only takes strings, so `chart_key` joins it
+    -- exactly the step at which "just use the id" is tempting again.
     """
-    rows = [
-        BoardRow(660271, "Shohei Ohtani", "hitter", 31, 16.6, 22.6, "UTIL", 4.0),
-        BoardRow(660271, "Shohei Ohtani", "pitcher", 31, 13.2, 12.0, "SP", 3.0),
-    ]
-    swept = sweep_pool(rows[:1], synthetic_panel(), "hitter", (1,)) + sweep_pool(
-        rows[1:], synthetic_panel(), "pitcher", (1,)
-    )
-    payload = to_payload(
-        swept,
-        extras={
-            (660271, "hitter"): {
-                "history": [[30, 16.0]],
-                "comps": [{"name": "A Bat", "season": 2011, "rmse": 1.0, "path": [15.0]}],
-            },
-            (660271, "pitcher"): {
-                "history": [[30, 12.0]],
-                "comps": [{"name": "An Arm", "season": 2012, "rmse": 2.0, "path": [11.0]}],
-            },
-        },
-        base_season=2026,
-    )
-    by_pool = {p["pool"]: p for p in payload["players"]}
-    assert set(by_pool) == {"hitter", "pitcher"}
-    assert by_pool["hitter"]["history"] == [[30, 16.0]]
-    assert by_pool["pitcher"]["history"] == [[30, 12.0]]
-    assert [c["name"] for c in by_pool["hitter"]["comps"]] == ["A Bat"]
-    assert [c["name"] for c in by_pool["pitcher"]["comps"]] == ["An Arm"]
+    chart = to_chart_payload(_two_way_extras(), generated_at="2026-08-07T09:00:00")
+
+    assert set(chart["players"]) == {"660271:hitter", "660271:pitcher"}
+    assert chart["players"]["660271:hitter"]["history"] == [[30, 16.0]]
+    assert chart["players"]["660271:pitcher"]["history"] == [[30, 12.0]]
+    assert [c["name"] for c in chart["players"]["660271:hitter"]["comps"]] == ["A Bat"]
+    assert [c["name"] for c in chart["players"]["660271:pitcher"]["comps"]] == ["An Arm"]
+
+
+def test_the_chart_payload_survives_a_json_round_trip_with_both_pools_intact() -> None:
+    """It is written to a KV as JSON, and JSON object keys are strings.
+
+    A tuple key serializes as `"(660271, 'hitter')"` under some encoders and raises
+    under `json.dumps`; either way the reader cannot rebuild it. This pins that the
+    stored key is the string the reader looks up.
+    """
+    chart = to_chart_payload(_two_way_extras(), generated_at="2026-08-07T09:00:00")
+    restored = json.loads(json.dumps(chart))
+
+    assert restored["generated_at"] == "2026-08-07T09:00:00"
+    assert restored["players"][chart_key(660271, "pitcher")]["history"] == [[30, 12.0]]
+
+
+def test_the_board_payload_no_longer_carries_chart_data() -> None:
+    """The 762 KB -> 1,861 KB growth #344 was opened about.
+
+    Only `build_player_view` reads history and comps; the league board and the By-team
+    view -- the two DEFAULT views -- never touch them and paid ~1.1 MB of egress and a
+    JSON parse per request to carry them. They live in `to_chart_payload` now.
+    """
+    payload = to_payload(sweep_pool(_rows(), synthetic_panel(), "hitter", (1,)), base_season=2026)
+
+    assert payload["players"], "fixture must score somebody"
+    for row in payload["players"]:
+        assert "history" not in row
+        assert "comps" not in row
 
 
 def test_ranks_run_over_the_whole_pool_and_break_ties_by_name() -> None:
