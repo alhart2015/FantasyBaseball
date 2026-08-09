@@ -117,3 +117,54 @@ def test_volume_forecast_walks_age_to_the_target_year(monkeypatch) -> None:
     # the 2024 target), not the target itself.
     assert len(ages) == 2
     assert ages[1] == pytest.approx(ages[0] + 1.0)
+
+
+def test_transitions_for_matches_the_counts_the_spec_discloses() -> None:
+    """The leakage disclosure in the writeup is computed from these.
+
+    Base 2024 is the year where loto and causal COINCIDE, which is why the sensitivity
+    check runs on 2023. Running it on 2024 would return a difference of exactly zero
+    and read as "the leakage is negligible" when nothing had been measured.
+    """
+    from backtest_trajectory import transitions_for
+
+    assert transitions_for(2022, "loto") == ((2023, 2024), (2024, 2025))
+    assert transitions_for(2023, "loto") == ((2022, 2023), (2024, 2025))
+    assert transitions_for(2024, "loto") == ((2022, 2023), (2023, 2024))
+
+    assert transitions_for(2022, "causal") == ()
+    assert transitions_for(2023, "causal") == ((2022, 2023),)
+    assert transitions_for(2024, "causal") == ((2022, 2023), (2023, 2024))
+
+    # The sensitivity check is only meaningful where the two differ.
+    assert transitions_for(2024, "loto") == transitions_for(2024, "causal")
+    assert transitions_for(2023, "loto") != transitions_for(2023, "causal")
+
+
+def test_loto_never_includes_the_transition_being_predicted() -> None:
+    """That is the ONE thing leave-one-transition-out guarantees. It does not make the
+    fit causal -- for base 2022 both survivors are LATER than the transition predicted,
+    which is why the writeup lists it as a third advantage keeper-value keeps."""
+    from backtest_trajectory import transitions_for
+
+    for base in (2022, 2023, 2024):
+        assert (base, base + 1) not in transitions_for(base, "loto")
+
+
+def test_future_transition_counts_are_2_1_0() -> None:
+    """Printed per base year in the report. If these ever change, the leakage
+    disclosure in the PR body is wrong."""
+    from backtest_trajectory import transitions_for
+
+    counts = {
+        base: sum(1 for _, end in transitions_for(base, "loto") if end > base + 1)
+        for base in (2022, 2023, 2024)
+    }
+    assert counts == {2022: 2, 2023: 1, 2024: 0}
+
+
+def test_transitions_for_rejects_an_unknown_mode() -> None:
+    from backtest_trajectory import transitions_for
+
+    with pytest.raises(ValueError, match="loto"):
+        transitions_for(2023, "whatever")

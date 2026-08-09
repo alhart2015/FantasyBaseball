@@ -35,6 +35,10 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
+
+from keeper_persistence import TRANSITIONS as KEEPER_TRANSITIONS
+
 from fantasy_baseball.config import load_config
 from fantasy_baseball.trajectory.comps import comp_trajectory
 from fantasy_baseball.trajectory.era import era_normalize
@@ -48,6 +52,36 @@ from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 #: columns have to be re-summed here or a mid-season trade reads as two half-roles --
 #: the same reason `trajectory.board._SPLIT_RULES` re-sums `starts`/`games`.
 _ROLE_SUMS = ("starts", "games", "sv")
+
+#: Every year-pair the persistence fit could use, bounded by actuals coverage
+#: (`data/stats/{pool}-{Y}.csv` exists for 2022-2025). Imported rather than restated so
+#: this cannot drift from the fit `keeper_persistence` actually validated.
+ALL_TRANSITIONS = KEEPER_TRANSITIONS
+
+
+def transitions_for(base_year: int, mode: str) -> tuple[tuple[int, int], ...]:
+    """Which (year, year+1) transitions the persistence fit may use for `base_year`.
+
+    `loto` drops ONLY the transition being predicted. It does not make the fit causal,
+    and the difference matters: for base 2022 both survivors are LATER than the
+    transition predicted, so the fit trains on the future. That is disclosed in the
+    writeup as a third advantage keeper-value keeps, rather than silently corrected,
+    because a strictly causal rule leaves base 2022 with nothing to fit on at all and
+    base 2023 with one transition -- which would delete the +2 horizon and with it the
+    multi-year claim this evaluation exists to make.
+
+    `causal` is the sensitivity variant, and it is only informative for base 2023:
+
+        base 2022  loto = 2 transitions, both future   causal = 0   not computable
+        base 2023  loto = 2, one future                causal = 1   THIS is the check
+        base 2024  loto = 2, none future               causal = 2   identical, measures nothing
+    """
+    if mode not in {"loto", "causal"}:
+        raise ValueError(f"mode must be 'loto' or 'causal', got {mode!r}")
+    if mode == "loto":
+        predicted = (base_year, base_year + 1)
+        return tuple(t for t in ALL_TRANSITIONS if t != predicted)
+    return tuple(t for t in ALL_TRANSITIONS if t[1] <= base_year)
 
 
 def roles(panel: pd.DataFrame) -> pd.Series:
