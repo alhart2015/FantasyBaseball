@@ -1,0 +1,81 @@
+========================================================================
+INJURY STRESS-TEST
+========================================================================
+
+1. WHAT INJURY RISK COSTS YOU
+------------------------------------------------------------------------
+  Deterministic projected roto margin : +18.0 pts (ahead of the leader)
+  Win% if availability lands as expected:  98.8%
+  Win% (real, with injury risk)         :  98.6%
+  -> Injury/availability risk costs you : +0.2 win pts
+
+2. HOW LIKELY IS EVERYONE STAYS HEALTHY?
+------------------------------------------------------------------------
+  (a player 'loses significant time' = >= 20% below expected playing time)
+  P(no active player loses significant time):   3.6%
+  P(exactly one does)                       :  13.0%
+  P(two or more)                            :  83.4%
+
+3. WHO ARE YOU MOST EXPOSED TO? (lose one, replaced)
+------------------------------------------------------------------------
+  Player                  Type      win% cost
+  Mason Miller            pitcher        2.0
+  Josh Hader              pitcher        1.5
+  Junior Caminero         hitter         0.8
+  Juan Soto               hitter         0.8
+  CJ Abrams               hitter         0.7
+  Julio Rodríguez         hitter         0.6
+  Emilio Pagán            pitcher        0.5
+  Yoendrys Gómez          pitcher        0.4
+  Freddie Freeman         hitter         0.3
+  Austin Riley            hitter         0.3
+  Byron Buxton            hitter         0.3
+  Otto Lopez              hitter         0.2
+  Ivan Herrera            hitter         0.1
+  Randy Arozarena         hitter         0.1
+  Willy Adames            hitter         0.1
+  Ceddanne Rafaela        hitter         0.0
+  Zack Wheeler            pitcher        0.0
+  Bryan Woo               pitcher       -0.2
+  Jesús Luzardo           pitcher       -0.2
+  Logan Webb              pitcher       -0.4
+  Sonny Gray              pitcher       -0.4
+
+4. LOSING TWO (top exposures, ranked by joint win% cost)
+------------------------------------------------------------------------
+  Pair                                       joint   vs sum
+  Mason Miller + Josh Hader                    5.4     +1.9  (worse than additive)
+  Mason Miller + Juan Soto                     4.1     +1.3  (worse than additive)
+  Mason Miller + Junior Caminero               4.0     +1.2  (worse than additive)
+  Josh Hader + Juan Soto                       3.3     +1.0  (worse than additive)
+  Josh Hader + Junior Caminero                 3.2     +0.9  (worse than additive)
+  Mason Miller + Emilio Pagán                  3.1     +0.6  (worse than additive)
+  Mason Miller + CJ Abrams                     3.0     +0.3
+  Mason Miller + Julio Rodríguez               3.0     +0.4
+  Josh Hader + Emilio Pagán                    3.0     +1.0  (worse than additive)
+  Mason Miller + Yoendrys Gómez                2.9     +0.5
+  Junior Caminero + Juan Soto                  2.7     +1.1  (worse than additive)
+  Josh Hader + CJ Abrams                       2.5     +0.3
+  Josh Hader + Julio Rodríguez                 2.2     +0.1
+  Josh Hader + Yoendrys Gómez                  2.0     +0.1
+  Junior Caminero + Emilio Pagán               1.9     +0.6  (worse than additive)
+  Juan Soto + CJ Abrams                        1.8     +0.3
+  Juan Soto + Julio Rodríguez                  1.8     +0.4
+  Junior Caminero + CJ Abrams                  1.6     +0.1
+  Junior Caminero + Julio Rodríguez            1.6     +0.2
+  Juan Soto + Emilio Pagán                     1.6     +0.3
+  CJ Abrams + Yoendrys Gómez                   1.3     +0.2
+  Junior Caminero + Yoendrys Gómez             1.2     +0.0
+  Juan Soto + Yoendrys Gómez                   1.2     +0.0
+  CJ Abrams + Emilio Pagán                     1.2     +0.0
+  Emilio Pagán + Yoendrys Gómez                1.2     +0.3
+  CJ Abrams + Julio Rodríguez                  1.1     -0.2
+  Julio Rodríguez + Emilio Pagán               1.1     +0.0
+  Julio Rodríguez + Yoendrys Gómez             1.1     +0.1
+
+5. NOTE
+------------------------------------------------------------------------
+  Section 2 uses a GENERIC (volume/role) injury model -- every player in a
+  PA/IP band shares the same downside. Per-player injury history is not yet
+  modeled (deferred; see the design's Future work).
+  MC: n_iter=1000, seed=42 (common random numbers across scenarios).

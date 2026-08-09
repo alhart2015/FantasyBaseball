@@ -1,0 +1,49 @@
+draft:
+  position: 8
+  scoring_mode: deltaroto_immediate
+  strategy: default
+  teams:
+    1: Send in the Cavalli
+    2: SkeleThor
+    3: Work in Progress
+    4: Jon's Underdogs
+    5: Boston Estrellas
+    6: Spacemen
+    7: Springfield Isotopes
+    8: Hart of the Order
+    9: Tortured Baseball Department
+    10: Hello Peanuts!
+keepers: []
+league:
+  game_code: mlb
+  id: 5652
+  num_teams: 10
+  season_end: '2026-09-28'
+  season_start: '2026-03-27'
+  season_year: 2026
+  team_name: Hart of the Order
+projections:
+  systems:
+  - steamer
+  - zips
+  - atc
+  - the-bat-x
+  - oopsy
+  weights:
+    atc: 0.2
+    oopsy: 0.2
+    steamer: 0.2
+    the-bat-x: 0.2
+    zips: 0.2
+roster_slots:
+  1B: 1
+  2B: 1
+  3B: 1
+  BN: 2
+  C: 1
+  IF: 1
+  IL: 2
+  OF: 4
+  P: 9
+  SS: 1
+  UTIL: 2
