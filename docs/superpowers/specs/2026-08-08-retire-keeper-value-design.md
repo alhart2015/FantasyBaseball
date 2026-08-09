@@ -76,6 +76,12 @@ Teardown constraints 1 and 2 exist because the last two keeper-value attempts we
 selected on pool-wide rank correlation, which "rewards being right about players nobody
 would keep". This evaluation is on the decision.
 
+**Where the code goes.** The bake-off extends `scripts/backtest_trajectory.py` and the
+keeper-chain parameterization stays in `scripts/keeper_forecast.py`. Both files are
+deleted in PR 3, so anything written into them is deliberately temporary. **`era_factors()`
+is the one exception** -- it lands in `trajectory/era.py`, which survives all three PRs,
+because `era_normalize` will keep calling it long after this evaluation is gone.
+
 ### One scale for both estimators
 
 `keeper_forecast.forecast_pool` emits the canonical rate/PT schema (`PA`, `ab_pa`,
@@ -148,10 +154,13 @@ for early base years.
 
 A gap-model fallback **still counts as keeper-value** -- it is what the engine does when
 the data is thin, and substituting something better would be scoring an engine that does
-not exist. But it is counted and reported per base year and pool. If more than 25% of a
-base year's pool falls back, that base year is reported separately and excluded from the
-headline number rather than folded in, because at that point the thing being measured is
-mostly the gap model.
+not exist. But it is counted and reported per base year and pool.
+
+The two fallbacks are treated differently. The **per-player** one is tolerated up to 25%
+of a base year's pool; past that the base year is reported separately and excluded from
+the headline, because at that point the thing being measured is mostly the gap model. The
+**whole-pool** one -- no panel at all -- fails that base year outright rather than
+producing a number.
 
 ### Three advantages keeper-value keeps
 
@@ -265,6 +274,21 @@ Rules that follow from that:
    Draft 2025 is unusable at either horizon -- its outcome year is 2026. The multi-year
    table is the one that matches the keeper question; the one-year table is the one with
    twice the decisions. Neither is dropped and neither is presented as the other.
+
+   **The name join is the risk in this slice, not the arithmetic.** The draft file carries
+   bare names (`"player": "Yordan Alvarez"`); everything else here is keyed on
+   `mlbam_id`. `CLAUDE.md` names bare-name joins as a defect class and
+   `trajectory/roster_join.py` documents that `(normalized_name, pool)` is not unique --
+   the live board has two hitters called Max Muncy. So: resolve through `normalize_name`
+   against the union people cache (`trajectory.board.people`), scoped to the pool the
+   draft slot implies, following `roster_join.RosterIndex`'s existing ambiguity contract
+   rather than writing a second spelling of it.
+
+   Unresolved and ambiguous names are **printed with their team and counted**, never
+   silently dropped. Silent drops would shrink roster pools non-randomly -- toward the
+   fringe players a keeper board is right to ignore -- which flatters both estimators and
+   quietly shrinks the decision being measured. A roster pushed under the 5-candidate
+   floor by unresolved names is named as such, distinctly from one thinned by coverage.
 2. **Top-of-board** -- realized multi-year VAR of each estimator's top 30, taken from the
    **concatenated both-pools** intersection set ranked on forecast multi-year VAR (3
    keepers x 10 teams = 30 players kept league-wide). Per-pool top-15 tables are reported
@@ -362,7 +386,8 @@ Two consequences the issue did not anticipate, both found by tracing consumers:
   `keeper_forecast._panel_path`. With that consumer gone the trajectory panel is the only
   one left: the default `--out-dir` moves to `data/trajectory`, and the keeper-dir guard
   and `--allow-keeper-dir` flag are removed. Leaving a guard that names a deleted
-  function is worse than the diff.
+  function is worse than the diff. `data/playing_time/{hitter,pitcher}_pt_panel_2010_2026.csv`
+  are orphaned by the move and deleted with it.
 
 `keepers/` ingest otherwise stays untouched and all of it keeps a live consumer:
 `cache`, `mlb_stats`, `savant`, `bref`, `appearances` (read by `trajectory/value.py` and
