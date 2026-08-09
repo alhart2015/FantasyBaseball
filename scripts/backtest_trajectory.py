@@ -512,8 +512,15 @@ def var_for(
     base_year: int,
     cache_dir: Path,
     levels: dict[str, float],
+    seasons: int = 1,
 ) -> pd.Series:
     """SGP above the position-aware floor, using year-`base_year` eligibility.
+
+    `seasons` is how many years `sgp_by_id` sums, and the floor is charged once per
+    year. A two-season total netted against ONE season of replacement halves the
+    scarcity credit -- the catcher-to-outfield spread collapses from 4.5 SGP to 2.3 --
+    which reorders catchers against outfielders in precisely the +2 slices the
+    multi-year claim rests on.
 
     Year Y, not the outcome year: Y is the information set the keeper decision actually
     has, and outcome-year eligibility would be hindsight. The catcher-to-outfield floor
@@ -531,7 +538,7 @@ def var_for(
     for pid in sgp_by_id.index:
         slots = resolve_slots(set(eligibility.get(int(pid), frozenset())), kind)
         floors[pid] = best_floor(slots, levels)[1]
-    return sgp_by_id - pd.Series(floors, dtype=float).reindex(sgp_by_id.index)
+    return sgp_by_id - seasons * pd.Series(floors, dtype=float).reindex(sgp_by_id.index)
 
 
 def roles(panel: pd.DataFrame) -> pd.Series:
@@ -688,11 +695,18 @@ def report_track(df: pd.DataFrame, label: str) -> None:
     )
 
 
-def _var(sgp_by_id: Mapping[int, float], kind: str, base_year: int, levels) -> dict[int, float]:
+def _var(
+    sgp_by_id: Mapping[int, float],
+    kind: str,
+    base_year: int,
+    levels: dict[str, float],
+    seasons: int,
+) -> dict[int, float]:
+    """VAR for a total that sums `seasons` years. See `var_for` on why that matters."""
     series = pd.Series(dict(sgp_by_id), dtype=float)
     if series.empty:
         return {}
-    return var_for(series, kind, base_year, FIELDING_CACHE, levels).to_dict()
+    return var_for(series, kind, base_year, FIELDING_CACHE, levels, seasons=seasons).to_dict()
 
 
 def report_base_year(
@@ -728,9 +742,9 @@ def report_base_year(
         keeper_total = {
             pid: sum(v for h, v in keeper_sgp[pid].items() if h <= horizon) for pid in common
         }
-        realized_var = _var(realized_sgp, kind, base_year, levels)
-        shape_var = _var(shape_total, kind, base_year, levels)
-        keeper_var = _var(keeper_total, kind, base_year, levels)
+        realized_var = _var(realized_sgp, kind, base_year, levels, seasons=horizon)
+        shape_var = _var(shape_total, kind, base_year, levels, seasons=horizon)
+        keeper_var = _var(keeper_total, kind, base_year, levels, seasons=horizon)
 
         wrecked = {
             pid

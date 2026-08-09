@@ -750,3 +750,28 @@ def test_bootstrap_difference_is_deterministic_for_a_seed() -> None:
 
     a, b = [1.0, 2.0, 3.0, 4.0], [2.0, 2.0, 2.0, 9.0]
     assert bootstrap_difference(a, b, seed=3) == bootstrap_difference(a, b, seed=3)
+
+
+def test_var_scales_the_floor_by_the_number_of_summed_seasons(tmp_path: Path) -> None:
+    """A two-season SGP total must be netted against TWO seasons of replacement.
+
+    Subtracting one year's floor from a two-year sum halves the position scarcity
+    credit -- the C-to-OF spread goes from 4.5 SGP to 2.3 -- which reorders catchers
+    against outfielders in exactly the +2 slices the multi-year claim rests on.
+    """
+    from backtest_trajectory import var_for
+
+    from fantasy_baseball.trajectory.board import season_slots
+
+    season_slots.cache_clear()
+    (tmp_path / "mlb_fielding_2023.csv").write_text(
+        "player.id,position.abbreviation,stat.games\n12345,C,100\n", encoding="utf-8"
+    )
+    levels = {"C": 7.70, "UTIL": 9.96}
+    sgp = pd.Series([20.0], index=pd.Index([12345], name="mlbam_id"))
+
+    one_year = var_for(sgp, "hitter", 2023, tmp_path, levels, seasons=1)
+    two_year = var_for(sgp, "hitter", 2023, tmp_path, levels, seasons=2)
+
+    assert one_year.loc[12345] == pytest.approx(20.0 - 7.70)
+    assert two_year.loc[12345] == pytest.approx(20.0 - 2 * 7.70)
