@@ -33,6 +33,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -104,6 +105,38 @@ PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 #: The season the LIVE board forecasts from. Historical runs (#325) pass their own.
 DEFAULT_BASE_YEAR = 2026
 
+#: Above this share of per-player gap-model fallbacks, a base year is reported on its
+#: own rather than folded into the headline -- past it, the number describes the gap
+#: model more than the playing-time curve.
+HEADLINE_FALLBACK_SHARE = 0.25
+
+
+@dataclass(frozen=True)
+class FallbackReport:
+    """How much of a forecast came from the gap model rather than the playing-time curve.
+
+    A gap-model fallback STILL COUNTS as keeper-value: it is what the engine does when
+    the data is thin, and substituting something better would be scoring an engine that
+    does not exist. But a base year mostly produced by it is not evidence about the
+    curve, so it is reported separately instead of quietly folded into the headline.
+
+    The two fallbacks are not the same event. `per_player` is a player the curve could
+    not score, tolerated up to `HEADLINE_FALLBACK_SHARE`. `whole_pool` is no panel at
+    all, which fails the base year outright -- there is no curve there to measure.
+    """
+
+    whole_pool: bool
+    per_player: int
+    total: int
+
+    @property
+    def share(self) -> float:
+        return self.per_player / self.total if self.total else 0.0
+
+    @property
+    def exceeds_headline_threshold(self) -> bool:
+        return self.whole_pool or self.share > HEADLINE_FALLBACK_SHARE
+
 
 def _series_for(panel: pd.DataFrame, year: int, column: str, index: pd.Index) -> pd.Series:
     """One season's `column` from the panel, reindexed onto `index`.
@@ -162,7 +195,7 @@ def volume_forecast(
     target_year: int,
     observed: pd.Series,
     include_exits: bool = True,
-) -> pd.Series | None:
+) -> tuple[pd.Series | None, bool]:
     """Projected `target_year` PA (hitters) or IP (pitchers) from career history.
 
     Supersedes the one-year gap term for both pools. `observed` is the BASE season's
@@ -182,7 +215,7 @@ def volume_forecast(
     path = _panel_path(kind)
     if path is None:
         print(f"  WARNING: no {kind} playing-time panel; falling back to the gap model")
-        return None
+        return None, True
     print(f"  {kind} playing-time panel: {path.name}")
     panel = pd.read_csv(path)
     # Censored to the base year for the same reason: a curve fit on seasons after Y has
@@ -234,7 +267,7 @@ def volume_forecast(
         built = build_features(vol1, vol2, vol3, age - (steps - step - 1), role, kind, start_share)
         projected = curve.predict(built)
         vol1, vol2, vol3 = projected, vol1, vol2
-    return projected
+    return projected, False
 
 
 def _dedupe(frame: pd.DataFrame, pt: str) -> pd.DataFrame:
@@ -304,7 +337,7 @@ def forecast_pool(
     *,
     transitions: tuple[tuple[int, int], ...] | None = None,
     factors: pd.DataFrame | None = None,
-) -> pd.DataFrame:
+) -> tuple[pd.DataFrame, FallbackReport]:
     """Forecast `target_year`'s rate/PT line from `base_year` plus what was observed.
 
     `observed` is a decomposed rate/PT frame for the base season, NOT the raw blob:
@@ -332,12 +365,20 @@ def forecast_pool(
     result = pd.DataFrame(index=idx)
     # Volume comes from the multi-year career curve for BOTH pools now, not the
     # one-year gap term. Falls back to the gap model if a panel is missing.
-    curve_volume = volume_forecast(
+    curve_volume, whole_pool_fallback = volume_forecast(
         kind,
         base_year,
         target_year,
         observed.loc[idx, pt],
         not getattr(args, "no_exit_rows", False),
+    )
+    # Built HERE, not inside volume_forecast: the per-player count needs `idx`, the
+    # DISPLAY population, and pushing that down would couple the training population to
+    # the display floor -- which TRAIN_FLOOR's comment records as measured-harmful.
+    fallback = FallbackReport(
+        whole_pool=whole_pool_fallback,
+        per_player=(int(curve_volume.reindex(idx).isna().sum()) if curve_volume is not None else 0),
+        total=len(idx),
     )
     for col in columns:
         g = gap(observed.loc[idx, col], base.loc[idx, col])
@@ -348,7 +389,7 @@ def forecast_pool(
             )
         folded = fold_forecast(base.loc[idx, col], g, shares[col], aging)
         if col == pt and curve_volume is not None:
-            fell_back = int(curve_volume.reindex(idx).isna().sum())
+            fell_back = fallback.per_player
             if fell_back:
                 # Silence here would let a board built entirely by the gap model print
                 # a reassuring "playing-time panel: <file>" line and look healthy.
@@ -368,7 +409,7 @@ def forecast_pool(
     # emit a negative HR rate that would silently subtract from a keeper's line.
     for col in columns:
         result[col] = result[col].clip(lower=0.0)
-    return result
+    return result, fallback
 
 
 def to_counting(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
@@ -442,7 +483,9 @@ def main() -> int:
 
     wanted = {n.strip().lower() for n in args.players.split(",")} if args.players else None
     for kind in [args.pool] if args.pool else ["hitter", "pitcher"]:
-        frame = forecast_pool(kind, DEFAULT_BASE_YEAR, args.year, parse_blend(payload, kind), args)
+        frame, _fallback = forecast_pool(
+            kind, DEFAULT_BASE_YEAR, args.year, parse_blend(payload, kind), args
+        )
         counting = to_counting(frame, kind)
         counting.insert(0, "name", _names(payload, kind).reindex(counting.index))
 

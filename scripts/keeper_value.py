@@ -259,10 +259,10 @@ def main() -> int:
         vol_col = "PA" if kind == "hitter" else "IP"
         for year in (2027, 2028):
             args.year = year
-            counting = to_counting(
-                forecast_pool(kind, DEFAULT_BASE_YEAR, year, parse_blend(payload, kind), args),
-                kind,
+            forecast, _fallback = forecast_pool(
+                kind, DEFAULT_BASE_YEAR, year, parse_blend(payload, kind), args
             )
+            counting = to_counting(forecast, kind)
             per_year[year] = sgp_frame(counting, kind, denoms)
             volume[year] = counting[vol_col]
             if year == 2027:
