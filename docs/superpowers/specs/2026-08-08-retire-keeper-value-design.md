@@ -67,6 +67,8 @@ So 2a is a deletion with a verification attached, not a migration.
 | Where the evidence lives | Issue comment on #325 + PR bodies | Same as how #313's verdict was recorded. No new `docs/` file. |
 | Injury view | Second view censoring outcome years under 50% of anchor volume | Per @alhart2015: injury is close to random, and penalising an otherwise-correct keeper decision for it confounds the comparison. |
 | Zero-volume outcomes | Censored too, in the injury-excluded view | Explicit call after being shown that volume alone cannot separate a season-ending April injury from a washout. The ALL view retains them, so nothing is lost. |
+| Persistence fit leakage | Leave-one-transition-out, declared as a third advantage keeper-value keeps | A strictly causal fit leaves zero transitions for base 2022 and one for base 2023, deleting the +2 horizon and the multi-year claim with it. Base 2024 gets a causal sensitivity run so the size of the advantage is measured, not argued. |
+| In-progress 2026 as an outcome year | Not admissible | `prorate_partial` is straight-line and assumes health, so pacing an outcome season scales an injured player up as if healthy -- the confound the injury view exists to remove. Costs draft 2024 its multi-year target; the triple slice is reported at both horizons instead. |
 
 ## Phase 1 -- the backtest (PR 1)
 
@@ -102,13 +104,32 @@ Four hardwirings, all in `scripts/keeper_forecast.py`:
 |---|---|
 | `BASE_YEAR = 2026` module constant | parameter threaded through `forecast_pool` and `volume_forecast` |
 | `fetch_blend()` reads live Upstash | `forecast_pool` takes an `observed` rate frame; historical runs pass `keeper_persistence.load_rates(Y, kind, source="actual")` |
-| `TRANSITIONS = ((2022,2023),(2023,2024),(2024,2025))` | `load_shares` takes the transition list; historical runs use **leave-one-transition-out** so the persistence fit never sees the transition it is predicting |
+| `TRANSITIONS = ((2022,2023),(2023,2024),(2024,2025))` | `load_shares` takes the transition list; historical runs use **leave-one-transition-out** -- see the leakage note below, this is weaker than it sounds |
 | playing-time panel spans 2010-2026 | censored to `season <= Y` before `lag_panel` / `fit_curve` |
+
+Each base year needs **two** `forecast_pool` runs per pool, for target years Y+1 and
+Y+2, exactly as the live tool is invoked separately for 2027 and 2028; the Y+2 run
+iterates the playing-time curve twice. Shape is called once with `horizons=(1, 2)`. The
+multi-year target is the sum of the two.
 
 Shape gets the symmetric treatment the harness already applies: query player removed
 from the panel entirely (no self-matching), panel truncated to `season <= Y`.
 
-### Two advantages keeper-value keeps
+### When the playing-time curve cannot fit
+
+`volume_forecast` already degrades rather than failing: no panel falls back to the
+one-year gap model with a printed WARNING, and a player the curve cannot score falls
+back per-player to `folded`. Censoring the panel to `season <= Y` makes both more likely
+for early base years.
+
+A gap-model fallback **still counts as keeper-value** -- it is what the engine does when
+the data is thin, and substituting something better would be scoring an engine that does
+not exist. But it is counted and reported per base year and pool. If more than 25% of a
+base year's pool falls back, that base year is reported separately and excluded from the
+headline number rather than folded in, because at that point the thing being measured is
+mostly the gap model.
+
+### Three advantages keeper-value keeps
 
 Stated, not removed, because removing them is impossible and pretending they are absent
 would be worse:
@@ -117,8 +138,24 @@ would be worse:
    the *preseason-Y* ZiPS run. Only the preseason-(Y+1) run exists on disk, and it
    already saw season Y.
 2. **It reads ZiPS at all.** Shape reads only realized, era-normalized seasons.
+3. **Its persistence share is fit partly on seasons after the one it predicts.**
+   `TRANSITIONS` is bounded by actuals coverage at (2022->23, 2023->24, 2024->25).
+   Leave-one-transition-out guarantees the fit never sees the transition it is
+   predicting, and nothing more: for base year 2022 the two remaining transitions are
+   both *later* than the one being predicted. A strictly causal rule (transitions ending
+   `<= Y`) leaves **zero** transitions for base 2022 and **one** for base 2023, which
+   would delete the +2 horizon entirely and with it the multi-year claim this whole
+   evaluation exists to make.
 
-Both flatter keeper-value. If shape wins anyway, that is the strong form of the result.
+   So LOTO is kept and the leakage is declared rather than hidden. The number of
+   future transitions used is printed per base year (2 for 2022, 1 for 2023, 0 for
+   2024). **Base 2024 is additionally run strictly causally**, on the two transitions
+   that precede it, as a sensitivity check -- it is the one base year where a causal fit
+   and a LOTO fit can both be computed, so it is the only place the size of this
+   advantage can be measured rather than argued about.
+
+All three flatter keeper-value. If shape wins anyway, that is the strong form of the
+result.
 
 ### Information set is otherwise symmetric
 
@@ -131,13 +168,29 @@ shape's anchors are -- so this is the symmetric choice, not a concession.
 Realized SGP summed over Y+1 and Y+2, and the same in VAR against `trajectory.value`
 floors. A season not played scores as the 0 it is worth to a roster slot, per `played()`.
 
-Available base years, bounded by actuals (2022-2025) and ZiPS vintages (2022-2026):
+**2026 is not admissible as an outcome year.** It is in progress, and the only tool for
+comparing it against full seasons -- `panel.prorate_partial` -- is straight-line and
+explicitly assumes the player stays healthy. Pacing an outcome season would scale an
+injured player's line up as if he had not been hurt, which is the exact confound the
+injury-excluded view exists to remove. So outcome years stop at 2025.
+
+Available base years, bounded by actuals (2022-2025), ZiPS vintages (2022-2026) and that
+rule:
 
 - **+1 horizon:** base 2022, 2023, 2024 (three cohorts)
 - **+2 horizon:** base 2022, 2023 (**two** cohorts)
 
 Two transition cohorts cannot support a fine distinction. That is teardown constraint 4
 and it is expected to bind here; see Acceptance.
+
+**Position eligibility for VAR comes from year Y**, for both estimators and both
+horizons, via `keepers.appearances.season_eligibility` over
+`data/cache/keeper_skills/mlb_fielding_{Y}.csv` (cached 2022-2026). Year Y is the
+information set the keeper decision actually has; outcome-year eligibility would be
+hindsight, and the catcher-to-outfield floor spread is 2.3 SGP a year -- larger than the
+margins this backtest is trying to resolve. `board.py`'s existing fallback applies: a
+missing or corrupt cache degrades a hitter to the UTIL floor, the highest one, so the
+failure mode understates a player rather than inventing value.
 
 ### Two views
 
@@ -167,15 +220,29 @@ Rules that follow from that:
 
 ### Slices, in decreasing order of trust
 
-1. **Keeper-triple regret** -- the actual decision. For each of the 10 teams in
-   `data/historical_drafts_resolved.json` for draft years 2023 and 2024, each estimator
-   picks the 3 of that team's 23 drafted players with the highest **forecast** multi-year
-   VAR (the league keeps 3). Score the **realized** multi-year VAR of each triple against
-   the ex-post best triple from the same roster; the shortfall is the regret. 20 real
-   decisions rather than 2, because every team's roster is a genuine 23-player keeper
-   pool.
-2. **Top-of-board** -- realized multi-year VAR of each estimator's top 30 (3 keepers x
-   10 teams), plus per-player error on the union of the two top-30s.
+1. **Keeper-triple regret** -- the actual decision. `data/historical_drafts_resolved.json`
+   holds draft years 2023, 2024 and 2025, each with 10 teams of exactly 23 players. For
+   each team, each estimator picks the 3 with the highest **forecast** VAR over the
+   target horizon (the league keeps 3). Score the **realized** VAR of each triple against
+   the ex-post best triple from the same roster; the shortfall is the regret.
+
+   Because 2026 is not an admissible outcome year, this slice is reported at **both**
+   horizons with honest counts rather than one blended number:
+
+   | target | usable draft years | decisions |
+   |---|---|---|
+   | multi-year (Y+1 and Y+2) | 2023 | **10** |
+   | one-year (Y+1) | 2023, 2024 | **20** |
+
+   Draft 2025 is unusable at either horizon -- its outcome year is 2026. The multi-year
+   table is the one that matches the keeper question; the one-year table is the one with
+   twice the decisions. Neither is dropped and neither is presented as the other.
+2. **Top-of-board** -- realized multi-year VAR of each estimator's top 30, taken from the
+   **concatenated both-pools** intersection set ranked on forecast multi-year VAR (3
+   keepers x 10 teams = 30 players kept league-wide). Per-pool top-15 tables are reported
+   alongside, because hitters and pitchers net against different floors and a pooled
+   ranking can hide a pool-specific failure. Plus per-player error on the union of the
+   two top-30s.
 3. **Breakout** -- `now > 1.25 * prior`. This is where 2a's open question is answered:
    `persistence.S` regresses a breakout against ZiPS; shape regresses it against how
    comparable shapes actually played out. If shape is not worse here, the
@@ -199,9 +266,17 @@ slice and named, because picking 3 from 4 is not the decision being measured.
 
 ### Noise floor
 
-Bootstrap over query players on every headline number, reporting the interval on the
-**difference** between estimators and the fraction of draws shape wins. With 20
-team-decisions this is expected to say "cannot separate".
+Bootstrap on every headline number, 10,000 draws, reporting the 2.5-97.5 interval on the
+**difference** between estimators and the fraction of draws shape wins.
+
+The resampling unit differs by slice and getting it wrong makes the interval meaningless:
+
+- **Keeper-triple regret:** resample **team-decisions** (a cluster bootstrap over the 10
+  or 20 team-years). Resampling players inside a roster would change the roster, which
+  changes the ex-post optimum and leaves regret undefined.
+- **Top-of-board and breakout:** resample **players**.
+
+With 10 to 20 team-decisions this is expected to say "cannot separate".
 
 ## Phase 2b -- non-shape trajectory modes (PR 2)
 
@@ -217,7 +292,9 @@ imports from `comps.py`, so deleting `comps.py` first breaks shape.
    `trajectory/__init__.py`; `--match`, `--band`, `--prior-band` and the `parser.error`
    branches policing their combinations in `scripts/player_trajectory.py`;
    `tests/test_trajectory/test_comps.py`; the `current` and `track` contenders in
-   `scripts/backtest_trajectory.py`.
+   `scripts/backtest_trajectory.py`. **`roles()` and `tests/test_trajectory/test_backtest_roles.py`
+   survive this PR untouched** -- the pitcher role bucketing came from #313, not from the
+   comp matchers, and it dies with the file in PR 3.
 3. **Convert, do not drop, `tests/test_trajectory/test_mode_parity.py`.** Its docstring
    records that three review rounds each found shape re-implementing something comps had
    already decided and silently disagreeing. Every assertion is triaged into either a
@@ -266,19 +343,41 @@ and is corrected in PR 2.
 
 Every numeric claim whose harness is being deleted -- the tables in
 `trajectory/__init__.py` and `shape.py` -- gets a `measured 2026-08-08 at <sha>`
-citation naming the commit that still contained `backtest_trajectory.py`, so the code
-that produced the number is findable in git.
+citation, so the code that produced the number is findable in git. `<sha>` is not an
+unfilled placeholder: it is resolved at PR-3 time to the last commit that still
+contained `scripts/backtest_trajectory.py`, which is only knowable once PR 3 is written.
 
 ## Acceptance
 
-**PR 1**
+**PR 1 -- output**
 
 - Historical head-to-head runs for base years 2022-2024 (+1) and 2022-2023 (+2), both
   pools, both views.
-- Keeper-triple regret, top-of-board and breakout slices reported with bootstrap
-  intervals on the difference.
+- Keeper-triple regret at both horizons (10 multi-year decisions, 20 one-year), plus
+  top-of-board and breakout, each with the bootstrap interval on the difference and the
+  resampling unit named.
 - Censored-player list printed with volumes, split zero vs non-zero, at 50% and 20%.
+- Per base year and pool: gap-model fallback counts, future-transition count used by the
+  persistence fit, and the strictly-causal sensitivity run for base 2024.
 - Verdict posted as a comment on #325 and in the PR body.
+
+**PR 1 -- verification.** PR 1 introduces the most error-prone code in this design and
+is not exempt from the repo's guardrail rule. Required tests:
+
+- **Characterization:** `era_normalize`'s output is byte-identical before and after the
+  `era_factors()` extraction, on a fixture panel. A behaviour-preserving extraction with
+  no characterization test is the case `CLAUDE.md` names by hand.
+- **Censor boundaries:** a query at exactly 50% of anchor volume, at zero volume, and
+  with no outcome row at all -- each asserted to land on the intended side of the cut,
+  and asserted to remove the identical row from both estimators.
+- **Historical mode is actually historical:** the fitted panel contains no season > Y,
+  and the query player is absent from it.
+- **Regret:** computed against a hand-built 5-player roster with known realized values,
+  including the case where an estimator's triple *is* the ex-post optimum (regret 0).
+- **Multi-year censoring:** a player censored in only one of two outcome years is absent
+  from the multi-year metric entirely.
+- `pytest -v`, `ruff check .`, `ruff format --check .`, `vulture`, and `mypy` where
+  applicable -- the same gate PR 2 and PR 3 carry.
 
 **A verdict of "cannot separate" is an acceptable outcome and does not block PR 2 or
 PR 3.** Teardown constraint 4 is explicit that when the evaluation cannot separate two
