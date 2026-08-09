@@ -682,7 +682,9 @@ def test_top_of_board_scores_the_realized_value_of_the_forecast_top_n() -> None:
 def test_breakout_mask_selects_a_season_25_percent_over_the_prior() -> None:
     from backtest_trajectory import breakout_mask
 
-    anchors = pd.DataFrame({"now": [13.0, 12.4, 4.0], "prior": [10.0, 10.0, 10.0]})
+    # `current`, not `now`: these are build_history's column names, and the
+    # fixture previously invented a name the real frame does not carry.
+    anchors = pd.DataFrame({"current": [13.0, 12.4, 4.0], "prior": [10.0, 10.0, 10.0]})
     assert list(breakout_mask(anchors)) == [True, False, False]
 
 
