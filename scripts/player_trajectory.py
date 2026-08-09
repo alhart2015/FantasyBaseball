@@ -48,12 +48,9 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import people as board_people
 from fantasy_baseball.trajectory.board import player_names, season_slots
-from fantasy_baseball.trajectory.comps import (
-    DEFAULT_BAND,
-    Trajectory,
-    comp_trajectory,
-)
+from fantasy_baseball.trajectory.comps import comp_trajectory
 from fantasy_baseball.trajectory.era import era_normalize
+from fantasy_baseball.trajectory.model import DEFAULT_BAND, Trajectory
 from fantasy_baseball.trajectory.panel import (
     DEFAULT_PANEL_DIR,
     load_scored_panel,

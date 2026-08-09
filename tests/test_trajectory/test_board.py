@@ -93,7 +93,7 @@ def test_the_split_season_rule_matches_the_shared_one() -> None:
     second definition of "a split season is summed" is exactly how the two estimators
     drifted apart before."""
     from fantasy_baseball.trajectory.board import _collapse
-    from fantasy_baseball.trajectory.comps import collapse_split_seasons
+    from fantasy_baseball.trajectory.model import collapse_split_seasons
 
     panel = _hitters(
         [(1, 2026, 27, 5.0, True), (1, 2026, 27, 6.0, False), (2, 2026, 25, 9.0, False)]

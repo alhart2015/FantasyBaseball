@@ -487,7 +487,7 @@ def test_outcome_sgp_matches_the_shared_collapse_definition() -> None:
     second one. If the collapse ever changes, this fails instead of diverging."""
     from backtest_keeper_value import outcomes_for
 
-    from fantasy_baseball.trajectory.comps import collapse_split_seasons
+    from fantasy_baseball.trajectory.model import collapse_split_seasons
 
     panel = _scored_panel(
         [

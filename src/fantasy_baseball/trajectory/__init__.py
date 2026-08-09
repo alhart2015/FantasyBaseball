@@ -44,8 +44,9 @@ weight on the prior season to the pool where track assumes it.
 and it remains the honest baseline any future matcher has to beat.
 """
 
-from .comps import PathPoint, Trajectory, comp_trajectory
+from .comps import comp_trajectory
 from .era import era_normalize, league_rates
+from .model import PathPoint, Trajectory
 from .panel import DEFAULT_PANEL_DIR, load_scored_panel
 from .shape import Anchors, Prepared, prepare, shape_trajectory
 from .value import best_floor, resolve_slots

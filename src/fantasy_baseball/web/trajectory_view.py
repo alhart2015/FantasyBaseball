@@ -27,7 +27,7 @@ from typing import Any, NoReturn
 
 from fantasy_baseball.data.rosters import RosterSpot
 from fantasy_baseball.trajectory.comp_paths import MAX_COMPS
-from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
+from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.roster_join import index_rosters
 from fantasy_baseball.trajectory.sweep import (
     SCALES,

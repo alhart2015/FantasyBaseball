@@ -971,7 +971,7 @@ def test_a_teams_block_carries_the_flag_threshold_and_its_flagged_rows(payload: 
     could not have rendered the flag even if it wanted to: it was dropped structurally,
     and every block total then summed extrapolated rows with nothing on screen to say so.
     """
-    from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
+    from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT
 
     spots = [*_teams_fixture(), _spot("Thin Support", "Mine")]
     board = build_teams_board(payload, spots=spots, my_team="Mine")

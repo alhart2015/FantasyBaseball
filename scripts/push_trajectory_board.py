@@ -204,8 +204,8 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
     from fantasy_baseball.sgp.denominators import get_sgp_denominators
     from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
     from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
-    from fantasy_baseball.trajectory.comps import collapse_split_seasons
     from fantasy_baseball.trajectory.era import era_normalize
+    from fantasy_baseball.trajectory.model import collapse_split_seasons
     from fantasy_baseball.trajectory.panel import (
         load_scored_panel,
         panel_path,

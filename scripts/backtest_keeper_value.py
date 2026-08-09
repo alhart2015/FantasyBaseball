@@ -59,8 +59,8 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import people, player_names, season_slots
-from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT, collapse_split_seasons
 from fantasy_baseball.trajectory.era import era_factors, era_normalize
+from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT, collapse_split_seasons
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
 from fantasy_baseball.trajectory.panel import score as panel_score
 from fantasy_baseball.trajectory.shape import build_history, shape_trajectory
