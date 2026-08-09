@@ -826,3 +826,25 @@ def test_breakout_requires_a_positive_prior(current, prior, expected, why) -> No
 
     anchors = pd.DataFrame({"current": [current], "prior": [prior]})
     assert bool(breakout_mask(anchors).iloc[0]) is expected, why
+
+
+def test_pool_merge_keeps_a_two_way_player_under_one_pool_only() -> None:
+    """A two-way id appears in BOTH panels. Merging per-pool maps with `|=` is
+    last-wins, so his hitter row was silently overwritten by his pitcher row -- and he
+    stayed in `per_pool["hitter"]`, so the hitter top-15 ranked him on pitcher numbers.
+
+    619 players pooled printed as 618, with no count and no warning.
+    """
+    from backtest_trajectory import merge_pools
+
+    hitter = {1: 10.0, 660271: 20.0}
+    pitcher = {2: 8.0, 660271: 5.0}
+
+    merged, pool_of, dropped = merge_pools(
+        [("hitter", hitter), ("pitcher", pitcher)], prefer={660271: "hitter"}
+    )
+
+    assert merged[660271] == 20.0, "the preferred pool's value must survive"
+    assert pool_of[660271] == "hitter"
+    assert dropped == [(660271, "pitcher")], "the discarded side is reported, not silent"
+    assert set(merged) == {1, 2, 660271}

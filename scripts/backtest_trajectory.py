@@ -516,6 +516,54 @@ def bootstrap_difference(
     return lo, hi, float((diffs < 0).mean())
 
 
+def _two_way_owner(runs: Sequence[PoolRun]) -> dict[int, str]:
+    """`mlbam_id -> owning pool`, for ids that appear in more than one panel.
+
+    The league scores a two-way player twice; a keeper decision is for one roster spot.
+    Highest base-year SGP wins, with the hitter side breaking ties -- that is where the
+    roster spot conventionally sits. Only contested ids appear in the result.
+    """
+    seen: dict[int, list[tuple[float, str]]] = {}
+    for run in runs:
+        for pid in run.common:
+            best = max(run.shape_sgp.get(pid, {0: 0.0}).values(), default=0.0)
+            seen.setdefault(pid, []).append((best, run.kind))
+    return {
+        pid: max(sides, key=lambda s: (s[0], s[1] == "hitter"))[1]
+        for pid, sides in seen.items()
+        if len(sides) > 1
+    }
+
+
+def merge_pools(
+    per_pool: Sequence[tuple[str, Mapping[int, float]]],
+    prefer: Mapping[int, str],
+) -> tuple[dict[int, float], dict[int, str], list[tuple[int, str]]]:
+    """Merge the pools' id-keyed maps, resolving a two-way player to ONE pool.
+
+    A plain `|=` is last-wins, and `runs` is ordered hitter-then-pitcher, so a two-way
+    id kept only its pitcher row -- the bat's forecast and realized VAR deleted with no
+    count and no warning. On the real panel that is Shohei Ohtani in base 2022 and
+    2023, the two years carrying the multi-year claim, entering the pooled top-30 and
+    the roster triple valued as a 130-inning pitcher.
+
+    `prefer` says which pool each contested id belongs to; the discarded side is
+    RETURNED rather than dropped, so the caller can report it.
+    """
+    merged: dict[int, float] = {}
+    pool_of: dict[int, str] = {}
+    dropped: list[tuple[int, str]] = []
+    for kind, values in per_pool:
+        for pid, value in values.items():
+            chosen = prefer.get(pid, kind)
+            if chosen == kind:
+                merged[pid] = value
+                pool_of[pid] = kind
+            else:
+                dropped.append((pid, kind))
+    return merged, pool_of, sorted(dropped)
+
+
 def keeper_value_sgp(
     frame: pd.DataFrame, kind: str, sgp_overrides: SgpOverrides | None
 ) -> pd.Series:
@@ -1001,19 +1049,23 @@ def report_base_year(
     Wiring only: every number comes from a helper that has its own tests.
     """
     collected: list[dict] = []
-    pool_of = {pid: run.kind for run in runs for pid in run.common}
     low_support = {pid for run in runs for pid in run.low_support}
-    excluded_pools = {run.kind for run in runs if run.excluded}
+    flagged_pools = {run.kind for run in runs if run.excluded}
+    # A two-way id is in BOTH panels. Decide ONCE, before anything is merged, which
+    # pool owns his roster spot -- the league scores him twice but a keeper decision is
+    # for one slot. Highest base-year SGP wins; ties go to the hitter side, which is
+    # where a two-way player's roster spot conventionally sits.
+    prefer = _two_way_owner(runs)
 
     for horizon in horizons:
         # CUMULATIVE: +1 is Y+1, +2 is Y+1 and Y+2 summed. One summed target reused for
         # every horizon made the two rows identical, which the first smoke run showed.
         years = [base_year + h for h in horizons if h <= horizon]
-        shape_var: dict[int, float] = {}
-        keeper_var: dict[int, float] = {}
-        realized_var: dict[int, float] = {}
         wrecked: set[int] = set()
-        per_pool: dict[str, list[int]] = {}
+        per_pool_var: list[tuple[str, dict[int, float]]] = []
+        shape_parts: list[tuple[str, dict[int, float]]] = []
+        keeper_parts: list[tuple[str, dict[int, float]]] = []
+        censor_payload = []
 
         for run in runs:
             usable = [
@@ -1023,7 +1075,6 @@ def report_base_year(
                 and _finite(run.shape_sgp.get(pid), horizon)
                 and _finite(run.keeper_sgp.get(pid), horizon)
             ]
-            per_pool[run.kind] = usable
             realized = {pid: run.outcomes[pid].realized(years) for pid in usable}
             shape_tot = {
                 pid: sum(v for h, v in run.shape_sgp[pid].items() if h <= horizon) for pid in usable
@@ -1032,19 +1083,47 @@ def report_base_year(
                 pid: sum(v for h, v in run.keeper_sgp[pid].items() if h <= horizon)
                 for pid in usable
             }
-            realized_var |= _var(realized, run.kind, base_year, levels, horizon, run.slots)
-            shape_var |= _var(shape_tot, run.kind, base_year, levels, horizon, run.slots)
-            keeper_var |= _var(keeper_tot, run.kind, base_year, levels, horizon, run.slots)
-            wrecked |= {
+            per_pool_var.append(
+                (run.kind, _var(realized, run.kind, base_year, levels, horizon, run.slots))
+            )
+            shape_parts.append(
+                (run.kind, _var(shape_tot, run.kind, base_year, levels, horizon, run.slots))
+            )
+            keeper_parts.append(
+                (run.kind, _var(keeper_tot, run.kind, base_year, levels, horizon, run.slots))
+            )
+            pool_wrecked = {
                 pid for pid in usable if censored(run.outcomes[pid], years, args.censor_threshold)
             }
+            wrecked |= pool_wrecked
             if horizon == horizons[-1]:
-                _report_censored(run, usable, years, args)
+                censor_payload.append((run, usable, pool_wrecked))
+
+        realized_var, pool_of, dropped = merge_pools(per_pool_var, prefer)
+        shape_var, _, _ = merge_pools(shape_parts, prefer)
+        keeper_var, _, _ = merge_pools(keeper_parts, prefer)
+        per_pool = {
+            kind: [pid for pid in realized_var if pool_of[pid] == kind]
+            for kind in {run.kind for run in runs}
+        }
+        # Wrecked is a property of the OUTCOME, so a two-way id could be censored on the
+        # side he does not own. Keep only the owning pool's verdict.
+        wrecked &= set(realized_var)
 
         label = "multi-year" if horizon > 1 else "one-year"
         print(f"\n== target +{horizon} ({label}) ==")
-        if excluded_pools:
-            print(f"     NOTE: {sorted(excluded_pools)} flagged as mostly gap model")
+        if flagged_pools:
+            print(f"     NOTE: {sorted(flagged_pools)} flagged as mostly gap model,")
+            print("           and NOT excluded -- their players are in every slice below")
+        if dropped:
+            names = player_names(FIELDING_CACHE)
+            for pid, side in dropped:
+                print(
+                    f"     two-way: {str(names.get(pid, pid))[:24]} scored as"
+                    f" {prefer.get(pid, '?')}; his {side} line is out of the pool"
+                )
+        for run, usable, pool_wrecked in censor_payload:
+            _report_censored(run, usable, pool_wrecked, years, args)
         for view in ("ALL", "INJURY-EXCLUDED"):
             ids = [pid for pid in realized_var if view == "ALL" or pid not in wrecked]
             print(f"  -- {view} ({len(ids)} players) --")
@@ -1085,9 +1164,13 @@ def _finite(by_horizon: dict[int, float] | None, horizon: int) -> bool:
     return len(values) == horizon and not any(np.isnan(v) for v in values)
 
 
-def _report_censored(run: PoolRun, ids: Sequence[int], years, args) -> None:
-    """Counts, and the wrecked players BY NAME with their volumes."""
-    wrecked = [pid for pid in ids if censored(run.outcomes[pid], years, args.censor_threshold)]
+def _report_censored(run: PoolRun, ids: Sequence[int], wrecked_set, years, args) -> None:
+    """Counts, and the wrecked players BY NAME with their volumes.
+
+    Takes the already-computed set rather than recomputing `censored` over the same ids
+    and threshold, so the report and the slice population cannot disagree.
+    """
+    wrecked = sorted(wrecked_set)
     zero = [pid for pid in wrecked if not any(run.outcomes[pid].volume_by_year.values())]
     at_20 = [pid for pid in ids if censored(run.outcomes[pid], years, 0.2)]
     print(
@@ -1129,22 +1212,24 @@ def _top_line(label, ids, shape_var, keeper_var, realized_var, n, args) -> None:
     s_pick, s_total = top_of_board({p: shape_var[p] for p in ids}, realized_var, n)
     k_pick, k_total = top_of_board({p: keeper_var[p] for p in ids}, realized_var, n)
     union = sorted(set(s_pick) | set(k_pick))
-    s_val = [realized_var[p] for p in s_pick]
-    k_val = [realized_var[p] for p in k_pick]
-    # Bootstrap the VAR TOTAL too -- the spec asks for an interval on every headline,
-    # and this is the number it names as the slice.
-    vlo, vhi, vshare = bootstrap_difference(k_val, s_val, draws=args.draws)
+    # NO interval on the VAR total. The two top-n lists are DIFFERENT players ordered by
+    # different forecasts, so `bootstrap_difference` -- which is paired, one index draw
+    # indexing both samples -- has no common unit to pair on. It happily returns a
+    # non-degenerate interval even when both estimators pick the identical 30 players in
+    # a different order, i.e. when the true difference is exactly zero. The union MAE
+    # below IS paired (same ids both sides) and is the honest interval for this slice.
     print(
         f"     top-{n} {label:7s} realized VAR: shape {s_total:7.1f}  keeper {k_total:7.1f}"
-        f"  (share {len(set(s_pick) & set(k_pick))}/{n})"
-        f"  diff 95% [{vlo:+.2f}, {vhi:+.2f}]  shape higher in {vshare:.0%}"
+        f"  (share {len(set(s_pick) & set(k_pick))}/{n}; no paired interval exists"
+        f" -- different player sets)"
     )
     s_err = [abs(shape_var[p] - realized_var[p]) for p in union]
     k_err = [abs(keeper_var[p] - realized_var[p]) for p in union]
     lo, hi, share = bootstrap_difference(s_err, k_err, draws=args.draws)
     print(
         f"        union-of-top MAE  shape {np.mean(s_err):5.2f}  keeper {np.mean(k_err):5.2f}"
-        f"   diff 95% [{lo:+.2f}, {hi:+.2f}]  shape better in {share:.0%}"
+        f"   shape-minus-keeper 95% [{lo:+.2f}, {hi:+.2f}]  shape better in {share:.0%}"
+        f"  [paired on {len(union)} players]"
     )
 
 
