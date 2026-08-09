@@ -379,7 +379,6 @@ def test_volume_forecast_reads_no_season_after_its_base_year(monkeypatch) -> Non
     import keeper_forecast
 
     seen: list[int] = []
-    real = pd.DataFrame.loc
 
     panel = pd.DataFrame(
         {
@@ -387,6 +386,7 @@ def test_volume_forecast_reads_no_season_after_its_base_year(monkeypatch) -> Non
             "season": [2020, 2021, 2022, 2026],
             "pa": [500.0, 550.0, 600.0, 610.0],
             "games": [140, 145, 150, 152],
+            "starts": [0, 0, 0, 0],
             "age": [25, 26, 27, 31],
             "partial_season": [False, False, False, False],
         }
@@ -394,9 +394,13 @@ def test_volume_forecast_reads_no_season_after_its_base_year(monkeypatch) -> Non
     monkeypatch.setattr(keeper_forecast.pd, "read_csv", lambda *_a, **_k: panel)
     monkeypatch.setattr(keeper_forecast, "_panel_path", lambda kind: Path("fake.csv"))
 
-    def spy(year: int, column: str):
+    real_series_for = keeper_forecast._series_for
+
+    def spy(panel_arg, year, column, index):
         seen.append(year)
-        return pd.Series(dtype=float)
+        return real_series_for(panel_arg, year, column, index)
+
+    monkeypatch.setattr(keeper_forecast, "_series_for", spy)
 
     observed = pd.Series([600.0], index=pd.Index([1], name="mlbam_id"))
     keeper_forecast.volume_forecast("hitter", 2022, 2023, observed)
@@ -405,10 +409,11 @@ def test_volume_forecast_reads_no_season_after_its_base_year(monkeypatch) -> Non
     assert max(seen) <= 2022, f"read seasons after the base year: {sorted(set(seen))}"
 ```
 
-Note: the spy needs `volume_forecast` to route its per-season reads through a named
-helper. Part of this task is extracting the inline `series_for` closure into a
-module-level `_series_for(panel, year, column, index)` so it can be observed; that is
-required for the test, not incidental.
+The spy wraps rather than replaces, so the function under test still does real work --
+a stub returning an empty Series would make the assertion pass for the wrong reason.
+It requires `volume_forecast` to route its per-season reads through a named
+module-level helper, so extracting the inline `series_for` closure into
+`_series_for(panel, year, column, index)` is part of this task, not incidental to it.
 
 - [ ] **Step 2: Run to verify it fails**
 
@@ -423,18 +428,36 @@ Expected: FAIL — `volume_forecast` takes 3 positional args, not 4.
 - `forecast_pool(kind, base_year, target_year, observed, args, *, transitions=None, factors=None)`; `load_vintage(base_year, PROJECTIONS, kind, factors=factors)` and `load_vintage(target_year, ..., factors=factors)`; drop the internal `parse_blend` call and take `observed` as a frame.
 - `main()` passes `DEFAULT_BASE_YEAR` and `parse_blend(payload, kind)`, so the live path is unchanged.
 
-- [ ] **Step 4: Run the test and the live path**
+- [ ] **Step 4: Repair the sibling caller this breaks**
+
+`scripts/keeper_value.py:255` calls `forecast_pool(kind, year, payload, args)` and imports it
+at line 55. The new signature breaks it. That script is not deleted until PR 3 and is the
+tool PR 3's live coverage diff has to run, so it is fixed here, not later:
+
+```python
+            counting = to_counting(
+                forecast_pool(kind, DEFAULT_BASE_YEAR, year, parse_blend(payload, kind), args),
+                kind,
+            )
+```
+
+and add `parse_blend` plus `DEFAULT_BASE_YEAR` to its imports from `keeper_forecast` /
+`fantasy_baseball.keepers.blend`.
+
+- [ ] **Step 5: Run the test and both live paths**
 
 Run: `pytest tests/test_scripts/test_backtest_historical.py -v`
 Expected: PASS.
 
 Run: `python scripts/keeper_forecast.py --pool hitter --top 5`
-Expected: the same top-5 table as before the change. This needs `.env` and network; if unavailable, say so in the commit message rather than claiming it was verified.
+Run: `python scripts/keeper_value.py --top 5`
+Expected: both produce the same tables as before the change. Both need `.env` and network;
+if unavailable, say so explicitly rather than claiming they were verified.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
-git add scripts/keeper_forecast.py tests/test_scripts/test_backtest_historical.py
+git add scripts/keeper_forecast.py scripts/keeper_value.py tests/test_scripts/test_backtest_historical.py
 git commit -m "keeper_forecast: make the base year and observed frame parameters (#325)"
 ```
 
@@ -622,7 +645,113 @@ git commit -m "keeper_forecast: censor the PT panel to the base year and report 
 
 ---
 
-### Task 6: Score a keeper-value forecast onto the panel's SGP and VAR scale
+### Task 6: The shape side -- normalize, then truncate, then hold out
+
+**Files:**
+- Modify: `scripts/backtest_trajectory.py`
+- Test: `tests/test_scripts/test_backtest_historical.py`
+
+**Interfaces:**
+- Consumes: `era_factors` (Task 1), `transitions_for` (Task 4).
+- Produces: `horizons_for(base_year: int) -> tuple[int, ...]`; `historical_panel(raw_panel: pd.DataFrame, kind: str, base_year: int, query_id: int, sgp_overrides) -> pd.DataFrame`; `historical_shape(panel: pd.DataFrame, kind: str, age: int, sgp: float, prior_sgp: float, horizons: tuple[int, ...])` returning the `shape_trajectory` pair.
+
+**The ORDER is the whole task.** `era_normalize` raises when any of `REFERENCE_SEASONS = (2023, 2024, 2025)` is missing (`trajectory/era.py`, deliberately). A panel truncated to `season <= 2022` has none of them, so normalizing after truncation aborts base years 2022 and 2023 -- two of the three. Normalize the **full** panel, then truncate, then remove the query player. The resulting factor table is informed by seasons after Y; that is a stated limitation in the spec, symmetric across both estimators, not a defect to fix here.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+def test_historical_panel_normalizes_before_truncating() -> None:
+    """The order is load-bearing. era_normalize raises without the 2023-2025 reference
+    seasons, so truncating first aborts base 2022 and 2023 outright -- two of the three
+    base years in scope."""
+    from backtest_trajectory import historical_panel
+
+    raw = _panel_2000_to_2026()  # spans the reference seasons
+    out = historical_panel(raw, "hitter", 2022, query_id=999, sgp_overrides=None)
+
+    assert not out.empty
+    assert int(out["season"].max()) <= 2022
+    assert "era_factor_hr_pa" in out.columns
+
+
+def test_historical_panel_removes_the_query_player() -> None:
+    """No self-matching. An in-sample comparison flatters shape, which fits a model."""
+    from backtest_trajectory import historical_panel
+
+    raw = _panel_2000_to_2026()
+    out = historical_panel(raw, "hitter", 2024, query_id=1, sgp_overrides=None)
+
+    assert 1 not in set(out["mlbam_id"])
+
+
+def test_horizons_for_drops_the_plus_two_run_where_2026_would_be_the_target() -> None:
+    from backtest_trajectory import horizons_for
+
+    assert horizons_for(2022) == (1, 2)
+    assert horizons_for(2023) == (1, 2)
+    assert horizons_for(2024) == (1,)
+```
+
+Write `_panel_2000_to_2026()` in that module: a hitter frame with one row per season
+from 2000 to 2026 for each of three `mlbam_id`s, through `trajectory.panel.score`.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `pytest tests/test_scripts/test_backtest_historical.py -k "historical_panel or horizons_for" -v`
+Expected: FAIL — neither function exists.
+
+- [ ] **Step 3: Implement**
+
+```python
+LAST_OUTCOME_SEASON = 2025
+
+
+def horizons_for(base_year: int) -> tuple[int, ...]:
+    """Which forward years are scoreable from `base_year`.
+
+    2026 is in progress and is never an outcome year: `prorate_partial` is
+    straight-line and assumes health, so pacing an outcome season would scale an
+    injured player up as if he had not been hurt -- the confound the injury-excluded
+    view exists to remove.
+    """
+    return tuple(h for h in (1, 2) if base_year + h <= LAST_OUTCOME_SEASON)
+
+
+def historical_panel(
+    raw_panel: pd.DataFrame,
+    kind: str,
+    base_year: int,
+    query_id: int,
+    sgp_overrides: SgpOverrides | None,
+) -> pd.DataFrame:
+    """Era-normalize on the FULL panel, then truncate, then hold the query player out.
+
+    Not the other order. See the module docstring and `era.era_factors`: the reference
+    window is 2023-2025, so a panel truncated to 2022 cannot define one and
+    `era_normalize` refuses rather than silently normalizing onto a different reference.
+    """
+    normalized = era_normalize(raw_panel, kind, sgp_overrides=sgp_overrides)
+    truncated = normalized[normalized["season"] <= base_year]
+    return truncated[truncated["mlbam_id"] != query_id].copy()
+```
+
+`historical_shape` is a thin call to `shape_trajectory(panel, kind=kind, age=age, sgp=sgp, prior_sgp=prior_sgp, horizons=horizons)`; it exists so the truncation and the holdout cannot be skipped by a caller reaching for `shape_trajectory` directly.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `pytest tests/test_scripts/test_backtest_historical.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/backtest_trajectory.py tests/test_scripts/test_backtest_historical.py
+git commit -m "backtest: shape side of the historical comparison (#325)"
+```
+
+---
+
+### Task 7: Score a keeper-value forecast onto the panel's SGP and VAR scale
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -703,7 +832,7 @@ git commit -m "backtest: score keeper-value forecasts on the panel's SGP scale (
 
 ---
 
-### Task 7: Realized outcomes and the two views
+### Task 8: Realized outcomes and the two views
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -816,7 +945,7 @@ git commit -m "backtest: realized outcomes and the injury-excluded view (#325)"
 
 ---
 
-### Task 8: Resolve drafted names to ids
+### Task 9: Resolve drafted names to ids
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -892,7 +1021,7 @@ git commit -m "backtest: resolve drafted names to mlbam ids, reporting misses (#
 
 ---
 
-### Task 9: Keeper-triple regret and the agreement rate
+### Task 10: Keeper-triple regret and the agreement rate
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -963,7 +1092,91 @@ git commit -m "backtest: keeper-triple regret and estimator agreement rate (#325
 
 ---
 
-### Task 10: The bootstrap, with the right resampling unit per slice
+### Task 11: Top-of-board, breakout, the intersection rule and the per-view floor
+
+**Files:**
+- Modify: `scripts/backtest_trajectory.py`
+- Test: `tests/test_scripts/test_backtest_historical.py`
+
+**Interfaces:**
+- Produces: `intersect(shape_ids, keeper_ids) -> list[int]`; `top_of_board(forecast: Mapping[int, float], realized: Mapping[int, float], n: int = 30) -> tuple[tuple[int, ...], float]`; `breakout_mask(anchors: pd.DataFrame, factor: float = 1.25) -> pd.Series`; `eligible_rosters(by_team, scoreable, floor: int = 5) -> tuple[dict[str, list[int]], list[str]]`; `low_support_count(rows) -> int`.
+
+**Three spec rules land here, and each one silently changes the answer if skipped.** Slices run on the **intersection** of what both estimators can score, or they compare two different populations. The 5-candidate roster floor is applied **per view**, so a roster can qualify in ALL and not in INJURY-EXCLUDED -- unreported, a difference between views confounds injury exclusion with a changed roster set. Low-support shape rows are **kept** in the headline (dropping them would flatter shape) and reported with one excluded-variant line.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+def test_intersect_keeps_only_players_both_estimators_scored() -> None:
+    from backtest_trajectory import intersect
+
+    assert intersect([1, 2, 3], [2, 3, 4]) == [2, 3]
+
+
+def test_top_of_board_scores_the_realized_value_of_the_forecast_top_n() -> None:
+    from backtest_trajectory import top_of_board
+
+    forecast = {1: 50.0, 2: 40.0, 3: 30.0, 4: 1.0}
+    realized = {1: 10.0, 2: 10.0, 3: 10.0, 4: 99.0}
+    picked, total = top_of_board(forecast, realized, n=3)
+    assert picked == (1, 2, 3)
+    assert total == pytest.approx(30.0)
+
+
+def test_breakout_mask_selects_a_season_25_percent_over_the_prior() -> None:
+    from backtest_trajectory import breakout_mask
+
+    anchors = pd.DataFrame({"now": [13.0, 12.4, 4.0], "prior": [10.0, 10.0, 10.0]})
+    assert list(breakout_mask(anchors)) == [True, False, False]
+
+
+def test_the_roster_floor_is_applied_per_view_and_names_the_difference() -> None:
+    """A roster with 6 candidates in ALL and 4 after censoring must appear in one view's
+    counts and not the other's, and be NAMED -- otherwise a between-view difference reads
+    as 'excluding injuries changed the answer' when it means 'different teams were
+    scored'."""
+    from backtest_trajectory import eligible_rosters
+
+    by_team = {"Spacemen": [1, 2, 3, 4, 5, 6], "Hart of the Order": [7, 8, 9, 10, 11]}
+
+    all_view, all_dropped = eligible_rosters(by_team, scoreable=set(range(1, 12)), floor=5)
+    injury_view, injury_dropped = eligible_rosters(
+        by_team, scoreable={1, 2, 3, 4, 7, 8, 9, 10, 11}, floor=5
+    )
+
+    assert set(all_view) == {"Spacemen", "Hart of the Order"}
+    assert all_dropped == []
+    assert set(injury_view) == {"Hart of the Order"}
+    assert injury_dropped == ["Spacemen"]
+```
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `pytest tests/test_scripts/test_backtest_historical.py -k "intersect or top_of_board or breakout or roster_floor" -v`
+Expected: FAIL — none of the four functions exist.
+
+- [ ] **Step 3: Implement**
+
+`intersect` returns the sorted common ids. `top_of_board` sorts by forecast descending (tie-break on id), takes `n`, and sums their realized values. `breakout_mask` is `anchors["now"] > factor * anchors["prior"]`. `eligible_rosters` filters each team's ids to `scoreable`, keeps teams at or above `floor`, and returns the kept mapping plus the sorted names of the dropped teams.
+
+Per-pool top-15 tables are computed by calling `top_of_board` on each pool's own forecast/realized mapping with `n=15` -- **not** by filtering the pooled top-30, since hitters and pitchers net against different floors and slicing the pooled ranking would report whichever pool happened to dominate it.
+
+`low_support_count` counts rows whose shape fit was evaluated below `MIN_LOCAL_SUPPORT`; the headline keeps them and one extra line reports the metric with them excluded.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `pytest tests/test_scripts/test_backtest_historical.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/backtest_trajectory.py tests/test_scripts/test_backtest_historical.py
+git commit -m "backtest: top-of-board, breakout, intersection and per-view roster floor (#325)"
+```
+
+---
+
+### Task 12: The bootstrap, with the right resampling unit per slice
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -1026,7 +1239,7 @@ git commit -m "backtest: paired bootstrap on the estimator difference (#325)"
 
 ---
 
-### Task 11: Wire the historical mode into the CLI and run it
+### Task 13: Wire the historical mode into the CLI and run it
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py` (`main`)
@@ -1038,16 +1251,28 @@ git commit -m "backtest: paired bootstrap on the estimator difference (#325)"
 
 - [ ] **Step 1: Add the arguments and the report**
 
-New flags: `--historical`, `--base-year` (repeatable, defaults to 2022 2023 2024), `--horizon-max` (1 or 2), `--causal-check`, `--censor-threshold` (default 0.5), `--draws` (default 10000). The report prints, per base year and pool:
+New flags: `--historical`, `--base-year` (repeatable, defaults to 2022 2023 2024), `--causal-check`, `--censor-threshold` (default 0.5), `--draws` (default 10000). Horizons are not a flag — `horizons_for` (Task 6) decides them per base year.
 
-- coverage: players each estimator alone could score, and the intersection size
-- fallback report and the future-transition count
-- the censored list (name, anchor volume, outcome volume), split zero vs non-zero, at 0.5 and 0.2
-- keeper-triple regret at both horizons, both views, with agreement rate and the disagreeing-subset difference
-- top-of-board and breakout, both views
-- bootstrap interval and win share on every headline
+This task is **wiring only**: every number below comes from a function built and tested in Tasks 6-12. If something here needs new logic, it belongs in one of those tasks with its own failing test, not inlined into the report.
 
-Per-view roster counts are printed for the triple slice, and any roster present in one view but not the other is named — otherwise a difference between views confounds injury exclusion with a changed roster set.
+Per base year and pool, the report prints:
+
+| line | source |
+|---|---|
+| coverage: each estimator alone, and the intersection size | `intersect` (Task 11) |
+| gap-model fallback counts | `FallbackReport` (Task 5) |
+| future-transition count, and the causal variant for base 2023 | `transitions_for` (Task 4) |
+| censored list (name, anchor volume, outcome volume), zero vs non-zero, at 0.5 and 0.2 | `censored` (Task 8) |
+| keeper-triple regret, both horizons, both views | `triple_regret` (Task 10) |
+| agreement rate and the disagreeing-subset difference | `agreement_rate` (Task 10) |
+| per-view roster counts, and any roster in one view but not the other, named | `eligible_rosters` (Task 11) |
+| top-of-board top-30 and per-pool top-15 | `top_of_board` (Task 11) |
+| breakout slice | `breakout_mask` (Task 11) |
+| low-support count and the excluded-variant line | `low_support_count` (Task 11) |
+| bootstrap interval and win share on every headline | `bootstrap_difference` (Task 12) |
+
+Names in the censored list come from the people cache via the Task 9 resolution, keyed on
+`mlbam_id` — never printed from a name that was not resolved to an id.
 
 - [ ] **Step 2: Run for one base year to smoke it out**
 
@@ -1077,7 +1302,7 @@ git commit -m "backtest: historical shape-vs-keeper-value mode (#325)"
 
 ---
 
-### Task 12: Write the verdict
+### Task 14: Write the verdict
 
 **Files:**
 - No code. Output only.
@@ -1110,8 +1335,30 @@ Note the commit sha of Task 11 — PR 3 cites it for numbers produced by this ru
 
 ## Self-Review
 
-**Spec coverage.** One scale -> Tasks 1, 2, 6. Chain runnable out of sample -> Tasks 3, 4, 5. Three advantages / leakage disclosure -> Task 4. Target and eligibility -> Task 6. Two views -> Task 7. Slices -> Tasks 8, 9, 11. Coverage and low-support -> Task 11. Noise floor -> Task 10. PR 1 verification list -> characterization (Task 1), censor boundaries (Task 7), historical-mode guards (Tasks 3, 5), regret (Task 9), multi-year censoring (Task 7). Verdict -> Task 12.
+**Spec coverage.**
 
-**Gap found and left open deliberately:** the spec's "the fit inputs and the fold inputs carry the same era factors" test is Task 2's cross-loader test, which requires real ZiPS files on disk. If `data/projections/2024/` is absent in a given checkout that test must skip with a stated reason rather than being deleted.
+| spec requirement | task |
+|---|---|
+| One scale through `panel.score` | 1, 2, 7 |
+| Normalize at BOTH loaders (`load_rates` and `load_vintage`) | 2 |
+| Factors on the FULL panel, truncate after | **6** |
+| Base year / observed frame parameterized | 3 |
+| Transition list, LOTO counts, causal variant on base 2023 | 4 |
+| PT panel censored to `<= Y`; fallback thresholds | 5 |
+| Query player held out; shape horizons per base year | 6 |
+| Year-Y position eligibility for VAR | 7 |
+| Realized multi-year target; 2026 inadmissible | 6 (`horizons_for`), 8 |
+| Two views, censor rules, missing row = zero volume | 8 |
+| Name join with unresolved/ambiguous reported | 9 |
+| Keeper-triple regret, both horizons, agreement rate | 10 |
+| Top-of-board, per-pool tables, breakout | 11 |
+| Intersection rule, per-view 5-candidate floor, low-support | 11 |
+| Bootstrap, per-slice resampling unit | 12 |
+| Report assembly | 13 |
+| Verdict against the pre-registered criterion | 14 |
 
-**Type consistency.** `era_factors` returns a season-indexed frame in Tasks 1 and 2. `normalize_frame(frame, season, kind, factors)` keeps that argument order at every call site. `volume_forecast` returns a tuple from Task 5 onward — Task 3's signature change and Task 5's return change touch the same function, so Task 5 must update Task 3's call sites, and its test asserts the tuple shape.
+**Two gaps found during this review and closed:** the shape side of the comparison had no task at all (now Task 6 — and its normalize-then-truncate order is the spec's round-2 Critical, which nothing had been enforcing), and `scripts/keeper_value.py:255` calls `forecast_pool` with the old signature, which Task 3 now repairs rather than leaving broken until PR 3.
+
+**Left open deliberately:** Task 2's cross-loader test needs real ZiPS files on disk. If `data/projections/2024/` is absent in a checkout it must skip with a stated reason rather than being deleted.
+
+**Type consistency.** `era_factors` returns a season-indexed frame in Tasks 1, 2 and 6. `normalize_frame(frame, season, kind, factors)` keeps that argument order at every call site. `volume_forecast` returns `tuple[pd.Series | None, FallbackReport]` from Task 5 onward — Task 3 changes its signature and Task 5 changes its return, both on the same function, so Task 5 updates Task 3's call sites and its test asserts the tuple shape. `horizons_for` (Task 6) is the single source of which horizons run, consumed by Tasks 8, 10, 11 and 13; no task hardcodes `(1, 2)`.
