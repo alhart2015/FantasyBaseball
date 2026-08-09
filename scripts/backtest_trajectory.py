@@ -41,11 +41,13 @@ from keeper_persistence import TRANSITIONS as KEEPER_TRANSITIONS
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.sgp.denominators import SgpOverrides
+from fantasy_baseball.trajectory.board import season_slots
 from fantasy_baseball.trajectory.comps import comp_trajectory
 from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
+from fantasy_baseball.trajectory.panel import score as panel_score
 from fantasy_baseball.trajectory.shape import build_history, shape_trajectory
-from fantasy_baseball.trajectory.value import STARTER_SHARE
+from fantasy_baseball.trajectory.value import STARTER_SHARE, best_floor, resolve_slots
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
 
 #: Columns the role bucket needs, and the rule for a season split across two rows.
@@ -136,6 +138,53 @@ def without_player(panel: pd.DataFrame, query_id: int) -> pd.DataFrame:
     `shape`, which fits a model, over an estimator that averages.
     """
     return panel[panel["mlbam_id"] != query_id]
+
+
+def keeper_value_sgp(
+    frame: pd.DataFrame, kind: str, sgp_overrides: SgpOverrides | None
+) -> pd.Series:
+    """SGP for a keeper-value forecast frame, scored by the PANEL's own scorer.
+
+    This is what puts the two estimators on one scale rather than merely in one unit.
+    `forecast_pool` emits the canonical rate/PT schema -- `keepers.actuals.HITTER_PT`
+    is literally `"pa"` and `HITTER_RATES` are character-for-character the columns
+    `panel.score` reconstructs from -- so the forecast can be handed to the scorer the
+    realized seasons went through, with no translation step to disagree about.
+
+    Deliberately NOT via `keeper_forecast.to_counting`, which renames to `PA`/`IP` and
+    finishes `AVG`/`ERA`/`WHIP`: that output is for display and would need a second
+    scoring path.
+    """
+    scored = panel_score(frame.reset_index(), kind, sgp_overrides)
+    return scored.set_index("mlbam_id")["sgp"]
+
+
+def var_for(
+    sgp_by_id: pd.Series,
+    kind: str,
+    base_year: int,
+    cache_dir: Path,
+    levels: dict[str, float],
+) -> pd.Series:
+    """SGP above the position-aware floor, using year-`base_year` eligibility.
+
+    Year Y, not the outcome year: Y is the information set the keeper decision actually
+    has, and outcome-year eligibility would be hindsight. The catcher-to-outfield floor
+    spread is 2.3 SGP a year, larger than the margins this backtest is trying to
+    resolve, so the choice is not cosmetic.
+
+    Reuses `trajectory.board.season_slots` rather than re-reading the fielding cache: a
+    second eligibility path would be free to price the backtest's catchers differently
+    from the live board's. Its existing fallback carries through -- a missing or corrupt
+    cache degrades to UTIL, the HIGHEST hitter floor, so an unknown player is
+    understated rather than credited with scarcity he may not have.
+    """
+    eligibility = season_slots(cache_dir, base_year)
+    floors = {}
+    for pid in sgp_by_id.index:
+        slots = resolve_slots(set(eligibility.get(int(pid), frozenset())), kind)
+        floors[pid] = best_floor(slots, levels)[1]
+    return sgp_by_id - pd.Series(floors, dtype=float).reindex(sgp_by_id.index)
 
 
 def roles(panel: pd.DataFrame) -> pd.Series:

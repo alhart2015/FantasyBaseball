@@ -312,3 +312,88 @@ def test_horizons_for_drops_the_plus_two_run_where_2026_would_be_the_target() ->
     assert horizons_for(2023) == (1, 2)
     assert horizons_for(2024) == (1,)
     assert horizons_for(2025) == ()
+
+
+def test_keeper_value_sgp_uses_the_panels_own_scorer() -> None:
+    """One scorer, or the two estimators are not on one scale.
+
+    A forecast frame is already in the panel's rate schema (keepers.actuals.HITTER_PT
+    == 'pa'), so this is a hand-off rather than a translation. Do NOT route through
+    keeper_forecast.to_counting, which renames to PA/IP and finishes AVG/ERA/WHIP.
+    """
+    from backtest_trajectory import keeper_value_sgp
+
+    from fantasy_baseball.trajectory.panel import score
+
+    frame = pd.DataFrame(
+        {
+            "pa": [600.0],
+            "ab_pa": [0.90],
+            "h_ab": [0.280],
+            "hr_pa": [0.05],
+            "r_pa": [0.15],
+            "rbi_pa": [0.14],
+            "sb_pa": [0.02],
+        },
+        index=pd.Index([12345], name="mlbam_id"),
+    )
+    expected = score(frame.reset_index(), "hitter")["sgp"].iloc[0]
+
+    assert keeper_value_sgp(frame, "hitter", None).loc[12345] == pytest.approx(expected)
+
+
+def test_var_uses_year_Y_eligibility_not_the_outcome_years(tmp_path: Path) -> None:
+    """A catcher who stops catching in the outcome year must still be priced against
+    the catcher floor -- that is the information the keeper decision had."""
+    from backtest_trajectory import var_for
+
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+    from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+    from fantasy_baseball.trajectory.board import season_slots
+
+    # season_slots is @lru_cache(maxsize=4) on (cache_dir, season); without this a
+    # previous test's tmp_path can answer for this one.
+    season_slots.cache_clear()
+
+    (tmp_path / "mlb_fielding_2023.csv").write_text(
+        "player.id,position.abbreviation,stat.games\n12345,C,100\n", encoding="utf-8"
+    )
+    (tmp_path / "mlb_fielding_2024.csv").write_text(
+        "player.id,position.abbreviation,stat.games\n12345,1B,100\n", encoding="utf-8"
+    )
+    sgp = pd.Series([10.0], index=pd.Index([12345], name="mlbam_id"))
+    # The REAL table, not a fixture -- a fixture would be free to drift from the floors
+    # the draft board actually nets against, which is the point of using them.
+    levels = position_aware_replacement_levels(
+        get_sgp_denominators(load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides)
+    )
+
+    as_catcher = var_for(sgp, "hitter", 2023, tmp_path, levels)
+    as_first_baseman = var_for(sgp, "hitter", 2024, tmp_path, levels)
+
+    # Directional against config/league.yaml's configured floors: the catcher floor is
+    # the lowest, so the same SGP is worth MORE as a catcher. An inequality rather than
+    # a number, because the floors are re-derived from the denominators and move.
+    assert as_catcher.loc[12345] > as_first_baseman.loc[12345]
+
+
+def test_var_degrades_a_missing_eligibility_cache_to_the_util_floor(tmp_path: Path) -> None:
+    """UTIL is the HIGHEST hitter floor, so an unknown player is UNDERSTATED rather
+    than credited with scarcity he may not have."""
+    from backtest_trajectory import var_for
+
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+    from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+    from fantasy_baseball.trajectory.board import season_slots
+
+    season_slots.cache_clear()
+    levels = position_aware_replacement_levels(
+        get_sgp_denominators(load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides)
+    )
+    sgp = pd.Series([10.0], index=pd.Index([12345], name="mlbam_id"))
+
+    out = var_for(sgp, "hitter", 1999, tmp_path, levels)
+
+    assert out.loc[12345] == pytest.approx(10.0 - levels["UTIL"])
