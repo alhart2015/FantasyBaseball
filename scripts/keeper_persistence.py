@@ -88,12 +88,21 @@ def _projection_path(year: int, stem: str) -> Path:
     return matches[-1]
 
 
-def load_rates(year: int, kind: str, *, source: str) -> pd.DataFrame:
+def load_rates(
+    year: int, kind: str, *, source: str, factors: pd.DataFrame | None = None
+) -> pd.DataFrame:
     """Decomposed rate/PT frame for one (year, pool, source), indexed by mlbam_id.
 
     `decompose_*` works on BOTH sources because the ZiPS export and our actuals CSVs
     carry the same counting-stat column names (PA/AB/H/HR/R/RBI/SB, IP/SO/W/SV/ER/BB/H)
     keyed by MLBAMID. That is why there is no separate actuals decomposer.
+
+    `factors` restates the frame into the trajectory panel's reference run environment
+    for the #325 backtest. This is one of TWO entry points that must apply it --
+    `keepers.vintages.load_vintage` feeds `forecast_pool` directly and is the other.
+    Applying it to only one leaves the persistence fit and the fold it feeds in
+    different unit systems: `S` survives that, being a dimensionless share of a gap,
+    but `drift` does not.
     """
     pool = POOLS[kind]
     path = (
@@ -106,7 +115,12 @@ def load_rates(year: int, kind: str, *, source: str) -> pd.DataFrame:
     # entry rather than the first, so the survivor is the real line and not a 12-PA stub.
     pt = str(pool["pt"])
     ordered = frame.sort_values(pt, ascending=False)
-    return ordered.loc[~ordered.index.duplicated(keep="first")]
+    deduped = ordered.loc[~ordered.index.duplicated(keep="first")]
+    if factors is None:
+        return deduped
+    from fantasy_baseball.trajectory.era import normalize_frame
+
+    return normalize_frame(deduped, year, kind, factors)
 
 
 def load_counts(year: int, kind: str, *, source: str) -> pd.DataFrame:
