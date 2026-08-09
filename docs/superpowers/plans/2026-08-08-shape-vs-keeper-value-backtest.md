@@ -17,6 +17,7 @@
 - **No `x or default` for numeric defaults.** `0`, `0.0` and `""` are falsy; use `x if x is not None else default`.
 - **`src/fantasy_baseball/keepers/` and `src/fantasy_baseball/trajectory/` are both under `[tool.mypy].files`** (`pyproject.toml:80`, `pyproject.toml:95`). Every library change in this plan needs full type annotations and a clean `mypy` run. `scripts/` is not under mypy.
 - **Tests are the guardrail.** Do not loosen an assertion to make it pass.
+- **`vulture` will flag the new helpers as dead until Task 14 wires them.** Tasks 6-13 each add functions that nothing calls yet, so a full-gate run mid-plan reports them as unused. That is expected, not a defect: do **not** delete them, do **not** add suppressions, and do **not** wire them early to quiet the check. Re-run `vulture` at Task 14, when every one of them has a caller, and treat anything still flagged there as a real finding.
 - **Verification gate for every commit:** `pytest -v` (or the stated subset), `ruff check .`, `ruff format --check .`, `vulture`, and `mypy` when a mypy-covered file was touched.
 - Outcome years stop at **2025**. 2026 is in progress and is never an outcome year.
 - Base years in scope: **2022, 2023, 2024** at +1; **2022, 2023** at +2.
@@ -330,6 +331,7 @@ Expected: PASS.
 - [ ] **Step 6: Full gate and commit**
 
 Run: `pytest -v && mypy && ruff check . && ruff format --check . && vulture`
+Expected: all clean. `normalize_frame` is referenced by both loaders as of this task, so vulture should not flag it.
 
 ```bash
 git add src/fantasy_baseball/trajectory/era.py src/fantasy_baseball/keepers/vintages.py scripts/keeper_persistence.py tests/
