@@ -288,8 +288,16 @@ Rules that follow from that:
 - Multi-year metric: a player censored in **either** outcome year leaves it entirely. A
   one-year sum and a two-year sum are not the same target.
 - Keeper-triple slice: a censored player leaves both the candidate pool and the ex-post
-  optimum -- the view asks "among players who were not wrecked, did the estimator pick
-  right".
+  optimum, so each estimator **re-picks** from the reduced roster.
+
+  This is deliberately counterfactual and the alternative was considered: keep the picks
+  made from the full pool and drop only the wrecked player's contribution from scoring.
+  That is closer to "don't penalise an otherwise-correct decision", but it leaves a
+  two-man triple scored against a three-man optimum, which makes regret incoherent.
+  Re-picking keeps both triples the same size, and both estimators receive identical
+  hindsight, so the comparison stays symmetric. The view therefore answers "excluding
+  players who were wrecked, does the estimator rank right", not "was this specific pick
+  correct".
 - Censoring is a property of the realized outcome, so both estimators lose identical
   rows. It cannot favour either.
 - Every censored player is printed with name, year-Y volume, outcome volume, and is
@@ -330,6 +338,19 @@ Rules that follow from that:
    fringe players a keeper board is right to ignore -- which flatters both estimators and
    quietly shrinks the decision being measured. A roster pushed under the 5-candidate
    floor by unresolved names is named as such, distinctly from one thinned by coverage.
+
+   **Report the agreement rate, or the bootstrap will lie about what it measured.** The
+   best three players on a 23-man roster are usually not close, so the likeliest outcome
+   is that both estimators name the same triple on most rosters. Every agreeing decision
+   contributes exactly zero to the difference while still counting toward n: 18 agreements
+   out of 20 would produce a tight interval around zero that reads as "cannot separate"
+   when it actually means the slice had two informative rows. So the output carries the
+   number of identical triples, and the difference recomputed on the **disagreeing subset
+   alone**.
+
+   A high agreement rate is itself a result, not a failure of the slice. It would mean the
+   two engines do not disagree where the decision is made -- which is grounds for deleting
+   one on simplicity, without any accuracy claim at all.
 2. **Top-of-board** -- realized multi-year VAR of each estimator's top 30, taken from the
    **concatenated both-pools** intersection set ranked on forecast multi-year VAR (3
    keepers x 10 teams = 30 players kept league-wide). Per-pool top-15 tables are reported
@@ -483,6 +504,8 @@ and **the right commit is not the same for every number**:
 - Keeper-triple regret at both horizons (10 multi-year decisions, 20 one-year), plus
   top-of-board and breakout, each with the bootstrap interval on the difference and the
   resampling unit named.
+- The keeper-triple **agreement rate** -- identical triples out of total decisions -- and
+  the difference recomputed on the disagreeing subset alone.
 - Censored-player list printed with volumes, split zero vs non-zero, at 50% and 20%.
 - Per base year and pool: gap-model fallback counts and the future-transition count used
   by the persistence fit, plus the strictly-causal sensitivity run **on base 2023** --
