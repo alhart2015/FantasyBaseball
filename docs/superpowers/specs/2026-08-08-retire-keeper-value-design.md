@@ -82,7 +82,7 @@ is stated in the PR body so the loss is a known one.
 | Where the evidence lives | Issue comment on #325 + PR bodies | Same as how #313's verdict was recorded. No new `docs/` file. |
 | Injury view | Second view censoring outcome years under 50% of anchor volume | Per @alhart2015: injury is close to random, and penalising an otherwise-correct keeper decision for it confounds the comparison. |
 | Zero-volume outcomes | Censored too, in the injury-excluded view | Explicit call after being shown that volume alone cannot separate a season-ending April injury from a washout. The ALL view retains them, so nothing is lost. |
-| Persistence fit leakage | Leave-one-transition-out, declared as a third advantage keeper-value keeps | A strictly causal fit leaves zero transitions for base 2022 and one for base 2023, deleting the +2 horizon and the multi-year claim with it. Base 2024 gets a causal sensitivity run so the size of the advantage is measured, not argued. |
+| Persistence fit leakage | Leave-one-transition-out, declared as a third advantage keeper-value keeps | A strictly causal fit leaves zero transitions for base 2022 and one for base 2023, deleting the +2 horizon and the multi-year claim with it. Base 2023 gets a causal sensitivity run -- the only base year where the two fits differ and both exist. |
 | In-progress 2026 as an outcome year | Not admissible | `prorate_partial` is straight-line and assumes health, so pacing an outcome season scales an injured player up as if healthy -- the confound the injury view exists to remove. Costs draft 2024 its multi-year target; the triple slice is reported at both horizons instead. |
 
 ## Phase 1 -- the backtest (PR 1)
@@ -207,12 +207,26 @@ would be worse:
    would delete the +2 horizon entirely and with it the multi-year claim this whole
    evaluation exists to make.
 
-   So LOTO is kept and the leakage is declared rather than hidden. The number of
-   future transitions used is printed per base year (2 for 2022, 1 for 2023, 0 for
-   2024). **Base 2024 is additionally run strictly causally**, on the two transitions
-   that precede it, as a sensitivity check -- it is the one base year where a causal fit
-   and a LOTO fit can both be computed, so it is the only place the size of this
-   advantage can be measured rather than argued about.
+   So LOTO is kept and the leakage is declared rather than hidden. The number of future
+   transitions used is printed per base year: **2 for 2022, 1 for 2023, 0 for 2024**.
+
+   **The sensitivity check goes on base 2023, and only there.** Read the counts before
+   assigning it:
+
+   | base | LOTO fit | causal fit | comparison |
+   |---|---|---|---|
+   | 2022 | 2 transitions, both future | **0 transitions** | not computable |
+   | 2023 | 2 transitions, 1 future | 1 transition (2022->23) | **this is the check** |
+   | 2024 | 2 transitions, 0 future | the same 2 transitions | identical -- measures nothing |
+
+   Base 2024 is where LOTO is *already* causal, so running it "strictly causally" would
+   return a difference of exactly zero and invite the reading that the leakage is
+   negligible when nothing had been measured. Base 2022's causal fit has no data at all.
+   Only base 2023 yields two different fits that both exist.
+
+   That check rests on a single-transition causal fit, so it is **directional, not a
+   measurement**: it says which way the leakage pushes and roughly how far, on one
+   cohort. It is reported with that caveat attached, not as a bound.
 
 All three flatter keeper-value. If shape wins anyway, that is the strong form of the
 result.
@@ -470,8 +484,10 @@ and **the right commit is not the same for every number**:
   top-of-board and breakout, each with the bootstrap interval on the difference and the
   resampling unit named.
 - Censored-player list printed with volumes, split zero vs non-zero, at 50% and 20%.
-- Per base year and pool: gap-model fallback counts, future-transition count used by the
-  persistence fit, and the strictly-causal sensitivity run for base 2024.
+- Per base year and pool: gap-model fallback counts and the future-transition count used
+  by the persistence fit, plus the strictly-causal sensitivity run **on base 2023** --
+  the only base year where a causal fit and a LOTO fit differ and both exist -- reported
+  as directional rather than as a bound.
 - Verdict posted as a comment on #325 and in the PR body.
 
 **PR 1 -- verification.** PR 1 introduces the most error-prone code in this design and
