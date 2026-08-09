@@ -397,3 +397,113 @@ def test_var_degrades_a_missing_eligibility_cache_to_the_util_floor(tmp_path: Pa
     out = var_for(sgp, "hitter", 1999, tmp_path, levels)
 
     assert out.loc[12345] == pytest.approx(10.0 - levels["UTIL"])
+
+
+CENSOR_CASES = [
+    # (anchor_volume, outcome_volumes, expected_censored, why)
+    (600.0, {2024: 600.0, 2025: 600.0}, False, "healthy both years"),
+    (600.0, {2024: 300.0, 2025: 600.0}, False, "exactly 50% is NOT under the cut"),
+    (600.0, {2024: 299.0, 2025: 600.0}, True, "just under 50% in one year censors both"),
+    (600.0, {2024: 0.0, 2025: 600.0}, True, "zero volume is censored, by explicit decision"),
+    (600.0, {2025: 600.0}, True, "a MISSING row is zero volume, not a skipped year"),
+]
+
+
+@pytest.mark.parametrize("anchor,volumes,expected,why", CENSOR_CASES)
+def test_censoring_boundaries(anchor, volumes, expected, why) -> None:
+    from backtest_trajectory import Outcome, censored
+
+    outcome = Outcome(mlbam_id=1, sgp_by_year={}, volume_by_year=volumes, anchor_volume=anchor)
+    assert censored(outcome, [2024, 2025]) is expected, why
+
+
+def test_the_ratio_is_against_the_anchor_year_not_the_previous_outcome() -> None:
+    """A wrecked Y+1 must not redefine 'normal' for Y+2. Against Y+1 (100 PA) a 500-PA
+    Y+2 would look like a 5x recovery and pass; the anchor is what decides."""
+    from backtest_trajectory import Outcome, censored
+
+    outcome = Outcome(
+        mlbam_id=1, sgp_by_year={}, volume_by_year={2024: 100.0, 2025: 500.0}, anchor_volume=600.0
+    )
+    assert censored(outcome, [2024, 2025]) is True
+    assert censored(outcome, [2025]) is False
+
+
+def test_a_missing_outcome_row_scores_zero_in_the_ALL_view() -> None:
+    """The 0 a vanished player is worth to a roster slot -- which is a different
+    question from whether he was wrecked, hence two methods."""
+    from backtest_trajectory import Outcome
+
+    outcome = Outcome(mlbam_id=1, sgp_by_year={}, volume_by_year={}, anchor_volume=600.0)
+    assert outcome.realized([2024, 2025]) == 0.0
+
+
+def test_a_zero_anchor_is_censored_rather_than_dividing_by_zero() -> None:
+    from backtest_trajectory import Outcome, censored
+
+    outcome = Outcome(mlbam_id=1, sgp_by_year={}, volume_by_year={2024: 600.0}, anchor_volume=0.0)
+    assert censored(outcome, [2024]) is True
+
+
+def test_outcomes_collapse_a_traded_players_split_season() -> None:
+    """Two rows, one season. Uncollapsed, a healthy 600-PA year reads as 310 + 290 and
+    the injury view censors him as wrecked -- a false positive landing on every player
+    who changed teams, correlated with nothing the view claims to control for."""
+    from backtest_trajectory import censored, outcomes_for
+
+    panel = _scored_panel(
+        [
+            {"mlbam_id": 1, "season": 2024, "pa": 310.0},
+            {"mlbam_id": 1, "season": 2024, "pa": 290.0},
+        ]
+    )
+    out = outcomes_for(panel, "hitter", 2023, (1,), anchor_volume={1: 600.0})
+
+    assert out[1].volume_by_year[2024] == pytest.approx(600.0)
+    assert censored(out[1], [2024]) is False
+
+
+def test_outcomes_omit_a_season_the_player_did_not_appear_in() -> None:
+    from backtest_trajectory import outcomes_for
+
+    panel = _scored_panel([{"mlbam_id": 1, "season": 2024, "pa": 600.0}])
+    out = outcomes_for(panel, "hitter", 2023, (1, 2), anchor_volume={1: 600.0})
+
+    assert 2024 in out[1].volume_by_year
+    assert 2025 not in out[1].volume_by_year
+    assert out[1].realized([2024, 2025]) == pytest.approx(out[1].sgp_by_year[2024])
+
+
+def test_outcome_sgp_matches_the_shared_collapse_definition() -> None:
+    """collapse_split_seasons SUMS sgp across the fragments (comps.py). The point of
+    routing through it is not that summing is obviously right -- it is that both
+    estimators already fit on that definition, so the outcome side must not carry a
+    second one. If the collapse ever changes, this fails instead of diverging."""
+    from backtest_trajectory import outcomes_for
+
+    from fantasy_baseball.trajectory.comps import collapse_split_seasons
+
+    panel = _scored_panel(
+        [
+            {"mlbam_id": 1, "season": 2024, "pa": 310.0},
+            {"mlbam_id": 1, "season": 2024, "pa": 290.0},
+        ]
+    )
+    collapsed = collapse_split_seasons(panel)
+    expected = float(collapsed.loc[collapsed["season"] == 2024, "sgp"].iloc[0])
+
+    out = outcomes_for(panel, "hitter", 2023, (1,), anchor_volume={1: 600.0})
+    assert out[1].sgp_by_year[2024] == pytest.approx(expected)
+
+
+def test_volume_survives_a_panel_with_nothing_split() -> None:
+    """collapse_split_seasons returns the panel UNTOUCHED when there are no duplicates
+    and a four-column aggregate when there are, so its schema varies by data. Code
+    reading `pa` off its result works on most fixtures and breaks on exactly the split
+    season it exists for -- volume must come from its own groupby on the raw panel."""
+    from backtest_trajectory import outcomes_for
+
+    panel = _scored_panel([{"mlbam_id": 1, "season": 2024, "pa": 600.0}])
+    out = outcomes_for(panel, "hitter", 2023, (1,), anchor_volume={1: 600.0})
+
+    assert out[1].volume_by_year[2024] == pytest.approx(600.0)

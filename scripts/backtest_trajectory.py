@@ -25,6 +25,8 @@ from __future__ import annotations
 
 import argparse
 import sys
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
@@ -42,7 +44,7 @@ from keeper_persistence import TRANSITIONS as KEEPER_TRANSITIONS
 from fantasy_baseball.config import load_config
 from fantasy_baseball.sgp.denominators import SgpOverrides
 from fantasy_baseball.trajectory.board import season_slots
-from fantasy_baseball.trajectory.comps import comp_trajectory
+from fantasy_baseball.trajectory.comps import collapse_split_seasons, comp_trajectory
 from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
 from fantasy_baseball.trajectory.panel import score as panel_score
@@ -138,6 +140,104 @@ def without_player(panel: pd.DataFrame, query_id: int) -> pd.DataFrame:
     `shape`, which fits a model, over an estimator that averages.
     """
     return panel[panel["mlbam_id"] != query_id]
+
+
+#: Outcome-year volume below this share of the ANCHOR year's counts as wrecked and
+#: leaves the injury-excluded view. Chosen by @alhart2015: injury is close to random,
+#: and charging an otherwise-correct keeper decision for it confounds the comparison.
+CENSOR_THRESHOLD = 0.5
+
+
+@dataclass(frozen=True)
+class Outcome:
+    """What a player actually did in the outcome years, and how much he played.
+
+    `sgp_by_year` and `volume_by_year` are SPARSE: a season the player did not appear
+    in is ABSENT, not zero, so "played badly" and "was not there" stay distinguishable
+    all the way to the censoring rule. `realized` collapses absence to the 0 a vanished
+    player is worth to a roster slot; `censored` treats it as zero volume. Those are
+    different questions and the two methods answer them differently on purpose.
+
+    `frozen=True` blocks attribute reassignment only -- the dicts remain mutable and the
+    generated `__hash__` would raise on them. Outcomes are never hashed and each owns
+    its dicts; do not start sharing them.
+    """
+
+    mlbam_id: int
+    sgp_by_year: dict[int, float]
+    volume_by_year: dict[int, float]
+    anchor_volume: float
+
+    def realized(self, years: Sequence[int]) -> float:
+        return sum(self.sgp_by_year.get(y, 0.0) for y in years)
+
+
+def censored(outcome: Outcome, years: Sequence[int], threshold: float = CENSOR_THRESHOLD) -> bool:
+    """True if ANY outcome year falls under `threshold` of the ANCHOR year's volume.
+
+    ANY, not all: a one-year sum and a two-year sum are not the same target, so a
+    player wrecked in one of two years leaves the multi-year metric entirely rather
+    than contributing a shorter one.
+
+    The ratio is against the ANCHOR (year Y) for every outcome year, never against the
+    preceding outcome. A wrecked Y+1 must not be allowed to redefine "normal" for Y+2 --
+    against a 100-PA Y+1, a 500-PA Y+2 would read as a recovery and pass.
+
+    Censoring is a property of the realized outcome, not of either forecast, so both
+    estimators lose identical rows and it cannot favour one.
+    """
+    if outcome.anchor_volume <= 0:
+        return True
+    return any(
+        outcome.volume_by_year.get(year, 0.0) < threshold * outcome.anchor_volume for year in years
+    )
+
+
+def outcomes_for(
+    panel: pd.DataFrame,
+    kind: str,
+    base_year: int,
+    horizons: tuple[int, ...],
+    anchor_volume: Mapping[int, float],
+) -> dict[int, Outcome]:
+    """What each player actually did in `base_year + h` for every h in `horizons`.
+
+    SGP and volume come from two DIFFERENT places, and that is not an accident:
+
+      * SGP -> `collapse_split_seasons`, which aggregates `sgp=("sgp", "sum")`. Used
+        because it is the definition both estimators already fit on, not because
+        summing is self-evidently correct for rate categories.
+      * volume -> a separate groupby on the RAW panel.
+
+    The collapse drops `pa` and `ip` entirely, and it returns the panel *untouched*
+    when no season is split. So its output schema differs by data -- full columns when
+    nothing is split, four columns when something is -- and reading volume off it works
+    on ordinary fixtures while failing on precisely the split season it exists to
+    handle. `_ROLE_SUMS` above re-sums the pitcher role columns for the same reason.
+
+    Getting this wrong is not a crash. A traded player's 600-PA season reads as 310 +
+    290, both under half a 600-PA anchor, and the injury-excluded view censors him as
+    wrecked -- a false positive concentrated on players who changed teams.
+    """
+    volume_col = "pa" if kind == "hitter" else "ip"
+    collapsed = collapse_split_seasons(panel).set_index(["mlbam_id", "season"])["sgp"]
+    volumes = panel.groupby(["mlbam_id", "season"])[volume_col].sum()
+
+    years = [base_year + h for h in horizons]
+    out: dict[int, Outcome] = {}
+    for pid in panel["mlbam_id"].unique():
+        pid = int(pid)
+        sgp_by_year = {y: float(collapsed[(pid, y)]) for y in years if (pid, y) in collapsed.index}
+        volume_by_year = {y: float(volumes[(pid, y)]) for y in years if (pid, y) in volumes.index}
+        out[pid] = Outcome(
+            mlbam_id=pid,
+            sgp_by_year=sgp_by_year,
+            volume_by_year=volume_by_year,
+            # Passed in rather than re-derived: the anchor is year Y and this function
+            # only ever looks forward.
+            anchor_volume=float(anchor_volume.get(pid, 0.0)),
+        )
+    return out
 
 
 def keeper_value_sgp(
