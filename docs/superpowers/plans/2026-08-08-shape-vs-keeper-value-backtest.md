@@ -20,6 +20,7 @@
 - **Verification gate for every commit:** `pytest -v` (or the stated subset), `ruff check .`, `ruff format --check .`, `vulture`, and `mypy` when a mypy-covered file was touched.
 - Outcome years stop at **2025**. 2026 is in progress and is never an outcome year.
 - Base years in scope: **2022, 2023, 2024** at +1; **2022, 2023** at +2.
+- `Sequence`, `Mapping` and `Iterable` in the signatures below come from `collections.abc`, imported at the top of `scripts/backtest_trajectory.py` alongside the existing `from __future__ import annotations`.
 
 ## File Structure
 
@@ -28,7 +29,8 @@
 | `src/fantasy_baseball/trajectory/era.py` | `era_factors()` extracted from `era_normalize`; `normalize_frame()` applies a factor table to any rate frame | **yes** |
 | `src/fantasy_baseball/keepers/vintages.py` | `load_vintage` gains an optional `factors` argument | no (deleted PR 3) |
 | `scripts/keeper_persistence.py` | `load_rates` gains `factors`; `TRANSITIONS` becomes a default, not a constant | no |
-| `scripts/keeper_forecast.py` | `BASE_YEAR` becomes a parameter; `forecast_pool` takes an `observed` frame and a transition list | no |
+| `scripts/keeper_forecast.py` | `BASE_YEAR` becomes a parameter; `forecast_pool` takes an `observed` frame and a transition list; the inline `series_for` closure is extracted to a module-level `_series_for` so Task 3's guard can observe it | no |
+| `scripts/keeper_value.py` | call site updated for `forecast_pool`'s new signature -- it must keep running, PR 3's live coverage diff depends on it | no |
 | `scripts/backtest_trajectory.py` | historical head-to-head, slices, censoring, bootstrap | no |
 | `tests/test_trajectory/test_era.py` | characterization + `normalize_frame` tests | yes |
 | `tests/test_scripts/test_backtest_historical.py` | censoring, regret, roster join, historical-mode guards | no |
@@ -653,9 +655,21 @@ git commit -m "keeper_forecast: censor the PT panel to the base year and report 
 
 **Interfaces:**
 - Consumes: `era_factors` (Task 1), `transitions_for` (Task 4).
-- Produces: `horizons_for(base_year: int) -> tuple[int, ...]`; `historical_panel(raw_panel: pd.DataFrame, kind: str, base_year: int, query_id: int, sgp_overrides) -> pd.DataFrame`; `historical_shape(panel: pd.DataFrame, kind: str, age: int, sgp: float, prior_sgp: float, horizons: tuple[int, ...])` returning the `shape_trajectory` pair.
+- Produces: `horizons_for(base_year: int) -> tuple[int, ...]`; `historical_panel(raw_panel: pd.DataFrame, kind: str, base_year: int, sgp_overrides) -> pd.DataFrame`; `without_player(panel: pd.DataFrame, query_id: int) -> pd.DataFrame`; `historical_shape(panel, kind, age, sgp, prior_sgp, horizons)` returning the `shape_trajectory` pair.
 
 **The ORDER is the whole task.** `era_normalize` raises when any of `REFERENCE_SEASONS = (2023, 2024, 2025)` is missing (`trajectory/era.py`, deliberately). A panel truncated to `season <= 2022` has none of them, so normalizing after truncation aborts base years 2022 and 2023 -- two of the three. Normalize the **full** panel, then truncate, then remove the query player. The resulting factor table is informed by seasons after Y; that is a stated limitation in the spec, symmetric across both estimators, not a defect to fix here.
+
+**Each of the three runs at a different frequency, and conflating them makes the backtest
+unrunnable.** `era_normalize` calls `panel.score`, a row-wise `apply` over ~18,000 seasons.
+Doing that per query -- several hundred per base year per pool -- is hours of work for an
+identical result every time. The existing harness normalizes once in `main()` and does only
+the cheap id filter inside the loop; keep that shape:
+
+| operation | frequency | function |
+|---|---|---|
+| era-normalize the full panel | once per pool | `era_normalize` in `main()` |
+| truncate to `season <= Y` | once per base year | `historical_panel` |
+| drop the query player | per query | `without_player` |
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -663,24 +677,27 @@ git commit -m "keeper_forecast: censor the PT panel to the base year and report 
 def test_historical_panel_normalizes_before_truncating() -> None:
     """The order is load-bearing. era_normalize raises without the 2023-2025 reference
     seasons, so truncating first aborts base 2022 and 2023 outright -- two of the three
-    base years in scope."""
+    base years in scope. This test is the ONLY thing standing between a plausible
+    restructure and losing two thirds of the evaluation."""
     from backtest_trajectory import historical_panel
 
     raw = _panel_2000_to_2026()  # spans the reference seasons
-    out = historical_panel(raw, "hitter", 2022, query_id=999, sgp_overrides=None)
+    out = historical_panel(raw, "hitter", 2022, sgp_overrides=None)
 
     assert not out.empty
     assert int(out["season"].max()) <= 2022
     assert "era_factor_hr_pa" in out.columns
 
 
-def test_historical_panel_removes_the_query_player() -> None:
+def test_without_player_removes_the_query_player() -> None:
     """No self-matching. An in-sample comparison flatters shape, which fits a model."""
-    from backtest_trajectory import historical_panel
+    from backtest_trajectory import historical_panel, without_player
 
     raw = _panel_2000_to_2026()
-    out = historical_panel(raw, "hitter", 2024, query_id=1, sgp_overrides=None)
+    truncated = historical_panel(raw, "hitter", 2024, sgp_overrides=None)
+    out = without_player(truncated, query_id=1)
 
+    assert 1 in set(truncated["mlbam_id"]), "fixture must contain the player being held out"
     assert 1 not in set(out["mlbam_id"])
 
 
@@ -721,19 +738,35 @@ def historical_panel(
     raw_panel: pd.DataFrame,
     kind: str,
     base_year: int,
-    query_id: int,
     sgp_overrides: SgpOverrides | None,
 ) -> pd.DataFrame:
-    """Era-normalize on the FULL panel, then truncate, then hold the query player out.
+    """Era-normalize on the FULL panel, THEN truncate to `base_year`.
 
-    Not the other order. See the module docstring and `era.era_factors`: the reference
-    window is 2023-2025, so a panel truncated to 2022 cannot define one and
-    `era_normalize` refuses rather than silently normalizing onto a different reference.
+    Not the other order. See `era.era_factors`: the reference window is 2023-2025, so a
+    panel truncated to 2022 cannot define one, and `era_normalize` refuses rather than
+    silently normalizing onto a different reference.
+
+    Called once per base year, not once per query -- `era_normalize` re-scores every one
+    of ~18,000 seasons row-wise. `without_player` is the per-query half.
     """
     normalized = era_normalize(raw_panel, kind, sgp_overrides=sgp_overrides)
-    truncated = normalized[normalized["season"] <= base_year]
-    return truncated[truncated["mlbam_id"] != query_id].copy()
+    return normalized[normalized["season"] <= base_year].copy()
+
+
+def without_player(panel: pd.DataFrame, query_id: int) -> pd.DataFrame:
+    """The panel both estimators see for one query: no self-matching.
+
+    Cheap by design and called in the inner loop. An in-sample comparison would flatter
+    `shape`, which fits a model, over an estimator that averages.
+    """
+    return panel[panel["mlbam_id"] != query_id]
 ```
+
+`main()` calls `era_normalize` once per pool and reuses the result across base years;
+`historical_panel` therefore takes the raw panel only in the test, where the ordering
+guard lives. Structure the loop so the normalized frame is computed once and truncated
+per base year -- if a profile shows the truncation itself is hot, cache per base year
+rather than moving the normalization back inside.
 
 `historical_shape` is a thin call to `shape_trajectory(panel, kind=kind, age=age, sgp=sgp, prior_sgp=prior_sgp, horizons=horizons)`; it exists so the truncation and the holdout cannot be skipped by a caller reaching for `shape_trajectory` directly.
 
