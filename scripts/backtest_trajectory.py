@@ -19,6 +19,26 @@ Usage:
     python scripts/backtest_trajectory.py --pool pitcher       # the #313 question
     python scripts/backtest_trajectory.py --sample 400         # random rather than elite
     python scripts/backtest_trajectory.py --horizon 2 --elite-floor 12
+
+`--historical` runs a SECOND, different bake-off (#325): `shape` against the
+`keeper_forecast` -> `keeper_value` chain, on the keeper decision rather than on
+pool-wide rank. It exists to answer whether the chain being retired is actually worse.
+
+    python scripts/backtest_trajectory.py --historical --pool hitter
+    python scripts/backtest_trajectory.py --historical --base-year 2023 --causal-check
+
+Three things about that mode are load-bearing and easy to undo by accident:
+
+  * era factors are computed on the FULL panel and the truncation happens AFTER --
+    `era_normalize` refuses a panel missing its 2023-2025 reference window, so the
+    other order aborts base years 2022 and 2023 outright
+  * targets are CUMULATIVE per horizon, so +1 and +2 are different questions
+  * keeper-value keeps three advantages (out-year vintage leakage, it reads ZiPS at
+    all, and a persistence fit that for base 2022 trains on LATER transitions). They
+    are declared rather than removed, so a shape win is the strong form of the result
+
+Both estimators are scored by `trajectory.panel.score`, which is what puts them on one
+SCALE rather than merely in one unit.
 """
 
 from __future__ import annotations
