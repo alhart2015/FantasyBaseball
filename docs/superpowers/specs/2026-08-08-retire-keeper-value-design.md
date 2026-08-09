@@ -404,6 +404,19 @@ Two consequences the issue did not anticipate, both found by tracing consumers:
   function is worse than the diff. `data/playing_time/{hitter,pitcher}_pt_panel_2010_2026.csv`
   are orphaned by the move and deleted with it.
 
+**`src/fantasy_baseball/pt_model/` survives, and is not the same thing as
+`keepers/playing_time.py`.** The names overlap and both are reached from
+`scripts/build_pt_panel.py`, so this has to be said rather than left to inference:
+
+- `keepers/playing_time.py` fits the **curve** -- `lag_panel`, `build_features`,
+  `fit_curve` -- and is deleted.
+- `pt_model/panel.py` builds the **training panel** (#290) and is not.
+
+`pt_model`'s live consumers after PR 3 are `scripts/build_pt_panel.py` and the trajectory
+panel (`tests/test_trajectory/test_panel.py` imports it). Its docstring says its "first
+consumer" is "the keeper composite's `pt` family" -- that consumer is what PR 3 deletes,
+so the docstring is corrected in the same PR.
+
 `keepers/` ingest otherwise stays untouched and all of it keeps a live consumer:
 `cache`, `mlb_stats`, `savant`, `bref`, `appearances` (read by `trajectory/value.py` and
 `trajectory/board.py` for position eligibility), `actuals` (read by `keepers/skills.py`,
@@ -413,7 +426,13 @@ Two consequences the issue did not anticipate, both found by tracing consumers:
 
 `trajectory/__init__.py` claims "**Hitters only.** The pitcher pool has never been
 validated and shape is its default too -- #313." That has been stale since 2026-08-03
-and is corrected in PR 2.
+and is corrected in PR 2. Its closing paragraph -- "`comps` is kept, not deprecated ...
+the honest baseline any future matcher has to beat" -- goes with the matchers.
+
+`keepers/__init__.py` narrates the history of the keeper-value model, naming
+`analysis/keeper_value.py` and the successive attempts. After PR 3 that describes nothing
+in the tree; it is rewritten there to describe what the package actually is, an ingest
+and normalization layer.
 
 Every numeric claim whose harness is being deleted -- the tables in
 `trajectory/__init__.py` and `shape.py` -- gets a `measured 2026-08-08 at <sha>`
