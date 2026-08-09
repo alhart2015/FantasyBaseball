@@ -117,15 +117,24 @@ factor exists. This requires extracting the factor computation out of `era_norma
 into a reusable `era_factors()` so the two callers cannot disagree about what a factor
 is.
 
-**Normalize inside `load_rates`, not at the call sites.** That is the single point where
-every historical rate frame -- actual or projection -- enters the keeper chain, and it is
-called by `build_transition` and `build_volume_transition` as well as by
-`forecast_pool`. Normalizing anywhere else would leave the persistence fit on raw rates
-while the fold it feeds runs on normalized ones. `S` would survive that (it is a
-dimensionless share of a gap) but **`drift` would not**: it is an additive term in the
-units it was fit in, so a raw-units drift applied to a normalized baseline biases every
-forecast by a fixed amount. A test asserts the fit inputs and the fold inputs carry the
-same era factors.
+**There are TWO loaders and both must normalize.** This is the easiest thing here to get
+wrong, because the second one is a call deeper than the first:
+
+- `keeper_persistence.load_rates` (through its own `_projection_path`) feeds the
+  persistence fit -- `build_transition`, `build_volume_transition`.
+- `keepers.vintages.load_vintage` feeds `forecast_pool` **directly**:
+  `scripts/keeper_forecast.py:258-259` loads the base vintage and the out-year vintage
+  through it, not through `load_rates`.
+
+Normalizing only one leaves the forecast's own baseline and aging term in raw units while
+the fit folding into them is normalized. `S` would survive that -- it is a dimensionless
+share of a gap -- but **`drift` would not**: it is additive in the units it was fit in, so
+a raw-units drift applied to a normalized baseline biases every forecast by a fixed
+amount, invisibly.
+
+So a single `normalize_frame(frame, season, kind, factors)` helper is applied at **both**
+entry points, with a test asserting that a frame fetched through either path carries
+identical factors for the same season.
 
 **Factors are computed on the FULL panel, before any truncation.** `era_normalize`
 raises when any of `REFERENCE_SEASONS = (2023, 2024, 2025)` is missing -- deliberately,
@@ -151,10 +160,13 @@ change:
 | `TRANSITIONS = ((2022,2023),(2023,2024),(2024,2025))` | `load_shares` takes the transition list; historical runs use **leave-one-transition-out** -- see the leakage note below, this is weaker than it sounds |
 | playing-time panel spans 2010-2026 | censored to `season <= Y` before `lag_panel` / `fit_curve` |
 
-Each base year needs **two** `forecast_pool` runs per pool, for target years Y+1 and
-Y+2, exactly as the live tool is invoked separately for 2027 and 2028; the Y+2 run
-iterates the playing-time curve twice. Shape is called once with `horizons=(1, 2)`. The
-multi-year target is the sum of the two.
+A base year needs one `forecast_pool` run per pool per target year, exactly as the live
+tool is invoked separately for 2027 and 2028; the Y+2 run iterates the playing-time curve
+twice. **The Y+2 run happens only where the +2 horizon is in scope** -- base 2022 and
+2023. Base 2024 runs Y+1 only: its Y+2 target is 2026, which is neither a scoreable
+outcome year nor a season with a settled era factor. Shape is called with
+`horizons=(1, 2)` where both are in scope and `(1,)` otherwise. The multi-year target is
+the sum of the two.
 
 Shape gets the symmetric treatment the harness already applies: query player removed
 from the panel entirely (no self-matching), panel truncated to `season <= Y` **after**
