@@ -52,8 +52,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
-from keeper_forecast import _names, fetch_blend, forecast_pool, to_counting
+from keeper_forecast import (
+    DEFAULT_BASE_YEAR,
+    _names,
+    fetch_blend,
+    forecast_pool,
+    to_counting,
+)
 
+from fantasy_baseball.keepers.blend import parse_blend
 from fantasy_baseball.keepers.positions import load_positions
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import (
@@ -252,7 +259,10 @@ def main() -> int:
         vol_col = "PA" if kind == "hitter" else "IP"
         for year in (2027, 2028):
             args.year = year
-            counting = to_counting(forecast_pool(kind, year, payload, args), kind)
+            counting = to_counting(
+                forecast_pool(kind, DEFAULT_BASE_YEAR, year, parse_blend(payload, kind), args),
+                kind,
+            )
             per_year[year] = sgp_frame(counting, kind, denoms)
             volume[year] = counting[vol_col]
             if year == 2027:

@@ -140,7 +140,12 @@ def load_counts(year: int, kind: str, *, source: str) -> pd.DataFrame:
 
 
 def build_transition(
-    year: int, kind: str, *, min_pt: float, min_next_pt: float
+    year: int,
+    kind: str,
+    *,
+    min_pt: float,
+    min_next_pt: float,
+    factors: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     """Aligned (projection_Y, actual_Y, actual_Y+1) panel plus a sample-attrition record.
 
@@ -158,9 +163,9 @@ def build_transition(
     """
     pool = POOLS[kind]
     pt = str(pool["pt"])
-    proj = load_rates(year, kind, source="projection")
-    obs = load_rates(year, kind, source="actual")
-    nxt = load_rates(year + 1, kind, source="actual")
+    proj = load_rates(year, kind, source="projection", factors=factors)
+    obs = load_rates(year, kind, source="actual", factors=factors)
+    nxt = load_rates(year + 1, kind, source="actual", factors=factors)
 
     qualified = obs.index[obs[pt] >= min_pt]
     survived = qualified.intersection(nxt.index[nxt[pt] >= min_next_pt])
@@ -398,7 +403,9 @@ def run_vs_fresh(kind: str, args: argparse.Namespace) -> None:
         print(f"{col:<10} {stale:>11.4f} {fitted:>10.4f} {fresh_m:>11.4f} {closed:>11}")
 
 
-def build_volume_transition(year: int, kind: str, *, min_pt: float) -> pd.DataFrame:
+def build_volume_transition(
+    year: int, kind: str, *, min_pt: float, factors: pd.DataFrame | None = None
+) -> pd.DataFrame:
     """Volume panel that KEEPS the players who washed out.
 
     The rate panels have to drop a player who did not play in Y+1 -- he has no
@@ -420,9 +427,9 @@ def build_volume_transition(year: int, kind: str, *, min_pt: float) -> pd.DataFr
     for the rate term to answer.
     """
     pt = str(POOLS[kind]["pt"])
-    proj = load_rates(year, kind, source="projection")
-    obs = load_rates(year, kind, source="actual")
-    nxt = load_rates(year + 1, kind, source="actual")
+    proj = load_rates(year, kind, source="projection", factors=factors)
+    obs = load_rates(year, kind, source="actual", factors=factors)
+    nxt = load_rates(year + 1, kind, source="actual", factors=factors)
     idx = obs.index[obs[pt] >= min_pt].intersection(proj.index)
     return pd.DataFrame(
         {
