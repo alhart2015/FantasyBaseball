@@ -24,6 +24,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -39,13 +40,20 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union
 
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
+from keeper_forecast import forecast_pool
 from keeper_persistence import TRANSITIONS as KEEPER_TRANSITIONS
+from keeper_persistence import load_rates
 
 from fantasy_baseball.config import load_config
-from fantasy_baseball.sgp.denominators import SgpOverrides
-from fantasy_baseball.trajectory.board import season_slots
-from fantasy_baseball.trajectory.comps import collapse_split_seasons, comp_trajectory
-from fantasy_baseball.trajectory.era import era_normalize
+from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
+from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+from fantasy_baseball.trajectory.board import people, season_slots
+from fantasy_baseball.trajectory.comps import (
+    MIN_LOCAL_SUPPORT,
+    collapse_split_seasons,
+    comp_trajectory,
+)
+from fantasy_baseball.trajectory.era import era_factors, era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
 from fantasy_baseball.trajectory.panel import score as panel_score
 from fantasy_baseball.trajectory.shape import build_history, shape_trajectory
@@ -660,6 +668,359 @@ def report_track(df: pd.DataFrame, label: str) -> None:
     )
 
 
+def _var(sgp_by_id: Mapping[int, float], kind: str, base_year: int, levels) -> dict[int, float]:
+    series = pd.Series(dict(sgp_by_id), dtype=float)
+    if series.empty:
+        return {}
+    return var_for(series, kind, base_year, FIELDING_CACHE, levels).to_dict()
+
+
+def report_base_year(
+    kind,
+    base_year,
+    horizons,
+    common,
+    shape_sgp,
+    keeper_sgp,
+    raw_panel,
+    full,
+    levels,
+    drafts,
+    args,
+) -> list[dict]:
+    """Every slice, in both views. Returns the triple decisions for pooled reporting.
+
+    Wiring only -- each number comes from a helper that has its own tests.
+    """
+    anchor_vol = _anchor_volume(raw_panel, kind, base_year)
+    outcomes = outcomes_for(full, kind, base_year, horizons, anchor_vol)
+    collected: list[dict] = []
+
+    for horizon in horizons:
+        # CUMULATIVE, not the single year: +1 means "Y+1", +2 means "Y+1 and Y+2
+        # summed". Reusing one summed target for every horizon made the rows identical,
+        # which is what the first smoke run showed.
+        years = [base_year + h for h in horizons if h <= horizon]
+        realized_sgp = {pid: outcomes[pid].realized(years) for pid in common if pid in outcomes}
+        shape_total = {
+            pid: sum(v for h, v in shape_sgp[pid].items() if h <= horizon) for pid in common
+        }
+        keeper_total = {
+            pid: sum(v for h, v in keeper_sgp[pid].items() if h <= horizon) for pid in common
+        }
+        realized_var = _var(realized_sgp, kind, base_year, levels)
+        shape_var = _var(shape_total, kind, base_year, levels)
+        keeper_var = _var(keeper_total, kind, base_year, levels)
+
+        wrecked = {
+            pid
+            for pid in common
+            if pid in outcomes and censored(outcomes[pid], years, args.censor_threshold)
+        }
+        if horizon == horizons[-1]:
+            zero_vol = sum(
+                1
+                for pid in wrecked
+                if pid in outcomes and not any(outcomes[pid].volume_by_year.values())
+            )
+            at_20 = {
+                pid for pid in common if pid in outcomes and censored(outcomes[pid], years, 0.2)
+            }
+            print(
+                f"  censored at {args.censor_threshold:.0%}: {len(wrecked)} of {len(common)}"
+                f" ({zero_vol} zero-volume, {len(wrecked) - zero_vol} played but wrecked);"
+                f" at 20%: {len(at_20)}"
+            )
+
+        label = "multi-year" if horizon > 1 else "one-year"
+        print(f"\n  == target +{horizon} ({label}) ==")
+        for view, pool_ids in (
+            ("ALL", [pid for pid in common if pid in realized_var]),
+            (
+                "INJURY-EXCLUDED",
+                [pid for pid in common if pid in realized_var and pid not in wrecked],
+            ),
+        ):
+            print(f"  -- {view} ({len(pool_ids)} players) --")
+            if len(pool_ids) < 10:
+                print("     under 10, not reported")
+                continue
+            _report_top_of_board(pool_ids, shape_var, keeper_var, realized_var, args)
+            collected += _report_triples(
+                kind,
+                base_year,
+                horizon,
+                view,
+                pool_ids,
+                shape_var,
+                keeper_var,
+                realized_var,
+                drafts,
+                args,
+            )
+    return collected
+
+
+def _report_top_of_board(pool_ids, shape_var, keeper_var, realized_var, args) -> None:
+    n = min(KEEP_SLOTS * 10, len(pool_ids))
+    s_pick, s_total = top_of_board({p: shape_var[p] for p in pool_ids}, realized_var, n)
+    k_pick, k_total = top_of_board({p: keeper_var[p] for p in pool_ids}, realized_var, n)
+    overlap = len(set(s_pick) & set(k_pick))
+    print(
+        f"     top-{n} realized VAR: shape {s_total:7.1f}  keeper {k_total:7.1f}"
+        f"  (they share {overlap}/{n})"
+    )
+    union = sorted(set(s_pick) | set(k_pick))
+    s_err = [abs(shape_var[p] - realized_var[p]) for p in union]
+    k_err = [abs(keeper_var[p] - realized_var[p]) for p in union]
+    lo, hi, share = bootstrap_difference(s_err, k_err, draws=args.draws)
+    print(
+        f"     union-of-top MAE  shape {np.mean(s_err):5.2f}  keeper {np.mean(k_err):5.2f}"
+        f"   diff 95% [{lo:+.2f}, {hi:+.2f}]  shape better in {share:.0%} of draws"
+    )
+
+
+def _report_triples(
+    kind, base_year, horizon, view, pool_ids, shape_var, keeper_var, realized_var, drafts, args
+) -> list[dict]:
+    """Keeper-triple regret for one base year, horizon and view."""
+    scoreable = set(pool_ids)
+    if base_year not in usable_draft_years(horizon, [int(y) for y in drafts]):
+        return []
+    resolution = resolve_draft(
+        drafts[str(base_year)], people(FIELDING_CACHE), dict.fromkeys(scoreable, kind)
+    )
+    rosters, dropped = eligible_rosters(resolution.by_team, scoreable)
+    if not rosters:
+        print(f"     triples: no roster kept {CANDIDATE_FLOOR}+ candidates")
+        return []
+
+    records = []
+    for team, ids in sorted(rosters.items()):
+        s_pick, s_r = triple_regret(ids, shape_var, realized_var)
+        k_pick, k_r = triple_regret(ids, keeper_var, realized_var)
+        records.append(
+            {
+                "pool": kind,
+                "base_year": base_year,
+                "horizon": horizon,
+                "view": view,
+                "team": team,
+                "shape_regret": s_r,
+                "keeper_regret": k_r,
+                "agree": set(s_pick) == set(k_pick),
+            }
+        )
+    misses = len(resolution.unresolved) + len(resolution.ambiguous)
+    print(
+        f"     triples: {len(records)} decisions"
+        f"{f', {len(dropped)} rosters dropped: {dropped}' if dropped else ''}"
+        f"  (join: {misses} unresolved/ambiguous,"
+        f" {len(resolution.unscoreable)} unscoreable)"
+    )
+    _print_regret_block(records, args, indent="        ")
+    return records
+
+
+def _print_regret_block(records, args, indent: str) -> None:
+    """Regret, its bootstrap interval, the agreement rate, and the disagreeing subset.
+
+    The agreement rate is not decoration. Most keeper decisions agree -- the best three
+    on a 23-man roster are rarely close -- and an agreeing decision contributes exactly
+    zero to the difference while still counting toward n. Without it, 18-of-20 agreement
+    reports a tight interval around zero that reads as "cannot separate" when it means
+    the slice had two informative rows.
+    """
+    s = [r["shape_regret"] for r in records]
+    k = [r["keeper_regret"] for r in records]
+    lo, hi, share = bootstrap_difference(s, k, draws=args.draws)
+    agree = sum(r["agree"] for r in records) / len(records)
+    print(
+        f"{indent}regret  shape {np.mean(s):6.2f}  keeper {np.mean(k):6.2f}"
+        f"   diff 95% [{lo:+.2f}, {hi:+.2f}]  shape better in {share:.0%}"
+    )
+    print(f"{indent}identical triples: {agree:.0%}")
+    dis = [r for r in records if not r["agree"]]
+    if not dis:
+        print(f"{indent}every decision agreed -- the slice carries no information")
+        return
+    ds = [r["shape_regret"] for r in dis]
+    dk = [r["keeper_regret"] for r in dis]
+    dlo, dhi, dshare = bootstrap_difference(ds, dk, draws=args.draws)
+    print(
+        f"{indent}on the {len(dis)} that DISAGREE: shape {np.mean(ds):6.2f}"
+        f"  keeper {np.mean(dk):6.2f}  95% [{dlo:+.2f}, {dhi:+.2f}]"
+        f"  shape better in {dshare:.0%}"
+    )
+
+
+def report_pooled(records: list[dict], args: argparse.Namespace) -> None:
+    """Triple decisions pooled ACROSS base years -- where the 20 one-year decisions live.
+
+    A per-base-year block can only ever show 10, since each draft year contributes ten
+    teams. The spec's headline counts (10 multi-year, 20 one-year) are the pooled ones,
+    so they have to be printed somewhere or they never appear.
+    """
+    if not records:
+        return
+    print(f"\n{'=' * 88}")
+    print("POOLED KEEPER-TRIPLE DECISIONS (across base years)")
+    print("=" * 88)
+    for pool in sorted({r["pool"] for r in records}):
+        for horizon in sorted({r["horizon"] for r in records}):
+            for view in ("ALL", "INJURY-EXCLUDED"):
+                subset = [
+                    r
+                    for r in records
+                    if r["pool"] == pool and r["horizon"] == horizon and r["view"] == view
+                ]
+                if not subset:
+                    continue
+                years = sorted({r["base_year"] for r in subset})
+                print(
+                    f"\n  {pool.upper()} +{horizon} {view}: "
+                    f"{len(subset)} decisions from base {years}"
+                )
+                _print_regret_block(subset, args, indent="     ")
+
+
+DRAFT_FILE = PROJECT_ROOT / "data" / "historical_drafts_resolved.json"
+FIELDING_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
+
+
+def _anchor_volume(raw_panel: pd.DataFrame, kind: str, base_year: int) -> dict[int, float]:
+    """Year-Y playing time per player, summed across a split season."""
+    volume = "pa" if kind == "hitter" else "ip"
+    year = raw_panel[raw_panel["season"] == base_year]
+    return year.groupby("mlbam_id")[volume].sum().to_dict()
+
+
+def _shape_forecasts(
+    truncated: pd.DataFrame,
+    anchors: pd.DataFrame,
+    kind: str,
+    ids: Sequence[int],
+    horizons: tuple[int, ...],
+) -> tuple[dict[int, dict[int, float]], int]:
+    """`{mlbam_id: {horizon: mean}}` with the query player held out each time.
+
+    Returns the low-support count alongside: those rows are KEPT in the headline,
+    because dropping them would flatter shape by removing the predictions it is least
+    sure of. They are reported, and one sensitivity line excludes them.
+    """
+    lookup = anchors.set_index("mlbam_id")
+    out: dict[int, dict[int, float]] = {}
+    low_support = 0
+    for i, pid in enumerate(ids, start=1):
+        if i % 50 == 0:
+            print(f"    shape {i}/{len(ids)}...", flush=True)
+        row = lookup.loc[pid]
+        traj, _ = shape_trajectory(
+            without_player(truncated, pid),
+            kind=kind,
+            age=int(row["age"]),
+            sgp=float(row["current"]),
+            prior_sgp=float(row["prior"]),
+            horizons=horizons,
+        )
+        means = {h: float(point.mean) for h, point in zip(horizons, traj.path, strict=True)}
+        if any(np.isnan(v) for v in means.values()):
+            continue
+        if traj.local_support < MIN_LOCAL_SUPPORT:
+            low_support += 1
+        out[pid] = means
+    return out, low_support
+
+
+def run_historical(args: argparse.Namespace) -> int:
+    """The #325 head-to-head: shape against the keeper-value chain, out of sample."""
+    overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
+    levels = position_aware_replacement_levels(get_sgp_denominators(overrides))
+    drafts = json.loads(DRAFT_FILE.read_text(encoding="utf-8"))
+    pools = [args.pool] if args.pool else ["hitter", "pitcher"]
+    pooled: list[dict] = []
+
+    for kind in pools:
+        raw_panel = load_scored_panel(kind, panel_dir=args.panel_dir, sgp_overrides=overrides)
+        factors = era_factors(raw_panel, kind)
+        full = era_normalize(raw_panel, kind, sgp_overrides=overrides)
+
+        for base_year in args.base_year:
+            horizons = horizons_for(base_year)
+            if not horizons:
+                print(f"\n{kind.upper()} base {base_year}: no scoreable horizon, skipped")
+                continue
+            print(
+                f"\n{'=' * 88}\n{kind.upper()}S -- base {base_year}, horizons {horizons}\n{'=' * 88}"
+            )
+
+            mode = "causal" if args.causal_check else "loto"
+            transitions = transitions_for(base_year, mode)
+            future = sum(1 for _, end in transitions if end > base_year + 1)
+            print(
+                f"  persistence fit: {mode}, {len(transitions)} transitions, {future} of them FUTURE"
+            )
+            if not transitions:
+                print("  -- no transitions to fit on; base year not scoreable in this mode")
+                continue
+
+            observed = load_rates(base_year, kind, source="actual", factors=factors)
+            keeper_sgp: dict[int, dict[int, float]] = {}
+            fallbacks = []
+            for h in horizons:
+                frame, fallback = forecast_pool(
+                    kind,
+                    base_year,
+                    base_year + h,
+                    observed,
+                    args,
+                    transitions=transitions,
+                    factors=factors,
+                )
+                fallbacks.append(fallback)
+                for pid, value in keeper_value_sgp(frame, kind, overrides).items():
+                    keeper_sgp.setdefault(int(pid), {})[h] = float(value)
+            worst = max(fallbacks, key=lambda f: (f.whole_pool, f.share))
+            print(
+                f"  gap-model fallback: {worst.per_player}/{worst.total} players"
+                f" ({worst.share:.0%}), whole-pool={worst.whole_pool}"
+            )
+            if worst.exceeds_headline_threshold:
+                print("  ** EXCLUDED FROM THE HEADLINE: mostly gap model, not the curve **")
+
+            truncated = historical_panel(raw_panel, kind, base_year, overrides)
+            anchors = build_history(truncated)
+            anchors = anchors[anchors["season"] == base_year]
+            common = intersect(list(anchors["mlbam_id"]), list(keeper_sgp))
+            print(
+                f"  coverage: shape {len(anchors)}, keeper-value {len(keeper_sgp)},"
+                f" intersection {len(common)}"
+            )
+            if not common:
+                print("  -- empty intersection; nothing to compare")
+                continue
+
+            shape_sgp, low_support = _shape_forecasts(truncated, anchors, kind, common, horizons)
+            common = intersect(common, list(shape_sgp))
+            print(f"  scored by both: {len(common)}   low-support shape rows: {low_support}")
+
+            pooled += report_base_year(
+                kind,
+                base_year,
+                horizons,
+                common,
+                shape_sgp,
+                keeper_sgp,
+                raw_panel,
+                full,
+                levels,
+                drafts,
+                args,
+            )
+    report_pooled(pooled, args)
+    return 0
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--pool", choices=("hitter", "pitcher"), default="hitter")
@@ -680,12 +1041,44 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=7)
     parser.add_argument("--panel-dir", type=Path, default=DEFAULT_PANEL_DIR)
     parser.add_argument("--out", type=Path, help="write the scored queries to this CSV")
+    # -- #325: shape against the keeper-value chain, out of sample ------------------
+    parser.add_argument(
+        "--historical",
+        action="store_true",
+        help="run the #325 head-to-head instead of the matcher bake-off",
+    )
+    parser.add_argument(
+        "--base-year",
+        type=int,
+        action="append",
+        help="base year for --historical (repeatable; defaults to 2022 2023 2024)",
+    )
+    parser.add_argument(
+        "--causal-check",
+        action="store_true",
+        help="fit the persistence share strictly causally; only informative for base 2023",
+    )
+    parser.add_argument("--censor-threshold", type=float, default=CENSOR_THRESHOLD)
+    parser.add_argument("--draws", type=int, default=10_000, help="bootstrap resamples")
+    # `forecast_pool` reads these off the namespace; they must match keeper_forecast's
+    # own defaults or the historical run scores a different population than the live one.
+    parser.add_argument("--min-pa", type=float, default=300)
+    parser.add_argument("--min-ip", type=float, default=50)
+    parser.add_argument("--min-next-pa", type=float, default=250)
+    parser.add_argument("--min-next-ip", type=float, default=50)
+    parser.add_argument("--no-aging", action="store_true")
     args = parser.parse_args()
     if args.horizon < 1:
         parser.error("--horizon must be at least 1")
+    if args.base_year and not args.historical:
+        parser.error("--base-year applies to --historical")
 
     if not args.panel_dir.is_absolute():
         args.panel_dir = PROJECT_ROOT / args.panel_dir
+
+    if args.historical:
+        args.base_year = args.base_year or [2022, 2023, 2024]
+        return run_historical(args)
 
     overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
     # Kept separately: the estimators want the era-normalized frame, but `roles` needs
