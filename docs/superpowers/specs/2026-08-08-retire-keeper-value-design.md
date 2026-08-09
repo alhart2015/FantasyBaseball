@@ -96,9 +96,32 @@ factor exists. This requires extracting the factor computation out of `era_norma
 into a reusable `era_factors()` so the two callers cannot disagree about what a factor
 is.
 
+**Normalize inside `load_rates`, not at the call sites.** That is the single point where
+every historical rate frame -- actual or projection -- enters the keeper chain, and it is
+called by `build_transition` and `build_volume_transition` as well as by
+`forecast_pool`. Normalizing anywhere else would leave the persistence fit on raw rates
+while the fold it feeds runs on normalized ones. `S` would survive that (it is a
+dimensionless share of a gap) but **`drift` would not**: it is an additive term in the
+units it was fit in, so a raw-units drift applied to a normalized baseline biases every
+forecast by a fixed amount. A test asserts the fit inputs and the fold inputs carry the
+same era factors.
+
+**Factors are computed on the FULL panel, before any truncation.** `era_normalize`
+raises when any of `REFERENCE_SEASONS = (2023, 2024, 2025)` is missing -- deliberately,
+so a partial window cannot silently restate every season into units the output never
+mentions. A panel truncated to `season <= 2022` contains none of them, so computing
+factors after truncation would abort base years 2022 and 2023 outright. A run environment
+is a league-wide fact, not part of either estimator's information set, and both
+estimators are treated identically by it.
+
+This does mean the factor table is informed by seasons after Y. It is a limitation, not
+an advantage to either side, and it is what the shipped harness already does -- it
+normalizes the full panel and filters queries afterwards.
+
 ### Making the keeper chain runnable out of sample
 
-Four hardwirings, all in `scripts/keeper_forecast.py`:
+Four hardwirings to lift, all in `scripts/keeper_forecast.py`, plus one invocation
+change:
 
 | hardwiring | change |
 |---|---|
@@ -113,7 +136,8 @@ iterates the playing-time curve twice. Shape is called once with `horizons=(1, 2
 multi-year target is the sum of the two.
 
 Shape gets the symmetric treatment the harness already applies: query player removed
-from the panel entirely (no self-matching), panel truncated to `season <= Y`.
+from the panel entirely (no self-matching), panel truncated to `season <= Y` **after**
+era factors have been computed on the full panel.
 
 ### When the playing-time curve cannot fit
 
@@ -207,6 +231,10 @@ Rules that follow from that:
 - The ratio is measured against year **Y** for both outcome years, never against Y+1. A
   wrecked Y+1 must not redefine "normal" for Y+2.
 - Zero-volume outcome years are censored too, by explicit decision.
+- **No outcome-season row at all means zero volume**: 0 SGP in the ALL view (the value a
+  vanished player has to a roster slot) and censored in the injury-excluded view. This is
+  the most common outcome for a fringe player, so it is a rule rather than something to
+  be read out of `played()`.
 - Multi-year metric: a player censored in **either** outcome year leaves it entirely. A
   one-year sum and a two-year sum are not the same target.
 - Keeper-triple slice: a censored player leaves both the candidate pool and the ex-post
@@ -263,6 +291,12 @@ coverage gap is reported rather than absorbed: how many players each estimator a
 could score, and for the keeper-triple slice, how many of each 23-man roster survived
 into the candidate pool. A roster left with fewer than 5 candidates is dropped from that
 slice and named, because picking 3 from 4 is not the decision being measured.
+
+**Low-support shape rows are kept.** `MIN_LOCAL_SUPPORT` marks a prediction evaluated
+outside its own support -- the rows `trajectory_board.py` flags `(!)`. Dropping them
+would flatter shape by removing exactly the predictions it is least sure of, so they
+stay in the headline. Their count is reported, with one sensitivity line showing the
+result if they were excluded.
 
 ### Noise floor
 
