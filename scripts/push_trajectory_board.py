@@ -19,9 +19,11 @@ career line under a fresh projection renders perfectly and is simply wrong. The 
 data is written FIRST, so a successful board write implies its extras are already there.
 
 The board is only as fresh as the last run of this script, which is why the payload
-carries its own vintage and the page prints it. Re-run it when the panel is rebuilt
-(`scripts/build_pt_panel.py`) or when the season has moved enough that the paced
-current-season figure every fit is built on has meaningfully changed.
+carries its own vintage and the page prints it. TWO vintages now (#348): the panel it
+was fitted on, and the rest-of-season snapshot the in-progress season is anchored to.
+Re-run it when the panel is rebuilt (`scripts/build_pt_panel.py`) or when a fresh ROS
+export lands (`scripts/ingest_ros_export.py`) -- either one moves every current-season
+figure the fits are built on.
 
 WHY ONE SWEEP AT THE LONGEST HORIZON. The end-year dropdown needs no refit -- see
 `fantasy_baseball.trajectory.sweep`, where the reasoning and the measurement live.
@@ -204,13 +206,9 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
     from fantasy_baseball.sgp.denominators import get_sgp_denominators
     from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
     from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
-    from fantasy_baseball.trajectory.era import era_normalize
     from fantasy_baseball.trajectory.model import collapse_split_seasons
-    from fantasy_baseball.trajectory.panel import (
-        load_scored_panel,
-        panel_path,
-        season_elapsed_fraction,
-    )
+    from fantasy_baseball.trajectory.panel import panel_path, season_elapsed_fraction
+    from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
     from fantasy_baseball.trajectory.shape import prepare
     from fantasy_baseball.trajectory.sweep import (
         chart_key,
@@ -225,22 +223,28 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
     levels = position_aware_replacement_levels(get_sgp_denominators(overrides))
     horizons = tuple(range(1, max_horizon + 1))
 
-    def load(kind: str) -> pd.DataFrame:
-        return era_normalize(
-            load_scored_panel(
-                kind, panel_dir=panel_dir, sgp_overrides=overrides, include_partial=True
-            ),
-            kind,
-            sgp_overrides=overrides,
-        )
-
+    # BOTH pools, era-normalized, with the in-progress season anchored on season-to-date
+    # plus a rest-of-season projection. The ordering rules that make that legitimate --
+    # inject before normalizing, take the base season's era factor off the ACTUAL rows --
+    # live in `load_anchored_panels`, spelled once for all three entry points.
+    loaded = load_anchored_panels(
+        systems=config.projection_systems,
+        weights={s: config.projection_weights[s] for s in config.projection_systems},
+        panel_dir=panel_dir,
+        sgp_overrides=overrides,
+    )
+    season = loaded.season
     # Dating the in-progress season is a league fact and must come off the HITTER panel
     # even when pricing pitchers -- pitcher `games` counts appearances, not team games.
-    calendar = load("hitter")
-    season = int(calendar["season"].max())
+    calendar = loaded.panels["hitter"]
     cache = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
     names = player_names(cache)
     eligibility = season_slots(cache, season)
+    # PROVENANCE, not an input to any fit -- the anchor replaced the pace adjustment that
+    # used to consume it (#348). Still stamped and still printed: how far into the season
+    # a board was built says how much of its base year is projection rather than record.
+    # `games` is deliberately left un-projected by the anchor, so this is still a fact
+    # about what has been played.
     elapsed = season_elapsed_fraction(calendar, season)
 
     swept = []
@@ -254,9 +258,9 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
     # Outside the pool loop like `extras`, because the key already carries the pool and
     # a two-way comp gets one entry per pool under distinct keys.
     careers: dict[str, list] = {}
-    excluded = {"low_sgp": 0, "no_current_line": 0}
+    excluded = {"low_sgp": 0, "no_current_line": 0, "no_ros_projection": 0}
     for kind in ("hitter", "pitcher"):
-        live = calendar if kind == "hitter" else load(kind)
+        live = loaded.panels[kind]
         candidates = list(
             board_inputs(
                 live,
@@ -264,20 +268,35 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
                 names=names,
                 replacement_levels=levels,
                 eligibility=eligibility,
-                calendar=calendar,
                 season=season,
             )
         )
         rows = [r for r in candidates if r.sgp >= MIN_SGP]
-        # Who this pool leaves out, so the page can say so. Two separate exclusions:
-        # the min-SGP gate, and -- larger and entirely silent -- players who had a line
-        # LAST season and none this one, who are never candidates at all.
+        # Who this pool leaves out, so the page can say so. Three separate exclusions:
+        # the min-SGP gate; players who had a line LAST season and none this one, who
+        # are never candidates at all; and players with a current line that no
+        # rest-of-season projection covers, whom the anchor drops.
+        no_ros = {int(pid) for pid in loaded.no_ros[kind]}
         excluded["low_sgp"] += len(candidates) - len(rows)
+        excluded["no_ros_projection"] += len(no_ros)
+        # MINUS the ones the anchor already removed. They are gone from `live`'s current
+        # season by construction, so without this subtraction every no-ROS player who
+        # played last season is counted twice and the total overstates the gap.
         excluded["no_current_line"] += len(
-            set(live.loc[live["season"] == season - 1, "mlbam_id"])
-            - set(live.loc[live["season"] == season, "mlbam_id"])
+            {int(pid) for pid in live.loc[live["season"] == season - 1, "mlbam_id"]}
+            - {int(pid) for pid in live.loc[live["season"] == season, "mlbam_id"]}
+            - no_ros
         )
         print(f"  {kind}: {len(rows)} players with a {season} line", flush=True)
+        if no_ros:
+            # SAID OUT LOUD, like the short-comp note below. A player who leaves the
+            # board without a word looks to a reader exactly like one the model priced
+            # low, which is the reading this whole exclusion block exists to prevent.
+            print(
+                f"    {len(no_ros)} dropped: a {season} line but no row in the "
+                f"{loaded.snapshot_date} rest-of-season snapshot",
+                flush=True,
+            )
         started = time.perf_counter()
         # The comp pool must NOT contain the in-progress season: a two-thirds year would
         # be averaged in as though it were a full one.
@@ -366,8 +385,15 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         # The vintage a reader must be shown. Filenames, not a timestamp: the panel is a
         # build artifact whose span is what identifies it.
         panel_vintage={k: panel_path(k, panel_dir).name for k in ("hitter", "pitcher")},
+        # The SECOND vintage (#348). Every base-season figure on this board is part
+        # projection, and which projection is a property of the snapshot it came from --
+        # the FanGraphs fetch is Cloudflare-403 blocked, so a snapshot can sit for a
+        # while and two boards built a week apart can share a panel and not an anchor.
+        # None when `base_season_partial` is False: a complete base season has no
+        # remainder, so nothing was injected and there is no snapshot to name.
+        ros_snapshot=loaded.snapshot_date.isoformat() if loaded.snapshot_date else None,
         floors={slot: round(v, 4) for slot, v in sorted(levels.items())},
-        excluded={**excluded, "total": excluded["low_sgp"] + excluded["no_current_line"]},
+        excluded={**excluded, "total": sum(excluded.values())},
     )
     return (
         payload,
@@ -471,7 +497,7 @@ def main() -> int:
     print(
         f"\n  wrote to {where}: "
         f"{len(data['players'])} players, generated {data['generated_at']}, "
-        f"panel {data['panel_vintage']}"
+        f"panel {data['panel_vintage']}, ROS {data['ros_snapshot']}"
     )
     print(
         f"  chart data: {len(chart_data['players'])} players, "

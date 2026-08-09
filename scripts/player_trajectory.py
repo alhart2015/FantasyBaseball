@@ -46,14 +46,9 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import people as board_people
 from fantasy_baseball.trajectory.board import player_names, season_slots
-from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.model import Trajectory
-from fantasy_baseball.trajectory.panel import (
-    DEFAULT_PANEL_DIR,
-    load_scored_panel,
-    prorate_partial,
-    season_elapsed_fraction,
-)
+from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR
+from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
 from fantasy_baseball.trajectory.shape import shape_trajectory
 from fantasy_baseball.trajectory.value import (
     ROLE_MIN_GAMES,
@@ -74,10 +69,9 @@ THIN_COMPS = 20
 def _resolve_player(
     name: str,
     panels: dict[str, pd.DataFrame],
-    calendar: pd.DataFrame,
     mlbam_id: int | None = None,
 ) -> list[tuple[str, int, int, float]]:
-    """One (pool, mlbam_id, age, sgp) per pool the player was used in, pace-adjusted.
+    """One (pool, mlbam_id, age, sgp) per pool the player was used in.
 
     Returns a LIST, because this league drafts and scores a two-way player as two
     separate assets -- a hitter and a pitcher -- so each half gets its own trajectory
@@ -85,9 +79,10 @@ def _resolve_player(
     has already decided what counts as being used in a role, so appearing in both pools
     here means genuinely two-way, not a position player's one mop-up inning.
 
-    `calendar` is the HITTER panel including partial seasons, used only to date the
-    in-progress season -- see `season_elapsed_fraction` for why that must not come from
-    the pitcher panel.
+    `panels` arrives ANCHORED: an in-progress season already carries season-to-date plus
+    a rest-of-season projection (#348), so its `sgp` is on the same footing as a settled
+    year and nothing here adjusts it a second time. This used to divide it by the
+    league's elapsed fraction, which read a player's missed time as his rate.
 
     A normalized name is NOT unique (58 hitters share one with another player: two Chris
     Youngs, two Chris Carters, accent-collapsed pairs like Angel Sanchez). Rather than
@@ -141,13 +136,12 @@ def _resolve_player(
         season = int(row["season"])
         sgp = float(row["sgp"])
         if bool(row["partial_season"]):
-            fraction = season_elapsed_fraction(calendar, season)
-            paced = prorate_partial(sgp, fraction)
+            # SAID OUT LOUD, because the number on screen is not a record of the season.
+            # It is what he has done plus what he is projected to do with the rest of it.
             print(
-                f"{name} ({pool}): {season} is {fraction:.0%} complete -- "
-                f"{sgp:.1f} SGP so far, pacing to {paced:.1f}"
+                f"{name} ({pool}): {season} is still in progress -- {sgp:.1f} SGP on the "
+                f"anchored full-season line (season to date + rest-of-season projection)"
             )
-            sgp = paced
         resolved.append((pool, int(row["mlbam_id"]), int(row["age"]), sgp))
     return resolved
 
@@ -604,28 +598,42 @@ def main() -> int:
 
     # league.yaml's denominators are what every other valuation in this repo prices in,
     # so the trajectory is quoted in the same units as a draft board or a keeper line.
-    overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
+    config = load_config(PROJECT_ROOT / "config" / "league.yaml")
+    overrides = config.sgp_overrides
     denoms = get_sgp_denominators(overrides)
 
-    def load(kind: str, include_partial: bool) -> pd.DataFrame:
-        panel = load_scored_panel(
-            kind,
-            panel_dir=args.panel_dir,
-            sgp_overrides=overrides,
-            include_partial=include_partial,
-        )
-        if args.no_era_adjust:
-            return panel
-        return era_normalize(panel, kind, sgp_overrides=overrides)
+    # THE SAME loader both boards use, so a name looked up here and the same name on the
+    # keeper board cannot be anchored on two different things. It injects season-to-date
+    # plus a rest-of-season projection before era-normalizing -- see `ros_anchor`.
+    loaded = None
+
+    def load(kind: str) -> pd.DataFrame:
+        nonlocal loaded
+        if loaded is None:
+            loaded = load_anchored_panels(
+                systems=config.projection_systems,
+                weights={s: config.projection_weights[s] for s in config.projection_systems},
+                panel_dir=args.panel_dir,
+                sgp_overrides=overrides,
+                era_adjust=not args.no_era_adjust,
+            )
+        return loaded.panels[kind]
+
+    def complete(kind: str) -> pd.DataFrame:
+        """The comp pool: the same frame minus its in-progress season.
+
+        DERIVED rather than loaded again, like both board scripts do it. A second load
+        re-reads a 4.7MB CSV and re-scores it for a frame that is this one minus its
+        partial rows, and it would have to re-anchor to stay consistent with the query.
+        """
+        panel = load(kind)
+        return panel[~panel["partial_season"]].reset_index(drop=True)
 
     if args.player:
         # The query needs the in-progress season; the comp pool must not have it.
         wanted = [args.pool] if args.pool else ["hitter", "pitcher"]
-        live = {k: load(k, True) for k in wanted}
-        # Dating the season is a league fact and must come off the hitter panel even for
-        # a pitcher query -- pitcher `games` counts appearances, not team games.
-        calendar = live.get("hitter") if "hitter" in live else load("hitter", True)
-        resolved = _resolve_player(args.player, live, calendar, args.mlbam_id)
+        live = {k: load(k) for k in wanted}
+        resolved = _resolve_player(args.player, live, args.mlbam_id)
         queries = [
             # `is not None`, never `or`: --sgp 0 and --age 0 are falsy but meaningful.
             (
@@ -680,7 +688,7 @@ def main() -> int:
         # projected under his floor prints a negative rather than a zero (#331).
         slot, floor = replacement_for(slots, levels) if slots is not None else (None, 0.0)
         traj, anchors = shape_trajectory(
-            load(pool, False),
+            complete(pool),
             kind=pool,
             age=age,
             sgp=sgp,

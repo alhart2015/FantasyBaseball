@@ -226,6 +226,10 @@ def _fake_payloads(module, monkeypatch):
         "generated_at": stamp,
         "base_season": 2026,
         "panel_vintage": {"hitter": "h.csv", "pitcher": "p.csv"},
+        # The second vintage: which rest-of-season snapshot the base season is anchored
+        # to (#348). `main` prints it on the readback, so a payload without it is not a
+        # payload this script produces.
+        "ros_snapshot": "2026-07-21",
         "players": [{"id": 1, "pool": "hitter"}, {"id": 1, "pool": "pitcher"}],
     }
     chart = to_chart_payload(
@@ -269,7 +273,14 @@ def _stub_the_sweep(monkeypatch):
         "pitcher": [BoardRow(2, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0)],
     }
     stubs = {
-        "fantasy_baseball.config.load_config": lambda _p: types.SimpleNamespace(sgp_overrides=None),
+        # `projection_systems` / `projection_weights` are what `load_anchored_panels`
+        # blends the rest-of-season snapshot from. This panel's base season is not
+        # partial, so no snapshot is actually read -- but the config is still consulted.
+        "fantasy_baseball.config.load_config": lambda _p: types.SimpleNamespace(
+            sgp_overrides=None,
+            projection_systems=["steamer"],
+            projection_weights={"steamer": 1.0},
+        ),
         "fantasy_baseball.sgp.denominators.get_sgp_denominators": lambda _o: {},
         "fantasy_baseball.sgp.replacement.position_aware_replacement_levels": lambda _d: {
             "OF": 4.0
@@ -278,6 +289,11 @@ def _stub_the_sweep(monkeypatch):
         "fantasy_baseball.trajectory.panel.panel_path": lambda k, _d: pathlib.Path(f"{k}.csv"),
         "fantasy_baseball.trajectory.panel.season_elapsed_fraction": lambda _df, _s: 0.7,
         "fantasy_baseball.trajectory.era.era_normalize": lambda df, _k, **_kw: df,
+        # The shared panel carries `sgp` and nothing to derive a run environment from,
+        # so the real factor table would raise on the missing rate columns. What the
+        # ordering between this and the anchor has to be is pinned where it lives, in
+        # tests/test_trajectory/test_ros_anchor.py.
+        "fantasy_baseball.trajectory.era.era_factors": lambda _df, _k, **_kw: None,
         "fantasy_baseball.trajectory.board.player_names": lambda _c: pd.Series(dtype=object),
         "fantasy_baseball.trajectory.board.season_slots": lambda _c, _s: {},
         "fantasy_baseball.trajectory.board.board_inputs": lambda *_a, **kw: rows[kw["kind"]],

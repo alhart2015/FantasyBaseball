@@ -21,7 +21,8 @@ Three cleaning steps, each of which changes the answer materially:
   and would score a missing year as a zero.
 * **In-progress seasons are excluded from the comp pool.** Every 2026 row is
   `partial_season`; a two-thirds season is not a career year. 2026 is still loaded,
-  because it is the QUERY side -- see `prorate_partial`.
+  because it is the QUERY side -- and it reaches a board with a full-season line already
+  on it, from `ros_anchor`.
 """
 
 from __future__ import annotations
@@ -185,8 +186,8 @@ def _scale_short_schedules(df: pd.DataFrame, kind: str) -> pd.DataFrame:
     volume = "pa" if kind == "hitter" else "ip"
     scale = FULL_SCHEDULE / df["scheduled_games"]
     # A partial (in-progress) season has a FULL schedule and short accumulation, which
-    # this ratio cannot see. `prorate_partial` handles those; they are excluded from
-    # the comp pool by default.
+    # this ratio cannot see. `ros_anchor` handles those, by adding the rest-of-season
+    # projection rather than by scaling; they are excluded from the comp pool by default.
     df[volume] = df[volume] * scale
     # EVERY appearance count scales, not just `games`. Scaling one and not the other
     # silently breaks any ratio between them: `starts / games` is how a pitcher is
@@ -246,6 +247,12 @@ def load_scored_panel(
 def season_elapsed_fraction(df: pd.DataFrame, season: int) -> float:
     """How much of an in-progress season has been played. HITTER PANEL ONLY.
 
+    PROVENANCE ONLY since #348. It used to drive the pace adjustment every board fit was
+    anchored on; the anchor is now season-to-date plus a rest-of-season projection
+    (`ros_anchor`), and this is stamped on the payload so a reader can see how much of
+    the base season is record rather than forecast. `games` is deliberately left
+    un-projected by the anchor, which is what keeps this a fact about what was played.
+
     Estimated as the busiest player's games over a full schedule. An everyday regular
     plays nearly every team game, so the max is a good read on the calendar and needs
     no second data source. Clipped to (0, 1]: a completed season returns 1.0.
@@ -270,24 +277,12 @@ def season_elapsed_fraction(df: pd.DataFrame, season: int) -> float:
         raise ValueError(f"season {season} is not in the panel")
     if not rows["games"].notna().any():
         # Without this the clip below is a no-op -- min(max(nan, 1e-6), 1.0) is nan,
-        # since both comparisons are False -- and the nan surfaces a frame later as
-        # "fraction must be in (0, 1]" from prorate_partial, pointing at the pace
-        # calculation instead of at the missing games data that actually caused it.
+        # since both comparisons are False -- and a nan then reaches the payload as the
+        # `season_elapsed` a reader is meant to date the board by, saying nothing about
+        # the missing games data that actually caused it.
         raise ValueError(
             f"season {season} has no usable `games` values, so the elapsed fraction "
             "cannot be estimated; rebuild the panel with scripts/build_pt_panel.py"
         )
     fraction = float(rows["games"].max()) / FULL_SCHEDULE
     return min(max(fraction, 1e-6), 1.0)
-
-
-def prorate_partial(sgp: float, fraction: float) -> float:
-    """A partial season's SGP at a full-season pace.
-
-    Straight-line: SGP is counting-loaded, so pace scales with playing time. This is
-    the "on track to produce 13 SGP" step -- it assumes the rate holds and the player
-    stays healthy, which is exactly the assumption the trajectory then prices.
-    """
-    if not 0 < fraction <= 1:
-        raise ValueError(f"fraction must be in (0, 1], got {fraction}")
-    return sgp / fraction

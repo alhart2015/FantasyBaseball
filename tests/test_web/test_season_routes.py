@@ -2293,6 +2293,10 @@ def _trajectory_payload():
         max_horizon=2,
         min_sgp=2.0,
         generated_at="2026-08-07T09:00:00",
+        # The base season is anchored on a rest-of-season projection (#348), and every
+        # push stamps which snapshot supplied it. A fixture without it renders a page no
+        # real push could produce -- the same reason `min_sgp` is here.
+        ros_snapshot="2026-07-21",
     )
 
 
@@ -2559,12 +2563,17 @@ def test_trajectory_teams_view_discloses_its_vintage(client):
     from, and the board does NOT move with a dashboard refresh -- it is as fresh as the
     last offline push. The league board says so; this view rendered none of the three
     vintage fields `meta` carries, so it gave no signal the numbers may be weeks old.
+
+    FOUR fields since #348: the base season is anchored on a rest-of-season projection,
+    so which snapshot supplied it dates the board as surely as the panel does -- the two
+    move independently and a re-push can refresh either one alone.
     """
     payload = dict(
         _trajectory_payload(),
         generated_at="2026-08-07T09:00:00",
         season_elapsed=0.7,
         panel_vintage={"hitter": "h.csv", "pitcher": "p.csv"},
+        ros_snapshot="2026-07-21",
     )
     with (
         patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload),
@@ -2579,7 +2588,8 @@ def test_trajectory_teams_view_discloses_its_vintage(client):
 
     assert "2026-08-07T09:00:00" in body, "the build timestamp"
     assert "h.csv / p.csv" in body, "the panels it was fitted on"
-    assert "70% complete" in body, "how much of the base season the pacing rests on"
+    assert "2026-07-21 rest-of-season projection" in body, "the snapshot it is anchored on"
+    assert "70% played" in body, "how much of the base season is record rather than forecast"
     assert "does not refresh with the dashboard" in body
 
 
@@ -2854,7 +2864,7 @@ def test_trajectory_player_view_discloses_its_vintage(client):
     vintage; this one printed none (#324 F3).
 
     It also used to print a sentence explaining why the solid line stopped a year
-    before the dashed one started. #346 closed that gap by drawing the paced season
+    before the dashed one started. #346 closed that gap by drawing the base season
     instead, so the sentence was both unwanted and false; the vintage half is what this
     test was really protecting and it is unchanged.
     """
@@ -2862,6 +2872,10 @@ def test_trajectory_player_view_discloses_its_vintage(client):
         resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     body = resp.data.decode()
     assert "Built 2026-08-07T09:00:00" in body, "the same vintage stamp the sibling views print"
+    # BOTH vintages. The panel supplies every realized season and the snapshot supplies
+    # the remainder of the base season this player's whole fit is anchored on, so naming
+    # only one of them dates the page wrongly (#348).
+    assert "2026-07-21 rest-of-season projection" in body, "the snapshot it is anchored on"
 
 
 def test_trajectory_player_view_explains_a_missing_chart_key(client):
@@ -3109,7 +3123,7 @@ def test_trajectory_chart_js_filters_the_internal_p10_series_from_tooltips_too()
 
     Matched on the FILTER, not on the one-line spelling `tooltip: { filter:` this used
     to assert. That literal broke the moment the tooltip grew a second key (#346's
-    paced-point label) -- a formatting fact about a block, not the rule being pinned.
+    anchor-point label) -- a formatting fact about a block, not the rule being pinned.
     """
     src = _trajectory_chart_js_source()
     assert re.search(r"tooltip:\s*\{\s*filter:", src)
@@ -3190,7 +3204,7 @@ def test_the_trajectory_pages_do_not_explain_how_to_read_themselves(client):
     assert "Start year is locked" in league and "Start year is locked" in teams
 
 
-def test_the_player_page_ships_the_paced_point_to_the_chart(client):
+def test_the_player_page_ships_the_anchor_point_to_the_chart(client):
     """The gap at the base season is the most useful point on the chart. It has to
     reach the JS island, not just the view model -- and it comes off the BOARD's `now`,
     so it is there even though the chart blob's history stops a year earlier."""
@@ -3199,12 +3213,12 @@ def test_the_player_page_ships_the_paced_point_to_the_chart(client):
     body = resp.data.decode()
     island = _chart_island(body)
 
-    assert island["paced"], "the island carries the point"
-    assert island["paced_label"] == "2026 pace", "and says what it is"
-    assert island["paced"][0] > max(pt[0] for pt in island["history"]), (
-        "the paced season is the career line's last point"
+    assert island["anchor"], "the island carries the point"
+    assert island["anchor_label"] == "2026 projected", "and says what it is"
+    assert island["anchor"][0] > max(pt[0] for pt in island["history"]), (
+        "the anchored season is the career line's last point"
     )
-    assert "pace</td>" in body, "the numbers table marks the row"
+    assert "projected</td>" in body, "the numbers table marks the row"
 
 
 def test_trajectory_player_chart_data_is_truncated_to_the_projected_horizons(client):

@@ -6,7 +6,6 @@ import pytest
 from fantasy_baseball.trajectory.panel import (
     load_scored_panel,
     panel_path,
-    prorate_partial,
     score,
     season_elapsed_fraction,
     widest_newest,
@@ -259,8 +258,8 @@ def test_widest_newest_returns_none_when_nothing_parses(tmp_path) -> None:
 
 def test_season_elapsed_fraction_rejects_an_all_nan_games_column(tmp_path) -> None:
     # min(max(nan, 1e-6), 1.0) is nan -- both comparisons are False -- so the documented
-    # clip to (0, 1] does not hold and the failure surfaces a frame later in
-    # prorate_partial, blaming the pace calculation for missing games data.
+    # clip to (0, 1] does not hold and the nan reaches the payload as the `season_elapsed`
+    # a reader dates the board by, saying nothing about the missing games data.
     frame = _hitter_rows([{"season": 2026, "partial_season": True, "games": float("nan")}])
     _write(tmp_path, frame)
     panel = load_scored_panel("hitter", panel_dir=tmp_path, include_partial=True)
@@ -272,14 +271,3 @@ def test_season_elapsed_fraction_caps_a_complete_season_at_one(tmp_path) -> None
     _write(tmp_path, _hitter_rows([{"season": 2015, "games": 162.0}]))
     panel = load_scored_panel("hitter", panel_dir=tmp_path)
     assert season_elapsed_fraction(panel, 2015) == 1.0
-
-
-def test_prorate_partial_projects_a_full_season_pace() -> None:
-    assert prorate_partial(9.0, 0.7) == pytest.approx(12.857, abs=1e-3)
-    assert prorate_partial(9.0, 1.0) == 9.0
-
-
-@pytest.mark.parametrize("fraction", [0.0, -0.5, 1.5])
-def test_prorate_partial_rejects_an_impossible_fraction(fraction: float) -> None:
-    with pytest.raises(ValueError, match="fraction"):
-        prorate_partial(9.0, fraction)

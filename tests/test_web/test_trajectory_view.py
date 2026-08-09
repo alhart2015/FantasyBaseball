@@ -1488,7 +1488,7 @@ def _chart_including_base_age(payload: dict) -> dict:
     return blob
 
 
-def test_the_paced_season_is_the_boards_now_netted_against_the_same_floor(
+def test_the_anchored_season_is_the_boards_now_netted_against_the_same_floor(
     payload: dict,
 ) -> None:
     """The gap at the base season was the most useful point on the chart. `now` is
@@ -1497,30 +1497,30 @@ def test_the_paced_season_is_the_boards_now_netted_against_the_same_floor(
     var = _view(payload, player="Big Bat", scale="var")
     sgp = _view(payload, player="Big Bat", scale="sgp")
 
-    assert var.paced == [row["age"], pytest.approx(row["now"] - row["floor"])]
-    assert sgp.paced == [row["age"], pytest.approx(row["now"])]
+    assert var.anchor == [row["age"], pytest.approx(row["now"] - row["floor"])]
+    assert sgp.anchor == [row["age"], pytest.approx(row["now"])]
 
 
-def test_the_paced_season_is_ordered_after_every_realized_one(payload: dict) -> None:
-    """The chart concatenates history + paced into one line with no re-sort, so the
-    paced age must be strictly the largest."""
+def test_the_anchored_season_is_ordered_after_every_realized_one(payload: dict) -> None:
+    """The chart concatenates history + anchor into one line with no re-sort, so the
+    anchored age must be strictly the largest."""
     view = _view(payload, player="Big Bat")
-    assert view.paced is not None
+    assert view.anchor is not None
     assert view.history, "the fixture stores a career"
-    assert max(pt[0] for pt in view.history) < view.paced[0]
+    assert max(pt[0] for pt in view.history) < view.anchor[0]
 
 
-def test_a_base_season_already_realized_gets_no_paced_point(payload: dict) -> None:
+def test_a_base_season_already_realized_gets_no_anchor_point(payload: dict) -> None:
     """The offseason case. A panel rebuilt after the season ends un-flags it, so it
     enters `history` -- and appending `now` beside it would draw two points at one age,
-    one of them labelled a pace, on a finished year."""
+    one of them labelled a projection, on a finished year."""
     view = build_player_view(payload, player="Big Bat", chart=_chart_including_base_age(payload))
     assert view.age == 27, "the fixture's players are 27, which this blob's history covers"
-    assert view.paced is None
+    assert view.anchor is None
     assert [pt[0] for pt in view.history] == [25, 26, 27], "history is left alone"
 
 
-def test_the_paced_point_survives_a_chart_blob_that_does_not(payload: dict) -> None:
+def test_the_anchor_point_survives_a_chart_blob_that_does_not(payload: dict) -> None:
     """`now` comes from the BOARD, so it is never stale against the projection beside
     it. A refused chart blob costs the career line and the comps, not the anchor."""
     stale = _chart(payload)
@@ -1529,20 +1529,20 @@ def test_the_paced_point_survives_a_chart_blob_that_does_not(payload: dict) -> N
 
     assert view.history == [] and view.comps == []
     assert view.chart_vintage_mismatch
-    assert view.paced is not None, "board data, not chart data"
+    assert view.anchor is not None, "board data, not chart data"
 
 
-def test_an_unfound_player_has_no_paced_point(payload: dict) -> None:
+def test_an_unfound_player_has_no_anchor_point(payload: dict) -> None:
     view = _view(payload, player="Nobody At All")
-    assert view.paced is None
-    assert view.paced_label == ""
+    assert view.anchor is None
+    assert view.anchor_label == ""
 
 
 @pytest.mark.parametrize(
     ("stored", "expected"),
-    [(True, "2026 pace"), (False, "2026"), (None, "2026 pace")],
+    [(True, "2026 projected"), (False, "2026"), (None, "2026 projected")],
 )
-def test_the_paced_label_follows_the_boards_own_partial_flag(
+def test_the_anchor_label_follows_the_boards_own_partial_flag(
     payload: dict, stored: object, expected: str
 ) -> None:
     """Built server-side like `axis_label`: the chart and the table read one string and
@@ -1553,7 +1553,7 @@ def test_the_paced_label_follows_the_boards_own_partial_flag(
         blob["base_season_partial"] = stored
     blob["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
     view = build_player_view(blob, player="Big Bat", chart=None)
-    assert view.paced_label == expected
+    assert view.anchor_label == expected
 
 
 def test_history_is_sorted_by_age_even_if_the_payload_is_not(payload: dict) -> None:

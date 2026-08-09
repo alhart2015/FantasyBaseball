@@ -113,7 +113,9 @@ class SweptPlayer:
     age: int
     slot: str
     floor: float
-    #: This season's SGP, paced to a full year. The query the whole fit is built on.
+    #: This season's SGP on its full-season line -- realized while the season is over,
+    #: season-to-date plus a rest-of-season projection while it is not (`ros_anchor`).
+    #: The query the whole fit is built on.
     now: float
     prior: float
     #: Share of the fitting weight near this player's own current season, and whether it

@@ -208,6 +208,10 @@ def _board_meta(payload: dict) -> dict:
     return {
         "generated_at": payload.get("generated_at"),
         "panel_vintage": payload.get("panel_vintage"),
+        # The SECOND vintage: which rest-of-season snapshot the base season is anchored
+        # to (#348). None on a complete base season and on every board written before the
+        # anchor existed, and the template branches on that rather than printing "None".
+        "ros_snapshot": payload.get("ros_snapshot"),
         "season_elapsed": payload.get("season_elapsed"),
         "min_sgp": payload.get("min_sgp"),
         "floors": payload.get("floors", {}),
@@ -679,17 +683,19 @@ class PlayerView:
     suggested: bool
     base_season: int
     end_years: list[int]
-    #: The PACED base season as [age, value], floor-netted exactly like `history`.
+    #: The ANCHORED base season as [age, value], floor-netted exactly like `history`.
     #:
     #: NOT part of `history`, which means "realized complete seasons" -- several
     #: template branches key on `not board.history` to report a missing or mismatched
     #: chart blob, and folding a board-sourced point into a chart-blob-sourced list
     #: would make that check stop meaning what it says. It is DRAWN as the same line.
     #:
-    #: The VALUE is straight-line prorated realized stats, never a projection blend:
-    #: `board_inputs` -> `_paced` -> `prorate_partial` divides realized SGP by the
-    #: elapsed fraction. No ROS projection reaches this model (#346), which
-    #: tests/test_trajectory/test_no_ros_dependency.py keeps true.
+    #: The VALUE is a FULL-SEASON line while the season is in progress: what he has done
+    #: plus what the rest-of-season blend projects him to do, combined on the stat line
+    #: and re-scored (#348). It is therefore part record and part forecast, which is why
+    #: `anchor_label` exists and why the board stamps the snapshot it came from. It used
+    #: to be straight-line prorated realized stats, which read a player's missed time as
+    #: his rate.
     #:
     #: `None` when the player was not found, or when `age` is ALREADY a realized row in
     #: `history` -- see the suppression rule in `build_player_view`.
@@ -698,11 +704,11 @@ class PlayerView:
     #: naturally: `meta` below is the first field carrying a default, so a defaulted
     #: field any earlier puts one ahead of `projection`/`candidates`/`found` and raises
     #: `TypeError: non-default argument follows default argument` at import.
-    paced: list[float] | None = None
-    #: What to call the paced point, finished server-side. Same rule as `axis_label`:
+    anchor: list[float] | None = None
+    #: What to call the anchored point, finished server-side. Same rule as `axis_label`:
     #: ship the string, not the ingredients, so the chart and the table cannot disagree
     #: about whether the season is over.
-    paced_label: str = ""
+    anchor_label: str = ""
     meta: dict = field(default_factory=dict)
     #: The chart data that arrived is stamped for a DIFFERENT board than this one, so
     #: `history` and `comps` were dropped rather than drawn. A distinct state from
@@ -1175,13 +1181,13 @@ def build_player_view(
     # iff `year >= today.year`, so a panel rebuilt in January un-flags the season that
     # just ended: it enters `complete`, lands in `history`, and `base_season` still
     # names it. Appending `now` beside it draws two points at one age, one of them
-    # labelled a pace, on a finished year.
+    # labelled a projection, on a finished year.
     #
     # Decided from `history` rather than from the stored `base_season_partial` flag
     # because this works on EVERY blob, including ones written before that flag existed.
     # The flag labels the point; this decides whether there is one.
     realized_ages = {pt[0] for pt in history}
-    paced = None if sp.age in realized_ages else [sp.age, float(sp.now) - floor]
+    anchor = None if sp.age in realized_ages else [sp.age, float(sp.now) - floor]
     return replace(
         empty,
         name=sp.name,
@@ -1201,13 +1207,17 @@ def build_player_view(
         extrapolated=sp.extrapolated,
         chart_vintage_mismatch=mismatch,
         history=history,
-        paced=paced,
+        anchor=anchor,
         # Read off the payload, not out of `meta`: the league and teams boards share
         # `_board_meta` and neither renders this, so routing it through there put a key
         # on two views that have no use for it. Default True -- every blob written
         # before the flag existed was written mid-season.
-        paced_label=(
-            f"{base} pace" if bool(payload.get("base_season_partial", True)) else str(base)
+        #
+        # "projected", not "pace": since #348 an in-progress base season is what he has
+        # done PLUS the rest-of-season blend, so the word has to say forecast rather
+        # than extrapolation. A finished season is just its year, with no qualifier.
+        anchor_label=(
+            f"{base} projected" if bool(payload.get("base_season_partial", True)) else str(base)
         ),
         # `points(scale)` applies the offset; `YearPoint.age` is already `age + horizon`.
         projection=[

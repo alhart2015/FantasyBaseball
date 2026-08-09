@@ -15,22 +15,22 @@
   // in that shape, `projection` ships as objects.
   const pairs = (rows) => rows.map(([age, v]) => ({ x: age, y: v }));
 
-  // WHAT HAPPENED, as one series: realized seasons then the paced base season. Drawn
-  // as the main chart's career line AND as the head of the faint subject overlay on
-  // every comp card, so it is built once -- the two used to spell the paced point's
+  // WHAT HAPPENED, as one series: realized seasons then the anchored base season.
+  // Drawn as the main chart's career line AND as the head of the faint subject overlay
+  // on every comp card, so it is built once -- the two used to spell the anchor point's
   // join independently, and a change to how it attaches would have made the big chart
   // and the cards disagree about the same player's own line.
   const career = [
     ...pairs(data.history),
-    ...(data.paced ? [{ x: data.paced[0], y: data.paced[1] }] : []),
+    ...(data.anchor ? [{ x: data.anchor[0], y: data.anchor[1] }] : []),
   ];
   // ...and where it is going. This is what a comp card compares its arc against.
   const subject = [...career, ...at(data.projection, "mean")];
-  // Per-point styling for the career line: everything plain except the paced base
-  // season, which gets an open marker -- it is a full-season pace off a partial year,
-  // not a finished season, and it must not read as one.
-  const pacedPoint = (plain, open) =>
-    career.map((_, i) => (data.paced && i === career.length - 1 ? open : plain));
+  // Per-point styling for the career line: everything plain except the anchored base
+  // season, which gets an open marker -- it is part record and part rest-of-season
+  // projection, not a finished season, and it must not read as one.
+  const anchorPoint = (plain, open) =>
+    career.map((_, i) => (data.anchor && i === career.length - 1 ? open : plain));
 
   // A dashed vertical rule at the age where the comp matched the subject. Ten lines of
   // canvas rather than the chartjs-plugin-annotation CDN bundle: a second external
@@ -98,7 +98,7 @@
       order: 1,
     },
     {
-      // ONE line, history running into the paced base season. The paced point is
+      // ONE line, history running into the anchored base season. The anchor point is
       // styled per point rather than split into its own dataset: a second dataset
       // would be a second legend entry and a visible seam at the join, and the whole
       // point of this change is that there is no gap there.
@@ -106,10 +106,10 @@
       data: career,
       borderColor: "#4e79a7",
       borderWidth: 2.5,
-      pointRadius: pacedPoint(2, 5),
-      pointBackgroundColor: pacedPoint("#4e79a7", "transparent"),
+      pointRadius: anchorPoint(2, 5),
+      pointBackgroundColor: anchorPoint("#4e79a7", "transparent"),
       pointBorderColor: "#4e79a7",
-      pointBorderWidth: pacedPoint(1, 2),
+      pointBorderWidth: anchorPoint(1, 2),
       order: 0,
     },
   ];
@@ -148,16 +148,16 @@
           tooltip: {
             filter: (item) => item.dataset.label !== "_p10",
             callbacks: {
-              // The paced point is the LAST point of the career line and looks like
-              // any other on hover. Say which it is: a full-season pace off a partial
-              // year is a different claim from a finished season.
+              // The anchor point is the LAST point of the career line and looks like
+              // any other on hover. Say which it is: a part-projected full-season line
+              // is a different claim from a finished season.
               label: (item) => {
                 const base = `${item.dataset.label}: ${item.formattedValue}`;
-                const isPaced =
-                  data.paced &&
+                const isAnchor =
+                  data.anchor &&
                   item.dataset.label === data.name &&
                   item.dataIndex === career.length - 1;
-                return isPaced ? `${base} (${data.paced_label})` : base;
+                return isAnchor ? `${base} (${data.anchor_label})` : base;
               },
             },
           },
