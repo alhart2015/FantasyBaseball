@@ -423,3 +423,27 @@ def test_a_complete_base_season_reads_no_snapshot(monkeypatch) -> None:
     assert loaded.no_ros == {"hitter": [], "pitcher": []}
     out = loaded.panels["hitter"]
     assert out[out["season"] == 2026].iloc[0]["pa"] == pytest.approx(300.0)
+
+
+def test_a_nan_in_the_ros_line_is_refused() -> None:
+    """A NaN counting stat does NOT surface as a NaN score -- measured, the row came out
+    at 9.34 SGP with its home runs silently contributing nothing, which reads as a
+    normal number and clears every downstream gate. That is the plausible-wrong-number
+    failure this repo treats as the worst one, so the malformed line is refused instead.
+
+    The blended FanGraphs frame cannot currently produce one (`_blend_players` collapses
+    an all-NaN stat to 0.0), but `anchor_full_season` is public and takes any frame.
+    """
+    ros = _ros_hitter()
+    ros.loc[0, "hr"] = float("nan")
+    with pytest.raises(ValueError, match="hr"):
+        anchor_full_season(_panel(YTD_HITTER), ros, kind="hitter", season=2026)
+
+
+def test_a_nan_outside_the_needed_columns_is_ignored() -> None:
+    """Only what the line is built from matters. Refusing on an unrelated column would
+    reject a whole snapshot over a stat the anchor never reads."""
+    ros = _ros_hitter().assign(adp=float("nan"))
+    out, dropped = anchor_full_season(_panel(YTD_HITTER), ros, kind="hitter", season=2026)
+    assert dropped == []
+    assert out.iloc[0]["pa"] == pytest.approx(500.0)

@@ -253,7 +253,23 @@ def _ros_by_id(ros: pd.DataFrame, columns: list[str], kind: str) -> pd.DataFrame
             f"Adding both would inflate the remainder by a whole projection, and every "
             f"number downstream would still render normally."
         )
-    return frame.set_index("mlbam_id")[columns].astype(float)
+    remainder = frame.set_index("mlbam_id")[columns].astype(float)
+    # A NaN does NOT surface as a NaN score. Measured: a NaN `hr` produced a 9.34 SGP
+    # row whose home runs contributed nothing -- a normal-looking number that clears
+    # every downstream gate, which is the failure mode this repo ranks worst. The
+    # blended FanGraphs frame cannot currently produce one (`_blend_players` collapses
+    # an all-NaN stat to 0.0), but this function is public and takes any frame, and the
+    # cost of finding out the hard way is a whole board of quietly wrong scores.
+    bad = remainder.columns[remainder.isna().any()].tolist()
+    if bad:
+        holes = remainder.index[remainder[bad].isna().any(axis=1)].tolist()
+        raise ValueError(
+            f"the {kind} ROS blend has NaN in {bad} for {len(holes)} player(s) "
+            f"(e.g. mlbam {holes[:5]}), so their full-season line would score as though "
+            f"those categories were zero -- and it would look like an ordinary number. "
+            f"Re-stage the snapshot rather than blending a partial one."
+        )
+    return remainder
 
 
 def anchor_full_season(
