@@ -1298,7 +1298,7 @@ git commit -m "backtest: resolve drafted names to mlbam ids, reporting misses (#
 - Test: `tests/test_scripts/test_backtest_historical.py`
 
 **Interfaces:**
-- Produces: `TripleResult` with `team: str`, `picked: tuple[int, ...]`, `regret: float`; and `triple_regret(candidates: Sequence[int], forecast: Mapping[int, float], realized: Mapping[int, float], keep: int = 3) -> tuple[tuple[int, ...], float]`.
+- Produces: `triple_regret(candidates: Sequence[int], forecast: Mapping[int, float], realized: Mapping[int, float], keep: int = 3) -> tuple[tuple[int, ...], float]`; `agreement_rate(a: Sequence[tuple[int, ...]], b: Sequence[tuple[int, ...]]) -> float`; `usable_draft_years(horizon: int, available: Sequence[int]) -> list[int]`.
 
 **Rules:** picks come from forecast VAR; regret is the realized shortfall against the ex-post best `keep`. In the injury view, censored players leave the candidate pool **and** the optimum, so each estimator re-picks from the reduced roster — that keeps both triples the same size, which is what makes regret coherent.
 
@@ -1337,6 +1337,21 @@ def test_agreement_rate_counts_identical_triples() -> None:
     shape = [(1, 2, 3), (1, 2, 3), (4, 5, 6)]
     keeper = [(1, 2, 3), (1, 2, 3), (7, 8, 9)]
     assert agreement_rate(shape, keeper) == pytest.approx(2 / 3)
+
+
+def test_usable_draft_years_pins_the_headline_decision_counts() -> None:
+    """10 multi-year decisions and 20 one-year ones are the headline of the slice the
+    spec ranks most trustworthy. Derived rather than typed, so a base year silently
+    dropping out changes the count and something notices."""
+    from backtest_trajectory import usable_draft_years
+
+    available = [2023, 2024, 2025]
+    assert usable_draft_years(2, available) == [2023]
+    assert usable_draft_years(1, available) == [2023, 2024]
+
+    teams_per_year = 10
+    assert len(usable_draft_years(2, available)) * teams_per_year == 10
+    assert len(usable_draft_years(1, available)) * teams_per_year == 20
 ```
 
 - [ ] **Step 2: Run to verify they fail**
@@ -1346,7 +1361,11 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-`triple_regret` sorts candidates by `forecast` descending (tie-break on `mlbam_id` for determinism), takes `keep`, and returns the picks plus `sum(top-keep realized) - sum(picked realized)`. `agreement_rate` is the share of index positions where the two pick tuples are equal as sets.
+`triple_regret` sorts candidates by `forecast` descending (tie-break on `mlbam_id` for determinism), takes `keep`, and returns the picks plus `sum(top-keep realized) - sum(picked realized)`.
+
+`agreement_rate` is the share of index positions where the two pick tuples are equal **as sets**. Both estimators always pick from the same candidate pool within a view — censoring is a property of the realized outcome, not of either forecast — so the two lists are the same length by construction. Assert that rather than letting `zip` truncate silently and report a rate over a shorter list than either input.
+
+`usable_draft_years(horizon, available)` keeps a draft year `y` when `horizon in horizons_for(y)` — one definition of what is scoreable, shared with the shape and keeper paths, rather than a second list of years to fall out of sync with `horizons_for`.
 
 - [ ] **Step 4: Run the tests**
 
@@ -1533,7 +1552,7 @@ Per base year and pool, the report prints:
 | gap-model fallback counts | `FallbackReport` (Task 5) |
 | future-transition count, and the causal variant for base 2023 | `transitions_for` (Task 4) |
 | censored list (name, anchor volume, outcome volume), zero vs non-zero, at 0.5 and 0.2 | `outcomes_for` (Task 9), `censored` (Task 8) |
-| keeper-triple regret, both horizons, both views | `triple_regret` (Task 11) |
+| keeper-triple regret, both horizons, both views, with realized vs expected decision counts | `triple_regret` + `usable_draft_years` (Task 11) |
 | agreement rate and the disagreeing-subset difference | `agreement_rate` (Task 11) |
 | per-view roster counts, and any roster in one view but not the other, named | `eligible_rosters` (Task 12) |
 | top-of-board top-30 and per-pool top-15 | `top_of_board` (Task 12) |
