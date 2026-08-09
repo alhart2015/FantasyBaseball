@@ -325,6 +325,140 @@ def resolve_draft(
     return RosterResolution(by_team, pool_of, unresolved, ambiguous, unscoreable)
 
 
+#: How many players a team may retain. Ten teams x three keepers is also where the
+#: top-of-board slice's 30 comes from.
+KEEP_SLOTS = 3
+
+#: A roster thinned below this many candidates leaves the triple slice: picking 3 from
+#: 4 is not the decision being measured.
+CANDIDATE_FLOOR = 5
+
+
+def usable_draft_years(horizon: int, available: Sequence[int]) -> list[int]:
+    """Draft years whose keeper decision can be scored at `horizon`.
+
+    Derived from `horizons_for` rather than typed out, so a base year dropping out
+    changes the decision count and something notices. The headline counts are 10
+    (multi-year, draft 2023 only) and 20 (one-year, 2023 and 2024).
+    """
+    return [year for year in available if horizon in horizons_for(year)]
+
+
+def intersect(a: Sequence[int], b: Sequence[int]) -> list[int]:
+    """Players BOTH estimators can score. Slices run on this or they compare two
+    different populations and the difference is partly a population difference."""
+    return sorted(set(a) & set(b))
+
+
+def eligible_rosters(
+    by_team: Mapping[str, Sequence[int]], scoreable: set[int], floor: int = CANDIDATE_FLOOR
+) -> tuple[dict[str, list[int]], list[str]]:
+    """Rosters with enough scoreable candidates to pose the keeper question.
+
+    Applied PER VIEW. Censored players leave the candidate pool in the injury-excluded
+    view, so a roster can clear the floor in ALL and fail it there -- and if that is not
+    reported, a difference between the views reads as "excluding injuries changed the
+    answer" when it means "different teams were scored", which is the one thing running
+    two views is supposed to separate.
+    """
+    kept, dropped = {}, []
+    for team, ids in by_team.items():
+        candidates = [pid for pid in ids if pid in scoreable]
+        if len(candidates) >= floor:
+            kept[team] = candidates
+        else:
+            dropped.append(team)
+    return kept, sorted(dropped)
+
+
+def triple_regret(
+    candidates: Sequence[int],
+    forecast: Mapping[int, float],
+    realized: Mapping[int, float],
+    keep: int = KEEP_SLOTS,
+) -> tuple[tuple[int, ...], float]:
+    """The keeper decision: pick `keep` on FORECAST, score them on REALIZED.
+
+    Regret is the realized shortfall against the ex-post best `keep` from the same
+    roster -- ranking wrong only costs what it actually cost. Ties break on `mlbam_id`
+    so a rerun cannot silently pick a different triple.
+    """
+    ranked = sorted(candidates, key=lambda pid: (-forecast.get(pid, 0.0), pid))
+    picked = tuple(sorted(ranked[:keep]))
+    best = sorted(candidates, key=lambda pid: (-realized.get(pid, 0.0), pid))[:keep]
+    shortfall = sum(realized.get(pid, 0.0) for pid in best) - sum(
+        realized.get(pid, 0.0) for pid in picked
+    )
+    return picked, shortfall
+
+
+def agreement_rate(a: Sequence[tuple[int, ...]], b: Sequence[tuple[int, ...]]) -> float:
+    """Share of decisions where both estimators named the same players.
+
+    Report this or the bootstrap lies about what it measured. The best three on a
+    23-man roster are usually not close, so most decisions agree -- and every agreeing
+    decision contributes exactly zero to the difference while still counting toward n.
+    18 agreements out of 20 produce a tight interval around zero that reads as "cannot
+    separate" when it means the slice had two informative rows.
+    """
+    if len(a) != len(b):
+        raise ValueError(
+            f"pick lists must be the same length ({len(a)} vs {len(b)}); both estimators "
+            "pick from one candidate pool per view, so a mismatch is a bug rather than "
+            "something to zip over"
+        )
+    if not a:
+        return 0.0
+    return sum(set(x) == set(y) for x, y in zip(a, b, strict=True)) / len(a)
+
+
+def top_of_board(
+    forecast: Mapping[int, float], realized: Mapping[int, float], n: int
+) -> tuple[tuple[int, ...], float]:
+    """Realized value of the `n` players an estimator ranked highest."""
+    ranked = sorted(forecast, key=lambda pid: (-forecast[pid], pid))[:n]
+    return tuple(ranked), sum(realized.get(pid, 0.0) for pid in ranked)
+
+
+def breakout_mask(anchors: pd.DataFrame, factor: float = 1.25) -> pd.Series:
+    """Query seasons at least `factor` above the prior one.
+
+    Estimator-neutral: both anchors are REALIZED seasons, so this selects a population
+    rather than favouring the side that happens to model breakouts.
+    """
+    return anchors["now"] > factor * anchors["prior"]
+
+
+def bootstrap_difference(
+    a: Sequence[float], b: Sequence[float], *, draws: int = 10_000, seed: int = 7
+) -> tuple[float, float, float]:
+    """Paired bootstrap on `mean(a) - mean(b)`.
+
+    Returns `(lo, hi, share_a_lower)` at the 2.5/97.5 percentiles. **PAIRED**: one index
+    draw indexes both samples, so the two estimators are always compared on the same
+    resampled decisions.
+
+    `share_a_lower` is the fraction of draws where `a`'s mean is BELOW `b`'s. Lower is
+    better for regret and for error, so that is "a wins" for every metric here -- but
+    the direction inverts if this is ever handed a metric where high is good, so check
+    before reusing it.
+
+    The RESAMPLING UNIT is the caller's choice and it matters: team-decisions for the
+    triple slice (resampling players inside a roster would change the roster, which
+    changes the ex-post optimum and leaves regret undefined), players elsewhere.
+    """
+    if len(a) != len(b):
+        raise ValueError(f"paired bootstrap needs equal lengths, got {len(a)} and {len(b)}")
+    if not a:
+        return float("nan"), float("nan"), float("nan")
+    left, right = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
+    rng = np.random.default_rng(seed)
+    idx = rng.integers(0, len(left), size=(draws, len(left)))
+    diffs = left[idx].mean(axis=1) - right[idx].mean(axis=1)
+    lo, hi = (float(x) for x in np.percentile(diffs, [2.5, 97.5]))
+    return lo, hi, float((diffs < 0).mean())
+
+
 def keeper_value_sgp(
     frame: pd.DataFrame, kind: str, sgp_overrides: SgpOverrides | None
 ) -> pd.Series:

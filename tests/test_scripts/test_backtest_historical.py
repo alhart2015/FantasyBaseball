@@ -592,3 +592,161 @@ def test_resolve_draft_ignores_a_player_the_panel_cannot_score() -> None:
 
     assert result.by_team["Spacemen"] == [1]
     assert ("Spacemen", "Bench Guy") in result.unscoreable
+
+
+def test_triple_regret_is_zero_when_the_forecast_picks_the_ex_post_best() -> None:
+    from backtest_trajectory import triple_regret
+
+    forecast = {1: 30.0, 2: 20.0, 3: 10.0, 4: 5.0, 5: 1.0}
+    realized = {1: 30.0, 2: 20.0, 3: 10.0, 4: 5.0, 5: 1.0}
+    picked, regret = triple_regret([1, 2, 3, 4, 5], forecast, realized)
+
+    assert picked == (1, 2, 3)
+    assert regret == pytest.approx(0.0)
+
+
+def test_triple_regret_is_the_realized_shortfall_not_the_forecast_error() -> None:
+    """Ranking wrong only costs what it actually cost."""
+    from backtest_trajectory import triple_regret
+
+    forecast = {1: 30.0, 2: 20.0, 3: 10.0, 4: 9.0, 5: 1.0}
+    realized = {1: 5.0, 2: 20.0, 3: 10.0, 4: 25.0, 5: 1.0}
+    picked, regret = triple_regret([1, 2, 3, 4, 5], forecast, realized)
+
+    assert picked == (1, 2, 3)
+    # best available was 25 + 20 + 10 = 55; picked 5 + 20 + 10 = 35
+    assert regret == pytest.approx(20.0)
+
+
+def test_triple_regret_breaks_ties_deterministically() -> None:
+    from backtest_trajectory import triple_regret
+
+    forecast = {5: 10.0, 3: 10.0, 1: 10.0, 9: 1.0}
+    realized = dict.fromkeys((1, 3, 5, 9), 1.0)
+    assert triple_regret([9, 5, 3, 1], forecast, realized)[0] == (1, 3, 5)
+
+
+def test_agreement_rate_counts_identical_triples() -> None:
+    """The likeliest outcome is that both estimators name the same three. Those rows
+    contribute zero to the difference while counting toward n, so 18-of-20 agreement
+    would report a tight interval around zero that MEANS two informative rows."""
+    from backtest_trajectory import agreement_rate
+
+    shape = [(1, 2, 3), (1, 2, 3), (4, 5, 6)]
+    keeper = [(1, 2, 3), (1, 2, 3), (7, 8, 9)]
+    assert agreement_rate(shape, keeper) == pytest.approx(2 / 3)
+
+
+def test_agreement_rate_refuses_unequal_lengths() -> None:
+    """Both estimators pick from the same candidate pool within a view, so the lists
+    are equal by construction. zip would truncate silently and report a rate over a
+    shorter list than either input."""
+    from backtest_trajectory import agreement_rate
+
+    with pytest.raises(ValueError, match="same length"):
+        agreement_rate([(1, 2, 3)], [(1, 2, 3), (4, 5, 6)])
+
+
+def test_usable_draft_years_pins_the_headline_decision_counts() -> None:
+    """10 multi-year decisions and 20 one-year ones are the headline of the slice the
+    spec ranks most trustworthy. Derived rather than typed, so a base year silently
+    dropping out changes the count and something notices."""
+    from backtest_trajectory import usable_draft_years
+
+    available = [2023, 2024, 2025]
+    assert usable_draft_years(2, available) == [2023]
+    assert usable_draft_years(1, available) == [2023, 2024]
+
+    teams_per_year = 10
+    assert len(usable_draft_years(2, available)) * teams_per_year == 10
+    assert len(usable_draft_years(1, available)) * teams_per_year == 20
+
+
+def test_intersect_keeps_only_players_both_estimators_scored() -> None:
+    from backtest_trajectory import intersect
+
+    assert intersect([1, 2, 3], [2, 3, 4]) == [2, 3]
+
+
+def test_top_of_board_scores_the_realized_value_of_the_forecast_top_n() -> None:
+    from backtest_trajectory import top_of_board
+
+    forecast = {1: 50.0, 2: 40.0, 3: 30.0, 4: 1.0}
+    realized = {1: 10.0, 2: 10.0, 3: 10.0, 4: 99.0}
+    picked, total = top_of_board(forecast, realized, n=3)
+
+    assert picked == (1, 2, 3)
+    assert total == pytest.approx(30.0)
+
+
+def test_breakout_mask_selects_a_season_25_percent_over_the_prior() -> None:
+    from backtest_trajectory import breakout_mask
+
+    anchors = pd.DataFrame({"now": [13.0, 12.4, 4.0], "prior": [10.0, 10.0, 10.0]})
+    assert list(breakout_mask(anchors)) == [True, False, False]
+
+
+def test_the_roster_floor_is_applied_per_view_and_names_the_difference() -> None:
+    """Censored players leave the candidate pool in the injury view, so a roster can
+    clear the floor in ALL and fail it in the other. Unreported, a between-view
+    difference reads as 'excluding injuries changed the answer' when it means
+    'different teams were scored'."""
+    from backtest_trajectory import eligible_rosters
+
+    by_team = {"Spacemen": [1, 2, 3, 4, 5, 6], "Hart of the Order": [7, 8, 9, 10, 11]}
+
+    all_view, all_dropped = eligible_rosters(by_team, scoreable=set(range(1, 12)), floor=5)
+    injury_view, injury_dropped = eligible_rosters(
+        by_team, scoreable={1, 2, 3, 4, 7, 8, 9, 10, 11}, floor=5
+    )
+
+    assert set(all_view) == {"Spacemen", "Hart of the Order"}
+    assert all_dropped == []
+    assert set(injury_view) == {"Hart of the Order"}
+    assert injury_dropped == ["Spacemen"]
+
+
+def test_bootstrap_difference_separates_an_obvious_gap() -> None:
+    from backtest_trajectory import bootstrap_difference
+
+    _lo, hi, share = bootstrap_difference([1.0] * 40, [5.0] * 40)
+    assert hi < 0
+    assert share == pytest.approx(1.0)
+
+
+def test_bootstrap_difference_reports_a_null_as_straddling_zero() -> None:
+    """TWO independent samples, not the same array twice. The resample is PAIRED, so
+    passing one array as both sides makes every draw exactly 0.0 -- the interval
+    collapses to a point and the assertion holds whether or not the bootstrap works."""
+    import numpy as np
+    from backtest_trajectory import bootstrap_difference
+
+    rng = np.random.default_rng(0)
+    lo, hi, _ = bootstrap_difference(list(rng.normal(size=200)), list(rng.normal(size=200)))
+
+    assert lo < 0 < hi, "a genuine null must produce a WIDE interval, not a point"
+
+
+def test_bootstrap_win_share_is_even_when_the_means_are_equal_by_construction() -> None:
+    """The interval is the 'cannot separate' signal; the win share is NOT, because a
+    PAIRED bootstrap centres on the OBSERVED difference rather than on zero. Two
+    independent draws from one distribution differ by ~1 SE and legitimately give a
+    share near 0.15. Equal means by construction is what pins the share at a half."""
+    import numpy as np
+    from backtest_trajectory import bootstrap_difference
+
+    rng = np.random.default_rng(0)
+    values = list(rng.normal(size=200))
+    shuffled = list(rng.permutation(values))
+
+    lo, hi, share = bootstrap_difference(values, shuffled)
+
+    assert lo < 0 < hi
+    assert 0.4 < share < 0.6
+
+
+def test_bootstrap_difference_is_deterministic_for_a_seed() -> None:
+    from backtest_trajectory import bootstrap_difference
+
+    a, b = [1.0, 2.0, 3.0, 4.0], [2.0, 2.0, 2.0, 9.0]
+    assert bootstrap_difference(a, b, seed=3) == bootstrap_difference(a, b, seed=3)
