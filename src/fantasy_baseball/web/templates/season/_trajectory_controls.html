@@ -166,7 +166,7 @@
 {% macro unscored_note(names, base_season, min_sgp) -%}
 <p class="muted">
   not scored: {{ names|join(', ') }} --
-  no {{ base_season }} line (injured, released, or not yet up) or pacing under
+  no {{ base_season }} line (injured, released, or not yet up) or scoring under
   {{ '%.1f'|format(min_sgp) }} SGP, so the model could not price them.
 </p>
 {%- endmacro %}

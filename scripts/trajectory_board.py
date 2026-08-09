@@ -229,7 +229,7 @@ def main() -> int:
         "--min-sgp",
         type=float,
         default=0.0,
-        help="skip players below this current-season pace, to cut the fringe",
+        help="skip players below this current-season SGP, to cut the fringe",
     )
     parser.add_argument(
         "--min-support",

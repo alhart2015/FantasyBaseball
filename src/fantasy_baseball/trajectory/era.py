@@ -95,10 +95,12 @@ def era_factors(
 
     Split out of `era_normalize` for #325's backtest, which needed to restate the
     keeper chain's ZiPS vintages onto the same reference the panel uses. That caller was
-    retired with the chain; the one left is the trajectory board, which computes the
-    table on the ACTUAL panel and passes it to `era_normalize` alongside a frame whose
-    in-progress season has been replaced by a projection-anchored line -- see that
-    function's `factors` argument for why the two must not be the same frame.
+    retired with the chain. The one DIRECT caller left is the trajectory board, which
+    computes the table on the ACTUAL panel and passes it to `era_normalize` alongside a
+    frame whose in-progress season has been replaced by a projection-anchored line -- see
+    that function's `factors` argument for why the two must not be the same frame.
+    `era_normalize` still reaches this itself whenever no table is supplied, which is
+    every other caller.
 
     Kept separate because the factor table is a readable intermediate worth being able
     to inspect on its own, and because computing it twice is how two answers to "what is

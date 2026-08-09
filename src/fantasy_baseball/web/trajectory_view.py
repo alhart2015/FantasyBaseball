@@ -901,7 +901,7 @@ def find_players(payload: dict, query: str, *, cap: int = FIND_RESULT_CAP) -> li
     Matching goes through `normalize_name`, the same function resolution uses.
 
     Searches the BOARD, not `ros_projections`. The two populations differ by a lot: the
-    board drops everyone with no current-season line and everyone pacing under MIN_SGP.
+    board drops everyone with no current-season line and everyone scoring under MIN_SGP.
     Suggesting a name from the wider set would offer a row that then renders "no player
     named X on this board".
 
@@ -1120,7 +1120,7 @@ def build_player_view(
         #
         # A name that substring-matches NOTHING still returns `empty`, candidates and
         # all: that sentence has to stay distinguishable from a typo, because a player
-        # genuinely absent from the board -- no current line, or pacing under MIN_SGP --
+        # genuinely absent from the board -- no current line, or scoring under MIN_SGP --
         # is a real answer and not a search failure.
         suggestions = find_players(payload, player or "")
         if not suggestions:

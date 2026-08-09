@@ -61,8 +61,9 @@ POOL_SLOTS: dict[str, frozenset[str]] = {
 #: Appearances before an in-progress season is trusted to describe a pitcher's ROLE.
 #: The same 10-game threshold the league uses for eligibility: a starter back from the
 #: IL with two September relief outings is not a reliever, but `starts / games` on that
-#: fragment says he is, and the pace-adjustment applied to his SGP was never applied
-#: here.
+#: fragment says he is. The anchor that gives his SGP a full-season line deliberately
+#: leaves appearances alone -- a projection must not pick a replacement level (#348) --
+#: so the fragment is still what this has to see through.
 ROLE_MIN_GAMES = 10
 
 #: Nothing eligible, so he fills a UTIL slot -- the HIGHEST floor. A missing lookup can

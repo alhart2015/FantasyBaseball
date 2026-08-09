@@ -257,20 +257,21 @@ def season_elapsed_fraction(df: pd.DataFrame, season: int) -> float:
     plays nearly every team game, so the max is a good read on the calendar and needs
     no second data source. Clipped to (0, 1]: a completed season returns 1.0.
 
-    **Must be handed the hitter panel even when pacing a pitcher.** How much of the
-    season has elapsed is a calendar fact about the league, not a property of the pool.
-    In the PITCHER panel `games` is `stat.gamesPitched` -- APPEARANCES, not team games
-    played -- so the busiest pitcher is a reliever at ~57 appearances and this would
-    read 2026 as 35% elapsed against the true 70%, roughly DOUBLING every pitcher's
-    projected pace and matching him against comps a full SGP tier too high. The guard
-    below rejects a pitcher panel rather than silently returning that number.
+    **Must be handed the hitter panel, whichever pool is being priced.** How much of
+    the season has elapsed is a calendar fact about the league, not a property of the
+    pool. In the PITCHER panel `games` is `stat.gamesPitched` -- APPEARANCES, not team
+    games played -- so the busiest pitcher is a reliever at ~57 appearances and this
+    would read 2026 as 35% elapsed against the true 70%. That no longer moves a score,
+    but it is stamped on the payload and printed as the share of the base season that
+    is record rather than forecast, so it would halve the number a reader dates the
+    board by. The guard below rejects a pitcher panel rather than returning it.
     """
     if "pa" not in df.columns:
         raise ValueError(
             "season_elapsed_fraction needs the HITTER panel: in the pitcher panel "
             "`games` counts appearances, not team games played, and the fraction "
             "comes out roughly half of the truth. Elapsed season is a league fact -- "
-            "pass the hitter panel even when pacing a pitcher."
+            "pass the hitter panel whichever pool is being priced."
         )
     rows = df[df["season"] == season]
     if rows.empty:

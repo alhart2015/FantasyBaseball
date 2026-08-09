@@ -1,6 +1,6 @@
 """Career SGP trajectory from historical comparables (#303).
 
-Answers: a player is on pace for N SGP in his age-A season -- what does the rest of
+Answers: a player is worth N SGP in his age-A season -- what does the rest of
 his career look like? The estimate is the forward path of every historical
 player-season that started from the same place, with players who left the league
 scored as the zero they are worth to a roster slot.

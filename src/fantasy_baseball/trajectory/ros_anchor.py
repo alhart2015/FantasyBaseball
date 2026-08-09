@@ -14,6 +14,14 @@ comes from the panel, so an anchor whose realized half came from Upstash would p
 seam between the query row and the rows it is fitted against -- and it would make the
 board unbuildable without a network. Only the REMAINDER is taken from the projection.
 
+**The two halves are only disjoint if the snapshot is current.** The realized half runs
+to whenever the panel was built and the remainder was projected from the snapshot date,
+so any gap between them is counted twice -- worst for the healthy full-time players who
+have the most remaining games. Taking the blend at face value is a deliberate call
+(Hart, 2026-08-09) and there is no guard here, which is exactly why this says so: the
+alternative is a module that reads as though the combination were disjoint by
+construction. `docs/trajectory-ros-anchor-movers-2026-08-09.md` measures it.
+
 **Combine the LINE, never the scores.** `calculate_player_sgp` prices AVG, ERA and WHIP,
 which are rates; `ytd_sgp + ros_sgp` is meaningless. The counting stats are added and the
 panel's rate x volume schema is rebuilt from the totals -- `panel._reconstruct` run
@@ -94,9 +102,13 @@ def load_ros_blend(
     THE SAME blend the dashboard runs on -- `blend_projections` with no normalizer, over
     the snapshot `latest_ros_snapshot` picks -- so the board and the standings cannot end
     up pricing one player off two different projections. It stops short of
-    `blend_and_cache_ros`, which reads `game_log_totals` and writes two KV blobs: this
-    path is offline by construction (the panel it anchors is a gitignored local build)
-    and takes its realized half from the panel, so neither the read nor the writes apply.
+    `blend_and_cache_ros`, which reads `game_log_totals`, writes two KV blobs, and
+    refuses a snapshot older than `ROS_SNAPSHOT_STALE_DAYS`. The first two do not apply:
+    this path is offline by construction (the panel it anchors is a gitignored local
+    build) and takes its realized half from the panel. The third is a DECISION rather
+    than an oversight -- the board takes the newest snapshot on disk at face value and
+    stamps its date for the reader (Hart, 2026-08-09). Named here because a list of
+    omissions that quietly skips the one with consequences is worse than no list.
 
     Raises:
         FileNotFoundError: no datable snapshot dir for `season`.
@@ -122,8 +134,9 @@ class AnchoredPanels:
 
     `season` is the base season, read off the HITTER panel: `panel_path` picks the newest
     file for each pool INDEPENDENTLY, so a hitter panel rebuilt through 2026 against a
-    pitcher panel still ending 2025 must produce an empty pitcher pool that
-    `_require_scored_pool` refuses, rather than two boards on two different years.
+    pitcher panel still ending 2025 produces an empty pitcher pool rather than two boards
+    on two different years. Only `push_trajectory_board.py` refuses that outright; the
+    CLI board and the single-player lookup simply find nothing for that pool.
 
     `no_ros` is who was DROPPED for having no rest-of-season row, per pool. It is
     returned rather than logged because the page has to be able to say how many went --
@@ -162,7 +175,7 @@ def load_anchored_panels(
 
     `era_adjust=False` returns the anchored panels on their RAW season scales, for
     `player_trajectory.py --no-era-adjust`. It turns off the restatement, never the
-    anchor: what a player is on pace for and what environment that pace is quoted in are
+    anchor: what a player will finish the season with and what environment that is quoted in are
     separate questions, and the flag only ever meant the second one.
     """
     from .era import era_factors, era_normalize

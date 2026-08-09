@@ -54,15 +54,20 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union
 #: today, so this is the measurement rather than the old one halved.
 DEFAULT_MAX_HORIZON = 5
 
-#: Current-season pace below which a player is not fitted. THE SAME CUT
+#: Current-season SGP below which a player is not fitted. THE SAME CUT
 #: `trajectory_board.py --min-sgp` defaults to, and it is a `>=` test rather than a
-#: no-op: 171 of the 1,340 players with a 2026 line pace NEGATIVE, and the CLI has never
-#: scored them. Every analysis on this model ran at this cut, so the web board matching
-#: it is what makes the two comparable.
+#: no-op: measured 2026-08-09 on the anchored board, 81 of the 1,340 players with a 2026
+#: line score NEGATIVE, and the CLI has never scored them. Every analysis on this model
+#: ran at this cut, so the web board matching it is what makes the two comparable.
+#:
+#: That figure was 171 under the retired proration. The anchor moved it because a
+#: projection regresses a bad half-season toward the mean, so 90 players who paced
+#: negative now clear the cut -- see docs/trajectory-ros-anchor-movers-2026-08-09.md.
 #:
 #: Deliberately not a control and deliberately not raised. It cannot change any fitted
 #: number -- the fitting pool is `complete`, which the query rows never enter -- but it
-#: does change RANKS, and a young player pacing low is exactly the ambiguous keeper call.
+#: does change RANKS, and a young player scoring low is exactly the ambiguous keeper
+#: call.
 MIN_SGP = 0.0
 
 #: Comps stored per player -- the SAME constant the view clamps `n` against, imported

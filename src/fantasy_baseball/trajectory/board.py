@@ -1,7 +1,7 @@
 """Every player's query line, for scoring a whole board rather than one name (#311).
 
 `scripts/player_trajectory.py` answers "what about THIS player": it resolves a name,
-pace-adjusts his in-progress season, reads his prior year, works out which slot he nets
+reads his anchored in-progress season, reads his prior year, works out which slot he nets
 against, and scores him. A board needs the same five things for everyone at once, and
 the per-player helpers cannot simply be looped -- each one scans the full panel, so a
 600-player sweep would be 600 passes over 16,000 rows before a single fit runs.
@@ -140,9 +140,10 @@ class BoardRow:
 #: `starts / games` and needs a settled season's whole total to do it -- a man traded in
 #: July has two rows of ~15 starts, and neither half clears `ROLE_MIN_GAMES`.
 #:
-#: `pa` and `partial_season` used to be here too, for the pace adjustment that read the
-#: elapsed season off the busiest hitter's games. Nothing collapsed reads either one
-#: since the anchor replaced pacing (#348).
+#: `pa` and `partial_season` used to be here too: `pa` because the elapsed-season read
+#: refused a frame without it, and `partial_season` because it was the mask deciding
+#: which rows got paced. Nothing collapsed reads either one since the anchor replaced
+#: pacing (#348).
 _SPLIT_RULES = {
     "starts": "sum",
     "games": "sum",

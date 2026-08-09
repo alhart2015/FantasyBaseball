@@ -1,6 +1,6 @@
 """Career SGP trajectory from historical comparables (#303).
 
-A player produced X SGP last year and is on pace for Y this one, at age A. What does
+A player produced X SGP last year and is set to finish with Y this one, at age A. What does
 the rest of his career look like?
 
 STANDALONE. Reads `data/trajectory/` and touches nothing in the keeper pipeline.
@@ -182,10 +182,10 @@ def _number(row: pd.Series, column: str) -> float:
 def _role_row(panel: pd.DataFrame, mlbam_id: int) -> pd.Series:
     """The season that should decide a pitcher's SP/RP role.
 
-    His most recent, unless that is an in-progress fragment: `_resolve_player` already
-    pace-adjusts a partial season's SGP because a fragment is not representative, and
-    the role read has the same problem. Below `ROLE_MIN_GAMES` appearances, fall back to
-    the last season that cleared it.
+    His most recent, unless that is an in-progress fragment: the anchor gives a partial
+    season a full-season SGP line but deliberately leaves APPEARANCES alone, so the role
+    read still sees the fragment. Below `ROLE_MIN_GAMES` appearances, fall back to the
+    last season that cleared it.
     """
     rows = panel[panel["mlbam_id"] == mlbam_id].sort_values("season")
     latest = rows.iloc[-1]
@@ -531,7 +531,7 @@ def render(traj: Trajectory, show_comps: int) -> None:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--player", help="look the age and current pace up by name")
+    parser.add_argument("--player", help="look the age and current-season line up by name")
     parser.add_argument(
         "--mlbam-id",
         type=int,
@@ -539,7 +539,7 @@ def main() -> int:
     )
     parser.add_argument("--pool", choices=("hitter", "pitcher"))
     parser.add_argument("--age", type=int, help="the player's age in the season he is producing")
-    parser.add_argument("--sgp", type=float, help="full-season SGP pace")
+    parser.add_argument("--sgp", type=float, help="full-season SGP for the current season")
     parser.add_argument(
         "--prior-sgp",
         type=float,
@@ -665,10 +665,10 @@ def main() -> int:
             for pool, pid, age, sgp in resolved
         ]
         if args.sgp is not None:
-            # The looked-up pace was printed above but is not what gets scored; say so
+            # The looked-up line was printed above but is not what gets scored; say so
             # rather than leaving two different numbers on screen with no indication of
             # which one drove the table.
-            print(f"  (--sgp {args.sgp} overrides the pace above)")
+            print(f"  (--sgp {args.sgp} overrides the line above)")
     else:
         if args.prior_sgp is None:
             # Never guess it. Assuming last year equalled this year is a real modelling
