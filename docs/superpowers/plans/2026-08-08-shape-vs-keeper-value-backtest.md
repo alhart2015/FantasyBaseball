@@ -1112,9 +1112,11 @@ def test_outcomes_omit_a_season_the_player_did_not_appear_in() -> None:
     assert out[1].realized([2024, 2025]) == pytest.approx(out[1].sgp_by_year[2024])
 
 
-def test_outcome_sgp_comes_from_the_collapsed_row_not_the_fragments() -> None:
-    """Summing two half-season SGPs is not the season's SGP -- rate categories do not
-    add. The collapse has to happen before scoring is read, not after."""
+def test_outcome_sgp_matches_the_shared_collapse_definition() -> None:
+    """collapse_split_seasons SUMS sgp across the fragments (comps.py:276-280). The
+    point of routing through it is not that summing is obviously right -- it is that
+    both estimators already fit on that definition, so the outcome side must not carry
+    a second one. If the collapse ever changes, this fails instead of diverging."""
     from backtest_trajectory import outcomes_for
 
     from fantasy_baseball.trajectory.comps import collapse_split_seasons
@@ -1130,6 +1132,19 @@ def test_outcome_sgp_comes_from_the_collapsed_row_not_the_fragments() -> None:
 
     out = outcomes_for(panel, "hitter", 2023, (1,), anchor_volume={1: 600.0})
     assert out[1].sgp_by_year[2024] == pytest.approx(expected)
+
+
+def test_volume_survives_a_panel_with_nothing_split() -> None:
+    """collapse_split_seasons returns the panel UNTOUCHED when there are no duplicates
+    (comps.py:274-275) and a four-column aggregate when there are. Code reading `pa`
+    off its result therefore works on most fixtures and breaks on exactly the split
+    season it exists for. Volume must come from its own groupby on the raw panel."""
+    from backtest_trajectory import outcomes_for
+
+    panel = _scored_panel([{"mlbam_id": 1, "season": 2024, "pa": 600.0}])
+    out = outcomes_for(panel, "hitter", 2023, (1,), anchor_volume={1: 600.0})
+
+    assert out[1].volume_by_year[2024] == pytest.approx(600.0)
 ```
 
 Write `_scored_panel(rows)` in that module: applies the `tests/test_trajectory/test_era.py::_hitters` default rate row to each entry and returns it through `trajectory.panel.score`.
@@ -1141,9 +1156,25 @@ Expected: FAIL — `cannot import name 'outcomes_for'`.
 
 - [ ] **Step 3: Implement**
 
-`outcomes_for` calls `collapse_split_seasons(panel)` first, then for each `base_year + h` in `horizons` reads `sgp` and the volume column (`pa` for hitters, `ip` for pitchers) into the two sparse dicts, keyed by `mlbam_id`. A season with no row contributes no key. `anchor_volume` is passed in rather than re-derived, because the anchor is year Y and this function only looks forward.
+**SGP and volume come from two different places, and this is not optional.** Checked
+against `trajectory/comps.py:262-280`:
 
-**Volume must be re-summed, not taken from the collapsed row, if `collapse_split_seasons` keeps only `sgp` and `age`** — check its implementation before writing this. `scripts/backtest_trajectory.py::_ROLE_SUMS` already carries that same caveat for the pitcher role columns and is the precedent to follow.
+- **SGP** -> `collapse_split_seasons(panel)`, which aggregates
+  `.agg(sgp=("sgp", "sum"), age=("age", "first"))`. Use it because it is the definition
+  both estimators already fit on, not because summing is self-evidently correct.
+- **Volume** -> a separate `panel.groupby(["mlbam_id", "season"])[volume].sum()` on the
+  **raw** panel, where `volume` is `pa` for hitters and `ip` for pitchers.
+
+The collapse **drops `pa` and `ip` entirely**, and it returns the panel *untouched* when
+no season is split (`comps.py:274-275`). So its output schema differs by data: full
+columns when nothing is split, four columns when something is. Reading `pa` off it works
+on most fixtures and fails on precisely the split-season case it exists to handle.
+`scripts/backtest_trajectory.py::_ROLE_SUMS` already re-sums the pitcher role columns for
+this exact reason and is the precedent.
+
+Then for each `base_year + h` in `horizons`, read both into the sparse dicts keyed by
+`mlbam_id`. A season with no row contributes no key. `anchor_volume` is passed in rather
+than re-derived, because the anchor is year Y and this function only looks forward.
 
 - [ ] **Step 4: Run the tests**
 
