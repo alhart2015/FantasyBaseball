@@ -367,6 +367,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -1490,12 +1491,20 @@ def test_bootstrap_difference_separates_an_obvious_gap() -> None:
 
 
 def test_bootstrap_difference_reports_a_null_as_straddling_zero() -> None:
+    """TWO independent samples from one distribution, not the same array twice. The
+    resample is PAIRED, so passing `values` as both sides makes every draw exactly
+    0.0 -- the interval collapses to a point and `lo <= 0 <= hi` holds whether or not
+    the bootstrap does anything at all."""
     from backtest_trajectory import bootstrap_difference
 
     rng = np.random.default_rng(0)
-    values = rng.normal(size=40)
-    lo, hi, _ = bootstrap_difference(list(values), list(values))
-    assert lo <= 0 <= hi
+    a = list(rng.normal(size=200))
+    b = list(rng.normal(size=200))
+
+    lo, hi, share = bootstrap_difference(a, b)
+
+    assert lo < 0 < hi, "a genuine null must produce a WIDE interval, not a point"
+    assert 0.3 < share < 0.7
 
 
 def test_bootstrap_difference_is_deterministic_for_a_seed() -> None:
@@ -1548,7 +1557,7 @@ Per base year and pool, the report prints:
 
 | line | source |
 |---|---|
-| coverage: each estimator alone, and the intersection size | `intersect` (Task 11) |
+| coverage: each estimator alone, and the intersection size | `intersect` (Task 12) |
 | gap-model fallback counts | `FallbackReport` (Task 5) |
 | future-transition count, and the causal variant for base 2023 | `transitions_for` (Task 4) |
 | censored list (name, anchor volume, outcome volume), zero vs non-zero, at 0.5 and 0.2 | `outcomes_for` (Task 9), `censored` (Task 8) |
