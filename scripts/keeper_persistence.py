@@ -88,12 +88,21 @@ def _projection_path(year: int, stem: str) -> Path:
     return matches[-1]
 
 
-def load_rates(year: int, kind: str, *, source: str) -> pd.DataFrame:
+def load_rates(
+    year: int, kind: str, *, source: str, factors: pd.DataFrame | None = None
+) -> pd.DataFrame:
     """Decomposed rate/PT frame for one (year, pool, source), indexed by mlbam_id.
 
     `decompose_*` works on BOTH sources because the ZiPS export and our actuals CSVs
     carry the same counting-stat column names (PA/AB/H/HR/R/RBI/SB, IP/SO/W/SV/ER/BB/H)
     keyed by MLBAMID. That is why there is no separate actuals decomposer.
+
+    `factors` restates the frame into the trajectory panel's reference run environment
+    for the #325 backtest. This is one of TWO entry points that must apply it --
+    `keepers.vintages.load_vintage` feeds `forecast_pool` directly and is the other.
+    Applying it to only one leaves the persistence fit and the fold it feeds in
+    different unit systems: `S` survives that, being a dimensionless share of a gap,
+    but `drift` does not.
     """
     pool = POOLS[kind]
     path = (
@@ -106,7 +115,12 @@ def load_rates(year: int, kind: str, *, source: str) -> pd.DataFrame:
     # entry rather than the first, so the survivor is the real line and not a 12-PA stub.
     pt = str(pool["pt"])
     ordered = frame.sort_values(pt, ascending=False)
-    return ordered.loc[~ordered.index.duplicated(keep="first")]
+    deduped = ordered.loc[~ordered.index.duplicated(keep="first")]
+    if factors is None:
+        return deduped
+    from fantasy_baseball.trajectory.era import normalize_frame
+
+    return normalize_frame(deduped, year, kind, factors)
 
 
 def load_counts(year: int, kind: str, *, source: str) -> pd.DataFrame:
@@ -126,7 +140,12 @@ def load_counts(year: int, kind: str, *, source: str) -> pd.DataFrame:
 
 
 def build_transition(
-    year: int, kind: str, *, min_pt: float, min_next_pt: float
+    year: int,
+    kind: str,
+    *,
+    min_pt: float,
+    min_next_pt: float,
+    factors: pd.DataFrame | None = None,
 ) -> tuple[pd.DataFrame, dict[str, int]]:
     """Aligned (projection_Y, actual_Y, actual_Y+1) panel plus a sample-attrition record.
 
@@ -144,9 +163,9 @@ def build_transition(
     """
     pool = POOLS[kind]
     pt = str(pool["pt"])
-    proj = load_rates(year, kind, source="projection")
-    obs = load_rates(year, kind, source="actual")
-    nxt = load_rates(year + 1, kind, source="actual")
+    proj = load_rates(year, kind, source="projection", factors=factors)
+    obs = load_rates(year, kind, source="actual", factors=factors)
+    nxt = load_rates(year + 1, kind, source="actual", factors=factors)
 
     qualified = obs.index[obs[pt] >= min_pt]
     survived = qualified.intersection(nxt.index[nxt[pt] >= min_next_pt])
@@ -384,7 +403,9 @@ def run_vs_fresh(kind: str, args: argparse.Namespace) -> None:
         print(f"{col:<10} {stale:>11.4f} {fitted:>10.4f} {fresh_m:>11.4f} {closed:>11}")
 
 
-def build_volume_transition(year: int, kind: str, *, min_pt: float) -> pd.DataFrame:
+def build_volume_transition(
+    year: int, kind: str, *, min_pt: float, factors: pd.DataFrame | None = None
+) -> pd.DataFrame:
     """Volume panel that KEEPS the players who washed out.
 
     The rate panels have to drop a player who did not play in Y+1 -- he has no
@@ -406,9 +427,9 @@ def build_volume_transition(year: int, kind: str, *, min_pt: float) -> pd.DataFr
     for the rate term to answer.
     """
     pt = str(POOLS[kind]["pt"])
-    proj = load_rates(year, kind, source="projection")
-    obs = load_rates(year, kind, source="actual")
-    nxt = load_rates(year + 1, kind, source="actual")
+    proj = load_rates(year, kind, source="projection", factors=factors)
+    obs = load_rates(year, kind, source="actual", factors=factors)
+    nxt = load_rates(year + 1, kind, source="actual", factors=factors)
     idx = obs.index[obs[pt] >= min_pt].intersection(proj.index)
     return pd.DataFrame(
         {

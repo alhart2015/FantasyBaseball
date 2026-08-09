@@ -136,3 +136,76 @@ def test_calibration_vintages_are_preseason_not_rest_of_season(year: int) -> Non
     assert hitters["pa"].mean() > 200, f"{year} ZiPS hitters look rest-of-season, not preseason"
     pitchers = load_vintage(year, root, "pitcher")
     assert pitchers["ip"].mean() > 40, f"{year} ZiPS pitchers look rest-of-season, not preseason"
+
+
+def _reference_factors() -> pd.DataFrame:
+    """Era factors from a panel spanning the 2023-2025 reference window."""
+    from fantasy_baseball.trajectory.era import era_factors
+    from fantasy_baseball.trajectory.panel import score
+
+    base = {
+        "mlbam_id": 1,
+        "season": 2024,
+        "pa": 600.0,
+        "ab_pa": 0.9,
+        "h_ab": 0.280,
+        "hr_pa": 0.05,
+        "r_pa": 0.15,
+        "rbi_pa": 0.14,
+        "sb_pa": 0.02,
+    }
+    rows = [
+        base | {"mlbam_id": 1, "season": 2022, "hr_pa": 0.040},
+        base | {"mlbam_id": 2, "season": 2023, "hr_pa": 0.050},
+        base | {"mlbam_id": 3, "season": 2024, "hr_pa": 0.060},
+        base | {"mlbam_id": 4, "season": 2025, "hr_pa": 0.055},
+    ]
+    return era_factors(score(pd.DataFrame(rows), "hitter"), "hitter")
+
+
+def test_both_loaders_normalize_a_vintage_identically(tmp_path: Path, monkeypatch) -> None:
+    """load_rates and load_vintage are SEPARATE code paths into the same chain.
+
+    keepers.vintages.load_vintage feeds forecast_pool directly; keeper_persistence's
+    own loader feeds the persistence fit. Normalizing one and not the other leaves
+    `drift` -- an ADDITIVE term -- fit in one unit system and applied in another,
+    which biases every forecast by a fixed amount with no symptom.
+    """
+    import sys
+
+    from fantasy_baseball.trajectory.era import normalize_frame
+
+    root = Path(__file__).resolve().parents[2]
+    sys.path.insert(0, str(root / "scripts"))
+    import keeper_persistence
+
+    year_dir = tmp_path / "2024"
+    year_dir.mkdir()
+    zips_hitters().to_csv(year_dir / "zips-hitters.csv", index=False)
+    monkeypatch.setattr(keeper_persistence, "PROJECTIONS", tmp_path)
+
+    factors = _reference_factors()
+    raw = load_vintage(2024, tmp_path, "hitter")
+    expected = normalize_frame(raw, 2024, "hitter", factors)
+
+    via_vintage = load_vintage(2024, tmp_path, "hitter", factors=factors)
+    via_rates = keeper_persistence.load_rates(2024, "hitter", source="projection", factors=factors)
+
+    for rate in HITTER_RATES:
+        pd.testing.assert_series_equal(via_vintage[rate], expected[rate], check_names=False)
+        pd.testing.assert_series_equal(
+            via_rates[rate], expected.loc[via_rates.index, rate], check_names=False
+        )
+
+
+def test_load_vintage_without_factors_is_unchanged(tmp_path: Path) -> None:
+    """The LIVE board runs raw -- its baseline and its target are both in the current
+    run environment, so normalizing there would restate one side and not the other."""
+    year_dir = tmp_path / "2024"
+    year_dir.mkdir()
+    zips_hitters().to_csv(year_dir / "zips-hitters.csv", index=False)
+
+    pd.testing.assert_frame_equal(
+        load_vintage(2024, tmp_path, "hitter"),
+        load_vintage(2024, tmp_path, "hitter", factors=None),
+    )

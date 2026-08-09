@@ -85,18 +85,19 @@ def league_rates(df: pd.DataFrame, kind: str) -> pd.DataFrame:
     return pd.DataFrame.from_dict(out, orient="index").sort_index()
 
 
-def era_normalize(
+def era_factors(
     df: pd.DataFrame,
     kind: str,
     *,
     reference_seasons: tuple[int, ...] = REFERENCE_SEASONS,
-    sgp_overrides: SgpOverrides | None = None,
 ) -> pd.DataFrame:
-    """Rescale every season's category rates into the reference run environment.
+    """``season -> {rate_column: multiplicative factor}`` into the reference environment.
 
-    Returns a copy with the rate columns adjusted and `sgp` re-scored. `era_factor_*`
-    columns are kept so a surprising comp can be traced back to its adjustment rather
-    than taken on faith.
+    Split out of `era_normalize` so a frame that is ABOUT one season and carries no
+    `season` column -- a ZiPS vintage, an actuals export -- can be restated onto the
+    same reference the panel uses. Two independent answers to "what is a 2022 home run
+    worth in 2023-2025 terms" is the disagreement this subsystem cannot afford, so
+    there is one and both callers read it.
     """
     rates = league_rates(df, kind)
     missing = [s for s in reference_seasons if s not in rates.index]
@@ -122,7 +123,46 @@ def era_normalize(
     # blanking the column or, worse, multiplying a real rate by inf.
     # np.nan, not pd.NA: pd.NA makes the column object-dtype and the later astype(float)
     # raises on it.
-    factors = (reference / rates).replace([np.inf, -np.inf], np.nan)
+    return (reference / rates).replace([np.inf, -np.inf], np.nan)
+
+
+def normalize_frame(
+    frame: pd.DataFrame, season: int, kind: str, factors: pd.DataFrame
+) -> pd.DataFrame:
+    """Restate one season's rate frame into the reference run environment.
+
+    For frames that are ABOUT a single season and carry no `season` column -- a ZiPS
+    vintage, an actuals export -- where `era_normalize` needs a panel to derive the
+    factors from. Volume (`pa`/`ip`) and the structural `ab_pa` ratio are left alone
+    for the same reasons `era_normalize` leaves them alone; see the module docstring.
+
+    A rate column the frame does not carry is SKIPPED, not an error: the 2027/2028
+    ZiPS exports ship with `SV` entirely empty, and refusing a vintage over a missing
+    category would reject a file that is otherwise fine.
+    """
+    out = frame.copy()
+    for rate in RATE_DENOMINATORS[kind]:
+        if rate not in out.columns:
+            continue
+        factor = factors[rate].get(season, 1.0)
+        out[rate] = out[rate] * (1.0 if pd.isna(factor) else float(factor))
+    return out
+
+
+def era_normalize(
+    df: pd.DataFrame,
+    kind: str,
+    *,
+    reference_seasons: tuple[int, ...] = REFERENCE_SEASONS,
+    sgp_overrides: SgpOverrides | None = None,
+) -> pd.DataFrame:
+    """Rescale every season's category rates into the reference run environment.
+
+    Returns a copy with the rate columns adjusted and `sgp` re-scored. `era_factor_*`
+    columns are kept so a surprising comp can be traced back to its adjustment rather
+    than taken on faith.
+    """
+    factors = era_factors(df, kind, reference_seasons=reference_seasons)
 
     out = df.copy()
     for rate in RATE_DENOMINATORS[kind]:

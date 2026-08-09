@@ -31,8 +31,14 @@ himself); shape is unbiased there and beats it on every elite slice.
     elite big drop (<70% of prior)  n=239  RMSE 6.03 -> 4.78  bias -3.31 -> -0.15
 
 Re-measure rather than trust: those figures come from that script and nowhere else, so
-a regression shows up as a changed table instead of a stale docstring. **Hitters only.**
-The pitcher pool has never been validated and shape is its default too -- #313.
+a regression shows up as a changed table instead of a stale docstring.
+
+**Both pools are validated.** #313 closed 2026-08-03 (PR #326) with the pitcher run:
+shape beats level matching on every well-powered slice there too, but by fixing
+CALIBRATION rather than by discriminating -- bias -1.69 -> +0.17 on the elite slice,
+against a 53% win rate on the big-drop slice, which is a coin flip. It also beats
+`track`, and on pitchers `track` is worse than plain level matching: shape ADAPTS the
+weight on the prior season to the pool where track assumes it.
 
 `comps` is kept, not deprecated: it is the simpler estimator, it needs only one season,
 and it remains the honest baseline any future matcher has to beat.

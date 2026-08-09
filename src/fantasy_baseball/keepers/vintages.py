@@ -70,8 +70,21 @@ def decompose_pitchers(df: pd.DataFrame) -> pd.DataFrame:
     )
 
 
-def load_vintage(year: int, projections_root: Path, player_type: str) -> pd.DataFrame:
+def load_vintage(
+    year: int,
+    projections_root: Path,
+    player_type: str,
+    *,
+    factors: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """One decomposed ZiPS vintage frame. Reads only the file it returns.
+
+    `factors` restates the vintage into the trajectory panel's reference run
+    environment, for the historical backtest in #325. It is one of TWO entry points
+    that must apply it -- `keeper_persistence.load_rates` is the other, feeding the
+    persistence fit. Normalizing here and not there (or vice versa) leaves `drift`,
+    an additive term, fit in one unit system and applied in another. The LIVE board
+    passes None: its baseline and its target are both in the current environment.
 
     Warns on a wholly-empty column. The 2027/2028 ZiPS exports carry `SV` with 0 of
     1838 rows populated, so `sv_ip` is all-NaN and every downstream consumer silently
@@ -97,4 +110,10 @@ def load_vintage(year: int, projections_root: Path, player_type: str) -> pd.Data
             player_type,
             ", ".join(empty),
         )
+    if factors is not None:
+        # Imported here rather than at module scope: `keepers` is the standalone
+        # ingest layer and does not otherwise depend on `trajectory`.
+        from fantasy_baseball.trajectory.era import normalize_frame
+
+        frame = normalize_frame(frame, year, player_type, factors)
     return frame

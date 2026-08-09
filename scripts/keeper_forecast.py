@@ -33,6 +33,7 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import pandas as pd
@@ -100,7 +101,53 @@ from fantasy_baseball.keepers.playing_time import (
 from fantasy_baseball.keepers.vintages import load_vintage
 
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
-BASE_YEAR = 2026
+
+#: The season the LIVE board forecasts from. Historical runs (#325) pass their own.
+DEFAULT_BASE_YEAR = 2026
+
+#: Above this share of per-player gap-model fallbacks, a base year is reported on its
+#: own rather than folded into the headline -- past it, the number describes the gap
+#: model more than the playing-time curve.
+HEADLINE_FALLBACK_SHARE = 0.25
+
+
+@dataclass(frozen=True)
+class FallbackReport:
+    """How much of a forecast came from the gap model rather than the playing-time curve.
+
+    A gap-model fallback STILL COUNTS as keeper-value: it is what the engine does when
+    the data is thin, and substituting something better would be scoring an engine that
+    does not exist. But a base year mostly produced by it is not evidence about the
+    curve, so it is reported separately instead of quietly folded into the headline.
+
+    The two fallbacks are not the same event. `per_player` is a player the curve could
+    not score, tolerated up to `HEADLINE_FALLBACK_SHARE`. `whole_pool` is no panel at
+    all, which fails the base year outright -- there is no curve there to measure.
+    """
+
+    whole_pool: bool
+    per_player: int
+    total: int
+
+    @property
+    def share(self) -> float:
+        return self.per_player / self.total if self.total else 0.0
+
+    @property
+    def exceeds_headline_threshold(self) -> bool:
+        return self.whole_pool or self.share > HEADLINE_FALLBACK_SHARE
+
+
+def _series_for(panel: pd.DataFrame, year: int, column: str, index: pd.Index) -> pd.Series:
+    """One season's `column` from the panel, reindexed onto `index`.
+
+    Module-level rather than a closure so a test can observe WHICH seasons a forecast
+    consulted. That is the only cheap guard against a stray base-year constant: a
+    forecast that reads a season after its base year produces a number, not an error.
+    """
+    sub = panel.loc[panel["season"] == year].set_index("mlbam_id")[column]
+    return sub.loc[~sub.index.duplicated()].reindex(index)
+
 
 POOLS = {
     "hitter": {"pt": HITTER_PT, "rates": HITTER_RATES, "volume": "PA"},
@@ -143,43 +190,54 @@ TRAIN_FLOOR = {"hitter": 300.0, "pitcher": 50.0}
 
 
 def volume_forecast(
-    kind: str, target_year: int, observed: pd.Series, include_exits: bool = True
-) -> pd.Series | None:
+    kind: str,
+    base_year: int,
+    target_year: int,
+    observed: pd.Series,
+    include_exits: bool = True,
+) -> tuple[pd.Series | None, bool]:
     """Projected `target_year` PA (hitters) or IP (pitchers) from career history.
 
-    Supersedes the one-year gap term for both pools. `observed` is the CURRENT season's
-    full-season blend, used as the first lag; the older lags, age and role come from the
+    Supersedes the one-year gap term for both pools. `observed` is the BASE season's
+    full-season line, used as the first lag; the older lags, age and role come from the
     2010-present panel. Returns None when the panel is absent, so the caller falls back
     to the gap model rather than failing.
 
     For a two-years-out target the curve is applied twice, its own output feeding back
     as the first lag. That is an extrapolation: the curve was fit one year ahead, and
     iterating it compounds its error.
+
+    `base_year` is a PARAMETER rather than a module constant because #325 runs this for
+    historical base years. It is read in six places below and every one of them matters:
+    leaving a single 2026 behind in a 2022 forecast raises nothing, it just quietly
+    feeds the estimator a season it was never supposed to see.
     """
     path = _panel_path(kind)
     if path is None:
         print(f"  WARNING: no {kind} playing-time panel; falling back to the gap model")
-        return None
+        return None, True
     print(f"  {kind} playing-time panel: {path.name}")
     panel = pd.read_csv(path)
+    # Censored to the base year for the same reason: a curve fit on seasons after Y has
+    # seen the future it is being asked to predict.
+    panel = panel[panel["season"] <= base_year]
     rows = lag_panel(panel, kind, min_recent=TRAIN_FLOOR[kind], include_exits=include_exits)
     curve = fit_curve(rows[list(FEATURES[kind])], rows["target"], kind)
     latest = int(panel.loc[~panel["partial_season"].astype(bool), "season"].max())
     volume = "pa" if kind == "hitter" else "ip"
 
     def series_for(year: int, column: str) -> pd.Series:
-        sub = panel.loc[panel["season"] == year].set_index("mlbam_id")[column]
-        return sub.loc[~sub.index.duplicated()].reindex(observed.index)
+        return _series_for(panel, year, column, observed.index)
 
-    vol2 = series_for(BASE_YEAR - 1, volume)
-    vol3 = series_for(BASE_YEAR - 2, volume)
+    vol2 = series_for(base_year - 1, volume)
+    vol3 = series_for(base_year - 2, volume)
     # Age comes from the BASE year, not the last COMPLETED one. Sourcing it from
     # `latest` gave NaN to every player whose first season is the base year -- 107 of
     # them in the 2026 panel, 10 already past 300 PA -- and that NaN propagated through
     # the whole 5x5 line, silently dropping exactly the young debutants a keeper league
     # values most. The base-year row exists for anyone the blend covers; `latest` stays
     # as a fallback for a player the base season somehow missed.
-    age = (series_for(BASE_YEAR, "age") + (target_year - BASE_YEAR)).fillna(
+    age = (series_for(base_year, "age") + (target_year - base_year)).fillna(
         series_for(latest, "age") + (target_year - latest)
     )
     # Role comes from the base season's PARTIAL panel row, not the blend. The blend
@@ -190,7 +248,7 @@ def volume_forecast(
     # HAS a panel row. A blanket fillna(0) turned "no row" into role = 0, the single
     # strongest negative signal in the model. `carry_forward_role` advances BOTH terms
     # off the same season -- carrying only one is a wrong answer, not a partial fix.
-    seasons = [BASE_YEAR, BASE_YEAR - 1, BASE_YEAR - 2]
+    seasons = [base_year, base_year - 1, base_year - 2]
     role, start_share = carry_forward_role(
         volumes=[series_for(y, volume) for y in seasons],
         appearances=[series_for(y, "games") for y in seasons],
@@ -204,12 +262,12 @@ def volume_forecast(
     # forward unchanged -- a batting-order slot or a rotation job is far stickier than a
     # workload, and projecting a change in either would be inventing information.
     vol1, projected = observed, None
-    steps = target_year - BASE_YEAR
+    steps = target_year - base_year
     for step in range(steps):
         built = build_features(vol1, vol2, vol3, age - (steps - step - 1), role, kind, start_share)
         projected = curve.predict(built)
         vol1, vol2, vol3 = projected, vol1, vol2
-    return projected
+    return projected, False
 
 
 def _dedupe(frame: pd.DataFrame, pt: str) -> pd.DataFrame:
@@ -217,13 +275,23 @@ def _dedupe(frame: pd.DataFrame, pt: str) -> pd.DataFrame:
     return ordered.loc[~ordered.index.duplicated(keep="first")]
 
 
-def load_shares(kind: str, args: argparse.Namespace) -> dict[str, Share]:
+def load_shares(
+    kind: str,
+    args: argparse.Namespace,
+    *,
+    transitions: tuple[tuple[int, int], ...] | None = None,
+    factors: pd.DataFrame | None = None,
+) -> dict[str, Share]:
     """Refit S and the drift here rather than pasting constants.
 
     `keeper_persistence` owns the fit; importing its loaders keeps ONE definition of
     the transition panels, so the shares applied below cannot drift from the shares
     that were validated. Slower than a cached table by a couple of seconds, and worth
     it -- a stale constant is the exact failure the previous model died of.
+
+    `transitions` defaults to the full set the live board uses. #325 passes a subset so
+    the fit never sees the transition it is predicting; see `backtest_trajectory
+    .transitions_for` for what that does and, more importantly, what it does not do.
     """
     sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
     from keeper_persistence import (
@@ -238,38 +306,79 @@ def load_shares(kind: str, args: argparse.Namespace) -> dict[str, Share]:
     pt = str(pool["pt"])
     min_pt = args.min_pa if kind == "hitter" else args.min_ip
     min_next = args.min_next_pa if kind == "hitter" else args.min_next_ip
+    years = TRANSITIONS if transitions is None else transitions
+    if not years:
+        raise ValueError(
+            "no transitions to fit the persistence share on. A strictly causal fit has "
+            "none available for base year 2022 -- that is why #325 uses "
+            "leave-one-transition-out and declares the leakage instead."
+        )
 
     rates = _pooled(
-        [build_transition(y, kind, min_pt=min_pt, min_next_pt=min_next)[0] for y, _ in TRANSITIONS]
+        [
+            build_transition(y, kind, min_pt=min_pt, min_next_pt=min_next, factors=factors)[0]
+            for y, _ in years
+        ]
     )
-    volume = _pooled([build_volume_transition(y, kind, min_pt=min_pt) for y, _ in TRANSITIONS])
+    volume = _pooled(
+        [build_volume_transition(y, kind, min_pt=min_pt, factors=factors) for y, _ in years]
+    )
     shares = {pt: _fit_column(volume, pt, pt)}
     shares.update({col: _fit_column(rates, col, pt) for col in pool["rates"]})
     return shares
 
 
 def forecast_pool(
-    kind: str, target_year: int, payload: dict, args: argparse.Namespace
-) -> pd.DataFrame:
+    kind: str,
+    base_year: int,
+    target_year: int,
+    observed: pd.DataFrame,
+    args: argparse.Namespace,
+    *,
+    transitions: tuple[tuple[int, int], ...] | None = None,
+    factors: pd.DataFrame | None = None,
+) -> tuple[pd.DataFrame, FallbackReport]:
+    """Forecast `target_year`'s rate/PT line from `base_year` plus what was observed.
+
+    `observed` is a decomposed rate/PT frame for the base season, NOT the raw blob:
+    the live path passes `parse_blend(payload, kind)` and the #325 historical path
+    passes that season's actuals. Taking the frame rather than the payload is what
+    lets one function serve both.
+
+    `transitions` selects which year-pairs the persistence fit may use, and `factors`
+    restates every vintage into the trajectory panel's reference environment. Both
+    default to the live behaviour.
+    """
     pool = POOLS[kind]
     pt = str(pool["pt"])
     columns = (pt, *pool["rates"])
 
-    base = _dedupe(load_vintage(BASE_YEAR, PROJECTIONS, kind), pt)
-    out = _dedupe(load_vintage(target_year, PROJECTIONS, kind), pt)
-    observed = parse_blend(payload, kind)
-    shares = load_shares(kind, args)
+    base = _dedupe(load_vintage(base_year, PROJECTIONS, kind, factors=factors), pt)
+    out = _dedupe(load_vintage(target_year, PROJECTIONS, kind, factors=factors), pt)
+    shares = load_shares(kind, args, transitions=transitions, factors=factors)
 
-    # Everyone the live blend says is a real 2026 contributor and whom the baseline
-    # covers. The floor keeps the fringe/minor-league bulk of the blob out.
+    # Everyone the base season says is a real contributor and whom the baseline covers.
+    # The floor keeps the fringe/minor-league bulk of the blob out.
     floor = args.min_pa if kind == "hitter" else args.min_ip
     idx = observed.index[observed[pt] >= floor].intersection(base.index)
 
     result = pd.DataFrame(index=idx)
     # Volume comes from the multi-year career curve for BOTH pools now, not the
     # one-year gap term. Falls back to the gap model if a panel is missing.
-    curve_volume = volume_forecast(
-        kind, target_year, observed.loc[idx, pt], not getattr(args, "no_exit_rows", False)
+    curve_volume, whole_pool_fallback = volume_forecast(
+        kind,
+        base_year,
+        target_year,
+        observed.loc[idx, pt],
+        not getattr(args, "no_exit_rows", False),
+    )
+    # Built HERE, not inside volume_forecast: the per-player count needs `idx`, the
+    # DISPLAY population, and pushing that down would couple the training population to
+    # the display floor -- which TRAIN_FLOOR's comment records as measured-harmful.
+    fallback = FallbackReport(
+        whole_pool=whole_pool_fallback,
+        per_player=(int(curve_volume.reindex(idx).isna().sum()) if curve_volume is not None else 0),
+        total=len(idx),
     )
     for col in columns:
         g = gap(observed.loc[idx, col], base.loc[idx, col])
@@ -280,7 +389,7 @@ def forecast_pool(
             )
         folded = fold_forecast(base.loc[idx, col], g, shares[col], aging)
         if col == pt and curve_volume is not None:
-            fell_back = int(curve_volume.reindex(idx).isna().sum())
+            fell_back = fallback.per_player
             if fell_back:
                 # Silence here would let a board built entirely by the gap model print
                 # a reassuring "playing-time panel: <file>" line and look healthy.
@@ -300,7 +409,7 @@ def forecast_pool(
     # emit a negative HR rate that would silently subtract from a keeper's line.
     for col in columns:
         result[col] = result[col].clip(lower=0.0)
-    return result
+    return result, fallback
 
 
 def to_counting(frame: pd.DataFrame, kind: str) -> pd.DataFrame:
@@ -369,12 +478,14 @@ def main() -> int:
     parser.add_argument("--pool", choices=("hitter", "pitcher"))
     args = parser.parse_args()
 
-    print(f"Fetching the live {BASE_YEAR} full-season blend...")
+    print(f"Fetching the live {DEFAULT_BASE_YEAR} full-season blend...")
     payload = fetch_blend()
 
     wanted = {n.strip().lower() for n in args.players.split(",")} if args.players else None
     for kind in [args.pool] if args.pool else ["hitter", "pitcher"]:
-        frame = forecast_pool(kind, args.year, payload, args)
+        frame, _fallback = forecast_pool(
+            kind, DEFAULT_BASE_YEAR, args.year, parse_blend(payload, kind), args
+        )
         counting = to_counting(frame, kind)
         counting.insert(0, "name", _names(payload, kind).reindex(counting.index))
 
