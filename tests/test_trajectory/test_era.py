@@ -3,7 +3,12 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from fantasy_baseball.trajectory.era import era_factors, era_normalize, league_rates
+from fantasy_baseball.trajectory.era import (
+    RATE_DENOMINATORS,
+    era_factors,
+    era_normalize,
+    league_rates,
+)
 from fantasy_baseball.trajectory.panel import score
 
 
@@ -132,26 +137,32 @@ def test_the_reference_averages_across_the_whole_window() -> None:
 def test_era_factors_reproduces_the_scaling_era_normalize_applies() -> None:
     """era_factors is an EXTRACTION, not a reimplementation.
 
-    era_normalize's own output is the contract. If these two ever disagree, the
-    keeper-value side of the backtest is normalized onto a different reference than
-    the shape side and every comparison in it is silently wrong.
+    Asserts the WHOLE normalized frame against one rebuilt from the factor table, with
+    `assert_frame_equal` -- not one column. The earlier version checked `hr_pa` only and
+    would have stayed green if the extraction had changed both halves the same way,
+    which is exactly the failure mode a characterization test exists to catch.
     """
     panel = _hitters(
         [
-            {"mlbam_id": 1, "season": 2022, "hr_pa": 0.040},
-            {"mlbam_id": 2, "season": 2023, "hr_pa": 0.050},
-            {"mlbam_id": 3, "season": 2024, "hr_pa": 0.060},
-            {"mlbam_id": 4, "season": 2025, "hr_pa": 0.055},
+            {"mlbam_id": 1, "season": 2022, "hr_pa": 0.040, "sb_pa": 0.03},
+            {"mlbam_id": 2, "season": 2023, "hr_pa": 0.050, "sb_pa": 0.01},
+            {"mlbam_id": 3, "season": 2024, "hr_pa": 0.060, "sb_pa": 0.04},
+            {"mlbam_id": 4, "season": 2025, "hr_pa": 0.055, "sb_pa": 0.02},
         ]
     )
     factors = era_factors(panel, "hitter")
     normalized = era_normalize(panel, "hitter")
 
-    for season in (2022, 2023, 2024, 2025):
-        raw_row = panel.loc[panel["season"] == season].iloc[0]
-        norm_row = normalized.loc[normalized["season"] == season].iloc[0]
-        assert norm_row["hr_pa"] == pytest.approx(raw_row["hr_pa"] * factors.loc[season, "hr_pa"])
-        assert norm_row["era_factor_hr_pa"] == pytest.approx(factors.loc[season, "hr_pa"])
+    # Rebuild the frame from the factor table alone and demand it match, column for
+    # column, row for row -- every rate, the untouched volume, and the re-scored sgp.
+    rebuilt = panel.copy()
+    for rate in RATE_DENOMINATORS["hitter"]:
+        factor = rebuilt["season"].map(factors[rate]).astype(float).fillna(1.0)
+        rebuilt[f"era_factor_{rate}"] = factor
+        rebuilt[rate] = rebuilt[rate] * factor
+    rebuilt = score(rebuilt, "hitter")
+
+    pd.testing.assert_frame_equal(normalized, rebuilt)
 
 
 def test_era_factors_raises_on_a_missing_reference_season_like_era_normalize() -> None:
