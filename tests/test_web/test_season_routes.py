@@ -2593,6 +2593,42 @@ def test_trajectory_teams_view_discloses_its_vintage(client):
     assert "does not refresh with the dashboard" in body
 
 
+def test_a_board_with_no_ros_snapshot_does_not_claim_it_was_anchored(client):
+    """Two reachable renderings where nothing was projected and the page said it was.
+
+    (a) A COMPLETE base season: `load_anchored_panels` reads no snapshot and injects
+    nothing, so `ros_snapshot` is None while `season_elapsed` is 1.0.
+    (b) Every board pushed BEFORE #348, which was paced rather than anchored -- and the
+    deployed board is only as fresh as the last push, so this is the live state until
+    someone re-pushes.
+
+    The anchoring sentence was gated on `season_elapsed`, which both of those carry.
+    It has to be gated on the snapshot that actually supplied the remainder.
+    """
+    payload = dict(
+        _trajectory_payload(),
+        generated_at="2026-08-07T09:00:00",
+        season_elapsed=0.7,
+        panel_vintage={"hitter": "h.csv", "pitcher": "p.csv"},
+    )
+    payload.pop("ros_snapshot")
+    with (
+        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload),
+        patch(
+            "fantasy_baseball.data.rosters.live_rosters",
+            return_value=_trajectory_spots(),
+        ),
+    ):
+        resp = client.get("/trajectory?view=teams")
+    body = resp.data.decode()
+
+    assert "70%" in body, "the elapsed fraction is still a fact about this board"
+    assert "rest-of-season projection" not in body, "no snapshot supplied a remainder"
+    assert "what each player has done plus what the projection gives him" not in body, (
+        "the anchoring claim must follow the snapshot, not the elapsed fraction"
+    )
+
+
 def test_trajectory_teams_view_keeps_a_flagged_rows_marker(client):
     """The league board marks a row evaluated outside its own support (!) and a
     band-fallback row (!!). The teams view printed both as bare totals -- and those

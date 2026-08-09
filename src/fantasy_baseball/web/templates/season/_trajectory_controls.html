@@ -147,9 +147,17 @@
   {#- TWO vintages since #348: the panel supplies every realized season, and the
       rest-of-season snapshot supplies the remainder of the base season that every fit
       is anchored on. A board can be re-pushed against a fresh panel and a stale
-      snapshot, or the reverse, so naming only one of them dates the board wrongly. -#}
+      snapshot, or the reverse, so naming only one of them dates the board wrongly.
+
+      THE ANCHORING CLAIM FOLLOWS THE SNAPSHOT, never `season_elapsed`. Both of the
+      boards that carry an elapsed fraction and no snapshot had nothing projected into
+      them: a COMPLETE base season, where `load_anchored_panels` reads no snapshot at
+      all, and every board pushed before #348, which was paced rather than anchored.
+      The deployed board is only as fresh as the last push, so the second of those is
+      the live state until someone re-pushes -- gating this on the elapsed fraction
+      described pre-#348 numbers in post-#348 words. -#}
   {% if board.meta.ros_snapshot %}and the {{ board.meta.ros_snapshot }} rest-of-season projection{% endif %}
-  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% played when the panel was built, and every fit is anchored on the full-year line: what each player has done plus what the projection gives him for the rest{% endif %}.
+  {% if board.meta.season_elapsed is not none %}-- {{ board.base_season }} was {{ '%.0f'|format(board.meta.season_elapsed * 100) }}% played when the panel was built{% if board.meta.ros_snapshot %}, and every fit is anchored on the full-year line: what each player has done plus what the projection gives him for the rest{% endif %}{% endif %}.
   This board does not refresh with the dashboard; it is as fresh as the last
   <code>push_trajectory_board.py</code> run.
 {%- endmacro %}
