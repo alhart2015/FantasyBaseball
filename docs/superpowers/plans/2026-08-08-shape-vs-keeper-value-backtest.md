@@ -1197,9 +1197,13 @@ git commit -m "backtest: build outcomes, collapsing split seasons first (#325)"
 - Test: `tests/test_scripts/test_backtest_historical.py`
 
 **Interfaces:**
-- Produces: `RosterResolution` dataclass with `by_team: dict[str, list[int]]`, `unresolved: list[tuple[str, str]]`, `ambiguous: list[tuple[str, str]]`; and `resolve_draft(draft: list[dict], people: pd.DataFrame, pool_by_id: dict[int, str]) -> RosterResolution`.
+- Produces: `RosterResolution` dataclass with `by_team: dict[str, list[int]]`, `pool_of: dict[int, str]`, `unresolved: list[tuple[str, str]]`, `ambiguous: list[tuple[str, str]]`; and `resolve_draft(draft: list[dict], people: pd.DataFrame, pool_by_id: Mapping[int, str], var_by_pool: Mapping[tuple[str, int], float] | None = None) -> RosterResolution`.
 
 **This is the risk in the whole plan.** `data/historical_drafts_resolved.json` carries bare names; everything else is `mlbam_id`. `CLAUDE.md` names bare-name joins as a defect class and `trajectory/roster_join.py` records that `(normalized_name, pool)` is not unique — the live board has two hitters called Max Muncy. Unresolved names are **reported, never dropped silently**: a silent drop thins roster pools toward the fringe, which flatters both estimators.
+
+**Where `pool_by_id` comes from.** Not from the draft file — its records carry only `pick`, `round`, `team` and `player`, no position. It is built from **panel membership**: ids in the scored hitter panel map to `"hitter"`, ids in the pitcher panel to `"pitcher"`, and ids in both to `"both"`.
+
+**The two-way rule.** This league scores a two-way player once per pool, but a keeper decision is for one roster **spot**. Entering him as two candidates would let one player consume two of a team's three keeper slots and would double-count him in the ex-post optimum. So an id in both pools enters the roster candidate pool **once**, under whichever pool gives the higher year-Y VAR, recorded in `pool_of`. `var_by_pool` supplies that comparison; when it is omitted (no two-way ids present) the parameter is unused.
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1234,13 +1238,34 @@ def test_resolve_draft_reports_an_ambiguous_name_rather_than_picking_one() -> No
 
 
 def test_resolve_draft_normalizes_accents() -> None:
+    """The people cache carries the accented spelling and the draft file does not.
+    Written as an escape so the source file stays ASCII per the repo rule while the
+    test still exercises the normalization -- a fixture with two identical ASCII
+    strings would pass against naive exact matching and guard nothing."""
     from backtest_trajectory import resolve_draft
 
-    people = pd.DataFrame({"id": [7], "fullName": ["Jesus Luzardo"]})
+    people = pd.DataFrame({"id": [7], "fullName": ["Jes\u00fas Luzardo"]})
     result = resolve_draft(
         [{"team": "Spacemen", "player": "Jesus Luzardo"}], people, {7: "pitcher"}
     )
     assert result.by_team["Spacemen"] == [7]
+
+
+def test_a_two_way_player_enters_a_roster_once() -> None:
+    """The league scores a two-way player once per POOL, but a keeper decision is for
+    one roster SPOT. Entering him twice would let one player consume two of a team's
+    three keeper slots."""
+    from backtest_trajectory import resolve_draft
+
+    people = pd.DataFrame({"id": [42], "fullName": ["Shohei Ohtani"]})
+    result = resolve_draft(
+        [{"team": "Spacemen", "player": "Shohei Ohtani"}],
+        people,
+        {42: "both"},
+        var_by_pool={("hitter", 42): 12.0, ("pitcher", 42): 8.0},
+    )
+    assert result.by_team["Spacemen"] == [42]
+    assert result.pool_of[42] == "hitter"  # the higher year-Y VAR
 ```
 
 - [ ] **Step 2: Run to verify they fail**
