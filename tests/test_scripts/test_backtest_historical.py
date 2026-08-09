@@ -800,3 +800,29 @@ def test_a_starter_is_priced_against_the_SP_floor_not_the_RP_one(tmp_path: Path)
 
     assert slots[1] == {"SP"}, "a 30-start arm is a starter"
     assert slots[2] == {"RP"}, "a 0-start, 60-appearance arm is a reliever"
+
+
+BREAKOUT_CASES = [
+    (13.0, 10.0, True, "a genuine 30% step up"),
+    (12.4, 10.0, False, "under the 1.25 factor"),
+    (4.0, 10.0, False, "a decline"),
+    (5.0, 0.0, False, "prior 0 means he was OUT OF THE LEAGUE, not that he broke out"),
+    (-2.2, -2.0, False, "a WORSE season: -2.2 > 1.25*-2.0 is arithmetically true"),
+    (2.0, -3.0, False, "recovering from below replacement is not a breakout either"),
+]
+
+
+@pytest.mark.parametrize("current,prior,expected,why", BREAKOUT_CASES)
+def test_breakout_requires_a_positive_prior(current, prior, expected, why) -> None:
+    """`current > factor * prior` only means "stepped up" when prior is POSITIVE.
+
+    build_history assigns prior=0 to a season the player was absent for, so an
+    unguarded comparison admits every return-from-absence -- 38-43% of the raw slice on
+    the real panel. That is the population where shape is structurally weakest, because
+    its prior anchor carries no information there, so letting it in loads the slice
+    against shape for a reason that has nothing to do with breakouts.
+    """
+    from backtest_trajectory import breakout_mask
+
+    anchors = pd.DataFrame({"current": [current], "prior": [prior]})
+    assert bool(breakout_mask(anchors).iloc[0]) is expected, why

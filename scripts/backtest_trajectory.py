@@ -467,8 +467,23 @@ def breakout_mask(anchors: pd.DataFrame, factor: float = 1.25) -> pd.Series:
 
     Estimator-neutral: both anchors are REALIZED seasons, so this selects a population
     rather than favouring the side that happens to model breakouts.
+
+    **The positivity guard is load-bearing, not defensive.** `current > factor * prior`
+    only means "stepped up" when `prior > 0`:
+
+      * `build_history` assigns `prior = 0` to a season the player was ABSENT for, and
+        every positive `current` clears `1.25 * 0`. On the real panel that admitted
+        144 of 333 hitters and 168 of 405 pitchers -- 38-43% of the slice -- none of
+        them breakouts, all of them returns from absence.
+      * a negative prior inverts the inequality: `-2.2 > 1.25 * -2.0` is true, so a
+        season that got WORSE qualified. Rare (0-2 per cell) but wrong.
+
+    The first case is the dangerous one, because a zero prior is exactly where `shape`
+    is structurally weakest -- its prior anchor carries no information there, while the
+    keeper chain still has a real ZiPS projection. Admitting them loads the slice
+    against shape for a reason that has nothing to do with breakouts.
     """
-    return anchors["current"] > factor * anchors["prior"]
+    return (anchors["prior"] > 0) & (anchors["current"] > factor * anchors["prior"])
 
 
 def bootstrap_difference(
