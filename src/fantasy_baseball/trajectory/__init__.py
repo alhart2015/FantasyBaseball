@@ -6,7 +6,7 @@ player-season that started from the same place, with players who left the league
 scored as the zero they are worth to a roster slot.
 
 DELIBERATELY STANDALONE. This does not read from, write to, or alter keeper value
-(`keepers/`, `scripts/keeper_forecast.py`, `scripts/keeper_value.py`). It is its own
+(`keepers/`, now ingest and normalization only). It is its own
 metric to explore; if it eventually earns the keeper forecast's job, that is a later
 and explicit decision.
 

@@ -39,7 +39,9 @@ from fantasy_baseball.keepers.mlb_stats import fetch_mlb_people, fetch_mlb_seaso
 from fantasy_baseball.pt_model.panel import build_hitter_panel, build_pitcher_panel
 
 RAW_DIR = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
-PANEL_DIR = PROJECT_ROOT / "data" / "playing_time"
+#: The trajectory panel is the only consumer since #325 retired the keeper
+#: playing-time curve, so this is where a default rebuild lands.
+PANEL_DIR = PROJECT_ROOT / "data" / "trajectory"
 DEFAULT_START = 2010
 
 logger = logging.getLogger(__name__)
@@ -185,10 +187,10 @@ def main() -> int:
         type=Path,
         default=PANEL_DIR,
         help=(
-            "where to write the panels (default data/playing_time/). Point a WIDER "
-            "span somewhere else: keeper_forecast._panel_path globs data/playing_time/ "
-            "and ranks on (end, -start), so a 2000-2026 panel dropped in beside the "
-            "2010-2026 one silently becomes the playing-time curve's training set."
+            "where to write the panels (default data/trajectory/). A narrower-but-"
+            "newer panel outranks a wider one in whatever directory it lands in, so a "
+            "2010-2027 rebuild dropped beside a 2000-2026 panel silently retires the "
+            "early comps."
         ),
     )
     parser.add_argument(
@@ -199,14 +201,6 @@ def main() -> int:
             "retiring its early seasons. Refused by default."
         ),
     )
-    parser.add_argument(
-        "--allow-keeper-dir",
-        action="store_true",
-        help=(
-            f"permit writing a pre-{DEFAULT_START} panel into data/playing_time/, "
-            "retraining the keeper playing-time curve on it. Refused by default."
-        ),
-    )
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -214,25 +208,6 @@ def main() -> int:
         parser.error(f"--end {args.end} precedes --start {args.start}")
 
     args.out_dir = _anchor(args.out_dir)
-
-    # The whole point of --out-dir is keeping a wider panel AWAY from the keeper model's
-    # directory, where _panel_path ranks on (end, -start) and would adopt it as the
-    # playing-time curve's training set. Forgetting the flag is the one way back in, so
-    # this REFUSES rather than warns: a warning scrolls past in a log, and by the time
-    # anyone notices, the keeper forecast has silently changed underneath them. The
-    # ordinary keeper rebuild (default --start, default --out-dir) never trips it.
-    if (
-        args.out_dir.resolve() == PANEL_DIR.resolve()
-        and args.start < DEFAULT_START
-        and not args.allow_keeper_dir
-    ):
-        parser.error(
-            f"--start {args.start} predates the keeper model's {DEFAULT_START} baseline "
-            f"and would write into {PANEL_DIR.name}/, where keeper_forecast._panel_path "
-            "prefers the widest span -- silently retraining the playing-time curve. "
-            "Pass --out-dir to keep it separate, or --allow-keeper-dir if retraining "
-            "the keeper curve on a wider panel is genuinely what you want."
-        )
 
     # The mirror hazard, and it bites the trajectory model rather than the keeper one:
     # BOTH _panel_path implementations rank on (end, -start), so a narrower-but-newer

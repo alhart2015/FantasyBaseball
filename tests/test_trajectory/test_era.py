@@ -3,12 +3,7 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from fantasy_baseball.trajectory.era import (
-    era_factors,
-    era_normalize,
-    league_rates,
-    normalize_frame,
-)
+from fantasy_baseball.trajectory.era import era_factors, era_normalize, league_rates
 from fantasy_baseball.trajectory.panel import score
 
 
@@ -175,38 +170,3 @@ def _reference_panel() -> pd.DataFrame:
             {"mlbam_id": 4, "season": 2025, "hr_pa": 0.055},
         ]
     )
-
-
-def test_normalize_frame_scales_each_rate_by_its_season_factor() -> None:
-    factors = era_factors(_reference_panel(), "hitter")
-    frame = pd.DataFrame({"pa": [600.0], "hr_pa": [0.040]}, index=pd.Index([99], name="mlbam_id"))
-
-    out = normalize_frame(frame, 2022, "hitter", factors)
-
-    assert out["hr_pa"].iloc[0] == pytest.approx(0.040 * factors.loc[2022, "hr_pa"])
-    # Volume is never era-normalized -- a 600-PA season is 600 PA in any year.
-    assert out["pa"].iloc[0] == 600.0
-    # The input is not mutated; callers hold on to raw frames.
-    assert frame["hr_pa"].iloc[0] == 0.040
-
-
-def test_normalize_frame_leaves_an_unknown_season_alone() -> None:
-    """1.0, not KeyError. A season with no factor means no usable adjustment, which is
-    what era_normalize's own fillna(1.0) already decided."""
-    factors = era_factors(_reference_panel(), "hitter")
-    frame = pd.DataFrame({"pa": [600.0], "hr_pa": [0.040]}, index=pd.Index([99], name="mlbam_id"))
-
-    out = normalize_frame(frame, 1998, "hitter", factors)
-
-    assert out["hr_pa"].iloc[0] == 0.040
-
-
-def test_normalize_frame_ignores_rate_columns_the_frame_does_not_carry() -> None:
-    """A vintage export can be missing a category entirely (the 2027/2028 ZiPS files
-    carry no SV). Skipping is right; raising would refuse a usable vintage."""
-    factors = era_factors(_reference_panel(), "hitter")
-    frame = pd.DataFrame({"pa": [600.0]}, index=pd.Index([99], name="mlbam_id"))
-
-    out = normalize_frame(frame, 2022, "hitter", factors)
-
-    assert list(out.columns) == ["pa"]
