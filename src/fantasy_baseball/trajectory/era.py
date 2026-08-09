@@ -93,11 +93,12 @@ def era_factors(
 ) -> pd.DataFrame:
     """``season -> {rate_column: multiplicative factor}`` into the reference environment.
 
-    Split out of `era_normalize` so a frame that is ABOUT one season and carries no
-    `season` column -- a ZiPS vintage, an actuals export -- can be restated onto the
-    same reference the panel uses. Two independent answers to "what is a 2022 home run
-    worth in 2023-2025 terms" is the disagreement this subsystem cannot afford, so
-    there is one and both callers read it.
+    Split out of `era_normalize` for #325's backtest, which needed to restate the
+    keeper chain's ZiPS vintages onto the same reference the panel uses. That caller
+    was retired with the chain, so `era_normalize` is the only one left -- kept
+    separate because the factor table is a readable intermediate worth being able to
+    inspect on its own, and because computing it twice is how two answers to "what is a
+    2022 home run worth in 2023-2025 terms" get into one codebase.
     """
     rates = league_rates(df, kind)
     missing = [s for s in reference_seasons if s not in rates.index]
@@ -124,29 +125,6 @@ def era_factors(
     # np.nan, not pd.NA: pd.NA makes the column object-dtype and the later astype(float)
     # raises on it.
     return (reference / rates).replace([np.inf, -np.inf], np.nan)
-
-
-def normalize_frame(
-    frame: pd.DataFrame, season: int, kind: str, factors: pd.DataFrame
-) -> pd.DataFrame:
-    """Restate one season's rate frame into the reference run environment.
-
-    For frames that are ABOUT a single season and carry no `season` column -- a ZiPS
-    vintage, an actuals export -- where `era_normalize` needs a panel to derive the
-    factors from. Volume (`pa`/`ip`) and the structural `ab_pa` ratio are left alone
-    for the same reasons `era_normalize` leaves them alone; see the module docstring.
-
-    A rate column the frame does not carry is SKIPPED, not an error: the 2027/2028
-    ZiPS exports ship with `SV` entirely empty, and refusing a vintage over a missing
-    category would reject a file that is otherwise fine.
-    """
-    out = frame.copy()
-    for rate in RATE_DENOMINATORS[kind]:
-        if rate not in out.columns:
-            continue
-        factor = factors[rate].get(season, 1.0)
-        out[rate] = out[rate] * (1.0 if pd.isna(factor) else float(factor))
-    return out
 
 
 def era_normalize(

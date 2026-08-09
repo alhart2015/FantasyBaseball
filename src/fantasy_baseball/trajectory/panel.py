@@ -37,9 +37,9 @@ from fantasy_baseball.sgp.player_value import calculate_player_sgp
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-# NOT data/playing_time/. `keeper_forecast._panel_path` globs that directory and ranks
-# on (end, -start), so a wider panel dropped in beside the keeper model's 2010-2026 one
-# silently becomes its playing-time training set. Separate directory, no interaction.
+# The trajectory panel spans 2000-present. `panel_path` ranks candidates on
+# (end, -start), so a narrower-but-newer rebuild dropped in here would outrank the wide
+# one and silently retire the early comps -- `build_pt_panel` refuses that by default.
 DEFAULT_PANEL_DIR = PROJECT_ROOT / "data" / "trajectory"
 
 FULL_SCHEDULE = 162
@@ -74,7 +74,7 @@ def widest_newest(paths: Iterable[Path]) -> Path | None:
 
     Ranking on the PARSED years, never on the filename: a raw string sort puts
     `_2010_2026` above `_2000_2026`, which silently picks the narrower file. Mirrors
-    `keeper_forecast._panel_path`'s rank so a rebuild with a different span is picked
+    the same rank a rebuild with a different span is picked by
     up rather than orphaning a hardcoded name. Paths whose stem does not end in two
     integers are EXCLUDED, not merely ranked low -- a stray backup or a partial write
     would otherwise be returned whenever it is the only candidate.
