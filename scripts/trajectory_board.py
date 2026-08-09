@@ -63,8 +63,8 @@ from fantasy_baseball.data.rosters import RosterSpot, live_rosters
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
-from fantasy_baseball.trajectory.comps import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.era import era_normalize
+from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
 from fantasy_baseball.trajectory.roster_join import RosterIndex, index_rosters
 from fantasy_baseball.trajectory.sweep import add_ranks, rank_move, sweep_pool, totals

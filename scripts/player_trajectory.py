@@ -5,23 +5,21 @@ the rest of his career look like?
 
 STANDALONE. Reads `data/trajectory/` and touches nothing in the keeper pipeline.
 
-Three matchers, selected with `--match`. **`shape` is the default**: it beats level
-matching out of sample on every elite slice, and by ~21% RMSE on the case a keeper
-decision actually turns on -- a star coming off a down year, where level matching
-under-predicts by 3.31 SGP a year. Re-measure with `scripts/backtest_trajectory.py`;
-those numbers come from there and nowhere else, and they are HITTERS ONLY (#313).
-Shape needs BOTH of the player's last two seasons, which `--player` looks up for you.
+`shape` is the only estimator, since #325 retired level matching and its `track`
+variant. It fits forward SGP on BOTH of the player's last two seasons with
+kernel-weighted age and level (#310), so it needs both -- `--player` looks them up.
 
-    shape     fit forward SGP on both anchors, kernel-weighted age and level (#310)
-    current   comps matched on this season's level alone -- the original estimator
-    track     current, plus a hard band on the prior season too (#305)
+It earned the position out of sample in both pools: on hitters it beats level matching
+by ~21% RMSE on the case a keeper decision turns on, a star coming off a down year,
+where level matching under-predicts by 3.31 SGP a year; on pitchers (#313) it wins by
+fixing calibration rather than by discriminating. The harness that measured it was
+retired with the matchers, so those figures live in git history and in PR #353.
 
 Usage:
     python scripts/player_trajectory.py --player "Juan Soto"
     python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --prior-sgp 18
     python scripts/player_trajectory.py --player "Juan Soto" --show-anchors
-    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --match current
-    python scripts/player_trajectory.py --player "Bobby Witt Jr." --match current --show-comps 15
+    python scripts/player_trajectory.py --player "Bobby Witt Jr." --show-comps 15
 
 Build the panel first (one time, ~1 minute):
     python scripts/build_pt_panel.py --start 2000 --end 2026 --out-dir data/trajectory
@@ -48,12 +46,8 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import people as board_people
 from fantasy_baseball.trajectory.board import player_names, season_slots
-from fantasy_baseball.trajectory.comps import (
-    DEFAULT_BAND,
-    Trajectory,
-    comp_trajectory,
-)
 from fantasy_baseball.trajectory.era import era_normalize
+from fantasy_baseball.trajectory.model import Trajectory
 from fantasy_baseball.trajectory.panel import (
     DEFAULT_PANEL_DIR,
     load_scored_panel,
@@ -309,7 +303,7 @@ def _warn_if_thin(traj: Trajectory) -> None:
     if support >= THIN_COMPS:
         return
     unit = "effective fitting seasons" if traj.mode == "shape" else "comps"
-    widen = "the kernels" if traj.mode == "shape" else "--band/--prior-band"
+    widen = "the kernels"
     print(
         f"  *** THIN: {support:.0f} {unit} at the weakest horizon. The numbers below are"
         f" directional only -- widen {widen}, or read a different mode. ***"
@@ -417,7 +411,7 @@ def render(traj: Trajectory, show_comps: int) -> None:
                 print(
                     f"  NO FIT -- {traj.n_comps} season(s) are near enough to weigh, but "
                     "none of the horizons reach the effective-support floor. Widen the "
-                    "kernels, or try --match current."
+                    "kernels."
                 )
             return
         print(f"  fit on {traj.n_comps} weighted seasons, {span}")
@@ -454,7 +448,7 @@ def render(traj: Trajectory, show_comps: int) -> None:
             # shape fit has no per-query comps to list, only a weighted population.
             print(
                 f"\n   (--show-comps {show_comps} lists individual comps, which only the "
-                "comp matchers have; add --match current, or --show-anchors for the "
+                "estimator fits no comp cohort; use --show-anchors for the "
                 "fitted coefficients)"
             )
         return
@@ -465,7 +459,7 @@ def render(traj: Trajectory, show_comps: int) -> None:
     # fewer, which is why the per-row n is printed rather than left to this header.
     print(f"  {traj.n_comps} comps at +1 within +/-{traj.band} SGP, age-{traj.age} seasons {span}")
     if _no_support(traj):
-        print("  NO COMPS -- widen --band/--prior-band or check the age")
+        print("  NO SUPPORT -- widen the kernels or check the age")
         return
     # `mean_prior` skips comps whose own prior sits before the panel begins, so it can
     # describe a SMALLER cohort than `mean_start` beside it -- and is NaN when every
@@ -534,44 +528,19 @@ def main() -> int:
     parser.add_argument("--age", type=int, help="the player's age in the season he is producing")
     parser.add_argument("--sgp", type=float, help="full-season SGP pace")
     parser.add_argument(
-        "--band",
-        type=float,
-        # default=None, NOT DEFAULT_BAND: the validation below must distinguish
-        # "the user asked for a band" from "nobody mentioned one".
-        default=None,
-        help=f"comp width in SGP for --match current/track (default {DEFAULT_BAND})",
-    )
-    parser.add_argument(
-        "--match",
-        choices=("shape", "track", "current"),
-        default="shape",
-        help=(
-            "'shape' (default) fits forward SGP on both anchors -- last year and this "
-            "year -- with kernel-weighted age and level, excluding nobody on a cliff "
-            "(#310); 'current' matches comps on this season's level alone; 'track' "
-            "adds a hard band on the prior season too (#305). --band/--prior-band "
-            "apply to the two comp modes only; shape has no band"
-        ),
-    )
-    parser.add_argument(
         "--prior-sgp",
         type=float,
         help=(
-            "prior-season SGP, required by --match shape/track without --player "
+            "prior-season SGP, required without --player "
             "(looked up automatically with --player); 0 means he was not in the majors"
         ),
-    )
-    parser.add_argument(
-        "--prior-band",
-        type=float,
-        help="comp width on the prior season (defaults to --band)",
     )
     parser.add_argument("--horizon", type=int, default=5, help="years forward to project")
     parser.add_argument("--show-comps", type=int, default=0, metavar="N")
     parser.add_argument(
         "--show-anchors",
         action="store_true",
-        help="with --match shape, print the fitted coefficients behind each prediction",
+        help="print the fitted coefficients behind each prediction",
     )
     parser.add_argument(
         "--no-era-adjust",
@@ -606,22 +575,6 @@ def main() -> int:
         parser.error("pass --player, or all of --pool/--age/--sgp")
     if args.horizon < 1:
         parser.error("--horizon must be at least 1")
-    # Every flag that cannot affect the chosen mode is refused, not ignored. Accepting
-    # one silently lets a user tune a parameter, see a byte-identical answer, and
-    # conclude the parameter does nothing -- or worse, believe an input was honoured
-    # that was dropped. --prior-band was already refused; the rest were not.
-    if args.prior_band is not None and args.match != "track":
-        parser.error(
-            f"--prior-band applies to --match track; {args.match} "
-            f"{'uses kernels, not bands' if args.match == 'shape' else 'has no prior band'}"
-        )
-    if args.band is not None and args.match == "shape":
-        parser.error("--band applies to --match current/track; shape uses kernels, not bands")
-    if args.prior_sgp is not None and args.match == "current":
-        parser.error(
-            "--prior-sgp applies to --match shape/track; --match current scores on this "
-            "season alone and would discard it"
-        )
     if args.position is not None and args.scale != "var":
         parser.error("--position selects a replacement floor and applies to --scale var")
     # Validated HERE, not in the per-query helper, because that helper only runs on the
@@ -641,8 +594,6 @@ def main() -> int:
             "are calibrated on the 2023-2025 run environment, so un-normalized seasons "
             "would be netted against a floor that does not describe them"
         )
-    if args.show_anchors and args.match != "shape":
-        parser.error("--show-anchors applies to --match shape; the comp matchers fit no anchors")
 
     # Anchor to the REPO, mirroring build_pt_panel._anchor on the write side. The
     # documented build command passes a RELATIVE --out-dir, so a reader resolving the
@@ -681,7 +632,7 @@ def main() -> int:
                 pool,
                 age if args.age is None else args.age,
                 sgp if args.sgp is None else args.sgp,
-                _prior_for(live[pool], pid, args) if args.match in ("track", "shape") else None,
+                _prior_for(live[pool], pid, args),
                 _query_slots(args, live[pool], pid, pool, len(resolved) > 1, parser),
             )
             for pool, pid, age, sgp in resolved
@@ -692,19 +643,15 @@ def main() -> int:
             # which one drove the table.
             print(f"  (--sgp {args.sgp} overrides the pace above)")
     else:
-        if args.match in ("track", "shape") and args.prior_sgp is None:
+        if args.prior_sgp is None:
             # Never guess it. Assuming last year equalled this year is a real modelling
             # claim -- it says the season is representative -- and it would silently
             # move the answer for exactly the players (breakouts, collapses) the two
             # anchors exist to tell apart.
             parser.error(
-                f"--match {args.match} needs the player's PRIOR season too; pass "
-                "--prior-sgp N (use 0 if he was not in the majors), or --player NAME "
-                "to look it up, or --match current to score on this season alone"
+                "shape needs the player's PRIOR season too; pass --prior-sgp N "
+                "(use 0 if he was not in the majors), or --player NAME to look it up"
             )
-        # Gate the prior on the MODE, exactly as the --player branch does. Passing it
-        # through unconditionally made `--match current --prior-sgp N` run the track
-        # estimator instead -- silently overriding the mode the user asked for.
         if args.scale == "var" and args.position is None:
             # Refuse rather than guess. Defaulting a pitcher to RP would hand a starter
             # 1.87 SGP a year he never earned, and defaulting a catcher to UTIL would
@@ -718,7 +665,7 @@ def main() -> int:
                 args.pool,
                 args.age,
                 args.sgp,
-                args.prior_sgp if args.match != "current" else None,
+                args.prior_sgp,
                 {args.position} if args.position else None,
             )
         ]
@@ -732,38 +679,24 @@ def main() -> int:
         # out of the league produced 0 SGP, so his VAR is minus the floor, and a player
         # projected under his floor prints a negative rather than a zero (#331).
         slot, floor = replacement_for(slots, levels) if slots is not None else (None, 0.0)
-        if args.match == "shape":
-            traj, anchors = shape_trajectory(
-                load(pool, False),
-                kind=pool,
-                age=age,
-                sgp=sgp,
-                prior_sgp=prior,
-                horizons=horizons,
-                replacement=floor,
-                slot=slot,
-            )
-            if args.show_anchors:
-                print("\n   fitted anchors (forward = intercept + a*now + b*last year):")
-                print("     h  intercept   a(now)  b(last)   n_fit   n_eff")
-                for a in anchors:
-                    print(
-                        f"     {a.horizon}   {a.intercept:8.2f} {a.on_current:8.3f} "
-                        f"{a.on_prior:8.3f} {a.n_fit:7d} {a.n_effective:7.0f}"
-                    )
-        else:
-            traj = comp_trajectory(
-                load(pool, False),
-                kind=pool,
-                age=age,
-                sgp=sgp,
-                band=DEFAULT_BAND if args.band is None else args.band,
-                prior_sgp=prior,
-                prior_band=args.prior_band,
-                horizons=horizons,
-                replacement=floor,
-                slot=slot,
-            )
+        traj, anchors = shape_trajectory(
+            load(pool, False),
+            kind=pool,
+            age=age,
+            sgp=sgp,
+            prior_sgp=prior,
+            horizons=horizons,
+            replacement=floor,
+            slot=slot,
+        )
+        if args.show_anchors:
+            print("\n   fitted anchors (forward = intercept + a*now + b*last year):")
+            print("     h  intercept   a(now)  b(last)   n_fit   n_eff")
+            for a in anchors:
+                print(
+                    f"     {a.horizon}   {a.intercept:8.2f} {a.on_current:8.3f} "
+                    f"{a.on_prior:8.3f} {a.n_fit:7d} {a.n_effective:7.0f}"
+                )
         render(traj, args.show_comps)
     return 0
 

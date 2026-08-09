@@ -1,44 +1,36 @@
-"""Out-of-sample bake-off between the trajectory matchers (#312, #313).
+"""Out-of-sample bake-off: `shape` against the keeper-value chain (#325).
 
-Answers the question the default rests on: does `shape` actually predict better than
-level matching, and on which players? Every claim in `trajectory/__init__.py` and in
-`shape.py`'s docstring comes from this script -- it exists so those numbers can be
-re-measured rather than trusted, and so a regression in the estimator shows up as a
-changed table instead of a stale docstring.
+Answers the question #325's Phase 1 exists to answer -- does the
+`keeper_forecast` -> `keeper_value` chain actually predict the KEEPER DECISION better
+than `shape`? Not pool-wide rank, which the keeper-value teardown calls "nearly a
+tautology": which three of a 23-man roster you would hold, and what that cost.
 
-**The query player is removed from the panel entirely** before either estimator is
-built, so neither can match him to himself. That is the whole point: an in-sample
-comparison would flatter `shape`, which fits a model, over `comps`, which averages.
-
-Slice, always. A random sample of the panel is dominated by fringe players -- 173 of
-249 in the first run -- and the pooled number said 3% RMSE where the decision-relevant
-slice said 18-20%. Pooled accuracy is not the thing being bought.
-
-Usage:
-    python scripts/backtest_trajectory.py                      # hitters, elite slices
-    python scripts/backtest_trajectory.py --pool pitcher       # the #313 question
-    python scripts/backtest_trajectory.py --sample 400         # random rather than elite
-    python scripts/backtest_trajectory.py --horizon 2 --elite-floor 12
-
-`--historical` runs a SECOND, different bake-off (#325): `shape` against the
-`keeper_forecast` -> `keeper_value` chain, on the keeper decision rather than on
-pool-wide rank. It exists to answer whether the chain being retired is actually worse.
-
-    python scripts/backtest_trajectory.py --historical --pool hitter
-    python scripts/backtest_trajectory.py --historical --base-year 2023 --causal-check
-
-Three things about that mode are load-bearing and easy to undo by accident:
-
-  * era factors are computed on the FULL panel and the truncation happens AFTER --
-    `era_normalize` refuses a panel missing its 2023-2025 reference window, so the
-    other order aborts base years 2022 and 2023 outright
-  * targets are CUMULATIVE per horizon, so +1 and +2 are different questions
-  * keeper-value keeps three advantages (out-year vintage leakage, it reads ZiPS at
-    all, and a persistence fit that for base 2022 trains on LATER transitions). They
-    are declared rather than removed, so a shape win is the strong form of the result
+    python scripts/backtest_keeper_value.py                          # both pools, 2022-2024
+    python scripts/backtest_keeper_value.py --base-year 2023
+    python scripts/backtest_keeper_value.py --base-year 2023 --causal-check
 
 Both estimators are scored by `trajectory.panel.score`, which is what puts them on one
 SCALE rather than merely in one unit.
+
+Five things here are load-bearing and were each got wrong once before being fixed:
+
+  * era factors come from the FULL panel and truncation happens AFTER -- `era_normalize`
+    refuses a panel missing its 2023-2025 reference window, so the other order aborts
+    base years 2022 and 2023 outright
+  * targets are CUMULATIVE per horizon, so +1 and +2 are different questions
+  * the keeper decision is scored at the ROSTER level across BOTH pools; a team keeps
+    three players, not three hitters and three pitchers
+  * `breakout_mask` needs its positivity guard -- `prior = 0` means "out of the league",
+    and without it 38-43% of the breakout slice was returns from absence
+  * a two-way player is resolved to ONE pool before anything is merged, or an `|=` on
+    id-keyed dicts silently deletes his bat
+
+Keeper-value keeps three declared advantages (out-year vintage leakage, it reads ZiPS at
+all, and a persistence fit that for base 2022 trains on LATER transitions). They are
+declared rather than removed, so a shape win is the strong form of the result.
+
+DELETED WITH THE CHAIN. This script exists to justify #325's retirement and goes with it;
+nothing here is meant to survive PR 3.
 """
 
 from __future__ import annotations
@@ -55,10 +47,9 @@ import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
-
-sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 from keeper_forecast import forecast_pool
 from keeper_persistence import TRANSITIONS as KEEPER_TRANSITIONS
@@ -68,24 +59,13 @@ from fantasy_baseball.config import load_config
 from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import people, player_names, season_slots
-from fantasy_baseball.trajectory.comps import (
-    MIN_LOCAL_SUPPORT,
-    collapse_split_seasons,
-    comp_trajectory,
-)
 from fantasy_baseball.trajectory.era import era_factors, era_normalize
+from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT, collapse_split_seasons
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
 from fantasy_baseball.trajectory.panel import score as panel_score
 from fantasy_baseball.trajectory.shape import build_history, shape_trajectory
-from fantasy_baseball.trajectory.value import STARTER_SHARE, best_floor, resolve_slots
-from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+from fantasy_baseball.trajectory.value import best_floor, resolve_slots
 from fantasy_baseball.utils.name_utils import normalize_name
-
-#: Columns the role bucket needs, and the rule for a season split across two rows.
-#: `collapse_split_seasons` keeps only `sgp` and `age`, so a traded pitcher's counting
-#: columns have to be re-summed here or a mid-season trade reads as two half-roles --
-#: the same reason `trajectory.board._SPLIT_RULES` re-sums `starts`/`games`.
-_ROLE_SUMS = ("starts", "games", "sv")
 
 #: Every year-pair the persistence fit could use, bounded by actuals coverage
 #: (`data/stats/{pool}-{Y}.csv` exists for 2022-2025). Imported rather than restated so
@@ -133,33 +113,6 @@ def horizons_for(base_year: int) -> tuple[int, ...]:
     slice counts cannot disagree about which base years support a multi-year target.
     """
     return tuple(h for h in (1, 2) if base_year + h <= LAST_OUTCOME_SEASON)
-
-
-def historical_panel(
-    raw_panel: pd.DataFrame,
-    kind: str,
-    base_year: int,
-    sgp_overrides: SgpOverrides | None,
-) -> pd.DataFrame:
-    """Era-normalize on the FULL panel, THEN truncate to `base_year`.
-
-    Not the other order, and this is not a stylistic preference. `era_normalize` raises
-    when any of `REFERENCE_SEASONS = (2023, 2024, 2025)` is missing -- deliberately, so
-    a partial window cannot silently restate every season into units the output never
-    mentions. A panel truncated to `season <= 2022` contains none of them, so computing
-    factors after truncation aborts base years 2022 and 2023 outright.
-
-    The factor table is therefore informed by seasons after `base_year`. That is a
-    limitation, not an advantage to either estimator: a run environment is a league-wide
-    fact and both sides are restated by the same one. It is also what the shipped
-    harness already does -- it normalizes the full panel and filters queries afterwards.
-
-    Called once per base year. `era_normalize` re-scores every one of ~18,000 seasons
-    row-wise, so calling it per query would be hours of identical work; `without_player`
-    is the cheap per-query half.
-    """
-    normalized = era_normalize(raw_panel, kind, sgp_overrides=sgp_overrides)
-    return normalized[normalized["season"] <= base_year].copy()
 
 
 def without_player(panel: pd.DataFrame, query_id: int) -> pd.DataFrame:
@@ -359,15 +312,21 @@ def resolve_draft(
 #: top-of-board slice's 30 comes from.
 KEEP_SLOTS = 3
 
+
 #: Ten teams. The pooled top-30 is KEEP_SLOTS x this.
 LEAGUE_TEAMS = 10
+
 
 #: A slice thinner than this is reported as unmeasurable rather than scored.
 MIN_REPORTABLE_SLICE = 10
 
+
 #: How many censored players and join misses to name before summarizing.
 CENSORED_LIST_LIMIT = 12
+
+
 JOIN_MISS_LIMIT = 8
+
 
 #: A roster thinned below this many candidates leaves the triple slice: picking 3 from
 #: 4 is not the decision being measured.
@@ -659,161 +618,9 @@ def var_for(
     return sgp_by_id - seasons * pd.Series(floors, dtype=float).reindex(sgp_by_id.index)
 
 
-def roles(panel: pd.DataFrame) -> pd.Series:
-    """``(mlbam_id, season) -> "SP" / "closer" / "RP"``.
-
-    #313 asks for the pitcher result split by role, because a closer's SGP is
-    saves-dominated and saves are a job rather than a skill: a pooled pitcher number can
-    average two opposite effects into a null.
-
-    The cuts are BORROWED, not invented. `STARTER_SHARE` is the same `starts / games`
-    split `trajectory.value` routes a pitcher's replacement floor on, and
-    `CLOSER_SV_THRESHOLD` is the same save count the draft board buckets closers at. A
-    third rule defined here would be one more thing to disagree with them.
-
-    **Pass the RAW panel, not the era-normalized one.** `era_normalize` rescales
-    `sv_ip` and `panel.score` then rebuilds `sv` from it, so a 20-save threshold on a
-    normalized frame is a threshold on restated saves -- which is meaningless, because
-    a closer is a JOB and 20 saves is a count of real ones. Measured on the live panel,
-    that mistake moves 8 of 17,947 seasons across the bucket line. Refused below rather
-    than documented, since the two frames are otherwise interchangeable to look at.
-    """
-    normalized = [c for c in panel.columns if c.startswith("era_factor_")]
-    if normalized:
-        raise ValueError(
-            "roles() needs the RAW panel: this frame is era-normalized "
-            f"(carries {normalized[:3]}...), so its `sv` has been restated into the "
-            "reference run environment and a 20-save cut no longer means 20 saves. "
-            "Pass the frame from load_scored_panel, before era_normalize."
-        )
-    missing = [c for c in _ROLE_SUMS if c not in panel.columns]
-    if missing:
-        raise KeyError(f"pitcher panel is missing role columns {missing}")
-    agg = panel.groupby(["mlbam_id", "season"])[list(_ROLE_SUMS)].sum()
-    games = agg["games"].to_numpy(dtype=float)
-    starts = agg["starts"].to_numpy(dtype=float)
-    saves = agg["sv"].to_numpy(dtype=float)
-    # games == 0 cannot be a starter; guard the divide rather than letting it warn.
-    share = np.divide(starts, games, out=np.zeros_like(starts), where=games > 0)
-    bucket = np.where(
-        share >= STARTER_SHARE, "SP", np.where(saves >= CLOSER_SV_THRESHOLD, "closer", "RP")
-    )
-    return pd.Series(bucket, index=agg.index, name="role")
-
-
-def score(
-    panel: pd.DataFrame,
-    queries: pd.DataFrame,
-    kind: str,
-    horizon: int,
-    role_by_season: pd.Series | None = None,
-) -> pd.DataFrame:
-    """Predict `horizon` years ahead for each query, with that player held out."""
-    index = panel.set_index(["mlbam_id", "season"])["sgp"]
-    rows = []
-    for i, q in enumerate(queries.itertuples(index=False), start=1):
-        if i % 100 == 0:
-            print(f"  {i}/{len(queries)}...", flush=True)
-        actual = float(index.get((q.mlbam_id, q.season + horizon), 0.0))
-        # No self-matching: the player is gone from the panel both estimators see.
-        clean = panel[panel["mlbam_id"] != q.mlbam_id]
-        age, current, prior = int(q.age), float(q.current), float(q.prior)
-        level = comp_trajectory(clean, kind=kind, age=age, sgp=current, horizons=(horizon,))
-        curve, _ = shape_trajectory(
-            clean, kind=kind, age=age, sgp=current, prior_sgp=prior, horizons=(horizon,)
-        )
-        if level.path[0].n == 0 or np.isnan(curve.path[0].mean):
-            continue
-        # `track` is `current` plus a HARD band on the prior season (#305) -- the same
-        # two anchors shape uses, bounded instead of kernel-weighted. Passing prior_sgp
-        # is what selects it; `comp_trajectory` defaults to level matching without it.
-        #
-        # Fitted AFTER the guard so a row that is about to be discarded does not pay for
-        # a third full-panel scan. Its own emptiness is deliberately NOT part of that
-        # guard: the two-mode comparison was already published from this harness, and
-        # dropping rows track cannot score would silently change the current-vs-shape
-        # population. Track records NaN there and is reported on its own defined subset.
-        tracked = comp_trajectory(
-            clean, kind=kind, age=age, sgp=current, prior_sgp=prior, horizons=(horizon,)
-        )
-        rows.append(
-            {
-                "mlbam_id": q.mlbam_id,
-                "season": q.season,
-                "age": age,
-                "prior": prior,
-                "now": current,
-                "actual": actual,
-                "current": level.path[0].mean,
-                "shape": curve.path[0].mean,
-                "track": (float("nan") if tracked.path[0].n == 0 else tracked.path[0].mean),
-                # The role of the QUERY season -- the one both anchors describe.
-                "role": (
-                    role_by_season.get((q.mlbam_id, q.season), "")
-                    if role_by_season is not None
-                    else ""
-                ),
-            }
-        )
-    return pd.DataFrame(rows)
-
-
-def report(df: pd.DataFrame, label: str) -> dict | None:
-    if len(df) < 10:
-        # Say so rather than printing nothing. A slice that silently vanishes reads as
-        # "not applicable" when it means "too thin to measure" -- which for the role
-        # splits in #313 is itself the finding.
-        print(f"  {label:30s} n={len(df):4d}   (under 10, not reported)")
-        return None
-    out = {}
-    for mode in ("current", "shape"):
-        err = df[mode] - df["actual"]
-        out[mode] = (float(np.sqrt((err**2).mean())), float(err.abs().mean()), float(err.mean()))
-    wins = float(((df["shape"] - df["actual"]).abs() < (df["current"] - df["actual"]).abs()).mean())
-    print(
-        f"  {label:30s} n={len(df):4d}   "
-        f"RMSE {out['current'][0]:5.2f} -> {out['shape'][0]:5.2f}   "
-        f"MAE {out['current'][1]:5.2f} -> {out['shape'][1]:5.2f}   "
-        f"bias {out['current'][2]:+5.2f} -> {out['shape'][2]:+5.2f}   "
-        f"shape wins {wins:.0%}"
-    )
-    return {"slice": label, "n": len(df), "wins": wins}
-
-
-def report_track(df: pd.DataFrame, label: str) -> None:
-    """Three-way on the subset where `track` found any comps.
-
-    Separate from `report` on purpose. `track`'s hard prior band leaves some queries
-    with an empty cohort, and folding those drops into the shared row filter would move
-    the current-vs-shape population that was already measured and published. So the
-    three-way runs on track's own defined subset, and the coverage is printed rather
-    than left for the reader to infer from a shrinking n.
-    """
-    defined = df.dropna(subset=["track"])
-    coverage = f"{len(defined)}/{len(df)}"
-    if len(defined) < 10:
-        print(f"  {label:30s} track scored {coverage:>9}   (under 10, not reported)")
-        return
-    stats = {}
-    for mode in ("current", "track", "shape"):
-        err = defined[mode] - defined["actual"]
-        stats[mode] = (float(np.sqrt((err**2).mean())), float(err.mean()))
-    beats_track = float(
-        (
-            (defined["shape"] - defined["actual"]).abs()
-            < (defined["track"] - defined["actual"]).abs()
-        ).mean()
-    )
-    print(
-        f"  {label:30s} track scored {coverage:>9}   "
-        f"RMSE cur {stats['current'][0]:5.2f} / track {stats['track'][0]:5.2f} / "
-        f"shape {stats['shape'][0]:5.2f}   "
-        f"bias track {stats['track'][1]:+5.2f} shape {stats['shape'][1]:+5.2f}   "
-        f"shape beats track {beats_track:.0%}"
-    )
-
-
 DRAFT_FILE = PROJECT_ROOT / "data" / "historical_drafts_resolved.json"
+
+
 FIELDING_CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
 
 
@@ -1398,36 +1205,14 @@ def main() -> int:
     parser.add_argument(
         "--pool",
         choices=("hitter", "pitcher"),
-        help="one pool only; --historical defaults to BOTH, the legacy mode to hitter",
-    )
-    parser.add_argument("--horizon", type=int, default=1, help="years ahead to predict")
-    parser.add_argument(
-        "--elite-floor",
-        type=float,
-        default=14.0,
-        help="prior-season SGP at or above which a query counts as elite",
-    )
-    parser.add_argument(
-        "--sample",
-        type=int,
-        help="score a RANDOM sample of this size instead of every elite season",
-    )
-    parser.add_argument("--min-age", type=int, default=24)
-    parser.add_argument("--max-age", type=int, default=32)
-    parser.add_argument("--seed", type=int, default=7)
-    parser.add_argument("--panel-dir", type=Path, default=DEFAULT_PANEL_DIR)
-    parser.add_argument("--out", type=Path, help="write the scored queries to this CSV")
-    # -- #325: shape against the keeper-value chain, out of sample ------------------
-    parser.add_argument(
-        "--historical",
-        action="store_true",
-        help="run the #325 head-to-head instead of the matcher bake-off",
+        help="score ONE pool only. A keeper roster spans both, so the triple slice then "
+        "answers 'best 3 within this pool' rather than the real decision.",
     )
     parser.add_argument(
         "--base-year",
         type=int,
         action="append",
-        help="base year for --historical (repeatable; defaults to 2022 2023 2024)",
+        help="repeatable; defaults to 2022 2023 2024",
     )
     parser.add_argument(
         "--causal-check",
@@ -1436,89 +1221,20 @@ def main() -> int:
     )
     parser.add_argument("--censor-threshold", type=float, default=CENSOR_THRESHOLD)
     parser.add_argument("--draws", type=int, default=10_000, help="bootstrap resamples")
+    parser.add_argument("--panel-dir", type=Path, default=DEFAULT_PANEL_DIR)
     # `forecast_pool` reads these off the namespace; they must match keeper_forecast's
-    # own defaults or the historical run scores a different population than the live one.
+    # own defaults or this scores a different population than the live board.
     parser.add_argument("--min-pa", type=float, default=300)
     parser.add_argument("--min-ip", type=float, default=50)
     parser.add_argument("--min-next-pa", type=float, default=250)
     parser.add_argument("--min-next-ip", type=float, default=50)
     parser.add_argument("--no-aging", action="store_true")
     args = parser.parse_args()
-    if args.horizon < 1:
-        parser.error("--horizon must be at least 1")
-    if args.base_year and not args.historical:
-        parser.error("--base-year applies to --historical")
 
     if not args.panel_dir.is_absolute():
         args.panel_dir = PROJECT_ROOT / args.panel_dir
-
-    if args.historical:
-        args.base_year = args.base_year or [2022, 2023, 2024]
-        return run_historical(args)
-
-    args.pool = args.pool or "hitter"
-    overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
-    # Kept separately: the estimators want the era-normalized frame, but `roles` needs
-    # the raw one -- see its docstring. Everything below reads `panel` except that one
-    # call.
-    raw_panel = load_scored_panel(args.pool, panel_dir=args.panel_dir, sgp_overrides=overrides)
-    panel = era_normalize(raw_panel, args.pool, sgp_overrides=overrides)
-    last = int(panel["season"].max())
-
-    # `build_history` supplies both anchors and censors seasons whose prior predates
-    # the panel -- the same rows a real query would have.
-    pool = build_history(panel)
-    pool = pool[
-        pool["age"].between(args.min_age, args.max_age) & (pool["season"] + args.horizon <= last)
-    ]
-    if args.sample:
-        queries = pool.sample(min(args.sample, len(pool)), random_state=args.seed)
-        header = f"random sample of {len(queries)}"
-    else:
-        queries = pool[pool["prior"] >= args.elite_floor]
-        header = f"every season with a prior >= {args.elite_floor:g} SGP"
-
-    print(
-        f"{args.pool.upper()}S, +{args.horizon}: {header}, ages "
-        f"{args.min_age}-{args.max_age}, {len(queries)} queries\n"
-    )
-    role_by_season = roles(raw_panel) if args.pool == "pitcher" else None
-    df = score(panel, queries, args.pool, args.horizon, role_by_season)
-    if args.out:
-        df.to_csv(args.out, index=False)
-        print(f"wrote {args.out}")
-    print(f"\nscored {len(df)} (query player held out of the panel each time)")
-    print(f"{'':32s}       current -> shape")
-    report(df, "ALL")
-    elite = df[df["prior"] >= args.elite_floor]
-    report(elite, f"elite (prior >= {args.elite_floor:g})")
-    report(elite[elite["now"] < elite["prior"] * 0.8], "elite down year (<80% of prior)")
-    report(elite[elite["now"] < elite["prior"] * 0.7], "elite big drop (<70% of prior)")
-    report(elite[elite["now"] >= elite["prior"] * 0.8], "elite holding steady")
-    report(df[df["now"] > df["prior"] * 1.25], "breakout (up >25%)")
-
-    # The two-mode table above races shape against LEVEL matching only. `track` uses the
-    # same two anchors shape does, so it is the closer competitor -- and retiring it
-    # (#325) without ever racing it would be retiring an unmeasured alternative.
-    print("\n  -- three-way, including track (hard prior band) --")
-    report_track(df, "ALL")
-    report_track(elite, f"elite (prior >= {args.elite_floor:g})")
-    report_track(elite[elite["now"] < elite["prior"] * 0.7], "elite big drop (<70% of prior)")
-    report_track(elite[elite["now"] >= elite["prior"] * 0.8], "elite holding steady")
-
-    if args.pool == "pitcher":
-        # #313: a pooled pitcher number can average a starter effect and a closer effect
-        # into a null, so the roles are reported separately rather than trusted to agree.
-        print("\n  -- by role of the query season --")
-        for role in ("SP", "RP", "closer"):
-            report(df[df["role"] == role], f"{role}")
-            report(df[(df["role"] == role) & (df["prior"] >= args.elite_floor)], f"{role} elite")
-        # 15% of pitcher-seasons score below replacement against 7.7% for hitters, and
-        # the linear form was never checked against a negative anchor.
-        print("\n  -- negative anchors --")
-        report(df[(df["now"] < 0) | (df["prior"] < 0)], "either anchor negative")
-        report(df[df["now"] < 0], "current season negative")
-    return 0
+    args.base_year = args.base_year or [2022, 2023, 2024]
+    return run_historical(args)
 
 
 if __name__ == "__main__":
