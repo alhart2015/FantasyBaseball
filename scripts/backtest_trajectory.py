@@ -40,6 +40,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from keeper_persistence import TRANSITIONS as KEEPER_TRANSITIONS
 
 from fantasy_baseball.config import load_config
+from fantasy_baseball.sgp.denominators import SgpOverrides
 from fantasy_baseball.trajectory.comps import comp_trajectory
 from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
@@ -82,6 +83,59 @@ def transitions_for(base_year: int, mode: str) -> tuple[tuple[int, int], ...]:
         predicted = (base_year, base_year + 1)
         return tuple(t for t in ALL_TRANSITIONS if t != predicted)
     return tuple(t for t in ALL_TRANSITIONS if t[1] <= base_year)
+
+
+#: The last season that can serve as an OUTCOME. 2026 is in progress, and the only
+#: tool for comparing it against full seasons -- `panel.prorate_partial` -- is
+#: straight-line and explicitly assumes the player stays healthy. Pacing an outcome
+#: season would scale an injured player's line up as if he had not been hurt, which is
+#: exactly the confound the injury-excluded view exists to remove.
+LAST_OUTCOME_SEASON = 2025
+
+
+def horizons_for(base_year: int) -> tuple[int, ...]:
+    """Which forward years are scoreable from `base_year`.
+
+    The single source of truth for this, so the shape side, the keeper side and the
+    slice counts cannot disagree about which base years support a multi-year target.
+    """
+    return tuple(h for h in (1, 2) if base_year + h <= LAST_OUTCOME_SEASON)
+
+
+def historical_panel(
+    raw_panel: pd.DataFrame,
+    kind: str,
+    base_year: int,
+    sgp_overrides: SgpOverrides | None,
+) -> pd.DataFrame:
+    """Era-normalize on the FULL panel, THEN truncate to `base_year`.
+
+    Not the other order, and this is not a stylistic preference. `era_normalize` raises
+    when any of `REFERENCE_SEASONS = (2023, 2024, 2025)` is missing -- deliberately, so
+    a partial window cannot silently restate every season into units the output never
+    mentions. A panel truncated to `season <= 2022` contains none of them, so computing
+    factors after truncation aborts base years 2022 and 2023 outright.
+
+    The factor table is therefore informed by seasons after `base_year`. That is a
+    limitation, not an advantage to either estimator: a run environment is a league-wide
+    fact and both sides are restated by the same one. It is also what the shipped
+    harness already does -- it normalizes the full panel and filters queries afterwards.
+
+    Called once per base year. `era_normalize` re-scores every one of ~18,000 seasons
+    row-wise, so calling it per query would be hours of identical work; `without_player`
+    is the cheap per-query half.
+    """
+    normalized = era_normalize(raw_panel, kind, sgp_overrides=sgp_overrides)
+    return normalized[normalized["season"] <= base_year].copy()
+
+
+def without_player(panel: pd.DataFrame, query_id: int) -> pd.DataFrame:
+    """The panel both estimators see for one query: no self-matching.
+
+    Cheap by design and called in the inner loop. An in-sample comparison would flatter
+    `shape`, which fits a model, over an estimator that averages.
+    """
+    return panel[panel["mlbam_id"] != query_id]
 
 
 def roles(panel: pd.DataFrame) -> pd.Series:

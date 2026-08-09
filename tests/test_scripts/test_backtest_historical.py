@@ -246,3 +246,69 @@ def test_volume_forecast_reports_a_whole_pool_fallback(monkeypatch) -> None:
 
     assert projected is None
     assert whole_pool is True
+
+
+def _scored_panel(rows: list[dict], kind: str = "hitter") -> pd.DataFrame:
+    """A scored trajectory panel from partial rows, defaults filled in."""
+    from fantasy_baseball.trajectory.panel import score
+
+    base = {
+        "mlbam_id": 1,
+        "season": 2024,
+        "age": 27,
+        "pa": 600.0,
+        "ab_pa": 0.9,
+        "h_ab": 0.280,
+        "hr_pa": 0.05,
+        "r_pa": 0.15,
+        "rbi_pa": 0.14,
+        "sb_pa": 0.02,
+    }
+    return score(pd.DataFrame([base | row for row in rows]), kind)
+
+
+def _panel_2000_to_2026() -> pd.DataFrame:
+    """Three careers spanning 2000-2026, so the 2023-2025 reference window is present."""
+    rows = []
+    for pid in (1, 2, 3):
+        for season in range(2000, 2027):
+            rows.append({"mlbam_id": pid, "season": season, "age": 22 + (season - 2000) % 15})
+    return _scored_panel(rows)
+
+
+def test_historical_panel_normalizes_before_truncating() -> None:
+    """The order is load-bearing. era_normalize RAISES without the 2023-2025 reference
+    seasons, so truncating first aborts base 2022 and 2023 outright -- two of the three
+    base years in scope. This test is the only thing standing between a plausible
+    restructure and losing two thirds of the evaluation."""
+    from backtest_trajectory import historical_panel
+
+    out = historical_panel(_panel_2000_to_2026(), "hitter", 2022, sgp_overrides=None)
+
+    assert not out.empty
+    assert int(out["season"].max()) <= 2022
+    assert "era_factor_hr_pa" in out.columns
+
+
+def test_without_player_removes_the_query_player() -> None:
+    """No self-matching. An in-sample comparison flatters shape, which fits a model."""
+    from backtest_trajectory import historical_panel, without_player
+
+    truncated = historical_panel(_panel_2000_to_2026(), "hitter", 2024, sgp_overrides=None)
+    out = without_player(truncated, query_id=1)
+
+    assert 1 in set(truncated["mlbam_id"]), "fixture must contain the player held out"
+    assert 1 not in set(out["mlbam_id"])
+    assert set(out["mlbam_id"]) == {2, 3}
+
+
+def test_horizons_for_drops_the_plus_two_run_where_2026_would_be_the_target() -> None:
+    """2026 is in progress and is never an outcome year: prorate_partial is
+    straight-line and assumes health, so pacing an outcome season would scale an
+    injured player UP -- the confound the injury-excluded view exists to remove."""
+    from backtest_trajectory import horizons_for
+
+    assert horizons_for(2022) == (1, 2)
+    assert horizons_for(2023) == (1, 2)
+    assert horizons_for(2024) == (1,)
+    assert horizons_for(2025) == ()
