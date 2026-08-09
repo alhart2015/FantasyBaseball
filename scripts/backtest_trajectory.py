@@ -520,6 +520,38 @@ def keeper_value_sgp(
     return scored.set_index("mlbam_id")["sgp"]
 
 
+def slots_for(
+    kind: str,
+    base_year: int,
+    raw_panel: pd.DataFrame,
+    cache_dir: Path,
+) -> dict[int, set[str]]:
+    """The slot each player is priced at, from the base year.
+
+    HITTERS route through `board.season_slots` -- the fielding leaderboard's 10-game
+    rule -- and fall back to UTIL, the highest floor, when the cache cannot answer.
+
+    PITCHERS route on ROLE, from the base season's starts and games, because
+    `resolve_slots`' pitcher branch decides SP vs RP that way and its defaults are
+    `starts=0, games=0`. Calling it without them puts every arm on the reliever floor.
+    That was harmless while the pools were scored separately and never compared; it
+    became load-bearing the moment a roster decision put hitters and pitchers up for
+    the same three slots, because a starter then carries 1.87 SGP a season of credit
+    (3.7 at +2) that no hitter gets.
+    """
+    if kind == "pitcher":
+        year = raw_panel[raw_panel["season"] == base_year]
+        agg = year.groupby("mlbam_id")[["starts", "games"]].sum()
+        return {
+            int(pid): resolve_slots(
+                None, "pitcher", starts=float(row.starts), games=float(row.games)
+            )
+            for pid, row in agg.iterrows()
+        }
+    eligibility = season_slots(cache_dir, base_year)
+    return {int(pid): resolve_slots(set(slots), "hitter") for pid, slots in eligibility.items()}
+
+
 def var_for(
     sgp_by_id: pd.Series,
     kind: str,
@@ -527,6 +559,7 @@ def var_for(
     cache_dir: Path,
     levels: dict[str, float],
     seasons: int = 1,
+    slots_by_id: Mapping[int, set[str]] | None = None,
 ) -> pd.Series:
     """SGP above the position-aware floor, using year-`base_year` eligibility.
 
@@ -547,11 +580,19 @@ def var_for(
     cache degrades to UTIL, the HIGHEST hitter floor, so an unknown player is
     understated rather than credited with scarcity he may not have.
     """
-    eligibility = season_slots(cache_dir, base_year)
+    lookup = (
+        slots_by_id
+        if slots_by_id is not None
+        else slots_for(
+            kind,
+            base_year,
+            pd.DataFrame(columns=["mlbam_id", "season", "starts", "games"]),
+            cache_dir,
+        )
+    )
     floors = {}
     for pid in sgp_by_id.index:
-        slots = resolve_slots(set(eligibility.get(int(pid), frozenset())), kind)
-        floors[pid] = best_floor(slots, levels)[1]
+        floors[pid] = best_floor(lookup.get(int(pid), set()), levels)[1]
     return sgp_by_id - seasons * pd.Series(floors, dtype=float).reindex(sgp_by_id.index)
 
 
@@ -731,6 +772,8 @@ class PoolRun:
     excluded: bool
     #: base-year anchors (`current`/`prior`), for the breakout slice
     anchors: pd.DataFrame
+    #: mlbam_id -> the slot it is priced at, from the BASE year
+    slots: dict[int, set[str]]
 
 
 @dataclass
@@ -859,6 +902,7 @@ def score_pool(
         low_support,
         excluded,
         anchors[anchors["mlbam_id"].isin(common)].copy(),
+        slots_for(kind, base_year, panels.raw, FIELDING_CACHE),
     )
 
 
@@ -913,12 +957,15 @@ def _var(
     base_year: int,
     levels: dict[str, float],
     seasons: int,
+    slots_by_id: Mapping[int, set[str]],
 ) -> dict[int, float]:
     """VAR for a total that sums `seasons` years. See `var_for` on why that matters."""
     series = pd.Series(dict(sgp_by_id), dtype=float)
     if series.empty:
         return {}
-    return var_for(series, kind, base_year, FIELDING_CACHE, levels, seasons=seasons).to_dict()
+    return var_for(
+        series, kind, base_year, FIELDING_CACHE, levels, seasons=seasons, slots_by_id=slots_by_id
+    ).to_dict()
 
 
 def report_base_year(
@@ -970,9 +1017,9 @@ def report_base_year(
                 pid: sum(v for h, v in run.keeper_sgp[pid].items() if h <= horizon)
                 for pid in usable
             }
-            realized_var |= _var(realized, run.kind, base_year, levels, seasons=horizon)
-            shape_var |= _var(shape_tot, run.kind, base_year, levels, seasons=horizon)
-            keeper_var |= _var(keeper_tot, run.kind, base_year, levels, seasons=horizon)
+            realized_var |= _var(realized, run.kind, base_year, levels, horizon, run.slots)
+            shape_var |= _var(shape_tot, run.kind, base_year, levels, horizon, run.slots)
+            keeper_var |= _var(keeper_tot, run.kind, base_year, levels, horizon, run.slots)
             wrecked |= {
                 pid for pid in usable if censored(run.outcomes[pid], years, args.censor_threshold)
             }

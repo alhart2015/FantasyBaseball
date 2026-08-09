@@ -777,3 +777,26 @@ def test_var_scales_the_floor_by_the_number_of_summed_seasons(tmp_path: Path) ->
 
     assert one_year.loc[12345] == pytest.approx(20.0 - 7.70)
     assert two_year.loc[12345] == pytest.approx(20.0 - 2 * 7.70)
+
+
+def test_a_starter_is_priced_against_the_SP_floor_not_the_RP_one(tmp_path: Path) -> None:
+    """resolve_slots' pitcher branch decides SP vs RP from starts/games, and its
+    defaults are 0/0 -- so calling it without them puts EVERY pitcher on the reliever
+    floor. Harmless while pools were scored separately; load-bearing once a roster
+    decision compares hitters and pitchers for the same three slots, because starters
+    then carry 1.87 SGP/season of credit hitters do not get.
+    """
+    from backtest_trajectory import slots_for
+
+    panel = pd.DataFrame(
+        {
+            "mlbam_id": [1, 2],
+            "season": [2023, 2023],
+            "starts": [30, 0],
+            "games": [32, 60],
+        }
+    )
+    slots = slots_for("pitcher", 2023, panel, tmp_path)
+
+    assert slots[1] == {"SP"}, "a 30-start arm is a starter"
+    assert slots[2] == {"RP"}, "a 0-start, 60-appearance arm is a reliever"
