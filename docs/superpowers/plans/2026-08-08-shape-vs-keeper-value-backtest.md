@@ -855,7 +855,9 @@ git commit -m "backtest: shape side of the historical comparison (#325)"
 - Test: `tests/test_scripts/test_backtest_historical.py`
 
 **Interfaces:**
-- Produces: `keeper_value_sgp(frame: pd.DataFrame, kind: str, sgp_overrides) -> pd.Series` — mlbam_id -> SGP, scored by `trajectory.panel.score`. `var_for(sgp_by_id: pd.Series, kind: str, base_year: int, cache_dir: Path) -> pd.Series` — SGP minus the year-`base_year` position-aware floor.
+- Produces: `keeper_value_sgp(frame: pd.DataFrame, kind: str, sgp_overrides) -> pd.Series` — mlbam_id -> SGP, scored by `trajectory.panel.score`. `var_for(sgp_by_id: pd.Series, kind: str, base_year: int, cache_dir: Path, levels: dict[str, float]) -> pd.Series` — SGP minus the year-`base_year` position-aware floor.
+
+**Where `levels` comes from.** `trajectory.value.best_floor` takes a `dict[str, float]` of position-aware floors and there is exactly one right way to build it: `position_aware_replacement_levels(get_sgp_denominators(overrides))`, as `scripts/trajectory_board.py:273` does. Computed once in `main()` and threaded down. Not a constant table and not a per-pool scalar — the scarcity credit this measures (catcher 7.70 against an outfielder's 9.96) only means anything if it is the same floor the draft board nets against.
 
 **Why this works at all:** `keepers.actuals.HITTER_PT == "pa"`, `PITCHER_PT == "ip"`, and `HITTER_RATES`/`PITCHER_RATES` are character-for-character the columns `trajectory.panel.score` reconstructs from. `forecast_pool`'s output frame is already in that schema, so it can be handed to the panel's own scorer with no translation. Do **not** route through `keeper_forecast.to_counting`, which renames to `PA`/`IP` and finishes `AVG`/`ERA`/`WHIP`.
 
@@ -904,11 +906,18 @@ def test_var_uses_year_Y_eligibility_not_the_outcome_years(tmp_path) -> None:
         "player.id,position.abbreviation,stat.games\n12345,1B,100\n", encoding="utf-8"
     )
     sgp = pd.Series([10.0], index=pd.Index([12345], name="mlbam_id"))
+    # The REAL table, not a fixture -- a fixture would be free to drift from the floors
+    # the draft board actually nets against, which is the whole point of using them.
+    levels = position_aware_replacement_levels(
+        get_sgp_denominators(load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides)
+    )
 
-    as_catcher = var_for(sgp, "hitter", 2023, tmp_path)
-    as_first_baseman = var_for(sgp, "hitter", 2024, tmp_path)
+    as_catcher = var_for(sgp, "hitter", 2023, tmp_path, levels)
+    as_first_baseman = var_for(sgp, "hitter", 2024, tmp_path, levels)
 
-    # The catcher floor is the lowest, so the same SGP is worth MORE as a catcher.
+    # Directional against config/league.yaml's configured floors: the catcher floor is
+    # the lowest, so the same SGP is worth MORE as a catcher. An inequality rather than
+    # a number, because the floors are re-derived from the denominators and move.
     assert as_catcher.loc[12345] > as_first_baseman.loc[12345]
 ```
 
