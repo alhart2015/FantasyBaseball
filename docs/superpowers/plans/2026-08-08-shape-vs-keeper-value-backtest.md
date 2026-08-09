@@ -948,7 +948,7 @@ git commit -m "backtest: score keeper-value forecasts on the panel's SGP scale (
 
 ---
 
-### Task 8: Realized outcomes and the two views
+### Task 8: The Outcome type and the censoring rules
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -1021,6 +1021,10 @@ class Outcome:
     in is ABSENT, not zero, so the distinction between "played badly" and "was not
     there" survives into the censoring rule. `realized` collapses it to the 0 a
     vanished player is worth to a roster slot; `censored` treats it as zero volume.
+
+    `frozen=True` here blocks attribute reassignment only -- the dicts remain mutable
+    and the generated `__hash__` would raise on them. Outcomes are never hashed, never
+    put in a set, and each one owns its dicts; do not start sharing them.
     """
 
     mlbam_id: int
@@ -1061,7 +1065,101 @@ git commit -m "backtest: realized outcomes and the injury-excluded view (#325)"
 
 ---
 
-### Task 9: Resolve drafted names to ids
+### Task 9: Build the outcomes -- collapse split seasons first
+
+**Files:**
+- Modify: `scripts/backtest_trajectory.py`
+- Test: `tests/test_scripts/test_backtest_historical.py`
+
+**Interfaces:**
+- Consumes: `Outcome` (Task 8), `horizons_for` (Task 6).
+- Produces: `outcomes_for(panel: pd.DataFrame, kind: str, base_year: int, horizons: tuple[int, ...], anchor_volume: Mapping[int, float]) -> dict[int, Outcome]`.
+
+**The trap is the traded player, and it lands on the injury view.** A player dealt mid-season has **two rows** for that season. Read uncollapsed, his 600 PA becomes 310 + 290, both under 50% of a 600-PA anchor -- so he is censored as "wrecked by injury" when he was healthy and merely changed teams. That is a systematic false positive concentrated on exactly the players who got traded, correlated with nothing the injury view claims to control for, and it would silently shrink the second view. `trajectory.comps.collapse_split_seasons` exists for this; `trajectory.board._SPLIT_RULES` re-sums the counting columns for the same reason.
+
+- [ ] **Step 1: Write the failing tests**
+
+```python
+def test_outcomes_collapse_a_traded_players_split_season() -> None:
+    """Two rows, one season. Uncollapsed, a healthy 600-PA year reads as 310 + 290 and
+    the injury view censors him as wrecked -- a false positive that lands on every
+    player who changed teams."""
+    from backtest_trajectory import censored, outcomes_for
+
+    panel = _scored_panel(
+        [
+            {"mlbam_id": 1, "season": 2024, "pa": 310.0},
+            {"mlbam_id": 1, "season": 2024, "pa": 290.0},
+        ]
+    )
+    out = outcomes_for(panel, "hitter", 2023, (1,), anchor_volume={1: 600.0})
+
+    assert out[1].volume_by_year[2024] == pytest.approx(600.0)
+    assert censored(out[1], [2024]) is False
+
+
+def test_outcomes_omit_a_season_the_player_did_not_appear_in() -> None:
+    """ABSENT, not zero. The distinction survives into the censoring rule -- `realized`
+    collapses it to 0, `censored` treats it as zero volume, and those are different
+    questions."""
+    from backtest_trajectory import outcomes_for
+
+    panel = _scored_panel([{"mlbam_id": 1, "season": 2024, "pa": 600.0}])
+    out = outcomes_for(panel, "hitter", 2023, (1, 2), anchor_volume={1: 600.0})
+
+    assert 2024 in out[1].volume_by_year
+    assert 2025 not in out[1].volume_by_year
+    assert out[1].realized([2024, 2025]) == pytest.approx(out[1].sgp_by_year[2024])
+
+
+def test_outcome_sgp_comes_from_the_collapsed_row_not_the_fragments() -> None:
+    """Summing two half-season SGPs is not the season's SGP -- rate categories do not
+    add. The collapse has to happen before scoring is read, not after."""
+    from backtest_trajectory import outcomes_for
+
+    from fantasy_baseball.trajectory.comps import collapse_split_seasons
+
+    panel = _scored_panel(
+        [
+            {"mlbam_id": 1, "season": 2024, "pa": 310.0},
+            {"mlbam_id": 1, "season": 2024, "pa": 290.0},
+        ]
+    )
+    collapsed = collapse_split_seasons(panel)
+    expected = float(collapsed.loc[collapsed["season"] == 2024, "sgp"].iloc[0])
+
+    out = outcomes_for(panel, "hitter", 2023, (1,), anchor_volume={1: 600.0})
+    assert out[1].sgp_by_year[2024] == pytest.approx(expected)
+```
+
+Write `_scored_panel(rows)` in that module: applies the `tests/test_trajectory/test_era.py::_hitters` default rate row to each entry and returns it through `trajectory.panel.score`.
+
+- [ ] **Step 2: Run to verify they fail**
+
+Run: `pytest tests/test_scripts/test_backtest_historical.py -k outcomes -v`
+Expected: FAIL — `cannot import name 'outcomes_for'`.
+
+- [ ] **Step 3: Implement**
+
+`outcomes_for` calls `collapse_split_seasons(panel)` first, then for each `base_year + h` in `horizons` reads `sgp` and the volume column (`pa` for hitters, `ip` for pitchers) into the two sparse dicts, keyed by `mlbam_id`. A season with no row contributes no key. `anchor_volume` is passed in rather than re-derived, because the anchor is year Y and this function only looks forward.
+
+**Volume must be re-summed, not taken from the collapsed row, if `collapse_split_seasons` keeps only `sgp` and `age`** — check its implementation before writing this. `scripts/backtest_trajectory.py::_ROLE_SUMS` already carries that same caveat for the pitcher role columns and is the precedent to follow.
+
+- [ ] **Step 4: Run the tests**
+
+Run: `pytest tests/test_scripts/test_backtest_historical.py -v`
+Expected: PASS.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add scripts/backtest_trajectory.py tests/test_scripts/test_backtest_historical.py
+git commit -m "backtest: build outcomes, collapsing split seasons first (#325)"
+```
+
+---
+
+### Task 10: Resolve drafted names to ids
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -1137,7 +1235,7 @@ git commit -m "backtest: resolve drafted names to mlbam ids, reporting misses (#
 
 ---
 
-### Task 10: Keeper-triple regret and the agreement rate
+### Task 11: Keeper-triple regret and the agreement rate
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -1208,7 +1306,7 @@ git commit -m "backtest: keeper-triple regret and estimator agreement rate (#325
 
 ---
 
-### Task 11: Top-of-board, breakout, the intersection rule and the per-view floor
+### Task 12: Top-of-board, breakout, the intersection rule and the per-view floor
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -1292,7 +1390,7 @@ git commit -m "backtest: top-of-board, breakout, intersection and per-view roste
 
 ---
 
-### Task 12: The bootstrap, with the right resampling unit per slice
+### Task 13: The bootstrap, with the right resampling unit per slice
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py`
@@ -1355,7 +1453,7 @@ git commit -m "backtest: paired bootstrap on the estimator difference (#325)"
 
 ---
 
-### Task 13: Wire the historical mode into the CLI and run it
+### Task 14: Wire the historical mode into the CLI and run it
 
 **Files:**
 - Modify: `scripts/backtest_trajectory.py` (`main`)
@@ -1369,7 +1467,7 @@ git commit -m "backtest: paired bootstrap on the estimator difference (#325)"
 
 New flags: `--historical`, `--base-year` (repeatable, defaults to 2022 2023 2024), `--causal-check`, `--censor-threshold` (default 0.5), `--draws` (default 10000). Horizons are not a flag — `horizons_for` (Task 6) decides them per base year.
 
-This task is **wiring only**: every number below comes from a function built and tested in Tasks 6-12. If something here needs new logic, it belongs in one of those tasks with its own failing test, not inlined into the report.
+This task is **wiring only**: every number below comes from a function built and tested in Tasks 6-13. If something here needs new logic, it belongs in one of those tasks with its own failing test, not inlined into the report.
 
 Per base year and pool, the report prints:
 
@@ -1378,16 +1476,16 @@ Per base year and pool, the report prints:
 | coverage: each estimator alone, and the intersection size | `intersect` (Task 11) |
 | gap-model fallback counts | `FallbackReport` (Task 5) |
 | future-transition count, and the causal variant for base 2023 | `transitions_for` (Task 4) |
-| censored list (name, anchor volume, outcome volume), zero vs non-zero, at 0.5 and 0.2 | `censored` (Task 8) |
-| keeper-triple regret, both horizons, both views | `triple_regret` (Task 10) |
-| agreement rate and the disagreeing-subset difference | `agreement_rate` (Task 10) |
-| per-view roster counts, and any roster in one view but not the other, named | `eligible_rosters` (Task 11) |
-| top-of-board top-30 and per-pool top-15 | `top_of_board` (Task 11) |
-| breakout slice | `breakout_mask` (Task 11) |
-| low-support count and the excluded-variant line | `low_support_count` (Task 11) |
-| bootstrap interval and win share on every headline | `bootstrap_difference` (Task 12) |
+| censored list (name, anchor volume, outcome volume), zero vs non-zero, at 0.5 and 0.2 | `outcomes_for` (Task 9), `censored` (Task 8) |
+| keeper-triple regret, both horizons, both views | `triple_regret` (Task 11) |
+| agreement rate and the disagreeing-subset difference | `agreement_rate` (Task 11) |
+| per-view roster counts, and any roster in one view but not the other, named | `eligible_rosters` (Task 12) |
+| top-of-board top-30 and per-pool top-15 | `top_of_board` (Task 12) |
+| breakout slice | `breakout_mask` (Task 12) |
+| low-support count and the excluded-variant line | `low_support_count` (Task 12) |
+| bootstrap interval and win share on every headline | `bootstrap_difference` (Task 13) |
 
-Names in the censored list come from the people cache via the Task 9 resolution, keyed on
+Names in the censored list come from the people cache via the Task 10 resolution, keyed on
 `mlbam_id` — never printed from a name that was not resolved to an id.
 
 - [ ] **Step 2: Run for one base year to smoke it out**
@@ -1418,7 +1516,7 @@ git commit -m "backtest: historical shape-vs-keeper-value mode (#325)"
 
 ---
 
-### Task 14: Write the verdict
+### Task 15: Write the verdict
 
 **Files:**
 - No code. Output only.
@@ -1463,18 +1561,19 @@ Note the commit sha of Task 11 — PR 3 cites it for numbers produced by this ru
 | PT panel censored to `<= Y`; fallback thresholds | 5 |
 | Query player held out; shape horizons per base year | 6 |
 | Year-Y position eligibility for VAR | 7 |
-| Realized multi-year target; 2026 inadmissible | 6 (`horizons_for`), 8 |
+| Realized multi-year target; 2026 inadmissible | 6 (`horizons_for`), 8, 9 |
 | Two views, censor rules, missing row = zero volume | 8 |
-| Name join with unresolved/ambiguous reported | 9 |
-| Keeper-triple regret, both horizons, agreement rate | 10 |
-| Top-of-board, per-pool tables, breakout | 11 |
-| Intersection rule, per-view 5-candidate floor, low-support | 11 |
-| Bootstrap, per-slice resampling unit | 12 |
-| Report assembly | 13 |
-| Verdict against the pre-registered criterion | 14 |
+| Outcome extraction, split seasons collapsed | 9 |
+| Name join with unresolved/ambiguous reported | 10 |
+| Keeper-triple regret, both horizons, agreement rate | 11 |
+| Top-of-board, per-pool tables, breakout | 12 |
+| Intersection rule, per-view 5-candidate floor, low-support | 12 |
+| Bootstrap, per-slice resampling unit | 13 |
+| Report assembly | 14 |
+| Verdict against the pre-registered criterion | 15 |
 
-**Two gaps found during this review and closed:** the shape side of the comparison had no task at all (now Task 6 — and its normalize-then-truncate order is the spec's round-2 Critical, which nothing had been enforcing), and `scripts/keeper_value.py:255` calls `forecast_pool` with the old signature, which Task 3 now repairs rather than leaving broken until PR 3.
+**Three gaps found during review and closed:** nothing built `Outcome` objects from the panel, and the extraction had to collapse split seasons or a traded player's 310+290 PA season would be censored as an injury -- a false positive landing on every player who changed teams (now Task 9); the shape side of the comparison had no task at all (now Task 6 — and its normalize-then-truncate order is the spec's round-2 Critical, which nothing had been enforcing), and `scripts/keeper_value.py:255` calls `forecast_pool` with the old signature, which Task 3 now repairs rather than leaving broken until PR 3.
 
 **Left open deliberately:** Task 2's cross-loader test needs real ZiPS files on disk. If `data/projections/2024/` is absent in a checkout it must skip with a stated reason rather than being deleted.
 
-**Type consistency.** `era_factors` returns a season-indexed frame in Tasks 1, 2 and 6. `normalize_frame(frame, season, kind, factors)` keeps that argument order at every call site. `volume_forecast` returns `tuple[pd.Series | None, FallbackReport]` from Task 5 onward — Task 3 changes its signature and Task 5 changes its return, both on the same function, so Task 5 updates Task 3's call sites and its test asserts the tuple shape. `horizons_for` (Task 6) is the single source of which horizons run, consumed by Tasks 8, 10, 11 and 13; no task hardcodes `(1, 2)`.
+**Type consistency.** `era_factors` returns a season-indexed frame in Tasks 1, 2 and 6. `normalize_frame(frame, season, kind, factors)` keeps that argument order at every call site. `volume_forecast` returns `tuple[pd.Series | None, FallbackReport]` from Task 5 onward — Task 3 changes its signature and Task 5 changes its return, both on the same function, so Task 5 updates Task 3's call sites and its test asserts the tuple shape. `horizons_for` (Task 6) is the single source of which horizons run, consumed by Tasks 9, 11, 12 and 14; no task hardcodes `(1, 2)`.
