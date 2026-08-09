@@ -565,33 +565,83 @@ git commit -m "keeper_forecast: parameterize the persistence transition list (#3
 - Test: `tests/test_scripts/test_backtest_historical.py`
 
 **Interfaces:**
-- Produces: `volume_forecast` returns `tuple[pd.Series | None, FallbackReport]` where `FallbackReport` is a `dataclass(frozen=True)` with `whole_pool: bool`, `per_player: int`, `total: int`.
+- Produces: `volume_forecast(...) -> tuple[pd.Series | None, bool]` — the projection and whether the **whole pool** fell back (no panel on disk). `FallbackReport` is a `dataclass(frozen=True)` with `whole_pool: bool`, `per_player: int`, `total: int`, built by `forecast_pool`.
+
+**Why the report is built one level up.** The per-player fallback count is
+`int(curve_volume.reindex(idx).isna().sum())` and `idx` — the display population — exists
+only in `forecast_pool`. `volume_forecast` cannot see it, and pushing `idx` down into it
+would couple the training population to the display floor, which `keeper_forecast`'s own
+`TRAIN_FLOOR` comment records as measured-harmful. So `volume_forecast` reports the one
+fact it owns (whole-pool fallback) and `forecast_pool` assembles the rest.
 
 **Rules from the spec:** per-player fallbacks are tolerated to 25% of the pool; past that the base year is excluded from the headline. A whole-pool fallback fails the base year outright rather than producing a number.
 
 - [ ] **Step 1: Write the failing tests**
 
 ```python
+def _pt_panel(seasons: list[int]) -> pd.DataFrame:
+    """Minimal playing-time panel: one row per (player, season) for two players."""
+    rows = []
+    for pid in (1, 2):
+        for season in seasons:
+            rows.append(
+                {
+                    "mlbam_id": pid,
+                    "season": season,
+                    "pa": 600.0,
+                    "ip": 0.0,
+                    "games": 150,
+                    "starts": 0,
+                    "age": 25 + (season - min(seasons)),
+                    "partial_season": False,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def test_volume_forecast_censors_the_panel_to_the_base_year(monkeypatch) -> None:
     """Training on seasons after Y would let the curve learn the future it is being
     asked to predict."""
     import keeper_forecast
 
     captured: dict[str, pd.DataFrame] = {}
-    monkeypatch.setattr(
-        keeper_forecast, "lag_panel", lambda panel, kind, **kw: captured.setdefault("panel", panel)
-    )
-    # ... panel fixture spanning 2018-2026, base year 2022 ...
+
+    def fake_lag_panel(panel, kind, **kwargs):
+        captured["panel"] = panel
+        return pd.DataFrame(
+            {feature: [1.0, 2.0] for feature in keeper_forecast.FEATURES[kind]}
+            | {"target": [600.0, 610.0]}
+        )
+
+    monkeypatch.setattr(keeper_forecast, "_panel_path", lambda kind: Path("fake.csv"))
+    monkeypatch.setattr(keeper_forecast.pd, "read_csv", lambda *_a, **_k: _pt_panel(list(range(2018, 2027))))
+    monkeypatch.setattr(keeper_forecast, "lag_panel", fake_lag_panel)
+
+    observed = pd.Series([600.0, 600.0], index=pd.Index([1, 2], name="mlbam_id"))
+    keeper_forecast.volume_forecast("hitter", 2022, 2023, observed)
+
+    assert "panel" in captured, "volume_forecast never reached lag_panel"
     assert int(captured["panel"]["season"].max()) <= 2022
 
 
 def test_fallback_report_counts_per_player_misses() -> None:
+    import keeper_forecast
+
     report = keeper_forecast.FallbackReport(whole_pool=False, per_player=30, total=100)
     assert report.share == pytest.approx(0.30)
     assert report.exceeds_headline_threshold is True
 
 
+def test_fallback_report_tolerates_a_share_at_the_threshold() -> None:
+    import keeper_forecast
+
+    report = keeper_forecast.FallbackReport(whole_pool=False, per_player=25, total=100)
+    assert report.exceeds_headline_threshold is False
+
+
 def test_fallback_report_flags_a_whole_pool_miss_regardless_of_share() -> None:
+    import keeper_forecast
+
     report = keeper_forecast.FallbackReport(whole_pool=True, per_player=0, total=100)
     assert report.share == 0.0
     assert report.exceeds_headline_threshold is True
@@ -631,7 +681,21 @@ class FallbackReport:
         return self.whole_pool or self.share > HEADLINE_FALLBACK_SHARE
 ```
 
-In `volume_forecast`, filter `panel = panel[panel["season"] <= base_year]` immediately after `pd.read_csv`, and return the report alongside the projection.
+In `volume_forecast`, filter `panel = panel[panel["season"] <= base_year]` immediately after `pd.read_csv`, and return `(projected, False)`; the early `return None` path becomes `return None, True`.
+
+In `forecast_pool`, where `fell_back` is already computed, build and return the report:
+
+```python
+    curve_volume, whole_pool = volume_forecast(...)
+    ...
+    fallback = FallbackReport(
+        whole_pool=whole_pool,
+        per_player=int(curve_volume.reindex(idx).isna().sum()) if curve_volume is not None else 0,
+        total=len(idx),
+    )
+```
+
+`forecast_pool` returns `(result, fallback)`; update `keeper_value.py`'s call site (touched in Task 3) to unpack it.
 
 - [ ] **Step 4: Run the tests**
 
@@ -827,6 +891,12 @@ def test_var_uses_year_Y_eligibility_not_the_outcome_years(tmp_path) -> None:
     catcher floor -- that is the information the keeper decision had."""
     from backtest_trajectory import var_for
 
+    from fantasy_baseball.trajectory.board import season_slots
+
+    # season_slots is @lru_cache(maxsize=4) on (cache_dir, season); without this a
+    # previous test's tmp_path can answer for this one.
+    season_slots.cache_clear()
+
     (tmp_path / "mlb_fielding_2023.csv").write_text(
         "player.id,position.abbreviation,stat.games\n12345,C,100\n", encoding="utf-8"
     )
@@ -849,7 +919,11 @@ Expected: FAIL.
 
 - [ ] **Step 3: Implement**
 
-`keeper_value_sgp` calls `panel.score(frame.reset_index(), kind, sgp_overrides)` and returns the `sgp` column indexed by `mlbam_id`. `var_for` reuses `trajectory.board`'s existing eligibility reader (the `cache_dir / f"mlb_fielding_{season}.csv"` path with its degrade-to-UTIL fallback) and `trajectory.value.resolve_slots` / `best_floor` — do not write a second eligibility path.
+`keeper_value_sgp` calls `panel.score(frame.reset_index(), kind, sgp_overrides)` and returns the `sgp` column indexed by `mlbam_id`.
+
+`var_for` reuses **`trajectory.board.season_slots(cache_dir: Path, season: int) -> dict[int, frozenset[str]]`** — the existing reader, with its `mlb_fielding_{season}.csv` path and its degrade-to-UTIL fallback on a missing or corrupt cache — then `trajectory.value.resolve_slots` and `best_floor`, exactly as `board.py` does. Do not write a second eligibility path; a divergent one would price the backtest's catchers differently from the live board's.
+
+`season_slots` is `@lru_cache(maxsize=4)` on its arguments, so tests using `tmp_path` must call `season_slots.cache_clear()` first.
 
 - [ ] **Step 4: Run the tests**
 
