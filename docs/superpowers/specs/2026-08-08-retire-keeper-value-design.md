@@ -435,17 +435,25 @@ in the tree; it is rewritten there to describe what the package actually is, an 
 and normalization layer.
 
 Every numeric claim whose harness is being deleted -- the tables in
-`trajectory/__init__.py` and `shape.py` -- gets a `measured 2026-08-08 at <sha>`
-citation, so the code that produced the number is findable in git. `<sha>` is not an
-unfilled placeholder: it is resolved at PR-3 time to the last commit that still
-contained `scripts/backtest_trajectory.py`, which is only knowable once PR 3 is written.
+`trajectory/__init__.py` and `shape.py` -- gets a `measured <date> at <sha>` citation, so
+the code that produced the number is findable in git. Neither is an unfilled placeholder,
+and **the right commit is not the same for every number**:
+
+- The existing shape-vs-`current` tables (`5.08 -> 4.78`, n=239) were produced by a
+  harness containing `comp_trajectory`. They cite **PR 2's parent** -- the last tree in
+  which `trajectory/comps.py` still existed. Citing a PR-3-era commit would send a reader
+  to code from which the comp matcher is already gone.
+- Numbers produced by PR 1's own run cite **PR 1's measurement commit**.
 
 ## Acceptance
 
 **PR 1 -- output**
 
-- Historical head-to-head runs for base years 2022-2024 (+1) and 2022-2023 (+2), both
-  pools, both views.
+- Every base year in scope -- 2022-2024 (+1), 2022-2023 (+2), both pools, both views --
+  is either **scored or reported as unscoreable with the reason**. A base year that fails
+  the fallback rule is a result, not a failed criterion; forcing it to produce a number
+  would be the fabrication this whole design exists to avoid. At least one base year at
+  each horizon must produce a headline number, or PR 1 has not answered its question.
 - Keeper-triple regret at both horizons (10 multi-year decisions, 20 one-year), plus
   top-of-board and breakout, each with the bootstrap interval on the difference and the
   resampling unit named.
@@ -457,9 +465,10 @@ contained `scripts/backtest_trajectory.py`, which is only knowable once PR 3 is 
 **PR 1 -- verification.** PR 1 introduces the most error-prone code in this design and
 is not exempt from the repo's guardrail rule. Required tests:
 
-- **Characterization:** `era_normalize`'s output is byte-identical before and after the
-  `era_factors()` extraction, on a fixture panel. A behaviour-preserving extraction with
-  no characterization test is the case `CLAUDE.md` names by hand.
+- **Characterization:** `era_normalize`'s output is unchanged before and after the
+  `era_factors()` extraction, asserted with `pd.testing.assert_frame_equal` on a fixture
+  panel. A behaviour-preserving extraction with no characterization test is the case
+  `CLAUDE.md` names by hand.
 - **Censor boundaries:** a query at exactly 50% of anchor volume, at zero volume, and
   with no outcome row at all -- each asserted to land on the intended side of the cut,
   and asserted to remove the identical row from both estimators.
@@ -500,6 +509,8 @@ either view. That is stated up front so a null cannot be read after the fact as 
 - **PR 3 only:** the live-pool coverage diff between `keeper_value` and
   `trajectory_board.py` is run before the deletion commit and its result -- empty or not
   -- is in the PR body, alongside the old and new commands.
+- **PR 3 closes #325**, with PR 1's verdict comment already posted on it. #306 (closers)
+  and #310 (shape follow-ups) stay open and are unaffected.
 
 ## Explicitly not in scope
 
