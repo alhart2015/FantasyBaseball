@@ -378,6 +378,14 @@ could score, and for the keeper-triple slice, how many of each 23-man roster sur
 into the candidate pool. A roster left with fewer than 5 candidates is dropped from that
 slice and named, because picking 3 from 4 is not the decision being measured.
 
+**The 5-candidate floor is applied per view, and the per-view decision counts are
+reported.** Censored players leave the candidate pool in the injury-excluded view, so a
+roster can clear the floor in the ALL view and fail it in the other. Left unreported, a
+difference between the two views would confound "excluding injuries changed the answer"
+with "the two views scored different teams" -- which is the one thing running two views
+is supposed to distinguish. Any roster present in one view and absent from the other is
+named.
+
 **Low-support shape rows are kept.** `MIN_LOCAL_SUPPORT` marks a prediction evaluated
 outside its own support -- the rows `trajectory_board.py` flags `(!)`. Dropping them
 would flatter shape by removing exactly the predictions it is least sure of, so they
