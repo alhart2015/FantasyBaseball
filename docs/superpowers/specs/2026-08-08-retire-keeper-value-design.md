@@ -1,7 +1,8 @@
 # Retire the keeper-value engine and the non-shape trajectory modes
 
-Design for #325. Shape becomes the single trajectory engine; the keeper board is priced
-off it instead of off the `keeper_forecast` -> `keeper_value` chain.
+Design for #325. Shape becomes the single trajectory engine. The keeper board is already
+priced off it -- what this retires is the parallel `keeper_forecast` -> `keeper_value`
+chain that no longer feeds anything, and the comp matchers shape replaced.
 
 Source issue: #325. Read `docs/keeper-value-teardown-2026-08-01.md` first -- the
 constraints it names are the reason this is sequenced the way it is.
@@ -56,6 +57,20 @@ like a build. It is not. The shape-priced board already ships:
   route, no library import, no cache key.
 
 So 2a is a deletion with a verification attached, not a migration.
+
+**What the user types changes, and that is the only visible behaviour change.**
+`scripts/keeper_value.py --team "Hart of the Order"` becomes
+`scripts/trajectory_board.py --team "Hart of the Order"`, or the `/trajectory` board in
+the season dashboard. PR 3's body shows the two commands side by side rather than
+leaving a reader to discover the replacement.
+
+**No code consumer is not the same as no coverage loss.** `keeper_value` admits anyone
+over 300 PA / 50 IP on the live blend; `trajectory_board.py` needs a current-season panel
+line and applies `--min-sgp`. The backtest runs on the historical intersection and so
+cannot see a live coverage gap. Before deleting, both boards are run once on the live
+2026 pool and the set difference is reported: every player `keeper_value` scores that the
+trajectory board does not is named. A non-empty difference does not block deletion -- it
+is stated in the PR body so the loss is a known one.
 
 ## Decisions taken during design
 
@@ -463,6 +478,9 @@ either view. That is stated up front so a null cannot be read after the fact as 
 - No reference anywhere -- code, tests, docs, config -- to a deleted symbol. Grep is not
   an AST: check direct calls, annotations, string literals in dispatch dicts and config,
   `getattr`/`importlib`, `__all__` re-exports, tests and fixtures, and docs.
+- **PR 3 only:** the live-pool coverage diff between `keeper_value` and
+  `trajectory_board.py` is run before the deletion commit and its result -- empty or not
+  -- is in the PR body, alongside the old and new commands.
 
 ## Explicitly not in scope
 
