@@ -507,3 +507,88 @@ def test_volume_survives_a_panel_with_nothing_split() -> None:
     out = outcomes_for(panel, "hitter", 2023, (1,), anchor_volume={1: 600.0})
 
     assert out[1].volume_by_year[2024] == pytest.approx(600.0)
+
+
+def test_resolve_draft_reports_an_unresolved_name_instead_of_dropping_it() -> None:
+    """A silent drop thins roster pools NON-randomly -- toward the fringe players a
+    keeper board is right to ignore -- which flatters both estimators and quietly
+    shrinks the decision being measured."""
+    from backtest_trajectory import resolve_draft
+
+    people = pd.DataFrame({"id": [1], "fullName": ["Yordan Alvarez"]})
+    result = resolve_draft(
+        [
+            {"team": "Hart of the Order", "player": "Yordan Alvarez"},
+            {"team": "Hart of the Order", "player": "Nobody At All"},
+        ],
+        people,
+        {1: "hitter"},
+    )
+
+    assert result.by_team["Hart of the Order"] == [1]
+    assert ("Hart of the Order", "Nobody At All") in result.unresolved
+
+
+def test_resolve_draft_reports_an_ambiguous_name_rather_than_picking_one() -> None:
+    """Two hitters called Max Muncy is a REAL case (roster_join.py). Picking one
+    silently means a roster is scored against the wrong player's career."""
+    from backtest_trajectory import resolve_draft
+
+    people = pd.DataFrame({"id": [1, 2], "fullName": ["Max Muncy", "Max Muncy"]})
+    result = resolve_draft(
+        [{"team": "Spacemen", "player": "Max Muncy"}], people, {1: "hitter", 2: "hitter"}
+    )
+
+    assert result.by_team.get("Spacemen", []) == []
+    assert ("Spacemen", "Max Muncy") in result.ambiguous
+
+
+def test_resolve_draft_normalizes_accents() -> None:
+    """The people cache carries the accented spelling and the draft file does not.
+    Written as an escape so the source stays ASCII while still exercising the join --
+    two identical ASCII strings would pass against naive exact matching."""
+    from backtest_trajectory import resolve_draft
+
+    people = pd.DataFrame({"id": [7], "fullName": ["Jesús Luzardo"]})
+    result = resolve_draft(
+        [{"team": "Spacemen", "player": "Jesus Luzardo"}], people, {7: "pitcher"}
+    )
+
+    assert result.by_team["Spacemen"] == [7]
+
+
+def test_a_two_way_player_enters_a_roster_once() -> None:
+    """The league scores a two-way player once per POOL, but a keeper decision is for
+    one roster SPOT. Entering him twice would let one player consume two of a team's
+    three keeper slots and double-count him in the ex-post optimum."""
+    from backtest_trajectory import resolve_draft
+
+    people = pd.DataFrame({"id": [42], "fullName": ["Shohei Ohtani"]})
+    result = resolve_draft(
+        [{"team": "Spacemen", "player": "Shohei Ohtani"}],
+        people,
+        {42: "both"},
+        var_by_pool={("hitter", 42): 12.0, ("pitcher", 42): 8.0},
+    )
+
+    assert result.by_team["Spacemen"] == [42]
+    assert result.pool_of[42] == "hitter"  # the higher year-Y VAR
+
+
+def test_resolve_draft_ignores_a_player_the_panel_cannot_score() -> None:
+    """Present in the people cache but absent from both panels is not 'unresolved' --
+    the name resolved fine, the player simply has no scoreable seasons."""
+    from backtest_trajectory import resolve_draft
+
+    people = pd.DataFrame({"id": [1, 9], "fullName": ["Yordan Alvarez", "Bench Guy"]})
+    result = resolve_draft(
+        [
+            {"team": "Spacemen", "player": "Yordan Alvarez"},
+            {"team": "Spacemen", "player": "Bench Guy"},
+        ],
+        people,
+        {1: "hitter"},
+    )
+
+    assert result.by_team["Spacemen"] == [1]
+    assert ("Spacemen", "Bench Guy") in result.unscoreable

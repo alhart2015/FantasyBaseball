@@ -51,6 +51,7 @@ from fantasy_baseball.trajectory.panel import score as panel_score
 from fantasy_baseball.trajectory.shape import build_history, shape_trajectory
 from fantasy_baseball.trajectory.value import STARTER_SHARE, best_floor, resolve_slots
 from fantasy_baseball.utils.constants import CLOSER_SV_THRESHOLD
+from fantasy_baseball.utils.name_utils import normalize_name
 
 #: Columns the role bucket needs, and the rule for a season split across two rows.
 #: `collapse_split_seasons` keeps only `sgp` and `age`, so a traded pitcher's counting
@@ -238,6 +239,90 @@ def outcomes_for(
             anchor_volume=float(anchor_volume.get(pid, 0.0)),
         )
     return out
+
+
+@dataclass(frozen=True)
+class RosterResolution:
+    """Drafted names resolved to mlbam ids, with every miss accounted for.
+
+    Four buckets, not two, because the misses mean different things and lumping them
+    would hide the one that matters:
+
+      `by_team`      team -> the ids that resolved AND are scoreable
+      `pool_of`      id -> "hitter"/"pitcher", the pool his roster spot is judged in
+      `unresolved`   (team, name) the people cache has no id for at all
+      `ambiguous`    (team, name) matching more than one scoreable id
+      `unscoreable`  (team, name) that resolved fine but has no panel seasons
+    """
+
+    by_team: dict[str, list[int]]
+    pool_of: dict[int, str]
+    unresolved: list[tuple[str, str]]
+    ambiguous: list[tuple[str, str]]
+    unscoreable: list[tuple[str, str]]
+
+
+def resolve_draft(
+    draft: Sequence[Mapping[str, str]],
+    people: pd.DataFrame,
+    pool_by_id: Mapping[int, str],
+    var_by_pool: Mapping[tuple[str, int], float] | None = None,
+) -> RosterResolution:
+    """Resolve `data/historical_drafts_resolved.json` records to mlbam ids.
+
+    THIS IS THE RISK IN THE WHOLE HARNESS. The draft file carries bare names
+    (`"player": "Yordan Alvarez"`) and everything else here is keyed on `mlbam_id`.
+    `CLAUDE.md` names bare-name joins as a defect class, and
+    `trajectory/roster_join.py` records that `(normalized_name, pool)` is not unique --
+    the live board has two hitters called Max Muncy.
+
+    So nothing is dropped silently. An unresolved or ambiguous name is REPORTED, because
+    a silent drop thins roster pools toward the fringe -- flattering both estimators and
+    shrinking the decision being measured -- and would look exactly like a clean run.
+
+    `pool_by_id` comes from PANEL MEMBERSHIP (the draft records carry no position), and
+    an id in both panels is `"both"`. Such a player enters his roster ONCE, under
+    whichever pool gives the higher year-Y VAR: the league scores him twice but a keeper
+    decision is for one roster spot, and entering him twice would let one player consume
+    two of a team's three slots.
+    """
+    by_name: dict[str, list[int]] = {}
+    for pid, name in zip(people["id"], people["fullName"], strict=False):
+        by_name.setdefault(normalize_name(str(name)), []).append(int(pid))
+
+    by_team: dict[str, list[int]] = {}
+    pool_of: dict[int, str] = {}
+    unresolved: list[tuple[str, str]] = []
+    ambiguous: list[tuple[str, str]] = []
+    unscoreable: list[tuple[str, str]] = []
+
+    for record in draft:
+        team, name = str(record["team"]), str(record["player"])
+        by_team.setdefault(team, [])
+        candidates = by_name.get(normalize_name(name), [])
+        if not candidates:
+            unresolved.append((team, name))
+            continue
+        scoreable = [pid for pid in candidates if pid in pool_by_id]
+        if not scoreable:
+            # The NAME resolved; the player simply has no panel seasons. A different
+            # failure from "no such name", and conflating them would overstate the join.
+            unscoreable.append((team, name))
+            continue
+        if len(scoreable) > 1:
+            ambiguous.append((team, name))
+            continue
+        pid = scoreable[0]
+        pool = pool_by_id[pid]
+        if pool == "both":
+            lookups = var_by_pool or {}
+            pool = max(
+                ("hitter", "pitcher"),
+                key=lambda p: lookups.get((p, pid), float("-inf")),
+            )
+        pool_of[pid] = pool
+        by_team[team].append(pid)
+    return RosterResolution(by_team, pool_of, unresolved, ambiguous, unscoreable)
 
 
 def keeper_value_sgp(
