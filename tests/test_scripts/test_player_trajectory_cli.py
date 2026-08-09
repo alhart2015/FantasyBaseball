@@ -11,6 +11,7 @@ import importlib.util
 import pathlib
 
 import pandas as pd
+import pytest
 
 from fantasy_baseball.utils.ansi import DIM_GRAY, RESET, visible_width
 
@@ -139,3 +140,68 @@ def test_the_legend_names_whatever_the_table_actually_shows() -> None:
     assert "*" in module.comps_legend(scale="var", color=False)
     # On the raw scale nothing is shifted, so the original 0.0 is still on the page.
     assert "0 = did not play" in module.comps_legend(scale="sgp", color=True)
+
+
+# --- a player the anchor dropped for want of a rest-of-season row (#348) --------------
+
+
+def _people(monkeypatch, module) -> None:
+    """The name -> id cache `_resolve_player` resolves through, without the real files."""
+    people = pd.DataFrame({"id": [1], "fullName": ["Solo Player"], "norm": ["solo player"]})
+    monkeypatch.setattr(module, "board_people", lambda _cache: people)
+
+
+def _panel_after_the_anchor_dropped_him() -> pd.DataFrame:
+    """What `anchor_full_season` leaves behind for a player with no ROS row.
+
+    His 2026 row is GONE -- that is the exclusion working as decided. Only the settled
+    2025 season survives, and it looks exactly like a normal most-recent season.
+    """
+    return pd.DataFrame(
+        [
+            {"mlbam_id": 1, "season": 2024, "age": 25, "sgp": 9.0, "partial_season": False},
+            {"mlbam_id": 1, "season": 2025, "age": 26, "sgp": 11.0, "partial_season": False},
+        ]
+    )
+
+
+def test_a_player_dropped_for_having_no_ros_row_is_refused_not_backdated(monkeypatch) -> None:
+    """`idxmax` lands on 2025 once the anchor has removed the 2026 row, and 2025 is
+    settled -- so the in-progress notice never prints and the CLI renders a full
+    trajectory headed with the wrong age and the wrong anchor, indistinguishable from a
+    correct one. The board scripts count and print this exclusion; this one must not
+    silently backdate him instead."""
+    module = _script()
+    _people(monkeypatch, module)
+    panels = {"hitter": _panel_after_the_anchor_dropped_him()}
+
+    with pytest.raises(SystemExit) as exc:
+        module._resolve_player("Solo Player", panels, no_ros={"hitter": [1]})
+    message = str(exc.value)
+    assert "rest-of-season" in message, "say WHY he is not priced"
+    assert "2025" not in message, "and do not offer the prior season as a substitute"
+
+
+def test_a_player_with_an_ros_row_is_unaffected(monkeypatch) -> None:
+    """The guard must key on the dropped set, not on 'his newest season is settled' --
+    which is every player's normal state in the offseason."""
+    module = _script()
+    _people(monkeypatch, module)
+    panels = {"hitter": _panel_after_the_anchor_dropped_him()}
+
+    resolved = module._resolve_player("Solo Player", panels, no_ros={"hitter": []})
+    assert resolved == [("hitter", 1, 26, 11.0)]
+
+
+def test_a_two_way_player_dropped_from_one_pool_still_scores_the_other(monkeypatch) -> None:
+    """He is two assets in this league. Losing his bat's projection says nothing about
+    his arm, and refusing both would drop a live keeper question over the other half."""
+    module = _script()
+    _people(monkeypatch, module)
+    panels = {
+        "hitter": _panel_after_the_anchor_dropped_him(),
+        "pitcher": _panel_after_the_anchor_dropped_him(),
+    }
+
+    resolved = module._resolve_player("Solo Player", panels, no_ros={"hitter": [1], "pitcher": []})
+    assert [pool for pool, *_ in resolved] == ["pitcher"]

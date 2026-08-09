@@ -70,6 +70,7 @@ def _resolve_player(
     name: str,
     panels: dict[str, pd.DataFrame],
     mlbam_id: int | None = None,
+    no_ros: dict[str, list[int]] | None = None,
 ) -> list[tuple[str, int, int, float]]:
     """One (pool, mlbam_id, age, sgp) per pool the player was used in.
 
@@ -107,12 +108,30 @@ def _resolve_player(
         )
     ids = {mlbam_id} if mlbam_id is not None else named
     found = []
+    # Pools the anchor DROPPED him from, for want of a rest-of-season row. His current
+    # season is gone from those frames, so without this the `idxmax` below lands on his
+    # PRIOR year -- which is settled, so the in-progress notice never prints either, and
+    # the page renders a complete trajectory headed with the wrong age and the wrong
+    # anchor. Indistinguishable from a correct one. Both board scripts count and print
+    # this exclusion; a silent backdate is the one reading it must not have.
+    dropped = {pool for pool, ids_ in (no_ros or {}).items() if ids & {int(i) for i in ids_}}
     for pool, panel in panels.items():
+        if pool in dropped:
+            continue
         rows = panel[panel["mlbam_id"].isin(ids)]
         if not rows.empty:
             found.append((pool, rows))
     if not found:
         who = f"mlbam id {mlbam_id}" if mlbam_id is not None else name
+        if dropped:
+            # A DIFFERENT statement from "no observed season". He has one; the board
+            # cannot price it, and the reason is nameable.
+            raise SystemExit(
+                f"{who} has a current-season line but no row in the rest-of-season "
+                f"snapshot ({', '.join(sorted(dropped))}), so there is no full-season "
+                f"anchor to fit. He is off the keeper board for the same reason -- see "
+                f"its 'no rest-of-season projection' exclusion count."
+            )
         raise SystemExit(f"{who} is in the people cache but has no observed season in the panel")
 
     present = sorted({int(i) for _, rows in found for i in rows["mlbam_id"]})
@@ -633,7 +652,7 @@ def main() -> int:
         # The query needs the in-progress season; the comp pool must not have it.
         wanted = [args.pool] if args.pool else ["hitter", "pitcher"]
         live = {k: load(k) for k in wanted}
-        resolved = _resolve_player(args.player, live, args.mlbam_id)
+        resolved = _resolve_player(args.player, live, args.mlbam_id, no_ros=loaded.no_ros)
         queries = [
             # `is not None`, never `or`: --sgp 0 and --age 0 are falsy but meaningful.
             (
