@@ -303,9 +303,11 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
                 flush=True,
             )
         started = time.perf_counter()
-        # The comp pool must NOT contain the in-progress season: a two-thirds year would
-        # be averaged in as though it were a full one.
-        complete = live[~live["partial_season"]].reset_index(drop=True)
+        # The comp pool must NOT contain the anchored season: part of it is a forecast,
+        # and averaging that into the population a player is matched against would fit
+        # the model on its own projection. The derivation lives on `AnchoredPanels` --
+        # all three entry points need it and each used to spell it out separately.
+        complete = loaded.comps(kind)
         produced = sweep_pool(rows, complete, kind, horizons)
         # Guard on what the sweep PRODUCED, not on what it was handed. sweep_pool
         # independently drops every player whose fitted path has no observable point, so

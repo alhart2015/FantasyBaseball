@@ -447,3 +447,29 @@ def test_a_nan_outside_the_needed_columns_is_ignored() -> None:
     out, dropped = anchor_full_season(_panel(YTD_HITTER), ros, kind="hitter", season=2026)
     assert dropped == []
     assert out.iloc[0]["pa"] == pytest.approx(500.0)
+
+
+def test_every_scored_rate_is_also_combined() -> None:
+    """The anchor's rate spec and `era.RATE_DENOMINATORS` describe the same categories
+    from two directions, and nothing joins them.
+
+    A category added to the scoring side and not here would be era-normalized and
+    scored while its rate silently kept the season-to-date value -- against a VOLUME
+    that grew by the whole remainder. That is not a missing feature, it is a wrong
+    number: the rate would be diluted across a full season's worth of PA it was never
+    earned over, and the row would render like any other.
+
+    Not merged into one table on purpose. `era` needs rate -> weighting denominator and
+    the anchor needs rate -> (ROS counting column, denominator); the shared part is the
+    KEY SET, so that is what is pinned.
+    """
+    from fantasy_baseball.trajectory.era import RATE_DENOMINATORS
+    from fantasy_baseball.trajectory.ros_anchor import _SPEC
+
+    for kind, (_volume, rates) in _SPEC.items():
+        missing = set(RATE_DENOMINATORS[kind]) - set(rates)
+        assert not missing, (
+            f"{kind} rate(s) {sorted(missing)} are scored and era-normalized but never "
+            f"combined with the rest-of-season line; they would keep their "
+            f"season-to-date value over a full-season volume"
+        )

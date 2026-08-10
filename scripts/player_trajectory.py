@@ -639,14 +639,10 @@ def main() -> int:
         return loaded.panels[kind]
 
     def complete(kind: str) -> pd.DataFrame:
-        """The comp pool: the same frame minus its in-progress season.
-
-        DERIVED rather than loaded again, like both board scripts do it. A second load
-        re-reads a 4.7MB CSV and re-scores it for a frame that is this one minus its
-        partial rows, and it would have to re-anchor to stay consistent with the query.
-        """
-        panel = load(kind)
-        return panel[~panel["partial_season"]].reset_index(drop=True)
+        """The comp pool -- see `AnchoredPanels.comps` for the rule and its reasoning."""
+        load(kind)
+        assert loaded is not None
+        return loaded.comps(kind)
 
     if args.player:
         # The query needs the in-progress season; the comp pool must not have it.

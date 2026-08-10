@@ -317,12 +317,9 @@ def main() -> int:
                 f"the {loaded.snapshot_date} rest-of-season snapshot",
                 flush=True,
             )
-        # The comp pool must NOT contain the in-progress season: a two-thirds year would
-        # be averaged in as though it were a full one. DERIVED from `live` rather than
-        # loaded again -- a second `load()` re-reads a 4.7MB CSV and runs two more
-        # full-panel `apply` passes for a frame that is this one minus its partial rows.
-        # Verified identical on both pools: same ids, same seasons, max |sgp diff| 0.0.
-        complete = live[~live["partial_season"]].reset_index(drop=True)
+        # The comp pool must NOT contain the anchored season -- see `AnchoredPanels.comps`,
+        # which is where that rule and the reason it is derived rather than reloaded live.
+        complete = loaded.comps(kind)
         # ONE fit, serving both scales. This used to ask for `scales=("var",)` to avoid a
         # second fit per player the CLI does not print; since #331 VAR is the raw fit
         # minus the slot's floor, so there is no second fit left to decline.

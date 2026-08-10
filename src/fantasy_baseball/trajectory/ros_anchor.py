@@ -152,6 +152,24 @@ class AnchoredPanels:
     panels: dict[str, pd.DataFrame]
     no_ros: dict[str, list[int]]
 
+    def comps(self, kind: str) -> pd.DataFrame:
+        """`kind`'s FITTING pool: the same panel minus its in-progress season.
+
+        The comp pool must not contain the anchored season -- part of it is a forecast,
+        and averaging that into the population a player is matched against would fit the
+        model on its own projection.
+
+        DERIVED, never loaded again. A second `load_scored_panel` re-reads a 4.7MB CSV
+        and runs another full scoring pass to produce this frame minus its partial rows,
+        and it would have to re-anchor to stay consistent with the query. Verified
+        identical on both pools: same ids, same seasons, max |sgp diff| 0.0.
+
+        Lives here because all three entry points need it and all three had spelled it
+        out with their own justifying comment -- three chances for one rule to drift.
+        """
+        panel = self.panels[kind]
+        return panel[~panel["partial_season"]].reset_index(drop=True)
+
 
 def load_anchored_panels(
     *,
