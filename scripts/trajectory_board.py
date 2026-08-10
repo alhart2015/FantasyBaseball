@@ -282,6 +282,7 @@ def main() -> int:
         weights={s: config.projection_weights[s] for s in config.projection_systems},
         panel_dir=args.panel_dir,
         sgp_overrides=overrides,
+        progress_cb=lambda m: print(f"  {m}", flush=True),
     )
     cache = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
     names = player_names(cache)

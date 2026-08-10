@@ -635,6 +635,7 @@ def main() -> int:
                 panel_dir=args.panel_dir,
                 sgp_overrides=overrides,
                 era_adjust=not args.no_era_adjust,
+                progress_cb=lambda m: print(f"  {m}"),
             )
         return loaded.panels[kind]
 

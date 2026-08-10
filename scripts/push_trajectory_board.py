@@ -245,6 +245,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         weights={s: config.projection_weights[s] for s in config.projection_systems},
         panel_dir=panel_dir,
         sgp_overrides=overrides,
+        progress_cb=lambda m: print(f"  {m}", flush=True),
     )
     season = loaded.season
     # Dating the in-progress season is a league fact and must come off the HITTER panel

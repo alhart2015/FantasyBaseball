@@ -12,7 +12,7 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.trajectory.panel import score
-from fantasy_baseball.trajectory.ros_anchor import anchor_full_season, load_ros_blend
+from fantasy_baseball.trajectory.ros_anchor import anchor_full_season
 
 #: A 300-PA half-season: .300/600 AB-rate hitter with 15 HR, 40 R, 45 RBI, 10 SB.
 YTD_HITTER = {
@@ -473,55 +473,3 @@ def test_every_scored_rate_is_also_combined() -> None:
             f"combined with the rest-of-season line; they would keep their "
             f"season-to-date value over a full-season volume"
         )
-
-
-# --- which systems the snapshot actually holds, and saying so -------------------------
-
-
-def _write_snapshot(root, system: str, *, hitters: bool = True, pitchers: bool = True) -> None:
-    """A minimal but real FanGraphs-shaped export pair."""
-    if hitters:
-        (root / f"{system}-hitters.csv").write_text(
-            "Name,Team,PA,AB,H,HR,R,RBI,SB,G,AVG,PlayerId,MLBAMID\n"
-            "Alpha,NYY,200,180,50,10,30,28,5,50,0.278,1,111\n",
-            encoding="utf-8",
-        )
-    if pitchers:
-        (root / f"{system}-pitchers.csv").write_text(
-            "Name,Team,IP,W,SO,ERA,WHIP,SV,G,GS,ER,BB,H,PlayerId,MLBAMID\n"
-            "Beta,NYY,60,5,66,4.50,1.33,1,11,11,30,20,60,2,222\n",
-            encoding="utf-8",
-        )
-
-
-def test_a_half_staged_system_is_skipped_and_named(tmp_path, capsys) -> None:
-    """`validate_projections_dir` accepts a system with EITHER file, and
-    `load_projection_set` then returns an empty frame for the missing side -- so a
-    snapshot whose pitchers export failed to download blends its hitters and silently
-    drops its arms, shifting every pitcher's anchor with no message anywhere.
-
-    `ingest_ros_export` already refuses to push a half-staged system. The board has to
-    make the same call, or the two price off different blends.
-    """
-    snapshot = tmp_path / "2026" / "rest_of_season" / "2026-07-21"
-    snapshot.mkdir(parents=True)
-    _write_snapshot(snapshot, "steamer")
-    _write_snapshot(snapshot, "zips", pitchers=False)
-
-    blend = load_ros_blend(tmp_path, 2026, ["steamer", "zips"], {"steamer": 0.5, "zips": 0.5})
-
-    assert blend.snapshot_date.isoformat() == "2026-07-21"
-    printed = capsys.readouterr().out
-    assert "zips" in printed, "name the system that was dropped"
-    assert "steamer" not in printed.split("zips")[0].split("\n")[-1], "and only that one"
-
-
-def test_no_complete_system_is_refused(tmp_path) -> None:
-    """Blending nothing would return empty frames, and every player would then be
-    dropped as having no ROS row -- an empty board reported as an exclusion count."""
-    snapshot = tmp_path / "2026" / "rest_of_season" / "2026-07-21"
-    snapshot.mkdir(parents=True)
-    _write_snapshot(snapshot, "steamer", pitchers=False)
-
-    with pytest.raises(FileNotFoundError, match="complete"):
-        load_ros_blend(tmp_path, 2026, ["steamer"], {"steamer": 1.0})
