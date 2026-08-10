@@ -113,6 +113,7 @@ def load_ros_blend(
     Raises:
         FileNotFoundError: no datable snapshot dir for `season`.
     """
+    from fantasy_baseball.data.fangraphs import _find_file
     from fantasy_baseball.data.projections import blend_projections
     from fantasy_baseball.data.ros_pipeline import latest_ros_snapshot, ros_snapshot_root
 
@@ -124,7 +125,48 @@ def load_ros_blend(
             f"no remainder to add. Stage one with scripts/ingest_ros_export.py."
         )
     snapshot, snapshot_date = newest
-    hitters, pitchers, _quality = blend_projections(snapshot, systems, weights, normalizer=None)
+
+    # COMPLETE systems only, the same call `ingest_ros_export` makes before it will push
+    # to prod. `validate_projections_dir` accepts a system with EITHER file, and
+    # `load_projection_set` then returns an empty frame for the missing side -- so a
+    # snapshot whose pitchers export failed to download blends its hitters and silently
+    # drops its arms, moving every pitcher's anchor with no message anywhere. Filtering
+    # here is also what keeps the docstring's claim true: the prod ROS blob was blended
+    # from the staged-complete set, so blending a different set would price the board and
+    # the standings off two different projections.
+    complete = [
+        s
+        for s in systems
+        if _find_file(snapshot, s, "hitters") is not None
+        and _find_file(snapshot, s, "pitchers") is not None
+    ]
+    if not complete:
+        raise FileNotFoundError(
+            f"no complete system in {snapshot.name}: none of {systems} has both a "
+            f"hitters and a pitchers export. Blending nothing would return empty frames "
+            f"and every player would then be dropped as having no rest-of-season row -- "
+            f"an empty board reported as an exclusion count. Re-stage with "
+            f"scripts/ingest_ros_export.py."
+        )
+    for skipped in [s for s in systems if s not in complete]:
+        # SAID OUT LOUD. A blend that quietly ran on four systems instead of five moves
+        # every anchored figure and renders identically to one that did not.
+        print(
+            f"  NOTE: {skipped} is half-staged in {snapshot.name} (one side missing), "
+            f"so it is excluded from the anchor blend."
+        )
+
+    # `progress_cb` is the ONLY channel `blend_projections` reports through: a system
+    # that fails to parse is caught and skipped, and every projection-quality exclusion
+    # is announced there. Passing None discarded both, so a truncated CSV would shift
+    # every anchor silently.
+    hitters, pitchers, _quality = blend_projections(
+        snapshot,
+        complete,
+        {s: w for s, w in (weights or {}).items() if s in complete} or None,
+        progress_cb=lambda m: print(f"  {m}"),
+        normalizer=None,
+    )
     return RosBlend(snapshot_date, {"hitter": hitters, "pitcher": pitchers})
 
 
