@@ -151,15 +151,27 @@ def _resolve_player(
         names = people.set_index("id")["fullName"]
         lines = []
         for pid in candidates:
-            spans = [r[r["mlbam_id"] == pid] for r in rows_by_pool.values()]
-            spans = [s for s in spans if not s.empty]
-            if pid in dropped_ids:
+            # PER POOL, not the union across pools. A pool counts as a survivor only if
+            # he has rows there AND was not dropped from it -- so a two-way player
+            # dropped from one half is still scorable in the other, and a pool he never
+            # played in is not a survivor. Labelling off the union told the user a
+            # scorable player "cannot be anchored"; he then picks the other namesake and
+            # gets that man's career under the name he typed, which is the wrong-player
+            # failure this menu exists to prevent, one step removed.
+            survives = [
+                rows_by_pool[pool][rows_by_pool[pool]["mlbam_id"] == pid]
+                for pool in panels
+                if pid not in dropped_by_pool[pool]
+            ]
+            survives = [rows for rows in survives if not rows.empty]
+            if not survives:
                 # NOT `through {last}`: the anchor has already removed his current
                 # season, so the newest one left would advertise him as finished a year
                 # before he actually played -- and picking him dies on the exclusion.
                 note = f"no rest-of-season row{vintage}, so he cannot be anchored"
             else:
-                note = f"through {max(int(s['season'].max()) for s in spans)}"
+                # Dated off the SURVIVING pools only, for the same reason.
+                note = f"through {max(int(r['season'].max()) for r in survives)}"
             lines.append(f"    --mlbam-id {pid}   {names.get(pid, '?')}, {note}")
         raise SystemExit(
             f"{name!r} matches {len(candidates)} different players; pick one:\n" + "\n".join(lines)

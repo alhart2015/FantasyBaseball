@@ -178,3 +178,60 @@ def test_no_ros_absent_entirely_changes_nothing(monkeypatch) -> None:
     module = _script()
     _people(monkeypatch, module)
     assert module._resolve_player("Solo Player", {"hitter": _rows(1)}) == [("hitter", 1, 26, 11.0)]
+
+
+def _rows_through_2026(mlbam_id: int) -> pd.DataFrame:
+    """A player still playing: his in-progress 2026 row survived the anchor."""
+    return pd.concat(
+        [
+            _rows(mlbam_id),
+            pd.DataFrame(
+                [
+                    {
+                        "mlbam_id": mlbam_id,
+                        "season": 2026,
+                        "age": 27,
+                        "sgp": 12.0,
+                        "partial_season": True,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+
+def test_a_namesake_scorable_in_one_pool_is_not_advertised_as_unscorable(monkeypatch) -> None:
+    """The exclusion is applied PER POOL, so labelling the menu off the union across
+    pools tells the user a two-way player cannot be anchored when picking him would in
+    fact print a perfectly good pitcher trajectory.
+
+    That is the wrong-player failure again, one step removed: the user reads "cannot be
+    anchored", picks the other namesake, and gets that man's career under the name he
+    typed."""
+    module = _script()
+    _people(monkeypatch, module, ids=(1, 2), name="Angel Sanchez")
+    panels = {
+        "hitter": pd.concat([_rows_through_2026(1), _rows_through_2026(2)], ignore_index=True),
+        "pitcher": pd.concat([_rows_through_2026(1), _rows_through_2026(2)], ignore_index=True),
+    }
+    with pytest.raises(SystemExit) as exc:
+        module._resolve_player("Angel Sanchez", panels, no_ros={"hitter": [2], "pitcher": []})
+    line = next(ln for ln in str(exc.value).splitlines() if "--mlbam-id 2" in ln)
+    assert "cannot be anchored" not in line, "he is still scorable as a pitcher"
+    assert "through 2026" in line, "and his surviving pool reaches the base season"
+
+
+def test_a_namesake_dropped_from_every_pool_he_plays_in_is_unscorable(monkeypatch) -> None:
+    """The other half of the same rule: 'dropped from all of them' is what makes a
+    player unscorable, and a pool he has no rows in must not count as a survivor."""
+    module = _script()
+    _people(monkeypatch, module, ids=(1, 2), name="Angel Sanchez")
+    panels = {
+        "hitter": pd.concat([_rows_through_2026(1), _rows_through_2026(2)], ignore_index=True),
+        "pitcher": _rows_through_2026(1),  # id 2 never pitched
+    }
+    with pytest.raises(SystemExit) as exc:
+        module._resolve_player("Angel Sanchez", panels, no_ros={"hitter": [2], "pitcher": []})
+    line = next(ln for ln in str(exc.value).splitlines() if "--mlbam-id 2" in ln)
+    assert "cannot be anchored" in line, "a pool he never played in is not a survivor"
