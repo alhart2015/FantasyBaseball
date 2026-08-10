@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -46,14 +47,9 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import people as board_people
 from fantasy_baseball.trajectory.board import player_names, season_slots
-from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.model import Trajectory
-from fantasy_baseball.trajectory.panel import (
-    DEFAULT_PANEL_DIR,
-    load_scored_panel,
-    prorate_partial,
-    season_elapsed_fraction,
-)
+from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR
+from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
 from fantasy_baseball.trajectory.shape import shape_trajectory
 from fantasy_baseball.trajectory.value import (
     ROLE_MIN_GAMES,
@@ -74,10 +70,40 @@ THIN_COMPS = 20
 def _resolve_player(
     name: str,
     panels: dict[str, pd.DataFrame],
-    calendar: pd.DataFrame,
     mlbam_id: int | None = None,
+    no_ros: dict[str, list[int]] | None = None,
+    snapshot_date: date | None = None,
+    overrides_supplied: bool = False,
 ) -> list[tuple[str, int, int, float]]:
-    """One (pool, mlbam_id, age, sgp) per pool the player was used in, pace-adjusted.
+    """One (pool, mlbam_id, age, sgp) per pool the player was used in.
+
+    `no_ros` maps pool -> the ids `ros_anchor` DROPPED for having no rest-of-season row,
+    and it governs whether a player is refused, announced, or scored. Getting it wrong is
+    silent in both directions, so the rule is stated once here and every case a review
+    pass has caught is pinned in tests/test_scripts/test_player_trajectory_no_ros.py
+    (`--mlbam-id` narrowing is NOT among them -- that path is unpinned):
+
+    * A dropped player has no in-progress row left, so his newest surviving season is a
+      SETTLED prior year. Resolving to it prints a complete trajectory headed with the
+      wrong age and the wrong anchor -- and the in-progress notice does not fire either,
+      because that row really is settled. He is refused instead, with the reason named.
+    * A dropped player is still a REAL PLAYER matching the typed name, so he counts
+      toward ambiguity even with no surviving rows. Keying disambiguation on surviving
+      rows alone resolved silently to his namesake and printed that man's career.
+    * ...and the converse: the exclusion is APPLIED to the resolved id, not to every id
+      the name matched. (`dropped_by_pool` is still built over every matching id -- it
+      has to be, to decide candidacy -- but only the resolved id's membership skips a
+      pool.) Filtering on "any matching id was dropped" suppressed a scorable player and
+      the "pick one" menu never ran.
+    * Only pools in `panels` are consulted, so `--pool hitter` cannot fail citing the
+      pitcher pool.
+    * A two-way player dropped from one pool keeps the other, and the lost half is
+      announced -- a pitcher-only table for a two-way player looks exactly like a player
+      who never hit.
+    * `overrides_supplied` (--age AND --sgp given) skips the refusal. Those two are the
+      only things the dropped row would have contributed besides his identity, so the
+      caller has already replaced the anchor by hand -- and refusing anyway would push
+      him to the fully manual path, which costs him the eligibility-derived floor.
 
     Returns a LIST, because this league drafts and scores a two-way player as two
     separate assets -- a hitter and a pitcher -- so each half gets its own trajectory
@@ -85,9 +111,10 @@ def _resolve_player(
     has already decided what counts as being used in a role, so appearing in both pools
     here means genuinely two-way, not a position player's one mop-up inning.
 
-    `calendar` is the HITTER panel including partial seasons, used only to date the
-    in-progress season -- see `season_elapsed_fraction` for why that must not come from
-    the pitcher panel.
+    `panels` arrives ANCHORED: an in-progress season already carries season-to-date plus
+    a rest-of-season projection (#348), so its `sgp` is on the same footing as a settled
+    year and nothing here adjusts it a second time. This used to divide it by the
+    league's elapsed fraction, which read a player's missed time as his rate.
 
     A normalized name is NOT unique (58 hitters share one with another player: two Chris
     Youngs, two Chris Carters, accent-collapsed pairs like Angel Sanchez). Rather than
@@ -111,25 +138,76 @@ def _resolve_player(
             f"Ids for that name: {', '.join(str(i) for i in sorted(named))}"
         )
     ids = {mlbam_id} if mlbam_id is not None else named
+    who = f"mlbam id {mlbam_id}" if mlbam_id is not None else name
+    vintage = f" ({snapshot_date})" if snapshot_date else ""
+
+    rows_by_pool = {pool: panel[panel["mlbam_id"].isin(ids)] for pool, panel in panels.items()}
+    # Scoped to `panels`, so a one-pool query cannot be failed citing the other pool.
+    dropped_by_pool = {
+        pool: ids & {int(i) for i in (no_ros or {}).get(pool, ())} for pool in panels
+    }
+    dropped_ids = set().union(*dropped_by_pool.values()) if dropped_by_pool else set()
+
+    with_rows = {int(i) for rows in rows_by_pool.values() for i in rows["mlbam_id"]}
+    # A DROPPED player counts as a candidate even with no surviving rows: the anchor
+    # deleted his only season, and treating that as absence resolved silently to a
+    # namesake and printed the wrong man's career.
+    candidates = sorted(with_rows | dropped_ids)
+    if not candidates:
+        raise SystemExit(f"{who} is in the people cache but has no observed season in the panel")
+
+    if len(candidates) > 1:
+        names = people.set_index("id")["fullName"]
+        lines = []
+        for pid in candidates:
+            # PER POOL, not the union across pools. A pool counts as a survivor only if
+            # he has rows there AND was not dropped from it -- so a two-way player
+            # dropped from one half is still scorable in the other, and a pool he never
+            # played in is not a survivor. Labelling off the union told the user a
+            # scorable player "cannot be anchored"; he then picks the other namesake and
+            # gets that man's career under the name he typed, which is the wrong-player
+            # failure this menu exists to prevent, one step removed.
+            survives = [
+                rows_by_pool[pool][rows_by_pool[pool]["mlbam_id"] == pid]
+                for pool in panels
+                if pid not in dropped_by_pool[pool]
+            ]
+            survives = [rows for rows in survives if not rows.empty]
+            if not survives:
+                # NOT `through {last}`: the anchor has already removed his current
+                # season, so the newest one left would advertise him as finished a year
+                # before he actually played -- and picking him dies on the exclusion.
+                note = f"no rest-of-season row{vintage}, so he cannot be anchored"
+            else:
+                # Dated off the SURVIVING pools only, for the same reason.
+                note = f"through {max(int(r['season'].max()) for r in survives)}"
+            lines.append(f"    --mlbam-id {pid}   {names.get(pid, '?')}, {note}")
+        raise SystemExit(
+            f"{name!r} matches {len(candidates)} different players; pick one:\n" + "\n".join(lines)
+        )
+
+    resolved_id = candidates[0]
     found = []
-    for pool, panel in panels.items():
-        rows = panel[panel["mlbam_id"].isin(ids)]
+    for pool in panels:
+        if resolved_id in dropped_by_pool[pool] and not overrides_supplied:
+            # SAID OUT LOUD even when the other half survives -- see the docstring.
+            print(
+                f"{name} ({pool}): dropped -- a current-season line but no row in the"
+                f"{vintage or ''} rest-of-season snapshot, so there is no full-season "
+                f"anchor to fit. Same reason he is off the keeper board."
+            )
+            continue
+        rows = rows_by_pool[pool]
+        rows = rows[rows["mlbam_id"] == resolved_id]
         if not rows.empty:
             found.append((pool, rows))
     if not found:
-        who = f"mlbam id {mlbam_id}" if mlbam_id is not None else name
-        raise SystemExit(f"{who} is in the people cache but has no observed season in the panel")
-
-    present = sorted({int(i) for _, rows in found for i in rows["mlbam_id"]})
-    if len(present) > 1:
-        names = people.set_index("id")["fullName"]
-        lines = []
-        for pid in present:
-            spans = [rows[rows["mlbam_id"] == pid] for _, rows in found]
-            last = max(int(s["season"].max()) for s in spans if not s.empty)
-            lines.append(f"    --mlbam-id {pid}   {names.get(pid, '?')}, through {last}")
         raise SystemExit(
-            f"{name!r} matches {len(present)} different players; pick one:\n" + "\n".join(lines)
+            f"{who} has a current-season line but no row in the rest-of-season snapshot"
+            f"{vintage}, so there is no full-season anchor to fit. He is off the keeper "
+            f"board for the same reason. To score him anyway, supply the line yourself: "
+            f"--age N --sgp N (keeps his eligibility), or drop --player entirely and pass "
+            f"--pool POOL --age N --sgp N --prior-sgp N --position POS."
         )
 
     if len(found) > 1:
@@ -141,13 +219,12 @@ def _resolve_player(
         season = int(row["season"])
         sgp = float(row["sgp"])
         if bool(row["partial_season"]):
-            fraction = season_elapsed_fraction(calendar, season)
-            paced = prorate_partial(sgp, fraction)
+            # SAID OUT LOUD, because the number on screen is not a record of the season.
+            # It is what he has done plus what he is projected to do with the rest of it.
             print(
-                f"{name} ({pool}): {season} is {fraction:.0%} complete -- "
-                f"{sgp:.1f} SGP so far, pacing to {paced:.1f}"
+                f"{name} ({pool}): {season} is still in progress -- {sgp:.1f} SGP on the "
+                f"anchored full-season line (season to date + rest-of-season projection)"
             )
-            sgp = paced
         resolved.append((pool, int(row["mlbam_id"]), int(row["age"]), sgp))
     return resolved
 
@@ -604,28 +681,49 @@ def main() -> int:
 
     # league.yaml's denominators are what every other valuation in this repo prices in,
     # so the trajectory is quoted in the same units as a draft board or a keeper line.
-    overrides = load_config(PROJECT_ROOT / "config" / "league.yaml").sgp_overrides
+    config = load_config(PROJECT_ROOT / "config" / "league.yaml")
+    overrides = config.sgp_overrides
     denoms = get_sgp_denominators(overrides)
 
-    def load(kind: str, include_partial: bool) -> pd.DataFrame:
-        panel = load_scored_panel(
-            kind,
-            panel_dir=args.panel_dir,
-            sgp_overrides=overrides,
-            include_partial=include_partial,
-        )
-        if args.no_era_adjust:
-            return panel
-        return era_normalize(panel, kind, sgp_overrides=overrides)
+    # THE SAME loader both boards use, so a name looked up here and the same name on the
+    # keeper board cannot be anchored on two different things. It injects season-to-date
+    # plus a rest-of-season projection before era-normalizing -- see `ros_anchor`.
+    loaded = None
+
+    def load(kind: str) -> pd.DataFrame:
+        nonlocal loaded
+        if loaded is None:
+            loaded = load_anchored_panels(
+                systems=config.projection_systems,
+                weights={s: config.projection_weights[s] for s in config.projection_systems},
+                panel_dir=args.panel_dir,
+                sgp_overrides=overrides,
+                era_adjust=not args.no_era_adjust,
+            )
+        return loaded.panels[kind]
+
+    def complete(kind: str) -> pd.DataFrame:
+        """The comp pool: the same frame minus its in-progress season.
+
+        DERIVED rather than loaded again, like both board scripts do it. A second load
+        re-reads a 4.7MB CSV and re-scores it for a frame that is this one minus its
+        partial rows, and it would have to re-anchor to stay consistent with the query.
+        """
+        panel = load(kind)
+        return panel[~panel["partial_season"]].reset_index(drop=True)
 
     if args.player:
         # The query needs the in-progress season; the comp pool must not have it.
         wanted = [args.pool] if args.pool else ["hitter", "pitcher"]
-        live = {k: load(k, True) for k in wanted}
-        # Dating the season is a league fact and must come off the hitter panel even for
-        # a pitcher query -- pitcher `games` counts appearances, not team games.
-        calendar = live.get("hitter") if "hitter" in live else load("hitter", True)
-        resolved = _resolve_player(args.player, live, calendar, args.mlbam_id)
+        live = {k: load(k) for k in wanted}
+        resolved = _resolve_player(
+            args.player,
+            live,
+            args.mlbam_id,
+            no_ros=loaded.no_ros,
+            snapshot_date=loaded.snapshot_date,
+            overrides_supplied=args.age is not None and args.sgp is not None,
+        )
         queries = [
             # `is not None`, never `or`: --sgp 0 and --age 0 are falsy but meaningful.
             (
@@ -680,7 +778,7 @@ def main() -> int:
         # projected under his floor prints a negative rather than a zero (#331).
         slot, floor = replacement_for(slots, levels) if slots is not None else (None, 0.0)
         traj, anchors = shape_trajectory(
-            load(pool, False),
+            complete(pool),
             kind=pool,
             age=age,
             sgp=sgp,

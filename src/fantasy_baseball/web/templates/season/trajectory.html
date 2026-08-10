@@ -33,9 +33,13 @@
   {%- if board.meta.excluded and board.meta.excluded.total %}
   <strong>{{ board.meta.excluded.total }} players league-wide{% if board.pool != 'both' %} (hitters and pitchers together, not just {{ board.pool }}s){% endif %} are not on this board at all</strong> --
   {{ board.meta.excluded.no_current_line }} with no {{ board.base_season }} line
-  (injured, released, or not yet up) and {{ board.meta.excluded.low_sgp }} pacing below
-  {{ '%.1f'|format(board.meta.min_sgp) }} SGP. They were never scored, so an absent player
-  means the model could not price him, not that it ranked him last.
+  (injured, released, or not yet up), {{ board.meta.excluded.low_sgp }} scoring below
+  {{ '%.1f'|format(board.meta.min_sgp) }} SGP{% if board.meta.excluded.no_ros_projection %},
+  and {{ board.meta.excluded.no_ros_projection }} with a {{ board.base_season }} line that
+  no rest-of-season projection covers -- the anchor needs both halves, so a player
+  FanGraphs no longer projects cannot be given a full-year figure{% endif %}. They were
+  never scored, so an absent player means the model could not price him, not that it
+  ranked him last.
   {%- endif %}
   Start year is locked at {{ board.base_season + 1 }}.
   {{ ctl.vintage_note(board) }}
@@ -58,7 +62,7 @@
       <th>Player</th>
       <th>Age</th>
       <th>Slot</th>
-      <th title="{{ board.base_season }} {{ board.scale|upper }}, paced to a full year{% if board.scale == 'var' %} -- SGP minus this slot's replacement level, so a below-replacement player reads negative{% endif %}">Now</th>
+      <th title="{{ board.base_season }} {{ board.scale|upper }} on the anchored full-season line -- what he has done plus what the rest-of-season blend projects for the remainder{% if board.scale == 'var' %}, minus this slot's replacement level, so a below-replacement player reads negative{% endif %}">Now</th>
       <th class="sorted">{{ board.span }} {{ board.scale|upper }}</th>
       <th title="p10..p90 of the {{ board.span }} {{ board.scale|upper }} total, summed across years -- assumes the years move together, so it is if anything too wide">Band</th>
       {% for y in board.year_columns %}
@@ -119,8 +123,9 @@
     either end of the <em>Band</em>.
     {%- else %}
     Negatives are rarer on this scale but not absent: the p10 end of the <em>Band</em>
-    goes under zero on most rows. <em>Now</em> is the exception -- it is raw paced SGP,
-    and the board only carries players at or above the SGP cut.
+    goes under zero on most rows. <em>Now</em> is the exception -- it is the raw
+    full-season SGP the fit is anchored on, and the board only carries players at or
+    above the SGP cut.
     {%- endif %}
     Because the floor is one number per slot, flipping the toggle cannot reorder two
     players who share a slot; what it moves is the comparison ACROSS slots, which is the

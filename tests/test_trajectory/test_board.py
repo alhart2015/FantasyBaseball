@@ -42,14 +42,15 @@ def test_a_split_season_enters_once_at_its_full_total() -> None:
     assert rows[0].sgp == pytest.approx(11.0)
 
 
-def test_an_in_progress_season_is_paced_to_a_full_year() -> None:
-    """Two thirds of a season is not a season. Comparing the fragment against full years
-    would rank every current player below where he belongs."""
+def test_the_in_progress_season_is_taken_as_scored() -> None:
+    """It arrives ALREADY anchored on a full-season line -- season to date plus a
+    rest-of-season projection, injected before `era_normalize` (#348). This module used
+    to divide it by the league's elapsed fraction instead, which read a player's missed
+    time as his rate. Nothing here may adjust the score a second time."""
     panel = _hitters([(1, 2026, 27, 8.0, True), (2, 2026, 27, 8.0, False)])
     rows = board_inputs(panel, kind="hitter", names=NAMES, replacement_levels=LEVELS)
-    partial, complete = _one(rows, 1), _one(rows, 2)
-    assert partial.sgp > complete.sgp
-    assert complete.sgp == pytest.approx(8.0)
+    assert _one(rows, 1).sgp == pytest.approx(8.0)
+    assert _one(rows, 2).sgp == pytest.approx(8.0)
 
 
 def test_a_missing_prior_season_is_a_real_zero() -> None:
@@ -103,29 +104,12 @@ def test_the_split_season_rule_matches_the_shared_one() -> None:
     pd.testing.assert_series_equal(mine.sort_index(), shared.sort_index())
 
 
-def test_a_split_season_that_is_partly_in_progress_stays_partial() -> None:
-    """Half a finished season plus half an in-progress one is an in-progress season.
-    Losing the flag would compare a fragment against full years."""
-    from fantasy_baseball.trajectory.board import _collapse
-
-    panel = _hitters([(1, 2026, 27, 5.0, False), (1, 2026, 27, 4.0, True)])
-    assert bool(_collapse(panel).iloc[0]["partial_season"])
-
-
-def test_pacing_a_pitcher_board_refuses_to_date_the_season_off_its_own_panel() -> None:
-    """In the pitcher panel `games` counts appearances, not team games, so the elapsed
-    fraction comes out near half the truth and roughly DOUBLES every projected pace.
-    Refused at the boundary rather than deep inside `season_elapsed_fraction`."""
-    panel = _pitchers([(1, 2026, 30, 6.0, True, 10.0, 12.0)])
-    with pytest.raises(ValueError, match="HITTER panel"):
-        board_inputs(panel, kind="pitcher", names=NAMES, replacement_levels=PITCHER_LEVELS)
-
-
 def test_a_pitchers_role_comes_from_a_settled_season() -> None:
     """A starter back from the IL with two September relief outings is not a reliever,
-    but `starts / games` on that fragment says he is -- and the pace adjustment applied
-    to his SGP was never applied to the role read. Getting this wrong moves him 1.87 SGP
-    a year between the SP and RP floors."""
+    but `starts / games` on that fragment says he is. The anchor that gives his SGP a
+    full-season line deliberately leaves appearances alone -- a projection must not pick
+    a replacement level -- so the fragment is still what this has to see through.
+    Getting it wrong moves him 1.87 SGP a year between the SP and RP floors."""
     panel = _pitchers(
         [
             (1, 2025, 29, 15.0, False, 30.0, 30.0),  # unambiguous starter
@@ -137,7 +121,6 @@ def test_a_pitchers_role_comes_from_a_settled_season() -> None:
         kind="pitcher",
         names=NAMES,
         replacement_levels=PITCHER_LEVELS,
-        calendar=_hitters([(99, 2026, 27, 10.0, True)]),
     )
     assert (rows[0].slot, rows[0].floor) == ("SP", 9.29)
 
@@ -157,7 +140,6 @@ def test_a_pitcher_who_has_never_settled_still_gets_a_slot() -> None:
         kind="pitcher",
         names=NAMES,
         replacement_levels=PITCHER_LEVELS,
-        calendar=_hitters([(99, 2026, 27, 10.0, True)]),
     )
     assert rows[0].slot in {"SP", "RP"}
 

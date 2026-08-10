@@ -74,9 +74,11 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
       what makes "he is not on the board" a different statement from "you mistyped". -#}
   {% if board.meta.excluded and board.meta.excluded.total %}
   <p class="muted">This board excluded {{ board.meta.excluded.total }} players --
-    {{ board.meta.excluded.no_current_line }} with no current-season line and
-    {{ board.meta.excluded.low_sgp }} pacing under the minimum. A player left out that
-    way will not be found here even when the name is spelled correctly.</p>
+    {{ board.meta.excluded.no_current_line }} with no current-season line,
+    {{ board.meta.excluded.low_sgp }} under the minimum SGP and
+    {{ board.meta.excluded.no_ros_projection or 0 }} with a current-season line that no
+    rest-of-season projection covers. A player left out any of those ways will not be
+    found here even when the name is spelled correctly.</p>
   {% endif %}
   {% else %}<p class="muted">Search a player to see his trajectory.</p>{% endif %}
 
@@ -111,7 +113,7 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     left for the two to disagree about. -#}
 <script type="application/json" id="trajectory-chart-data">{{ {
   "name": board.name, "axis_label": board.axis_label, "history": board.history,
-  "paced": board.paced, "paced_label": board.paced_label, "age": board.age,
+  "anchor": board.anchor, "anchor_label": board.anchor_label, "age": board.age,
   "projection": board.projection, "comps": board.comps} | tojson }}</script>
 
 {% if board.comps %}
@@ -196,12 +198,13 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     {% for a, v in board.history %}
     <tr><td>{{ a }}</td><td>{{ '%.1f'|format(v) }}</td><td class="muted">actual</td></tr>
     {% endfor %}
-    {#- The base season at its full-year pace. Absent once that season is realized --
-        a panel rebuilt after it ends puts it in `history` above instead, and
-        `build_player_view` suppresses this rather than printing it twice. -#}
-    {% if board.paced %}
-    <tr><td>{{ board.paced[0] }}</td><td>{{ '%.1f'|format(board.paced[1]) }}</td>
-      <td class="muted">pace</td></tr>
+    {#- The base season on its ANCHORED full-year line -- what he has done plus what
+        the rest-of-season blend projects for the remainder (#348). Absent once that
+        season is realized: a panel rebuilt after it ends puts it in `history` above
+        instead, and `build_player_view` suppresses this rather than printing it twice. -#}
+    {% if board.anchor %}
+    <tr><td>{{ board.anchor[0] }}</td><td>{{ '%.1f'|format(board.anchor[1]) }}</td>
+      <td class="muted">{{ board.anchor_label }}</td></tr>
     {% endif %}
     {% for pt in board.projection %}
     <tr><td>{{ pt.age }}</td><td>{{ '%.1f'|format(pt.mean) }}</td>

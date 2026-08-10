@@ -94,11 +94,15 @@ def era_factors(
     """``season -> {rate_column: multiplicative factor}`` into the reference environment.
 
     Split out of `era_normalize` for #325's backtest, which needed to restate the
-    keeper chain's ZiPS vintages onto the same reference the panel uses. That caller
-    was retired with the chain, so `era_normalize` is the only one left -- kept
-    separate because the factor table is a readable intermediate worth being able to
-    inspect on its own, and because computing it twice is how two answers to "what is a
-    2022 home run worth in 2023-2025 terms" get into one codebase.
+    keeper chain's ZiPS vintages onto the same reference the panel uses. That caller was
+    retired with the chain; the one left is the trajectory board, which computes the
+    table on the ACTUAL panel and passes it to `era_normalize` alongside a frame whose
+    in-progress season has been replaced by a projection-anchored line -- see that
+    function's `factors` argument for why the two must not be the same frame.
+
+    Kept separate because the factor table is a readable intermediate worth being able
+    to inspect on its own, and because computing it twice is how two answers to "what is
+    a 2022 home run worth in 2023-2025 terms" get into one codebase.
     """
     rates = league_rates(df, kind)
     missing = [s for s in reference_seasons if s not in rates.index]
@@ -133,14 +137,27 @@ def era_normalize(
     *,
     reference_seasons: tuple[int, ...] = REFERENCE_SEASONS,
     sgp_overrides: SgpOverrides | None = None,
+    factors: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """Rescale every season's category rates into the reference run environment.
 
     Returns a copy with the rate columns adjusted and `sgp` re-scored. `era_factor_*`
     columns are kept so a surprising comp can be traced back to its adjustment rather
     than taken on faith.
+
+    `factors` OVERRIDES the table this would otherwise derive from `df`, and exists for
+    one caller with one reason (#348). A run environment is a property of the league and
+    of what really happened in it -- the same argument the module docstring makes for
+    league-wide rather than top-N rates -- but the factors are computed from the league
+    rates of the rows HANDED IN. The trajectory board replaces its in-progress season
+    with a YTD + rest-of-season line before normalizing, and projections are regressed
+    toward the mean, so a projected league HR/600 sits closer to the reference than the
+    season actually did. Deriving the factor from those rows would quietly shrink the
+    adjustment for the one season the whole board is anchored on. That caller computes
+    `era_factors` on the ACTUAL panel first and passes the result here.
     """
-    factors = era_factors(df, kind, reference_seasons=reference_seasons)
+    if factors is None:
+        factors = era_factors(df, kind, reference_seasons=reference_seasons)
 
     out = df.copy()
     for rate in RATE_DENOMINATORS[kind]:

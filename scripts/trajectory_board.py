@@ -63,9 +63,9 @@ from fantasy_baseball.data.rosters import RosterSpot, live_rosters
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
-from fantasy_baseball.trajectory.era import era_normalize
 from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT
-from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
+from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR
+from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
 from fantasy_baseball.trajectory.roster_join import RosterIndex, index_rosters
 from fantasy_baseball.trajectory.sweep import add_ranks, rank_move, sweep_pool, totals
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -274,30 +274,30 @@ def main() -> int:
     horizons = tuple(range(1, args.horizon + 1))
     pools = ["hitter", "pitcher"] if args.pool == "both" else [args.pool]
 
-    def load(kind: str, include_partial: bool) -> pd.DataFrame:
-        return era_normalize(
-            load_scored_panel(
-                kind,
-                panel_dir=args.panel_dir,
-                sgp_overrides=overrides,
-                include_partial=include_partial,
-            ),
-            kind,
-            sgp_overrides=overrides,
-        )
-
-    # Dating the in-progress season is a league fact and must come off the HITTER panel
-    # even when pricing pitchers -- pitcher `games` counts appearances, not team games.
-    calendar = load("hitter", True)
+    # THE SAME loader the pushed board uses, so the CLI and the web board cannot end up
+    # anchoring the in-progress season on two different things. It injects season-to-date
+    # plus a rest-of-season projection before era-normalizing -- see `ros_anchor`.
+    loaded = load_anchored_panels(
+        systems=config.projection_systems,
+        weights={s: config.projection_weights[s] for s in config.projection_systems},
+        panel_dir=args.panel_dir,
+        sgp_overrides=overrides,
+    )
     cache = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
     names = player_names(cache)
-    season = int(calendar["season"].max())
+    season = loaded.season
     eligibility = season_slots(cache, season)
+    anchor = (
+        f"anchored on the {loaded.snapshot_date} rest-of-season projection"
+        if loaded.snapshot_date
+        else f"{season} is complete, so nothing is projected"
+    )
+    print(f"  {season}: {anchor}", flush=True)
 
     started = time.perf_counter()
     swept = []
     for kind in pools:
-        live = calendar if kind == "hitter" else load(kind, True)
+        live = loaded.panels[kind]
         rows = [
             r
             for r in board_inputs(
@@ -306,12 +306,17 @@ def main() -> int:
                 names=names,
                 replacement_levels=levels,
                 eligibility=eligibility,
-                calendar=calendar,
                 season=season,
             )
             if r.sgp >= args.min_sgp
         ]
         print(f"  {kind}: {len(rows)} players with a {season} line", flush=True)
+        if loaded.no_ros[kind]:
+            print(
+                f"    {len(loaded.no_ros[kind])} dropped: a {season} line but no row in "
+                f"the {loaded.snapshot_date} rest-of-season snapshot",
+                flush=True,
+            )
         # The comp pool must NOT contain the in-progress season: a two-thirds year would
         # be averaged in as though it were a full one. DERIVED from `live` rather than
         # loaded again -- a second `load()` re-reads a 4.7MB CSV and runs two more

@@ -226,6 +226,10 @@ def _fake_payloads(module, monkeypatch):
         "generated_at": stamp,
         "base_season": 2026,
         "panel_vintage": {"hitter": "h.csv", "pitcher": "p.csv"},
+        # The second vintage: which rest-of-season snapshot the base season is anchored
+        # to (#348). `main` prints it on the readback, so a payload without it is not a
+        # payload this script produces.
+        "ros_snapshot": "2026-07-21",
         "players": [{"id": 1, "pool": "hitter"}, {"id": 1, "pool": "pitcher"}],
     }
     chart = to_chart_payload(
@@ -237,6 +241,30 @@ def _fake_payloads(module, monkeypatch):
     )
     monkeypatch.setattr(module, "build_payload", lambda *a, **k: (board, chart, 2))
     return board, chart
+
+
+#: Stands in for the factor table `load_anchored_panels` derives from the ACTUAL panel.
+#: Its identity is the assertion -- see the `era_factors` stub below.
+_FACTORS = object()
+
+
+def _assert_factors_threaded(df, _kind, **kwargs):
+    """Identity `era_normalize`, plus the one thing this file can check about #348.
+
+    It pins the WIRING, not the ordering: that the script forwards `era_factors`' return
+    value as `factors=` rather than dropping it. If it stops, `factors` arrives as None
+    and the real `era_normalize` quietly derives one from the frame it was handed.
+
+    It cannot detect the ordering. `_stub_the_sweep` sets `partial_season = False`, so no
+    snapshot is read and nothing is ever injected -- a script that computed the factor
+    table AFTER injection would produce an identical frame and still pass here. The
+    ordering is pinned where it lives, in tests/test_trajectory/test_ros_anchor.py.
+    """
+    assert kwargs.get("factors") is _FACTORS, (
+        "push_trajectory_board must thread the actual-rows factor table into "
+        "era_normalize; None makes it re-derive from the anchored frame"
+    )
+    return df
 
 
 def _stub_the_sweep(monkeypatch):
@@ -269,7 +297,14 @@ def _stub_the_sweep(monkeypatch):
         "pitcher": [BoardRow(2, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0)],
     }
     stubs = {
-        "fantasy_baseball.config.load_config": lambda _p: types.SimpleNamespace(sgp_overrides=None),
+        # `projection_systems` / `projection_weights` are what `load_anchored_panels`
+        # blends the rest-of-season snapshot from. This panel's base season is not
+        # partial, so no snapshot is actually read -- but the config is still consulted.
+        "fantasy_baseball.config.load_config": lambda _p: types.SimpleNamespace(
+            sgp_overrides=None,
+            projection_systems=["steamer"],
+            projection_weights={"steamer": 1.0},
+        ),
         "fantasy_baseball.sgp.denominators.get_sgp_denominators": lambda _o: {},
         "fantasy_baseball.sgp.replacement.position_aware_replacement_levels": lambda _d: {
             "OF": 4.0
@@ -277,7 +312,14 @@ def _stub_the_sweep(monkeypatch):
         "fantasy_baseball.trajectory.panel.load_scored_panel": lambda _k, **_kw: panel.copy(),
         "fantasy_baseball.trajectory.panel.panel_path": lambda k, _d: pathlib.Path(f"{k}.csv"),
         "fantasy_baseball.trajectory.panel.season_elapsed_fraction": lambda _df, _s: 0.7,
-        "fantasy_baseball.trajectory.era.era_normalize": lambda df, _k, **_kw: df,
+        # A SENTINEL, not None. `era_normalize(factors=None)` silently reverts to
+        # deriving the table from the frame it was handed -- the exact failure the
+        # parameter exists to prevent -- so a stub returning None would leave this test
+        # green while the script stopped passing the actual-rows table at all. The
+        # `era_normalize` stub asserts it received the sentinel, which is what pins the
+        # wiring; the ORDERING is pinned where it lives, in test_ros_anchor.py.
+        "fantasy_baseball.trajectory.era.era_factors": lambda _df, _k, **_kw: _FACTORS,
+        "fantasy_baseball.trajectory.era.era_normalize": _assert_factors_threaded,
         "fantasy_baseball.trajectory.board.player_names": lambda _c: pd.Series(dtype=object),
         "fantasy_baseball.trajectory.board.season_slots": lambda _c, _s: {},
         "fantasy_baseball.trajectory.board.board_inputs": lambda *_a, **kw: rows[kw["kind"]],

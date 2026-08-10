@@ -181,3 +181,39 @@ def _reference_panel() -> pd.DataFrame:
             {"mlbam_id": 4, "season": 2025, "hr_pa": 0.055},
         ]
     )
+
+
+def test_precomputed_factors_override_the_frames_own_rates() -> None:
+    """The base season's run environment is a fact about what HAPPENED in it, so the
+    factor must be able to come from a frame other than the one being rescaled (#348).
+
+    The trajectory board replaces its in-progress season with a YTD + rest-of-season
+    line before normalizing. Projections are regressed toward the mean, so league rates
+    computed off the injected rows sit closer to the reference than the season really
+    did -- and the factor for the one season the whole board is anchored on would
+    silently shrink.
+    """
+    actual = _hitters(
+        [
+            {"mlbam_id": 1, "season": 2023, "hr_pa": 0.050},
+            {"mlbam_id": 2, "season": 2024, "hr_pa": 0.060},
+            {"mlbam_id": 3, "season": 2025, "hr_pa": 0.055},
+            # The real 2026: a depressed home-run environment, so its factor is > 1.
+            {"mlbam_id": 4, "season": 2026, "hr_pa": 0.030},
+        ]
+    )
+    factors = era_factors(actual, "hitter")
+    assert factors.loc[2026, "hr_pa"] > 1.2
+
+    # The same panel with 2026 replaced by a regressed projection sitting right on the
+    # reference. Left to itself, era_normalize would call that season a neutral one.
+    injected = actual.copy()
+    injected.loc[injected["season"] == 2026, "hr_pa"] = 0.055
+    assert era_factors(injected, "hitter").loc[2026, "hr_pa"] == pytest.approx(1.0, abs=0.02)
+
+    normalized = era_normalize(injected, "hitter", factors=factors)
+    applied = normalized.loc[normalized["season"] == 2026, "era_factor_hr_pa"]
+    assert applied.iloc[0] == pytest.approx(factors.loc[2026, "hr_pa"])
+    assert normalized.loc[normalized["season"] == 2026, "hr_pa"].iloc[0] == pytest.approx(
+        0.055 * factors.loc[2026, "hr_pa"]
+    )

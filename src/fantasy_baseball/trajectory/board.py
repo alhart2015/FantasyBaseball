@@ -10,8 +10,11 @@ So the same rules are restated here as whole-column operations. They are RULES, 
 conveniences, and getting one wrong is silent:
 
   * a split season is collapsed, or a traded player enters as two half-seasons
-  * an in-progress season is PACE-ADJUSTED, or two-thirds of a year is compared against
-    full ones
+  * an in-progress season arrives ALREADY ANCHORED on a full-season line -- season to
+    date plus a rest-of-season projection, injected by `ros_anchor.anchor_full_season`
+    before `era.era_normalize` runs -- or two-thirds of a year is compared against full
+    ones. This module used to do that itself by dividing season-to-date SGP by the
+    league's elapsed fraction, which read a player's missed time as his RATE (#348).
   * a prior season the panel cannot see is 0 only when he was genuinely out of the
     league -- never when the panel simply starts too late
   * a pitcher's SP/RP role comes from a SETTLED season, not an in-progress fragment
@@ -32,7 +35,6 @@ from pathlib import Path
 import pandas as pd
 
 from ..utils.name_utils import normalize_name
-from .panel import prorate_partial, season_elapsed_fraction
 from .value import ROLE_MIN_GAMES, best_floor, resolve_slots
 
 
@@ -119,7 +121,9 @@ class BoardRow:
     name: str
     pool: str
     age: int
-    #: This season's SGP, paced to a full year if the season is still in progress.
+    #: This season's SGP. While the season is in progress that is scored off the anchored
+    #: full-season line -- what he has done plus what he is projected to do -- so it is
+    #: already on the same footing as a settled year. See `ros_anchor`.
     sgp: float
     #: Last season's SGP. A real 0 means he was out of the league, which for a young
     #: player is the normal case rather than missing data.
@@ -129,20 +133,19 @@ class BoardRow:
 
 
 #: Columns the board needs that `collapse_split_seasons` does not carry, and how a split
-#: season combines them. It aggregates `sgp` and `age` ONLY, so calling it first and then
-#: reading `partial_season` raises KeyError, and reading `starts`/`games` off the
-#: uncollapsed frame double-counts a traded pitcher.
+#: season combines them. It aggregates `sgp` and `age` ONLY, so reading `starts`/`games`
+#: off the uncollapsed frame double-counts a traded pitcher.
 #:
-#: `pa` and `games` are here because `season_elapsed_fraction` dates the season off the
-#: busiest player's games, and it REFUSES a frame without `pa` -- so dropping either one
-#: turns a hitter panel into something it rejects as a pitcher panel. Collapsing them
-#: also matters on its own: a traded everyday player has two rows of ~56 games, and the
-#: max over the uncollapsed frame reads the season as 35% elapsed rather than 70%.
+#: Both are here for `_pitcher_slots`, which routes a pitcher to the SP or RP floor on
+#: `starts / games` and needs a settled season's whole total to do it -- a man traded in
+#: July has two rows of ~15 starts, and neither half clears `ROLE_MIN_GAMES`.
+#:
+#: `pa` and `partial_season` used to be here too, for the pace adjustment that read the
+#: elapsed season off the busiest hitter's games. Nothing collapsed reads either one
+#: since the anchor replaced pacing (#348).
 _SPLIT_RULES = {
-    "partial_season": "any",
     "starts": "sum",
     "games": "sum",
-    "pa": "sum",
 }
 
 
@@ -165,29 +168,14 @@ def _collapse(panel: pd.DataFrame) -> pd.DataFrame:
     return panel.groupby(["mlbam_id", "season"], as_index=False).agg(**aggregations)
 
 
-def _paced(current: pd.DataFrame, calendar: pd.DataFrame, season: int) -> pd.Series:
-    """Current-season SGP, prorated where the season is still running.
-
-    `calendar` must be the HITTER panel even when pricing pitchers -- pitcher `games`
-    counts appearances rather than team games, so dating the season off it would put the
-    league somewhere it is not. Same rule `_resolve_player` follows.
-    """
-    fraction = season_elapsed_fraction(calendar, season)
-    sgp = current["sgp"].astype(float)
-    partial = current["partial_season"].astype(bool)
-    # A column operation, not a `.apply(axis=1)` -- the per-row form builds a Series per
-    # row and re-reads two columns by name each time, and it is the pattern this repo's
-    # conventions warn about. `fraction` is one number for the whole frame.
-    return sgp.where(~partial, sgp.map(lambda v: prorate_partial(v, fraction)))
-
-
 def _pitcher_slots(live: pd.DataFrame, season: int) -> dict[int, set[str]]:
     """SP or RP per pitcher, decided from a SETTLED season.
 
     A starter back from the IL with two September relief outings is not a reliever, but
-    `starts / games` on that fragment says he is -- and the pace adjustment applied to
-    his SGP was never applied to this. So the role comes from his most recent season
-    clearing `ROLE_MIN_GAMES`, falling back to the latest if he has never cleared it.
+    `starts / games` on that fragment says he is -- and the anchor that gives his SGP a
+    full-season line deliberately leaves appearances alone, because a projection must
+    not pick a replacement level. So the role comes from his most recent season clearing
+    `ROLE_MIN_GAMES`, falling back to the latest if he has never cleared it.
     """
     rows = live[live["season"] <= season].sort_values(["mlbam_id", "season"]).copy()
     for column in ("starts", "games"):
@@ -217,13 +205,17 @@ def board_inputs(
     names: pd.Series,
     replacement_levels: dict[str, float],
     eligibility: dict[int, frozenset[str]] | None = None,
-    calendar: pd.DataFrame | None = None,
     season: int | None = None,
 ) -> list[BoardRow]:
     """A query line for every player with a season in `season` (default: the latest).
 
-    `live` is a scored, era-normalized panel INCLUDING partial seasons -- the query needs
-    the in-progress year even though the comp pool must not have it.
+    `live` is a scored, era-normalized panel INCLUDING the in-progress season -- the
+    query needs that year even though the comp pool must not have it. The in-progress
+    season must ALREADY carry a full-season line: `ros_anchor.anchor_full_season`
+    replaces it with season-to-date plus a rest-of-season projection, before
+    `era_normalize`, and this reads whatever `sgp` it finds. Handing in a raw panel is
+    not an error here and cannot be made one -- it simply prices two-thirds of a year
+    against full ones, which is what the anchor exists to stop.
 
     `eligibility` maps mlbam id to the slots he has 10+ games at, the league's own rule.
     Pitchers never consult it: `resolve_slots` decides SP/RP from starts. Pass None and
@@ -237,24 +229,6 @@ def board_inputs(
     current = live[live["season"] == season].copy()
     if current.empty:
         return []
-    needs_pacing = "partial_season" in current.columns and bool(current["partial_season"].any())
-    if calendar is None:
-        if kind != "hitter" and needs_pacing:
-            # Refuse at the boundary rather than let `season_elapsed_fraction` reject the
-            # pitcher panel three frames down. In the pitcher panel `games` counts
-            # appearances rather than team games, so dating the season off it comes out
-            # near HALF the truth and roughly doubles every pitcher's projected pace.
-            raise ValueError(
-                "pacing a pitcher board needs the HITTER panel as `calendar`: elapsed "
-                "season is a league fact, and pitcher `games` counts appearances rather "
-                "than team games played"
-            )
-        calendar = live
-    else:
-        calendar = _collapse(calendar)
-    current["paced"] = (
-        _paced(current, calendar, season) if needs_pacing else current["sgp"].astype(float)
-    )
 
     # The prior year, looked up as a whole column. A player absent from it was out of
     # the league, which is a real 0 -- the same convention the forward path uses.
@@ -282,7 +256,7 @@ def board_inputs(
                 name=str(names.get(pid, f"mlbam {pid}")),
                 pool=kind,
                 age=int(r.age),
-                sgp=float(r.paced),
+                sgp=float(r.sgp),
                 prior_sgp=float(prior.get(pid, 0.0)),
                 slot=slot,
                 floor=floor,
