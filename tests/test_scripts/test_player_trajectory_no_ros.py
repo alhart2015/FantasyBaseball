@@ -135,7 +135,13 @@ def test_only_the_pools_actually_queried_are_named(monkeypatch) -> None:
         module._resolve_player(
             "Solo Player", {"hitter": _empty()}, no_ros={"hitter": [], "pitcher": [1]}
         )
-    assert "pitcher" not in str(exc.value)
+    # ASSERT THE DISCRIMINATING FACT. No refusal message interpolates a pool name on any
+    # path, so `"pitcher" not in message` is true under the buggy implementation too --
+    # the same vacuous shape that shipped twice already on this branch. What separates
+    # the two is WHICH refusal fires: leaking the pitcher entry into a hitter-only query
+    # makes him look dropped rather than absent.
+    assert "no observed season" in str(exc.value)
+    assert "rest-of-season" not in str(exc.value)
 
 
 def test_a_two_way_player_keeps_the_half_that_has_a_projection(monkeypatch, capsys) -> None:
@@ -154,13 +160,17 @@ def test_a_two_way_player_keeps_the_half_that_has_a_projection(monkeypatch, caps
 
 
 def test_the_refusal_names_an_escape_that_actually_works(monkeypatch) -> None:
-    """The manual path is the `--player`-less branch, so an instruction to "supply the
-    line by hand" that keeps `--player` re-hits this same refusal."""
+    """Both escapes, because they cost different things. `--age N --sgp N` keeps
+    `--player` and therefore keeps his eligibility-derived floor; dropping `--player`
+    for the fully manual path loses it and needs `--position` back. An instruction that
+    named only the second sent the user to the more expensive one."""
     module = _script()
     _people(monkeypatch, module)
     with pytest.raises(SystemExit) as exc:
         module._resolve_player("Solo Player", {"hitter": _rows(1)}, no_ros={"hitter": [1]})
-    assert "without --player" in str(exc.value)
+    message = str(exc.value)
+    assert "--age N --sgp N" in message, "the cheap escape, which keeps eligibility"
+    assert "drop --player" in message, "and the fully manual one"
 
 
 def test_a_player_with_a_projection_is_untouched(monkeypatch) -> None:
@@ -235,3 +245,28 @@ def test_a_namesake_dropped_from_every_pool_he_plays_in_is_unscorable(monkeypatc
         module._resolve_player("Angel Sanchez", panels, no_ros={"hitter": [2], "pitcher": []})
     line = next(ln for ln in str(exc.value).splitlines() if "--mlbam-id 2" in ln)
     assert "cannot be anchored" in line, "a pool he never played in is not a survivor"
+
+
+def test_a_supplied_line_is_not_refused(monkeypatch) -> None:
+    """`--player X --age N --sgp N --prior-sgp N` overrides everything the dropped row
+    would have supplied, so the only thing left to take from the panel is his identity.
+    Refusing him there blocks an invocation that works -- and it is the one escape a
+    user who knows the numbers actually wants, since the manual path costs him the
+    eligibility-derived floor."""
+    module = _script()
+    _people(monkeypatch, module)
+    resolved = module._resolve_player(
+        "Solo Player", {"hitter": _rows(1)}, no_ros={"hitter": [1]}, overrides_supplied=True
+    )
+    assert [pool for pool, *_ in resolved] == ["hitter"]
+
+
+def test_the_escape_hatch_mentions_position_for_the_var_scale(monkeypatch) -> None:
+    """Following the message verbatim under `--scale var` hits
+    `parser.error("--scale var needs --position ...")`, so the instruction is only
+    complete for the default scale."""
+    module = _script()
+    _people(monkeypatch, module)
+    with pytest.raises(SystemExit) as exc:
+        module._resolve_player("Solo Player", {"hitter": _rows(1)}, no_ros={"hitter": [1]})
+    assert "--position" in str(exc.value)

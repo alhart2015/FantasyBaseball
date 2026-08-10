@@ -1216,9 +1216,20 @@ def build_player_view(
         # "projected", not "pace": since #348 an in-progress base season is what he has
         # done PLUS the rest-of-season blend, so the word has to say forecast rather
         # than extrapolation. A finished season is just its year, with no qualifier.
-        anchor_label=(
-            f"{base} projected" if bool(payload.get("base_season_partial", True)) else str(base)
-        ),
+        # THREE states, not two -- and the middle one is the live board. "projected"
+        # is only true when a rest-of-season snapshot actually supplied the remainder;
+        # a board pushed before #348 is partial AND unanchored, and its point is a
+        # straight-line PACE. Gating this on `base_season_partial` alone put the
+        # post-#348 word on pre-#348 numbers, which is the same defect the vintage note
+        # was fixed for one template over.
+        # COMPLETE is checked first: a finished season takes no qualifier at all, and
+        # that has to hold even on a blob that carries a snapshot date beside a complete
+        # base season. `load_anchored_panels` never reads a snapshot for a complete
+        # season, so a real push cannot produce that pair -- but the label should not
+        # depend on the writer having been correct.
+        anchor_label=(f"{base} projected" if payload.get("ros_snapshot") else f"{base} pace")
+        if bool(payload.get("base_season_partial", True))
+        else str(base),
         # `points(scale)` applies the offset; `YearPoint.age` is already `age + horizon`.
         projection=[
             {"age": p.age, "mean": p.mean, "p10": p.p10, "p90": p.p90} for p in sp.points(scale)

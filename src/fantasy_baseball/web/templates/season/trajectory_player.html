@@ -204,7 +204,7 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
         instead, and `build_player_view` suppresses this rather than printing it twice. -#}
     {% if board.anchor %}
     <tr><td>{{ board.anchor[0] }}</td><td>{{ '%.1f'|format(board.anchor[1]) }}</td>
-      <td class="muted">projected</td></tr>
+      <td class="muted">{{ board.anchor_label }}</td></tr>
     {% endif %}
     {% for pt in board.projection %}
     <tr><td>{{ pt.age }}</td><td>{{ '%.1f'|format(pt.mean) }}</td>

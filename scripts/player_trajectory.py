@@ -29,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
@@ -71,14 +72,16 @@ def _resolve_player(
     panels: dict[str, pd.DataFrame],
     mlbam_id: int | None = None,
     no_ros: dict[str, list[int]] | None = None,
-    snapshot_date: object | None = None,
+    snapshot_date: date | None = None,
+    overrides_supplied: bool = False,
 ) -> list[tuple[str, int, int, float]]:
     """One (pool, mlbam_id, age, sgp) per pool the player was used in.
 
     `no_ros` maps pool -> the ids `ros_anchor` DROPPED for having no rest-of-season row,
     and it governs whether a player is refused, announced, or scored. Getting it wrong is
-    silent in both directions, so the rule is stated once here and the whole state space
-    is pinned in tests/test_scripts/test_player_trajectory_no_ros.py:
+    silent in both directions, so the rule is stated once here and every case a review
+    pass has caught is pinned in tests/test_scripts/test_player_trajectory_no_ros.py
+    (`--mlbam-id` narrowing is NOT among them -- that path is unpinned):
 
     * A dropped player has no in-progress row left, so his newest surviving season is a
       SETTLED prior year. Resolving to it prints a complete trajectory headed with the
@@ -87,14 +90,20 @@ def _resolve_player(
     * A dropped player is still a REAL PLAYER matching the typed name, so he counts
       toward ambiguity even with no surviving rows. Keying disambiguation on surviving
       rows alone resolved silently to his namesake and printed that man's career.
-    * ...and the converse: the dropped set is read per RESOLVED id, not over every id the
-      name matched, or one dropped namesake suppresses a scorable player and the
-      "pick one" menu never runs.
+    * ...and the converse: the exclusion is APPLIED to the resolved id, not to every id
+      the name matched. (`dropped_by_pool` is still built over every matching id -- it
+      has to be, to decide candidacy -- but only the resolved id's membership skips a
+      pool.) Filtering on "any matching id was dropped" suppressed a scorable player and
+      the "pick one" menu never ran.
     * Only pools in `panels` are consulted, so `--pool hitter` cannot fail citing the
       pitcher pool.
     * A two-way player dropped from one pool keeps the other, and the lost half is
       announced -- a pitcher-only table for a two-way player looks exactly like a player
       who never hit.
+    * `overrides_supplied` (--age AND --sgp given) skips the refusal. Those two are the
+      only things the dropped row would have contributed besides his identity, so the
+      caller has already replaced the anchor by hand -- and refusing anyway would push
+      him to the fully manual path, which costs him the eligibility-derived floor.
 
     Returns a LIST, because this league drafts and scores a two-way player as two
     separate assets -- a hitter and a pitcher -- so each half gets its own trajectory
@@ -180,7 +189,7 @@ def _resolve_player(
     resolved_id = candidates[0]
     found = []
     for pool in panels:
-        if resolved_id in dropped_by_pool[pool]:
+        if resolved_id in dropped_by_pool[pool] and not overrides_supplied:
             # SAID OUT LOUD even when the other half survives -- see the docstring.
             print(
                 f"{name} ({pool}): dropped -- a current-season line but no row in the"
@@ -196,8 +205,9 @@ def _resolve_player(
         raise SystemExit(
             f"{who} has a current-season line but no row in the rest-of-season snapshot"
             f"{vintage}, so there is no full-season anchor to fit. He is off the keeper "
-            f"board for the same reason. To score him anyway, run without --player and "
-            f"supply the line: --pool POOL --age N --sgp N --prior-sgp N."
+            f"board for the same reason. To score him anyway, supply the line yourself: "
+            f"--age N --sgp N (keeps his eligibility), or drop --player entirely and pass "
+            f"--pool POOL --age N --sgp N --prior-sgp N --position POS."
         )
 
     if len(found) > 1:
@@ -712,6 +722,7 @@ def main() -> int:
             args.mlbam_id,
             no_ros=loaded.no_ros,
             snapshot_date=loaded.snapshot_date,
+            overrides_supplied=args.age is not None and args.sgp is not None,
         )
         queries = [
             # `is not None`, never `or`: --sgp 0 and --age 0 are falsy but meaningful.

@@ -251,10 +251,14 @@ _FACTORS = object()
 def _assert_factors_threaded(df, _kind, **kwargs):
     """Identity `era_normalize`, plus the one thing this file can check about #348.
 
-    The script must hand `era_normalize` a factor table computed BEFORE the anchor was
-    injected. If it ever stops, `factors` arrives as None and the real `era_normalize`
-    quietly derives one from the injected frame, which is the silent bias the parameter
-    was added to prevent.
+    It pins the WIRING, not the ordering: that the script forwards `era_factors`' return
+    value as `factors=` rather than dropping it. If it stops, `factors` arrives as None
+    and the real `era_normalize` quietly derives one from the frame it was handed.
+
+    It cannot detect the ordering. `_stub_the_sweep` sets `partial_season = False`, so no
+    snapshot is read and nothing is ever injected -- a script that computed the factor
+    table AFTER injection would produce an identical frame and still pass here. The
+    ordering is pinned where it lives, in tests/test_trajectory/test_ros_anchor.py.
     """
     assert kwargs.get("factors") is _FACTORS, (
         "push_trajectory_board must thread the actual-rows factor table into "

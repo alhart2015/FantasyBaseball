@@ -1539,18 +1539,31 @@ def test_an_unfound_player_has_no_anchor_point(payload: dict) -> None:
 
 
 @pytest.mark.parametrize(
-    ("stored", "expected"),
-    [(True, "2026 projected"), (False, "2026"), (None, "2026 projected")],
+    ("partial", "snapshot", "expected"),
+    [
+        (True, "2026-07-21", "2026 projected"),  # anchored: a snapshot supplied the rest
+        (True, None, "2026 pace"),  # pre-#348 board: partial, but nothing was projected
+        (None, None, "2026 pace"),  # old blob with no flag at all -- also unanchored
+        (False, None, "2026"),  # the season is over; no qualifier belongs on it
+        (False, "2026-07-21", "2026"),  # complete wins: nothing was injected either way
+    ],
 )
-def test_the_anchor_label_follows_the_boards_own_partial_flag(
-    payload: dict, stored: object, expected: str
+def test_the_anchor_label_follows_the_snapshot_then_the_partial_flag(
+    payload: dict, partial: object, snapshot: object, expected: str
 ) -> None:
-    """Built server-side like `axis_label`: the chart and the table read one string and
-    cannot disagree about whether the season is finished. `None` is an old blob, which
-    was written mid-season."""
-    blob = {**payload}
-    if stored is not None:
-        blob["base_season_partial"] = stored
+    """THREE states, not two. Built server-side like `axis_label` so the chart and the
+    table read one string and cannot disagree.
+
+    "projected" is true only when a rest-of-season snapshot actually supplied the
+    remainder. A board pushed before #348 is partial AND unanchored -- its point is a
+    straight-line pace -- and since the deployed board is only as fresh as the last
+    push, that is the live state until someone re-pushes. Keying the label on
+    `base_season_partial` alone put the post-#348 word on pre-#348 numbers."""
+    blob = {k: v for k, v in payload.items() if k != "ros_snapshot"}
+    if partial is not None:
+        blob["base_season_partial"] = partial
+    if snapshot is not None:
+        blob["ros_snapshot"] = snapshot
     blob["generated_at"] = f"hand-{next(_HAND_SEQ)}"  # do not share the parse cache
     view = build_player_view(blob, player="Big Bat", chart=None)
     assert view.anchor_label == expected
