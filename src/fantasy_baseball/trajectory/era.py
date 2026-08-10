@@ -176,7 +176,8 @@ def era_normalize(
                 f"categories would keep their raw rates while the rest of the frame is "
                 f"restated around them"
             )
-        uncovered = sorted({int(s) for s in df["season"].unique()} - set(factors.index))
+        seasons = {int(s) for s in df["season"].unique()}
+        uncovered = sorted(seasons - set(factors.index))
         if uncovered:
             raise ValueError(
                 f"the supplied {kind} factor table does not cover season(s) {uncovered}, "
@@ -184,6 +185,17 @@ def era_normalize(
                 f"1.0) while every other season is restated. Build the table from a frame "
                 f"spanning the same seasons."
             )
+        # A NaN CELL is deliberately NOT checked. It looks like the same failure -- the
+        # `fillna(1.0)` below neutralizes it and that season keeps its raw rate for that
+        # category -- but `era_factors` produces it on purpose for a season whose pool
+        # rate is 0 or whose pool is empty, and its own comment says so: "Both mean 'no
+        # usable adjustment for this season'; neutralize to 1.0 rather than blanking the
+        # column or, worse, multiplying a real rate by inf." A 2005 with no recorded
+        # saves has no honest `sv_ip` factor, and 1.0 is the right answer. Refusing it
+        # here rejected three legitimate panels in this repo's own test suite.
+        #
+        # Coverage is different: an ABSENT season was never considered at all, which is a
+        # statement about the table's provenance rather than about the league.
 
     out = df.copy()
     for rate in RATE_DENOMINATORS[kind]:

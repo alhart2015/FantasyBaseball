@@ -298,23 +298,7 @@ def _ros_by_id(ros: pd.DataFrame, columns: list[str], kind: str) -> pd.DataFrame
             f"Adding both would inflate the remainder by a whole projection, and every "
             f"number downstream would still render normally."
         )
-    remainder = frame.set_index("mlbam_id")[columns].astype(float)
-    # A NaN does NOT surface as a NaN score. Measured: a NaN `hr` produced a 9.34 SGP
-    # row whose home runs contributed nothing -- a normal-looking number that clears
-    # every downstream gate, which is the failure mode this repo ranks worst. The
-    # blended FanGraphs frame cannot currently produce one (`_blend_players` collapses
-    # an all-NaN stat to 0.0), but this function is public and takes any frame, and the
-    # cost of finding out the hard way is a whole board of quietly wrong scores.
-    bad = remainder.columns[remainder.isna().any()].tolist()
-    if bad:
-        holes = remainder.index[remainder[bad].isna().any(axis=1)].tolist()
-        raise ValueError(
-            f"the {kind} ROS blend has NaN in {bad} for {len(holes)} player(s) "
-            f"(e.g. mlbam {holes[:5]}), so their full-season line would score as though "
-            f"those categories were zero -- and it would look like an ordinary number. "
-            f"Re-stage the snapshot rather than blending a partial one."
-        )
-    return remainder
+    return frame.set_index("mlbam_id")[columns].astype(float)
 
 
 def anchor_full_season(
@@ -395,6 +379,26 @@ def anchor_full_season(
     if kept.empty:
         return panel[~target].copy(), dropped
     add = remainder.loc[kept["mlbam_id"].astype(int)]
+
+    # AFTER the join, over the rows that will actually be added. A NaN does NOT surface
+    # as a NaN score: measured, a NaN `hr` produced a 9.34 SGP row whose home runs
+    # contributed nothing -- an ordinary-looking number that clears every downstream
+    # gate, which is the failure this repo ranks worst.
+    #
+    # Checked HERE and not over the whole blended frame. That frame is the entire
+    # FanGraphs export (~4,748 hitter rows against ~600 anchored players), so a guard
+    # across all of it let one malformed row for a deep-minors player nobody prices
+    # abort the whole board build, with no override -- and the join two lines up would
+    # have discarded that row anyway.
+    holes = add.columns[add.isna().any()].tolist()
+    if holes:
+        who = add.index[add[holes].isna().any(axis=1)].tolist()
+        raise ValueError(
+            f"the {kind} ROS blend has NaN in {holes} for {len(who)} anchored player(s) "
+            f"(e.g. mlbam {who[:5]}), so their full-season line would score as though "
+            f"those categories were zero -- and it would look like an ordinary number. "
+            f"Re-stage the snapshot rather than blending a partial one."
+        )
 
     # The realized half, reconstructed from what the panel stores. `_reconstruct` does
     # exactly this for scoring; it is spelled again here because that one writes display

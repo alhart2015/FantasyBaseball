@@ -473,3 +473,16 @@ def test_every_scored_rate_is_also_combined() -> None:
             f"combined with the rest-of-season line; they would keep their "
             f"season-to-date value over a full-season volume"
         )
+
+
+def test_a_nan_for_a_player_nobody_anchors_does_not_abort_the_build() -> None:
+    """The blended frame is the whole FanGraphs export -- ~4,748 hitter rows against the
+    ~600 with a current-season panel line. A guard across all of it let one malformed row
+    for a deep-minors player abort every board, with no override, when the join discards
+    that row regardless."""
+    ros = pd.concat([_ros_hitter(), _ros_hitter(mlbam_id=99999)], ignore_index=True)
+    ros.loc[ros["mlbam_id"] == 99999, "hr"] = float("nan")
+
+    out, dropped = anchor_full_season(_panel(YTD_HITTER), ros, kind="hitter", season=2026)
+    assert dropped == []
+    assert out.iloc[0]["pa"] == pytest.approx(500.0)

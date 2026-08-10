@@ -249,9 +249,14 @@ def season_elapsed_fraction(df: pd.DataFrame, season: int) -> float:
 
     PROVENANCE ONLY since #348. It used to drive the pace adjustment every board fit was
     anchored on; the anchor is now season-to-date plus a rest-of-season projection
-    (`ros_anchor`), and this is stamped on the payload so a reader can see how much of
-    the base season is record rather than forecast. `games` is deliberately left
-    un-projected by the anchor, which is what keeps this a fact about what was played.
+    (`ros_anchor`), and this is stamped on the payload so a reader can date the board.
+    `games` is deliberately left un-projected by the anchor, which is what keeps this a
+    fact about what was played.
+
+    It is NOT the share of the base season that is record rather than forecast, and must
+    not be described as one: the panel's realized half runs to the panel build date while
+    the remainder was projected from a snapshot that may be weeks older, so the two
+    overlap. See `ros_anchor`'s module docstring.
 
     Estimated as the busiest player's games over a full schedule. An everyday regular
     plays nearly every team game, so the max is a good read on the calendar and needs

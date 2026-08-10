@@ -159,8 +159,9 @@ def _collapse(panel: pd.DataFrame) -> pd.DataFrame:
     agree, so this cannot drift into a second, different definition of the same rule.
 
     The other rules follow from what a mid-season trade means: half a season plus half a
-    season is one season, so appearances ADD; and if either half is in progress then the
-    combined season is too.
+    season is one season, so appearances ADD. `partial_season` used to be carried too,
+    combined with "any"; nothing collapsed reads it since the anchor replaced pacing
+    (#348), so it is no longer aggregated and no longer described here.
     """
     aggregations: dict[str, tuple[str, str]] = {"age": ("age", "first"), "sgp": ("sgp", "sum")}
     for column, how in _SPLIT_RULES.items():
