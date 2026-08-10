@@ -217,3 +217,34 @@ def test_precomputed_factors_override_the_frames_own_rates() -> None:
     assert normalized.loc[normalized["season"] == 2026, "hr_pa"].iloc[0] == pytest.approx(
         0.055 * factors.loc[2026, "hr_pa"]
     )
+
+
+def test_a_supplied_factor_table_must_cover_the_frame() -> None:
+    """`factors` bypasses `era_factors`, and with it the reference-window check that is
+    the only thing standing between a caller and a silently wrong restatement.
+
+    A season the table does not cover does not fail -- `.map` yields NaN and the
+    `fillna(1.0)` below treats it as a neutral era, so that season silently keeps its
+    raw rates while every other season is restated around it. That is a season priced in
+    different units from the ones it is ranked against, and nothing says so.
+    """
+    panel = _hitters(
+        [
+            {"mlbam_id": 1, "season": 2023, "hr_pa": 0.050},
+            {"mlbam_id": 2, "season": 2024, "hr_pa": 0.060},
+            {"mlbam_id": 3, "season": 2025, "hr_pa": 0.055},
+            {"mlbam_id": 4, "season": 2026, "hr_pa": 0.030},
+        ]
+    )
+    partial = era_factors(panel[panel["season"] != 2026], "hitter")
+    with pytest.raises(ValueError, match="2026"):
+        era_normalize(panel, "hitter", factors=partial)
+
+
+def test_a_factor_table_missing_a_rate_column_is_refused() -> None:
+    """Same failure with a different shape: a dropped column takes the whole category
+    out of the restatement while the rest of the frame is scaled around it."""
+    panel = _reference_panel()
+    factors = era_factors(panel, "hitter").drop(columns=["hr_pa"])
+    with pytest.raises(KeyError, match="hr_pa"):
+        era_normalize(panel, "hitter", factors=factors)

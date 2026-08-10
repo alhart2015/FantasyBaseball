@@ -160,6 +160,30 @@ def era_normalize(
     """
     if factors is None:
         factors = era_factors(df, kind, reference_seasons=reference_seasons)
+    else:
+        # A supplied table BYPASSES `era_factors`, and with it the reference-window check
+        # that is the only thing standing between a caller and a silently wrong
+        # restatement. Neither failure below announces itself: a season the table does
+        # not cover maps to NaN and the `fillna(1.0)` treats it as a neutral era, so it
+        # keeps its raw rates while every other season is restated around it -- a season
+        # priced in different units from the ones it is ranked against. `reference_seasons`
+        # is not consulted on this branch either; the table already embodies a window,
+        # and re-deriving one here would be a second answer to the same question.
+        missing_rates = [r for r in RATE_DENOMINATORS[kind] if r not in factors.columns]
+        if missing_rates:
+            raise KeyError(
+                f"the supplied {kind} factor table is missing {missing_rates}, so those "
+                f"categories would keep their raw rates while the rest of the frame is "
+                f"restated around them"
+            )
+        uncovered = sorted({int(s) for s in df["season"].unique()} - set(factors.index))
+        if uncovered:
+            raise ValueError(
+                f"the supplied {kind} factor table does not cover season(s) {uncovered}, "
+                f"which would silently keep their raw rates (the NaN factor falls back to "
+                f"1.0) while every other season is restated. Build the table from a frame "
+                f"spanning the same seasons."
+            )
 
     out = df.copy()
     for rate in RATE_DENOMINATORS[kind]:
