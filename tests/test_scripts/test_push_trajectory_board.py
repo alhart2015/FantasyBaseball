@@ -243,6 +243,26 @@ def _fake_payloads(module, monkeypatch):
     return board, chart
 
 
+#: Stands in for the factor table `load_anchored_panels` derives from the ACTUAL panel.
+#: Its identity is the assertion -- see the `era_factors` stub below.
+_FACTORS = object()
+
+
+def _assert_factors_threaded(df, _kind, **kwargs):
+    """Identity `era_normalize`, plus the one thing this file can check about #348.
+
+    The script must hand `era_normalize` a factor table computed BEFORE the anchor was
+    injected. If it ever stops, `factors` arrives as None and the real `era_normalize`
+    quietly derives one from the injected frame, which is the silent bias the parameter
+    was added to prevent.
+    """
+    assert kwargs.get("factors") is _FACTORS, (
+        "push_trajectory_board must thread the actual-rows factor table into "
+        "era_normalize; None makes it re-derive from the anchored frame"
+    )
+    return df
+
+
 def _stub_the_sweep(monkeypatch):
     """Make `build_payload` runnable with no panel on disk, so what it STAMPS can be
     pinned on a fresh clone.
@@ -288,12 +308,14 @@ def _stub_the_sweep(monkeypatch):
         "fantasy_baseball.trajectory.panel.load_scored_panel": lambda _k, **_kw: panel.copy(),
         "fantasy_baseball.trajectory.panel.panel_path": lambda k, _d: pathlib.Path(f"{k}.csv"),
         "fantasy_baseball.trajectory.panel.season_elapsed_fraction": lambda _df, _s: 0.7,
-        "fantasy_baseball.trajectory.era.era_normalize": lambda df, _k, **_kw: df,
-        # The shared panel carries `sgp` and nothing to derive a run environment from,
-        # so the real factor table would raise on the missing rate columns. What the
-        # ordering between this and the anchor has to be is pinned where it lives, in
-        # tests/test_trajectory/test_ros_anchor.py.
-        "fantasy_baseball.trajectory.era.era_factors": lambda _df, _k, **_kw: None,
+        # A SENTINEL, not None. `era_normalize(factors=None)` silently reverts to
+        # deriving the table from the frame it was handed -- the exact failure the
+        # parameter exists to prevent -- so a stub returning None would leave this test
+        # green while the script stopped passing the actual-rows table at all. The
+        # `era_normalize` stub asserts it received the sentinel, which is what pins the
+        # wiring; the ORDERING is pinned where it lives, in test_ros_anchor.py.
+        "fantasy_baseball.trajectory.era.era_factors": lambda _df, _k, **_kw: _FACTORS,
+        "fantasy_baseball.trajectory.era.era_normalize": _assert_factors_threaded,
         "fantasy_baseball.trajectory.board.player_names": lambda _c: pd.Series(dtype=object),
         "fantasy_baseball.trajectory.board.season_slots": lambda _c, _s: {},
         "fantasy_baseball.trajectory.board.board_inputs": lambda *_a, **kw: rows[kw["kind"]],
