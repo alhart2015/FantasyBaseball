@@ -25,6 +25,14 @@ Re-run it when the panel is rebuilt (`scripts/build_pt_panel.py`) or when a fres
 export lands (`scripts/ingest_ros_export.py`) -- either one moves every current-season
 figure the fits are built on.
 
+**DEPLOY THE READER BEFORE THE FIRST ANCHORED PUSH.** This writes to the same prod
+Upstash the live Render build reads, and `ros_snapshot` is an additive key a pre-#348
+reader tolerates rather than rejects -- so nothing crashes and nothing looks wrong. What
+a stale reader does is print the old copy: "paced full-year figure", "2026 pace", over
+values that are now part projection. The board is the one blob that does NOT move with a
+dashboard refresh, so that mislabelling persists until someone notices. Same rule, same
+reason as the 2026-08-06 `/trajectory` incident: the reader ships first.
+
 WHY ONE SWEEP AT THE LONGEST HORIZON. The end-year dropdown needs no refit -- see
 `fantasy_baseball.trajectory.sweep`, where the reasoning and the measurement live.
 """
