@@ -108,30 +108,12 @@ def _resolve_player(
         )
     ids = {mlbam_id} if mlbam_id is not None else named
     found = []
-    # Pools the anchor DROPPED him from, for want of a rest-of-season row. His current
-    # season is gone from those frames, so without this the `idxmax` below lands on his
-    # PRIOR year -- which is settled, so the in-progress notice never prints either, and
-    # the page renders a complete trajectory headed with the wrong age and the wrong
-    # anchor. Indistinguishable from a correct one. Both board scripts count and print
-    # this exclusion; a silent backdate is the one reading it must not have.
-    dropped = {pool for pool, ids_ in (no_ros or {}).items() if ids & {int(i) for i in ids_}}
     for pool, panel in panels.items():
-        if pool in dropped:
-            continue
         rows = panel[panel["mlbam_id"].isin(ids)]
         if not rows.empty:
             found.append((pool, rows))
     if not found:
         who = f"mlbam id {mlbam_id}" if mlbam_id is not None else name
-        if dropped:
-            # A DIFFERENT statement from "no observed season". He has one; the board
-            # cannot price it, and the reason is nameable.
-            raise SystemExit(
-                f"{who} has a current-season line but no row in the rest-of-season "
-                f"snapshot ({', '.join(sorted(dropped))}), so there is no full-season "
-                f"anchor to fit. He is off the keeper board for the same reason -- see "
-                f"its 'no rest-of-season projection' exclusion count."
-            )
         raise SystemExit(f"{who} is in the people cache but has no observed season in the panel")
 
     present = sorted({int(i) for _, rows in found for i in rows["mlbam_id"]})
@@ -144,6 +126,45 @@ def _resolve_player(
             lines.append(f"    --mlbam-id {pid}   {names.get(pid, '?')}, through {last}")
         raise SystemExit(
             f"{name!r} matches {len(present)} different players; pick one:\n" + "\n".join(lines)
+        )
+
+    # AFTER disambiguation, and per RESOLVED id. The anchor drops a player with no
+    # rest-of-season row, so his current season is gone from that pool's frame and the
+    # `idxmax` below would land on his PRIOR year -- which is settled, so the
+    # in-progress notice never prints either and the page renders a complete trajectory
+    # headed with the wrong age and the wrong anchor. Both board scripts count and print
+    # this exclusion; a silent backdate is the one reading it must not have.
+    #
+    # Applied here rather than before the loop because `ids` holds every namesake until
+    # disambiguation runs. Filtering pools on "any id in `ids` was dropped" suppressed a
+    # perfectly scorable player whenever a DIFFERENT player sharing his normalized name
+    # had no ROS row -- and it did so by skipping the pool, so `found` came out empty and
+    # the "pick one" branch above never ran. The user was pointed at a data problem
+    # instead of at `--mlbam-id`. There are 58 such collisions among hitters alone.
+    resolved_id = present[0]
+    excluded = {
+        pool for pool in panels if resolved_id in {int(i) for i in (no_ros or {}).get(pool, ())}
+    }
+    for pool in sorted(excluded):
+        # SAID OUT LOUD even when the other half survives. He is two assets in this
+        # league, and a pitcher-only table for a two-way player looks exactly like a
+        # player who never hit.
+        # No season number: the anchor has already removed his current-season row, so
+        # the newest one left is his PRIOR year and naming it would assert the opposite
+        # of what happened.
+        print(
+            f"{name} ({pool}): dropped -- current-season line but no row in the "
+            f"rest-of-season snapshot, so there is no full-season anchor to fit. Same "
+            f"reason he is off the keeper board."
+        )
+    found = [(pool, rows) for pool, rows in found if pool not in excluded]
+    if not found:
+        who = f"mlbam id {mlbam_id}" if mlbam_id is not None else name
+        raise SystemExit(
+            f"{who} has no row in the rest-of-season snapshot for any pool you asked "
+            f"for ({', '.join(sorted(excluded))}), so there is no full-season anchor to "
+            f"fit. To score him anyway, supply the line by hand: --pool POOL --age N "
+            f"--sgp N --prior-sgp N --position POS."
         )
 
     if len(found) > 1:

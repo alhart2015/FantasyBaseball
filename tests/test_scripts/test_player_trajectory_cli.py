@@ -205,3 +205,69 @@ def test_a_two_way_player_dropped_from_one_pool_still_scores_the_other(monkeypat
 
     resolved = module._resolve_player("Solo Player", panels, no_ros={"hitter": [1], "pitcher": []})
     assert [pool for pool, *_ in resolved] == ["pitcher"]
+
+
+def _namesakes(monkeypatch, module) -> None:
+    """Two different players sharing one normalized name. CLAUDE.md records 58 such
+    collisions among hitters alone."""
+    people = pd.DataFrame(
+        {
+            "id": [1, 2],
+            "fullName": ["Angel Sanchez", "Angel Sanchez"],
+            "norm": ["angel sanchez", "angel sanchez"],
+        }
+    )
+    monkeypatch.setattr(module, "board_people", lambda _cache: people)
+
+
+def test_one_namesake_being_dropped_does_not_suppress_the_other(monkeypatch) -> None:
+    """`dropped` was computed over ALL ids matching the name, so if ANY namesake had no
+    ROS row the whole pool was skipped for EVERY namesake -- the scorable player was
+    refused and the "matches 2 different players; pick one" branch was never reached.
+    The user was pointed at a data problem instead of at `--mlbam-id`."""
+    module = _script()
+    _namesakes(monkeypatch, module)
+    panel = pd.DataFrame(
+        [
+            {"mlbam_id": 1, "season": 2026, "age": 27, "sgp": 12.0, "partial_season": True},
+            {"mlbam_id": 2, "season": 2025, "age": 30, "sgp": 8.0, "partial_season": False},
+        ]
+    )
+    with pytest.raises(SystemExit) as exc:
+        module._resolve_player("Angel Sanchez", {"hitter": panel}, no_ros={"hitter": [2]})
+    assert "pick one" in str(exc.value), "ambiguity is resolved before exclusion is applied"
+
+
+def test_the_refusal_names_only_pools_that_were_queried(monkeypatch) -> None:
+    """`--pool hitter` restricts `panels`, but `dropped` was derived from the whole
+    `no_ros` dict, so a pure pitcher dropped from the pitcher pool produced 'no row in
+    the rest-of-season snapshot (pitcher)' for a HITTER query -- naming a pool nobody
+    asked about, when the real answer is 'he is not a hitter'."""
+    module = _script()
+    _people(monkeypatch, module)
+    with pytest.raises(SystemExit) as exc:
+        module._resolve_player(
+            "Solo Player",
+            {"hitter": pd.DataFrame(columns=["mlbam_id", "season"])},
+            no_ros={"hitter": [], "pitcher": [1]},
+        )
+    assert "pitcher" not in str(exc.value)
+    assert "no observed season" in str(exc.value)
+
+
+def test_a_dropped_half_of_a_two_way_player_is_announced(monkeypatch, capsys) -> None:
+    """He survives in the other pool, so `found` is non-empty and the refusal never
+    fires -- and `len(found) > 1` is now False, so the "was used in both roles" notice
+    does not print either. Nothing said the bat was gone. That is the silent drop the
+    fix's own comment calls the one reading it must not have."""
+    module = _script()
+    _people(monkeypatch, module)
+    panels = {
+        "hitter": _panel_after_the_anchor_dropped_him(),
+        "pitcher": _panel_after_the_anchor_dropped_him(),
+    }
+    resolved = module._resolve_player("Solo Player", panels, no_ros={"hitter": [1], "pitcher": []})
+
+    assert [pool for pool, *_ in resolved] == ["pitcher"]
+    said = capsys.readouterr().out
+    assert "hitter" in said and "rest-of-season" in said, "the dropped half is named"
