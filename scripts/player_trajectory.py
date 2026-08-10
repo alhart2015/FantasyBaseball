@@ -70,8 +70,31 @@ def _resolve_player(
     name: str,
     panels: dict[str, pd.DataFrame],
     mlbam_id: int | None = None,
+    no_ros: dict[str, list[int]] | None = None,
+    snapshot_date: object | None = None,
 ) -> list[tuple[str, int, int, float]]:
     """One (pool, mlbam_id, age, sgp) per pool the player was used in.
+
+    `no_ros` maps pool -> the ids `ros_anchor` DROPPED for having no rest-of-season row,
+    and it governs whether a player is refused, announced, or scored. Getting it wrong is
+    silent in both directions, so the rule is stated once here and the whole state space
+    is pinned in tests/test_scripts/test_player_trajectory_no_ros.py:
+
+    * A dropped player has no in-progress row left, so his newest surviving season is a
+      SETTLED prior year. Resolving to it prints a complete trajectory headed with the
+      wrong age and the wrong anchor -- and the in-progress notice does not fire either,
+      because that row really is settled. He is refused instead, with the reason named.
+    * A dropped player is still a REAL PLAYER matching the typed name, so he counts
+      toward ambiguity even with no surviving rows. Keying disambiguation on surviving
+      rows alone resolved silently to his namesake and printed that man's career.
+    * ...and the converse: the dropped set is read per RESOLVED id, not over every id the
+      name matched, or one dropped namesake suppresses a scorable player and the
+      "pick one" menu never runs.
+    * Only pools in `panels` are consulted, so `--pool hitter` cannot fail citing the
+      pitcher pool.
+    * A two-way player dropped from one pool keeps the other, and the lost half is
+      announced -- a pitcher-only table for a two-way player looks exactly like a player
+      who never hit.
 
     Returns a LIST, because this league drafts and scores a two-way player as two
     separate assets -- a hitter and a pitcher -- so each half gets its own trajectory
@@ -106,25 +129,63 @@ def _resolve_player(
             f"Ids for that name: {', '.join(str(i) for i in sorted(named))}"
         )
     ids = {mlbam_id} if mlbam_id is not None else named
+    who = f"mlbam id {mlbam_id}" if mlbam_id is not None else name
+    vintage = f" ({snapshot_date})" if snapshot_date else ""
+
+    rows_by_pool = {pool: panel[panel["mlbam_id"].isin(ids)] for pool, panel in panels.items()}
+    # Scoped to `panels`, so a one-pool query cannot be failed citing the other pool.
+    dropped_by_pool = {
+        pool: ids & {int(i) for i in (no_ros or {}).get(pool, ())} for pool in panels
+    }
+    dropped_ids = set().union(*dropped_by_pool.values()) if dropped_by_pool else set()
+
+    with_rows = {int(i) for rows in rows_by_pool.values() for i in rows["mlbam_id"]}
+    # A DROPPED player counts as a candidate even with no surviving rows: the anchor
+    # deleted his only season, and treating that as absence resolved silently to a
+    # namesake and printed the wrong man's career.
+    candidates = sorted(with_rows | dropped_ids)
+    if not candidates:
+        raise SystemExit(f"{who} is in the people cache but has no observed season in the panel")
+
+    if len(candidates) > 1:
+        names = people.set_index("id")["fullName"]
+        lines = []
+        for pid in candidates:
+            spans = [r[r["mlbam_id"] == pid] for r in rows_by_pool.values()]
+            spans = [s for s in spans if not s.empty]
+            if pid in dropped_ids:
+                # NOT `through {last}`: the anchor has already removed his current
+                # season, so the newest one left would advertise him as finished a year
+                # before he actually played -- and picking him dies on the exclusion.
+                note = f"no rest-of-season row{vintage}, so he cannot be anchored"
+            else:
+                note = f"through {max(int(s['season'].max()) for s in spans)}"
+            lines.append(f"    --mlbam-id {pid}   {names.get(pid, '?')}, {note}")
+        raise SystemExit(
+            f"{name!r} matches {len(candidates)} different players; pick one:\n" + "\n".join(lines)
+        )
+
+    resolved_id = candidates[0]
     found = []
-    for pool, panel in panels.items():
-        rows = panel[panel["mlbam_id"].isin(ids)]
+    for pool in panels:
+        if resolved_id in dropped_by_pool[pool]:
+            # SAID OUT LOUD even when the other half survives -- see the docstring.
+            print(
+                f"{name} ({pool}): dropped -- a current-season line but no row in the"
+                f"{vintage or ''} rest-of-season snapshot, so there is no full-season "
+                f"anchor to fit. Same reason he is off the keeper board."
+            )
+            continue
+        rows = rows_by_pool[pool]
+        rows = rows[rows["mlbam_id"] == resolved_id]
         if not rows.empty:
             found.append((pool, rows))
     if not found:
-        who = f"mlbam id {mlbam_id}" if mlbam_id is not None else name
-        raise SystemExit(f"{who} is in the people cache but has no observed season in the panel")
-
-    present = sorted({int(i) for _, rows in found for i in rows["mlbam_id"]})
-    if len(present) > 1:
-        names = people.set_index("id")["fullName"]
-        lines = []
-        for pid in present:
-            spans = [rows[rows["mlbam_id"] == pid] for _, rows in found]
-            last = max(int(s["season"].max()) for s in spans if not s.empty)
-            lines.append(f"    --mlbam-id {pid}   {names.get(pid, '?')}, through {last}")
         raise SystemExit(
-            f"{name!r} matches {len(present)} different players; pick one:\n" + "\n".join(lines)
+            f"{who} has a current-season line but no row in the rest-of-season snapshot"
+            f"{vintage}, so there is no full-season anchor to fit. He is off the keeper "
+            f"board for the same reason. To score him anyway, run without --player and "
+            f"supply the line: --pool POOL --age N --sgp N --prior-sgp N."
         )
 
     if len(found) > 1:
@@ -633,7 +694,13 @@ def main() -> int:
         # The query needs the in-progress season; the comp pool must not have it.
         wanted = [args.pool] if args.pool else ["hitter", "pitcher"]
         live = {k: load(k) for k in wanted}
-        resolved = _resolve_player(args.player, live, args.mlbam_id)
+        resolved = _resolve_player(
+            args.player,
+            live,
+            args.mlbam_id,
+            no_ros=loaded.no_ros,
+            snapshot_date=loaded.snapshot_date,
+        )
         queries = [
             # `is not None`, never `or`: --sgp 0 and --age 0 are falsy but meaningful.
             (
