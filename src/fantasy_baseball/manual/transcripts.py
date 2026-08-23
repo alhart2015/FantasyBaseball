@@ -30,7 +30,7 @@ from typing import Any
 
 import yaml
 
-from fantasy_baseball.models.positions import IL_SLOTS, Position
+from fantasy_baseball.models.positions import IL_SLOTS, PITCHER_ELIGIBLE, Position
 from fantasy_baseball.models.standings import CategoryStats, Standings, StandingsEntry
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category, OpportunityStat
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -139,6 +139,19 @@ def _nonempty_str(value: Any, *, where: str, field: str, errors: list[str]) -> s
 # ---------------------------------------------------------------- rosters
 
 
+def _is_pitcher_row(row: Mapping[str, str]) -> bool:
+    """True when this transcribed row is the PITCHER half of a name.
+
+    Read off the eligibility string Yahoo prints, which is the only type signal a
+    transcription carries -- the projection frames are not loaded at validation
+    time. Any pitcher-eligible slot makes it a pitcher row: Yahoo prints "P" for
+    every pitcher in this league, and a two-way player's two rows are "Util" and
+    "P" respectively.
+    """
+    parsed = Position.parse_list(row.get("positions", ""))
+    return any(p in PITCHER_ELIGIBLE for p in parsed)
+
+
 def _parse_player(row: Any, *, team: str, index: int, errors: list[str]) -> dict[str, str] | None:
     """Turn one transcribed player block into a weekly_rosters_history row."""
     where = f"team {team!r} player #{index + 1}"
@@ -221,6 +234,13 @@ def load_manual_rosters(path: Path) -> ManualRosterSnapshot:
         teams_raw = []
 
     rows_by_team: dict[str, list[dict[str, str]]] = {}
+    # SPANS EVERY TEAM. Scoped per team, this caught a name typed twice on one
+    # roster and missed the same player typed onto TWO -- which `League.from_redis`
+    # gives to both, and `ProjectedStandings.from_rosters` then counts twice,
+    # inflating two teams' projected totals and shifting every DeltaRoto
+    # comparison behind the audit. Every per-team slot count stays legal, so
+    # nothing downstream catches it.
+    seen_players: dict[tuple[str, bool], tuple[str, str]] = {}
     for i, team_raw in enumerate(teams_raw):
         where = f"teams[{i}]"
         if not isinstance(team_raw, Mapping):
@@ -240,19 +260,28 @@ def load_manual_rosters(path: Path) -> ManualRosterSnapshot:
             continue
 
         rows: list[dict[str, str]] = []
-        seen_names: dict[str, str] = {}
         for j, player_raw in enumerate(players_raw):
             row = _parse_player(player_raw, team=team, index=j, errors=errors)
             if row is None:
                 continue
-            key = normalize_name(row["player_name"])
-            if key in seen_names:
-                errors.append(
-                    f"team {team!r}: duplicate player {row['player_name']!r} "
-                    f"(already transcribed as {seen_names[key]!r})"
+            # KEYED ON (name, player type), NEVER THE BARE NAME. Shohei Ohtani is
+            # two rostered entities, and in the 2026 league they sit on DIFFERENT
+            # teams -- the batter on Work in Progress, the pitcher on Tortured
+            # Baseball Department. A bare-name key would reject the real rosters.
+            key = (normalize_name(row["player_name"]), _is_pitcher_row(row))
+            prior = seen_players.get(key)
+            if prior is not None:
+                prior_team, prior_name = prior
+                where = (
+                    f"already transcribed as {prior_name!r}"
+                    if prior_team == team
+                    else (
+                        f"also on team {prior_team!r} -- a player cannot be on more than one team"
+                    )
                 )
+                errors.append(f"team {team!r}: duplicate player {row['player_name']!r} ({where})")
                 continue
-            seen_names[key] = row["player_name"]
+            seen_players[key] = (team, row["player_name"])
             rows.append(row)
         rows_by_team[team] = rows
 

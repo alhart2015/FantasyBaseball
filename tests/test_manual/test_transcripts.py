@@ -243,6 +243,56 @@ def test_duplicate_player_within_a_team_rejected(tmp_path: Path) -> None:
     assert any("duplicate player" in e for e in exc.value.errors)
 
 
+def test_the_same_player_on_two_teams_is_rejected(tmp_path: Path) -> None:
+    """A player can only be on one roster, and the consequence of missing it is
+    not a cosmetic duplicate.
+
+    ``League.from_redis`` gives him to both teams and
+    ``ProjectedStandings.from_rosters`` counts his rest-of-season line twice,
+    inflating two teams' projected totals and shifting every roto comparison --
+    including the DeltaRoto behind the audit's recommendations. Every per-team
+    slot count stays legal, so nothing else catches it.
+
+    Reachable the obvious way: a trade lands between two roster screenshots and
+    the player is typed onto both the old team and the new one.
+    """
+    payload = _roster_payload()
+    moved = dict(payload["teams"][0]["players"][0])
+    moved["slot"] = "BN"
+    payload["teams"][1]["players"].append(moved)
+    path = _write(tmp_path, "rosters.yaml", payload)
+
+    with pytest.raises(ManualTranscriptError) as exc:
+        load_manual_rosters(path)
+
+    joined = " ".join(exc.value.errors)
+    assert "on more than one team" in joined
+    assert payload["teams"][0]["name"] in joined and payload["teams"][1]["name"] in joined
+
+
+def test_a_two_way_player_may_be_on_two_teams_as_his_two_halves(tmp_path: Path) -> None:
+    """Ohtani is two rostered entities and this league splits them across teams.
+
+    The cross-team check must therefore key on (name, player type) and not on the
+    bare name -- keying on the name alone would reject the real 2026 rosters,
+    where Work in Progress holds the batter and Tortured Baseball Department the
+    pitcher.
+    """
+    payload = _roster_payload()
+    payload["teams"][0]["players"].append(
+        {"name": "Shohei Ohtani", "slot": "UTIL", "positions": "Util"}
+    )
+    payload["teams"][1]["players"].append(
+        {"name": "Shohei Ohtani", "slot": "P", "positions": "P"}
+    )
+    path = _write(tmp_path, "rosters.yaml", payload)
+
+    snapshot = load_manual_rosters(path)
+
+    names = [r["player_name"] for rows in snapshot.rows_by_team.values() for r in rows]
+    assert names.count("Shohei Ohtani") == 2
+
+
 def test_future_snapshot_date_rejected(tmp_path: Path) -> None:
     payload = _roster_payload()
     payload["snapshot_date"] = (local_today() + timedelta(days=1)).isoformat()
