@@ -391,7 +391,19 @@ def role_from_ip(ip: float) -> str:
 
 
 # Yahoo player statuses that indicate a player is on the injured list.
-IL_STATUSES = frozenset({"IL", "IL+", "IL10", "IL15", "IL60", "DL", "DL+"})
+#
+# MLB carries a 7-day concussion IL alongside the 10/15/60-day lists, and Yahoo
+# reports it as "IL7". It was absent here until 2026-08-22, when a transcribed
+# roster showed an IL7 player sitting in an ACTIVE slot: `Player.is_on_il`
+# checks status first and slot second, so an IL7 player parked at 1B failed
+# BOTH checks and was scored as a healthy everyday contributor. That silently
+# inflates the owning team's projected counting stats and therefore every
+# DeltaRoto comparison against them. The bug is not specific to any one intake
+# path -- the Yahoo API emits the same string.
+#
+# Keep this set in sync with whatever Yahoo can actually return: a missing
+# variant does not raise, it just quietly treats an injured player as active.
+IL_STATUSES = frozenset({"IL", "IL+", "IL7", "IL10", "IL15", "IL60", "DL", "DL7", "DL+"})
 
 DEFAULT_SGP_DENOMINATORS: dict[Category, float] = {
     Category.R: 20.0,
