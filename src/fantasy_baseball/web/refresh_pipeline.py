@@ -1633,8 +1633,35 @@ class RefreshRun:
 
         # Cache positions for all known players (roster + opponents + FAs)
         positions_map = build_positions_map(self.roster_players, self.opp_rosters, self.fa_players)
+        if self.manual_mode:
+            # MERGED, not replaced -- and only in manual mode, where this blob is an
+            # INPUT to the pool that produced it. `build_manual_free_agents` gets its
+            # eligibility from `load_positions()`, which reads this key, and the pool it
+            # returns is per-position CAPPED. So a straight overwrite writes back
+            # "rostered players plus the handful of free agents that made the cut" and
+            # every later run derives its pool from that narrower map -- a one-way
+            # ratchet that quietly stops considering legitimate free agents.
+            #
+            # What it destroys is specific: `bootstrap_manual_kv.py` copies the frozen
+            # Yahoo `cache:positions` precisely because it is the most accurate
+            # eligibility map available while Yahoo auth is down, and the first manual
+            # run used to throw most of it away. The merge keeps every prior entry and
+            # lets a freshly observed one win, so eligibility still UPDATES; it just
+            # cannot shrink.
+            #
+            # The Yahoo path is untouched: there the pool is the real free-agent list,
+            # so replacing is correct -- a player who left it should stop appearing.
+            existing = read_cache_dict(CacheKey.POSITIONS) or {}
+            merged = {str(k): v for k, v in existing.items()}
+            merged.update(positions_map)
+            self._progress(
+                f"Cached positions for {len(merged)} players "
+                f"({len(positions_map)} seen this run, {len(existing)} carried over)"
+            )
+            positions_map = merged
+        else:
+            self._progress(f"Cached positions for {len(positions_map)} players")
         write_cache(CacheKey.POSITIONS, positions_map)
-        self._progress(f"Cached positions for {len(positions_map)} players")
 
         audit_results = audit_roster(
             self.roster_players,

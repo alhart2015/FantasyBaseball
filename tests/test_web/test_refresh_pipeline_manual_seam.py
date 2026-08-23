@@ -27,6 +27,7 @@ from fantasy_baseball.data.cache_keys import CacheKey, redis_key
 from fantasy_baseball.lineup.waivers import FreeAgentRequest
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import Position
+from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.web import refresh_pipeline
 from fantasy_baseball.web.refresh_pipeline import RefreshRun
 from tests._cache_helpers import unwrap_cache_value
@@ -578,3 +579,72 @@ class TestFullManualRefresh:
 
         assert [k for k in keys if k.startswith("job_log:manual:")], f"no manual job log: {keys}"
         assert [k for k in keys if k.startswith("job_log:refresh:")], "live job log went missing"
+
+
+class TestManualModeDoesNotNarrowItsOwnInput:
+    """`cache:positions` is an INPUT to the manual pool, not just an output.
+
+    `build_manual_free_agents` gets eligibility from `load_positions()`, which
+    reads this blob, and returns a per-position CAPPED pool. Overwriting the key
+    with `build_positions_map(roster, opp, that capped pool)` therefore writes
+    back a narrower map than the one it read, and the next run derives from THAT
+    -- a one-way ratchet that quietly stops considering legitimate free agents.
+
+    What it discards is specific: `bootstrap_manual_kv.py` copies the frozen
+    Yahoo `cache:positions` precisely because it is the most accurate
+    eligibility map available while Yahoo auth is down.
+    """
+
+    def test_a_manual_run_keeps_eligibility_it_did_not_see_this_time(
+        self, configured_test_env, fake_redis, monkeypatch
+    ):
+        from tests.test_web._refresh_fixture import free_agents
+
+        pool = TestFullManualRefresh()._manual_pool()
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+
+            # Stand in for the frozen Yahoo blob the bootstrap carried over: a
+            # player nobody on this run will mention.
+            from fantasy_baseball.web.season_data import write_cache
+
+            carried = unwrap_cache_value(fake_redis.get(redis_key(CacheKey.POSITIONS))) or {}
+            carried = dict(carried)
+            carried["someone not in this run"] = ["2B", "SS"]
+            write_cache(CacheKey.POSITIONS, carried)
+
+            armed = [patch(target, side_effect=_boom) for target in YAHOO_ENTRY_POINTS]
+            for p in armed:
+                p.start()
+            try:
+                RefreshRun(
+                    skip_yahoo=True,
+                    free_agent_source=lambda req: pool,
+                    job_label="manual",
+                ).run()
+            finally:
+                for p in armed:
+                    p.stop()
+
+        after = unwrap_cache_value(fake_redis.get(redis_key(CacheKey.POSITIONS)))
+        assert after["someone not in this run"] == ["2B", "SS"], (
+            "the map the next run derives its pool from must not shrink"
+        )
+        # And it still UPDATES: the players this run did see are in there.
+        assert any(normalize_name(fa["name"]) in after for fa in free_agents())
+
+    def test_the_yahoo_path_still_replaces_rather_than_merges(
+        self, configured_test_env, fake_redis
+    ):
+        """There the pool IS the real free-agent list, so a player who left it
+        should stop appearing. Merging would make the Yahoo map immortal."""
+        from fantasy_baseball.web.season_data import write_cache
+
+        with patched_refresh_environment(fake_redis):
+            refresh_pipeline.run_full_refresh()
+            write_cache(CacheKey.POSITIONS, {"dropped last week": ["OF"]})
+            refresh_pipeline.run_full_refresh()
+
+        after = unwrap_cache_value(fake_redis.get(redis_key(CacheKey.POSITIONS)))
+        assert "dropped last week" not in after

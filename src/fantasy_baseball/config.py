@@ -1,3 +1,4 @@
+import logging
 import math
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -5,6 +6,8 @@ from pathlib import Path
 import yaml
 
 from fantasy_baseball.utils.constants import Category
+
+log = logging.getLogger(__name__)
 
 #: Used when no keepers are configured yet (pre-season the list is empty).
 DEFAULT_KEEPERS_PER_TEAM = 3
@@ -43,15 +46,42 @@ class LeagueConfig:
         Load-bearing for keeper valuation: ranking teams by their best FIVE when only
         three may be kept counts players nobody can retain, and on 2026-08-22 that
         inverted the league ordering (the depth leader was not the keeper leader).
-        Falls back to 3 when no keepers are configured -- pre-season, the list is empty
-        and there is nothing to derive from.
+
+        TWO WAYS TO GET A WRONG ANSWER, both of which now WARN rather than pass
+        silently, because this number goes straight into a headline that asserts a
+        league rule ("the best 3 they may keep"):
+
+        1. No entry carries a ``team`` key. Legitimate pre-season -- the list is
+           empty and there is nothing to derive from -- but it also happens when
+           the schema drifts, and the fallback looks identical either way.
+        2. Only ONE team's keepers are listed. ``max`` over a single team returns
+           that team's own choice, which is a lower bound on the rule, not the rule.
+           A team that kept fewer than its allowance shrinks the league rule to its
+           own decision -- the exact failure ``max`` across ten teams prevents.
         """
         from collections import Counter
 
         counts = Counter(
             k.get("team") for k in self.keepers if isinstance(k, dict) and k.get("team")
         )
-        return max(counts.values()) if counts else DEFAULT_KEEPERS_PER_TEAM
+        if not counts:
+            log.warning(
+                "keepers_per_team: no keeper entry in league.yaml carries a 'team' key; "
+                "assuming %d per team. Pre-season this is expected; mid-season it means "
+                "the keeper list is empty or its schema changed.",
+                DEFAULT_KEEPERS_PER_TEAM,
+            )
+            return DEFAULT_KEEPERS_PER_TEAM
+        if len(counts) == 1:
+            only_team, only_count = next(iter(counts.items()))
+            log.warning(
+                "keepers_per_team: league.yaml lists keepers for exactly one team (%r, "
+                "%d players), so the league rule is being read off one team's choice. "
+                "A team that kept fewer than its allowance would understate it.",
+                only_team,
+                only_count,
+            )
+        return max(counts.values())
 
 
 def _validate_sgp_overrides(raw_overrides: dict) -> dict[str, float]:

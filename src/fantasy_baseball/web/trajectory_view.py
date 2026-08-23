@@ -158,6 +158,16 @@ class TeamBlock:
         return float(sum(r["total"] for r in self.rows[: self.keep]))
 
     @property
+    def kept_count(self) -> int:
+        """How many rows `keep_total` actually summed.
+
+        `keep` is the league rule; this is the rule capped by what the block HAS. A
+        team with two scored players cannot show three, and printing "from the best 3
+        they may keep" above a two-player sum states a number the rows disprove.
+        """
+        return min(self.keep, len(self.rows))
+
+    @property
     def stranded(self) -> float:
         """Positive value on the block that CANNOT be kept -- a weakness, not depth.
 
@@ -172,9 +182,15 @@ class TeamBlock:
 
         What an opponent gives up by keeping the wrong player -- near zero means no
         exploitable mistake exists for that team, however deep they look. `None` when
-        the block has no row past the cut.
+        the block has no row past the cut, or no row before it.
+
+        BOTH ends are guarded. `len(rows) <= keep` protects `rows[keep]` and says
+        nothing about `rows[keep - 1]`: at `keep=0` that is `rows[-1]`, the WORST row,
+        and the answer comes back as the negation of the whole block's spread wearing
+        the label "keeper drop-off". `build_teams_board` clamps `keep` to at least 1,
+        but this is a public frozen dataclass and tests construct it directly.
         """
-        if len(self.rows) <= self.keep:
+        if self.keep < 1 or len(self.rows) <= self.keep:
             return None
         return float(self.rows[self.keep - 1]["total"] - self.rows[self.keep]["total"])
 
@@ -604,11 +620,18 @@ def build_teams_board(
     base, end_year, end_years, pool, scale, horizons, ranked_rows = _sweep_setup(
         payload, end, pool, scale
     )
-    n = _clamp(per_team, 1, 50, DEFAULT_PER_TEAM)
-    # Clamped like `per_team`, because it can arrive from a query string. Capped at `n`:
-    # a keep count past the rows shown would make `keep_total` equal `total` and quietly
-    # undo the distinction the field exists to draw.
-    keep_n = _clamp(keep, 1, n, min(DEFAULT_KEEP, n))
+    # THE LEAGUE RULE IS NOT A DISPLAY SETTING, and the two must not clamp each other.
+    # `keep` comes from `config.keepers_per_team` (season_routes), not from a query
+    # string; `per_team` is `?per=` and is purely how many rows to draw. Capping the
+    # rule at the display cap made `?per=2` render "the best 3 they may keep" over a
+    # two-player sum AND reorder every block by best-2 -- an inverted league ordering,
+    # which is the exact defect `keep_total` was added to fix.
+    #
+    # So the DISPLAY bends instead: showing fewer rows than a team may keep would put a
+    # headline on screen that its own rows cannot add up to, so `n` is floored at the
+    # rule. Asking for fewer rows than that is a request the page cannot honestly serve.
+    keep_n = _clamp(keep, 1, 50, DEFAULT_KEEP)
+    n = max(_clamp(per_team, 1, 50, DEFAULT_PER_TEAM), keep_n)
     index = index_rosters(ranked_rows, spots or [], my_team)
 
     # BLOCKS COME FROM THE ROSTERS, not the rows. A team whose players were all

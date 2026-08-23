@@ -22,6 +22,7 @@ from fantasy_baseball.web.trajectory_view import (
     FIND_MIN_CHARS,
     FIND_RESULT_CAP,
     PlayerView,
+    TeamBlock,
     build_board,
     build_player_view,
     build_teams_board,
@@ -830,7 +831,13 @@ def test_blocks_are_ordered_by_strength_and_mine_is_not_promoted(payload: dict) 
     names = [b.team for b in board.blocks]
     assert names[0] == "Rivals", "the strongest roster reads first"
     assert names.index("Mine") == 1, "mine sits where its strength puts it"
-    assert [b.total for b in board.blocks] == sorted((b.total for b in board.blocks), reverse=True)
+    # keep_total, NOT total. The sort key moved to the keeper sum precisely because
+    # the two DISAGREE -- ranking on depth inverted the league ordering on 2026-08-22 --
+    # so an assertion on `total` no longer guards the real key and passes here only by
+    # the fixture's coincidence.
+    assert [b.keep_total for b in board.blocks] == sorted(
+        (b.keep_total for b in board.blocks), reverse=True
+    )
     assert next(b for b in board.blocks if b.is_mine).team == "Mine"
     assert not board.mine_missing
 
@@ -898,8 +905,12 @@ def test_per_team_slices_without_re_ranking(payload: dict) -> None:
     to compare went with them. "Mine" is appended [Small Bat(#5), Small Arm(#4)] -- the
     opposite of rank order -- so at per_team=1 the surviving row is the sort's answer.
     """
-    one = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team=1)
-    two = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team=2)
+    # `keep=1` alongside, because the display cap is FLOORED at the league rule: a
+    # page cannot show fewer rows than a team may keep without putting a headline on
+    # screen that its own rows do not add up to. A one-keeper league is the setting
+    # in which a one-row block is coherent, and this test is about the SLICE.
+    one = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team=1, keep=1)
+    two = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team=2, keep=1)
 
     rivals_one = next(b for b in one.blocks if b.team == "Rivals")
     rivals_two = next(b for b in two.blocks if b.team == "Rivals")
@@ -992,10 +1003,17 @@ def test_a_teams_block_carries_the_flag_threshold_and_its_flagged_rows(payload: 
 
 
 def test_per_team_and_end_year_clamp_junk_from_the_query_string(payload: dict) -> None:
-    """These arrive from a URL a reader can edit."""
+    """These arrive from a URL a reader can edit.
+
+    The LOWER bound is the league keep count, not 1. `per_team` is how many rows to
+    draw and `keep` is how many a team may retain; drawing fewer than the rule puts
+    "the best 3 they may keep" over a shorter sum. So a too-small `?per=` widens to
+    the rule rather than shrinking it -- the rule is not a display setting.
+    """
     board = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", per_team="junk")
     assert board.per_team == 5
-    assert build_teams_board(payload, spots=_teams_fixture(), per_team=0).per_team == 1
+    assert build_teams_board(payload, spots=_teams_fixture(), per_team=0, keep=1).per_team == 1
+    assert build_teams_board(payload, spots=_teams_fixture(), per_team=0, keep=3).per_team == 3
     assert build_teams_board(payload, spots=_teams_fixture(), per_team=999).per_team == 50
     assert build_teams_board(payload, spots=_teams_fixture(), end="nonsense").end_year == 2027
 
@@ -2094,3 +2112,46 @@ def test_the_stale_board_message_reads_as_a_sentence_for_a_payload_level_key() -
     message = str(caught.value)
     assert "  " not in message, f"double space in {message!r}"
     assert message.startswith("trajectory board payload is missing"), message
+
+
+class TestTheLeagueRuleIsNotADisplaySetting:
+    """`keep` is how many a team may retain; `per_team` is how many rows to draw.
+
+    Clamping the first by the second let `?per=2` put "the best 3 they may keep" on
+    screen over a two-player sum, and reorder every block by best-2 -- an inverted
+    league ordering, which is the exact defect `keep_total` was added to fix.
+    """
+
+    def test_a_narrow_display_cap_does_not_shrink_the_league_rule(self, payload: dict) -> None:
+        board = build_teams_board(
+            payload, spots=_teams_fixture(), my_team="Mine", per_team=2, keep=3
+        )
+
+        assert all(b.keep == 3 for b in board.blocks), "the rule is not a display setting"
+
+    def test_the_display_widens_to_at_least_the_rule(self, payload: dict) -> None:
+        """A headline its own rows cannot add up to is unverifiable on the page."""
+        board = build_teams_board(
+            payload, spots=_teams_fixture(), my_team="Mine", per_team=2, keep=3
+        )
+
+        assert board.per_team >= 3
+        rivals = next(b for b in board.blocks if b.team == "Rivals")
+        assert rivals.keep_total == sum(r["total"] for r in rivals.rows[:3])
+
+    def test_the_headline_names_the_count_it_actually_summed(self, payload: dict) -> None:
+        """A team with fewer scored rows than the rule cannot show three."""
+        board = build_teams_board(payload, spots=_teams_fixture(), my_team="Mine", keep=3)
+
+        for block in board.blocks:
+            assert block.kept_count == min(3, len(block.rows))
+            assert block.keep_total == sum(r["total"] for r in block.rows[: block.kept_count])
+
+    def test_keep_dropoff_guards_both_indices(self) -> None:
+        """At keep=0, `rows[keep - 1]` is `rows[-1]` -- the WORST row -- and the answer
+        comes back as the negation of the whole block's spread, labelled a keeper
+        drop-off. `build_teams_board` clamps, but this is a public frozen dataclass."""
+        rows = [{"total": 10.0}, {"total": 4.0}, {"total": -6.0}]
+        block = TeamBlock(team="T", rows=rows, scored=3, unscored=[], is_mine=False, keep=0)
+
+        assert block.keep_dropoff is None

@@ -58,7 +58,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
-from fantasy_baseball.config import load_config
+from fantasy_baseball.config import DEFAULT_KEEPERS_PER_TEAM, load_config
 from fantasy_baseball.data.rosters import RosterSpot, live_rosters
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
@@ -80,11 +80,17 @@ def by_team(
     base: int,
     horizons: tuple[int, ...],
     only: str | None = None,
+    keep: int = DEFAULT_KEEPERS_PER_TEAM,
 ) -> None:
     """Every player on your team, then the best `per_team` on each other team.
 
     Ranks shown are LEAGUE ranks, carried from `add_ranks`, not ranks within the team --
     otherwise every team's best player reads as a 1.
+
+    `per_team` is how many rows to PRINT; `keep` is how many a team may actually keep,
+    and the headline sums the latter. The two are different questions and the web view
+    already separated them -- this surface had kept headlining the best `per_team`, so
+    the same board ranked teams differently depending on which surface you read.
     """
     one, span = _header(base, horizons)
 
@@ -117,13 +123,16 @@ def by_team(
         # opponent's on 5 -- and read as a deficit, since your extra rows are the
         # negative ones. The cap belongs to the number, not the list.
         #
-        # `per_team` rather than the three slots a keeper decision actually has: five is
-        # the candidate POOL. An opponent without this model may not keep his best
-        # three, so the fourth and fifth names are the ones worth scouting.
-        total = sum(r["total"] for r in rows[:per_team])
+        # `keep`, NOT `per_team`. The extra rows are a scouting POOL -- an opponent
+        # without this model may not keep his best three, so the fourth and fifth names
+        # are worth seeing -- but only three of them can be retained, so summing five
+        # counts two players nobody keeps. That is not a smaller signal, it is a
+        # different ordering: on 2026-08-22 the best-5 leader TRAILED on best-3.
+        kept = min(keep, len(rows))
+        total = sum(r["total"] for r in rows[:keep])
         head = (
             f"{team}{note}  ({len(rows)} scored, "
-            f"{total:.1f} total {span} VAR from the best {per_team})"
+            f"{total:.1f} total {span} VAR from the best {kept} they may keep)"
         )
         print(f"\n{head}\n{'-' * len(head)}")
         for r in shown:
@@ -153,8 +162,19 @@ def by_team(
             return
         block(only, None, note="  -- all players")
         return
+
+    # Ordered by keeper strength, like the web view -- not alphabetically. The point of
+    # the per-team view is comparing teams, and a list sorted by name buries that.
+    def keeper_strength(team: str) -> float:
+        rows = sorted(
+            (r for r in scored if team in r["teams"]), key=lambda r: r["total"], reverse=True
+        )
+        return sum(r["total"] for r in rows[:keep])
+
     block(my_team, None, note="  -- YOUR TEAM, all players")
-    for team in sorted(rostered - {my_team}):
+    # Name is the tie-break, not decoration: two teams with nothing scored both sum to
+    # 0.0, and leaving that to set order makes the output reorder between runs.
+    for team in sorted(rostered - {my_team}, key=lambda t: (-keeper_strength(t), t)):
         block(team, per_team)
     if not rostered:
         print("\n  no rosters read -- see the join note above.")
@@ -390,6 +410,7 @@ def main() -> int:
                 season,
                 horizons,
                 args.team,
+                keep=config.keepers_per_team,
             )
     if args.csv:
         pd.DataFrame(scored).sort_values("rank_total").to_csv(args.csv, index=False)
