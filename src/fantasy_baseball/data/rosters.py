@@ -19,15 +19,34 @@ him".
 `parse_rosters` is separated from `live_rosters` because the second reaches prod Upstash,
 which `build_explicit_upstash_kv` refuses to do under pytest. The shape handling is the
 part worth testing, so it is testable without a network.
+
+**Prod Upstash is the wrong store in manual mode.** The Yahoo-free pipeline isolates
+itself in a whole separate KV file, and its rosters are hand-transcribed and current;
+prod is Yahoo-vintage and, while Yahoo auth is down, up to a month stale. Serving prod
+rosters into a page otherwise built from manual data mixes two vintages that both look
+plausible, so `live_rosters` refuses instead -- see `ManualStoreRefused`.
 """
 
 from __future__ import annotations
 
 import json
+import logging
 from dataclasses import dataclass
 from typing import Any
 
 from ..utils.name_utils import normalize_name
+
+log = logging.getLogger(__name__)
+
+
+class ManualStoreRefused(RuntimeError):
+    """`live_rosters` was called from a process running on the manual KV store.
+
+    A `RuntimeError` subclass, so the two existing callers -- the season dashboard's
+    trajectory route and `scripts/trajectory_board.py` -- catch it with the handlers
+    they already have for a failed roster read. Both degrade to "no roster data",
+    which is the point: NOT to "you own nobody", and not to month-stale prod rows.
+    """
 
 
 @dataclass(frozen=True)
@@ -84,8 +103,48 @@ def owner_map(spots: list[RosterSpot]) -> dict[tuple[str, str], str]:
     return {(s.normalized, s.player_type): s.team for s in spots}
 
 
+def manual_store_active() -> bool:
+    """True when this process's KV store holds hand-transcribed (manual) data.
+
+    Reads the store-level breadcrumb `manual.seed` stamps on a seeded manual store,
+    rather than sniffing `FANTASY_LOCAL_KV_PATH`. That precision is the whole point:
+    every pytest run and every ad-hoc `FANTASY_LOCAL_KV_PATH` also redirects the
+    store, and none of those are manual runs -- keying on the env var would refuse
+    reads that are perfectly legitimate. One breadcrumb read, from a local SQLite
+    file the caller's process has already opened.
+
+    Never consults a remote store: on Render `get_kv()` IS production Upstash, which
+    is the store `live_rosters` wants, and a manual run refuses to start with
+    `RENDER` set at all -- so the answer there is False without a round trip.
+    """
+    from .kv_store import get_kv, is_remote
+
+    if is_remote():
+        return False
+
+    from ..manual.seed import PROVENANCE_KEY
+
+    try:
+        return get_kv().get(PROVENANCE_KEY) is not None
+    except Exception:
+        # Fail OPEN, deliberately. A KV read that raises is not evidence of manual
+        # mode, and refusing on it would take the ordinary Yahoo caller down for an
+        # unrelated fault. In manual mode the store is a local SQLite file the page
+        # has already read successfully to get this far.
+        log.warning("live_rosters: manual-store check failed; assuming Yahoo mode")
+        return False
+
+
 def live_rosters(my_team: str) -> list[RosterSpot]:
     """Read both roster blobs from PROD Upstash and flatten them.
+
+    Raises `ManualStoreRefused` when this process is running against the manual KV
+    store. The Upstash reach below is right for the Yahoo caller and wrong for that
+    one: it would splice month-stale prod rosters into a page whose other half is
+    fresh manual data, with both halves looking plausible. Refusing loudly (logged
+    here, so the reason survives a caller that only logs "read failed") leaves the
+    page in its EXISTING "could not read your roster" state -- which the trajectory
+    board already renders distinctly from "you own none of these".
 
     `build_explicit_upstash_kv` rather than `get_kv()`, deliberately: off Render `get_kv`
     returns the local SQLite mirror, which is only as fresh as the last sync, and roster
@@ -99,6 +158,16 @@ def live_rosters(my_team: str) -> list[RosterSpot]:
     reachable from the web app is a side effect with no upside. `.env` loading is likewise
     already handled inside `_build_upstash_kv`.
     """
+    if manual_store_active():
+        message = (
+            "live_rosters: refusing to read production Upstash rosters -- this "
+            "process is running against the hand-transcribed manual KV store. Prod "
+            "rosters are Yahoo-vintage and can be a month stale; mixing them into a "
+            "page built from manual data would look plausible and be wrong."
+        )
+        log.error(message)
+        raise ManualStoreRefused(message)
+
     from .cache_keys import CacheKey, redis_key
     from .kv_store import build_explicit_upstash_kv
 

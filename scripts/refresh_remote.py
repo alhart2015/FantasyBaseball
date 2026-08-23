@@ -28,6 +28,62 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
+#: Exit codes, matching scripts/run_season_dashboard.py and
+#: scripts/run_manual_refresh.py: 2 means "refused, nothing happened".
+RC_REFUSED = 2
+
+
+def _sync_destination_refusal() -> str | None:
+    """Refusal message when the sync-back would wipe a non-baseline store, else None.
+
+    Step 3 calls ``sync_remote_to_local(remote=remote)`` with no ``local=``, so the
+    destination is whatever ``get_kv()`` resolves -- i.e. whatever
+    ``FANTASY_LOCAL_KV_PATH`` points at. The sync then runs
+    ``DELETE FROM kv; DELETE FROM hash_kv;`` on that store before refilling it.
+
+    ``scripts/run_manual_refresh.py`` exports ``FANTASY_LOCAL_KV_PATH`` to isolate
+    the Yahoo-free manual store, so running this script from that same shell
+    silently destroys the hand-transcribed standings and rosters and refills them
+    with the last Yahoo snapshot -- no error, and a store that still looks
+    populated afterwards.
+
+    The check lives here rather than in ``kv_sync`` because
+    ``FANTASY_LOCAL_KV_PATH`` is ALSO how the test suite isolates its KV:
+    ``tests/test_data/test_kv_sync.py::test_default_local_is_get_kv`` pins the
+    library contract that the default destination is simply whatever ``get_kv()``
+    returns. Narrowing that contract library-side breaks legitimate callers -- the
+    hazard is specific to operator-facing entry points, so the guard belongs in
+    them.
+
+    Steps 1 and 2 have already written to prod Upstash by the time this runs; that
+    is the intended effect of the script and is not undone. Only the local
+    sync-back is refused.
+    """
+    from fantasy_baseball.data.kv_store import _DEFAULT_LOCAL_DB, get_kv
+    from fantasy_baseball.manual.seed import resolve_kv_path
+
+    resolved = resolve_kv_path(get_kv())
+    baseline = _DEFAULT_LOCAL_DB.resolve()
+    if resolved == baseline:
+        return None
+
+    target = str(resolved) if resolved is not None else "a store with no local file"
+    lines = [
+        "",
+        f"REFUSING TO SYNC BACK: the resolved local KV store is {target},",
+        f"not the Yahoo baseline {baseline}.",
+        "The sync-back WIPES its destination (DELETE FROM kv; DELETE FROM "
+        "hash_kv;) and refills it from Upstash, so it would destroy this store "
+        "-- most likely the hand-transcribed manual store written by "
+        "scripts/run_manual_refresh.py.",
+        "",
+        "The remote refresh already completed; only the local sync-back was skipped.",
+        "Unset FANTASY_LOCAL_KV_PATH and re-run if you want the baseline synced.",
+        "See docs/manual-pipeline-runbook.md.",
+    ]
+    return "\n".join(lines)
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -103,6 +159,11 @@ def main(argv: list[str] | None = None) -> int:
     remote = build_explicit_upstash_kv()
     os.environ["RENDER"] = "false"
     kv_store._reset_singleton()
+
+    refusal = _sync_destination_refusal()
+    if refusal is not None:
+        print(refusal)
+        return RC_REFUSED
 
     print("Syncing remote -> local SQLite...")
     stats = sync_remote_to_local(remote=remote)

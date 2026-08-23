@@ -1,4 +1,20 @@
-from collections.abc import Callable
+"""What a free-agent pool is, and the two ways to get one.
+
+:func:`fetch_and_match_free_agents` is the Yahoo path and is the only one the
+season refresh uses when the API is reachable. :class:`FreeAgentRequest` /
+:data:`FreeAgentSource` are the injection seam for callers that must supply the
+pool from somewhere else -- today that is the Yahoo-free manual pipeline, which
+synthesizes it from the ROS projection frames minus every transcribed roster
+(``fantasy_baseball.manual.free_agents``).
+
+The seam is deliberately shaped as "hand me a ``list[Player]``" rather than
+"hand me raw rows": both producers run their candidates through the same
+:func:`data.projections.match_roster_to_projections`, so whatever fills the pool,
+the objects downstream of it are identical.
+"""
+
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import pandas as pd
@@ -6,6 +22,43 @@ import pandas as pd
 from fantasy_baseball.lineup.yahoo_roster import fetch_free_agents
 from fantasy_baseball.models.player import Player
 from fantasy_baseball.utils.name_utils import normalize_name
+
+
+@dataclass(frozen=True, eq=False)
+class FreeAgentRequest:
+    """Everything a free-agent source needs to build a pool without Yahoo.
+
+    ``rostered_hitters`` / ``rostered_pitchers`` are normalized names
+    (:func:`utils.name_utils.normalize_name`) of every player on any team in the
+    league, split BY PLAYER TYPE. The split is load-bearing, not tidiness: a
+    single pooled set of bare names would delete the pitcher Shohei Ohtani from
+    the pool because the hitter Shohei Ohtani is rostered, and would delete the
+    pitcher Will Smith because the catcher Will Smith is rostered. Both are
+    real, both are in this league's projection frames, and in this league Ohtani
+    is kept as a batter only -- so his arm is genuinely available.
+
+    ``rankings_lookup`` is the four-way merge from
+    :func:`sgp.rankings.build_rankings_lookup`; a source may use it to cap the
+    pool at a plausible number of candidates per position, standing in for the
+    ownership filter Yahoo's own free-agent endpoint applies.
+
+    ``eq=False`` because the DataFrame fields make both ``==`` and ``hash()``
+    ill-defined; this is a parameter object, never a value compared for equality.
+    """
+
+    hitters_proj: pd.DataFrame
+    pitchers_proj: pd.DataFrame
+    preseason_hitters_proj: pd.DataFrame | None
+    preseason_pitchers_proj: pd.DataFrame | None
+    rostered_hitters: frozenset[str]
+    rostered_pitchers: frozenset[str]
+    rankings_lookup: Mapping[str, dict[str, Any]] | None = None
+
+
+#: A callable that turns a :class:`FreeAgentRequest` into a free-agent pool.
+#: Injected by callers that cannot reach Yahoo; ``None`` everywhere else, which
+#: is what keeps the Yahoo path the default and unchanged.
+FreeAgentSource = Callable[[FreeAgentRequest], list[Player]]
 
 
 def fetch_and_match_free_agents(

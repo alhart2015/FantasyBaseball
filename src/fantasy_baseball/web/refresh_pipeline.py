@@ -64,6 +64,7 @@ if TYPE_CHECKING:
 
     from fantasy_baseball.config import LeagueConfig
     from fantasy_baseball.lineup.optimizer import HitterAssignment, PitcherStarter
+    from fantasy_baseball.lineup.waivers import FreeAgentRequest, FreeAgentSource
     from fantasy_baseball.mc_roster import EffectiveRoster
     from fantasy_baseball.models.league import League
     from fantasy_baseball.models.player import Player
@@ -412,10 +413,30 @@ class RefreshRun:
     across threads and stays at module scope.
     """
 
-    def __init__(self, *, skip_yahoo: bool | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        skip_yahoo: bool | None = None,
+        free_agent_source: "FreeAgentSource | None" = None,
+        job_label: str = "refresh",
+    ) -> None:
         from fantasy_baseball.web.job_logger import JobLogger
 
-        self.logger = JobLogger("refresh")
+        # Manual mode: the caller supplies the free-agent pool itself, so the
+        # one step that stale-data mode has to skip (the roster audit, whose
+        # every product is built against the FA pool) can run without Yahoo.
+        # Default None => not manual => every branch below takes exactly the
+        # path it took before this seam existed. See
+        # ``fantasy_baseball.manual`` and docs/manual-pipeline-runbook.md.
+        self.free_agent_source: FreeAgentSource | None = free_agent_source
+        self.manual_mode: bool = free_agent_source is not None
+        # Stamped onto the job log key (``job_log:<label>:<date>:<ts>``) and
+        # into every cache:* provenance envelope this run writes, so a manual
+        # run is distinguishable from a real one after the fact. The default
+        # reproduces today's "refresh" exactly.
+        self.job_label: str = job_label
+
+        self.logger = JobLogger(self.job_label)
 
         # Stale-data mode: run every step that does NOT need Yahoo (MLB game
         # logs, projections, standings projection, optimizer, Monte Carlo,
@@ -496,7 +517,7 @@ class RefreshRun:
         # Stamp every cache:* blob this refresh writes with its writer; reset
         # in finally so a synchronous/reused worker thread doesn't leak the
         # label into the next job's writes.
-        job_token = set_cache_job("refresh")
+        job_token = set_cache_job(self.job_label)
         with _refresh_lock:
             _refresh_status["running"] = True
             _refresh_status["progress"] = "Starting..."
@@ -1424,6 +1445,48 @@ class RefreshRun:
         }
         write_cache(CacheKey.LINEUP_OPTIMAL, optimal_data)
 
+    def _mlb_cache_dir(self) -> Path:
+        """Directory holding the on-disk MLB caches (schedule, team batting stats).
+
+        Yahoo mode returns ``<project_root>/data``, which is exactly where
+        ``weekly_schedule.json`` and ``team_batting_stats.json`` have always been
+        written -- unchanged, deliberately.
+
+        Manual mode must not write there. Both files are git-TRACKED, so a manual
+        run would dirty the working tree with hand-transcribed-run cache content:
+        the repo would no longer reflect Yahoo-mode state, and a careless
+        ``git add -A`` would commit it. Manual isolation is by whole separate KV
+        file (``FANTASY_LOCAL_KV_PATH``), so the cache directory is derived from
+        that same resolved path -- ``<kv_parent>/cache/<kv_stem>``, i.e.
+        ``data/cache/manual`` for the standard ``data/manual.db`` store.
+        ``data/cache/`` is already gitignored, so nothing written there can be
+        committed by accident, and two different manual stores cannot share a
+        cache.
+        """
+        project_root = Path(__file__).resolve().parents[3]
+        if not self.manual_mode:
+            return project_root / "data"
+
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.manual.seed import resolve_kv_path
+
+        kv_path = resolve_kv_path(get_kv())
+        if kv_path is None:
+            # No local file behind the store (remote or in-memory). A manual run is
+            # never supposed to reach one -- scripts/run_manual_refresh.py refuses
+            # to start against Upstash -- so fall back to an isolated, gitignored
+            # directory rather than abort a long run over a cache location, and
+            # never to the tracked default.
+            log.warning(
+                "Manual run: KV store has no local file; MLB caches go to "
+                "data/cache/manual instead of the tracked data/ defaults."
+            )
+            cache_dir = project_root / "data" / "cache" / "manual"
+        else:
+            cache_dir = kv_path.parent / "cache" / kv_path.stem
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        return cache_dir
+
     # --- Step 9: Probable starters ---
     def _fetch_probable_starters(self):
         from fantasy_baseball.data.mlb_schedule import get_week_schedule
@@ -1439,8 +1502,8 @@ class RefreshRun:
         assert self.pitchers_proj is not None
 
         self._progress("Fetching schedule and matchup data...")
-        project_root = Path(__file__).resolve().parents[3]
-        schedule_cache_path = project_root / "data" / "weekly_schedule.json"
+        cache_dir = self._mlb_cache_dir()
+        schedule_cache_path = cache_dir / "weekly_schedule.json"
         # 14-day lookback: the upcoming-starts module needs each pitcher's
         # most recent start as the rotation anchor for projecting forward.
         schedule = get_week_schedule(
@@ -1450,7 +1513,7 @@ class RefreshRun:
             lookback_days=14,
         )
 
-        batting_stats_cache_path = project_root / "data" / "team_batting_stats.json"
+        batting_stats_cache_path = cache_dir / "team_batting_stats.json"
         team_stats = get_team_batting_stats(batting_stats_cache_path)
 
         sp_roster = filter_starting_pitchers(self.roster_players, self.pitchers_proj)
@@ -1469,12 +1532,17 @@ class RefreshRun:
         from fantasy_baseball.web.refresh_steps import build_positions_map
 
         assert self.config is not None
-        if self.skip_yahoo:
+        if self.skip_yahoo and not self.manual_mode:
             # Every product of this step (upgrade list, stash board, positions
             # map) is built against the free-agent pool, which only Yahoo can
             # supply. Leave the previous run's caches in place -- a board
             # computed against an empty FA pool would read as "no upgrades
             # available", which is a claim, not a gap.
+            #
+            # ``manual_mode`` is the one exception: the caller has handed us a
+            # pool built from somewhere other than Yahoo, so the step has its
+            # input and runs. Without an injected source this is byte-for-byte
+            # the old ``if self.skip_yahoo:``.
             self.fa_players = []
             self._progress("Skipping roster audit (stale-data mode: free agents need Yahoo)")
             return
@@ -1488,13 +1556,21 @@ class RefreshRun:
         assert self.fraction_remaining is not None
 
         self._progress("Running roster audit...")
-        self.fa_players, _ = fetch_and_match_free_agents(
-            self.league,
-            self.hitters_proj,
-            self.pitchers_proj,
-            preseason_hitters_proj=self.preseason_hitters,
-            preseason_pitchers_proj=self.preseason_pitchers,
-        )
+        if self.manual_mode:
+            # Everything downstream of this assignment -- build_positions_map,
+            # audit_roster, the three write_cache calls, score_stash_candidates
+            # -- is already Yahoo-free and is called with identical arguments.
+            assert self.free_agent_source is not None
+            self.fa_players = self.free_agent_source(self._free_agent_request())
+            self._progress(f"Free agents from injected source: {len(self.fa_players)}")
+        else:
+            self.fa_players, _ = fetch_and_match_free_agents(
+                self.league,
+                self.hitters_proj,
+                self.pitchers_proj,
+                preseason_hitters_proj=self.preseason_hitters,
+                preseason_pitchers_proj=self.preseason_pitchers,
+            )
 
         # Cache positions for all known players (roster + opponents + FAs)
         positions_map = build_positions_map(self.roster_players, self.opp_rosters, self.fa_players)
@@ -1554,6 +1630,48 @@ class RefreshRun:
                 ).to_dict(),
             )
             self._progress("Stash board: computation failed (empty board cached)")
+
+    def _free_agent_request(self) -> "FreeAgentRequest":
+        """Package this run's inputs for an injected free-agent source.
+
+        Rostered names are split BY PLAYER TYPE rather than pooled into one
+        set of bare names, because a pooled set removes the wrong players: the
+        pitcher Shohei Ohtani would drop out because the hitter Shohei Ohtani
+        is rostered, and the pitcher Will Smith because the catcher Will Smith
+        is. Both are real and both are in this league's projection frames.
+
+        ``rankings_lookup`` is populated by ``_compute_rankings``, which runs
+        five steps ahead of ``_audit_roster`` in ``_run_pipeline_steps``.
+        """
+        from fantasy_baseball.lineup.waivers import FreeAgentRequest
+        from fantasy_baseball.models.player import PlayerType
+        from fantasy_baseball.utils.name_utils import normalize_name
+
+        assert self.hitters_proj is not None
+        assert self.pitchers_proj is not None
+        assert self.roster_players is not None
+        assert self.opp_rosters is not None
+
+        rostered_hitters: set[str] = set()
+        rostered_pitchers: set[str] = set()
+        for roster in (self.roster_players, *self.opp_rosters.values()):
+            for player in roster:
+                bucket = (
+                    rostered_pitchers
+                    if player.player_type == PlayerType.PITCHER
+                    else rostered_hitters
+                )
+                bucket.add(normalize_name(player.name))
+
+        return FreeAgentRequest(
+            hitters_proj=self.hitters_proj,
+            pitchers_proj=self.pitchers_proj,
+            preseason_hitters_proj=self.preseason_hitters,
+            preseason_pitchers_proj=self.preseason_pitchers,
+            rostered_hitters=frozenset(rostered_hitters),
+            rostered_pitchers=frozenset(rostered_pitchers),
+            rankings_lookup=self.rankings_lookup,
+        )
 
     # --- Step 11: Compute per-team leverage ---
     def _compute_per_team_leverage(self):
@@ -1919,7 +2037,11 @@ class RefreshRun:
         ``cache:standings`` before getting here.
         """
         now = local_now().strftime("%Y-%m-%d %H:%M")
-        if not self.skip_yahoo:
+        if not self.skip_yahoo or self.manual_mode:
+            # Manual mode is not stale: the league state behind it was
+            # transcribed by hand for this run, so the stamp is honest and the
+            # badge must not fire. Without an injected source this is
+            # byte-for-byte the old ``if not self.skip_yahoo:``.
             return now
         previous = read_cache_dict(CacheKey.META) or {}
         return previous.get("last_refresh") or now

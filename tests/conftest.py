@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 
 import fakeredis
@@ -60,6 +61,47 @@ def _isolate_kv_from_prod(monkeypatch):
     monkeypatch.delenv("UPSTASH_REDIS_REST_TOKEN", raising=False)
     monkeypatch.delenv("RENDER", raising=False)
     kv_store._reset_singleton()
+
+
+#: Env vars that select the KV backing file / disable Yahoo. Production code --
+#: not just tests -- assigns these (``scripts/run_manual_refresh.py`` sets both
+#: in ``_activate_manual_environment``), so any test that drives such a code
+#: path can leave them set for whatever runs next in the same process.
+_PROCESS_SCOPED_ENV = ("FANTASY_LOCAL_KV_PATH", "FB_SKIP_YAHOO")
+
+
+@pytest.fixture(autouse=True)
+def _restore_process_scoped_env():
+    """Put ``_PROCESS_SCOPED_ENV`` back exactly as the test found it.
+
+    A backstop, deliberately independent of ``monkeypatch``. The natural
+    monkeypatch spelling for "snapshot a var the code under test might set"
+    is ``monkeypatch.delenv(name, raising=False)``, and it silently does
+    nothing when the name is not already set: ``delenv`` registers an undo
+    only when it actually removes something. So the case this is meant to
+    cover -- var absent, code under test assigns it -- is exactly the case
+    with no undo registered, and the value escapes.
+
+    The escape is invisible where it happens and fatal somewhere else: a
+    leaked ``FB_SKIP_YAHOO=1`` plus a ``FANTASY_LOCAL_KV_PATH`` pointing at a
+    torn-down ``tmp_path`` made ``tests/test_web/test_refresh_pipeline.py``
+    fail with "FB_SKIP_YAHOO is set but no cached standings exist" -- in a
+    file that never touches either variable. With ``pytest -n auto`` and
+    ``pytest-randomly``, which worker and which tests got hit changed run to
+    run, so it read as flake rather than as pollution.
+
+    Restoring unconditionally here costs two dict lookups per test and makes
+    the whole class of leak impossible, wherever the assignment happens.
+    """
+    saved = {name: os.environ.get(name) for name in _PROCESS_SCOPED_ENV}
+    try:
+        yield
+    finally:
+        for name, before in saved.items():
+            if before is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = before
 
 
 @pytest.fixture
