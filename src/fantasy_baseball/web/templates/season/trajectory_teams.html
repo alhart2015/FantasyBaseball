@@ -14,6 +14,11 @@
 
 <p class="muted">
   The best {{ board.per_team }} on every roster over {{ board.span }}, strongest team first.
+  {%- if board.per_team_requested %}
+  (You asked for {{ board.per_team_requested }}; a block cannot show fewer rows than the
+  {{ board.blocks[0].keep }} this league keeps, or the headline would sum players the
+  table does not list.)
+  {%- endif %}
 </p>
 
 {#- This IS the teams view, so it exists by construction. -#}
@@ -42,7 +47,8 @@ statement about the lookup, not about what you own.</p>
   <h3>{{ block.team }}
     {%- if block.scored %}
     <span class="muted">({{ block.rows | length }} of {{ block.scored }} scored,
-    {{ '%.1f'|format(block.total) }} {{ board.span }} {{ board.scale|upper }} from the best {{ board.per_team }})</span>
+    <strong>{{ '%.1f'|format(block.keep_total) }}</strong> {{ board.span }} {{ board.scale|upper }} from the best {{ block.kept_count }} they may keep{% if block.stranded > 0.05 %};
+    {{ '%.1f'|format(block.stranded) }} stranded below the cut{% endif %})</span>
     {%- endif %}
   </h3>
   {% if block.rows %}

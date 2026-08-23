@@ -1,0 +1,19 @@
+# Free agents to keep OUT of the synthesized manual free-agent pool.
+#
+# The manual pipeline has no Yahoo availability feed, so the pool is derived
+# from the ROS projections minus everyone on the ten transcribed rosters. That
+# derivation cannot see injuries, minor-league assignments, or players another
+# manager has already claimed but who have not shown up in a transcription
+# yet. This list is the escape hatch: anything named here is dropped from the
+# pool before it can be recommended as an add.
+#
+# Names are matched by normalize_name (accent-stripped, lowercased), so an
+# accented name matches its unaccented spelling and casing does not matter.
+# The match is by NAME only, so an entry here removes both the hitter and the
+# pitcher when two players share a name -- prefer leaving the file empty over
+# over-excluding.
+#
+# An empty list, an absent `names:` key, and an absent file are all valid and
+# all mean "exclude nobody".
+
+names: []

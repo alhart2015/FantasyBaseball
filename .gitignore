@@ -43,9 +43,26 @@ data/playing_time/
 # regenerable CSV that would otherwise re-diff on every rebuild.
 data/trajectory/
 
-# SQLite databases (populated at runtime)
+# SQLite databases (populated at runtime), and their sidecars. The -wal/-shm
+# pair is created whenever a WAL store is open, so `git add -A` during a run
+# would otherwise stage SQLite internals -- including uncheckpointed pages of
+# data/local.db, the Yahoo KV baseline. `data/*.db` does not cover them: the
+# suffix comes AFTER the .db, so each needs its own pattern.
 data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.db-journal
 
 # Hot streak analysis: local DuckDB + research notebooks (not source of truth)
 data/streaks/
 notebooks/streaks/
+
+# Generated manual-pipeline audit reports. The TRANSCRIPTIONS in data/manual/
+# (standings.yaml, rosters.yaml, fa_exclusions.yaml) are deliberately tracked --
+# they are hand-typed input worth reviewing in a diff. The dated report is a run
+# artifact regenerated on every run, so it stays out.
+# Every GENERATED report under data/manual/. The hand-typed transcriptions there
+# (*.yaml) stay tracked -- they are input worth reviewing in a diff; the .txt
+# reports are run artifacts regenerated on every run. Pattern is by extension so
+# a new report type does not have to remember to add itself here.
+data/manual/*.txt

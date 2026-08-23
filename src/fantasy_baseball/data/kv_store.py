@@ -179,6 +179,20 @@ class SqliteKVStore:
         )
         self._lock = threading.RLock()
 
+    @property
+    def path(self) -> Path:
+        """The file this store is backed by.
+
+        PUBLIC, and load-bearing. Operator-facing guards refuse to wipe a store by
+        comparing this against the Yahoo baseline, and they reach it through
+        ``getattr(client, "path", None)`` -- a KVStore need not have a file at all
+        (Upstash does not), so the guards cannot require the attribute. A getattr
+        that misses therefore fails OPEN, which means renaming or dropping this
+        would silently turn every one of those guards into a no-op with nothing
+        raising. ``tests/test_data/test_kv_store.py`` pins it for that reason.
+        """
+        return self._path
+
     def get(self, key: str) -> str | None:
         with self._lock:
             row = self._conn.execute(
@@ -383,8 +397,15 @@ def _build_upstash_kv() -> UpstashKVStore:
     return UpstashKVStore(Redis(url=url, token=token))
 
 
+#: The env var that redirects the local SQLite store. Named rather than retyped
+#: because the operator guards resolve the same destination WITHOUT opening it --
+#: see `kv_sync.local_destination` -- and a second spelling of this string would
+#: let the guard and the store disagree about which file is at risk.
+LOCAL_KV_PATH_ENV = "FANTASY_LOCAL_KV_PATH"
+
+
 def _build_sqlite_kv() -> SqliteKVStore:
-    path_str = os.environ.get("FANTASY_LOCAL_KV_PATH")
+    path_str = os.environ.get(LOCAL_KV_PATH_ENV)
     path = Path(path_str) if path_str else _DEFAULT_LOCAL_DB
     return SqliteKVStore(path)
 

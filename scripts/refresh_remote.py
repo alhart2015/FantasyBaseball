@@ -28,6 +28,44 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
+#: Exit codes, matching scripts/run_season_dashboard.py and
+#: scripts/run_manual_refresh.py: 2 means "refused, nothing happened".
+RC_REFUSED = 2
+
+
+def _sync_destination_refusal() -> str | None:
+    """Refusal message when the sync-back would wipe a non-baseline store, else None.
+
+    Thin wrapper over ``kv_sync.sync_destination_refusal``, which carries the
+    hazard and the comparison; this supplies only this script's own wording. It
+    was written out longhand here AND in ``run_season_dashboard.guard_sync_target``,
+    and the two copies had already drifted.
+
+    CALLED BEFORE ANYTHING RUNS, not just before the sync. The refusal used to sit
+    beside step 3, by which point steps 1 and 2 had already written production
+    Upstash -- so this script returned 2, the code every other script in this repo
+    documents as "refused, nothing happened", after doing the single most
+    consequential thing it does. The destination is known at startup: it is
+    ``FANTASY_LOCAL_KV_PATH``, set or not before the process begins.
+
+    ``local_destination()`` rather than ``store_path(get_kv())`` for exactly that
+    reason -- see its docstring. Asking ``get_kv()`` here would answer according to
+    ``RENDER`` (refusing a legitimate run from a shell that already exports it) and
+    would CREATE the destination file while asking, under a refusal that promises
+    nothing was written.
+    """
+    from fantasy_baseball.data.kv_sync import local_destination, sync_destination_refusal
+
+    return sync_destination_refusal(
+        local_destination(),
+        action="The sync-back at the end of this run",
+        recovery=[
+            "Nothing has run yet -- no remote refresh, no local write.",
+            "Unset FANTASY_LOCAL_KV_PATH and re-run from a Yahoo-mode shell.",
+        ],
+    )
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -46,6 +84,11 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
+
+    refusal = _sync_destination_refusal()
+    if refusal is not None:
+        print(refusal)
+        return RC_REFUSED
 
     # Must flip the gate BEFORE importing the pipeline: import-time
     # module state (e.g. cached singletons) reads RENDER once.

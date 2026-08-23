@@ -58,6 +58,20 @@ class CacheKey(StrEnum):
     TRAJECTORY_CHART_DATA = "trajectory_chart_data"
 
 
+#: Store-level breadcrumb marking a whole KV file as hand-transcribed (manual)
+#: rather than Yahoo-sourced. A plain key, not a ``cache:*`` one, because it
+#: describes the STORE and not any one cached blob -- an operator opening an
+#: unfamiliar ``.db`` can tell in a single read which kind it is.
+#:
+#: IT LIVES HERE, not in ``manual/``, because ``data.rosters.manual_store_active``
+#: reads it to decide whether this process may reach prod Upstash. Pointing the
+#: pipeline at ``manual.seed`` for that inverted the layering: ``manual/`` adapts
+#: hand-transcribed input INTO the pipeline, so the pipeline must not import it.
+#: ``manual.seed`` and ``scripts/bootstrap_manual_kv.py`` write it; ``data`` reads
+#: it; one definition, one direction.
+MANUAL_PROVENANCE_KEY = "manual_seed_provenance"
+
+
 def redis_key(key: CacheKey) -> str:
     """Return the Redis key for a cache entry (``cache:<name>``)."""
     return f"cache:{key}"

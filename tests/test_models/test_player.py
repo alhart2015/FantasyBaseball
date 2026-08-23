@@ -643,3 +643,44 @@ def test_missing_games_defaults_zero_not_error():
     )
     p = PitcherStats.from_dict({"w": 10, "k": 180, "ip": 190, "er": 70, "bb": 50, "h_allowed": 160})
     assert p.g == 0 and p.gs == 0
+
+
+class TestIsOnIlStatusCoverage:
+    """`is_on_il` must catch every IL variant Yahoo can emit.
+
+    The failure mode is silent and one-directional: an uncovered status makes
+    an injured player read as ACTIVE, so their projections are counted in full
+    and the owning team's projected standings are inflated. Nothing raises.
+    """
+
+    @staticmethod
+    def _player(status: str, slot: str):
+        from fantasy_baseball.models.player import Player
+
+        return Player.from_dict(
+            {
+                "name": "Test Player",
+                "player_type": "hitter",
+                "positions": ["1B", "UTIL"],
+                "status": status,
+                "selected_position": slot,
+            }
+        )
+
+    @pytest.mark.parametrize("status", ["IL", "IL+", "IL7", "IL10", "IL15", "IL60", "DL", "DL7"])
+    def test_every_il_status_detected_from_an_active_slot(self, status):
+        """The slot check cannot help here -- status is the only signal.
+
+        IL7 (MLB's 7-day concussion list) was missing from IL_STATUSES until
+        2026-08-22. A real roster had an IL7 player sitting at 1B, which failed
+        the status check AND the slot check and scored him as healthy.
+        """
+        assert self._player(status, "1B").is_on_il() is True
+
+    @pytest.mark.parametrize("status", ["", "DTD", "NA", "P"])
+    def test_non_il_statuses_are_not_treated_as_il(self, status):
+        """Day-to-day and roster-status markers are NOT the IL -- those players play."""
+        assert self._player(status, "1B").is_on_il() is False
+
+    def test_il_slot_alone_is_enough_when_status_is_blank(self):
+        assert self._player("", "IL").is_on_il() is True

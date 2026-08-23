@@ -2544,7 +2544,11 @@ def test_trajectory_teams_view_renders_a_block_for_every_team_including_empty_on
     # NOT a bare `"Hart of the Order" in body` -- that string is also the site header,
     # so it is present whether or not a single block rendered. Assert on markup only a
     # block emits. (The same trap made a dropdown-ordering test vacuous on #336.)
-    assert body.count("from the best 5") == 2, (
+    # Marker updated when the block headline became the KEEP total rather than the
+    # best-N total: the summary now reads "from the best <keep> they may keep", so
+    # "from the best 5" no longer appears. The assertion is unchanged in meaning --
+    # it still counts one summary clause per scored block.
+    assert body.count("they may keep") == 2, (
         "one summary per SCORED block; Nobodies has none, so this is 2, not 3"
     )
     assert "Aardvarks" in body

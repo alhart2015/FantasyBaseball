@@ -1,0 +1,97 @@
+# Manual standings transcription -- Yahoo web UI, ROTO > Stats tab.
+#
+# Source: user screenshots, 2026-08-22 09:15 local.
+# League "Phantoms of the Outfield" (config/league.yaml id 5652).
+#
+# Yahoo's roto Stats tab exposes R HR RBI SB AVG IP W SV K ERA WHIP.
+# It does NOT expose team AB or PA -- neither does the Yahoo API. Team AB is
+# NOT left at zero, though: refresh_pipeline._build_standings (around line
+# 1052) derives it from Team.ownership_periods intersected with the per-game
+# hitter logs and injects it as extras[AB], which ytd_components then reads at
+# AB sourcing tier 1. That derivation is MLB-sourced and runs unchanged in the
+# manual pipeline, so no AB belongs in this file -- transcribing one here would
+# be inventing a number that the pipeline already computes correctly.
+#
+# IP is recorded in Yahoo's innings.outs display format (1079.1 == 1079 IP + 1
+# out), byte-identical to what the Yahoo API put in StandingsEntry.extras.
+# Do not "fix" it to 1079.333 -- that would diverge from the Yahoo path.
+
+# Yahoo's authoritative roto points are recorded alongside the stats, per team.
+#
+# WHY THIS MATTERS: Yahoo DISPLAYS AVG/ERA/WHIP rounded (.250, 3.40, 1.12) but
+# RANKS on full precision. Five display ties in this snapshot -- AVG .250, AVG
+# .244, ERA 3.40, WHIP 1.12, WHIP 1.18 -- are each split by Yahoo but look like
+# ties to us. Re-deriving points from the rounded stats gives every tied team
+# x.5 and disagrees with Yahoo by up to 1.0 point per team. `category_points`
+# carries Yahoo's real ordering so the tie is resolvable; `points_for` feeds
+# StandingsEntry.yahoo_points_for, which the display layer already prefers over
+# re-scored totals for exactly this reason.
+#
+# VALIDATED: re-deriving points from the counting stats below reproduces Yahoo's
+# category points EXACTLY for R HR RBI SB W SV K across all 10 teams. Every
+# disagreement is a rate-stat display tie. See the checker in
+# tests/test_manual/ -- it is a regression guard on future transcriptions.
+
+effective_date: "2026-08-22"
+
+teams:
+  - name: "Hart of the Order"
+    rank: 1
+    stats: {R: 818, HR: 251, RBI: 754, SB: 162, AVG: 0.263, W: 83, SV: 76, K: 1181, ERA: 3.40, WHIP: 1.12}
+    extras: {IP: 1079.1}
+    points_for: 93
+    category_points: {R: 9, HR: 10, RBI: 9, SB: 10, AVG: 10, W: 10, SV: 9, K: 9, ERA: 8, WHIP: 9}
+  - name: "Hello Peanuts!"
+    rank: 2
+    stats: {R: 861, HR: 248, RBI: 804, SB: 142, AVG: 0.256, W: 69, SV: 77, K: 1094, ERA: 3.40, WHIP: 1.18}
+    extras: {IP: 985.2}
+    points_for: 84
+    category_points: {R: 10, HR: 8, RBI: 10, SB: 9, AVG: 8, W: 6, SV: 10, K: 7, ERA: 9, WHIP: 7}
+  - name: "Jon's Underdogs"
+    rank: 3
+    stats: {R: 773, HR: 202, RBI: 690, SB: 141, AVG: 0.250, W: 72, SV: 64, K: 1142, ERA: 3.32, WHIP: 1.12}
+    extras: {IP: 996.1}
+    points_for: 68.5
+    category_points: {R: 6, HR: 5.5, RBI: 4, SB: 8, AVG: 6, W: 7, SV: 6, K: 8, ERA: 10, WHIP: 8}
+  - name: "Springfield Isotopes"
+    rank: 3
+    stats: {R: 736, HR: 202, RBI: 753, SB: 121, AVG: 0.248, W: 73, SV: 52, K: 1191, ERA: 3.45, WHIP: 1.10}
+    extras: {IP: 1100.2}
+    points_for: 68.5
+    category_points: {R: 5, HR: 5.5, RBI: 8, SB: 7, AVG: 4, W: 8, SV: 4, K: 10, ERA: 7, WHIP: 10}
+  - name: "SkeleThor"
+    rank: 5
+    stats: {R: 804, HR: 191, RBI: 723, SB: 96, AVG: 0.255, W: 79, SV: 59, K: 1034, ERA: 3.54, WHIP: 1.21}
+    extras: {IP: 1031.2}
+    points_for: 55
+    category_points: {R: 7, HR: 3, RBI: 6, SB: 3, AVG: 7, W: 9, SV: 5, K: 5, ERA: 6, WHIP: 4}
+  - name: "Work in Progress"
+    rank: 6
+    stats: {R: 808, HR: 249, RBI: 750, SB: 111, AVG: 0.260, W: 40, SV: 4, K: 892, ERA: 4.25, WHIP: 1.28}
+    extras: {IP: 958.2}
+    points_for: 46
+    category_points: {R: 8, HR: 9, RBI: 7, SB: 5, AVG: 9, W: 1, SV: 1, K: 2, ERA: 2, WHIP: 2}
+  - name: "Spacemen"
+    rank: 7
+    stats: {R: 722, HR: 192, RBI: 693, SB: 103, AVG: 0.250, W: 49, SV: 73, K: 921, ERA: 3.92, WHIP: 1.25}
+    extras: {IP: 983.2}
+    points_for: 42
+    category_points: {R: 4, HR: 4, RBI: 5, SB: 4, AVG: 5, W: 3, SV: 8, K: 3, ERA: 3, WHIP: 3}
+  - name: "Boston Estrellas"
+    rank: 8
+    stats: {R: 711, HR: 180, RBI: 603, SB: 114, AVG: 0.244, W: 59, SV: 36, K: 1067, ERA: 3.68, WHIP: 1.18}
+    extras: {IP: 1050.1}
+    points_for: 35
+    category_points: {R: 2, HR: 1, RBI: 1, SB: 6, AVG: 2, W: 4, SV: 3, K: 6, ERA: 4, WHIP: 6}
+  - name: "Tortured Baseball Department"
+    rank: 9
+    stats: {R: 716, HR: 186, RBI: 664, SB: 94, AVG: 0.244, W: 65, SV: 28, K: 922, ERA: 3.56, WHIP: 1.20}
+    extras: {IP: 977.2}
+    points_for: 34
+    category_points: {R: 3, HR: 2, RBI: 3, SB: 2, AVG: 3, W: 5, SV: 2, K: 4, ERA: 5, WHIP: 5}
+  - name: "Send in the Cavalli"
+    rank: 10
+    stats: {R: 619, HR: 230, RBI: 646, SB: 68, AVG: 0.238, W: 45, SV: 68, K: 730, ERA: 4.40, WHIP: 1.32}
+    extras: {IP: 740.0}
+    points_for: 24
+    category_points: {R: 1, HR: 7, RBI: 2, SB: 1, AVG: 1, W: 2, SV: 7, K: 1, ERA: 1, WHIP: 1}
