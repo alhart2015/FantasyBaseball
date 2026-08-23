@@ -90,6 +90,23 @@ DEFAULT_MIN_ROS_IP = 12.0
 _WARN_SAMPLE = 10
 
 
+class ManualPoolUnsound(RuntimeError):
+    """A transcribed rostered player is missing from the request's rostered set.
+
+    Raised rather than warned because the pool cannot be repaired from here and
+    the failure is invisible downstream. ``match_roster_to_projections``
+    documents that unmatched entries are OMITTED, so a transcription whose
+    spelling misses the projection row ("Luis L. Ortiz" against a frame carrying
+    "Luis Ortiz") drops that player from the rostered set -- while his row
+    survives under its own spelling and becomes recommendable. ``audit_roster``
+    then headlines "drop X, add Y" for a Y another manager owns.
+
+    The spelling mismatch IS the defect, so it cannot be corrected here; only
+    the operator can, by editing the transcription. Naming the players is
+    therefore the whole payload.
+    """
+
+
 @dataclass(frozen=True)
 class _Candidate:
     """One surviving projection row, with the identity used to key it."""
@@ -109,6 +126,7 @@ def build_manual_free_agents(
     per_position_cap: int = DEFAULT_PER_POSITION_CAP,
     min_ros_pa: float = DEFAULT_MIN_ROS_PA,
     min_ros_ip: float = DEFAULT_MIN_ROS_IP,
+    rostered_expected: frozenset[tuple[str, PlayerType]] | None = None,
 ) -> list[Player]:
     """Build the free-agent pool from projections and the rostered-name sets.
 
@@ -135,6 +153,12 @@ def build_manual_free_agents(
             pitcher fetches (SP and RP).
         min_ros_pa: hitter volume floor, in projected rest-of-season PA.
         min_ros_ip: pitcher volume floor, in projected rest-of-season IP.
+        rostered_expected: every ``(normalized name, player_type)`` the
+            TRANSCRIPTION says is rostered. When supplied, any member absent
+            from ``req``'s rostered sets raises :class:`ManualPoolUnsound`
+            rather than building a pool. ``None`` skips the check, which is what
+            the Yahoo path would want if it ever called this -- there the
+            rostered set comes from Yahoo and cannot disagree with itself.
 
     Returns:
         ``list[Player]`` in the same shape ``fetch_and_match_free_agents``
@@ -153,6 +177,23 @@ def build_manual_free_agents(
             "substitute for Yahoo's ownership filter. Run the pipeline's ranking "
             "step (RefreshRun._compute_rankings) before the roster audit."
         )
+
+    if rostered_expected is not None:
+        # EVERY TRANSCRIBED PLAYER MUST HAVE MADE IT INTO THE ROSTERED SET, or the
+        # subtraction below is incomplete and the pool contains someone's player.
+        # Checked before any work: there is nothing to salvage from a pool built
+        # on an incomplete subtraction, and continuing would produce a report
+        # that reads normally and recommends an unavailable add.
+        have = {(n, PlayerType.HITTER) for n in req.rostered_hitters}
+        have |= {(n, PlayerType.PITCHER) for n in req.rostered_pitchers}
+        missing = sorted(f"{name} ({ptype.value})" for name, ptype in rostered_expected - have)
+        if missing:
+            raise ManualPoolUnsound(
+                f"{len(missing)} transcribed rostered player(s) did not match a projection "
+                "row, so they are absent from the rostered set and their projection rows "
+                "would be offered as free agents. Fix the spelling in the roster "
+                "transcription to match the projection frames, then re-run: " + ", ".join(missing)
+            )
 
     candidates: list[_Candidate] = []
     for df, ptype, rostered, volume_col, min_volume in (

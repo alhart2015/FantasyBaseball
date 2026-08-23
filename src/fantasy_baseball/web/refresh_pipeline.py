@@ -81,6 +81,21 @@ log = logging.getLogger(__name__)
 SKIP_YAHOO_ENV = "FB_SKIP_YAHOO"
 
 
+class ManualRosterUnmatched(RuntimeError):
+    """A transcribed roster player did not match a projection row, in manual mode.
+
+    Raised rather than warned because the failure is silent and the output looks
+    normal. On the manual path the hydrated rosters are the ONLY thing subtracted
+    from the synthesized free-agent pool, so an omitted player leaves his own
+    projection row addable and the audit headlines "drop X, add Y" for a Y that
+    another manager owns.
+
+    Manual mode only: on the Yahoo path both the roster and the pool come from
+    Yahoo, so a drop costs that player's projections and cannot leak him into the
+    pool. Gated on ``RefreshRun.manual_mode``.
+    """
+
+
 def skip_yahoo_requested() -> bool:
     """True when ``FB_SKIP_YAHOO`` asks the refresh to run without Yahoo.
 
@@ -990,6 +1005,7 @@ class RefreshRun:
     # --- Step 4d: Hydrate user roster + opponent rosters from League ---
     def _hydrate_rosters(self):
         from fantasy_baseball.data.projections import hydrate_roster_entries
+        from fantasy_baseball.utils.name_utils import normalize_name
 
         assert self.config is not None
         assert self.league_model is not None
@@ -1013,8 +1029,29 @@ class RefreshRun:
                 context=context,
             )
 
+        # WHO FELL OUT OF HYDRATION, by team. `match_roster_to_projections`
+        # OMITS an entry it cannot match (projections.py:529) and logs one
+        # WARNING. On the Yahoo path that is tolerable -- the roster came from
+        # Yahoo and the FA pool comes from Yahoo, so a drop costs one player's
+        # projections and nothing else. On the manual path the rostered set is
+        # the ONLY thing subtracted from the free-agent pool, so a dropped
+        # player's projection row survives under its own spelling and becomes
+        # recommendable: the report says to add someone another manager owns.
+        # Collected here, where both halves are in hand, and acted on below.
+        unhydrated: dict[str, list[str]] = {}
+
+        def _hydrate_checked(roster_model, context, team_name):
+            hydrated = _hydrate(roster_model, context)
+            matched = {normalize_name(p.name) for p in hydrated}
+            lost = [e.name for e in roster_model.entries if normalize_name(e.name) not in matched]
+            if lost:
+                unhydrated[team_name] = lost
+            return hydrated
+
         user_team_model = self.league_model.team_by_name(self.config.team_name)
-        self.matched = _hydrate(user_team_model.latest_roster(), "user")
+        self.matched = _hydrate_checked(
+            user_team_model.latest_roster(), "user", self.config.team_name
+        )
 
         self.opp_rosters = {}
         for team in self.league_model.teams:
@@ -1022,9 +1059,23 @@ class RefreshRun:
                 continue
             if not team.rosters:
                 continue
-            hydrated = _hydrate(team.latest_roster(), f"opp:{team.name}")
+            hydrated = _hydrate_checked(team.latest_roster(), f"opp:{team.name}", team.name)
             if hydrated:
                 self.opp_rosters[team.name] = hydrated
+
+        if unhydrated and self.manual_mode:
+            # Manual mode only. Refusing is the point: the operator can fix a
+            # transcribed spelling, and no downstream stage can recover from an
+            # incomplete subtraction.
+            detail = "; ".join(
+                f"{team}: {', '.join(sorted(names))}" for team, names in sorted(unhydrated.items())
+            )
+            raise ManualRosterUnmatched(
+                f"{sum(len(v) for v in unhydrated.values())} transcribed roster player(s) "
+                "did not match a projection row. Their projection rows would be offered as "
+                "free agents, so the audit would recommend adding a player another manager "
+                f"owns. Fix the spelling in data/manual/rosters.yaml and re-run -- {detail}"
+            )
         self._progress(f"Hydrated {len(self.opp_rosters)} opponent rosters")
 
         # Cache opponent rosters for on-demand trade search

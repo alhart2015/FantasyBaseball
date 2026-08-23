@@ -12,7 +12,10 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.lineup.waivers import FreeAgentRequest
-from fantasy_baseball.manual.free_agents import build_manual_free_agents
+from fantasy_baseball.manual.free_agents import (
+    ManualPoolUnsound,
+    build_manual_free_agents,
+)
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -483,6 +486,61 @@ def test_positions_are_looked_up_by_normalized_name():
 # --------------------------------------------------------------------------
 # Exclusions.
 # --------------------------------------------------------------------------
+
+
+def test_a_transcribed_player_who_failed_to_hydrate_is_refused_not_offered():
+    """The pool is only sound if every rostered player was subtracted from it.
+
+    `match_roster_to_projections` documents that unmatched entries are OMITTED,
+    so a transcription whose spelling misses the projection row ("Luis L. Ortiz"
+    vs "Luis Ortiz") drops that player from the rostered set the request
+    carries -- while his projection row survives under its own spelling and
+    becomes recommendable. The report then says to add a player another manager
+    owns, which is unactionable and looks entirely normal.
+
+    The spelling cannot be repaired here (that is the defect), so the only
+    sound response is to refuse and name the players the operator must fix.
+    """
+    hitters = _hitters([{"name": "Luis Ortiz"}, {"name": "Real Bat"}])
+    positions = {"luis ortiz": ["OF"], "real bat": ["OF"]}
+    # The request carries only the player who DID hydrate.
+    req = _request(
+        hitters,
+        _pitchers([]),
+        rostered_hitters=("Real Bat",),
+        rankings=_ranks(("Luis Ortiz", PlayerType.HITTER), ("Real Bat", PlayerType.HITTER)),
+    )
+
+    with pytest.raises(ManualPoolUnsound) as exc:
+        build_manual_free_agents(
+            req,
+            positions_by_name=positions,
+            rostered_expected=frozenset(
+                {("luis l. ortiz", PlayerType.HITTER), ("real bat", PlayerType.HITTER)}
+            ),
+        )
+
+    assert "luis l. ortiz" in str(exc.value)
+
+
+def test_the_pool_is_built_normally_when_every_transcribed_player_hydrated():
+    """The guard must not fire on the healthy case."""
+    hitters = _hitters([{"name": "Rostered Bat"}, {"name": "Free Bat"}])
+    positions = {"rostered bat": ["OF"], "free bat": ["OF"]}
+    req = _request(
+        hitters,
+        _pitchers([]),
+        rostered_hitters=("Rostered Bat",),
+        rankings=_ranks(("Rostered Bat", PlayerType.HITTER), ("Free Bat", PlayerType.HITTER)),
+    )
+
+    players = build_manual_free_agents(
+        req,
+        positions_by_name=positions,
+        rostered_expected=frozenset({("rostered bat", PlayerType.HITTER)}),
+    )
+
+    assert _by_key(players) == {("free bat", PlayerType.HITTER)}
 
 
 def test_exclusions_applied():

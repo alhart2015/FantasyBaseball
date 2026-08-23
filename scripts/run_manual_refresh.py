@@ -749,12 +749,28 @@ def _run_pipeline(args: argparse.Namespace, exclusions: frozenset[str]) -> int:
     routes the job log to ``job_log:manual:*``, so a manual run's output is
     distinguishable from a Yahoo run's after the fact.
     """
-    from fantasy_baseball.web.refresh_pipeline import RefreshRun
+    from fantasy_baseball.web.refresh_pipeline import ManualRosterUnmatched, RefreshRun
 
     print("")
     print("[5/6] Running the refresh pipeline (Yahoo steps disabled)...")
     source = _build_free_agent_source(args, exclusions)
-    RefreshRun(skip_yahoo=True, free_agent_source=source, job_label="manual").run()
+    try:
+        RefreshRun(skip_yahoo=True, free_agent_source=source, job_label="manual").run()
+    except ManualRosterUnmatched as exc:
+        # A transcription error the operator can fix, not a crash. Surfaced the
+        # same way the transcription-validation errors are, because it IS one --
+        # it is simply not detectable until the projection frames are loaded.
+        _print_errors(
+            "ROSTER PLAYERS DID NOT MATCH A PROJECTION ROW",
+            [str(exc)],
+            [
+                "Check the spelling against the projection frames -- the matcher "
+                "strips accents and suffixes, so the mismatch is usually a middle "
+                "initial, a Jr./Sr. difference, or a player absent from the ROS export.",
+                "Re-run after editing data/manual/rosters.yaml.",
+            ],
+        )
+        return RC_FAILED
     return RC_OK
 
 
