@@ -382,6 +382,15 @@ def _cap_by_position(
                 break
             if bucket is not None and bucket not in cand.positions:
                 continue
-            kept.setdefault((cand.name_norm, cand.player_type), cand)
+            key = (cand.name_norm, cand.player_type)
+            if key in kept:
+                # A REPEATED PLAYER COSTS NO SLOT. The cap bounds how many
+                # DISTINCT players enter the pool, and the frames genuinely
+                # carry duplicate rows for one man -- `sgp.rankings` documents
+                # two "Mason Miller" rows. Counting the repeat spent a slot on
+                # someone already kept and pushed a real free agent out of the
+                # bucket entirely.
+                continue
+            kept[key] = cand
             taken += 1
     return list(kept.values())

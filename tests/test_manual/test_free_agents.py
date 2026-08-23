@@ -525,6 +525,37 @@ def test_exclusions_do_not_consume_a_cap_slot():
     assert _by_key(players) == {("available bat", PlayerType.HITTER)}
 
 
+def test_a_duplicated_projection_row_does_not_consume_two_cap_slots():
+    """Two rows for one player must cost one cap slot, not two.
+
+    The cap bounds how many DISTINCT players enter the pool. ``setdefault``
+    already collapses a repeated ``(name, type)`` -- but the counter was
+    incremented on every iteration regardless, so a duplicated row spent a slot
+    on a player who was already kept and pushed a real free agent out. The
+    projection frames genuinely carry these: ``sgp.rankings`` documents two
+    "Mason Miller" rows, and the same-name collision test below exercises
+    another.
+    """
+    hitters = _hitters([{"name": "Dup Bat"}, {"name": "Dup Bat"}, {"name": "Real Bat"}])
+    positions = {"dup bat": ["OF"], "real bat": ["OF"]}
+    req = _request(
+        hitters,
+        _pitchers([]),
+        rankings=_ranks(
+            ("Dup Bat", PlayerType.HITTER),
+            ("Dup Bat", PlayerType.HITTER),
+            ("Real Bat", PlayerType.HITTER),
+        ),
+    )
+
+    players = build_manual_free_agents(req, positions_by_name=positions, per_position_cap=2)
+
+    assert _by_key(players) == {
+        ("dup bat", PlayerType.HITTER),
+        ("real bat", PlayerType.HITTER),
+    }, "the duplicate must not have spent the second slot"
+
+
 def test_exclusions_remove_both_types_of_a_shared_name():
     """Documented behavior of ``data/manual/fa_exclusions.yaml``: the match is by
     name only, so an entry removes the hitter and the pitcher alike."""
