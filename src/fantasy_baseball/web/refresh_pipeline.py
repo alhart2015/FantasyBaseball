@@ -450,6 +450,13 @@ class RefreshRun:
         # run is distinguishable from a real one after the fact. The default
         # reproduces today's "refresh" exactly.
         self.job_label: str = job_label
+        #: True only once every pipeline step has run. ``run()`` returns
+        #: normally when another instance holds the durable lock, having
+        #: executed NOTHING, so "it returned" is not "it ran" -- a caller that
+        #: reads the caches afterwards would render the PREVIOUS run's output
+        #: as if it were this one's. Checked by
+        #: ``scripts/run_manual_refresh.py``, which then has no report to print.
+        self.completed: bool = False
 
         self.logger = JobLogger(self.job_label)
 
@@ -550,6 +557,7 @@ class RefreshRun:
                     self.logger.finish("skipped", "another instance holds the refresh lock")
                     return
                 self._run_pipeline_steps()
+                self.completed = True
         except Exception as exc:
             with _refresh_lock:
                 _refresh_status["error"] = str(exc)

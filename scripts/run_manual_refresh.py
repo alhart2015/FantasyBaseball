@@ -759,8 +759,9 @@ def _run_pipeline(args: argparse.Namespace, exclusions: frozenset[str]) -> int:
     print("")
     print("[5/6] Running the refresh pipeline (Yahoo steps disabled)...")
     source = _build_free_agent_source(args, exclusions)
+    run = RefreshRun(skip_yahoo=True, free_agent_source=source, job_label="manual")
     try:
-        RefreshRun(skip_yahoo=True, free_agent_source=source, job_label="manual").run()
+        run.run()
     except ManualRosterUnmatched as exc:
         # A transcription error the operator can fix, not a crash. Surfaced the
         # same way the transcription-validation errors are, because it IS one --
@@ -775,6 +776,25 @@ def _run_pipeline(args: argparse.Namespace, exclusions: frozenset[str]) -> int:
                 "Re-run after editing data/manual/rosters.yaml.",
             ],
         )
+        return RC_FAILED
+
+    if not run.completed:
+        # `run()` returns NORMALLY when another instance holds the durable
+        # refresh lock, having executed zero steps. Left unchecked, step 6 reads
+        # `cache:roster_audit` -- the blob from whenever the last successful run
+        # was -- and renders it under THIS run's provenance header, beside roto
+        # standings freshly parsed from today's YAML. The operator acts on stale
+        # add/drop recommendations that look current.
+        #
+        # Reachable without any misuse: the lock has a 30-minute TTL and is
+        # released in a `finally`, so a Ctrl-C'd or killed run leaves it set,
+        # and the natural response is to fix the input and re-run immediately.
+        print("")
+        print("REFRESH DID NOT RUN: another instance holds the refresh lock, so no")
+        print("pipeline step executed and there is no fresh audit to report.")
+        print("")
+        print("If a previous run was interrupted, the lock clears on its own within")
+        print("30 minutes; re-run then. Nothing was written by this run.")
         return RC_FAILED
     return RC_OK
 

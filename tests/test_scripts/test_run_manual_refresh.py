@@ -605,9 +605,15 @@ def test_run_pipeline_passes_the_manual_kwargs_to_refresh_run(monkeypatch):
     class _Recorder:
         def __init__(self, **kwargs):
             seen.update(kwargs)
+            # Models RefreshRun.completed, which run() sets only after every step
+            # executed. The driver now refuses when it is False, because run()
+            # also returns normally when another instance holds the durable lock
+            # and nothing ran at all.
+            self.completed = False
 
         def run(self):
             seen["ran"] = True
+            self.completed = True
 
     monkeypatch.setattr(pipeline_mod, "RefreshRun", _Recorder)
     args = drv._build_parser().parse_args([])

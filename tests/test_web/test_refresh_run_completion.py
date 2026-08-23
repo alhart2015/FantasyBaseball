@@ -1,0 +1,88 @@
+"""`run()` returning is not `run()` having run.
+
+`RefreshRun.run()` acquires the cross-instance durable lock and, when another
+instance already holds it, logs "skipping this run" and returns NORMALLY having
+executed zero steps. Any caller that then reads the caches gets whatever the
+last successful run wrote -- so a manual run would render a stale audit under a
+fresh provenance header. The lock has a 30-minute TTL and is released in a
+`finally`, so an interrupted run leaves it set and the natural response (fix the
+input, re-run) walks straight into it.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from fantasy_baseball.web import refresh_pipeline as rp
+from fantasy_baseball.web.refresh_pipeline import RefreshRun
+
+
+@pytest.fixture(autouse=True)
+def _no_slot(monkeypatch):
+    """Bypass the in-process slot and job logger; only the durable lock matters."""
+    monkeypatch.setattr(rp, "try_acquire_refresh_slot", lambda: True)
+    monkeypatch.setattr(rp, "release_refresh_slot", lambda: None)
+
+
+class _Logger:
+    def start(self, *a, **k):
+        return None
+
+    def finish(self, *a, **k):
+        return None
+
+
+def _run(monkeypatch, *, got_lock: bool, steps_ran: list):
+    import contextlib
+
+    @contextlib.contextmanager
+    def _lock():
+        yield got_lock
+
+    run = RefreshRun(skip_yahoo=True)
+    monkeypatch.setattr(rp, "durable_refresh_lock", _lock)
+    monkeypatch.setattr(run, "logger", _Logger(), raising=False)
+    monkeypatch.setattr(run, "_progress", lambda *a, **k: None)
+    monkeypatch.setattr(run, "_run_pipeline_steps", lambda: steps_ran.append(True))
+    return run
+
+
+def test_completed_is_false_when_the_lock_was_not_acquired(monkeypatch):
+    steps: list = []
+    run = _run(monkeypatch, got_lock=False, steps_ran=steps)
+
+    run.run()
+
+    assert steps == [], "no step may run without the lock"
+    assert run.completed is False, (
+        "a caller reading the caches after this would render the PREVIOUS run's output"
+    )
+
+
+def test_completed_is_true_after_a_full_run(monkeypatch):
+    steps: list = []
+    run = _run(monkeypatch, got_lock=True, steps_ran=steps)
+
+    run.run()
+
+    assert steps == [True]
+    assert run.completed is True
+
+
+def test_completed_stays_false_when_a_step_raises(monkeypatch):
+    """A partial run is not a completed one, and `run()` re-raises."""
+
+    def _boom():
+        raise RuntimeError("step exploded")
+
+    run = _run(monkeypatch, got_lock=True, steps_ran=[])
+    monkeypatch.setattr(run, "_run_pipeline_steps", _boom)
+
+    with pytest.raises(RuntimeError):
+        run.run()
+
+    assert run.completed is False
+
+
+def test_a_fresh_run_starts_incomplete():
+    assert RefreshRun().completed is False
