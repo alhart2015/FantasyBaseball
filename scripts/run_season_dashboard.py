@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 # ``scripts/refresh_remote.py`` cannot drift apart, and neither can drift from
 # the store ``get_kv()`` actually resolves.
 from fantasy_baseball.data.kv_store import get_kv, is_remote
-from fantasy_baseball.data.kv_sync import sync_remote_to_local
+from fantasy_baseball.data.kv_sync import sync_destination_refusal, sync_remote_to_local
 from fantasy_baseball.manual.seed import describe_kv_target, resolve_kv_path
 from fantasy_baseball.web.season_app import create_app
 
@@ -77,8 +77,6 @@ def guard_sync_target(kv_path: Path | None) -> int:
     already printed, passed through so the banner and the refusal cannot name
     different stores.
     """
-    from fantasy_baseball.data.kv_sync import sync_destination_refusal
-
     refusal = sync_destination_refusal(
         kv_path,
         action="The startup sync",
@@ -91,7 +89,6 @@ def guard_sync_target(kv_path: Path | None) -> int:
     if refusal is None:
         return RC_OK
     print(refusal)
-    print("No sync ran and nothing was deleted.")
     return RC_REFUSED
 
 

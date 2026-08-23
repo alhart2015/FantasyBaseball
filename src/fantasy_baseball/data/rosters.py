@@ -38,6 +38,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from ..utils.name_utils import normalize_name
+from .redis_store import _PLAYER_SUFFIX_RE
 
 log = logging.getLogger(__name__)
 
@@ -118,7 +119,7 @@ def owner_map(spots: list[RosterSpot]) -> dict[tuple[str, str], str]:
 def manual_store_active() -> bool:
     """True when this process's KV store holds hand-transcribed (manual) data.
 
-    Reads the store-level breadcrumb `manual.seed` stamps on a seeded manual store,
+    Reads the store-level breadcrumb the manual writers stamp on a manual store,
     rather than sniffing `FANTASY_LOCAL_KV_PATH`. That precision is the whole point:
     every pytest run and every ad-hoc `FANTASY_LOCAL_KV_PATH` also redirects the
     store, and none of those are manual runs -- keying on the env var would refuse
@@ -134,10 +135,10 @@ def manual_store_active() -> bool:
     if is_remote():
         return False
 
-    from ..manual.seed import PROVENANCE_KEY
+    from .cache_keys import MANUAL_PROVENANCE_KEY
 
     try:
-        return get_kv().get(PROVENANCE_KEY) is not None
+        return get_kv().get(MANUAL_PROVENANCE_KEY) is not None
     except (OSError, sqlite3.Error):
         # Fail OPEN on a STORAGE fault, deliberately. An unreadable store is not
         # evidence of manual mode, and refusing on it would take the ordinary Yahoo
@@ -155,7 +156,7 @@ def manual_store_active() -> bool:
 
 
 def live_rosters(my_team: str) -> list[RosterSpot]:
-    """Read both roster blobs from PROD Upstash and flatten them.
+    """Who owns whom: prod Upstash normally, the manual store in manual mode.
 
     Delegates to `manual_rosters` when this process is running against the manual KV
     store. The Upstash reach below is right for the Yahoo caller and wrong for that
@@ -196,7 +197,7 @@ def live_rosters(my_team: str) -> list[RosterSpot]:
 
 
 def manual_rosters(my_team: str) -> list[RosterSpot]:
-    """Ownership from the MANUAL store's own latest roster snapshot.
+    """Ownership from the manual store's latest HAND-TRANSCRIBED roster snapshot.
 
     The manual pipeline seeds `weekly_rosters_history` from `data/manual/rosters.yaml`
     for every team in the league, so the answer `live_rosters` wants is already in the
@@ -205,55 +206,126 @@ def manual_rosters(my_team: str) -> list[RosterSpot]:
     needs ownership for all ten teams, works in manual mode instead of falling through
     to an empty block list and silently rendering the league board.
 
-    `my_team` is accepted and unused, deliberately: every row in the hash carries its
-    own `team`, including yours, so unlike the Upstash pair there is no bare list that
-    needs a name attached. Keeping the parameter lets this stand in for `live_rosters`
-    at the same call signature.
+    THE HASH IS NOT ALL MANUAL. `bootstrap_manual_kv.py` copies the Yahoo baseline
+    WHOLESALE, `weekly_rosters_history` included, so the manual store also holds every
+    Yahoo snapshot the baseline had. Taking `max(dates)` would therefore serve a
+    month-stale Yahoo day whenever one out-dates the transcription -- a back-dated
+    snapshot, a typo'd date, a re-bootstrap from a fresher baseline -- and report it as
+    manual data. That is the same vintage splice `ManualStoreRefused` exists to prevent,
+    reached silently instead of loudly. So days are filtered to those whose rows carry
+    the manual source marker `manual.seed._stamp_rows` writes, and the latest of THOSE
+    wins.
+
+    That filter is also what makes the refusal reachable. A store bootstrapped from a
+    populated baseline is not empty -- it holds the whole Yahoo history -- so a
+    "did we get any rows at all" test would never fire against a real bootstrap, only
+    against a synthetic empty store.
+
+    `my_team` does not select rows -- every row in the hash carries its own `team`,
+    including yours, so unlike the Upstash pair there is no bare list needing a name
+    attached. It is still checked, because a mismatch between `config.team_name` and
+    the `team:` key in `rosters.yaml` is otherwise SILENT here: `is_mine` comes back
+    false for every block and the page reports "you own none of these" with nothing
+    naming the typo as the cause. The Yahoo path surfaces the same mistake as a
+    visibly wrong label.
 
     `player_type` is derived from the eligibility string -- see
     `player_type_for_positions`. Roster rows carry no type field, and a two-way player
-    is two rows, so deriving it is what keeps `name::player_type` intact.
+    is two rows, so deriving it is what keeps `name::player_type` intact. A row whose
+    positions do not parse is NAMED rather than silently filed as a hitter: a wrong-half
+    join drops the player off the board with nothing on screen to say so.
+
+    Names are stripped of Yahoo's " (Batter)"/" (Pitcher)" suffixes before normalizing,
+    matching `redis_store.get_latest_roster_names` -- the other reader of this same hash.
+    Two readers normalizing differently is a join that works in one place and not the
+    other.
 
     Raises:
-        ManualStoreRefused: the store holds no roster snapshot (bootstrapped but not
-            yet seeded). Falling back to prod Upstash here would be the exact vintage
-            mix this whole path exists to prevent.
+        ManualStoreRefused: the store holds no hand-transcribed roster snapshot
+            (bootstrapped but not yet seeded, or seeded into a different store).
+            Falling back to prod Upstash here would be the exact vintage mix this whole
+            path exists to prevent.
     """
-    from ..models.positions import player_type_for_positions
+    from ..manual.seed import MANUAL_SOURCE, ROW_SOURCE_FIELD
+    from ..models.positions import UnknownPositions, player_type_for_positions
     from .kv_store import get_kv
-    from .redis_store import get_latest_weekly_rosters
+    from .redis_store import get_weekly_roster_day
 
-    del my_team  # every row names its own team; see the docstring
-
-    rows = get_latest_weekly_rosters(get_kv())
-    if not rows:
+    kv = get_kv()
+    day = _latest_manual_day(kv)
+    if day is None:
         message = (
             "live_rosters: this process is running against the hand-transcribed manual "
-            "KV store and that store holds no roster snapshot. Refusing to fall back to "
-            "production Upstash -- those rosters are Yahoo-vintage and can be a month "
-            "stale, and mixing them into a page built from manual data would look "
-            "plausible and be wrong. Run scripts/run_manual_refresh.py to seed it."
+            "KV store and that store holds no manual roster snapshot. Refusing to fall "
+            "back to production Upstash, or to the Yahoo snapshots the bootstrap copied "
+            "in -- those rosters are Yahoo-vintage and can be a month stale, and mixing "
+            "them into a page built from manual data would look plausible and be wrong. "
+            "Run scripts/run_manual_refresh.py to seed it."
         )
         log.error(message)
         raise ManualStoreRefused(message)
 
+    rows = get_weekly_roster_day(kv, day)
     spots: list[RosterSpot] = []
+    unparsed: list[str] = []
     for row in rows:
-        if not isinstance(row, dict):
+        if not isinstance(row, dict) or row.get(ROW_SOURCE_FIELD) != MANUAL_SOURCE:
             continue
         name = row.get("player_name")
         team = row.get("team")
         if not name or not team:
             continue
+        try:
+            player_type = player_type_for_positions(str(row.get("positions", "")))
+        except UnknownPositions:
+            unparsed.append(str(name))
+            continue
         spots.append(
             RosterSpot(
                 name=str(name),
-                normalized=normalize_name(str(name)),
-                player_type=player_type_for_positions(str(row.get("positions", ""))),
+                normalized=normalize_name(_PLAYER_SUFFIX_RE.sub("", str(name))),
+                player_type=player_type,
                 team=str(team),
                 yahoo_id=str(row.get("yahoo_id", "") or ""),
                 status=str(row.get("status", "") or ""),
             )
         )
-    log.info("live_rosters: served %d spots from the manual store", len(spots))
+    if my_team and my_team not in {s.team for s in spots}:
+        log.warning(
+            "live_rosters: configured team_name %r is not one of the transcribed teams "
+            "(%s) -- every block will read as someone else's",
+            my_team,
+            ", ".join(sorted({s.team for s in spots})),
+        )
+    if unparsed:
+        # NAMED, not swallowed. Each of these is a player who will read as unowned on
+        # every board, which is indistinguishable from a free agent.
+        log.warning(
+            "live_rosters: %d manual roster row(s) had unparseable positions and are "
+            "not on the board: %s",
+            len(unparsed),
+            ", ".join(sorted(unparsed)),
+        )
+    log.info("live_rosters: served %d spots from the manual store (snapshot %s)", len(spots), day)
     return spots
+
+
+def _latest_manual_day(kv: Any) -> str | None:
+    """The most recent `weekly_rosters_history` date whose rows are hand-transcribed.
+
+    Scans newest-first and stops at the first manual day, so the common case reads one
+    field. Returns None when the hash holds only Yahoo days, or nothing at all.
+    """
+    from ..manual.seed import MANUAL_SOURCE, ROW_SOURCE_FIELD
+    from .redis_store import WEEKLY_ROSTERS_HISTORY_KEY, get_weekly_roster_day
+
+    try:
+        dates = kv.hkeys(WEEKLY_ROSTERS_HISTORY_KEY) or []
+    except (OSError, sqlite3.Error):
+        log.warning("live_rosters: could not list roster snapshot dates")
+        return None
+    for day in sorted((str(d) for d in dates), reverse=True):
+        rows = get_weekly_roster_day(kv, day)
+        if any(isinstance(r, dict) and r.get(ROW_SOURCE_FIELD) == MANUAL_SOURCE for r in rows):
+            return day
+    return None

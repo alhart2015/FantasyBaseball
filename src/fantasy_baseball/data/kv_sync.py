@@ -22,10 +22,13 @@ Design:
 from __future__ import annotations
 
 import logging
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from fantasy_baseball.data.kv_store import (
+    _DEFAULT_LOCAL_DB,
+    LOCAL_KV_PATH_ENV,
     KVStore,
     SqliteKVStore,
     build_explicit_upstash_kv,
@@ -74,6 +77,31 @@ class SyncStats:
             f"{self.string_keys} string keys, "
             f"{self.hash_keys} hash keys ({self.hash_fields} fields)"
         )
+
+
+def local_destination() -> Path | None:
+    """Where a ``local=None`` sync would write, WITHOUT opening the store.
+
+    Read straight off the environment rather than through ``get_kv()``, for two
+    reasons that both bit the operator guards:
+
+    - ``get_kv()`` answers according to ``RENDER``. An operator with ``RENDER=true``
+      already exported -- which this repo's own CLAUDE.md tells them to do to read
+      Upstash -- got the Upstash client, no path, and a guard that refused a
+      perfectly legitimate run as "a store with no local file".
+    - ``get_kv()`` CONSTRUCTS the store. ``SqliteKVStore.__init__`` mkdirs the parent
+      and runs ``CREATE TABLE IF NOT EXISTS``, so merely asking the question created
+      an empty database and its WAL sidecars -- underneath a refusal whose own text
+      promises nothing was written.
+
+    Returns None only when the resolved path cannot be parsed, which is not a state
+    the guards need to distinguish from "not the baseline".
+    """
+    raw = os.environ.get(LOCAL_KV_PATH_ENV)
+    try:
+        return Path(raw).resolve() if raw else _DEFAULT_LOCAL_DB.resolve()
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
 
 
 def store_path(client: KVStore) -> Path | None:
@@ -146,6 +174,9 @@ def sync_destination_refusal(
         "",
         *recovery,
         "See docs/manual-pipeline-runbook.md.",
+        # The invariant of the guard itself, so both callers state it identically:
+        # the one sentence an operator staring at a refusal actually needs.
+        "Nothing was deleted.",
     ]
     return "\n".join(lines)
 

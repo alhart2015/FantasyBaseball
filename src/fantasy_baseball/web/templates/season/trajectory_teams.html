@@ -14,6 +14,11 @@
 
 <p class="muted">
   The best {{ board.per_team }} on every roster over {{ board.span }}, strongest team first.
+  {%- if board.per_team_requested %}
+  (You asked for {{ board.per_team_requested }}; a block cannot show fewer rows than the
+  {{ board.blocks[0].keep }} this league keeps, or the headline would sum players the
+  table does not list.)
+  {%- endif %}
 </p>
 
 {#- This IS the teams view, so it exists by construction. -#}

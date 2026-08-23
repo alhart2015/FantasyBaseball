@@ -74,3 +74,35 @@ def test_script_is_ascii_only():
     """cp1252 stdout on this dev box: one non-ASCII glyph crashes the script."""
     raw = (PROJECT_ROOT / "scripts" / "refresh_remote.py").read_bytes()
     assert raw.decode("ascii")
+
+
+def test_an_already_exported_render_does_not_refuse_the_run(monkeypatch, tmp_path):
+    """CLAUDE.md tells operators to export RENDER=true to read Upstash directly.
+
+    Resolving the destination through get_kv() answered according to RENDER, so from
+    such a shell the guard saw the Upstash client, found no local file, and refused a
+    perfectly legitimate remote refresh before it ran.
+    """
+    baseline = tmp_path / "local.db"
+    monkeypatch.setattr(kv_store, "_DEFAULT_LOCAL_DB", baseline)
+    monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(baseline))
+    monkeypatch.setenv("RENDER", "true")
+    kv_store._reset_singleton()
+
+    assert refresh_remote._sync_destination_refusal() is None
+
+
+def test_the_guard_does_not_create_the_store_it_is_asking_about(monkeypatch, tmp_path):
+    """The refusal says nothing was written; asking must not make that false.
+
+    SqliteKVStore.__init__ mkdirs the parent and runs CREATE TABLE, so resolving the
+    destination through get_kv() created an empty database and its WAL sidecars
+    underneath a message promising no local write.
+    """
+    manual = tmp_path / "nested" / "manual.db"
+    monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(manual))
+    kv_store._reset_singleton()
+
+    assert refresh_remote._sync_destination_refusal() is not None
+    assert not manual.exists()
+    assert not manual.parent.exists()

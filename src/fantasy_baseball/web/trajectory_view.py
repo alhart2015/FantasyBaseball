@@ -155,17 +155,22 @@ class TeamBlock:
         the best-5 measure 67.4 to 55.8 and TRAILED on best-3, 43.0 to 45.1, because
         two of their five were unkeepable.
         """
-        return float(sum(r["total"] for r in self.rows[: self.keep]))
+        return float(sum(r["total"] for r in self.rows[: self.kept_count]))
 
     @property
     def kept_count(self) -> int:
         """How many rows `keep_total` actually summed.
 
-        `keep` is the league rule; this is the rule capped by what the block HAS. A
-        team with two scored players cannot show three, and printing "from the best 3
-        they may keep" above a two-player sum states a number the rows disprove.
+        `keep` is the league rule; this is the rule capped by what the block HAS -- and
+        floored at zero. A team with two scored players cannot show three, and printing
+        "from the best 3 they may keep" above a two-player sum states a number the rows
+        disprove; a negative `keep` would print "the best -1".
+
+        Clamped HERE rather than trusted from the caller because `TeamBlock` is a public
+        frozen dataclass that tests and future callers construct directly, and every
+        property that slices on `keep` has to agree about what an out-of-range one means.
         """
-        return min(self.keep, len(self.rows))
+        return max(0, min(self.keep, len(self.rows)))
 
     @property
     def stranded(self) -> float:
@@ -173,8 +178,11 @@ class TeamBlock:
 
         Only positives count: a negative row past the cut costs nothing to lose, so
         summing it would credit a team for holding bad players.
+
+        Slices on `kept_count`, not `keep`: at `keep=0` the raw field would sum EVERY
+        row and label the whole block "stranded below the cut".
         """
-        return float(sum(max(r["total"], 0.0) for r in self.rows[self.keep :]))
+        return float(sum(max(r["total"], 0.0) for r in self.rows[self.kept_count :]))
 
     @property
     def keep_dropoff(self) -> float | None:
@@ -184,15 +192,17 @@ class TeamBlock:
         exploitable mistake exists for that team, however deep they look. `None` when
         the block has no row past the cut, or no row before it.
 
-        BOTH ends are guarded. `len(rows) <= keep` protects `rows[keep]` and says
-        nothing about `rows[keep - 1]`: at `keep=0` that is `rows[-1]`, the WORST row,
-        and the answer comes back as the negation of the whole block's spread wearing
-        the label "keeper drop-off". `build_teams_board` clamps `keep` to at least 1,
-        but this is a public frozen dataclass and tests construct it directly.
+        BOTH ends are guarded, through `kept_count` like every other property that
+        slices on the cut. `len(rows) <= keep` protects `rows[keep]` and says nothing
+        about `rows[keep - 1]`: at `keep=0` that is `rows[-1]`, the WORST row, and the
+        answer comes back as the negation of the whole block's spread wearing the label
+        "keeper drop-off". `build_teams_board` clamps `keep` to at least 1, but this is
+        a public frozen dataclass and tests construct it directly.
         """
-        if self.keep < 1 or len(self.rows) <= self.keep:
+        cut = self.kept_count
+        if cut < 1 or len(self.rows) <= cut:
             return None
-        return float(self.rows[self.keep - 1]["total"] - self.rows[self.keep]["total"])
+        return float(self.rows[cut - 1]["total"] - self.rows[cut]["total"])
 
 
 @dataclass(frozen=True)
@@ -205,9 +215,14 @@ class TeamsBoard:
     end_years: list[int]
     pool: str
     scale: str
+    #: How many rows each block DRAWS. Floored at `keep` -- see `build_teams_board`.
     per_team: int
     year_columns: list[int]
     meta: dict = field(default_factory=dict)
+    #: The `?per=` the reader actually asked for, when it was widened to reach `keep`;
+    #: None when it was honoured. Drives one clause of the page's summary line, so a
+    #: request the page could not serve is visible rather than silently overridden.
+    per_team_requested: int | None = None
 
     @property
     def mine_missing(self) -> bool:
@@ -631,7 +646,8 @@ def build_teams_board(
     # headline on screen that its own rows cannot add up to, so `n` is floored at the
     # rule. Asking for fewer rows than that is a request the page cannot honestly serve.
     keep_n = _clamp(keep, 1, 50, DEFAULT_KEEP)
-    n = max(_clamp(per_team, 1, 50, DEFAULT_PER_TEAM), keep_n)
+    requested = _clamp(per_team, 1, 50, DEFAULT_PER_TEAM)
+    n = max(requested, keep_n)
     index = index_rosters(ranked_rows, spots or [], my_team)
 
     # BLOCKS COME FROM THE ROSTERS, not the rows. A team whose players were all
@@ -694,6 +710,10 @@ def build_teams_board(
         pool=pool,
         scale=scale,
         per_team=n,
+        # What was asked for, when it differs from what was drawn. The page prints
+        # "The best N on every roster", so silently widening `?per=2` to 3 made that
+        # sentence contradict the request with nothing on screen to explain it.
+        per_team_requested=requested if requested != n else None,
         year_columns=[base + h for h in horizons] if len(horizons) > 1 else [],
         meta=_board_meta(payload),
     )

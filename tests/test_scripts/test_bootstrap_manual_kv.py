@@ -337,3 +337,74 @@ def test_manual_db_is_gitignored():
     )
     assert result.returncode == 0, f"data/manual.db is NOT gitignored: {result.stdout}"
     assert "data/*.db" in result.stdout
+
+
+def test_a_copy_that_cannot_be_stamped_is_removed(source_db, tmp_path, monkeypatch):
+    """An unstamped store on disk is worse than no store at all.
+
+    `manual_store_active` reads the ABSENCE of the stamp as "this is the Yahoo
+    baseline", so a copy left behind at data/manual.db hands the next process that
+    points FANTASY_LOCAL_KV_PATH at it month-stale prod rosters for a manual page --
+    the exact splice the stamp exists to prevent, reached through the failure path.
+    """
+    dest = tmp_path / "manual.db"
+
+    def _boom(_dest):
+        raise RuntimeError("no venv, no package")
+
+    monkeypatch.setattr(boot, "stamp_manual_provenance", _boom)
+
+    assert _run(source_db, dest) == 1
+    assert not dest.exists(), "an unstamped copy must not survive"
+
+
+def test_a_copy_that_fails_the_fidelity_check_is_removed(source_db, tmp_path, monkeypatch):
+    """Same reasoning: both fidelity branches leave a fully written, unstamped store."""
+    dest = tmp_path / "manual.db"
+    real = boot.content_digest
+    calls: list[Path] = []
+
+    def _digest(path: Path) -> str:
+        calls.append(path)
+        # Third call is the copy's own digest; make it disagree with the source.
+        return "different" if len(calls) == 3 else real(path)
+
+    monkeypatch.setattr(boot, "content_digest", _digest)
+
+    assert _run(source_db, dest) == 1
+    assert not dest.exists(), "an unstamped copy must not survive"
+
+
+def test_the_script_finds_the_package_without_an_active_venv(source_db, tmp_path):
+    """It was stdlib-only by design; the stamp made it need `fantasy_baseball`.
+
+    Every other script here inserts src/ on sys.path for exactly this reason. Without
+    it the copy and both checks pass and only the stamp dies -- the worst possible
+    place to fail.
+    """
+    src = boot.PROJECT_ROOT / "src"
+    assert str(src) in sys.path
+
+
+def test_bootstrap_and_seed_agree_on_the_seeded_flag(source_db, tmp_path, open_store):
+    """`seeded` is the field to branch on, so it must mean the same to both writers.
+
+    They each used to build their own payload: bootstrap wrote `seeded: False`, the
+    seeder wrote `seeded_at` and no `seeded` key at all -- so `.get("seeded")` was
+    falsy after a SUCCESSFUL seed, the opposite of what it reads like.
+    """
+    import json
+
+    from fantasy_baseball.manual.seed import PROVENANCE_KEY, stamp_provenance
+
+    dest = tmp_path / "manual.db"
+    assert _run(source_db, dest) == 0
+    store = open_store(dest)
+
+    assert json.loads(store.get(PROVENANCE_KEY))["seeded"] is False
+
+    stamp_provenance(store, str(dest), seeded=True, teams=10, players=241)
+
+    after = json.loads(store.get(PROVENANCE_KEY))
+    assert after["seeded"] is True
+    assert after["teams"] == 10

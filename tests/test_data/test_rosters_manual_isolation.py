@@ -126,28 +126,53 @@ class TestNonManualIsUnchanged:
 
 
 def _seed_snapshot(client, date="2026-08-17") -> None:
-    """Write a roster day in the shape `manual.seed` writes it.
+    """Write a MANUAL roster day in the shape `manual.seed` writes it.
 
-    Through `write_roster_snapshot`, the same writer the seeder uses, so a change
-    to that shape breaks this test rather than sliding past it.
+    Through `write_roster_snapshot` and `_stamp_rows`, the two the seeder itself
+    uses, so a change to either shape breaks this test rather than sliding past
+    it -- and in particular so these rows carry the source marker that tells them
+    apart from the Yahoo days the bootstrap copies into the same hash.
+    """
+    from fantasy_baseball.data.redis_store import write_roster_snapshot
+    from fantasy_baseball.manual.seed import _stamp_rows
+
+    write_roster_snapshot(
+        client,
+        date,
+        MY_TEAM,
+        _stamp_rows(
+            [
+                {"player_name": "Bryan Woo", "positions": "SP, P", "slot": "P", "status": ""},
+                {"player_name": "Shohei Ohtani", "positions": "Util", "slot": "Util", "status": ""},
+                {"player_name": "Shohei Ohtani", "positions": "P", "slot": "BN", "status": ""},
+            ],
+            MY_TEAM,
+        ),
+    )
+    write_roster_snapshot(
+        client,
+        date,
+        "Team 02",
+        _stamp_rows(
+            [{"player_name": "Juan Soto", "positions": "OF, Util", "slot": "OF", "status": "DTD"}],
+            "Team 02",
+        ),
+    )
+
+
+def _seed_yahoo_day(client, date) -> None:
+    """A Yahoo roster day, UNSTAMPED -- what the bootstrap copies in.
+
+    `bootstrap_manual_kv.py` copies data/local.db wholesale, `weekly_rosters_history`
+    included, so the manual store holds every Yahoo snapshot the baseline had.
     """
     from fantasy_baseball.data.redis_store import write_roster_snapshot
 
     write_roster_snapshot(
         client,
         date,
-        MY_TEAM,
-        [
-            {"player_name": "Bryan Woo", "positions": "SP, P", "slot": "P", "status": ""},
-            {"player_name": "Shohei Ohtani", "positions": "Util", "slot": "Util", "status": ""},
-            {"player_name": "Shohei Ohtani", "positions": "P", "slot": "BN", "status": ""},
-        ],
-    )
-    write_roster_snapshot(
-        client,
-        date,
-        "Team 02",
-        [{"player_name": "Juan Soto", "positions": "OF, Util", "slot": "OF", "status": "DTD"}],
+        "Yahoo Vintage FC",
+        [{"player_name": "Stale Yahoo Guy", "positions": "OF", "slot": "OF", "status": ""}],
     )
 
 
@@ -194,9 +219,10 @@ class TestManualModeServesManualRosters:
 
         assert soto.status == "DTD"
 
-    def test_the_latest_snapshot_wins(self, local_kv, fake_upstash):
+    def test_the_latest_manual_snapshot_wins(self, local_kv, fake_upstash):
         """Re-seeding after a trade must not resurrect the older day's ownership."""
         from fantasy_baseball.data.redis_store import write_roster_snapshot
+        from fantasy_baseball.manual.seed import _stamp_rows
 
         _stamp_manual(local_kv)
         _seed_snapshot(local_kv, date="2026-08-10")
@@ -204,10 +230,112 @@ class TestManualModeServesManualRosters:
             local_kv,
             "2026-08-17",
             "Team 02",
-            [{"player_name": "Bryan Woo", "positions": "SP, P", "slot": "P", "status": ""}],
+            _stamp_rows(
+                [{"player_name": "Bryan Woo", "positions": "SP, P", "slot": "P", "status": ""}],
+                "Team 02",
+            ),
         )
 
         assert {(s.name, s.team) for s in live_rosters(MY_TEAM)} == {("Bryan Woo", "Team 02")}
+
+    def test_a_newer_yahoo_day_does_not_outrank_the_transcription(self, local_kv, fake_upstash):
+        """The hash is not all manual, so max(dates) is the wrong question.
+
+        The bootstrap copies data/local.db WHOLESALE, so the manual store also holds
+        every Yahoo snapshot the baseline had. A Yahoo day that out-dates the
+        transcription -- a back-dated snapshot, a typo'd date, a re-bootstrap from a
+        fresher baseline -- would otherwise be served as manual-vintage ownership on
+        an otherwise-manual page, with no error and nothing in the log saying so.
+        That is the same splice ManualStoreRefused exists to prevent, reached
+        silently instead of loudly.
+        """
+        _stamp_manual(local_kv)
+        _seed_snapshot(local_kv, date="2026-08-10")
+        _seed_yahoo_day(local_kv, "2026-08-24")
+
+        spots = live_rosters(MY_TEAM)
+
+        assert "Stale Yahoo Guy" not in {s.name for s in spots}
+        assert ("Bryan Woo", MY_TEAM) in {(s.name, s.team) for s in spots}
+
+    def test_a_bootstrapped_store_with_only_yahoo_days_refuses(self, local_kv, fake_upstash):
+        """The state a real bootstrap leaves behind, which "no rows at all" misses.
+
+        A store copied from a populated baseline is NOT empty -- it holds the whole
+        Yahoo history -- so a did-we-get-any-rows test would fire only against a
+        synthetic empty store and never against an actual bootstrap.
+        """
+        _stamp_manual(local_kv)
+        _seed_yahoo_day(local_kv, "2026-07-27")
+        client, built = fake_upstash
+
+        with pytest.raises(ManualStoreRefused):
+            live_rosters(MY_TEAM)
+
+        assert not built
+        assert client.calls == 0
+
+    def test_a_row_whose_positions_do_not_parse_is_named(self, local_kv, fake_upstash, caplog):
+        """player_type is half the join key, so a guess is not a degraded answer.
+
+        Filing an unparseable row as a hitter attributes it to a player who does not
+        exist: the join misses, the player reads as unowned on every board, and that
+        is indistinguishable from a free agent. Naming him is the failure this repo
+        prefers.
+        """
+        from fantasy_baseball.data.redis_store import write_roster_snapshot
+        from fantasy_baseball.manual.seed import _stamp_rows
+
+        _stamp_manual(local_kv)
+        _seed_snapshot(local_kv)
+        write_roster_snapshot(
+            local_kv,
+            "2026-08-17",
+            "Team 03",
+            _stamp_rows(
+                [{"player_name": "Mystery Man", "positions": "", "slot": "BN", "status": ""}],
+                "Team 03",
+            ),
+        )
+
+        with caplog.at_level("WARNING", logger=rosters.__name__):
+            spots = live_rosters(MY_TEAM)
+
+        assert "Mystery Man" not in {s.name for s in spots}
+        assert any("Mystery Man" in r.getMessage() for r in caplog.records), (
+            "a player dropped off the board must be named, not silently filed as a hitter"
+        )
+
+    def test_yahoo_name_suffixes_are_stripped_like_the_other_reader(self, local_kv, fake_upstash):
+        """redis_store.get_latest_roster_names strips these before normalizing.
+
+        Two readers of the SAME hash normalizing differently is a join that works in
+        one place and not the other.
+        """
+        from fantasy_baseball.data.redis_store import get_latest_roster_names, write_roster_snapshot
+        from fantasy_baseball.manual.seed import _stamp_rows
+
+        _stamp_manual(local_kv)
+        write_roster_snapshot(
+            local_kv,
+            "2026-08-17",
+            MY_TEAM,
+            _stamp_rows(
+                [
+                    {
+                        "player_name": "Shohei Ohtani (Pitcher)",
+                        "positions": "P",
+                        "slot": "P",
+                        "status": "",
+                    }
+                ],
+                MY_TEAM,
+            ),
+        )
+
+        spot = live_rosters(MY_TEAM)[0]
+
+        assert spot.normalized in (get_latest_roster_names(local_kv) or set())
 
     def test_an_unseeded_manual_store_refuses_rather_than_reaching_prod(
         self, local_kv, fake_upstash
@@ -308,7 +436,15 @@ class TestTheDetectionWindowIsClosed:
             "a store that IS manual must say so before anything reads it"
         )
 
-    def test_the_copied_baseline_content_still_arrives(self, tmp_path):
-        dest = self._bootstrap(tmp_path)
+    def test_a_freshly_bootstrapped_store_reads_as_manual(self, tmp_path, monkeypatch):
+        """The property this FILE owns: the detection, not the script's fidelity.
 
-        assert kv_store.SqliteKVStore(dest).get("cache:standings") == "{}"
+        `test_bootstrap_manual_kv.py` pins that the stamp is written and that it is
+        the only row added; what matters here is that `manual_store_active` agrees,
+        because that is what stands between a bootstrapped store and prod Upstash.
+        """
+        dest = self._bootstrap(tmp_path)
+        monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(dest))
+        kv_store._reset_singleton()
+
+        assert manual_store_active() is True

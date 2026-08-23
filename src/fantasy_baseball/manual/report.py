@@ -21,6 +21,7 @@ the entry-point script is responsible for
 
 from __future__ import annotations
 
+import math
 from collections.abc import Mapping, Sequence
 from datetime import date
 from typing import Any
@@ -162,18 +163,25 @@ def is_injured(entry: AuditEntry) -> bool:
 
 
 def _as_float(value: Any) -> float | None:
-    """A float, or None for anything that is not one.
+    """A finite real number, or None for anything else.
 
-    Every number in this report arrives out of a cached JSON blob, and a blob is
-    not a type. A bool is rejected on purpose -- `True` is a float in Python and
-    would print as "+1.00", a plausible roto delta nobody computed.
+    Every number in this report arrives out of a cached JSON blob, and a blob is not
+    a type. What gets rejected is chosen so that a value nobody computed can never
+    print as one that looks computed:
+
+    - a bool, because ``True`` IS a float in Python and would render "+1.00", a
+      perfectly plausible roto delta;
+    - a string, even a numeric one. ``float("0.46")`` succeeds, so accepting strings
+      would let a writer that stringified its numbers render a full report that looks
+      right while the type mismatch -- the actual defect -- stays invisible. "--" is
+      the honest answer: this build did not produce that number;
+    - NaN and the infinities, which format as "+nan" and "inf%" inside a table a
+      reader scans for magnitudes.
     """
-    if value is None or isinstance(value, bool):
+    if not isinstance(value, int | float) or isinstance(value, bool):
         return None
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return None
+    number = float(value)
+    return number if math.isfinite(number) else None
 
 
 def _num(value: Any, digits: int = 2) -> str:
@@ -186,15 +194,9 @@ def _signed(value: Any, digits: int = 2) -> str:
     return MISSING if number is None else f"{number:+.{digits}f}"
 
 
-def _pct(value: Any) -> str:
+def _pct(value: Any, digits: int = 0) -> str:
     number = _as_float(value)
-    return MISSING if number is None else f"{number * 100:.0f}%"
-
-
-def _pct1(value: Any) -> str:
-    """A percentage to one decimal. Separate from `_pct` only in precision."""
-    number = _as_float(value)
-    return MISSING if number is None else f"{number * 100:.1f}%"
+    return MISSING if number is None else f"{number * 100:.{digits}f}%"
 
 
 def _positions(positions: Sequence[str] | None) -> str:
@@ -256,6 +258,7 @@ def _provenance_lines(
     fraction_remaining: float | None,
     ros_snapshot_date: str,
     kv_path: str | None,
+    dropped_rows: int = 0,
 ) -> list[str]:
     fields = [
         ("team", team_name),
@@ -267,8 +270,20 @@ def _provenance_lines(
         # "0.0%" is a specific and false claim that the season is over, on the
         # PROVENANCE block -- the one part of the report a reader trusts to say
         # what the rest was built from. MISSING is why it exists.
-        ("season remaining", _pct1(fraction_remaining)),
+        ("season remaining", _pct(fraction_remaining, digits=1)),
     ]
+    if dropped_rows:
+        # IN THE REPORT, not only on the terminal. This file is the artifact -- what a
+        # later session reads and what the user comes back to -- and a partial audit
+        # presented as a complete one is the failure this whole block exists to
+        # prevent. A stdout NOTE scrolls away; this does not.
+        fields.append(
+            (
+                "INCOMPLETE",
+                f"{dropped_rows} audit row(s) were unreadable and are missing from "
+                "this report -- re-run the pipeline to rebuild them",
+            )
+        )
     label_width = max(len(label) for label, _ in fields)
     lines = [f"{pad(label, label_width)} : {value}" for label, value in fields]
     lines.append("")
@@ -530,6 +545,7 @@ def render_audit_report(
     projected_standings: ProjectedStandings | None = None,
     roto_standings: Sequence[tuple[str, float]] | None = None,
     lineup_moves: Mapping[str, Any] | None = None,
+    dropped_rows: int = 0,
 ) -> str:
     """Render a roster audit as an ASCII terminal report.
 
@@ -547,6 +563,9 @@ def render_audit_report(
             display string (the manual pipeline stores it as text).
         kv_path: resolved KV store path, printed for provenance so a reader
             can tell the isolated manual store from the Yahoo baseline.
+        dropped_rows: audit rows the caller could not read back out of the cache.
+            Named in the provenance block when non-zero, because the saved file is
+            the artifact and a partial audit that does not say so reads as complete.
         top_n: cap on how many upgrades to list. ``None`` lists all of them.
             The hold and IL sections are never capped.
         projected_standings: optional. Only the stored category totals for
@@ -567,6 +586,7 @@ def render_audit_report(
         team_name=team_name,
         effective_date=effective_date,
         fraction_remaining=fraction_remaining,
+        dropped_rows=dropped_rows,
         ros_snapshot_date=ros_snapshot_date,
         kv_path=kv_path,
     )

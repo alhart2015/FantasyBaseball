@@ -111,11 +111,8 @@ class SeedStats:
 def resolve_kv_path(client: KVStore) -> Path | None:
     """Return the absolute file backing ``client``, or None if it has none.
 
-    Thin alias for ``kv_sync.store_path``. It used to read the PRIVATE
-    ``SqliteKVStore._path`` through a ``getattr(..., None)`` that fails open --
-    so a rename would have turned this, and the three refusals that gate on it,
-    into silent no-ops. ``SqliteKVStore.path`` is public and pinned by a test
-    now; this stays as the name ``manual/`` callers already use.
+    Thin alias for ``kv_sync.store_path``, kept as the name ``manual/`` callers
+    already use.
     """
     from fantasy_baseball.data.kv_sync import store_path
 
@@ -219,6 +216,35 @@ def read_team_keys(client: KVStore) -> dict[str, str]:
     return out
 
 
+def stamp_provenance(client: KVStore, kv_path: str, **extra: object) -> None:
+    """Write the store-level breadcrumb that marks a KV file as hand-transcribed.
+
+    ONE writer for one key. `bootstrap_manual_kv.py` stamps at copy time and this
+    module re-stamps at end of seed, and when each built its own JSON payload the two
+    disagreed on shape: bootstrap wrote ``seeded: False`` and the seeder wrote
+    ``seeded_at`` and no ``seeded`` key at all, so ``blob.get("seeded")`` was falsy
+    after a SUCCESSFUL seed -- the opposite of what it reads like.
+
+    ``seeded`` is always present, and is the field to branch on. Everything else is
+    descriptive: `extra` carries whatever the caller knows at its point in the
+    sequence (counts and dates after a seed, nothing before one).
+    """
+    blob: dict[str, object] = {
+        "source": MANUAL_SOURCE,
+        "yahoo": False,
+        "kv_path": kv_path,
+        "stamped_at": datetime.now(UTC).isoformat(),
+        "note": (
+            "weekly_rosters_history, standings_history and cache:standings in this "
+            "store come from hand-transcribed YAML under data/manual/, NOT from the "
+            "Yahoo API. Do not sync this store anywhere."
+        ),
+    }
+    blob.update(extra)
+    blob.setdefault("seeded", False)
+    client.set(PROVENANCE_KEY, json.dumps(blob))
+
+
 def _stamp_rows(rows: list[dict[str, str]], team: str) -> list[dict[str, str]]:
     """Copy roster rows, adding the provenance marker.
 
@@ -314,26 +340,15 @@ def seed_manual_kv(
         standings_date=standings_date,
         kv_path=str(path),
     )
-    client.set(
-        PROVENANCE_KEY,
-        json.dumps(
-            {
-                "source": MANUAL_SOURCE,
-                "yahoo": False,
-                "seeded_at": datetime.now(UTC).isoformat(),
-                "kv_path": stats.kv_path,
-                "roster_snapshot_date": stats.snapshot_date,
-                "standings_effective_date": stats.standings_date,
-                "teams": stats.teams,
-                "players": stats.players,
-                "note": (
-                    "weekly_rosters_history, standings_history and cache:standings in "
-                    "this store were seeded from hand-transcribed YAML under "
-                    "data/manual/, NOT from the Yahoo API. Do not sync this store "
-                    "anywhere."
-                ),
-            }
-        ),
+    stamp_provenance(
+        client,
+        stats.kv_path,
+        seeded=True,
+        seeded_at=datetime.now(UTC).isoformat(),
+        roster_snapshot_date=stats.snapshot_date,
+        standings_effective_date=stats.standings_date,
+        teams=stats.teams,
+        players=stats.players,
     )
 
     echo(f"  seeded {stats.teams} teams / {stats.players} players; stamped {PROVENANCE_KEY}")

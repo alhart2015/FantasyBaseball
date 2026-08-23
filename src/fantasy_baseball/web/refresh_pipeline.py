@@ -1584,6 +1584,43 @@ class RefreshRun:
         )
         write_cache(CacheKey.PROBABLE_STARTERS, probable_starters, required=False)
 
+    def _merge_manual_positions(self, seen: dict[str, list[str]]) -> tuple[dict, int]:
+        """``(map to write, how many entries were carried over)`` for manual mode.
+
+        MERGED, not replaced -- and only in manual mode, where this blob is an INPUT
+        to the pool that produced it. `build_manual_free_agents` gets its eligibility
+        from `load_positions()`, which reads this key, and the pool it returns is
+        per-position CAPPED. So a straight overwrite writes back "rostered players
+        plus the handful of free agents that made the cut", and every later run
+        derives its pool from that narrower map -- a one-way ratchet that quietly
+        stops considering legitimate free agents.
+
+        What that destroys is specific: `bootstrap_manual_kv.py` copies the frozen
+        Yahoo `cache:positions` precisely because it is the most accurate eligibility
+        map available while Yahoo auth is down, and the first manual run used to
+        throw most of it away.
+
+        A freshly observed entry WINS, so eligibility still updates -- a player who
+        gained 2B this month gets it. What cannot happen is shrinking. The tradeoff
+        is that a player who LOST eligibility, retired, or left the league keeps his
+        last observed slots indefinitely; that is the deliberate side to be on while
+        Yahoo is unavailable, because a stale extra slot offers a player who cannot
+        fill it (visible, and caught by the audit), whereas a dropped entry removes
+        him from consideration entirely (invisible). Re-bootstrap from a fresh Yahoo
+        baseline is what prunes it, and that is the same event that ends manual mode.
+
+        The Yahoo path never calls this: there the pool is the real free-agent list,
+        so replacing is correct -- a player who left it should stop appearing.
+        """
+        existing = read_cache_dict(CacheKey.POSITIONS) or {}
+        merged = {str(k): v for k, v in existing.items()}
+        # Counted BEFORE the update: `len(existing)` includes every entry this run
+        # also saw, so reporting it as "carried over" inflated the number by the
+        # whole overlap -- in practice most of the roster.
+        carried = sum(1 for key in merged if key not in seen)
+        merged.update(seen)
+        return merged, carried
+
     # --- Step 10: Roster audit ---
     def _audit_roster(self):
         from fantasy_baseball.lineup.roster_audit import audit_roster
@@ -1634,31 +1671,11 @@ class RefreshRun:
         # Cache positions for all known players (roster + opponents + FAs)
         positions_map = build_positions_map(self.roster_players, self.opp_rosters, self.fa_players)
         if self.manual_mode:
-            # MERGED, not replaced -- and only in manual mode, where this blob is an
-            # INPUT to the pool that produced it. `build_manual_free_agents` gets its
-            # eligibility from `load_positions()`, which reads this key, and the pool it
-            # returns is per-position CAPPED. So a straight overwrite writes back
-            # "rostered players plus the handful of free agents that made the cut" and
-            # every later run derives its pool from that narrower map -- a one-way
-            # ratchet that quietly stops considering legitimate free agents.
-            #
-            # What it destroys is specific: `bootstrap_manual_kv.py` copies the frozen
-            # Yahoo `cache:positions` precisely because it is the most accurate
-            # eligibility map available while Yahoo auth is down, and the first manual
-            # run used to throw most of it away. The merge keeps every prior entry and
-            # lets a freshly observed one win, so eligibility still UPDATES; it just
-            # cannot shrink.
-            #
-            # The Yahoo path is untouched: there the pool is the real free-agent list,
-            # so replacing is correct -- a player who left it should stop appearing.
-            existing = read_cache_dict(CacheKey.POSITIONS) or {}
-            merged = {str(k): v for k, v in existing.items()}
-            merged.update(positions_map)
+            positions_map, carried = self._merge_manual_positions(positions_map)
             self._progress(
-                f"Cached positions for {len(merged)} players "
-                f"({len(positions_map)} seen this run, {len(existing)} carried over)"
+                f"Cached positions for {len(positions_map)} players "
+                f"({len(positions_map) - carried} seen this run, {carried} carried over)"
             )
-            positions_map = merged
         else:
             self._progress(f"Cached positions for {len(positions_map)} players")
         write_cache(CacheKey.POSITIONS, positions_map)

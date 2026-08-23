@@ -87,12 +87,29 @@ class ManualRosterSnapshot:
 # ---------------------------------------------------------------- helpers
 
 
+def _parse_yaml(path: Path) -> Any:
+    """Parse ``path``, turning a YAML SYNTAX error into a transcript error.
+
+    The single likeliest mistake in a hand-typed thousand-line roster file -- a bad
+    indent, an unquoted colon, a stray tab -- raises ``yaml.YAMLError`` out of
+    ``safe_load``. Left alone that escapes the driver's ``except ManualTranscriptError``
+    and lands as a traceback, which is the one thing the transcription error path
+    exists to prevent. PyYAML's ``MarkedYAMLError`` carries the line and column, so
+    the message it produces is more useful than anything this layer could write.
+    """
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return yaml.safe_load(fh)
+    except yaml.YAMLError as exc:
+        detail = " ".join(str(exc).split())
+        raise ManualTranscriptError(path, [f"not valid YAML -- {detail}"]) from exc
+
+
 def _load_yaml_mapping(path: Path) -> dict[str, Any]:
     """Read a YAML file that must contain a top-level mapping."""
     if not path.exists():
         raise ManualTranscriptError(path, ["file does not exist"])
-    with open(path, encoding="utf-8") as fh:
-        raw = yaml.safe_load(fh)
+    raw = _parse_yaml(path)
     if raw is None:
         raise ManualTranscriptError(path, ["file is empty"])
     if not isinstance(raw, Mapping):
@@ -149,10 +166,14 @@ def _is_pitcher_row(row: Mapping[str, str]) -> bool:
     Thin wrapper over the shared derivation: `data.rosters` needs the same answer
     for the same reason, and two copies of "which eligibility strings mean
     pitcher" would drift.
+
+    Unreachable for an unparseable string -- every caller runs after the positions
+    field has been validated -- so the raise is not handled here. `data.rosters`
+    joins unvalidated rows and does handle it.
     """
     from ..models.player import PlayerType
 
-    return player_type_for_positions(row.get("positions", "")) == str(PlayerType.PITCHER)
+    return player_type_for_positions(row.get("positions", "")) is PlayerType.PITCHER
 
 
 def _parse_player(row: Any, *, team: str, index: int, errors: list[str]) -> dict[str, str] | None:
@@ -567,8 +588,7 @@ def load_fa_exclusions(path: Path | None) -> frozenset[str]:
     """
     if path is None or not path.exists():
         return frozenset()
-    with open(path, encoding="utf-8") as fh:
-        raw = yaml.safe_load(fh)
+    raw = _parse_yaml(path)
     if raw is None:
         return frozenset()
     if not isinstance(raw, Mapping):

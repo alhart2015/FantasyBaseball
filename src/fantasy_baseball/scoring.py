@@ -1509,6 +1509,18 @@ def _dict_table(
     return _AdHocStatsTable(entries=entries)
 
 
+def yahoo_totals_are_authoritative(entries: Iterable[Any]) -> bool:
+    """True when EVERY entry carries Yahoo's own points_for.
+
+    Split out because callers branch on it separately from the totals themselves --
+    `build_standings_view` uses it to pick a sort key. Recomputing the predicate
+    beside a call to `displayed_roto_totals` put the rule back in two places, which
+    is a sort that can silently disagree with the numbers it is sorting.
+    """
+    rows = list(entries)
+    return bool(rows) and all(e.yahoo_points_for is not None for e in rows)
+
+
 def displayed_roto_totals(
     entries: Iterable[Any],
     roto: Mapping[str, CategoryPoints],
@@ -1532,13 +1544,13 @@ def displayed_roto_totals(
     given date, and "every team has one" means every team it was handed.
     """
     rows = list(entries)
-    authoritative = bool(rows) and all(e.yahoo_points_for is not None for e in rows)
+    authoritative = yahoo_totals_are_authoritative(rows)
     out: dict[str, float] = {}
     for entry in rows:
-        # `is not None` again rather than trusting the flag: it narrows for mypy,
-        # and a falsy-default (`or 0.0`) would silently swallow a legitimate 0.0
-        # total -- last in all ten categories still scores, and the arithmetic
-        # must not depend on that never happening.
+        # `is not None` again rather than trusting the flag alone: a falsy default
+        # (`or 0.0`) would silently swallow a legitimate 0.0 total -- last in all ten
+        # categories still scores, and the arithmetic must not depend on that never
+        # happening.
         points_for = entry.yahoo_points_for
         if authoritative and points_for is not None:
             out[entry.team_name] = float(points_for)

@@ -401,11 +401,13 @@ def role_from_ip(ip: float) -> str:
 # DeltaRoto comparison against them. The bug is not specific to any one intake
 # path -- the Yahoo API emits the same string.
 #
-# "DL7" is here by SYMMETRY, not by observation. Yahoo has been migrating "DL"
-# to "IL" for years and this repo has seen both spellings, so every IL variant
-# gets its DL twin -- but no roster in this league has produced a "DL7" string,
-# and nothing below should be read as evidence that one did. An unused member
-# costs nothing; a missing one silently scores an injured player as active.
+# "DL7" is here by SYMMETRY with the "IL7" above it, not by observation. Yahoo has
+# been migrating "DL" to "IL" for years and this repo has seen both spellings, so a
+# newly added IL variant gets its DL counterpart -- but no roster in this league has
+# produced a "DL7" string, and nothing below should be read as evidence that one did.
+# (The set is not exhaustively twinned: DL10/DL15/DL60 have never been seen either
+# and were not added speculatively. An unused member costs nothing; a missing one
+# silently scores an injured player as active, so err toward adding when in doubt.)
 #
 # Keep this set in sync with whatever Yahoo can actually return: a missing
 # variant does not raise, it just quietly treats an injured player as active.

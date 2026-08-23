@@ -226,7 +226,15 @@ def test_a_rostered_player_the_model_cannot_price_is_named(capsys) -> None:
     spots = [_spot("Scored Guy", "T"), _spot("Bench Rookie", "T")]
 
     module.by_team(
-        scored, spots, index_rosters(scored, spots, "T"), "OTHER", 5, 2026, (1, 2, 3), None
+        scored,
+        spots,
+        index_rosters(scored, spots, "T"),
+        "OTHER",
+        5,
+        2026,
+        (1, 2, 3),
+        None,
+        keep=3,
     )
     out = capsys.readouterr().out
 

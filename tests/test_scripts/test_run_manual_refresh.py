@@ -1009,7 +1009,12 @@ def test_an_unreadable_audit_row_is_dropped_and_counted(capsys, tmp_path, monkey
     assert rc == drv.RC_OK
     out = capsys.readouterr().out
     assert "1 audit row(s) had a shape this build does not recognize" in out
-    assert "Alpha Catcher" in out_file.read_text(encoding="utf-8")
+    written = out_file.read_text(encoding="utf-8")
+    assert "Alpha Catcher" in written
+    # AND in the saved artifact. A stdout NOTE scrolls away; the file is what a later
+    # session reads, and a partial audit that does not say so reads as complete.
+    assert "INCOMPLETE" in written
+    assert "1 audit row(s)" in written
 
 
 def test_an_absent_fraction_remaining_is_not_printed_as_zero(capsys, tmp_path, monkeypatch):
@@ -1040,20 +1045,79 @@ def test_an_absent_fraction_remaining_is_not_printed_as_zero(capsys, tmp_path, m
     assert "season remaining" in written
 
 
-def test_the_panel_drift_tolerance_sits_between_the_two_scales_it_separates():
-    """It has to clear a definitional gap without clearing a stale panel.
+def _drift_trips(panel_elapsed: float, pipeline_elapsed: float) -> bool:
+    """The comparison `_keeper_board` actually makes, driven directly.
 
-    The panel and the pipeline measure elapsed season differently -- busiest
-    hitter's games over a full schedule vs calendar days -- so they disagree by
-    a fraction of a percent even when both are current. A panel that is genuinely
-    weeks behind disagrees by roughly the fraction of the season that elapsed
-    since it was built: about 0.09 for a fortnight over a 162-game schedule.
-
-    Pinned as a relationship, not as measurements. The comment beside this
-    constant used to carry hand-typed readings from one afternoon, which rot
-    silently and cannot be checked by anything.
+    The constant is only meaningful through this comparison, so the tests drive it
+    rather than asserting a numeric range around the literal -- a range assertion
+    holds for any value across a wide band and pins no behaviour at all.
     """
-    fortnight_of_a_season = 14 / 162
+    return abs(panel_elapsed - pipeline_elapsed) > drv.PANEL_DRIFT_TOLERANCE
 
-    assert drv.PANEL_DRIFT_TOLERANCE > 0.02, "must not fire on the definitional gap"
-    assert fortnight_of_a_season > drv.PANEL_DRIFT_TOLERANCE, "a fortnight-stale panel must trip it"
+
+def test_a_current_panel_does_not_trip_the_drift_check():
+    """The two measure elapsed season DIFFERENTLY -- busiest hitter's games over a
+    full schedule vs calendar days -- so they disagree slightly even when both are
+    current. Tripping on that gap would cry wolf on every run."""
+    assert not _drift_trips(panel_elapsed=0.809, pipeline_elapsed=0.800)
+
+
+def test_a_fortnight_stale_panel_trips_the_drift_check():
+    """A stale panel drifts by roughly the fraction of the season elapsed since it was
+    built: about 0.09 for a fortnight over a 162-game schedule. That is the case the
+    check exists for -- a board blending fresh projections with weeks-old actuals."""
+    fortnight = 14 / 162
+
+    assert _drift_trips(panel_elapsed=0.800 - fortnight, pipeline_elapsed=0.800)
+
+
+def test_a_yaml_syntax_error_prints_errors_rather_than_a_traceback(good_inputs, capsys, tmp_path):
+    """The driver's whole error path is 'no traceback between command and report'."""
+    bad = tmp_path / "broken.yaml"
+    bad.write_text("teams:\n  - name: Alpha\n   players: []\n", encoding="utf-8")
+
+    rc = drv.main(
+        [
+            "--dry-run",
+            "--kv-path",
+            str(good_inputs["kv"]),
+            "--rosters",
+            str(bad),
+            "--standings",
+            str(good_inputs["standings"]),
+        ]
+    )
+
+    assert rc == drv.RC_FAILED
+    assert "not valid YAML" in capsys.readouterr().out
+
+
+def test_a_missing_optional_exclusions_file_is_not_advertised_as_untranscribed(
+    good_inputs, capsys, tmp_path
+):
+    """`fa_exclusions.yaml` is documented as legal to omit.
+
+    `template_hints` tells the operator to transcribe anything in its map that does
+    not exist, so listing the optional file unconditionally advised transcribing a
+    file the run was about to ignore -- printed alongside an unrelated error in one
+    of the two files that ARE required.
+    """
+    broken = tmp_path / "standings.yaml"
+    broken.write_text(yaml.safe_dump({"effective_date": "2026-08-22"}), encoding="utf-8")
+
+    rc = drv.main(
+        [
+            "--dry-run",
+            "--kv-path",
+            str(good_inputs["kv"]),
+            "--rosters",
+            str(good_inputs["rosters"]),
+            "--standings",
+            str(broken),
+            "--exclusions",
+            str(tmp_path / "not-there.yaml"),
+        ]
+    )
+
+    assert rc == drv.RC_FAILED
+    assert "fa_exclusions.yaml does not exist" not in capsys.readouterr().out

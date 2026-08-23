@@ -400,5 +400,8 @@ def test_sqlite_store_exposes_its_path_publicly(tmp_path):
     target = tmp_path / "store.db"
     store = SqliteKVStore(target)
 
-    assert store.path == target
+    # The CONTRACT is that the guards can resolve this store to its file. Asserting
+    # `store.path == target` instead would pin the un-resolved constructor argument,
+    # an incidental fact that any harmless normalization inside __init__ would break.
     assert store_path(store) == target.resolve()
+    assert store.path is not None

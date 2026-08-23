@@ -54,10 +54,16 @@ import hashlib
 import json
 import os
 import sqlite3
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+# The repo convention (see every other script here), and load-bearing since the stamp:
+# this file was stdlib-only by design, so without it `stamp_manual_provenance` dies with
+# ModuleNotFoundError outside an active venv -- AFTER the copy and both fidelity checks
+# have passed, leaving exactly the unstamped store the stamp exists to prevent.
+sys.path.insert(0, str(PROJECT_ROOT / "src"))
 DEFAULT_SOURCE = PROJECT_ROOT / "data" / "local.db"
 DEFAULT_DEST = PROJECT_ROOT / "data" / "manual.db"
 
@@ -152,30 +158,39 @@ def stamp_manual_provenance(dest: Path) -> None:
     with ``--no-sync``. It also reopened after any re-bootstrap, and after a seed
     interrupted partway. Stamping here closes it for every one of those.
 
-    Written through the same ``PROVENANCE_KEY`` the seeder uses, so there is one
-    breadcrumb and one reader rather than two competing signals. The stamp is
-    deliberately minimal -- it records only what is true at bootstrap time;
-    ``manual.seed`` overwrites it with the full provenance (teams, snapshot
-    dates, counts) once a seed completes.
+    Written through ``manual.seed.stamp_provenance`` -- one writer for one key, so
+    the bootstrap stamp and the end-of-seed stamp cannot disagree on shape. This one
+    records only what is true at bootstrap time; the seeder overwrites it with the
+    full provenance (teams, snapshot dates, counts, ``seeded: True``) once a seed
+    completes.
 
     The import is local because this script guards its target before any
     ``fantasy_baseball`` import -- see the module docstring.
     """
     from fantasy_baseball.data.kv_store import SqliteKVStore
-    from fantasy_baseball.manual.seed import MANUAL_SOURCE, PROVENANCE_KEY
+    from fantasy_baseball.manual.seed import stamp_provenance
 
-    SqliteKVStore(dest).set(
-        PROVENANCE_KEY,
-        json.dumps(
-            {
-                "source": MANUAL_SOURCE,
-                "yahoo": False,
-                "bootstrapped_at": datetime.now(UTC).isoformat(),
-                "kv_path": str(dest),
-                "seeded": False,
-            }
-        ),
+    stamp_provenance(
+        SqliteKVStore(dest),
+        str(dest),
+        seeded=False,
+        bootstrapped_at=datetime.now(UTC).isoformat(),
     )
+
+
+def _discard(dest: Path, why: str) -> int:
+    """Delete a copy that must not survive, and return the failure exit code.
+
+    Every path that gets here leaves ``dest`` fully written and NOT stamped as a
+    manual store. `data.rosters.manual_store_active` reads the absence of that stamp
+    as "this is the Yahoo baseline", so an unstamped copy sitting at
+    ``data/manual.db`` is worse than no copy at all: the next process to point
+    ``FANTASY_LOCAL_KV_PATH`` at it serves month-stale prod rosters into a manual
+    page and says nothing.
+    """
+    remove_store(dest)
+    print(f"Removed {dest}: {why}, and an unstamped copy must not be left behind.")
+    return 1
 
 
 def remove_store(path: Path) -> None:
@@ -268,19 +283,26 @@ def main(argv: list[str] | None = None) -> int:
         print("ERROR: the source changed during the copy. The Yahoo baseline may be corrupted.")
         print(f"  before: {before_counts} {before_digest}")
         print(f"  after:  {after_counts} {after_digest}")
-        return 1
+        return _discard(dest, "the source changed during the copy")
     print(f"  source unchanged (sha256 {before_digest[:16]}...)")
 
     if dest_counts != before_counts or dest_digest != before_digest:
         print("ERROR: the copy does not match the source.")
         print(f"  source: {before_counts} {before_digest}")
         print(f"  copy:   {dest_counts} {dest_digest}")
-        return 1
+        return _discard(dest, "the copy does not match the source")
     print("  copy matches the source, row for row.")
 
-    # Only now, with fidelity proven, is the copy marked as a manual store. A
-    # store that IS manual must say so before anything reads it.
-    stamp_manual_provenance(dest)
+    # Only now, with fidelity proven, is the copy marked as a manual store -- and if
+    # the stamp itself fails the copy is DISCARDED rather than left behind. An
+    # unstamped store reads as Yahoo mode to `manual_store_active`, so leaving one on
+    # disk hands the dashboard prod Upstash rosters for a manual page: the exact
+    # splice this stamp exists to prevent, reached through the failure path instead.
+    try:
+        stamp_manual_provenance(dest)
+    except Exception as exc:
+        print(f"ERROR: could not stamp the copy as a manual store ({type(exc).__name__}: {exc}).")
+        return _discard(dest, "the copy could not be stamped")
     print("  stamped as a manual store (not yet seeded).")
 
     print(f"Wrote {dest} ({dest.stat().st_size} bytes).")

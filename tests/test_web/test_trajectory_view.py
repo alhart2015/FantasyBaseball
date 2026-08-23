@@ -2147,6 +2147,23 @@ class TestTheLeagueRuleIsNotADisplaySetting:
             assert block.kept_count == min(3, len(block.rows))
             assert block.keep_total == sum(r["total"] for r in block.rows[: block.kept_count])
 
+    def test_every_property_that_slices_on_the_cut_agrees_about_keep_zero(self) -> None:
+        """One clamp, in kept_count, that the others slice through.
+
+        Guarding only keep_dropoff left stranded summing EVERY row under the label
+        "stranded below the cut", and kept_count at keep=-1 rendering "the best -1
+        they may keep" in the template.
+        """
+        rows = [{"total": 10.0}, {"total": 4.0}, {"total": -6.0}]
+        zero = TeamBlock(team="T", rows=rows, scored=3, unscored=[], is_mine=False, keep=0)
+        negative = TeamBlock(team="T", rows=rows, scored=3, unscored=[], is_mine=False, keep=-1)
+
+        for block in (zero, negative):
+            assert block.kept_count == 0
+            assert block.keep_total == 0.0
+            assert block.keep_dropoff is None
+            assert block.stranded == 14.0, "at keep=0 nothing is KEPT, so everything is stranded"
+
     def test_keep_dropoff_guards_both_indices(self) -> None:
         """At keep=0, `rows[keep - 1]` is `rows[-1]` -- the WORST row -- and the answer
         comes back as the negation of the whole block's spread, labelled a keeper

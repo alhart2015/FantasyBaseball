@@ -138,7 +138,11 @@ def test_a_string_where_a_number_belongs_renders_as_missing_not_a_crash():
     out = _render(moves)
 
     assert "Bryan Woo" in out
-    assert "--" in out
+    # The NUMBER must be absent, not merely a "--" somewhere on the page: other
+    # fields in this block are legitimately missing, so asserting on "--" alone
+    # passes whether or not the string was coerced.
+    assert "0.46" not in out, "a stringified number was rendered as a computed one"
+    assert "82%" not in out
 
 
 def test_a_bool_is_not_a_roto_delta():
@@ -158,3 +162,28 @@ def test_a_bool_is_not_a_roto_delta():
     out = _render(moves)
 
     assert "+1.00" not in out
+
+
+def test_nan_and_infinity_do_not_reach_the_table():
+    """They format as "+nan" and "inf%" inside a table a reader scans for magnitudes."""
+    moves = {
+        "swaps": [
+            {
+                "start": {
+                    "player": "Bryan Woo",
+                    "from": "BN",
+                    "to": "P",
+                    "roto_delta": float("nan"),
+                    "band": {"p_positive": float("inf"), "verdict": "real"},
+                },
+                "bench": {"player": "Yoendrys Gomez"},
+            }
+        ],
+        "unpaired_starts": [],
+        "unpaired_benches": [],
+    }
+
+    out = _render(moves)
+
+    assert "nan" not in out.lower()
+    assert "inf" not in out.lower()

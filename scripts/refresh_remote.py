@@ -29,9 +29,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 
 #: Exit codes, matching scripts/run_season_dashboard.py and
-#: scripts/run_manual_refresh.py: 2 means "refused, nothing happened" -- and
-#: means it literally here, which is why the destination guard runs at the very
-#: top of ``main`` rather than beside the sync it protects.
+#: scripts/run_manual_refresh.py: 2 means "refused, nothing happened".
 RC_REFUSED = 2
 
 
@@ -43,19 +41,23 @@ def _sync_destination_refusal() -> str | None:
     was written out longhand here AND in ``run_season_dashboard.guard_sync_target``,
     and the two copies had already drifted.
 
-    CALLED BEFORE ANYTHING RUNS, not just before the sync. The refusal used to
-    sit beside step 3, by which point steps 1 and 2 had already written
-    production Upstash -- so this script returned 2, the code every other script
-    in this repo documents as "refused, nothing happened", after doing the single
-    most consequential thing it does. Nothing about the destination is unknown at
-    startup: it comes from ``FANTASY_LOCAL_KV_PATH``, which is set or not before
-    the process begins. Checking early makes the exit code true.
+    CALLED BEFORE ANYTHING RUNS, not just before the sync. The refusal used to sit
+    beside step 3, by which point steps 1 and 2 had already written production
+    Upstash -- so this script returned 2, the code every other script in this repo
+    documents as "refused, nothing happened", after doing the single most
+    consequential thing it does. The destination is known at startup: it is
+    ``FANTASY_LOCAL_KV_PATH``, set or not before the process begins.
+
+    ``local_destination()`` rather than ``store_path(get_kv())`` for exactly that
+    reason -- see its docstring. Asking ``get_kv()`` here would answer according to
+    ``RENDER`` (refusing a legitimate run from a shell that already exports it) and
+    would CREATE the destination file while asking, under a refusal that promises
+    nothing was written.
     """
-    from fantasy_baseball.data.kv_store import get_kv
-    from fantasy_baseball.data.kv_sync import store_path, sync_destination_refusal
+    from fantasy_baseball.data.kv_sync import local_destination, sync_destination_refusal
 
     return sync_destination_refusal(
-        store_path(get_kv()),
+        local_destination(),
         action="The sync-back at the end of this run",
         recovery=[
             "Nothing has run yet -- no remote refresh, no local write.",
@@ -83,9 +85,6 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     args = _parse_args(argv)
 
-    # BEFORE the RENDER flip, so `get_kv()` still resolves the LOCAL store this
-    # run would eventually wipe. After the flip it resolves Upstash, which has no
-    # path, and the guard could only ever answer "no local file".
     refusal = _sync_destination_refusal()
     if refusal is not None:
         print(refusal)

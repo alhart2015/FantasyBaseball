@@ -16,7 +16,12 @@ from fantasy_baseball.lineup.delta_roto import compute_one_for_one_band, score_s
 from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
 from fantasy_baseball.models.positions import BENCH_SLOTS
 from fantasy_baseball.models.standings import ProjectedStandings, Standings, StandingsEntry
-from fantasy_baseball.scoring import displayed_roto_totals, score_roto, score_roto_dict
+from fantasy_baseball.scoring import (
+    displayed_roto_totals,
+    score_roto,
+    score_roto_dict,
+    yahoo_totals_are_authoritative,
+)
 from fantasy_baseball.trades.evaluate import build_swap_standings, find_player_by_name
 from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
@@ -388,7 +393,7 @@ def format_standings_for_display(
     roto = score_roto(cast("Any", standings), team_sds=team_sds)
 
     displayed = displayed_roto_totals(standings.entries, roto)
-    has_yahoo_totals = all(e.yahoo_points_for is not None for e in standings.entries)
+    has_yahoo_totals = yahoo_totals_are_authoritative(standings.entries)
     yahoo_rank_by_name = {e.team_name: e.rank for e in standings.entries}
 
     teams: list[dict] = []

@@ -67,6 +67,7 @@ from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:  # pragma: no cover - typing only, never executed at runtime
     from fantasy_baseball.config import LeagueConfig
+    from fantasy_baseball.lineup.roster_audit import AuditEntry
     from fantasy_baseball.lineup.waivers import FreeAgentSource
     from fantasy_baseball.manual.transcripts import ManualRosterSnapshot
     from fantasy_baseball.models.standings import Standings
@@ -472,11 +473,14 @@ def _load_transcriptions(
     rosters_path = resolve_path(args.rosters)
     standings_path = resolve_path(args.standings)
     exclusions_path = resolve_path(args.exclusions)
-    labelled = {
-        "rosters.yaml": rosters_path,
-        "standings.yaml": standings_path,
-        "fa_exclusions.yaml": exclusions_path,
-    }
+    # The two REQUIRED transcriptions, plus the optional one only when it is there.
+    # `template_hints` tells the operator to go transcribe anything in this map that
+    # does not exist, and fa_exclusions.yaml is documented as legal to omit -- so
+    # listing it unconditionally advised transcribing a file the run is about to
+    # ignore, alongside an unrelated error in one of the other two.
+    labelled = {"rosters.yaml": rosters_path, "standings.yaml": standings_path}
+    if exclusions_path.is_file():
+        labelled["fa_exclusions.yaml"] = exclusions_path
 
     # INSIDE the try, all three. `load_fa_exclusions` raises the same
     # ManualTranscriptError as the other two -- "'names' must be a list", a
@@ -524,10 +528,11 @@ def _summarize_transcriptions(
     Printed for every team, not only when it trips, so the reader can eyeball
     the shape of all ten at once.
     """
-    # IL_SLOTS, not the literal "IL": this league's config and Yahoo both use
-    # "IL+" as well, and counting an IL+ row as ACTIVE printed a spurious
+    # IL_SLOTS, not the literal "IL". Yahoo emits "IL+" alongside "IL", and a config
+    # may carry either; counting an IL+ row as ACTIVE would print a spurious
     # "re-check" against a perfectly legal roster. Every other IL test in this
-    # pipeline already goes through the set; this was the one that did not.
+    # pipeline already goes through the set, and this was the one that did not --
+    # config/league.yaml happens to list only "IL" today, so nothing had tripped it.
     from fantasy_baseball.models.positions import IL_SLOTS
 
     il_names = {slot.value.upper() for slot in IL_SLOTS}
@@ -853,7 +858,7 @@ def _current_roto_standings(standings: Standings) -> list[tuple[str, float]]:
     return [(e.team_name, displayed[e.team_name]) for e in entries]
 
 
-def _audit_entries(raw: list) -> tuple[list, int]:
+def _audit_entries(raw: list[Any]) -> tuple[list[AuditEntry], int]:
     """``(entries, dropped)`` from a `cache:roster_audit` blob.
 
     ``AuditEntry(**row)`` checks the TYPE of the container and nothing about its
@@ -943,6 +948,9 @@ def _render_report(
         projected_standings=projected_standings,
         roto_standings=_current_roto_standings(standings),
         lineup_moves=lineup_moves,
+        # Into the REPORT, not just the terminal: the saved file is what gets read
+        # later, and a partial audit that does not say so reads as a complete one.
+        dropped_rows=skipped,
     )
 
     out_path = _report_path(args, rosters.snapshot_date.isoformat())

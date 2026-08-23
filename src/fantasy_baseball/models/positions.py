@@ -10,6 +10,12 @@ from __future__ import annotations
 
 import re
 from enum import StrEnum
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover - `player` imports THIS module, so the edge
+    # only exists for the type checker. A runtime import here is a genuine cycle:
+    # models.player line 8 imports models.positions.
+    from .player import PlayerType
 
 # Matches trailing digits used to disambiguate same-named slots in
 # historical roster JSON files and legacy DB rows (e.g. "OF2", "BN3",
@@ -105,8 +111,18 @@ PITCHER_ELIGIBLE: frozenset[Position] = frozenset(
 )
 
 
-def player_type_for_positions(positions: str) -> str:
-    """``"pitcher"`` / ``"hitter"`` from the eligibility string Yahoo prints.
+class UnknownPositions(ValueError):
+    """An eligibility string that does not parse into any known slot.
+
+    Its own type so a caller can decide: `manual.transcripts` validates positions
+    before it ever asks, so this is unreachable there; `data.rosters` joins roster
+    rows to a board and NAMES the players it could not place, because guessing a
+    half would drop them off the board with nothing on screen to say so.
+    """
+
+
+def player_type_for_positions(positions: str) -> PlayerType:
+    """Hitter or pitcher, from the eligibility string Yahoo prints.
 
     The only type signal a roster row carries: roster blobs have no ``mlbam_id``
     and a hand transcription has no projection frame loaded at parse time. Any
@@ -114,20 +130,21 @@ def player_type_for_positions(positions: str) -> str:
     pitcher in this league, and a two-way player appears as TWO rows, "Util" and
     "P", which is exactly the split ``name::player_type`` exists to keep apart.
 
-    Unparseable input is a hitter rather than an exception: a caller joining a
-    roster row to a board would otherwise take the whole page down over one
-    malformed eligibility string, and a wrong-half join fails to match and gets
-    NAMED, which is the failure mode this repo prefers.
+    Raises:
+        UnknownPositions: the string parsed to nothing. Deliberately NOT defaulted
+            to hitter: `player_type` is half the join key, so a guess does not
+            degrade the answer, it silently attributes the row to a player who
+            does not exist.
     """
     from .player import PlayerType
 
     try:
         parsed = Position.parse_list(positions or "")
-    except ValueError:
-        return str(PlayerType.HITTER)
-    return str(
-        PlayerType.PITCHER if any(p in PITCHER_ELIGIBLE for p in parsed) else PlayerType.HITTER
-    )
+    except ValueError as exc:
+        raise UnknownPositions(f"cannot parse positions {positions!r}: {exc}") from exc
+    if not parsed:
+        raise UnknownPositions(f"positions {positions!r} parsed to no known slot")
+    return PlayerType.PITCHER if any(p in PITCHER_ELIGIBLE for p in parsed) else PlayerType.HITTER
 
 
 BENCH_SLOTS: frozenset[Position] = frozenset(

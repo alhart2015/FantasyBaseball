@@ -671,3 +671,37 @@ def test_fa_exclusions_bad_entry_is_rejected(tmp_path: Path) -> None:
 
 def test_shipped_exclusions_file_loads() -> None:
     assert load_fa_exclusions(SHIPPED_EXCLUSIONS) == frozenset()
+
+
+class TestYamlSyntaxErrorsArriveAsTranscriptErrors:
+    """A bad indent is the likeliest mistake in a hand-typed thousand-line file.
+
+    `yaml.YAMLError` is not a `ManualTranscriptError`, so it escaped the driver's
+    handler and landed as a traceback -- the one thing that error path exists to
+    prevent.
+    """
+
+    def test_a_malformed_roster_file(self, tmp_path):
+        from fantasy_baseball.manual.transcripts import ManualTranscriptError, load_manual_rosters
+
+        path = tmp_path / "rosters.yaml"
+        path.write_text("teams:\n  - name: Alpha\n   players: []\n", encoding="utf-8")
+
+        with pytest.raises(ManualTranscriptError) as excinfo:
+            load_manual_rosters(path)
+
+        assert any("not valid YAML" in e for e in excinfo.value.errors)
+        # PyYAML marks the line and column; that is more useful than anything this
+        # layer could write, so it must survive into the message.
+        assert any("line" in e for e in excinfo.value.errors)
+
+    def test_a_malformed_exclusions_file(self, tmp_path):
+        from fantasy_baseball.manual.transcripts import ManualTranscriptError, load_fa_exclusions
+
+        path = tmp_path / "fa_exclusions.yaml"
+        path.write_text("names:\n  - A\n - B\n", encoding="utf-8")
+
+        with pytest.raises(ManualTranscriptError) as excinfo:
+            load_fa_exclusions(path)
+
+        assert any("not valid YAML" in e for e in excinfo.value.errors)

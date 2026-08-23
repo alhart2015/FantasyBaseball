@@ -58,8 +58,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union-attr]
 
-from fantasy_baseball.config import DEFAULT_KEEPERS_PER_TEAM, load_config
-from fantasy_baseball.data.rosters import RosterSpot, live_rosters
+from fantasy_baseball.config import load_config
+from fantasy_baseball.data.rosters import RosterSpot, live_rosters, manual_store_active
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
@@ -80,7 +80,8 @@ def by_team(
     base: int,
     horizons: tuple[int, ...],
     only: str | None = None,
-    keep: int = DEFAULT_KEEPERS_PER_TEAM,
+    *,
+    keep: int,
 ) -> None:
     """Every player on your team, then the best `per_team` on each other team.
 
@@ -88,24 +89,37 @@ def by_team(
     otherwise every team's best player reads as a 1.
 
     `per_team` is how many rows to PRINT; `keep` is how many a team may actually keep,
-    and the headline sums the latter. The two are different questions and the web view
+    and the headline sums the latter. Required, with no default: a headline that
+    ASSERTS a league rule must not be able to invent one. `shown` is floored at `keep`
+    so the printed rows can always account for the number beside them. The two are different questions and the web view
     already separated them -- this surface had kept headlining the best `per_team`, so
     the same board ranked teams differently depending on which surface you read.
     """
     one, span = _header(base, horizons)
+
+    def rows_for(team: str) -> list[dict]:
+        """This team's scored rows, strongest first.
+
+        MEMBERSHIP, matching the web board: a key rostered by two teams appears under
+        both. `r["team"]` is the single winning team and is what the CSV carries, but
+        it is not the ownership test.
+        """
+        return sorted(
+            (r for r in scored if team in r["teams"]), key=lambda r: r["total"], reverse=True
+        )
+
+    def keeper_strength(team: str) -> float:
+        """The headline number, as an ordering key. Same rule, one definition."""
+        rows = rows_for(team)
+        return sum(r["total"] for r in rows[: min(keep, len(rows))])
 
     def block(team: str, limit: int | None, note: str = "") -> None:
         """One team's block. Takes the TEAM, never a decorated title -- the missing list is keyed
         on the raw name, and passing a label like "X -- YOUR TEAM" made the lookup miss, so
         the unmatched-player warning fired for every opposing team and silently never for
         your own: the one roster a keep-or-cut call is made from."""
-        # MEMBERSHIP, matching the web board: a key rostered by two teams appears
-        # under both. `r["team"]` is the single winning team and is what the CSV
-        # carries, but it is not the ownership test.
-        rows = sorted(
-            (r for r in scored if team in r["teams"]), key=lambda r: r["total"], reverse=True
-        )
-        shown = rows if limit is None else rows[:limit]
+        rows = rows_for(team)
+        shown = rows if limit is None else rows[: max(limit, keep)]
         # The best `per_team`, NOT the roster and NOT `shown`. Three separate reasons.
         #
         # Not the roster: VAR is a shift rather than a clamp as of #331, so a below-
@@ -128,8 +142,14 @@ def by_team(
         # are worth seeing -- but only three of them can be retained, so summing five
         # counts two players nobody keeps. That is not a smaller signal, it is a
         # different ordering: on 2026-08-22 the best-5 leader TRAILED on best-3.
+        #
+        # `shown` is floored at `keep` for the same reason `build_teams_board` floors
+        # `per_team`: `--per-team 2` under a three-keeper rule would otherwise print two
+        # players over a header naming three, a number the visible rows cannot make.
+        # `kept`, not `keep`, in the slice -- a team with two scored players sums two,
+        # and the label has to be the number that was actually summed.
         kept = min(keep, len(rows))
-        total = sum(r["total"] for r in rows[:keep])
+        total = sum(r["total"] for r in rows[:kept])
         head = (
             f"{team}{note}  ({len(rows)} scored, "
             f"{total:.1f} total {span} VAR from the best {kept} they may keep)"
@@ -163,15 +183,10 @@ def by_team(
         block(only, None, note="  -- all players")
         return
 
+    block(my_team, None, note="  -- YOUR TEAM, all players")
     # Ordered by keeper strength, like the web view -- not alphabetically. The point of
     # the per-team view is comparing teams, and a list sorted by name buries that.
-    def keeper_strength(team: str) -> float:
-        rows = sorted(
-            (r for r in scored if team in r["teams"]), key=lambda r: r["total"], reverse=True
-        )
-        return sum(r["total"] for r in rows[:keep])
-
-    block(my_team, None, note="  -- YOUR TEAM, all players")
+    #
     # Name is the tie-break, not decoration: two teams with nothing scored both sum to
     # 0.0, and leaving that to set order makes the output reorder between runs.
     for team in sorted(rostered - {my_team}, key=lambda t: (-keeper_strength(t), t)):
@@ -381,7 +396,13 @@ def main() -> int:
         # column. The team views genuinely cannot proceed, so those still fail loudly.
         try:
             spots = live_rosters(config.team_name)
-            print(f"\n  {len(spots)} roster spots read from Upstash")
+            # NAME THE SOURCE. `live_rosters` serves prod Upstash normally and the
+            # hand-transcribed manual store in manual mode, and this line is what an
+            # operator reads to confirm which vintage is on screen -- so hardcoding
+            # "Upstash" printed a false provenance claim in exactly the mode where
+            # vintage is the entire concern.
+            source = "the manual store" if manual_store_active() else "Upstash"
+            print(f"\n  {len(spots)} roster spots read from {source}")
             # The index is READ-ONLY, so the stamping the CLI needs happens here
             # rather than inside it -- these rows are the CLI's own and mutating
             # them is safe, which is not true of the web's cached rows.
