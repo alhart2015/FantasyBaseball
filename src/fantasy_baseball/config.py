@@ -1,6 +1,7 @@
 import logging
 import math
 from dataclasses import dataclass, field
+from functools import cached_property
 from pathlib import Path
 
 import yaml
@@ -33,7 +34,7 @@ class LeagueConfig:
     season_start: str = "2026-03-27"
     season_end: str = "2026-09-28"
 
-    @property
+    @cached_property
     def keepers_per_team(self) -> int:
         """How many players each team may keep into next season.
 
@@ -47,9 +48,13 @@ class LeagueConfig:
         three may be kept counts players nobody can retain, and on 2026-08-22 that
         inverted the league ordering (the depth leader was not the keeper leader).
 
-        TWO WAYS TO GET A WRONG ANSWER, both of which now WARN rather than pass
-        silently, because this number goes straight into a headline that asserts a
-        league rule ("the best 3 they may keep"):
+        CACHED, so the warnings below fire once per config object rather than once
+        per read. `season_routes` reads this on every trajectory request, and a
+        league in either state below would otherwise log on every page render.
+
+        TWO WAYS TO GET A WRONG ANSWER, both of which WARN rather than pass silently,
+        because this number goes straight into a headline that asserts a league rule
+        ("the best 3 they may keep"):
 
         1. No entry carries a ``team`` key. Legitimate pre-season -- the list is
            empty and there is nothing to derive from -- but it also happens when

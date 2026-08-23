@@ -18,20 +18,24 @@ from fantasy_baseball.web.refresh_pipeline import RefreshRun
 
 
 @pytest.fixture(autouse=True)
-def _slot_is_left_free(monkeypatch):
-    """Leave the in-process refresh slot free, whatever this test does to it.
+def _slot_is_free_and_left_free():
+    """Bracket every test in this file with a free in-process refresh slot.
 
-    `run()` writes `_refresh_status["running"] = True` into a MODULE-LEVEL dict
-    and relies on its own `finally: release_refresh_slot()` to put it back. That
-    global outlives the test: stubbing the release out left `running` True for
-    the rest of the worker's session, and `/api/refresh-status` -- which just
-    reports the dict -- then answered "a refresh is running" in an unrelated
-    file. Under xdist the two land on the same worker only sometimes, so it
-    surfaced as an ordering-dependent failure rather than as this file's fault.
+    `run()` writes `_refresh_status["running"] = True` into a MODULE-LEVEL dict and
+    relies on its own `finally: release_refresh_slot()` to put it back. That global
+    outlives the test in BOTH directions, so both ends are held:
 
-    So: do NOT stub the release, and belt-and-braces release again on the way
-    out for the paths that raise before the finally is reached.
+    - ON THE WAY OUT, because stubbing the release out left `running` True for the
+      rest of the worker's session and `/api/refresh-status` -- which just reports
+      the dict -- then answered "a refresh is running" in an unrelated file. Under
+      xdist the two land on the same worker only sometimes, so it surfaced as an
+      ordering-dependent failure rather than as this file's fault.
+    - ON THE WAY IN, because these tests no longer stub `try_acquire_refresh_slot`
+      either, so a slot some earlier test leaked would otherwise decide what they
+      measure. Depending on the same global the fixture exists to contain is how the
+      first leak went unnoticed.
     """
+    rp.release_refresh_slot()
     yield
     rp.release_refresh_slot()
 

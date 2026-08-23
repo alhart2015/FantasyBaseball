@@ -165,6 +165,12 @@ def is_injured(entry: AuditEntry) -> bool:
 def _as_float(value: Any) -> float | None:
     """A finite real number, or None for anything else.
 
+    CALLED AT THE BLOB BOUNDARY, not inside the formatters. Most values in this
+    report come from typed `AuditEntry` fields, and widening `_num`/`_signed`/`_pct`
+    to `Any` to accommodate the few that do not would have removed type checking from
+    all of them -- a genuine type error at a typed call site would then render as
+    "--" instead of failing mypy. Only the cache-sourced reads coerce.
+
     Every number in this report arrives out of a cached JSON blob, and a blob is not
     a type. What gets rejected is chosen so that a value nobody computed can never
     print as one that looks computed:
@@ -184,19 +190,16 @@ def _as_float(value: Any) -> float | None:
     return number if math.isfinite(number) else None
 
 
-def _num(value: Any, digits: int = 2) -> str:
-    number = _as_float(value)
-    return MISSING if number is None else f"{number:.{digits}f}"
+def _num(value: float | None, digits: int = 2) -> str:
+    return MISSING if value is None else f"{value:.{digits}f}"
 
 
-def _signed(value: Any, digits: int = 2) -> str:
-    number = _as_float(value)
-    return MISSING if number is None else f"{number:+.{digits}f}"
+def _signed(value: float | None, digits: int = 2) -> str:
+    return MISSING if value is None else f"{value:+.{digits}f}"
 
 
-def _pct(value: Any, digits: int = 0) -> str:
-    number = _as_float(value)
-    return MISSING if number is None else f"{number * 100:.{digits}f}%"
+def _pct(value: float | None, digits: int = 0) -> str:
+    return MISSING if value is None else f"{value * 100:.{digits}f}%"
 
 
 def _positions(positions: Sequence[str] | None) -> str:
@@ -270,7 +273,7 @@ def _provenance_lines(
         # "0.0%" is a specific and false claim that the season is over, on the
         # PROVENANCE block -- the one part of the report a reader trusts to say
         # what the rest was built from. MISSING is why it exists.
-        ("season remaining", _pct(fraction_remaining, digits=1)),
+        ("season remaining", _pct(_as_float(fraction_remaining), digits=1)),
     ]
     if dropped_rows:
         # IN THE REPORT, not only on the terminal. This file is the artifact -- what a
@@ -495,8 +498,8 @@ def _lineup_lines(moves: Mapping[str, Any] | None) -> list[str]:
                     start.get("to", "?"),
                 ),
                 bench.get("name") or bench.get("player") or "?",
-                _signed(start.get("roto_delta")),
-                _pct(band.get("p_positive")),
+                _signed(_as_float(start.get("roto_delta"))),
+                _pct(_as_float(band.get("p_positive"))),
                 str(band.get("verdict") or ""),
             )
         )

@@ -5,6 +5,8 @@ import yaml
 
 from fantasy_baseball.config import load_config
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
 
 @pytest.fixture
 def minimal_league_yaml(tmp_path):
@@ -304,3 +306,42 @@ class TestKeepersPerTeam:
 
         root = Path(__file__).resolve().parents[1]
         assert load_config(root / "config" / "league.yaml").keepers_per_team == 3
+
+
+def test_keepers_per_team_warns_once_not_once_per_read(tmp_path, caplog):
+    """It is read on EVERY trajectory request, so an uncached warning is per-page log noise.
+
+    The two states it warns about -- no keeper carries a team key, or exactly one
+    team's keepers are listed -- are properties of the config file, so the answer
+    cannot change between reads of the same object.
+    """
+    raw = yaml.safe_load((PROJECT_ROOT / "config" / "league.yaml").read_text(encoding="utf-8"))
+    raw["keepers"] = []
+    path = tmp_path / "league.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    config = load_config(path)
+
+    with caplog.at_level("WARNING"):
+        for _ in range(5):
+            assert config.keepers_per_team == 3
+
+    warnings = [r for r in caplog.records if "keepers_per_team" in r.getMessage()]
+    assert len(warnings) == 1, f"warned {len(warnings)} times across five reads"
+
+
+def test_keepers_per_team_warns_when_one_team_defines_the_league_rule(tmp_path, caplog):
+    """max over a single team returns that manager's own choice, not the rule.
+
+    A team that kept fewer than its allowance would understate it -- the exact
+    failure taking the max across ten teams prevents.
+    """
+    raw = yaml.safe_load((PROJECT_ROOT / "config" / "league.yaml").read_text(encoding="utf-8"))
+    raw["keepers"] = [{"name": f"P{i}", "team": "Only Team"} for i in range(2)]
+    path = tmp_path / "league.yaml"
+    path.write_text(yaml.safe_dump(raw), encoding="utf-8")
+    config = load_config(path)
+
+    with caplog.at_level("WARNING"):
+        assert config.keepers_per_team == 2
+
+    assert any("exactly one team" in r.getMessage() for r in caplog.records)
