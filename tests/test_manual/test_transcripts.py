@@ -282,9 +282,7 @@ def test_a_two_way_player_may_be_on_two_teams_as_his_two_halves(tmp_path: Path) 
     payload["teams"][0]["players"].append(
         {"name": "Shohei Ohtani", "slot": "UTIL", "positions": "Util"}
     )
-    payload["teams"][1]["players"].append(
-        {"name": "Shohei Ohtani", "slot": "P", "positions": "P"}
-    )
+    payload["teams"][1]["players"].append({"name": "Shohei Ohtani", "slot": "P", "positions": "P"})
     path = _write(tmp_path, "rosters.yaml", payload)
 
     snapshot = load_manual_rosters(path)

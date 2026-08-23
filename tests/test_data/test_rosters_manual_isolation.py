@@ -16,6 +16,7 @@ The two properties pinned here are opposite-facing, and both matter:
 """
 
 import json
+from pathlib import Path
 
 import pytest
 
@@ -164,3 +165,63 @@ class TestManualModeIsRefused:
         assert any("manual-store check failed" in r.message for r in caplog.records), (
             "a swallowed probe failure must still be audible in the log"
         )
+
+    def test_a_bug_in_the_probe_is_not_swallowed_into_yahoo_mode(self, local_kv, monkeypatch):
+        """Fail open on a STORAGE fault; never on a defect in our own code.
+
+        The two are not the same risk. An unreadable SQLite file is an unrelated
+        fault, and taking the ordinary Yahoo page down for it helps nobody. A
+        TypeError or AttributeError out of this probe means the detection logic
+        itself is broken -- and swallowing THAT answers "not manual" for a store
+        that is manual, which is precisely how prod rosters get spliced into a
+        manual page. A catch-all cannot tell them apart, so it gets the second
+        one wrong every time, silently.
+        """
+
+        class _Buggy:
+            def get(self, key):
+                raise AttributeError("'NoneType' object has no attribute 'get'")
+
+        monkeypatch.setattr(kv_store, "get_kv", _Buggy)
+        with pytest.raises(AttributeError):
+            manual_store_active()
+
+
+class TestTheDetectionWindowIsClosed:
+    """The breadcrumb must exist from the moment the store does.
+
+    Written only at the END of a successful seed, it left a window in which the
+    store IS a manual store and does not say so -- and `live_rosters` resolves
+    that to "Yahoo mode" and reaches prod Upstash. The window is not exotic: it
+    is the runbook's own sequence (bootstrap, then open the dashboard), plus any
+    re-bootstrap and any seed interrupted partway.
+    """
+
+    @staticmethod
+    def _bootstrap(tmp_path):
+        """Run the real script end to end, exactly as the runbook does."""
+        import sys
+
+        repo_root = Path(__file__).resolve().parents[2]
+        sys.path.insert(0, str(repo_root / "scripts"))
+        import bootstrap_manual_kv
+
+        source = tmp_path / "local.db"
+        kv_store.SqliteKVStore(source).set("cache:standings", "{}")
+        dest = tmp_path / "manual.db"
+
+        rc = bootstrap_manual_kv.main(["--source", str(source), "--dest", str(dest)])
+        assert rc == 0
+        return dest
+
+    def test_bootstrap_stamps_the_breadcrumb_on_the_store_it_creates(self, tmp_path):
+        dest = self._bootstrap(tmp_path)
+
+        assert kv_store.SqliteKVStore(dest).get(PROVENANCE_KEY) is not None, (
+            "a store that IS manual must say so before anything reads it"
+        )
+
+    def test_the_copied_baseline_content_still_arrives(self, tmp_path):
+        dest = self._bootstrap(tmp_path)
+
+        assert kv_store.SqliteKVStore(dest).get("cache:standings") == "{}"

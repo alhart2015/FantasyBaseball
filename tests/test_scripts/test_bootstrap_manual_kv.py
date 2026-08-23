@@ -32,6 +32,28 @@ def _file_sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _baseline_view(dest: Path, tmp_path: Path) -> tuple[dict[str, int], str]:
+    """``(counts, digest)`` for ``dest`` with the manual breadcrumb removed.
+
+    The bootstrap deliberately adds exactly one row the source does not have --
+    the provenance stamp that tells every later process this store is manual and
+    must not reach prod Upstash (see ``stamp_manual_provenance``). Fidelity of
+    the CARRIED-OVER baseline is still the property these tests pin, so they
+    compare against the copy with that one row taken back out.
+    """
+    from fantasy_baseball.manual.seed import PROVENANCE_KEY
+
+    scratch = tmp_path / "baseline_view.db"
+    shutil.copyfile(dest, scratch)
+    conn = sqlite3.connect(str(scratch))
+    try:
+        conn.execute("DELETE FROM kv WHERE key = ?", (PROVENANCE_KEY,))
+        conn.commit()
+    finally:
+        conn.close()
+    return boot.row_counts(scratch), boot.content_digest(scratch)
+
+
 class _SourceSnapshot:
     """Everything about a store that must not change: counts, rows, bytes."""
 
@@ -112,8 +134,9 @@ def test_copies_every_row_including_uncheckpointed_wal_frames(source_db, tmp_pat
 
     assert _run(source_db, dest) == 0
 
-    assert boot.row_counts(dest) == boot.row_counts(source_db)
-    assert boot.content_digest(dest) == boot.content_digest(source_db)
+    counts, digest = _baseline_view(dest, tmp_path)
+    assert counts == boot.row_counts(source_db)
+    assert digest == boot.content_digest(source_db)
     copy = open_store(dest)
     assert copy.get("blended_projections:hitters") == '[{"name": "Juan Soto"}]'
     assert copy.hgetall("standings_history") == {
@@ -136,7 +159,33 @@ def test_a_naive_file_copy_would_have_lost_rows(source_db, tmp_path):
 
     faithful = tmp_path / "manual.db"
     assert _run(source_db, faithful) == 0
-    assert boot.row_counts(faithful) == boot.row_counts(source_db)
+    assert _baseline_view(faithful, tmp_path)[0] == boot.row_counts(source_db)
+
+
+def test_the_copy_is_stamped_manual_and_that_is_the_only_row_added(source_db, tmp_path, open_store):
+    """The store must announce itself as manual before anything reads it.
+
+    ``manual_store_active`` gates whether a process may serve prod Upstash
+    rosters. The seeder stamps this key only at the END of a successful seed, so
+    a store that had been bootstrapped but not yet seeded -- the runbook's own
+    sequence, and the state a seed interrupted partway leaves behind -- read as
+    Yahoo mode and spliced month-stale prod rosters into a manual page.
+    """
+    import json
+
+    from fantasy_baseball.manual.seed import MANUAL_SOURCE, PROVENANCE_KEY
+
+    dest = tmp_path / "manual.db"
+    assert _run(source_db, dest) == 0
+
+    stamp = json.loads(open_store(dest).get(PROVENANCE_KEY))
+    assert stamp["source"] == MANUAL_SOURCE
+    assert stamp["yahoo"] is False
+    assert stamp["seeded"] is False
+
+    # Exactly one row more than the source, and it is that one.
+    assert boot.row_counts(dest)["kv"] == boot.row_counts(source_db)["kv"] + 1
+    assert _baseline_view(dest, tmp_path)[1] == boot.content_digest(source_db)
 
 
 def test_source_is_untouched_by_the_copy(source_db, tmp_path):

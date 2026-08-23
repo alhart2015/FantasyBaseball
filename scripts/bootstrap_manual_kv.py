@@ -51,8 +51,10 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import sqlite3
+from datetime import UTC, datetime
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -120,7 +122,12 @@ def content_digest(path: Path) -> str:
 
 
 def backup(src: Path, dest: Path) -> None:
-    """Copy ``src`` to ``dest`` via the SQLite backup API, source opened read-only."""
+    """Copy ``src`` to ``dest`` via the SQLite backup API, source opened read-only.
+
+    A pure copy: ``main`` verifies the result row-for-row against the source
+    before anything is added to it, so this must not write a row of its own.
+    ``stamp_manual_provenance`` runs after that check.
+    """
     source = open_readonly(src)
     try:
         target = sqlite3.connect(str(dest))
@@ -130,6 +137,45 @@ def backup(src: Path, dest: Path) -> None:
             target.close()
     finally:
         source.close()
+
+
+def stamp_manual_provenance(dest: Path) -> None:
+    """Mark ``dest`` as a hand-transcribed store, from bootstrap time onward.
+
+    ``data.rosters.manual_store_active`` decides whether a process may read prod
+    Upstash rosters by looking for this breadcrumb, and the seeder wrote it only
+    at the END of a successful seed -- so between the copy and that write, the
+    store IS a manual store and did not say so, and the dashboard spliced
+    month-stale prod rosters into a page whose other half is manual.
+
+    The window is the runbook's own sequence: bootstrap, then open the dashboard
+    with ``--no-sync``. It also reopened after any re-bootstrap, and after a seed
+    interrupted partway. Stamping here closes it for every one of those.
+
+    Written through the same ``PROVENANCE_KEY`` the seeder uses, so there is one
+    breadcrumb and one reader rather than two competing signals. The stamp is
+    deliberately minimal -- it records only what is true at bootstrap time;
+    ``manual.seed`` overwrites it with the full provenance (teams, snapshot
+    dates, counts) once a seed completes.
+
+    The import is local because this script guards its target before any
+    ``fantasy_baseball`` import -- see the module docstring.
+    """
+    from fantasy_baseball.data.kv_store import SqliteKVStore
+    from fantasy_baseball.manual.seed import MANUAL_SOURCE, PROVENANCE_KEY
+
+    SqliteKVStore(dest).set(
+        PROVENANCE_KEY,
+        json.dumps(
+            {
+                "source": MANUAL_SOURCE,
+                "yahoo": False,
+                "bootstrapped_at": datetime.now(UTC).isoformat(),
+                "kv_path": str(dest),
+                "seeded": False,
+            }
+        ),
+    )
 
 
 def remove_store(path: Path) -> None:
@@ -231,6 +277,11 @@ def main(argv: list[str] | None = None) -> int:
         print(f"  copy:   {dest_counts} {dest_digest}")
         return 1
     print("  copy matches the source, row for row.")
+
+    # Only now, with fidelity proven, is the copy marked as a manual store. A
+    # store that IS manual must say so before anything reads it.
+    stamp_manual_provenance(dest)
+    print("  stamped as a manual store (not yet seeded).")
 
     print(f"Wrote {dest} ({dest.stat().st_size} bytes).")
     print("Manual-mode processes must export FANTASY_LOCAL_KV_PATH to this path")

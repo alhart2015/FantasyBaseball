@@ -31,6 +31,7 @@ from __future__ import annotations
 
 import json
 import logging
+import sqlite3
 from dataclasses import dataclass
 from typing import Any
 
@@ -126,11 +127,18 @@ def manual_store_active() -> bool:
 
     try:
         return get_kv().get(PROVENANCE_KEY) is not None
-    except Exception:
-        # Fail OPEN, deliberately. A KV read that raises is not evidence of manual
-        # mode, and refusing on it would take the ordinary Yahoo caller down for an
-        # unrelated fault. In manual mode the store is a local SQLite file the page
-        # has already read successfully to get this far.
+    except (OSError, sqlite3.Error):
+        # Fail OPEN on a STORAGE fault, deliberately. An unreadable store is not
+        # evidence of manual mode, and refusing on it would take the ordinary Yahoo
+        # caller down for an unrelated fault. In manual mode the store is a local
+        # SQLite file the page has already read successfully to get this far.
+        #
+        # Narrow on purpose. `except Exception` would swallow a TypeError or
+        # AttributeError out of the probe itself -- a DEFECT in the detection logic,
+        # answering "not manual" for a store that is manual, which is exactly how
+        # month-stale prod rosters end up spliced into a manual page. That failure
+        # has to be loud. Off Render `get_kv()` is a local SQLite store, so these
+        # two are the fault modes it actually has.
         log.warning("live_rosters: manual-store check failed; assuming Yahoo mode")
         return False
 
