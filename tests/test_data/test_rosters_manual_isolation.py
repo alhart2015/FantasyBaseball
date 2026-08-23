@@ -125,12 +125,99 @@ class TestNonManualIsUnchanged:
         assert manual_store_active() is False
 
 
-class TestManualModeIsRefused:
+def _seed_snapshot(client, date="2026-08-17") -> None:
+    """Write a roster day in the shape `manual.seed` writes it.
+
+    Through `write_roster_snapshot`, the same writer the seeder uses, so a change
+    to that shape breaks this test rather than sliding past it.
+    """
+    from fantasy_baseball.data.redis_store import write_roster_snapshot
+
+    write_roster_snapshot(
+        client,
+        date,
+        MY_TEAM,
+        [
+            {"player_name": "Bryan Woo", "positions": "SP, P", "slot": "P", "status": ""},
+            {"player_name": "Shohei Ohtani", "positions": "Util", "slot": "Util", "status": ""},
+            {"player_name": "Shohei Ohtani", "positions": "P", "slot": "BN", "status": ""},
+        ],
+    )
+    write_roster_snapshot(
+        client,
+        date,
+        "Team 02",
+        [{"player_name": "Juan Soto", "positions": "OF, Util", "slot": "OF", "status": "DTD"}],
+    )
+
+
+class TestManualModeServesManualRosters:
     def test_seeded_manual_store_reads_as_manual(self, local_kv):
         _stamp_manual(local_kv)
         assert manual_store_active() is True
 
-    def test_live_rosters_refuses_and_never_touches_prod(self, local_kv, fake_upstash):
+    def test_ownership_comes_from_the_manual_store_not_prod(self, local_kv, fake_upstash):
+        """The By-team keeper view needs all ten teams; refusing left it empty.
+
+        Same-vintage data is what the caller wanted all along -- the manual store
+        already holds every team's roster, seeded from data/manual/rosters.yaml.
+        """
+        _stamp_manual(local_kv)
+        _seed_snapshot(local_kv)
+        client, built = fake_upstash
+
+        spots = live_rosters(MY_TEAM)
+
+        assert not built, "manual mode must not build a prod Upstash client at all"
+        assert client.calls == 0
+        assert {(s.name, s.team) for s in spots} == {
+            ("Bryan Woo", MY_TEAM),
+            ("Shohei Ohtani", MY_TEAM),
+            ("Juan Soto", "Team 02"),
+        }
+
+    def test_a_two_way_player_stays_two_spots(self, local_kv, fake_upstash):
+        """`name::player_type` is the join key; collapsing Ohtani loses one of him."""
+        _stamp_manual(local_kv)
+        _seed_snapshot(local_kv)
+
+        types = {s.player_type for s in live_rosters(MY_TEAM) if s.name == "Shohei Ohtani"}
+
+        assert types == {"hitter", "pitcher"}
+
+    def test_status_survives_the_read(self, local_kv, fake_upstash):
+        """An injured player is still owned, and the board renders the status."""
+        _stamp_manual(local_kv)
+        _seed_snapshot(local_kv)
+
+        soto = next(s for s in live_rosters(MY_TEAM) if s.name == "Juan Soto")
+
+        assert soto.status == "DTD"
+
+    def test_the_latest_snapshot_wins(self, local_kv, fake_upstash):
+        """Re-seeding after a trade must not resurrect the older day's ownership."""
+        from fantasy_baseball.data.redis_store import write_roster_snapshot
+
+        _stamp_manual(local_kv)
+        _seed_snapshot(local_kv, date="2026-08-10")
+        write_roster_snapshot(
+            local_kv,
+            "2026-08-17",
+            "Team 02",
+            [{"player_name": "Bryan Woo", "positions": "SP, P", "slot": "P", "status": ""}],
+        )
+
+        assert {(s.name, s.team) for s in live_rosters(MY_TEAM)} == {("Bryan Woo", "Team 02")}
+
+    def test_an_unseeded_manual_store_refuses_rather_than_reaching_prod(
+        self, local_kv, fake_upstash
+    ):
+        """Bootstrapped but not yet seeded -- the runbook's own intermediate state.
+
+        The store says it is manual and has nothing to serve. Prod Upstash is NOT the
+        fallback: those rows are Yahoo-vintage and up to a month stale, and splicing
+        them into a manual page is the whole failure this path exists to prevent.
+        """
         _stamp_manual(local_kv)
         client, built = fake_upstash
 

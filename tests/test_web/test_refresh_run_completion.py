@@ -18,10 +18,22 @@ from fantasy_baseball.web.refresh_pipeline import RefreshRun
 
 
 @pytest.fixture(autouse=True)
-def _no_slot(monkeypatch):
-    """Bypass the in-process slot and job logger; only the durable lock matters."""
-    monkeypatch.setattr(rp, "try_acquire_refresh_slot", lambda: True)
-    monkeypatch.setattr(rp, "release_refresh_slot", lambda: None)
+def _slot_is_left_free(monkeypatch):
+    """Leave the in-process refresh slot free, whatever this test does to it.
+
+    `run()` writes `_refresh_status["running"] = True` into a MODULE-LEVEL dict
+    and relies on its own `finally: release_refresh_slot()` to put it back. That
+    global outlives the test: stubbing the release out left `running` True for
+    the rest of the worker's session, and `/api/refresh-status` -- which just
+    reports the dict -- then answered "a refresh is running" in an unrelated
+    file. Under xdist the two land on the same worker only sometimes, so it
+    surfaced as an ordering-dependent failure rather than as this file's fault.
+
+    So: do NOT stub the release, and belt-and-braces release again on the way
+    out for the paths that raise before the finally is reached.
+    """
+    yield
+    rp.release_refresh_slot()
 
 
 class _Logger:

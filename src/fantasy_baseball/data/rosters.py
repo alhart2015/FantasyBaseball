@@ -24,7 +24,9 @@ part worth testing, so it is testable without a network.
 itself in a whole separate KV file, and its rosters are hand-transcribed and current;
 prod is Yahoo-vintage and, while Yahoo auth is down, up to a month stale. Serving prod
 rosters into a page otherwise built from manual data mixes two vintages that both look
-plausible, so `live_rosters` refuses instead -- see `ManualStoreRefused`.
+plausible. So `live_rosters` reads the MANUAL store's own roster snapshot instead --
+same-vintage data, which is what the caller actually wanted -- and refuses only when
+that store has no snapshot to give (see `ManualStoreRefused`).
 """
 
 from __future__ import annotations
@@ -41,12 +43,21 @@ log = logging.getLogger(__name__)
 
 
 class ManualStoreRefused(RuntimeError):
-    """`live_rosters` was called from a process running on the manual KV store.
+    """The manual KV store is active and has no roster snapshot to serve.
 
-    A `RuntimeError` subclass, so the two existing callers -- the season dashboard's
-    trajectory route and `scripts/trajectory_board.py` -- catch it with the handlers
-    they already have for a failed roster read. Both degrade to "no roster data",
-    which is the point: NOT to "you own nobody", and not to month-stale prod rows.
+    Raised INSTEAD OF falling back to prod Upstash, which is the whole point: a
+    month-stale Yahoo roster spliced into an otherwise-manual page looks plausible
+    and is wrong. "No roster data" is the honest answer; "you own nobody" is not.
+
+    The state is reachable: `scripts/bootstrap_manual_kv.py` creates the store and
+    stamps it manual before any seed has run, so a dashboard opened between those
+    two steps lands here. The message says to seed.
+
+    A `RuntimeError` subclass, so the season dashboard's trajectory route catches it
+    with the handler it already has for a failed roster read and renders the board
+    unmarked. `scripts/trajectory_board.py` also catches it, but RE-RAISES under
+    `--by-team`, where a team view with no rosters would render nothing at all -- a
+    loud stop beats an empty table that reads as "every team is empty".
     """
 
 
@@ -146,13 +157,12 @@ def manual_store_active() -> bool:
 def live_rosters(my_team: str) -> list[RosterSpot]:
     """Read both roster blobs from PROD Upstash and flatten them.
 
-    Raises `ManualStoreRefused` when this process is running against the manual KV
+    Delegates to `manual_rosters` when this process is running against the manual KV
     store. The Upstash reach below is right for the Yahoo caller and wrong for that
     one: it would splice month-stale prod rosters into a page whose other half is
-    fresh manual data, with both halves looking plausible. Refusing loudly (logged
-    here, so the reason survives a caller that only logs "read failed") leaves the
-    page in its EXISTING "could not read your roster" state -- which the trajectory
-    board already renders distinctly from "you own none of these".
+    fresh manual data, with both halves looking plausible. The manual store already
+    holds the same answer at the page's own vintage; `ManualStoreRefused` comes back
+    only when it does not.
 
     `build_explicit_upstash_kv` rather than `get_kv()`, deliberately: off Render `get_kv`
     returns the local SQLite mirror, which is only as fresh as the last sync, and roster
@@ -167,14 +177,7 @@ def live_rosters(my_team: str) -> list[RosterSpot]:
     already handled inside `_build_upstash_kv`.
     """
     if manual_store_active():
-        message = (
-            "live_rosters: refusing to read production Upstash rosters -- this "
-            "process is running against the hand-transcribed manual KV store. Prod "
-            "rosters are Yahoo-vintage and can be a month stale; mixing them into a "
-            "page built from manual data would look plausible and be wrong."
-        )
-        log.error(message)
-        raise ManualStoreRefused(message)
+        return manual_rosters(my_team)
 
     from .cache_keys import CacheKey, redis_key
     from .kv_store import build_explicit_upstash_kv
@@ -190,3 +193,67 @@ def live_rosters(my_team: str) -> list[RosterSpot]:
     # for both backends, so fetching them separately just bought an extra network wait.
     roster_raw, opp_raw = kv.mget(redis_key(CacheKey.ROSTER), redis_key(CacheKey.OPP_ROSTERS))
     return parse_rosters(decode(roster_raw), decode(opp_raw), my_team)
+
+
+def manual_rosters(my_team: str) -> list[RosterSpot]:
+    """Ownership from the MANUAL store's own latest roster snapshot.
+
+    The manual pipeline seeds `weekly_rosters_history` from `data/manual/rosters.yaml`
+    for every team in the league, so the answer `live_rosters` wants is already in the
+    store this process is pointed at -- at the same vintage as everything else on the
+    page. Reading it is strictly better than refusing: the By-team keeper view, which
+    needs ownership for all ten teams, works in manual mode instead of falling through
+    to an empty block list and silently rendering the league board.
+
+    `my_team` is accepted and unused, deliberately: every row in the hash carries its
+    own `team`, including yours, so unlike the Upstash pair there is no bare list that
+    needs a name attached. Keeping the parameter lets this stand in for `live_rosters`
+    at the same call signature.
+
+    `player_type` is derived from the eligibility string -- see
+    `player_type_for_positions`. Roster rows carry no type field, and a two-way player
+    is two rows, so deriving it is what keeps `name::player_type` intact.
+
+    Raises:
+        ManualStoreRefused: the store holds no roster snapshot (bootstrapped but not
+            yet seeded). Falling back to prod Upstash here would be the exact vintage
+            mix this whole path exists to prevent.
+    """
+    from ..models.positions import player_type_for_positions
+    from .kv_store import get_kv
+    from .redis_store import get_latest_weekly_rosters
+
+    del my_team  # every row names its own team; see the docstring
+
+    rows = get_latest_weekly_rosters(get_kv())
+    if not rows:
+        message = (
+            "live_rosters: this process is running against the hand-transcribed manual "
+            "KV store and that store holds no roster snapshot. Refusing to fall back to "
+            "production Upstash -- those rosters are Yahoo-vintage and can be a month "
+            "stale, and mixing them into a page built from manual data would look "
+            "plausible and be wrong. Run scripts/run_manual_refresh.py to seed it."
+        )
+        log.error(message)
+        raise ManualStoreRefused(message)
+
+    spots: list[RosterSpot] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        name = row.get("player_name")
+        team = row.get("team")
+        if not name or not team:
+            continue
+        spots.append(
+            RosterSpot(
+                name=str(name),
+                normalized=normalize_name(str(name)),
+                player_type=player_type_for_positions(str(row.get("positions", ""))),
+                team=str(team),
+                yahoo_id=str(row.get("yahoo_id", "") or ""),
+                status=str(row.get("status", "") or ""),
+            )
+        )
+    log.info("live_rosters: served %d spots from the manual store", len(spots))
+    return spots

@@ -30,7 +30,11 @@ from typing import Any
 
 import yaml
 
-from fantasy_baseball.models.positions import IL_SLOTS, PITCHER_ELIGIBLE, Position
+from fantasy_baseball.models.positions import (
+    IL_SLOTS,
+    Position,
+    player_type_for_positions,
+)
 from fantasy_baseball.models.standings import CategoryStats, Standings, StandingsEntry
 from fantasy_baseball.utils.constants import ALL_CATEGORIES, Category, OpportunityStat
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -142,14 +146,13 @@ def _nonempty_str(value: Any, *, where: str, field: str, errors: list[str]) -> s
 def _is_pitcher_row(row: Mapping[str, str]) -> bool:
     """True when this transcribed row is the PITCHER half of a name.
 
-    Read off the eligibility string Yahoo prints, which is the only type signal a
-    transcription carries -- the projection frames are not loaded at validation
-    time. Any pitcher-eligible slot makes it a pitcher row: Yahoo prints "P" for
-    every pitcher in this league, and a two-way player's two rows are "Util" and
-    "P" respectively.
+    Thin wrapper over the shared derivation: `data.rosters` needs the same answer
+    for the same reason, and two copies of "which eligibility strings mean
+    pitcher" would drift.
     """
-    parsed = Position.parse_list(row.get("positions", ""))
-    return any(p in PITCHER_ELIGIBLE for p in parsed)
+    from ..models.player import PlayerType
+
+    return player_type_for_positions(row.get("positions", "")) == str(PlayerType.PITCHER)
 
 
 def _parse_player(row: Any, *, team: str, index: int, errors: list[str]) -> dict[str, str] | None:

@@ -46,7 +46,11 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
-from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+from fantasy_baseball.data.cache_keys import (
+    MANUAL_PROVENANCE_KEY,
+    CacheKey,
+    redis_key,
+)
 
 # ``_DEFAULT_LOCAL_DB`` is the single definition of the Yahoo baseline store's
 # location. Re-deriving it here would let the two drift, and the refusal below
@@ -73,8 +77,10 @@ MANUAL_JOB_LABEL = "manual-seed"
 
 #: Store-level breadcrumb: one plain key describing the whole seed, so an
 #: operator opening an unfamiliar .db can tell in a single read whether it is
-#: the Yahoo baseline or a hand-transcribed store. Not read by the pipeline.
-PROVENANCE_KEY = "manual_seed_provenance"
+#: the Yahoo baseline or a hand-transcribed store. Defined in ``data.cache_keys``
+#: and re-exported here: ``data.rosters`` reads it, and the pipeline importing
+#: ``manual`` for a key would point the dependency the wrong way.
+PROVENANCE_KEY = MANUAL_PROVENANCE_KEY
 
 #: Any store with this file name is presumed to be the Yahoo baseline.
 BASELINE_DB_NAME = "local.db"

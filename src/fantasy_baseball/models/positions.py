@@ -104,6 +104,32 @@ PITCHER_ELIGIBLE: frozenset[Position] = frozenset(
     }
 )
 
+
+def player_type_for_positions(positions: str) -> str:
+    """``"pitcher"`` / ``"hitter"`` from the eligibility string Yahoo prints.
+
+    The only type signal a roster row carries: roster blobs have no ``mlbam_id``
+    and a hand transcription has no projection frame loaded at parse time. Any
+    pitcher-eligible slot makes it a pitcher -- Yahoo prints "P" for every
+    pitcher in this league, and a two-way player appears as TWO rows, "Util" and
+    "P", which is exactly the split ``name::player_type`` exists to keep apart.
+
+    Unparseable input is a hitter rather than an exception: a caller joining a
+    roster row to a board would otherwise take the whole page down over one
+    malformed eligibility string, and a wrong-half join fails to match and gets
+    NAMED, which is the failure mode this repo prefers.
+    """
+    from .player import PlayerType
+
+    try:
+        parsed = Position.parse_list(positions or "")
+    except ValueError:
+        return str(PlayerType.HITTER)
+    return str(
+        PlayerType.PITCHER if any(p in PITCHER_ELIGIBLE for p in parsed) else PlayerType.HITTER
+    )
+
+
 BENCH_SLOTS: frozenset[Position] = frozenset(
     {
         Position.BN,
