@@ -161,16 +161,40 @@ def is_injured(entry: AuditEntry) -> bool:
 # --------------------------------------------------------------------------
 
 
-def _num(value: float | None, digits: int = 2) -> str:
-    return MISSING if value is None else f"{value:.{digits}f}"
+def _as_float(value: Any) -> float | None:
+    """A float, or None for anything that is not one.
+
+    Every number in this report arrives out of a cached JSON blob, and a blob is
+    not a type. A bool is rejected on purpose -- `True` is a float in Python and
+    would print as "+1.00", a plausible roto delta nobody computed.
+    """
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
 
 
-def _signed(value: float | None, digits: int = 2) -> str:
-    return MISSING if value is None else f"{value:+.{digits}f}"
+def _num(value: Any, digits: int = 2) -> str:
+    number = _as_float(value)
+    return MISSING if number is None else f"{number:.{digits}f}"
 
 
-def _pct(value: float | None) -> str:
-    return MISSING if value is None else f"{value * 100:.0f}%"
+def _signed(value: Any, digits: int = 2) -> str:
+    number = _as_float(value)
+    return MISSING if number is None else f"{number:+.{digits}f}"
+
+
+def _pct(value: Any) -> str:
+    number = _as_float(value)
+    return MISSING if number is None else f"{number * 100:.0f}%"
+
+
+def _pct1(value: Any) -> str:
+    """A percentage to one decimal. Separate from `_pct` only in precision."""
+    number = _as_float(value)
+    return MISSING if number is None else f"{number * 100:.1f}%"
 
 
 def _positions(positions: Sequence[str] | None) -> str:
@@ -229,7 +253,7 @@ def _provenance_lines(
     *,
     team_name: str,
     effective_date: date,
-    fraction_remaining: float,
+    fraction_remaining: float | None,
     ros_snapshot_date: str,
     kv_path: str | None,
 ) -> list[str]:
@@ -239,7 +263,11 @@ def _provenance_lines(
         ("kv store", MISSING if kv_path is None else str(kv_path)),
         ("roster snapshot", effective_date.isoformat()),
         ("ros projections", ros_snapshot_date),
-        ("season remaining", f"{fraction_remaining * 100:.1f}%"),
+        # `_pct1`, not a 0.0 default upstream: an absent number rendered as
+        # "0.0%" is a specific and false claim that the season is over, on the
+        # PROVENANCE block -- the one part of the report a reader trusts to say
+        # what the rest was built from. MISSING is why it exists.
+        ("season remaining", _pct1(fraction_remaining)),
     ]
     label_width = max(len(label) for label, _ in fields)
     lines = [f"{pad(label, label_width)} : {value}" for label, value in fields]
@@ -495,7 +523,7 @@ def render_audit_report(
     *,
     team_name: str,
     effective_date: date,
-    fraction_remaining: float,
+    fraction_remaining: float | None,
     ros_snapshot_date: str,
     kv_path: str | None = None,
     top_n: int | None = None,
@@ -512,8 +540,9 @@ def render_audit_report(
         team_name: the user's team, used in the banner and to mark their row
             in the standings block.
         effective_date: the roster snapshot's date.
-        fraction_remaining: fraction of the season still to play; rendered as
-            a percentage.
+        fraction_remaining: fraction of the season still to play, rendered as
+            a percentage. ``None`` when the pipeline did not record one, and
+            printed as ``"--"`` rather than as a fabricated 0.0%.
         ros_snapshot_date: the rest-of-season projection snapshot date, as a
             display string (the manual pipeline stores it as text).
         kv_path: resolved KV store path, printed for provenance so a reader

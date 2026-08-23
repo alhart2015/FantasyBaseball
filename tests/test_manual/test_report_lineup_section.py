@@ -107,3 +107,54 @@ def test_missing_lineup_data_is_reported_as_missing_not_as_optimal():
 def test_report_is_ascii_only_with_a_lineup_section():
     out = _render(MOVES)
     assert out.encode("ascii")
+
+
+def test_a_string_where_a_number_belongs_renders_as_missing_not_a_crash():
+    """Every number here arrives out of a cached JSON blob, and a blob is not a type.
+
+    `_signed` and `_pct` fed straight into an f-string numeric format, so a blob
+    carrying "0.46" instead of 0.46 -- an older writer, a hand-edited cache --
+    took the whole report down at the last step, after the pipeline had already
+    run. A number this build cannot read prints as "--", the same as an absent
+    one, because that is what it is.
+    """
+    moves = {
+        "swaps": [
+            {
+                "start": {
+                    "player": "Bryan Woo",
+                    "from": "BN",
+                    "to": "P",
+                    "roto_delta": "0.46",
+                    "band": {"p_positive": "0.82", "verdict": "real"},
+                },
+                "bench": {"player": "Yoendrys Gomez"},
+            }
+        ],
+        "unpaired_starts": [],
+        "unpaired_benches": [],
+    }
+
+    out = _render(moves)
+
+    assert "Bryan Woo" in out
+    assert "--" in out
+
+
+def test_a_bool_is_not_a_roto_delta():
+    """True is a float in Python and would print as '+1.00' -- a plausible number
+    nobody computed, which is worse than a visible gap."""
+    moves = {
+        "swaps": [
+            {
+                "start": {"player": "Bryan Woo", "from": "BN", "to": "P", "roto_delta": True},
+                "bench": {"player": "Yoendrys Gomez"},
+            }
+        ],
+        "unpaired_starts": [],
+        "unpaired_benches": [],
+    }
+
+    out = _render(moves)
+
+    assert "+1.00" not in out

@@ -111,17 +111,15 @@ class SeedStats:
 def resolve_kv_path(client: KVStore) -> Path | None:
     """Return the absolute file backing ``client``, or None if it has none.
 
-    ``SqliteKVStore`` keeps its path privately (there is no public
-    accessor); an Upstash client has no path at all, which is precisely the
-    case :func:`assert_isolated_store` must refuse.
+    Thin alias for ``kv_sync.store_path``. It used to read the PRIVATE
+    ``SqliteKVStore._path`` through a ``getattr(..., None)`` that fails open --
+    so a rename would have turned this, and the three refusals that gate on it,
+    into silent no-ops. ``SqliteKVStore.path`` is public and pinned by a test
+    now; this stays as the name ``manual/`` callers already use.
     """
-    raw = getattr(client, "_path", None)
-    if raw is None:
-        return None
-    try:
-        return Path(raw).resolve()
-    except (TypeError, ValueError):  # pragma: no cover - defensive
-        return None
+    from fantasy_baseball.data.kv_sync import store_path
+
+    return store_path(client)
 
 
 def describe_kv_target(client: KVStore) -> str:

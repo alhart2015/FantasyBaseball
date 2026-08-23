@@ -15,11 +15,11 @@ Provides core functions:
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from math import erf, sqrt
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from fantasy_baseball.lineup.pitcher_swap import discount_factor, swap_window_ip
 from fantasy_baseball.models.player import PitcherStats, Player, PlayerType
@@ -1507,6 +1507,44 @@ def _dict_table(
         cs = stats if isinstance(stats, CategoryStats) else CategoryStats.from_dict(stats)
         entries.append(ProjectedStandingsEntry(team_name=name, stats=cs))
     return _AdHocStatsTable(entries=entries)
+
+
+def displayed_roto_totals(
+    entries: Iterable[Any],
+    roto: Mapping[str, CategoryPoints],
+) -> dict[str, float]:
+    """``{team: the roto total to SHOW}``, Yahoo's own when every team has one.
+
+    Yahoo displays AVG/ERA/WHIP rounded and ranks on full precision, so a
+    display tie in a rate category cannot be broken locally: `score_roto` splits
+    it and Yahoo does not, and the two answers differ by up to +/-0.5 per tie.
+    When every entry carries `yahoo_points_for` -- the authoritative total off
+    the standings page -- that is what the reader is comparing against, so it
+    wins outright. When even one is missing, the mixed set would be incomparable
+    across teams, so ALL of them fall back to the locally scored total.
+
+    All-or-nothing on purpose, and factored out because three call sites had
+    each re-derived it: the standings view, the history series, and the manual
+    driver's report header. A fourth would have got it subtly wrong.
+
+    `entries` is any iterable of standings rows (`team_name`, `yahoo_points_for`)
+    and may be a SUBSET -- the history series passes only the teams present on a
+    given date, and "every team has one" means every team it was handed.
+    """
+    rows = list(entries)
+    authoritative = bool(rows) and all(e.yahoo_points_for is not None for e in rows)
+    out: dict[str, float] = {}
+    for entry in rows:
+        # `is not None` again rather than trusting the flag: it narrows for mypy,
+        # and a falsy-default (`or 0.0`) would silently swallow a legitimate 0.0
+        # total -- last in all ten categories still scores, and the arithmetic
+        # must not depend on that never happening.
+        points_for = entry.yahoo_points_for
+        if authoritative and points_for is not None:
+            out[entry.team_name] = float(points_for)
+        else:
+            out[entry.team_name] = float(roto[entry.team_name].total)
+    return out
 
 
 def score_roto_dict(

@@ -25,6 +25,11 @@ never a protected application database -- or when ``RENDER`` is set. The
 resolved absolute path is printed first, every time, so a terminal's mode is
 never ambiguous.
 
+ONE STEP REACHES PAST THAT, and only with ``--with-keeper-board``: the panel
+rebuild overwrites ``data/trajectory/*.csv``, which no env var redirects and a
+later Yahoo run reads. See :func:`_keeper_board` for why that is safe and how to
+opt out. Every other step is inside the store.
+
 WHY THE IMPORT ORDER IN ``main`` IS LOAD-BEARING -- DO NOT "TIDY" IT.
 ``kv_store.get_kv()`` is a process-wide singleton that captures
 ``FANTASY_LOCAL_KV_PATH`` on its FIRST call (``kv_store._build_sqlite_kv``).
@@ -374,20 +379,30 @@ def _verify_kv_target(kv_path: Path) -> int:
 
 
 def template_hints(paths: dict[str, Path]) -> list[str]:
-    """Actionable lines for any transcription still shipped as a template.
+    """Actionable lines for a transcription that was never filled in.
 
-    The shipped ``rosters.yaml`` is a two-team worked example under a
-    REPLACE-ME header. Run against the real ten-team standings it fails
-    validation with a team-set mismatch, which is accurate and completely
-    unhelpful. This turns that into "you have not filled the file in yet, here
-    is what to do".
+    Two states, both of which otherwise fail with an accurate and completely
+    unhelpful message:
+
+    - THE FILE IS NOT THERE. Reachable whenever a path is overridden
+      (``--rosters somewhere/else.yaml``) or a checkout is fresh -- the
+      transcriptions under ``data/manual/`` are committed, but nothing makes a
+      custom path exist.
+    - THE FILE IS STILL A PLACEHOLDER. A hand-authored file with "REPLACE-ME" or
+      "<team name>" left in it fails validation as a team-set mismatch, which
+      says nothing about the actual problem.
+
+    The committed ``data/manual/rosters.yaml`` is the REAL ten-team
+    transcription, so the marker branch will not fire against it. That is fine:
+    this guard is aimed at files the operator supplied, not at the shipped ones.
     """
     hints: list[str] = []
     for label, path in paths.items():
         if not path.is_file():
             hints.append(
-                f"{label} does not exist: {path}. Copy the template from data/manual/ "
-                "and transcribe the Yahoo pages into it."
+                f"{label} does not exist: {path}. Transcribe the Yahoo pages into it "
+                "-- see docs/manual-pipeline-runbook.md, and the committed files under "
+                "data/manual/ for the shape."
             )
             continue
         text = path.read_text(encoding="utf-8", errors="replace").lower()
@@ -457,12 +472,21 @@ def _load_transcriptions(
     rosters_path = resolve_path(args.rosters)
     standings_path = resolve_path(args.standings)
     exclusions_path = resolve_path(args.exclusions)
-    labelled = {"rosters.yaml": rosters_path, "standings.yaml": standings_path}
+    labelled = {
+        "rosters.yaml": rosters_path,
+        "standings.yaml": standings_path,
+        "fa_exclusions.yaml": exclusions_path,
+    }
 
+    # INSIDE the try, all three. `load_fa_exclusions` raises the same
+    # ManualTranscriptError as the other two -- "'names' must be a list", a
+    # blank entry -- and reading it outside meant those arrived as a traceback
+    # while the identical mistake in rosters.yaml printed an actionable block.
     try:
         rosters = load_manual_rosters(rosters_path)
         with _quiet_missing_team_keys():
             standings = load_manual_standings(standings_path, team_keys={})
+        exclusions = load_fa_exclusions(exclusions_path if exclusions_path.is_file() else None)
     except ManualTranscriptError as exc:
         _print_errors(
             f"TRANSCRIPTION ERRORS in {exc.path}", list(exc.errors), template_hints(labelled)
@@ -482,7 +506,6 @@ def _load_transcriptions(
         _print_errors("TRANSCRIPTIONS DISAGREE", errors, template_hints(labelled))
         return RC_FAILED
 
-    exclusions = load_fa_exclusions(exclusions_path if exclusions_path.is_file() else None)
     return standings, rosters, exclusions
 
 
@@ -501,8 +524,15 @@ def _summarize_transcriptions(
     Printed for every team, not only when it trips, so the reader can eyeball
     the shape of all ten at once.
     """
-    active_slots = sum(int(v) for k, v in config.roster_slots.items() if k.upper() != "IL")
-    il_slots = int(config.roster_slots.get("IL", 0))
+    # IL_SLOTS, not the literal "IL": this league's config and Yahoo both use
+    # "IL+" as well, and counting an IL+ row as ACTIVE printed a spurious
+    # "re-check" against a perfectly legal roster. Every other IL test in this
+    # pipeline already goes through the set; this was the one that did not.
+    from fantasy_baseball.models.positions import IL_SLOTS
+
+    il_names = {slot.value.upper() for slot in IL_SLOTS}
+    active_slots = sum(int(v) for k, v in config.roster_slots.items() if k.upper() not in il_names)
+    il_slots = sum(int(v) for k, v in config.roster_slots.items() if k.upper() in il_names)
     slot_summary = ", ".join(f"{k}:{v}" for k, v in config.roster_slots.items())
     print("")
     print(
@@ -513,7 +543,7 @@ def _summarize_transcriptions(
     total = 0
     for team, rows in rosters.rows_by_team.items():
         total += len(rows)
-        il = sum(1 for row in rows if row["slot"].upper() == "IL")
+        il = sum(1 for row in rows if row["slot"].upper() in il_names)
         active = len(rows) - il
         flag = "" if active == active_slots else f"   <-- {active_slots} active slots; re-check"
         mark = "*" if team == config.team_name else " "
@@ -802,36 +832,49 @@ def _run_pipeline(args: argparse.Namespace, exclusions: frozenset[str]) -> int:
 def _current_roto_standings(standings: Standings) -> list[tuple[str, float]]:
     """``(team, roto_total)`` in Yahoo's own rank order -- ordered, not re-ranked.
 
-    Prefers ``yahoo_points_for`` (Yahoo's authoritative total, transcribed from
-    the standings page) over a locally scored total whenever every team has
-    one, mirroring ``season_data.build_standings_view``. Local scoring differs
-    by up to +/-0.5 per display tie in the rounded rate categories, and the
-    transcription has several such ties -- so re-deriving here would print
-    numbers that disagree with the page the user is reading.
+    The prefer-Yahoo's-own-total rule lives in ``scoring.displayed_roto_totals``,
+    shared with ``season_data``'s standings view and history series. It used to
+    be written out here as well, which is how three copies of one rule came to
+    exist; the shared one carries the reasoning.
+
+    Rank order is Yahoo's, taken straight off the transcribed standings page --
+    NOT re-derived by sorting on the totals. Yahoo breaks display ties on full
+    precision we do not have, so sorting locally can reorder two teams the page
+    shows in the other order.
     """
-    from fantasy_baseball.scoring import score_roto
+    from fantasy_baseball.scoring import displayed_roto_totals, score_roto
 
     entries = sorted(standings.entries, key=lambda e: e.rank)
-
-    # Spelled as an explicit `is None` break rather than `e.yahoo_points_for or
-    # 0.0`: 0.0 is a legal roto total (a team last in all ten categories scores
-    # 10, but the arithmetic must not depend on that), and a falsy default
-    # would silently substitute for a missing one. The `else` runs only when no
-    # entry was missing a total.
-    yahoo_totals: list[tuple[str, float]] = []
-    for entry in entries:
-        total = entry.yahoo_points_for
-        if total is None:
-            break
-        yahoo_totals.append((entry.team_name, float(total)))
-    else:
-        return yahoo_totals
 
     # Standings is structurally a TeamStatsTable (team_name/stats per entry);
     # mypy cannot see the protocol variance through list[StandingsEntry] vs
     # Sequence[TeamStatsRow]. Same cast, same reason, as season_data.
-    roto = score_roto(cast("Any", standings))
-    return [(e.team_name, float(roto[e.team_name].total)) for e in entries]
+    displayed = displayed_roto_totals(entries, score_roto(cast("Any", standings)))
+    return [(e.team_name, displayed[e.team_name]) for e in entries]
+
+
+def _audit_entries(raw: list) -> tuple[list, int]:
+    """``(entries, dropped)`` from a `cache:roster_audit` blob.
+
+    ``AuditEntry(**row)`` checks the TYPE of the container and nothing about its
+    keys, so a blob written before a field was added or renamed raises TypeError
+    -- at step 6 of 6, after the pipeline has already run and written everything,
+    which is the most expensive moment in the run to fail. A row this build
+    cannot read is dropped and COUNTED; the caller says how many.
+    """
+    from fantasy_baseball.lineup.roster_audit import AuditEntry
+
+    entries = []
+    dropped = 0
+    for row in raw:
+        if not isinstance(row, dict):
+            dropped += 1
+            continue
+        try:
+            entries.append(AuditEntry(**row))
+        except TypeError:
+            dropped += 1
+    return entries, dropped
 
 
 def _render_report(
@@ -843,7 +886,6 @@ def _render_report(
 ) -> int:
     """Read the audit back out of the manual store, render it, print and save it."""
     from fantasy_baseball.data.cache_keys import CacheKey
-    from fantasy_baseball.lineup.roster_audit import AuditEntry
     from fantasy_baseball.manual.report import render_audit_report
     from fantasy_baseball.models.standings import ProjectedStandings
     from fantasy_baseball.web.season_data import (
@@ -855,7 +897,13 @@ def _render_report(
     print("")
     print("[6/6] Rendering the audit report...")
     raw = read_cache_list(CacheKey.ROSTER_AUDIT) or []
-    entries = [AuditEntry(**row) for row in raw if isinstance(row, dict)]
+    entries, skipped = _audit_entries(raw)
+    if skipped:
+        print(
+            f"  NOTE: {skipped} audit row(s) had a shape this build does not "
+            "recognize and were dropped. The blob was written by a different "
+            "revision; re-run without --report-only to rebuild it."
+        )
 
     projections = read_cache_dict(CacheKey.PROJECTIONS) or {}
     fraction_remaining = projections.get("fraction_remaining")
@@ -886,7 +934,10 @@ def _render_report(
         entries,
         team_name=config.team_name,
         effective_date=rosters.snapshot_date,
-        fraction_remaining=fraction_remaining if fraction_remaining is not None else 0.0,
+        # Passed through as None. A 0.0 here reads on the report as "0.0% of the
+        # season remains" -- a specific, false, and load-bearing claim, on the very
+        # block a reader consults to learn what the rest was built from.
+        fraction_remaining=fraction_remaining,
         ros_snapshot_date=ros_snapshot_date,
         kv_path=str(kv_path),
         projected_standings=projected_standings,
@@ -911,12 +962,15 @@ def _render_report(
 
 
 #: How far the panel's own elapsed-season reading may drift from the pipeline's before
-#: the keeper board is treated as built on stale actuals. The two measure elapsed season
-#: DIFFERENTLY -- the panel takes the busiest hitter's games over a full schedule, the
-#: pipeline takes calendar days -- so they never agree exactly even when both are current;
-#: on 2026-08-22 they read 0.809 and 0.800. 0.05 is wide enough to ignore that definitional
-#: gap and narrow enough to catch a genuinely stale panel: the 2026-08-08 panel still in
-#: place on 2026-08-22 read 0.698 against a true 0.800, a drift of 0.10.
+#: the keeper board is treated as built on stale actuals.
+#:
+#: The two measure elapsed season DIFFERENTLY -- the panel takes the busiest hitter's
+#: games over a full schedule, the pipeline takes calendar days -- so they never agree
+#: exactly even when both are current. The tolerance has to clear that definitional gap
+#: (a fraction of a percent, since both track the same season) without clearing a panel
+#: that is genuinely weeks behind (a stale panel drifts by roughly the fraction of the
+#: season that elapsed since it was built, so a two-week-old panel is ~0.09 off).
+#: 0.05 sits between those two scales. `test_run_manual_refresh.py` pins both ends.
 PANEL_DRIFT_TOLERANCE = 0.05
 
 
@@ -994,6 +1048,20 @@ def _keeper_board(args: argparse.Namespace, season: int) -> int:
     ``data/trajectory/*.csv`` and ``data/cache/keeper_skills``, both gitignored and both
     absent on Render. It therefore does not move when the pipeline runs, which is the
     whole reason it is wired here.
+
+    THIS STEP REACHES OUTSIDE THE KV ISOLATION, and it is the only one that does.
+    The module docstring's "isolation is by whole KV file" is exact for everything
+    else: every read and write lands in ``FANTASY_LOCAL_KV_PATH``. This step also
+    touches ON-DISK artifacts that no env var redirects -- it OVERWRITES
+    ``data/trajectory/hitter_pt_panel_*.csv`` when the panel is stale, and reads
+    ``data/cache/keeper_skills``. A later Yahoo run reads the same files.
+
+    That is deliberate and is not a leak of manual data: the panel is built from
+    MLB Stats API history and the skills cache from projections, neither of which
+    is hand-transcribed, so what a Yahoo run picks up afterwards is a REBUILT panel,
+    not a manual one. But "a manual run mutates nothing a Yahoo run reads" is false
+    with this flag set, and an operator reasoning from the isolation claim alone
+    would not expect it. Pass ``--skip-panel-rebuild`` to leave the CSVs untouched.
     """
     print("")
     print("[keeper board] Rebuilding the trajectory board...")
@@ -1144,7 +1212,9 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Also rebuild the trajectory (keeper value) board into the manual store. "
         "Adds several minutes: it rebuilds the playing-time panel when stale, then "
-        "sweeps the whole player pool.",
+        "sweeps the whole player pool. NOTE: the panel rebuild OVERWRITES CSVs under "
+        "data/trajectory/, which are outside the KV isolation and are read by later "
+        "Yahoo runs; --skip-panel-rebuild leaves them alone.",
     )
     parser.add_argument(
         "--skip-panel-rebuild",

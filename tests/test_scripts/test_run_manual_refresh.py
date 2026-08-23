@@ -892,3 +892,168 @@ def test_effective_date_comes_from_the_roster_snapshot(tmp_path, stub_caches):
     args = drv._build_parser().parse_args(["--report-out", str(out_file)])
     drv._render_report(args, config, _standings_for(tmp_path), rosters, tmp_path / "manual.db")
     assert "2026-08-22" in out_file.read_text(encoding="utf-8")
+
+
+# --------------------------------------------------------------------------
+# The failure surface: no state between "typed the command" and "printed the
+# report" may produce a traceback or a fabricated number.
+# --------------------------------------------------------------------------
+
+
+def test_an_empty_exclusions_file_is_exclude_nobody(good_inputs, capsys, tmp_path):
+    """A blank or fully commented-out fa_exclusions.yaml is a DOCUMENTED valid state.
+
+    It is also the shipped template, and what an operator leaves behind after
+    commenting out the last name. `_load_yaml_mapping` calls an empty file an
+    error, so this arrived as a traceback rather than as a run.
+    """
+    exclusions = tmp_path / "fa_exclusions.yaml"
+    exclusions.write_text("# names:\n#   - Somebody\n", encoding="utf-8")
+
+    rc = drv.main(_dry_run_argv(good_inputs, "--exclusions", str(exclusions)))
+
+    assert rc == drv.RC_OK
+    assert "free-agent exclusions: none" in capsys.readouterr().out
+
+
+def test_a_malformed_exclusions_file_prints_errors_rather_than_a_traceback(
+    good_inputs, capsys, tmp_path
+):
+    """The same mistake in rosters.yaml already printed an actionable block."""
+    exclusions = tmp_path / "fa_exclusions.yaml"
+    exclusions.write_text(yaml.safe_dump({"names": 3}), encoding="utf-8")
+
+    rc = drv.main(_dry_run_argv(good_inputs, "--exclusions", str(exclusions)))
+
+    assert rc == drv.RC_FAILED
+    out = capsys.readouterr().out
+    assert "TRANSCRIPTION ERRORS" in out
+    assert "must be a list" in out
+
+
+def test_an_il_plus_row_is_not_counted_as_active(capsys, tmp_path, monkeypatch):
+    """IL+ is a legal slot. Counting it active printed a re-check on a fine roster."""
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.manual.transcripts import load_manual_rosters, load_manual_standings
+
+    _yaml = yaml
+
+    raw = _yaml.safe_load((PROJECT_ROOT / "config" / "league.yaml").read_text(encoding="utf-8"))
+    raw["league"]["team_name"] = "Alpha"
+    raw["roster_slots"] = {"C": 1, "P": 1, "IL": 1, "IL+": 1}
+    config_path = tmp_path / "league.yaml"
+    config_path.write_text(_yaml.safe_dump(raw), encoding="utf-8")
+
+    roster_path = tmp_path / "rosters.yaml"
+    roster_path.write_text(
+        _yaml.safe_dump(
+            {
+                "snapshot_date": "2026-08-22",
+                "teams": [
+                    {
+                        "name": n,
+                        "players": [
+                            {"name": f"{n} Catcher", "slot": "C", "positions": "C"},
+                            {"name": f"{n} Pitcher", "slot": "P", "positions": "P"},
+                            {"name": f"{n} Hurt", "slot": "IL+", "positions": "OF"},
+                        ],
+                    }
+                    for n in ("Alpha", "Beta")
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_config(config_path)
+    rosters = load_manual_rosters(roster_path)
+    with drv._quiet_missing_team_keys():
+        standings = load_manual_standings(_write_standings(tmp_path), team_keys={})
+
+    drv._summarize_transcriptions(standings, rosters, frozenset(), config)
+
+    out = capsys.readouterr().out
+    assert "re-check" not in out, out
+    assert "2 active + 1 IL" in out
+
+
+def test_an_unreadable_audit_row_is_dropped_and_counted(capsys, tmp_path, monkeypatch):
+    """A cache:roster_audit blob from another revision must not crash step 6 of 6.
+
+    By then the pipeline has already run and written everything, which is the
+    most expensive moment in the run to fail -- and it failed with a TypeError,
+    not a message.
+    """
+    import fantasy_baseball.web.season_data as season_data
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.manual.transcripts import load_manual_rosters
+
+    payloads = {
+        CacheKey.ROSTER_AUDIT: [
+            *_audit_payload(),
+            {"player": "Ghost", "field_this_build_never_heard_of": 1},
+        ],
+        CacheKey.PROJECTIONS: {"fraction_remaining": 0.11},
+    }
+    monkeypatch.setattr(season_data, "read_cache_list", lambda key: payloads.get(key))
+    monkeypatch.setattr(season_data, "read_cache_dict", lambda key: payloads.get(key))
+    monkeypatch.setattr(season_data, "read_cache_with_meta", lambda key: (None, {}))
+
+    config = load_config(_write_config(tmp_path))
+    rosters = load_manual_rosters(_write_rosters(tmp_path))
+    out_file = tmp_path / "audit.txt"
+    args = drv._build_parser().parse_args(["--report-out", str(out_file)])
+
+    rc = drv._render_report(args, config, _standings_for(tmp_path), rosters, tmp_path / "manual.db")
+
+    assert rc == drv.RC_OK
+    out = capsys.readouterr().out
+    assert "1 audit row(s) had a shape this build does not recognize" in out
+    assert "Alpha Catcher" in out_file.read_text(encoding="utf-8")
+
+
+def test_an_absent_fraction_remaining_is_not_printed_as_zero(capsys, tmp_path, monkeypatch):
+    """ "0.0%" is a specific claim -- the season is over -- that nobody computed.
+
+    It lands on the PROVENANCE block, the one part of the report a reader
+    consults to learn what the rest was built from.
+    """
+    import fantasy_baseball.web.season_data as season_data
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.manual.transcripts import load_manual_rosters
+
+    payloads = {CacheKey.ROSTER_AUDIT: _audit_payload(), CacheKey.PROJECTIONS: {}}
+    monkeypatch.setattr(season_data, "read_cache_list", lambda key: payloads.get(key))
+    monkeypatch.setattr(season_data, "read_cache_dict", lambda key: payloads.get(key))
+    monkeypatch.setattr(season_data, "read_cache_with_meta", lambda key: (None, {}))
+
+    config = load_config(_write_config(tmp_path))
+    rosters = load_manual_rosters(_write_rosters(tmp_path))
+    out_file = tmp_path / "audit.txt"
+    args = drv._build_parser().parse_args(["--report-out", str(out_file)])
+
+    drv._render_report(args, config, _standings_for(tmp_path), rosters, tmp_path / "manual.db")
+
+    written = out_file.read_text(encoding="utf-8")
+    assert "0.0%" not in written
+    assert "season remaining" in written
+
+
+def test_the_panel_drift_tolerance_sits_between_the_two_scales_it_separates():
+    """It has to clear a definitional gap without clearing a stale panel.
+
+    The panel and the pipeline measure elapsed season differently -- busiest
+    hitter's games over a full schedule vs calendar days -- so they disagree by
+    a fraction of a percent even when both are current. A panel that is genuinely
+    weeks behind disagrees by roughly the fraction of the season that elapsed
+    since it was built: about 0.09 for a fortnight over a 162-game schedule.
+
+    Pinned as a relationship, not as measurements. The comment beside this
+    constant used to carry hand-typed readings from one afternoon, which rot
+    silently and cannot be checked by anything.
+    """
+    fortnight_of_a_season = 14 / 162
+
+    assert drv.PANEL_DRIFT_TOLERANCE > 0.02, "must not fire on the definitional gap"
+    assert fortnight_of_a_season > drv.PANEL_DRIFT_TOLERANCE, "a fortnight-stale panel must trip it"

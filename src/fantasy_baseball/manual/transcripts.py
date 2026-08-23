@@ -554,12 +554,27 @@ def load_manual_standings(path: Path, *, team_keys: Mapping[str, str]) -> Standi
 def load_fa_exclusions(path: Path | None) -> frozenset[str]:
     """Load the optional free-agent exclusion list as normalized names.
 
-    A missing path, a missing file, or an empty ``names`` list all mean
-    "exclude nobody" -- absent is a valid state, not an error.
+    A missing path, a missing file, an EMPTY file, and an empty ``names`` list
+    all mean "exclude nobody" -- absent is a valid state, not an error.
+
+    The empty-file case is the one that mattered, and it is why this reads the
+    YAML itself instead of going through `_load_yaml_mapping`: that helper calls
+    a file parsing to None an ERROR, and a blank or fully commented-out file is
+    exactly what the shipped template is, and exactly what an operator leaves
+    behind after commenting out the last name. Here it means "exclude nobody",
+    as this docstring has always promised. Every OTHER malformation is still an
+    error, with the same `ManualTranscriptError` the other loaders raise.
     """
     if path is None or not path.exists():
         return frozenset()
-    raw = _load_yaml_mapping(path)
+    with open(path, encoding="utf-8") as fh:
+        raw = yaml.safe_load(fh)
+    if raw is None:
+        return frozenset()
+    if not isinstance(raw, Mapping):
+        raise ManualTranscriptError(
+            path, [f"top level must be a mapping, got {type(raw).__name__}"]
+        )
     names = raw.get("names")
     if names is None:
         return frozenset()

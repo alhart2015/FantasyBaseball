@@ -17,11 +17,12 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-# ``_DEFAULT_LOCAL_DB`` is the single definition of the Yahoo baseline store's
-# location; ``fantasy_baseball.manual.seed`` imports it for the same reason.
-# Re-deriving the path here would let the two drift, and the refusal below is
-# only worth having if it names the same file ``kv_store`` resolves.
-from fantasy_baseball.data.kv_store import _DEFAULT_LOCAL_DB, get_kv, is_remote
+# The baseline path this script guards against is NOT re-derived here. It lives
+# in ``kv_store`` and is read, at call time, inside
+# ``kv_sync.sync_destination_refusal`` -- so this script and
+# ``scripts/refresh_remote.py`` cannot drift apart, and neither can drift from
+# the store ``get_kv()`` actually resolves.
+from fantasy_baseball.data.kv_store import get_kv, is_remote
 from fantasy_baseball.data.kv_sync import sync_remote_to_local
 from fantasy_baseball.manual.seed import describe_kv_target, resolve_kv_path
 from fantasy_baseball.web.season_app import create_app
@@ -69,26 +70,27 @@ def guard_sync_target(kv_path: Path | None) -> int:
     no error and no prompt. So the sync runs only against the default
     baseline; ``--no-sync`` is how you open the dashboard against a
     manual store.
-    """
-    baseline = _DEFAULT_LOCAL_DB.resolve()
-    if kv_path == baseline:
-        return RC_OK
 
-    target = str(kv_path) if kv_path is not None else "a store with no local file"
-    print("")
-    print(f"REFUSING TO SYNC: the resolved KV store is {target},")
-    print(f"not the Yahoo baseline {baseline}.")
-    print(
-        "The startup sync WIPES its destination (DELETE FROM kv; DELETE FROM hash_kv;) "
-        "and refills it from Upstash, so syncing here would destroy this store -- most "
-        "likely the hand-transcribed manual store written by "
-        "scripts/run_manual_refresh.py."
+    The comparison and the wording live in ``kv_sync.sync_destination_refusal``,
+    shared with ``scripts/refresh_remote.py``. This wrapper keeps the dashboard's
+    own recovery advice and exit code. ``kv_path`` is the path the startup banner
+    already printed, passed through so the banner and the refusal cannot name
+    different stores.
+    """
+    from fantasy_baseball.data.kv_sync import sync_destination_refusal
+
+    refusal = sync_destination_refusal(
+        kv_path,
+        action="The startup sync",
+        recovery=[
+            "Either:",
+            "  * re-run with --no-sync to open the dashboard against this store, or",
+            "  * unset FANTASY_LOCAL_KV_PATH and re-run to sync the Yahoo baseline.",
+        ],
     )
-    print("")
-    print("Either:")
-    print("  * re-run with --no-sync to open the dashboard against this store, or")
-    print("  * unset FANTASY_LOCAL_KV_PATH and re-run to sync the Yahoo baseline.")
-    print("See docs/manual-pipeline-runbook.md.")
+    if refusal is None:
+        return RC_OK
+    print(refusal)
     print("No sync ran and nothing was deleted.")
     return RC_REFUSED
 

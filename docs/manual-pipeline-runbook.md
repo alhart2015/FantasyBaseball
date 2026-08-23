@@ -88,10 +88,11 @@ Run either from a shell where `FANTASY_LOCAL_KV_PATH=data/manual.db` is still
 exported and the hand-transcribed store is destroyed and replaced with the last
 Yahoo snapshot, with no error and no prompt.
 
-`run_season_dashboard.py` now refuses to sync when the resolved KV path is not
-`data/local.db` (prints the path, exits `2`, deletes nothing). **`refresh_remote.py`
-has no such guard** -- never launch it from a manual-mode terminal. The reliable
-habit is a fresh terminal per mode.
+Both now refuse when the resolved KV path is not `data/local.db`: they print the
+path, exit `2`, and delete nothing. `refresh_remote.py` checks at the very top of
+its run, so a refused launch has not written production Upstash either. The
+reliable habit is still a fresh terminal per mode -- the guard is a backstop, not
+a licence.
 
 **(b) Never run `scripts/ingest_ros_export.py` without `--no-push`.**
 

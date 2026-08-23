@@ -6,7 +6,8 @@ to -- and the sync wipes its destination before refilling it. Running this
 script from a manual-pipeline shell would therefore delete the hand-transcribed
 manual store silently.
 
-The guard is deliberately in the SCRIPT and not in ``kv_sync``:
+The MESSAGE is shared with ``run_season_dashboard`` -- one hazard, one wording --
+but the DECISION stays in each script:
 ``tests/test_data/test_kv_sync.py::test_default_local_is_get_kv`` pins the
 library contract that the default destination is simply whatever ``get_kv()``
 returns, and the whole test suite relies on ``FANTASY_LOCAL_KV_PATH`` for
@@ -42,7 +43,12 @@ def test_refuses_when_destination_is_the_manual_store(monkeypatch, tmp_path):
     msg = refresh_remote._sync_destination_refusal()
 
     assert msg is not None
-    assert "REFUSING TO SYNC BACK" in msg
+    assert "REFUSING TO SYNC" in msg
+    # WHICH sync: this script's refusal fires at startup, before the remote
+    # refresh, so the operator has to be told it is the sync-back at the end
+    # that would have done the damage -- and that nothing has run yet.
+    assert "sync-back" in msg
+    assert "Nothing has run yet" in msg
     assert str(manual) in msg
     # It must say what the operator should do, not just that it failed.
     assert "FANTASY_LOCAL_KV_PATH" in msg

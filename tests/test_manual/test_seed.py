@@ -157,7 +157,10 @@ class _OrderedClient:
 
     def __init__(self, inner, events: list[str]):
         self._inner = inner
-        self._path = inner._path
+        #: PUBLIC, mirroring SqliteKVStore.path -- that is the attribute the
+        #: guards read, and a double that only mirrored the private one would
+        #: pass while the real thing was refused.
+        self.path = inner.path
         self._events = events
 
     def get(self, key):
@@ -271,7 +274,7 @@ def test_echoes_the_absolute_kv_path_before_the_first_write(store, standings, ro
     assert events, "seeder produced neither echo nor write"
     first = events[0]
     assert first.startswith("ECHO ")
-    assert str((store._path).resolve()) in first
+    assert str(store.path.resolve()) in first
     # And the path is echoed strictly before anything is written.
     first_write = next(i for i, e in enumerate(events) if e.startswith("WRITE "))
     assert first_write > 0

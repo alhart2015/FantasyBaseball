@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from fantasy_baseball.data.kv_store import (
     KVStore,
@@ -73,6 +74,80 @@ class SyncStats:
             f"{self.string_keys} string keys, "
             f"{self.hash_keys} hash keys ({self.hash_fields} fields)"
         )
+
+
+def store_path(client: KVStore) -> Path | None:
+    """The absolute file backing ``client``, or None when it has none.
+
+    None is a real answer, not a failure: an Upstash client has no local file,
+    and that is exactly the case the guards below must refuse.
+    """
+    raw = getattr(client, "path", None)
+    if raw is None:
+        return None
+    try:
+        return Path(raw).resolve()
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
+
+
+def sync_destination_refusal(
+    kv_path: Path | None, *, action: str, recovery: list[str]
+) -> str | None:
+    """The refusal text when a sync would wipe a non-baseline store, else None.
+
+    THE HAZARD. `sync_remote_to_local` resolves its destination as
+    ``local if local is not None else get_kv()`` and then wipes it
+    UNCONDITIONALLY -- ``DELETE FROM kv; DELETE FROM hash_kv;`` -- before
+    refilling it from Upstash. Every caller that passes ``local=None`` therefore
+    aims at whatever ``FANTASY_LOCAL_KV_PATH`` points at, and
+    ``scripts/run_manual_refresh.py`` exports that to isolate the manual store.
+    Running one of those callers from the same shell destroys the
+    hand-transcribed standings and rosters and refills them with the last Yahoo
+    snapshot -- no error, no prompt, and a store that still looks populated.
+
+    THE GUARD IS NOT IN THE LIBRARY, deliberately. `FANTASY_LOCAL_KV_PATH` is
+    also how the test suite isolates its KV, and
+    `test_kv_sync.py::test_default_local_is_get_kv` pins the contract that the
+    default destination is simply whatever `get_kv()` returns. Narrowing that
+    library-side breaks legitimate callers. The hazard is specific to
+    OPERATOR-FACING entry points, so this returns a message and each script
+    decides -- but the message and the comparison live here, once, because two
+    scripts had each written their own and they had already drifted apart.
+
+    Args:
+        kv_path: the destination the caller resolved, or None for a store with
+            no local file. PASSED IN rather than resolved here so the caller's
+            own startup banner and this guard cannot name different stores, and
+            so both are testable without a process-global singleton.
+        action: what would be wiped, in the imperative -- "The startup sync",
+            "The sync-back". Named because the two callers refuse at different
+            points in their run and the operator needs to know which.
+        recovery: the caller's own next-step lines. What gets you out of it
+            differs per script; the hazard does not.
+    """
+    # Read off the module at CALL time, not bound at import: relocating the
+    # baseline is how the tests keep the real data/local.db out of a test run,
+    # and a from-import here would freeze the real path into this function.
+    from fantasy_baseball.data import kv_store
+
+    baseline = kv_store._DEFAULT_LOCAL_DB.resolve()
+    if kv_path == baseline:
+        return None
+
+    target = str(kv_path) if kv_path is not None else "a store with no local file"
+    lines = [
+        "",
+        f"REFUSING TO SYNC: the resolved KV store is {target},",
+        f"not the Yahoo baseline {baseline}.",
+        f"{action} WIPES its destination (DELETE FROM kv; DELETE FROM hash_kv;) and "
+        "refills it from Upstash, so it would destroy this store -- most likely the "
+        "hand-transcribed manual store written by scripts/run_manual_refresh.py.",
+        "",
+        *recovery,
+        "See docs/manual-pipeline-runbook.md.",
+    ]
+    return "\n".join(lines)
 
 
 def sync_remote_to_local(

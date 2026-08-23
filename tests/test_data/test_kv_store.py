@@ -380,3 +380,25 @@ def test_sqlite_persists_across_instances(tmp_path):
 def test_kvstore_protocol_accepts_both_backends(tmp_kv: SqliteKVStore):
     """Duck-typed Protocol check — both concrete classes satisfy it."""
     assert isinstance(tmp_kv, KVStore)
+
+
+def test_sqlite_store_exposes_its_path_publicly(tmp_path):
+    """Three operator-facing refusals gate on this attribute, via getattr.
+
+    `kv_sync.store_path` reads `getattr(client, "path", None)` because a KVStore
+    need not have a file at all -- Upstash does not -- so it cannot require the
+    attribute. A getattr that misses therefore fails OPEN: rename or drop this
+    and every guard that protects a hand-transcribed store from being wiped
+    becomes a silent no-op, with nothing raising anywhere.
+
+    The guards used to read the PRIVATE `_path` for the same reason, which is
+    the same fragility with none of this warning attached.
+    """
+    from fantasy_baseball.data.kv_store import SqliteKVStore
+    from fantasy_baseball.data.kv_sync import store_path
+
+    target = tmp_path / "store.db"
+    store = SqliteKVStore(target)
+
+    assert store.path == target
+    assert store_path(store) == target.resolve()

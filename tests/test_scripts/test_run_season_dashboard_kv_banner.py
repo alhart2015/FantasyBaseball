@@ -109,8 +109,15 @@ def _point_at(monkeypatch, path: Path) -> None:
 
 
 def _relocate_baseline(monkeypatch, path: Path) -> None:
-    """Treat ``path`` as the Yahoo baseline for the duration of a test."""
-    monkeypatch.setattr(dash, "_DEFAULT_LOCAL_DB", path)
+    """Treat ``path`` as the Yahoo baseline for the duration of a test.
+
+    Patched on ``kv_store``, the one module that defines it. The script used to
+    carry its own from-import as well, which meant two names for one path and a
+    test that had to know which of them the guard happened to read.
+    """
+    from fantasy_baseball.data import kv_store
+
+    monkeypatch.setattr(kv_store, "_DEFAULT_LOCAL_DB", path)
 
 
 # --------------------------------------------------------------------------
@@ -121,12 +128,12 @@ def _relocate_baseline(monkeypatch, path: Path) -> None:
 def test_unset_env_targets_the_repo_baseline():
     """The guard's allow-list is the same constant ``kv_store`` resolves.
 
-    Re-deriving ``data/local.db`` in the script would let the two drift, and
-    a drifted guard would refuse the normal launch.
+    Re-deriving ``data/local.db`` anywhere would let the two drift, and a
+    drifted guard would refuse the normal launch -- the one case that must
+    always work.
     """
     from fantasy_baseball.data import kv_store
 
-    assert dash._DEFAULT_LOCAL_DB is kv_store._DEFAULT_LOCAL_DB
     assert dash.guard_sync_target(kv_store._DEFAULT_LOCAL_DB.resolve()) == dash.RC_OK
 
 

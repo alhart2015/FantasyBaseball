@@ -179,6 +179,20 @@ class SqliteKVStore:
         )
         self._lock = threading.RLock()
 
+    @property
+    def path(self) -> Path:
+        """The file this store is backed by.
+
+        PUBLIC, and load-bearing. Operator-facing guards refuse to wipe a store by
+        comparing this against the Yahoo baseline, and they reach it through
+        ``getattr(client, "path", None)`` -- a KVStore need not have a file at all
+        (Upstash does not), so the guards cannot require the attribute. A getattr
+        that misses therefore fails OPEN, which means renaming or dropping this
+        would silently turn every one of those guards into a no-op with nothing
+        raising. ``tests/test_data/test_kv_store.py`` pins it for that reason.
+        """
+        return self._path
+
     def get(self, key: str) -> str | None:
         with self._lock:
             row = self._conn.execute(
