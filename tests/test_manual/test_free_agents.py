@@ -13,6 +13,7 @@ import pytest
 
 from fantasy_baseball.lineup.waivers import FreeAgentRequest
 from fantasy_baseball.manual.free_agents import (
+    MIN_PLAUSIBLE_POOL,
     ManualPoolUnsound,
     build_manual_free_agents,
 )
@@ -541,6 +542,89 @@ def test_the_pool_is_built_normally_when_every_transcribed_player_hydrated():
     )
 
     assert _by_key(players) == {("free bat", PlayerType.HITTER)}
+
+
+def test_the_volume_floor_scales_with_what_the_frame_actually_projects():
+    """A late-season frame must not filter out every full-time player.
+
+    The floors bound "is this a real contributor", which is a question about a
+    player's share of the remaining schedule -- not about an absolute PA count.
+    An absolute floor answers it correctly in August and wrongly in September:
+    with 8 games left a full-time bat projects ~34 ROS PA and a starter ~7 ROS
+    IP, so a floor of 40/12 removes EVERY player. The pool comes back empty,
+    ``audit_roster`` finds no candidate for any slot, and the report prints
+    "no upgrades found -- hold the roster as-is": a claim, not a gap, and the
+    exact hazard ``_audit_roster``'s stale-mode guard was written against.
+    """
+    # A September frame: the busiest bat has 34 PA, everyone else proportionally less.
+    hitters = _hitters(
+        [
+            {"name": "Everyday Bat", "pa": 34.0},
+            {"name": "Platoon Bat", "pa": 20.0},
+            {"name": "Bench Bat", "pa": 4.0},
+        ]
+    )
+    positions = {"everyday bat": ["OF"], "platoon bat": ["OF"], "bench bat": ["OF"]}
+    req = _request(
+        hitters,
+        _pitchers([]),
+        rankings=_ranks(
+            ("Everyday Bat", PlayerType.HITTER),
+            ("Platoon Bat", PlayerType.HITTER),
+            ("Bench Bat", PlayerType.HITTER),
+        ),
+    )
+
+    players = build_manual_free_agents(req, positions_by_name=positions)
+
+    kept = _by_key(players)
+    assert ("everyday bat", PlayerType.HITTER) in kept, (
+        "the busiest bat in the frame must survive its own frame's floor"
+    )
+    assert ("bench bat", PlayerType.HITTER) not in kept, (
+        "the floor must still exclude a token-playing-time line"
+    )
+
+
+def test_an_empty_pool_is_refused_rather_than_reported_as_no_upgrades():
+    """An empty pool and 'nobody is better than what you have' are different facts.
+
+    ``report._upgrade_lines`` renders an empty audit as "Hold the roster as-is",
+    which is a recommendation. If the pool was empty the audit never had a
+    candidate to evaluate, so that sentence asserts something never tested.
+    """
+    hitters = _hitters([{"name": "Rostered Bat", "pa": 600.0}])
+    req = _request(
+        hitters,
+        _pitchers([]),
+        rostered_hitters=("Rostered Bat",),
+        rankings=_ranks(("Rostered Bat", PlayerType.HITTER)),
+    )
+
+    with pytest.raises(ManualPoolUnsound) as exc:
+        build_manual_free_agents(
+            req,
+            positions_by_name={"rostered bat": ["OF"]},
+            min_pool=MIN_PLAUSIBLE_POOL,
+        )
+
+    assert "derivation failure" in str(exc.value)
+
+
+def test_a_small_pool_is_allowed_when_the_caller_does_not_ask_for_a_minimum():
+    """The library contract is unchanged: return what came out, including nothing.
+
+    Fixtures build two-row frames on purpose, and
+    ``test_empty_frames_produce_an_empty_pool_without_raising`` pins the empty
+    case. Plausibility is a judgement about a REAL run against real frames, so
+    it belongs to the caller that knows which it is.
+    """
+    hitters = _hitters([{"name": "Only Bat"}])
+    req = _request(hitters, _pitchers([]), rankings=_ranks(("Only Bat", PlayerType.HITTER)))
+
+    players = build_manual_free_agents(req, positions_by_name={"only bat": ["OF"]})
+
+    assert _by_key(players) == {("only bat", PlayerType.HITTER)}
 
 
 def test_exclusions_applied():

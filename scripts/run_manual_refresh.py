@@ -725,6 +725,7 @@ def _build_free_agent_source(
     from fantasy_baseball.keepers.positions import load_positions
     from fantasy_baseball.manual.free_agents import (
         DEFAULT_PER_POSITION_CAP,
+        MIN_PLAUSIBLE_POOL,
         build_manual_free_agents,
     )
 
@@ -739,6 +740,10 @@ def _build_free_agent_source(
         positions_by_name=positions_by_name,
         excluded_names=exclusions,
         per_position_cap=cap,
+        # A REAL run, against real frames: an empty pool here is a derivation
+        # failure, not a league with nobody available, and it must not reach the
+        # report as "hold the roster as-is".
+        min_pool=MIN_PLAUSIBLE_POOL,
     )
 
 

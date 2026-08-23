@@ -80,11 +80,32 @@ HITTER_RANK_BUCKETS: tuple[Position, ...] = (
 #: Default per-position cap, matching ``fa_per_position`` on the Yahoo path.
 DEFAULT_PER_POSITION_CAP = 100
 
-#: Volume floors. A rest-of-season line below these is either a September
-#: call-up with no role or a projection-system artifact; either way it is not a
-#: player this league can add and start.
-DEFAULT_MIN_ROS_PA = 40.0
-DEFAULT_MIN_ROS_IP = 12.0
+#: Volume floors, as a FRACTION of what the frame's own busiest players project.
+#:
+#: The question the floor answers is "does this line represent a real share of
+#: the remaining schedule", which is relative by nature. An ABSOLUTE floor gets
+#: that right in August and wrong in September: with 8 games left a full-time bat
+#: projects ~34 ROS PA and a starter ~7 ROS IP, so the 40 PA / 12 IP absolutes
+#: this replaced removed EVERY player, returned an empty pool, and made the
+#: report print "no upgrades found -- hold the roster as-is" -- a claim, not a
+#: gap, and precisely the hazard ``_audit_roster``'s stale-mode guard exists to
+#: prevent.
+#:
+#: Calibrated against the reference below rather than a hand-picked number: 0.30
+#: of the frame's 90th-percentile volume reproduces the old 40 PA / 12 IP cut at
+#: the 2026-08-22 snapshot (~33 games left, p90 around 130 PA / 34 IP) and scales
+#: with the schedule from there.
+FLOOR_FRACTION_OF_P90 = 0.30
+
+#: Percentile used as "a full workload in this frame". The maximum is one
+#: player's outlier; the median includes every part-timer and September call-up.
+FLOOR_REFERENCE_PERCENTILE = 90
+
+#: A pool smaller than this is treated as a derivation failure, not as a league
+#: with nobody available. ``audit_roster`` takes the maximum-DeltaRoto free agent
+#: PER SLOT, so a handful of candidates cannot answer the question the report
+#: claims to have answered.
+MIN_PLAUSIBLE_POOL = 5
 
 #: How many names to name in an aggregate warning before saying "and N more".
 _WARN_SAMPLE = 10
@@ -124,9 +145,10 @@ def build_manual_free_agents(
     positions_by_name: Mapping[str, Sequence[str]],
     excluded_names: frozenset[str] = frozenset(),
     per_position_cap: int = DEFAULT_PER_POSITION_CAP,
-    min_ros_pa: float = DEFAULT_MIN_ROS_PA,
-    min_ros_ip: float = DEFAULT_MIN_ROS_IP,
+    min_ros_pa: float | None = None,
+    min_ros_ip: float | None = None,
     rostered_expected: frozenset[tuple[str, PlayerType]] | None = None,
+    min_pool: int = 0,
 ) -> list[Player]:
     """Build the free-agent pool from projections and the rostered-name sets.
 
@@ -151,8 +173,19 @@ def build_manual_free_agents(
         per_position_cap: candidates kept per hitter bucket. Pitchers get one
             combined bucket at twice this, mirroring the Yahoo path's two
             pitcher fetches (SP and RP).
-        min_ros_pa: hitter volume floor, in projected rest-of-season PA.
-        min_ros_ip: pitcher volume floor, in projected rest-of-season IP.
+        min_ros_pa: absolute hitter volume floor, in projected rest-of-season
+            PA. ``None`` (the default) derives it from the frame -- see
+            :data:`FLOOR_FRACTION_OF_P90`. Pass a number only to pin the floor
+            in a test; a hand-set absolute is what this replaced.
+        min_ros_ip: the same for pitchers, in projected rest-of-season IP.
+        min_pool: refuse with :class:`ManualPoolUnsound` when fewer than this
+            many players survive. ``0`` (the default) keeps the derivation's
+            plain contract -- return whatever came out, including nothing --
+            which is what a fixture wants and what
+            ``test_empty_frames_produce_an_empty_pool_without_raising`` pins.
+            A REAL run passes :data:`MIN_PLAUSIBLE_POOL`: there, an empty pool
+            is a derivation failure rather than a league with nobody available,
+            and it must not reach the report as "hold the roster as-is".
         rostered_expected: every ``(normalized name, player_type)`` the
             TRANSCRIPTION says is rostered. When supplied, any member absent
             from ``req``'s rostered sets raises :class:`ManualPoolUnsound`
@@ -196,10 +229,11 @@ def build_manual_free_agents(
             )
 
     candidates: list[_Candidate] = []
-    for df, ptype, rostered, volume_col, min_volume in (
+    for df, ptype, rostered, volume_col, override in (
         (req.hitters_proj, PlayerType.HITTER, req.rostered_hitters, "pa", min_ros_pa),
         (req.pitchers_proj, PlayerType.PITCHER, req.rostered_pitchers, "ip", min_ros_ip),
     ):
+        min_volume = _derive_floor(df, volume_col) if override is None else override
         rows = _candidate_rows(df, rostered, min_volume, volume_col, excluded_names)
         typed = _with_positions(rows, ptype, positions_by_name)
         cap = per_position_cap if ptype == PlayerType.HITTER else per_position_cap * 2
@@ -219,7 +253,7 @@ def build_manual_free_agents(
     # and keep this module importable from an offline script.
     from fantasy_baseball.data.projections import match_roster_to_projections
 
-    return match_roster_to_projections(
+    pool = match_roster_to_projections(
         fa_dicts,
         req.hitters_proj,
         req.pitchers_proj,
@@ -228,6 +262,25 @@ def build_manual_free_agents(
         warn_unmatched=False,
         context="fa:manual",
     )
+
+    if min_pool > 0 and len(pool) < min_pool:
+        # AN EMPTY POOL AND "NOBODY IS BETTER" ARE DIFFERENT FACTS, and only one
+        # of them is a recommendation. `report._upgrade_lines` renders an audit
+        # with no upgrades as "Hold the roster as-is" -- which asserts the pool
+        # was searched. If the derivation produced nothing, it never was, and the
+        # operator would act on a sentence backed by no comparison at all.
+        # `_audit_roster` states the same rule for the Yahoo path: "a board
+        # computed against an empty FA pool would read as 'no upgrades
+        # available', which is a claim, not a gap".
+        raise ManualPoolUnsound(
+            f"the synthesized free-agent pool came back with {len(pool)} player(s), "
+            f"fewer than the {min_pool} needed for the audit to have "
+            "answered anything. This is a derivation failure, not a league with "
+            "nobody available. Check that the ROS projection frames loaded, that "
+            "the position-eligibility map has coverage (scripts/fetch_positions_mlb.py "
+            "backfills it), and that the rank cap is not filtering everything."
+        )
+    return pool
 
 
 def _volume(row: Mapping[str, Any], column: str) -> float:
@@ -243,6 +296,29 @@ def _volume(row: Mapping[str, Any], column: str) -> float:
     if raw is None or pd.isna(raw):
         return 0.0
     return float(raw)
+
+
+def _derive_floor(df: pd.DataFrame, volume_col: str) -> float:
+    """The volume floor for ``df``, as a fraction of its own p90.
+
+    Relative rather than absolute because the floor is asking "is this a real
+    share of the remaining schedule", and the answer to that shrinks with the
+    schedule. Deriving it from the frame means the same rule holds in March and
+    in the last week, with no fraction-of-season plumbed in from the caller --
+    the frame already encodes how much season is left.
+
+    Returns 0.0 (no floor) when the column is missing or carries nothing
+    positive: an absent column is a schema change, not a league of zero-playing-
+    time players, and ``_candidate_rows`` warns about it separately.
+    """
+    if df.empty or volume_col not in df.columns:
+        return 0.0
+    volumes = pd.to_numeric(df[volume_col], errors="coerce").dropna()
+    volumes = volumes[volumes > 0]
+    if volumes.empty:
+        return 0.0
+    reference = float(volumes.quantile(FLOOR_REFERENCE_PERCENTILE / 100.0))
+    return reference * FLOOR_FRACTION_OF_P90
 
 
 def _candidate_rows(
