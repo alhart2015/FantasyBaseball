@@ -6,6 +6,9 @@ import yaml
 
 from fantasy_baseball.utils.constants import Category
 
+#: Used when no keepers are configured yet (pre-season the list is empty).
+DEFAULT_KEEPERS_PER_TEAM = 3
+
 
 @dataclass
 class LeagueConfig:
@@ -26,6 +29,29 @@ class LeagueConfig:
     season_year: int = 2026
     season_start: str = "2026-03-27"
     season_end: str = "2026-09-28"
+
+    @property
+    def keepers_per_team(self) -> int:
+        """How many players each team may keep into next season.
+
+        Derived from the ``keepers`` roster rather than stored, because that list is
+        already the authority: ``config/league.yaml`` carries one entry per kept player
+        per team, so the per-team count IS the rule. Returns the MAX across teams -- a
+        team that kept fewer than its allowance would otherwise shrink the league rule
+        to its own choice.
+
+        Load-bearing for keeper valuation: ranking teams by their best FIVE when only
+        three may be kept counts players nobody can retain, and on 2026-08-22 that
+        inverted the league ordering (the depth leader was not the keeper leader).
+        Falls back to 3 when no keepers are configured -- pre-season, the list is empty
+        and there is nothing to derive from.
+        """
+        from collections import Counter
+
+        counts = Counter(
+            k.get("team") for k in self.keepers if isinstance(k, dict) and k.get("team")
+        )
+        return max(counts.values()) if counts else DEFAULT_KEEPERS_PER_TEAM
 
 
 def _validate_sgp_overrides(raw_overrides: dict) -> dict[str, float]:

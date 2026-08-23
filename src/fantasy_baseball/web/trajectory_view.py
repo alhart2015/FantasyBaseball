@@ -44,6 +44,11 @@ from fantasy_baseball.utils.name_utils import normalize_name
 #: scrolls where a terminal dump does not.
 DEFAULT_TOP = 50
 
+#: Keepers per team. Callers that have the league config should pass its
+#: `keepers_per_team` rather than lean on this; it is the default so a block never
+#: silently reports a best-of-everything headline.
+DEFAULT_KEEP = 3
+
 
 @dataclass(frozen=True)
 class Board:
@@ -121,18 +126,57 @@ class TeamBlock:
     scored: int
     unscored: list[str]
     is_mine: bool
+    #: How many of `rows` a team may actually KEEP. `rows` deliberately shows more (see
+    #: `TeamsBoard.per_team`): an opponent without this data may keep someone outside
+    #: their true best-`keep`, and the rows past the cut are what make that visible.
+    keep: int = DEFAULT_KEEP
 
     @property
     def total(self) -> float:
-        """The BEST-N total, never the roster total -- `rows` is already the slice.
+        """Sum of every row SHOWN -- the depth figure, not the keeper figure.
 
-        Derived rather than stored because it was being summed one line after `rows`
-        was assigned from the same list. 7e74b7b1 removed the roster version from the
-        CLI after measuring it: 93.5% of scored players carry a negative VAR and tails
-        run -62 to -196 against a best-5 signal of 15 to 73, so as a sort key the
-        roster total orders the page by depth of junk.
+        Kept as-is because callers and tests read it as "what this block adds up to".
+        For ordering and for the headline, use `keep_total`: this league keeps three,
+        so a best-of-five sum counts two players nobody can retain.
+
+        7e74b7b1 removed the ROSTER version from the CLI after measuring it: 93.5% of
+        scored players carry a negative VAR and tails run -62 to -196 against a best-5
+        signal of 15 to 73, so as a sort key the roster total orders the page by depth
+        of junk.
         """
         return float(sum(r["total"] for r in self.rows))
+
+    @property
+    def keep_total(self) -> float:
+        """Sum of the best `keep` rows -- the real keeper strength, and the sort key.
+
+        `rows` arrives strongest-first, so this is a prefix sum. Ranking on the full
+        block instead inverted the league ordering on 2026-08-22: Hello Peanuts! led
+        the best-5 measure 67.4 to 55.8 and TRAILED on best-3, 43.0 to 45.1, because
+        two of their five were unkeepable.
+        """
+        return float(sum(r["total"] for r in self.rows[: self.keep]))
+
+    @property
+    def stranded(self) -> float:
+        """Positive value on the block that CANNOT be kept -- a weakness, not depth.
+
+        Only positives count: a negative row past the cut costs nothing to lose, so
+        summing it would credit a team for holding bad players.
+        """
+        return float(sum(max(r["total"], 0.0) for r in self.rows[self.keep :]))
+
+    @property
+    def keep_dropoff(self) -> float | None:
+        """Value gap between the last keeper and the first non-keeper.
+
+        What an opponent gives up by keeping the wrong player -- near zero means no
+        exploitable mistake exists for that team, however deep they look. `None` when
+        the block has no row past the cut.
+        """
+        if len(self.rows) <= self.keep:
+            return None
+        return float(self.rows[self.keep - 1]["total"] - self.rows[self.keep]["total"])
 
 
 @dataclass(frozen=True)
@@ -548,6 +592,7 @@ def build_teams_board(
     spots: Sequence[RosterSpot] | None = None,
     my_team: str | None = None,
     per_team: Any = None,
+    keep: Any = None,
 ) -> TeamsBoard:
     """The same cached sweep, grouped by team instead of flattened.
 
@@ -560,6 +605,10 @@ def build_teams_board(
         payload, end, pool, scale
     )
     n = _clamp(per_team, 1, 50, DEFAULT_PER_TEAM)
+    # Clamped like `per_team`, because it can arrive from a query string. Capped at `n`:
+    # a keep count past the rows shown would make `keep_total` equal `total` and quietly
+    # undo the distinction the field exists to draw.
+    keep_n = _clamp(keep, 1, n, min(DEFAULT_KEEP, n))
     index = index_rosters(ranked_rows, spots or [], my_team)
 
     # BLOCKS COME FROM THE ROSTERS, not the rows. A team whose players were all
@@ -607,11 +656,12 @@ def build_teams_board(
                 scored=len(rows),
                 unscored=index.unscored_for(team, pool),
                 is_mine=my_team is not None and team == my_team,
+                keep=keep_n,
             )
         )
     # Name is the tie-break, not decoration: two teams with nothing scored both total
     # 0.0, and leaving that to dict order makes the page reorder between reads.
-    blocks.sort(key=lambda b: (-b.total, b.team))
+    blocks.sort(key=lambda b: (-b.keep_total, b.team))
 
     return TeamsBoard(
         blocks=blocks,

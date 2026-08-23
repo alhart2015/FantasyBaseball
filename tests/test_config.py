@@ -252,3 +252,55 @@ def test_load_config_summary_defaults_empty(tmp_path):
     p.write_text("league:\n  id: 1\n  num_teams: 10\n  team_name: T\n", encoding="utf-8")
     cfg = load_config(p)
     assert cfg.summary == {}
+
+
+class TestKeepersPerTeam:
+    """The league's keeper allowance, derived from the configured keeper roster.
+
+    Load-bearing for keeper valuation: ranking teams by their best FIVE when only three
+    may be kept counts players nobody can retain, which on 2026-08-22 inverted the
+    league ordering on the trajectory board's By-team view.
+    """
+
+    @staticmethod
+    def _cfg(keepers):
+        from fantasy_baseball.config import LeagueConfig
+
+        return LeagueConfig(
+            league_id=1,
+            num_teams=10,
+            game_code="mlb",
+            team_name="Mine",
+            draft_position=1,
+            keepers=keepers,
+            roster_slots={},
+            projection_systems=[],
+            projection_weights={},
+        )
+
+    def test_derives_the_count_from_the_configured_keepers(self):
+        keepers = [{"name": f"P{i}", "team": t} for t in ("A", "B") for i in range(3)]
+        assert self._cfg(keepers).keepers_per_team == 3
+
+    def test_takes_the_max_so_one_team_keeping_fewer_does_not_shrink_the_rule(self):
+        keepers = [{"name": "a1", "team": "A"}] + [{"name": f"b{i}", "team": "B"} for i in range(3)]
+        assert self._cfg(keepers).keepers_per_team == 3
+
+    def test_falls_back_when_no_keepers_are_configured(self):
+        """Pre-season the list is empty and there is nothing to derive from."""
+        from fantasy_baseball.config import DEFAULT_KEEPERS_PER_TEAM
+
+        assert self._cfg([]).keepers_per_team == DEFAULT_KEEPERS_PER_TEAM
+
+    def test_ignores_malformed_entries_rather_than_counting_them(self):
+        keepers = [{"name": "a", "team": "A"}, {"name": "no team"}, "junk", {"team": ""}]
+        assert self._cfg(keepers).keepers_per_team == 1
+
+    def test_the_real_league_config_keeps_three(self):
+        """The rule this project actually plays under, read from the shipped config."""
+        from pathlib import Path
+
+        from fantasy_baseball.config import load_config
+
+        root = Path(__file__).resolve().parents[1]
+        assert load_config(root / "config" / "league.yaml").keepers_per_team == 3

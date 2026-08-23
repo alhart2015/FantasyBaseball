@@ -880,6 +880,12 @@ def register_routes(app: Flask) -> None:
                         spots=spots,
                         my_team=my_team,
                         per_team=request.args.get("per"),
+                        # More rows are SHOWN than may be kept, on purpose: an opponent
+                        # without this board may keep someone outside their true best-N,
+                        # and only the rows past the cut make that visible. The headline
+                        # and the block ordering use the best `keep` (see
+                        # TeamBlock.keep_total).
+                        keep=_load_config().keepers_per_team,
                     )
                     # No roster data means no blocks to show. Fall back rather than
                     # render an empty page -- a bookmark outlives an Upstash outage.

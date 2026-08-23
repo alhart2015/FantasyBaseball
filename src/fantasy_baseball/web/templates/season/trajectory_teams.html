@@ -42,7 +42,8 @@ statement about the lookup, not about what you own.</p>
   <h3>{{ block.team }}
     {%- if block.scored %}
     <span class="muted">({{ block.rows | length }} of {{ block.scored }} scored,
-    {{ '%.1f'|format(block.total) }} {{ board.span }} {{ board.scale|upper }} from the best {{ board.per_team }})</span>
+    <strong>{{ '%.1f'|format(block.keep_total) }}</strong> {{ board.span }} {{ board.scale|upper }} from the best {{ block.keep }} they may keep{% if block.stranded > 0.05 %};
+    {{ '%.1f'|format(block.stranded) }} stranded below the cut{% endif %})</span>
     {%- endif %}
   </h3>
   {% if block.rows %}
