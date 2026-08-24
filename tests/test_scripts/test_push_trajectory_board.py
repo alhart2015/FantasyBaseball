@@ -174,6 +174,41 @@ def test_a_comp_is_selected_on_the_career_never_on_the_prediction() -> None:
     ]
 
 
+def test_a_volume_column_that_is_all_nan_stores_no_playing_time_rather_than_zero() -> None:
+    """`Series.sum()` is `skipna=True, min_count=0`, so an all-NaN group sums to a real
+    `0.0` -- a `pd.notna` guard over it can never fire.
+
+    Stored, that becomes "PA/IP: 0" printed beside a real SGP figure: the exact
+    hurt-versus-finished signal the column was added for (#357), inverted. A partly-NaN
+    group is its own defect -- it sums the half it can see and understates a split
+    season. Both must come out absent, which the table renders as a dash.
+
+    Drives the real grouping expression rather than a hand-rolled copy of it, so a
+    future rewrite back to a bare `.sum()` fails here.
+    """
+    import numpy as np
+    import pandas as pd
+
+    frame = pd.DataFrame(
+        {
+            "mlbam_id": [1, 1, 2, 3, 3],
+            "season": [2010, 2010, 2011, 2012, 2012],
+            # player 1: a split season, both halves recorded -> summed
+            # player 2: every value missing                  -> absent
+            # player 3: a split season, one half missing     -> absent, not 300
+            "pa": [300.0, 250.0, np.nan, np.nan, 300.0],
+        }
+    )
+    keys = [frame["mlbam_id"], frame["season"]]
+    totals = frame["pa"].groupby(keys).sum(min_count=1)
+    totals = totals.where(~frame["pa"].isna().groupby(keys).any())
+    got = {(int(i), int(s)): float(v) for (i, s), v in totals.items() if pd.notna(v)}
+
+    assert got == {(1, 2010): 550.0}, "only the fully-recorded split season survives"
+    assert (2, 2011) not in got, "an all-NaN group is absent, not 0.0"
+    assert (3, 2012) not in got, "a partly-NaN group is absent, not an understatement"
+
+
 def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
     """A comp used to be a display NAME and four numbers. Joining a chart to a name is
     the defect class #284 exists for -- two players share one normalized name and one

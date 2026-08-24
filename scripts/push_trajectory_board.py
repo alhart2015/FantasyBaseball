@@ -359,15 +359,40 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         # collapse was decline or absence (#357). PA for hitters, IP for pitchers -- one
         # column, named by pool, because the two pools never share a frame here.
         volume = "pa" if kind == "hitter" else "ip"
+        # ON A 162-GAME FOOTING, not as the box score printed it. `_scale_short_schedules`
+        # multiplies this column by `162 / scheduled_games` on load, so a 2020 season
+        # arrives at 2.7x its literal count -- Alvarez's nine 2020 plate appearances are
+        # 24 here. That is the RIGHT number for the question the column is asked ("was
+        # this a part-time season?"), because the SGP printed beside it was scaled by the
+        # very same factor; an unscaled volume against a scaled SGP is the pair that
+        # actually misleads. It does have to be SAID, which the page now does -- a column
+        # headed "PA/IP" showing 24 for a 9-PA season is a wrong number until it is
+        # labelled.
+        #
         # SUMMED over a split season, like `collapse_split_seasons` sums its SGP. A
         # traded player's two rows are half a season each, and taking either one alone
         # would print a 300-PA year beside the full-season SGP the same row was matched
         # on. `collapse_split_seasons` cannot supply this: it keeps only sgp and age.
-        # NaN volumes are dropped rather than carried -- `json.dumps` writes them as the
-        # bare token `NaN`, which no strict JSON reader will parse back.
+        #
+        # A GROUP HOLDING ANY NaN IS DROPPED, and the two-part test is what makes that
+        # true. `Series.sum()` defaults to `skipna=True, min_count=0`, so an ALL-NaN group
+        # sums to a real `0.0` that sails through `notna` -- the previous spelling's guard
+        # could never fire, and it would have stored `pt: 0.0`, printing "PA/IP: 0" beside
+        # a real SGP figure and inverting the exact hurt-versus-finished signal the column
+        # exists for. A PARTLY-NaN group is worse than useless too: it sums only the half
+        # it can see and understates a split season. Both become absent, which the table
+        # renders as a dash.
+        #
+        # Unreachable on today's panels -- `load_scored_panel` admits a row only on
+        # `volume.notna() & volume > 0` -- so this is the guard being honest about what it
+        # claims rather than a fix for live data. Vectorized, because the per-group Python
+        # alternative would run once per (player, season) over ~16k rows per pool.
         pt = {}
         if volume in complete.columns:
-            for (i, sn), v in complete.groupby(["mlbam_id", "season"])[volume].sum().items():
+            keys = [complete["mlbam_id"], complete["season"]]
+            totals = complete[volume].groupby(keys).sum(min_count=1)
+            totals = totals.where(~complete[volume].isna().groupby(keys).any())
+            for (i, sn), v in totals.items():
                 if pd.notna(v):
                     pt[(int(i), int(sn))] = round(float(v), 1)
 
