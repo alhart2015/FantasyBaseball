@@ -2713,9 +2713,11 @@ def _trajectory_chart(payload):
     A SECOND key, carrying the board's own `generated_at` -- the player view refuses
     extras stamped for a different board, and only that view reads them at all.
 
-    Comps carry `id`s and the blob carries a deduped `careers` map (#346), because that
-    is what a real push writes: a fixture without them exercises only the
-    old-blob degradation path and never the one the page is built for.
+    Comps carry `id`s and the blob carries a deduped `careers` map (#346), plus the
+    `overlap` and `pt` a backward match writes (#358), because that is what a real push
+    writes: a fixture without them exercises only the old-blob degradation path and
+    never the one the page is built for. `test_a_board_pushed_before_the_backward_match
+    _still_renders_its_comps` covers the degradation deliberately.
     """
     from fantasy_baseball.trajectory.sweep import chart_key, to_chart_payload
 
@@ -2729,6 +2731,8 @@ def _trajectory_chart(payload):
                         "name": "Andre Ethier",
                         "season": 2007,
                         "rmse": 1.25,
+                        "overlap": 7,
+                        "pt": 612.0,
                         "path": [12.7, 14.4, 12.1, 9.2, 12.2],
                     },
                     {
@@ -2736,6 +2740,8 @@ def _trajectory_chart(payload):
                         "name": "Bryan Reynolds",
                         "season": 2020,
                         "rmse": 1.31,
+                        "overlap": 6,
+                        "pt": 188.0,
                         "path": [11.0, 12.0, 11.5, 10.0, 9.5],
                     },
                 ],
@@ -2811,8 +2817,15 @@ def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
     assert "trajectory-chart" in body, "the canvas the chart draws into"
     # The HEADING, which survives. This matched the lowercase "closest realized paths"
     # inside the explanatory paragraph until #346 removed it; the section it was
-    # standing in for is the table below, and the heading is what marks it.
-    assert "Closest realized paths" in body, "the comps section rendered"
+    # standing in for is the table below, and the heading is what marks it. Renamed with
+    # the matcher in #358 -- "closest realized path" described a set chosen by how near
+    # it landed to the forecast, which is no longer how one is chosen.
+    assert "Careers that looked like his" in body, "the comps section rendered"
+    # AND THE CLAIM THE SECTION MAKES. A reader who takes these for the forecast's own
+    # range reads a far more certain page than the one the model produced, so the
+    # sentence that says they are picked on realized career alone is load-bearing copy,
+    # not decoration.
+    assert "realized career up to age" in body
     # The TABLE markup, not the `#trajectory-chart-data` JSON island -- that island
     # also serializes `board.comps` verbatim, so a plain substring match on "Andre
     # Ethier"/"1.25" is satisfied by the JSON alone and stays green even if the
@@ -2821,11 +2834,118 @@ def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
     assert "<td>1.25</td>" in body, "each comp shows its RMSE in the table"
 
 
+def test_the_comps_table_shows_how_much_career_the_match_saw(client):
+    """`overlap` and `pt` are what stop a reader over-trusting a row (#358, #357).
+
+    RMSE alone hides both failure modes the backward match can still produce: a
+    beautiful distance over three shared ages says far less than the same distance over
+    eight, and a comp whose SGP fell off a cliff on 188 PA was hurt rather than
+    finished. Neither is recoverable from the numbers already on screen, so both are
+    stored and both are printed.
+    """
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        body = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
+
+    table = body[body.index("Careers that looked like his") : body.index("The numbers")]
+    assert "<th>Ages</th>" in table and "<th>PA/IP</th>" in table
+    assert "<td>7</td>" in table, "Ethier's shared-age count"
+    assert "<td>188</td>" in table, "Reynolds played 188 PA in the season he matched at"
+
+
+def test_one_comp_missing_its_playing_time_does_not_take_the_page_down(client):
+    """The MIXED blob -- some comps carry `pt`, some do not.
+
+    The column test and the cell format used to be decided from different rows: the
+    header asked `comps[0].pt is not none` and every cell then ran
+    `'%.0f'|format(c.pt)`, which is `soft_str(value) % args` and raises `TypeError` on
+    None. First comp populated plus any later one absent was a 500 on the player page.
+    `overlap` had the same shape and printed the literal string "None", which is quieter
+    and no more correct.
+
+    The all-absent case was already covered and could not catch this: deleting the keys
+    from EVERY comp makes the header test false, so no cell is ever formatted.
+    """
+    payload, chart = _trajectory_board_and_chart()
+    for extras in chart["players"].values():
+        del extras["comps"][1]["pt"], extras["comps"][1]["overlap"]
+
+    with _trajectory_cache(payload, chart):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200, "a comp with no volume is not a broken page"
+    table = resp.data.decode()
+    table = table[table.index("Careers that looked like his") : table.index("The numbers")]
+    assert "<th>PA/IP</th>" in table, "the comps that DO carry it still get their column"
+    assert "<td>612</td>" in table, "Ethier's volume still prints"
+    # ON THE CELL, not on the table. `assert "--" in table` passed against the intro
+    # paragraph above it, which carries three em-dash pairs of its own -- so it stayed
+    # green with the cell rendered empty, which is the state it was written to reject.
+    assert "<td>--</td>" in table, "the comp without it reads as absent, not as zero"
+    assert "None" not in table
+
+
+def test_a_player_with_no_comps_is_told_which_of_the_three_causes_applied(client):
+    """The push knows which cause applied; the page used to list all three and let the
+    reader guess.
+
+    Two of the three -- "no other player of this age in the panel" and "everyone this age
+    is too recent to follow forward" -- are facts about the FITTING PANEL, not about the
+    man on screen, and telling someone his career is unusual when the answer is a panel
+    vintage sends him to the wrong place entirely. Stored per player because only the
+    push has the panel to know.
+    """
+    payload, chart = _trajectory_board_and_chart()
+    for extras in chart["players"].values():
+        extras["comps"] = []
+        extras["no_comps"] = "every player this age is too recent to follow forward"
+
+    with _trajectory_cache(payload, chart):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "every player this age is too recent to follow forward" in body
+    assert "a fact about the panel" in body, "and that it is not about him"
+    assert "no historical career shares enough of his ages" not in body, (
+        "the menu of causes is for a blob that does not say which one; this one does"
+    )
+
+
+def test_a_board_with_no_comps_and_no_stored_cause_still_lists_the_candidates(client):
+    """The deploy window again: a blob written before the cause was stored. The page
+    falls back to naming every possible reason, which is what it did for everyone."""
+    payload, chart = _trajectory_board_and_chart()
+    for extras in chart["players"].values():
+        extras["comps"] = []
+
+    with _trajectory_cache(payload, chart):
+        body = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
+    assert "no historical career shares enough of his ages" in body
+    assert "too recently to be followed forward" in body
+
+
+def test_a_board_pushed_before_the_backward_match_still_renders_its_comps(client):
+    """The deploy window. A board written by the previous push carries no `overlap` and
+    no `pt`, and the page has to drop those two COLUMNS rather than print a table of
+    blanks or 500 on `format(None)`. Everything else about the row is unchanged.
+    """
+    payload, chart = _trajectory_board_and_chart()
+    for extras in chart["players"].values():
+        for comp in extras["comps"]:
+            del comp["overlap"], comp["pt"]
+
+    with _trajectory_cache(payload, chart):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    table = resp.data.decode()
+    table = table[table.index("Careers that looked like his") : table.index("The numbers")]
+    assert "<th>Ages</th>" not in table and "<th>PA/IP</th>" not in table
+    assert "<td>Andre Ethier</td>" in table, "the comp itself still renders"
+
+
 # REMOVED in #346: test_trajectory_player_view_states_the_five_year_comp_rule.
 # It asserted the sentence "A comp needs five realized seasons to be scored on the same
 # horizons, so none is recent", which was deleted along with the rest of the page's
 # reading instructions at the owner's explicit request. The rule it described is
-# unchanged and still lives in `comp_paths.closest_paths`'s candidate mask and its
+# unchanged and still lives in `career_comps.closest_careers`'s candidate mask and its
 # docstring; what went away is the page stating it. No behavior lost a guard.
 
 
@@ -2933,7 +3053,7 @@ def test_trajectory_player_view_explains_a_missing_chart_key(client):
     assert "trajectory-chart" in body, "the projection still renders regardless"
     assert body.count("predates") == 2, "one note for the missing comps, one for history"
     assert "different build" not in body, "nothing arrived, so nothing can mismatch"
-    comps_section = body[body.index("Closest realized paths") : body.index("The numbers")]
+    comps_section = body[body.index("Careers that looked like his") : body.index("The numbers")]
     assert "<td>" not in comps_section, "no fabricated comp rows"
 
 
@@ -3131,6 +3251,40 @@ def test_trajectory_chart_js_disables_the_default_aspect_ratio():
     # BROKEN form and stays green with the real option deleted.
     assert re.search(r"^\s*maintainAspectRatio: false,$", src, re.M)
     assert re.search(r"^\s*responsive: true,$", src, re.M)
+
+
+def test_trajectory_chart_js_draws_the_comps_over_the_band_not_under_it():
+    """#358 acceptance criterion 5: "draws the comp spread legibly with the band still
+    visible". Both halves, and the branch originally shipped only the first.
+
+    Chart.js paints HIGHER `order` first, so a comp at `order: 3` under a band fill at
+    `order: 2` was being washed out by the 0.18-alpha rectangle it exists to be compared
+    against -- de-emphasis that made sense only while comps were selected ON the forecast
+    and were therefore not evidence about it. The band keeps its fill and the projection
+    and career line still paint last, so "still visible" holds in both directions.
+
+    A source-text assertion because no JS runtime lives in this suite, anchored on the
+    option lines rather than a bare substring: the header comment above them discusses
+    drawing order in prose, and a substring check would be satisfied by the explanation
+    with the real options deleted.
+    """
+    src = _trajectory_chart_js_source()
+    comps = src[src.index("...data.comps.map") : src.index('label: "p10-p90"')]
+    band = src[src.index('label: "p10-p90"') : src.index('label: "projected"')]
+
+    projected = src[src.index('label: "projected"') : src.index("// ONE line, history")]
+
+    comp_order = int(re.search(r"^\s*order: (\d+),$", comps, re.M).group(1))
+    band_order = int(re.search(r"^\s*order: (\d+),$", band, re.M).group(1))
+    proj_order = int(re.search(r"^\s*order: (\d+),$", projected, re.M).group(1))
+    assert comp_order < band_order, (
+        "a higher order paints first, so the comps must sit ABOVE the band's fill"
+    )
+    # THE OTHER DIRECTION, which the docstring claimed and the assertions did not cover:
+    # moving the comps above the projection would have passed the test as written.
+    assert proj_order < comp_order, "the model's own line still paints over the comps"
+    assert re.search(r"^\s*borderWidth: 1\.5,$", comps, re.M), "and be drawn legibly"
+    assert "rgba(120,120,120,0.7)" in comps, "the un-faded stroke from #358"
 
 
 def test_trajectory_chart_js_discloses_the_var_netting_on_the_axis():
@@ -3412,7 +3566,7 @@ def test_the_default_views_never_read_the_chart_data_key(client, url):
 
 # `test_the_stored_and_displayed_comp_ceilings_agree` was here: it asserted the view's
 # clamp ceiling equalled the push script's stored count. Both are now the one
-# `comp_paths.MAX_COMPS`, so the parity it policed is structural and there is nothing
+# `career_comps.MAX_COMPS`, so the parity it policed is structural and there is nothing
 # left for the two to drift apart on.
 
 

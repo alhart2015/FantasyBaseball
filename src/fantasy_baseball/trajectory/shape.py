@@ -316,7 +316,13 @@ class Prepared:
     #: shape, different survival -- and print it under `kind='pitcher'` with a plausible
     #: `n_comps` and no warning.
     kind: str
-    #: Horizons whose forward values are available. A query may ask for any subset.
+    #: Horizons whose forward values are available, ASCENDING AND DEDUPED. `prepare`
+    #: normalizes them; a reader is entitled to `horizons[-1]` being the true maximum and
+    #: to `forward` iterating in path order. Stated here because `Prepared` is a plain
+    #: dataclass that tests and any caller construct by hand -- the same reason
+    #: `lookback` is carried rather than inferred -- and because `career_comps` both
+    #: censors on `horizons[-1]` and stacks `path` in this order, so an unsorted tuple
+    #: mis-censors and mis-orders with no exception anywhere.
     horizons: tuple[int, ...]
     #: Last season with an observable outcome; a row is censored past it.
     last: int
@@ -333,6 +339,32 @@ class Prepared:
     #: Rows whose `season + horizon` runs past `last` are unobservable and are masked
     #: off per query rather than being trusted here.
     forward: dict[int, np.ndarray]
+    #: offset -> PRIOR SGP for every history row, `offset` seasons back, **NaN** where he
+    #: has no season there. `back[0]` is the row's own season and equals `current`.
+    #:
+    #: THE OPPOSITE CONVENTION TO `forward`, DELIBERATELY, and the asymmetry is the point
+    #: rather than an oversight (#358). The two answer different questions:
+    #:
+    #: * `forward` asks WHAT HAPPENED TO HIM. A player out of the league at 33 was worth
+    #:   nothing to a roster slot that year, so 0 is the honest outcome and filling it is
+    #:   what keeps a comp set from being all survivors.
+    #: * `back` asks WHAT DID HE LOOK LIKE. A year he did not play says nothing about the
+    #:   kind of player he was, and scoring it as a 0 makes an injured star and a
+    #:   replacement-level journeyman look alike -- which is exactly the match
+    #:   `career_comps` exists to stop making. It also cannot be told apart from a season
+    #:   that falls before the panel begins, which is unobservable rather than absent.
+    #:
+    #: So NaN here means "no comparison available at this age", and `career_comps` drops
+    #: it from the error and counts the overlap instead. Anything else reading this must
+    #: decide what a NaN means for its own question rather than `nan_to_num`-ing it.
+    back: dict[int, np.ndarray]
+    #: How many offsets `back` holds, so a reader never has to infer the window size
+    #: from `len(back)`. The two are the same number today and the field is what keeps
+    #: them the same number: `Prepared` is a plain dataclass, anything can construct one
+    #: (the test helpers do), and a sparse or short `back` inferred as a contiguous
+    #: `range` surfaces as a bare `KeyError` deep in a matcher rather than as the
+    #: contract violation it is. 0 means NO backward window was built -- see `prepare`.
+    lookback: int = 0
 
 
 def prepare(
@@ -340,6 +372,7 @@ def prepare(
     *,
     kind: str,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+    lookback: int = 0,
     last_complete_season: int | None = None,
 ) -> Prepared:
     """Hoist the panel-level half of `shape_trajectory` out of the per-query loop.
@@ -348,11 +381,28 @@ def prepare(
 
     `kind` names the pool `panel` was loaded from, and every query against the result
     must agree with it -- see `Prepared.kind`.
+
+    `lookback` sizes `back`, the realized-career window `career_comps` matches on. It is
+    built HERE rather than in that module because it is panel-level state exactly like
+    `forward` -- one vectorized reindex per offset over the whole history, against one
+    per query -- and because building it beside `forward` is what makes the two
+    conventions (0 versus NaN) sit next to each other where a reader meets both.
+
+    OPT-IN, defaulting to OFF, which is the opposite of how it started. `back` is read by
+    exactly one consumer (`career_comps`, reached through `push_trajectory_board`) while
+    `prepare` is called by `sweep_pool` once per pool, by the single-player CLI, and by
+    `tune_shape_windows` INSIDE ITS TUNING LOOP. Building it unconditionally charged every
+    one of those `lookback` extra full-history reindexes for state they never
+    touch, and the sweep paid it twice per pool. Nothing about the fit changes either way,
+    so the default that costs nothing is the right one and the one caller that needs it
+    says so.
     """
     if not horizons:
         raise ValueError("horizons must not be empty")
     if min(horizons) < 1:
         raise ValueError(f"horizons must be at least 1, got {sorted(horizons)}")
+    if lookback < 0:
+        raise ValueError(f"lookback must not be negative, got {lookback}")
 
     last = last_complete_season if last_complete_season is not None else int(panel["season"].max())
     collapsed, index = collapsed_index(panel)
@@ -370,6 +420,20 @@ def prepare(
         )
         for h in sorted(set(horizons))
     }
+    # The same reindex run backwards, WITHOUT `nan_to_num` -- see `Prepared.back`. The
+    # NaN is load-bearing there, so this must not be folded into the loop above.
+    #
+    # OFFSET 0 IS REINDEXED LIKE THE REST, even though `(id, season - 0)` is the row's own
+    # key and can only return the value already sitting in `current`. Aliasing the two was
+    # tried and reverted: `Prepared` is `frozen=True`, which advertises an immutability its
+    # ndarrays do not have, so a single in-place edit to either array -- and the natural
+    # one is exactly the `nan_to_num` that `Prepared.back` warns readers off -- silently
+    # rewrote `current`, which every fit reads. One reindex, paid only by the single
+    # caller that opts into a window at all, buys that hazard away.
+    back = {
+        k: index.reindex(pd.MultiIndex.from_arrays([ids, seasons - k])).to_numpy(dtype=float)
+        for k in range(lookback)
+    }
     return Prepared(
         kind=kind,
         horizons=tuple(sorted(set(horizons))),
@@ -380,6 +444,8 @@ def prepare(
         season=seasons,
         mlbam_id=ids,
         forward=forward,
+        back=back,
+        lookback=lookback,
     )
 
 

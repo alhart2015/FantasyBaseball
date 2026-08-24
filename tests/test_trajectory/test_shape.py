@@ -514,3 +514,78 @@ def test_the_batched_bootstrap_survives_a_rank_deficient_draw() -> None:
         pick = reference_rng.integers(0, n, n)
         loop[i] = query @ _weighted_least_squares(x[pick], y[pick], w[pick])
     assert batched == pytest.approx(loop, rel=1e-6)
+
+
+# --------------------------------------------------------------------------
+# `Prepared.back` -- the backward career window (#358)
+# --------------------------------------------------------------------------
+
+
+def _back_panel() -> pd.DataFrame:
+    """One player with a HOLE in his career, which is the whole point of these tests.
+
+    Ages 24-28 with age 26 never played. `build_history` drops the first season (no
+    observable prior), so the anchor rows are ages 25, 27 and 28.
+    """
+    return pd.DataFrame(
+        {
+            "mlbam_id": [1, 1, 1, 1],
+            "season": [2010, 2011, 2013, 2014],
+            "age": [24, 25, 27, 28],
+            "sgp": [5.0, 6.0, 8.0, 9.0],
+        }
+    )
+
+
+def test_prepare_builds_no_backward_window_unless_asked() -> None:
+    """OPT-IN. `back` is read by one consumer (`career_comps`, via the push script) while
+    `prepare` is called by `sweep_pool`, the CLI, and `tune_shape_windows` inside its
+    tuning loop. Building it by default charged all of them N full-history reindexes for
+    state they never touch."""
+    prepared = prepare(_back_panel(), kind="hitter", horizons=(1,))
+    assert prepared.back == {} and prepared.lookback == 0
+
+
+def test_a_season_he_did_not_play_is_nan_in_back_and_zero_in_forward() -> None:
+    """THE ASYMMETRY, asserted against `prepare` rather than against a hand-built
+    fixture. Both matchers read the same panel through the same reindex, and the ONLY
+    thing separating them is the `nan_to_num` on one side -- so nothing but this test
+    fails if `back` is ever "tidied up" to match `forward`.
+
+    Scoring an unplayed year as 0 on the backward side is exactly what made an injured
+    star match a replacement-level journeyman (#357, #358).
+    """
+    prepared = prepare(_back_panel(), kind="hitter", horizons=(1,), lookback=3)
+    at_28 = int(np.flatnonzero(prepared.age == 28.0)[0])
+
+    # Age 28 looking back: 27 played (8.0), 26 did NOT, 28 is himself.
+    assert prepared.back[0][at_28] == 9.0
+    assert prepared.back[1][at_28] == 8.0
+    assert np.isnan(prepared.back[2][at_28]), "age 26 was never played -- absent, not 0.0"
+
+    # The same hole on the FORWARD side is a real 0.0, deliberately: absence there is
+    # the outcome, and filling it is what keeps a comp set from being all survivors.
+    at_25 = int(np.flatnonzero(prepared.age == 25.0)[0])
+    assert prepared.forward[1][at_25] == 0.0, "age 26 forward from 25 -- a real zero"
+
+
+def test_back_offsets_count_backwards_not_forwards() -> None:
+    """A sign flip here is silent: every RMSE still computes, and the comps returned are
+    matched on the years AFTER the anchor instead of the years before -- which is the
+    forward matcher this replaced, wearing the new name."""
+    prepared = prepare(_back_panel(), kind="hitter", horizons=(1,), lookback=2)
+    at_27 = int(np.flatnonzero(prepared.age == 27.0)[0])
+    assert prepared.back[1][at_27] != 9.0, "offset 1 is not age 28"
+    assert np.isnan(prepared.back[1][at_27]), "offset 1 from age 27 is age 26, unplayed"
+
+
+def test_back_offset_zero_is_the_rows_own_season() -> None:
+    """`back[0]` is `current` aliased, not a second reindex of the same key. Asserting
+    the VALUES rather than identity so the aliasing stays an implementation choice."""
+    prepared = prepare(_back_panel(), kind="hitter", horizons=(1,), lookback=4)
+    assert np.array_equal(prepared.back[0], prepared.current)
+
+
+def test_a_negative_lookback_is_refused() -> None:
+    with pytest.raises(ValueError, match="lookback must not be negative"):
+        prepare(_back_panel(), kind="hitter", horizons=(1,), lookback=-1)

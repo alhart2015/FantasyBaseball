@@ -1,9 +1,26 @@
 // One player's trajectory: career solid, projection dashed, p10-p90 as a filled band,
-// comps thin and faint across the projected ages only.
+// comps drawn legibly across the projected ages.
 //
-// The band must stay visually dominant over the comps. They were selected ON the outcome
-// -- the closest paths out of ~1,200 -- so drawn as equals they hug the projection and
-// make the forecast look far more certain than it is.
+// THE COMPS ARE MEANT TO BE READ (#358). They used to be near-invisible, and correctly
+// so: they were chosen by how close their realized path landed to THIS forecast, so drawn
+// as equals they hugged the projection and made it look far more certain than it was.
+// They are now chosen on their REALIZED CAREER before the match age, with no predicted
+// value entering, and what they draw is what actually happened to those players. That
+// fan is real information about the forecast rather than a redrawing of it, so hiding it
+// understates the uncertainty exactly as drawing the old ones boldly overstated it.
+//
+// DRAWING ORDER, and it inverted with the meaning. Chart.js paints HIGHER `order` first,
+// so the band fill now sits at the bottom and the comps are drawn OVER it, with the
+// projection and the career line on top of both. Comps beneath a 0.18-alpha fill were
+// being washed out by the very band they exist to be compared against.
+//
+// THE Y-AXIS IS SCALED BY THE COMPS, and that is not a defect to correct. Chart.js
+// autoscales over every dataset, so a comp who collapsed to 0 or held his peak widens
+// the axis and the p10-p90 band occupies less of it. The old forward comps hugged the
+// projection and could never do this. It is the honest picture: if the model's 80%
+// interval is narrow next to what actually befell players who looked like this one, a
+// reader should see that, and clamping the axis to flatter the band would be the one
+// change here that manufactures confidence.
 (function () {
   const node = document.getElementById("trajectory-chart-data");
   const canvas = document.getElementById("trajectory-chart");
@@ -68,13 +85,17 @@
   // longer carries `floor` or `scale` at all.
 
   const datasets = [
-    // Comps first so later datasets paint over them.
+    // Array position decides nothing here -- `order` does, and the block at the top of
+    // this file explains which way round it runs. Comps stay first in the array only
+    // because `fill: "+1"` on the band below resolves by array INDEX, so the band and
+    // its hidden p10 partner have to stay adjacent and in that order.
     ...data.comps.map((c) => ({
       label: `${c.name} (${c.season})`,
       data: c.path.map((p) => ({ x: p.age, y: p.value })),
-      borderColor: "rgba(120,120,120,0.35)",
-      borderWidth: 1,
+      borderColor: "rgba(120,120,120,0.7)",
+      borderWidth: 1.5,
       pointRadius: 0,
+      // Above the band fill (order 4), below the projection and the career line.
       order: 3,
     })),
     {
@@ -84,10 +105,10 @@
       backgroundColor: "rgba(78,121,167,0.18)",
       fill: "+1",
       pointRadius: 0,
-      order: 2,
+      order: 4,
     },
     { label: "_p10", data: at(data.projection, "p10"), borderColor: "transparent",
-      pointRadius: 0, fill: false, order: 2 },
+      pointRadius: 0, fill: false, order: 4 },
     {
       label: "projected",
       data: at(data.projection, "mean"),
@@ -219,7 +240,7 @@
           },
           plugins: {
             legend: { display: false },
-            // The subject's own age, identical on every card: `closest_paths` selects
+            // The subject's own age, identical on every card: `closest_careers` selects
             // on an EXACT age match, so the rule sits at the same x throughout, which
             // is what makes the grid comparable. One number, shipped once.
             matchLine: { age: data.age },

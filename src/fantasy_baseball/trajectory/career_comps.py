@@ -1,0 +1,443 @@
+"""Historical players whose REALIZED career looked like this one's (#358).
+
+Given a player's realized SGP by age, find the historical player-seasons whose own
+realized career, over the same window of ages, minimizes RMSE against it -- then show
+what those players went on to do.
+
+THIS IS THE BACKWARD MATCH, and it replaced a forward one. `comp_paths.closest_paths`
+took the model's already-predicted five-year path and returned the historical seasons
+whose realized path landed closest to it. That set is selected ON THE OUTCOME: it is the
+prediction redrawn, so it cannot be evidence for the prediction and its spread is not
+uncertainty about anything. Measured on Yordan Alvarez, the five stored forward comps
+tracked his predicted path at RMSE 1.20-2.04.
+
+What is matched here is a statement about HISTORY, and no predicted value enters it. The
+question is "which players actually looked like this one, and what happened to them?",
+which is answerable without our model and therefore usable as evidence about it. The
+forward paths that come back fan out, and that fan is real.
+
+The two sets are almost disjoint in practice. Measured 2026-08-24 on Alvarez at 29, against
+the 2000-2026 hitter panel anchored to the 2026-08-22 rest-of-season snapshot -- which is
+THIS code's output, not the issue's prototype's (see `MIN_OVERLAP_FRACTION` for why the two
+differ). Forward matching returned Todd Frazier 2015, Edgar Renteria 2005, Howie Kendrick
+2013, Evan Longoria 2015 and Melky Cabrera 2014. Backward matching returns:
+
+    Starling Marte  2018  rmse 2.96  16.5 16.0 19.2 13.9  6.7
+    Ian Kinsler     2011       3.96  13.9 13.1 16.0 13.2 16.5
+    Joey Votto      2013       4.41   4.0 16.6 16.8 16.6  9.4
+    Alex Rios       2010       4.61   7.5 17.3 18.6  9.8  5.6
+    Carlos Gonzalez 2015       4.98  13.8  8.1 10.1  1.1  0.0
+    Adam Dunn       2009       5.02  14.4  2.6 12.6 10.9  8.3
+
+Recognisably the same KIND of player -- high-peak bats with interruption years -- and the
+outcomes are the point: Kinsler is still at 16.5 five years on, Gonzalez is out of the
+league. That fan is what the old set could not show, because it was picked for agreeing
+with the forecast.
+
+RE-MEASURE RATHER THAN TRUST THIS PARAGRAPH. It is pinned to one panel vintage and one
+snapshot, and both move.
+
+TWO CONVENTIONS FOR A MISSING SEASON, on purpose. See `Prepared.back` for the full
+reasoning; in short, an age the player did not play is dropped from the BACKWARD error
+(absence says nothing about the kind of player he was) and is a real 0.0 in the FORWARD
+path (absence is exactly what happened to him). Filling the backward side with zeros is
+what matched an injured star to a replacement-level journeyman; requiring a played season
+on the forward side would quietly drop everyone who washed out and bias the displayed
+outcomes optimistic.
+
+Ids, never names: naming needs the people cache, and keeping it out of here is what lets
+this be tested against a hand-built `Prepared` with no data files at all.
+"""
+
+from __future__ import annotations
+
+import math
+from collections.abc import Mapping
+from dataclasses import dataclass
+
+import numpy as np
+
+from fantasy_baseball.trajectory.shape import Prepared
+
+#: Comps per player: what `push_trajectory_board.py` STORES and what the chart's `n`
+#: control may ASK FOR. One number, because they are one requirement -- the blob is
+#: built hours earlier by another process, so the control can only ever slice what was
+#: stored, and a ceiling above the stored count asks for comps that do not exist.
+#:
+#: Ten, not the five the chart draws by default: every legal `n` has to be servable.
+#: It lives HERE, beside `closest_careers`, because this is the module both sides go
+#: through; it was defined twice, once per side, and kept honest by a test asserting the
+#: two literals were equal.
+#:
+#: WHAT IT COSTS, re-measured 2026-08-24 because backward matching moved it. The old note
+#: quoted "~370 bytes a player over five" and was written for the forward matcher; that
+#: figure no longer describes anything. Built at max_horizon=5 against the 2000-2026
+#: panels and the 2026-08-22 snapshot, the whole `cache:trajectory_chart_data` blob is
+#: **1,739 KB** over 1,290 players -- against **1,515 KB** for the forward-matched blob
+#: currently deployed, so +15%.
+#:
+#: The growth is NOT the two new per-comp fields. It is the deduped `careers` map going
+#: 1,216 -> 2,755 arcs: forward comps were selected for landing near one predicted path,
+#: so the same few hundred careers served the whole board, while backward comps are drawn
+#: from a far wider and less correlated pool and share far less. Comp ENTRIES actually
+#: fell, 12,590 -> 10,980, because `required_overlap` leaves the young with none -- mostly
+#: `MIN_OVERLAP_FRACTION`'s 0.75 doing the excluding for three-to-five-season players,
+#: with the flat `MIN_OVERLAP` binding only at two realized ages or fewer.
+#:
+#: COMPARABLE to the deployed blob, not equal to it: 1,739 against 1,515 KB is the +15%
+#: stated above, and "the deployed blob is already this size" contradicted those two
+#: figures four lines after printing them. Well inside what the KV takes either way, but
+#: this is the number to check before raising this constant, since the careers map is
+#: what grows and it grows faster than the comp count.
+MAX_COMPS = 10
+
+#: Share of the subject's own realized ages a candidate must also have played to be
+#: matched against him at all. Fraction rather than a flat count because the flat count
+#: silently excludes the young: 6-of-8 is the right cut for a 29-year-old and is
+#: unreachable for a 23-year-old who has only three professional seasons -- and a
+#: 23-year-old is precisely the ambiguous keeper call this board exists for.
+#:
+#: 0.75 reproduces the >= 6 of 8 the #358 prototype used. THE RULE, NOT THE NUMBERS --
+#: the shipped comp list is close to the issue's prototype but not equal to it, and
+#: claiming parity would send the next reader hunting for a regression that is not there.
+#: Six things differ, none of them a drift from a decision anyone made:
+#:
+#:  1. the approved deviation on survivorship admits candidates the prototype's
+#:     `all(a in hist for a in FWD)` dropped, which changes who is in the top ten;
+#:  2. the subject's anchor-age value is `player.now`, the ROS-anchored full-season
+#:     estimate, where the prototype used the raw partial-season row;
+#:  3. the panel here is `load_scored_panel`-filtered (observed, `_in_role`, volume > 0,
+#:     `_scale_short_schedules`) where the prototype read the CSV bare;
+#:  4. era factors are computed pre-injection by `ros_anchor.load_anchored_panels`, not
+#:     `era_normalize(score(raw))`;
+#:  5. `build_history` drops each player's first panel season, so it can never anchor;
+#:  6. `exclude_id` is explicit here.
+MIN_OVERLAP_FRACTION = 0.75
+
+#: ...and the floor under it, in ages. Two, so a "career comp" is never a single point.
+#: One shared age is the anchor season alone, which is level matching -- the question
+#: `comps.py` asked and #325 retired -- wearing a career comp's label.
+#:
+#: A HARD floor, not clamped to what the subject has. A player with one realized season
+#: has no career to match on, so he gets no comps rather than a level match under a
+#: career comp's heading; the page says so in words. Clamping it produced 100% coverage
+#: across both 2026 pools, every age from 20 up -- which reads as the feature working and
+#: is really the floor being defeated at exactly the ages nobody can check by eye.
+MIN_OVERLAP = 2
+
+#: How many ages a backward career match looks over, counting the anchor age itself, so
+#: eight means the anchor plus the seven before it.
+#:
+#: NOT NAMED "DEFAULT" ANY MORE, and not living in `model` any more either. It was
+#: `model.DEFAULT_LOOKBACK`, next to `DEFAULT_HORIZONS`, back when `prepare` defaulted to
+#: building a backward window for everyone. `prepare` now defaults to building none, so a
+#: constant called DEFAULT sat beside `lookback: int = 0` asserting a default that was
+#: not one -- and it has exactly one consumer, the push script, which wants it for THIS
+#: module's matcher. It belongs here, beside `MAX_COMPS`, with the other numbers that
+#: describe what a career comp is.
+#:
+#: Eight is roughly a career's worth of established play without reaching back into the
+#: minors for a late-20s subject -- ages 22-29 for a 29-year-old, which is the window the
+#: #358 prototype matched Alvarez on. Longer buys little (few candidates have twelve
+#: qualifying ages and the extra ones are teenage partial seasons); shorter stops
+#: distinguishing "peaked early then dipped" from "climbed steadily", which is the whole
+#: shape a career comp is supposed to carry.
+#:
+#: A subject with fewer realized ages than this is matched on what he HAS -- see
+#: `required_overlap`. It is a ceiling on the window, not a requirement.
+COMP_LOOKBACK = 8
+
+
+def required_overlap(subject_ages: int) -> int:
+    """How many shared ages a candidate needs, given how many the subject has.
+
+    Scales with the subject rather than being fixed, so a 23-year-old is matched on the
+    three seasons he has instead of being refused for not having eight -- but never
+    below `MIN_OVERLAP`, which no subject can buy his way under by having played less.
+    """
+    return max(MIN_OVERLAP, math.ceil(MIN_OVERLAP_FRACTION * subject_ages))
+
+
+@dataclass(frozen=True)
+class CareerComp:
+    """One historical player-season whose realized career resembles the subject's."""
+
+    mlbam_id: int
+    #: The season AT THE ANCHOR AGE -- the year he was as old as the subject is now.
+    #: For labelling; the match spans the years before it and the display spans the
+    #: years after.
+    season: int
+    #: Root mean squared error on the REALIZED career, over the shared ages only. No
+    #: predicted value enters it.
+    #:
+    #: A THIN MATCH SCORES SLIGHTLY BETTER, and nothing here corrects for it: RMSE is a
+    #: mean, so fewer shared ages is fewer chances to disagree rather than a smaller
+    #: sum. `MIN_OVERLAP_FRACTION` bounds how thin a match can get, and `overlap` is
+    #: carried so a reader can see it, which is the honest treatment -- a correction
+    #: factor would be invented rather than measured.
+    rmse: float
+    #: Ages that actually entered `rmse`. Below the subject's own count when the
+    #: candidate has a hole in his career, or when the subject's window reaches back
+    #: past where the panel begins.
+    overlap: int
+    #: What happened NEXT: realized SGP at each horizon, ascending, 0.0 for a year he
+    #: was out of the league. This is the payload -- the match is only how he was chosen.
+    path: tuple[float, ...]
+
+
+def _check(prepared: Prepared, career: Mapping[int, float], age: int) -> None:
+    """The preconditions BOTH public entry points share.
+
+    One function because they must not drift: `match_pool` exists to explain what
+    `closest_careers` did, and a diagnostic that accepts input the matcher rejects
+    explains a decision the code never made. `match_pool` shipped briefly with neither
+    check and died inside `np.column_stack([])` -- the bare crash these named errors
+    were added to replace, reintroduced one function over.
+
+    Raises:
+        ValueError: no backward window, or no usable value at the anchor age.
+    """
+    if not prepared.lookback:
+        raise ValueError(
+            "this Prepared carries no backward window; call prepare(..., lookback=N). "
+            "It is opt-in because only this module reads it and every other prepare() "
+            "caller would pay N full-history reindexes for nothing."
+        )
+    # PRESENT AND FINITE, not merely present. A NaN slips through an `in` test and then
+    # makes the anchor column all-NaN for every candidate: `matched` goes False there, so
+    # the one age every candidate was SELECTED at contributes nothing to the error and
+    # `overlap` reads one lower for the whole pool, with no exception anywhere. The comps
+    # would still be returned, ranked on a window silently shorter than the number
+    # printed beside them.
+    if age not in career or not math.isfinite(career[age]):
+        raise ValueError(
+            f"career carries no usable value at the anchor age {age} "
+            f"(got {career.get(age)!r}); the in-progress season must be supplied by the "
+            "caller as a finite number"
+        )
+
+
+def _subject_window(
+    career: Mapping[int, float], age: int, lookback: int
+) -> tuple[list[int], np.ndarray]:
+    """The subject's own realized ages inside the window, newest last, and their values.
+
+    Ages he never played are simply absent, which is the same treatment `back` gives the
+    candidates. A non-finite value is dropped for the same reason a non-finite ANCHOR is
+    refused: an age that cannot be compared is not an age in common, and leaving it in
+    lengthens `ages`, raises `required_overlap`, and then contributes nothing to any
+    candidate's `overlap` -- the whole pool judged against a window none of them can
+    reach.
+
+    Shared with `match_pool` so the two cannot disagree about what the window IS. It was
+    spelled out in both, which is exactly the duplication `match_pool`'s own docstring
+    claims it exists to avoid.
+    """
+    ages = [
+        a for a in range(age - lookback + 1, age + 1) if a in career and math.isfinite(career[a])
+    ]
+    return ages, np.array([career[a] for a in ages], dtype=float)
+
+
+def _candidates(
+    prepared: Prepared, age: int, exclude_id: int | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rows at exactly `age` that can be followed forward, and the MASK of those at that
+    age at all.
+
+    EXACT age, and every forward year observABLE. `forward` stores a real 0.0 for "out
+    of the league", which is indistinguishable from "has not happened yet" -- so the
+    censoring has to come from the SEASON, not the value. Horizons ascend, so clearing
+    the longest clears them all.
+
+    The second return is the pool BEFORE censoring but AFTER `exclude_id` -- the subject
+    himself is never in it -- which is the only thing that tells "nobody ELSE was ever
+    this old in the panel" apart from "everyone else this old is too recent to follow".
+    See `MatchPool`. A MASK rather than its count, because the matcher does not want the
+    count and should not pay a full `.sum()` over the panel on every query to produce a
+    number only the diagnostic path reads.
+    """
+    horizons = tuple(sorted(prepared.horizons))
+    at_age = prepared.age == float(age)
+    if exclude_id is not None:
+        at_age = at_age & (prepared.mlbam_id != exclude_id)
+    followable = at_age & (prepared.season + horizons[-1] <= prepared.last)
+    return np.flatnonzero(followable), at_age
+
+
+def _overlap(
+    prepared: Prepared,
+    candidates: np.ndarray,
+    ages: list[int],
+    subject: np.ndarray,
+    age: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-candidate `(difference, matched-mask)` over the shared ages.
+
+    The overlap COUNT is `matched.sum(axis=1)`, derived by each caller rather than
+    returned here: the diagnostic wants only the count and the matcher wants all of it,
+    and a shared helper shaped for one caller's convenience is how a shared seam stops
+    being shared.
+
+    One column per shared age, NaN where the candidate has no season there. `age - a` is
+    an age offset and a season offset at once -- a player's age advances by exactly one
+    per season, verified against the shipped panel (0 exceptions in 29,424 rows).
+    """
+    window = np.column_stack([prepared.back[age - a][candidates] for a in ages])
+    diff = window - subject
+    return diff, ~np.isnan(diff)
+
+
+@dataclass(frozen=True)
+class MatchPool:
+    """Why a player got the comps he got -- or why he got none.
+
+    An empty comp list has THREE causes and they point at different things. The push
+    script's summary named only the middle one, so an operator reading "matched no
+    historical career closely enough" about a 40-year-old was told the player was
+    unusual when the real answer was that nobody his age has five realized forward
+    seasons in this panel -- a fact about the panel's vintage, fixable by rebuilding it.
+
+    Same class of misdirection the message it replaced was written to avoid.
+    """
+
+    #: Rows at exactly the anchor age, before censoring but AFTER `exclude_id` -- so the
+    #: subject himself is never counted here. "Excluding him" rather than "before any
+    #: censoring", which is what this said while the exclusion was already applied: for
+    #: the only 43-year-old in the panel that reads `at_age == 0` and the summary would
+    #: have told an operator the panel holds nobody that old, sending them to rebuild a
+    #: panel that holds exactly one.
+    at_age: int
+    #: ...of those, with a realized outcome at every horizon. Zero with `at_age` positive
+    #: means every one of them is too recent to follow forward.
+    followable: int
+    #: ...of those, sharing enough ages to be matched. Zero with `followable` positive is
+    #: the only case that is genuinely about THIS player's career being unusual or short.
+    overlapping: int
+
+    @property
+    def reason(self) -> str:
+        """One short phrase for an operator summary, or "" when comps were produced."""
+        if self.overlapping:
+            return ""
+        if not self.at_age:
+            return "no other player of this age in the panel"
+        if not self.followable:
+            return "every player this age is too recent to follow forward"
+        return "no career shares enough of his ages"
+
+
+def match_pool(
+    prepared: Prepared,
+    career: Mapping[int, float],
+    age: int,
+    *,
+    exclude_id: int | None = None,
+) -> MatchPool:
+    """How `closest_careers` arrived at its answer, for diagnostics only.
+
+    Shares EVERY step with the matcher rather than restating it -- the preconditions
+    (`_check`), the candidate mask (`_candidates`), the subject window
+    (`_subject_window`) and the overlap (`_overlap`). That is the whole point: a
+    diagnostic that computes its own version of the rule eventually explains a decision
+    the code did not make. It first shipped sharing only the two masks, and the two
+    halves it still spelled for itself were the window construction and the
+    preconditions -- so it accepted input the matcher refuses and built a window the
+    matcher would have built differently.
+    """
+    _check(prepared, career, age)
+    candidates, at_age = _candidates(prepared, age, exclude_id)
+    if candidates.size == 0:
+        return MatchPool(at_age=int(at_age.sum()), followable=0, overlapping=0)
+    ages, subject = _subject_window(career, age, prepared.lookback)
+    _, matched = _overlap(prepared, candidates, ages, subject, age)
+    overlap = matched.sum(axis=1)
+    return MatchPool(
+        at_age=int(at_age.sum()),
+        followable=int(candidates.size),
+        overlapping=int((overlap >= required_overlap(len(ages))).sum()),
+    )
+
+
+def closest_careers(
+    prepared: Prepared,
+    career: Mapping[int, float],
+    age: int,
+    n: int,
+    *,
+    exclude_id: int | None = None,
+) -> list[CareerComp]:
+    """The `n` historical careers closest to `career` at `age`, best first.
+
+    `career` is the subject's REALIZED SGP by age -- his complete seasons, plus the
+    anchored in-progress one at `age` (see `ros_anchor`). Ages outside the lookback
+    window are ignored, so a caller may pass a whole career.
+
+    THE ANCHOR AGE IS NOT PURELY REALIZED, and this is the one place "matched on realized
+    career only" needs qualifying. While the base season is in progress the caller passes
+    `SweptPlayer.now` for that age: season-to-date PLUS a rest-of-season projection,
+    re-scored (#348). Deliberate -- dropping the newest and most decision-relevant year
+    would match a player on a career that stops a year before the question being asked,
+    and passing his two-thirds-season partial line would read his missed time as decline.
+    What matters for #358 is that no value from the SHAPE FIT enters, which is what makes
+    the resulting comps independent of the forecast they are drawn against; that is
+    pinned by `test_a_comp_is_selected_on_the_career_never_on_the_prediction`. A
+    rest-of-season blend is not a trajectory prediction and does not reintroduce the
+    circularity. On a COMPLETE base season the distinction vanishes.
+
+    `exclude_id` drops the subject from his own candidate pool. The forward-observability
+    mask usually removes him anyway -- his anchor season is the most recent one -- but
+    that is a coincidence of the current panel and not a rule, and a player listed as his
+    own closest comp at RMSE 0.00 is the kind of wrong that is only ever noticed by
+    someone who already distrusts the page.
+
+    Raises:
+        ValueError: `career` has no value at `age` itself. Every candidate is selected at
+            exactly that age, so with no anchor value there is nothing to anchor to -- and
+            a caller reaching this has a construction bug, not an empty result.
+    """
+    _check(prepared, career, age)
+    # SORTED HERE TOO, not merely trusted. `Prepared.horizons` states the contract and
+    # `prepare` honours it, but this module both CENSORS on `horizons[-1]` and stacks
+    # `path` in iteration order, so an unsorted tuple from a hand-built `Prepared`
+    # censors on the wrong horizon AND emits a path the view then reads positionally --
+    # every comp's third year drawn in the age+1 column, silently. A pass-1 review called
+    # this re-sort redundant and it was removed; it is not redundant, it is the one line
+    # standing between a malformed input and a wrong chart.
+    horizons = tuple(sorted(prepared.horizons))
+    ages, subject = _subject_window(career, age, prepared.lookback)
+    need = required_overlap(len(ages))
+
+    candidates, _ = _candidates(prepared, age, exclude_id)
+    if candidates.size == 0:
+        return []
+    diff, matched = _overlap(prepared, candidates, ages, subject, age)
+    overlap = matched.sum(axis=1)
+
+    keep = overlap >= need
+    if not keep.any():
+        return []
+    candidates, overlap = candidates[keep], overlap[keep]
+    # Squared error over the SHARED ages only: a NaN column contributes nothing to the
+    # sum and nothing to the divisor, so an absent season neither helps nor hurts.
+    # `np.where` alone discards the unmatched lanes -- a second `nan_to_num` over the
+    # same lanes was two spellings of one rule.
+    squared = np.where(matched[keep], diff[keep] ** 2, 0.0)
+    rmse = np.sqrt(squared.sum(axis=1) / overlap)
+
+    paths = np.column_stack([prepared.forward[h][candidates] for h in horizons])
+
+    # Sorted on the full key, not just rmse: two identical careers would otherwise swap
+    # between reads on nothing but row order. `lexsort` reads its keys LAST-IS-PRIMARY,
+    # so this tuple is (rmse, mlbam_id, season) priority spelled backwards.
+    order = np.lexsort((prepared.season[candidates], prepared.mlbam_id[candidates], rmse))
+    return [
+        CareerComp(
+            mlbam_id=int(prepared.mlbam_id[candidates[i]]),
+            season=int(prepared.season[candidates[i]]),
+            rmse=float(rmse[i]),
+            overlap=int(overlap[i]),
+            path=tuple(float(v) for v in paths[i]),
+        )
+        for i in order[:n]
+    ]

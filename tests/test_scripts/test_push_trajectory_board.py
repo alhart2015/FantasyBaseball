@@ -111,36 +111,112 @@ def _swept(n_points: int):
 
 
 def _prepared(horizons):
+    from fantasy_baseball.trajectory.career_comps import COMP_LOOKBACK
     from fantasy_baseball.trajectory.shape import prepare
     from tests._trajectory_panel import synthetic_panel
 
-    return prepare(synthetic_panel(), kind="hitter", horizons=horizons)
+    # `lookback=` mirrors what `build_payload` passes. Without it `back` is empty and
+    # `closest_careers` refuses -- which is the opt-in contract working, not a fixture bug.
+    return prepare(synthetic_panel(), kind="hitter", horizons=horizons, lookback=COMP_LOOKBACK)
 
 
-def test_a_player_observable_at_fewer_horizons_than_the_sweep_loses_only_his_comps() -> None:
-    """One short path must not discard the whole ~52s sweep.
+#: A subject career over the synthetic panel's ages. Its players run 24-32, so a
+#: 27-year-old shares four ages with the lookback window rather than all eight -- which
+#: is the ordinary case for anyone whose window reaches past the panel's start.
+_CAREER = {24: 9.0, 25: 10.0, 26: 11.0, 27: 12.0}
+
+
+def test_a_player_observable_at_fewer_horizons_than_the_sweep_still_gets_comps() -> None:
+    """One short path must not discard the whole ~52s sweep -- and since #358 it no
+    longer even costs him his comps.
 
     `player.sgp` is `traj.observable` -- points with `n > 0` only -- and the candidate
     mask `seasons + h <= last` shrinks as h grows, so a player can be observable at
     h=1..3 and not at h=4..5. `sweep_pool` keeps him (it drops only an ENTIRELY empty
-    path), `closest_paths` raises when `len(predicted) != len(prepared.horizons)`, and
-    nothing catches it, so the push writes nothing at all. Directly reachable via the
-    documented `--max-horizon` flag.
+    path). The forward matcher then raised on `len(predicted) != len(prepared.horizons)`
+    and nothing caught it, so the push wrote nothing at all; the guard against that was
+    to skip his comps.
 
-    HIS COMPS ARE SKIPPED, not padded. `forward` stores a real 0.0 for "out of the
-    league", so padding the path with zeros would match him against a cohort that
-    stopped playing -- and the page already renders an empty comps list with an
-    explanation of why.
+    Backward matching has no `predicted`, so there is no length contract left to
+    violate. He is matched on his realized career like everyone else, gets full-length
+    comp paths, and the view truncates them to the horizons he was actually fitted at.
+    The old skip is deleted rather than kept: it existed only to dodge that exception.
     """
     module = _script()
     horizons = (1, 2, 3)
     prepared = _prepared(horizons)
 
-    assert module.player_comps(prepared, _swept(2), horizons, {}) is None, "skipped"
+    short = module.player_comps(prepared, _swept(2), _CAREER, {}, {})
+    full = module.player_comps(prepared, _swept(3), _CAREER, {}, {})
 
-    full = module.player_comps(prepared, _swept(3), horizons, {})
-    assert full is not None and full, "a full-length path still gets its comps"
-    assert set(full[0]) == {"id", "name", "season", "rmse", "path"}
+    assert short, "a short fit is no longer a reason to withhold comps"
+    assert [c["id"] for c in short] == [c["id"] for c in full], (
+        "the match reads his career, which the fit length says nothing about"
+    )
+    assert set(full[0]) == {"id", "name", "season", "rmse", "overlap", "pt", "path"}
+    assert len(full[0]["path"]) == len(horizons)
+
+
+def test_a_comp_is_selected_on_the_career_never_on_the_prediction() -> None:
+    """THE POINT OF #358. The fitted path is not an input, so moving it cannot move the
+    comps. A forward matcher returns a different set for every prediction; this one
+    returns the same set, because the question it answers is about history.
+    """
+    module = _script()
+    horizons = (1, 2, 3)
+    prepared = _prepared(horizons)
+
+    from dataclasses import replace
+
+    player = _swept(3)
+    # The same man, with the model predicting something wildly different about him.
+    elsewhere = replace(player, sgp=tuple(replace(p, mean=p.mean + 40.0) for p in player.sgp))
+
+    here = module.player_comps(prepared, player, _CAREER, {}, {})
+    there = module.player_comps(prepared, elsewhere, _CAREER, {}, {})
+    assert here, "the fixture player has comps at all"
+    assert [c["id"] for c in here] == [c["id"] for c in there]
+    assert [c["rmse"] for c in here] == [c["rmse"] for c in there], (
+        "the distances too -- a matcher that read the prediction would move these even "
+        "when the membership happened to survive"
+    )
+
+
+def test_a_volume_column_that_is_all_nan_stores_no_playing_time_rather_than_zero() -> None:
+    """`Series.sum()` is `skipna=True, min_count=0`, so an all-NaN group sums to a real
+    `0.0` -- a one-part `pd.notna` guard over it can never fire.
+
+    Stored, that becomes "PA/IP: 0" printed beside a real SGP figure: the exact
+    hurt-versus-finished signal the column was added for (#357), inverted. A partly-NaN
+    group is its own defect -- it sums the half it can see and understates a split
+    season. Both must come out absent, which the table renders as a dash.
+
+    DRIVES `_playing_time` ITSELF. The first version of this test re-typed the grouping
+    expression against a local frame and never imported the script, so it asserted
+    pandas' behaviour rather than this rule -- reverting the guard to a bare `.sum()`
+    would have left it green, which is the whole defect it exists to catch. The rule was
+    extracted into a named function so the test could reach it.
+    """
+    import numpy as np
+    import pandas as pd
+
+    module = _script()
+    frame = pd.DataFrame(
+        {
+            "mlbam_id": [1, 1, 2, 3, 3],
+            "season": [2010, 2010, 2011, 2012, 2012],
+            # player 1: a split season, both halves recorded -> summed
+            # player 2: every value missing                  -> absent
+            # player 3: a split season, one half missing     -> absent, not 300
+            "pa": [300.0, 250.0, np.nan, np.nan, 300.0],
+        }
+    )
+    got = module._playing_time(frame, "pa")
+
+    assert got == {(1, 2010): 550.0}, "only the fully-recorded split season survives"
+    assert (2, 2011) not in got, "an all-NaN group is absent, not 0.0"
+    assert (3, 2012) not in got, "a partly-NaN group is absent, not an understatement"
+    assert module._playing_time(frame, "ip") == {}, "a pool with no volume column at all"
 
 
 def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
@@ -149,8 +225,7 @@ def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
     of them gets the other's career drawn under his own. The per-comp career cards
     (#346) look their arc up by `chart_key(id, pool)`, so the id has to be stored."""
     module = _script()
-    horizons = (1, 2, 3)
-    comps = module.player_comps(_prepared(horizons), _swept(3), horizons, {})
+    comps = module.player_comps(_prepared((1, 2, 3)), _swept(3), _CAREER, {}, {})
 
     assert comps, "the fixture player has comps"
     assert all(isinstance(c["id"], int) for c in comps)
@@ -442,10 +517,14 @@ def test_the_chart_data_carries_career_history_and_comps(monkeypatch) -> None:
     assert len(player["comps"]) <= module.MAX_COMPS
     if player["comps"]:
         first = player["comps"][0]
-        assert set(first) == {"id", "name", "season", "rmse", "path"}
+        assert set(first) == {"id", "name", "season", "rmse", "overlap", "pt", "path"}
         assert len(first["path"]) == 5
         rmses = [c["rmse"] for c in player["comps"]]
         assert rmses == sorted(rmses), "closest first"
+        # MATCHED, not merely stored. `overlap` is how many ages entered the RMSE, and
+        # a real push must produce a number of them rather than the 0 an unwired
+        # backward window would hand back with a perfect-looking distance beside it.
+        assert all(c["overlap"] >= 2 for c in player["comps"])
 
 
 @pytest.mark.skipif(
@@ -531,3 +610,97 @@ def test_an_arc_with_no_holes_is_unchanged_and_a_missing_player_is_empty() -> No
 
     assert module._arc(solid) == [[24, 3.0], [25, 4.0], [26, 5.0]]
     assert module._arc(None) == []
+
+
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "matches a named player against the real 2000-2026 panel, which is gitignored "
+        "and so absent on a fresh clone"
+    ),
+)
+def test_a_real_comp_set_is_matched_on_career_complete_and_deep_enough() -> None:
+    """#358 acceptance criterion 4, on output that actually came through `prepare`.
+
+    THE PROPERTIES, NOT THE NAMES. The issue is explicit that membership shifts with the
+    panel and the snapshot, so asserting "Marte is in the list" would be a test of this
+    week's data. What must hold for every comp on every board is:
+
+      1. MATCHED ON CAREER -- `overlap` is at least `required_overlap` for the number of
+         realized ages the subject actually has, so no comp got in on a thin window;
+      2. A COMPLETE OUTCOME -- one realized value per horizon, and the comp's own anchor
+         season is far enough back that all of them had already happened. A 0.0 is a real
+         outcome (he left the league) and is NOT what this checks; the check is that the
+         season could be observed at all, which is the censoring rule;
+      3. and the anchor age is EXACTLY the subject's, since that is what makes the comp's
+         forward path line up with the projection it is drawn against.
+
+    The unit tests cover each property against a hand-built `Prepared`, which is a
+    different claim -- it says the matcher would honour them, not that the pipeline
+    produced them. This is the only test that reads real output.
+
+    Alvarez by NAME, resolved to an id in this snippet rather than typed as a literal
+    (CLAUDE.md): a hand-written mlbam_id lands on a real row belonging to someone else
+    and the assertions below would pass on it.
+    """
+    import math
+
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.trajectory.board import player_names
+    from fantasy_baseball.trajectory.career_comps import (
+        COMP_LOOKBACK,
+        closest_careers,
+        required_overlap,
+    )
+    from fantasy_baseball.trajectory.model import collapse_split_seasons
+    from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
+    from fantasy_baseball.trajectory.shape import prepare
+
+    config = load_config(PROJECT_ROOT / "config" / "league.yaml")
+    loaded = load_anchored_panels(
+        systems=config.projection_systems,
+        weights={s: config.projection_weights[s] for s in config.projection_systems},
+        panel_dir=PANEL_DIR,
+        sgp_overrides=config.sgp_overrides,
+    )
+    live = loaded.panels["hitter"]
+    names = player_names(PROJECT_ROOT / "data" / "cache" / "keeper_skills")
+    matches = [pid for pid, name in names.items() if name == "Yordan Alvarez"]
+    assert len(matches) == 1, f"expected exactly one Yordan Alvarez, got {matches}"
+    pid = matches[0]
+
+    horizons = (1, 2, 3, 4, 5)
+    complete = live[~live["partial_season"]].reset_index(drop=True)
+    prepared = prepare(complete, kind="hitter", horizons=horizons, lookback=COMP_LOOKBACK)
+    by_id = {int(i): g for i, g in collapse_split_seasons(complete).groupby("mlbam_id")}
+    mine = by_id[pid]
+    career = {int(a): float(s) for a, s in zip(mine["age"], mine["sgp"], strict=True)}
+    current = live[(live["mlbam_id"] == pid) & (live["season"] == loaded.season)]
+    age = int(current["age"].iloc[0])
+    career[age] = float(current["sgp"].iloc[0])
+
+    comps = closest_careers(prepared, career, age=age, n=10, exclude_id=pid)
+    assert comps, "the subject is a 29-year-old with a full career; he must match somebody"
+
+    realized = [a for a in range(age - COMP_LOOKBACK + 1, age + 1) if a in career]
+    # SPELLED OUT, not taken from `required_overlap`. Deriving the threshold from the
+    # function under test makes the assertion move with the code: loosening
+    # `required_overlap` to a flat `MIN_OVERLAP` left this green, because both sides
+    # dropped together. The test is the specification, so it states the rule -- three
+    # quarters of the subject's own realized ages, never below two -- and the second
+    # assertion checks the shipped constant still agrees with it.
+    need = max(2, math.ceil(0.75 * len(realized)))
+    assert required_overlap(len(realized)) == need, (
+        "MIN_OVERLAP_FRACTION or MIN_OVERLAP moved; if that was deliberate, change this "
+        "number and say why in the same commit"
+    )
+    for c in comps:
+        assert c.overlap >= need, f"{c.mlbam_id} matched on {c.overlap} ages, needs {need}"
+        assert c.overlap <= len(realized), "cannot share more ages than the subject has"
+        assert len(c.path) == len(horizons), "one realized value per projected year"
+        assert c.season + horizons[-1] <= prepared.last, (
+            f"{c.mlbam_id}'s {c.season} runs past {prepared.last}; his forward path "
+            "contains years that have not happened"
+        )
+        assert c.mlbam_id != pid, "he is not his own comp"
+    assert [c.rmse for c in comps] == sorted(c.rmse for c in comps), "closest first"

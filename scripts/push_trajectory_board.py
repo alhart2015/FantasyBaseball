@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -66,9 +67,41 @@ DEFAULT_MAX_HORIZON = 5
 MIN_SGP = 0.0
 
 #: Comps stored per player -- the SAME constant the view clamps `n` against, imported
-#: rather than re-declared here. See its docstring in `comp_paths`; a second literal
+#: rather than re-declared here. See its docstring in `career_comps`; a second literal
 #: beside this one is what the deleted parity test existed to police.
-from fantasy_baseball.trajectory.comp_paths import MAX_COMPS, closest_paths
+from fantasy_baseball.trajectory.career_comps import (
+    COMP_LOOKBACK,
+    MAX_COMPS,
+    closest_careers,
+    match_pool,
+)
+
+
+def _career_by_age(seasons) -> dict[int, float]:
+    """One player's REALIZED SGP keyed by age, with holes left as holes.
+
+    The raw reading of the stored frame, shared by everything that needs it: `_arc`
+    fills the holes to draw a line, and the `career` dict `build_payload` assembles for
+    `player_comps` must not fill them at all. They were
+    one comprehension doing both jobs, and the fill is exactly the thing backward
+    matching cannot tolerate -- see `Prepared.back`.
+
+    Ages within one player are distinct: `collapse_split_seasons` gives one row per
+    (mlbam_id, season) and age advances with the season, so nothing is collapsed here.
+    """
+    if seasons is None:
+        return {}
+    # NON-FINITE VALUES ARE DROPPED, not carried. A NaN sgp passes every `in` test
+    # downstream, lengthens the matched window, raises `required_overlap` through it, and
+    # then matches no candidate at that age -- the whole pool judged against a window
+    # none of them can reach. `_subject_window` drops it too; doing it here as well keeps
+    # the drawn career line from carrying a point that renders as a gap in one place and
+    # a zero in another.
+    return {
+        int(a): round(float(s), 4)
+        for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
+        if math.isfinite(s)
+    }
 
 
 def _arc(seasons) -> list[list[float]]:
@@ -80,15 +113,15 @@ def _arc(seasons) -> list[list[float]]:
     blob's two `[[age, sgp]]` lists carried different ordering guarantees for no reason
     a reader could find.
 
-    **A MISSED SEASON IS A ZERO, NOT A GAP.** `load_scored_panel` drops a season the
-    player did not play (`observed` False, `pa <= 0`) and `_in_role` drops one he played
-    in the other role, so a career with a lost year arrives here as a frame with a hole
-    in it. `shape.prepare` takes the opposite convention on the very same data -- it
-    reindexes and `np.nan_to_num(..., nan=0.0)`, commented "a missing key means he was
-    out of the league that year -- a real 0" -- and that zero is part of the RMSE that
-    made him a comp and is what the comps table prints. An arc that skipped the age drew
-    a straight line through a year the rest of the page shows as nothing, on a card whose
-    whole job is showing where the busts sit in the arc.
+    **A MISSED SEASON IS A ZERO HERE, AND A GAP IN THE MATCH.** This is a DRAWING, and a
+    line that skips an age draws straight through a year the rest of the page shows as
+    nothing, on a card whose whole job is showing where the busts sit in the arc. So the
+    hole is filled with the 0 a roster slot actually got.
+
+    That is the opposite of what `closest_careers` does with the same hole, deliberately
+    (#358): matching on a filled 0 makes an injured star and a journeyman look alike.
+    The two conventions live one function apart on purpose -- `Prepared.back` and
+    `Prepared.forward` carry the same split for the same reason.
 
     Filled only BETWEEN observed seasons. Before his debut and after his last year he was
     not a zero, he was absent, and the career span is what the arc is about.
@@ -97,40 +130,107 @@ def _arc(seasons) -> list[list[float]]:
     ascending: nothing in the panel contract promises it, and `_netted` on the read side
     sorts for the same reason.
     """
-    if seasons is None:
-        return []
-    # Ages within one player are distinct: `collapse_split_seasons` gives one row per
-    # (mlbam_id, season) and age advances with the season, so nothing is collapsed here.
-    scored = {
-        int(a): round(float(s), 4) for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
-    }
+    scored = _career_by_age(seasons)
     if not scored:
         return []
     return [[age, scored.get(age, 0.0)] for age in range(min(scored), max(scored) + 1)]
 
 
-def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> list[dict] | None:
-    """One player's stored comp block, or ``None`` when his path is too short to match.
+def _playing_time(frame, volume: str) -> dict[tuple[int, int], float]:
+    """``(mlbam_id, season) -> PA or IP`` for every row in ``frame``, absent where unknown.
 
-    ``player.sgp`` is ``traj.observable`` -- the points with ``n > 0`` -- and the
-    candidate mask ``seasons + h <= last`` shrinks as the horizon grows, so a player can
-    be observable at h=1..3 and not at h=4..5. ``sweep_pool`` keeps him: it drops a
-    player only when the path is ENTIRELY empty. ``closest_paths`` then raises on
-    ``len(predicted) != len(prepared.horizons)``, and nothing caught it -- one such
-    player discarded the whole ~52s sweep and pushed nothing. Latent on the default
-    horizon, directly reachable via ``--max-horizon``.
+    ON A 162-GAME FOOTING, not as the box score printed it. `_scale_short_schedules`
+    multiplies this column by `162 / scheduled_games` on load, so a 2020 season arrives at
+    2.7x its literal count -- Alvarez's nine 2020 plate appearances are 24 here. That is
+    the RIGHT number for the question the column is asked ("was this a part-time
+    season?"), because the SGP printed beside it was scaled by the very same factor; an
+    unscaled volume against a scaled SGP is the pair that actually misleads. It does have
+    to be SAID, which the page does -- a column headed "PA/IP" showing 24 for a 9-PA
+    season is a wrong number until it is labelled.
 
-    SKIPPED, NEVER PADDED. ``forward`` stores a real 0.0 for "out of the league", so
-    padding the short tail with zeros would match him against the cohort that stopped
-    playing -- a confident wrong answer in place of an honest gap. The page already
-    renders an empty comps list with an explanation, so an absent block degrades.
+    SUMMED over a split season, like `collapse_split_seasons` sums its SGP. A traded
+    player's two rows are half a season each, and taking either one alone would print a
+    300-PA year beside the full-season SGP the same row was matched on.
+    `collapse_split_seasons` cannot supply this: it keeps only sgp and age.
 
-    Names are attached HERE, not in ``closest_paths``: naming needs the people cache, and
-    keeping it out of that module is what lets it be tested with no data files. An
-    unknown id renders as its id rather than vanishing -- a comp is still a comp.
+    A GROUP HOLDING ANY NaN IS DROPPED, and the two-part test is what makes that true.
+    `Series.sum()` defaults to `skipna=True, min_count=0`, so an ALL-NaN group sums to a
+    real `0.0` that sails through `notna` -- a single-part guard could never fire, and it
+    would store `pt: 0.0`, printing "PA/IP: 0" beside a real SGP figure and inverting the
+    exact hurt-versus-finished signal the column exists for (#357). A PARTLY-NaN group is
+    worse than useless too: it sums only the half it can see and understates a split
+    season. Both become absent, which the table renders as a dash.
+
+    HOW A NaN GETS HERE AT ALL, since `load_scored_panel` admits a row only on
+    `volume.notna() & volume > 0`: that filter runs BEFORE `_scale_short_schedules`
+    multiplies the column by `162 / scheduled_games`, so a season carrying no
+    `scheduled_games` produces a NaN volume downstream of the very check usually cited as
+    making this impossible. Not observed on the shipped panels -- the point is that
+    "unreachable" is a claim about two functions, not one, and the guard is cheap.
+
+    A FUNCTION, not four lines inline in `build_payload`, for one reason: the test that
+    covers it was written inline against a local frame and therefore asserted pandas'
+    behaviour rather than this rule, so reverting the guard would have left it green.
+    A named seam is what lets the test drive the real thing.
+
+    Vectorized, because the per-group Python alternative would run once per
+    (player, season) over ~16k rows per pool.
     """
-    if len(player.sgp) != len(horizons):
-        return None
+    if volume not in frame.columns:
+        return {}
+    keys = [frame["mlbam_id"], frame["season"]]
+    totals = frame[volume].groupby(keys).sum(min_count=1)
+    totals = totals.where(~frame[volume].isna().groupby(keys).any())
+    return {
+        (int(i), int(season)): round(float(v), 1)
+        for (i, season), v in totals.items()
+        if pd.notna(v)
+    }
+
+
+def player_comps(prepared, player, career: dict[int, float], names: dict, pt: dict) -> list[dict]:
+    """One player's stored comp block -- the careers that looked like his, and what
+    happened to them. ``[]`` when nothing historical resembles him closely enough.
+
+    TAKES THE PLAYER, not his `age` and `mlbam_id` as separate arguments. It was briefly
+    split into the two fields it reads, on the theory that a function should ask for the
+    narrowest thing it needs. That was wrong twice over, and both showed up immediately:
+
+    * Two same-typed ints sit adjacent in the signature, so `player_comps(prepared,
+      player.mlbam_id, player.age, ...)` -- the natural id-then-age ordering -- type-checks
+      under mypy, runs without error, and returns `[]` for every player, because no
+      candidate sits at `age == 592885`. The result is a comp-less board that renders
+      perfectly. The object made that unrepresentable.
+    * It silently gutted two tests. `_swept(2)` and `_swept(3)` differ ONLY in path
+      length, so once the function stopped reading the path, both tests were calling it
+      twice with identical arguments and comparing the result to itself -- including
+      `test_a_comp_is_selected_on_the_career_never_on_the_prediction`, the named pin for
+      this issue's whole premise, which `closest_careers`'s docstring cites by name.
+
+    The object is the narrowest thing it needs: it is what guarantees the age and the id
+    describe one player.
+
+    MATCHED BACKWARD (#358). ``career`` is what he has actually DONE, and the comps are
+    chosen on that alone; the fitted path never enters. The forward matcher this replaced
+    chose them by how close their realized path landed to our PREDICTION, which made the
+    comp set a redrawing of the forecast rather than evidence about it.
+
+    That also removed a failure mode rather than moving it. The old matcher raised when
+    ``len(predicted) != len(prepared.horizons)`` -- reachable for a player observable at
+    h=1..3 but not h=4..5, whom ``sweep_pool`` keeps -- and one such player discarded a
+    whole ~52s sweep and pushed nothing. There is no ``predicted`` here, so a short fit
+    is no longer a length contract to violate: he gets full-length comp paths and the
+    view truncates them to the horizons he was actually fitted at.
+
+    An EMPTY list means no candidate shared enough of his ages (`required_overlap`) --
+    the honest answer for a career the panel has no parallel for, and the page already
+    renders it with an explanation.
+
+    Names and playing time are attached HERE, not in ``closest_careers``: naming needs
+    the people cache and volume needs the panel frame, and keeping both out of that
+    module is what lets it be tested with no data files. An unknown id renders as its id
+    rather than vanishing -- a comp is still a comp.
+    """
     return [
         {
             # THE JOIN KEY for the stored career map, not decoration. `chart_key(id,
@@ -141,10 +241,25 @@ def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> li
             "name": names.get(c.mlbam_id, str(c.mlbam_id)),
             "season": c.season,
             "rmse": round(c.rmse, 3),
+            # HOW MUCH CAREER THE MATCH ACTUALLY SAW. Stored rather than derived on read:
+            # the reader has no way to recompute it, and a 3-age match and an 8-age match
+            # at the same RMSE are not the same claim.
+            "overlap": c.overlap,
+            # PA (hitters) or IP (pitchers) in the anchor season, so a reader can tell a
+            # comp who declined from one who was hurt (#357). None when the pool frame
+            # carried no volume column.
+            "pt": pt.get((c.mlbam_id, c.season)),
             "path": [round(v, 3) for v in c.path],
         }
-        for c in closest_paths(
-            prepared, [point.mean for point in player.sgp], age=player.age, n=MAX_COMPS
+        for c in closest_careers(
+            prepared,
+            career,
+            age=player.age,
+            n=MAX_COMPS,
+            # He is not his own comp. The forward-observability mask usually removes him
+            # anyway, but only because his anchor season is the newest one -- a fact
+            # about this panel, not a rule. See `closest_careers`.
+            exclude_id=player.mlbam_id,
         )
     ]
 
@@ -311,10 +426,15 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         swept += produced
 
         # `sweep_pool` builds its own prepared state and does not return it. Preparing a
-        # second time costs one vectorized reindex per pool -- cheap next to the sweep,
-        # and far cheaper than widening `sweep_pool`'s signature, which the CLI and its
-        # tests also call.
-        prepared = prepare(complete, kind=kind, horizons=horizons)
+        # second time costs one vectorized reindex per horizon PLUS one per lookback
+        # offset. That second term is new, and it is the whole reason `lookback` is
+        # opt-in: `sweep_pool`'s own `prepare` does not pass it, so the sweep does not pay
+        # it. Still cheap next to the sweep, and far cheaper than widening `sweep_pool`'s
+        # signature, which the CLI and its tests also call.
+        # `lookback=` is what turns the backward window on. It is opt-in (see `prepare`)
+        # because this is its only consumer, and `sweep_pool` above just called `prepare`
+        # without it -- so the sweep no longer pays for a window it never reads.
+        prepared = prepare(complete, kind=kind, horizons=horizons, lookback=COMP_LOOKBACK)
         # THROUGH THE SHARED COLLAPSE, like every other reader of this panel. A
         # mid-season trade can put two rows on one player-year, and `collapse_split_seasons`
         # is where that rule lives -- `collapsed_index`'s docstring names it as the single
@@ -327,17 +447,49 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         # panel unchanged when there are none. This is consistency insurance against a
         # future panel build, not a fix for anything currently wrong.
         by_id = {int(i): g for i, g in collapse_split_seasons(complete).groupby("mlbam_id")}
+        # Anchor-season volume for every candidate comp, so a card can say whether a
+        # collapse was decline or absence (#357). PA for hitters, IP for pitchers -- one
+        # column, named by pool, because the two pools never share a frame here.
+        volume = "pa" if kind == "hitter" else "ip"
+        pt = _playing_time(complete, volume)
 
-        short_paths = 0
+        no_comps: dict[str, int] = {}
         for player in produced:
             history = _arc(by_id.get(player.mlbam_id))
-            # None means his observable path is shorter than the swept horizons, so no
-            # honest match exists -- see `player_comps`. He keeps his row and his career
-            # line; only the comps go.
-            comps = player_comps(prepared, player, horizons, names)
-            if comps is None:
-                short_paths += 1
+            # WHAT HE HAS ACTUALLY DONE, which is what the comps are matched on (#358).
+            # His complete seasons out of the same `by_id` the career line is drawn from,
+            # plus the base season at his current age -- which `complete` does not carry
+            # while it is in progress, and which is `now`: season-to-date plus the
+            # rest-of-season blend, re-scored (`ros_anchor`). Without it the newest and
+            # most decision-relevant year of his career is missing from the match.
+            #
+            # UNFILLED. `_career_by_age`, not `_arc`: a year he did not play must stay
+            # absent here, or an injured star matches a journeyman.
+            career = {**_career_by_age(by_id.get(player.mlbam_id)), player.age: player.now}
+            # ONE BAD PLAYER MUST NOT DISCARD THE SWEEP. `closest_careers` refuses a
+            # non-finite anchor by design -- silently matching on a window one age
+            # shorter than the `overlap` printed beside it is worse than no comps -- but
+            # raising out of this loop aborts both pools and pushes nothing, which is
+            # verbatim the failure `player_comps`'s own docstring says was removed. He
+            # keeps his row and his career line and loses only his comps, exactly like a
+            # player nothing matches.
+            reason = ""
+            if not math.isfinite(player.now):
+                reason = "no usable current-season value"
+                comps = []
             else:
+                comps = player_comps(prepared, player, career, names, pt)
+                if not comps:
+                    # Only on the empty branch: `match_pool` repeats the candidate mask
+                    # and the overlap count, and paying that for the ~85% of players who
+                    # DO get comps would be a second full pass over the pool for a number
+                    # nothing reads.
+                    reason = match_pool(
+                        prepared, career, player.age, exclude_id=player.mlbam_id
+                    ).reason
+            if reason:
+                no_comps[reason] = no_comps.get(reason, 0) + 1
+            if comps:
                 # THE SAME `by_id` the subject's own history comes from, so a comp's arc
                 # and the subject overlay drawn on top of it are on one scale by
                 # construction. Resolved per pool, because `by_id` is per pool: a hitter
@@ -350,20 +502,31 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
                     key = chart_key(comp["id"], kind)
                     if key not in careers and (arc := _arc(by_id.get(comp["id"]))):
                         careers[key] = arc
-            extras[(player.mlbam_id, player.pool)] = {
-                "history": history,
-                "comps": comps if comps is not None else [],
-            }
+            entry = {"history": history, "comps": comps}
+            # WHY HE HAS NONE, stored per player rather than only counted. The page has
+            # no other way to know which of the three causes applied to the man on
+            # screen, so without this it had to list all three at every affected player
+            # and let him guess -- documenting the gap instead of closing it. Written
+            # only when there is something to say, so a player with comps costs nothing.
+            if reason:
+                entry["no_comps"] = reason
+            extras[(player.mlbam_id, player.pool)] = entry
         print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
-        if short_paths:
-            # SAID OUT LOUD. A push that quietly drops comps for part of the pool
-            # renders exactly like one that did not, and the page's "none stored" note
-            # reads as "this player has no comps" rather than "this run skipped them".
+        if no_comps:
+            # SAID OUT LOUD, AND BY CAUSE. A push that quietly drops comps for part of
+            # the pool renders exactly like one that did not. Broken out because the
+            # three causes point at different things: "no career shares enough of his
+            # ages" is about the player and is expected for the very young, while
+            # "too recent to follow forward" and "no player of this age" are facts about
+            # the PANEL, and an operator told the first when the truth is the third goes
+            # looking in the wrong place entirely.
+            total = sum(no_comps.values())
             print(
-                f"    {short_paths} observable at fewer than {len(horizons)} horizons; "
-                f"comps skipped for those (their rows and career lines are intact)",
+                f"    {total} got no comps (their rows and career lines are intact):",
                 flush=True,
             )
+            for reason, count in sorted(no_comps.items(), key=lambda kv: -kv[1]):
+                print(f"      {count:5} -- {reason}", flush=True)
 
     # ONE stamp for both blobs -- see this function's docstring.
     generated_at = local_now().isoformat(timespec="seconds")

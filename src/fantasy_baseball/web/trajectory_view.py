@@ -26,7 +26,7 @@ from dataclasses import dataclass, field, replace
 from typing import Any, NoReturn
 
 from fantasy_baseball.data.rosters import RosterSpot
-from fantasy_baseball.trajectory.comp_paths import MAX_COMPS
+from fantasy_baseball.trajectory.career_comps import MAX_COMPS
 from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.roster_join import index_rosters
 from fantasy_baseball.trajectory.sweep import (
@@ -728,8 +728,8 @@ DEFAULT_COMPS = 5
 
 @dataclass(frozen=True)
 class PlayerView:
-    """One player's chart: what happened, what is predicted, and what it looked like
-    when this shape played out before."""
+    """One player's chart: what happened, what is predicted, and what became of the
+    players whose careers had looked like his by this age."""
 
     name: str
     age: int
@@ -745,15 +745,22 @@ class PlayerView:
     history: list[list[float]]
     #: [{age, mean, p10, p90}, ...] one per projected year.
     projection: list[dict]
-    #: [{name, season, rmse, path: [{age, value}, ...], career: [[age, value], ...]},
-    #: ...] closest first. `path` is his forward path over the projected ages, drawn on
-    #: the main chart; `career` is his WHOLE arc, drawn on his own card, and is empty
-    #: when the blob carries no entry for him. ONE list, because a card titles itself and
-    #: draws itself from the same entry -- a second parallel list would have to stay the
-    #: same length and order forever, enforced by nothing but construction.
+    #: [{name, season, rmse, overlap, pt, path: [{age, value}, ...],
+    #: career: [[age, value], ...]}, ...] closest first. `path` is what actually happened
+    #: to him over the subject's projected ages, drawn on the main chart; `career` is his
+    #: WHOLE arc, drawn on his own card, and is empty when the blob carries no entry for
+    #: him. ONE list, because a card titles itself and draws itself from the same entry --
+    #: a second parallel list would have to stay the same length and order forever,
+    #: enforced by nothing but construction.
+    #:
+    #: MATCHED BACKWARD (#358): these are the players whose REALIZED career up to this
+    #: age most resembles the subject's, and `path` is their realized future. They are
+    #: NOT selected on our forecast, which is what makes their spread evidence about it
+    #: rather than a redrawing of it. `rmse` is the distance on the shared career and
+    #: `overlap` is how many ages that was, which a reader needs to weigh it.
     #:
     #: The age at which he matched the subject is `PlayerView.age`, identical on every
-    #: card: `closest_paths` selects on `prepared.age == float(age)`, an exact match.
+    #: card: `closest_careers` selects on `prepared.age == float(age)`, an exact match.
     comps: list[dict]
     #: Populated when the name was ambiguous OR when it matched nothing exactly and the
     #: substring fallback found something (#350). The caller renders these instead of a
@@ -810,6 +817,13 @@ class PlayerView:
     #: means the two keys are out of step and one re-push fixes it. Saying "predates"
     #: for a mismatch sends a reader looking in the wrong place.
     chart_vintage_mismatch: bool = False
+    #: WHY there are no comps, in the push's own words, when the blob says so. Empty when
+    #: comps exist, and empty on a board written before the field did -- the page falls
+    #: back to listing every possible cause, which is what it had to do for everyone.
+    #: Stored per player rather than derived here because only the push has the panel:
+    #: "the panel holds nobody else this old" and "everyone this old is too recent to
+    #: follow forward" are facts about the fitting data, not about this row.
+    no_comps_reason: str = ""
 
     @property
     def axis_label(self) -> str:
@@ -1332,17 +1346,37 @@ def build_player_view(
                 "name": c["name"],
                 "season": c["season"],
                 "rmse": c["rmse"],
-                # Truncated to the PROJECTED horizons, not the stored path length. A
-                # produced blob never needs this slice to do anything: comp paths come
-                # off the same `horizons` tuple as `row["sgp"]`, and a player whose
-                # observable path is SHORTER than those horizons gets no comps at all
-                # (`push_trajectory_board.player_comps`) rather than a long path beside
-                # a short projection. So this is defence against a hand-built or future
-                # blob, not a rule the current pipeline exercises -- cheap and correct
-                # to keep regardless.
+                # How many ages the match actually saw, and his volume in the anchor
+                # season. Both `.get` rather than `[]`: a board pushed before #358 has
+                # neither key, and a comp that renders without them is better than a
+                # 500 on a stale blob. The template hides the columns when they are None.
+                "overlap": c.get("overlap"),
+                "pt": c.get("pt"),
+                # PAIRED BY HORIZON, never by position. A comp's stored path is one
+                # value per horizon 1..N ascending, and `sp.sgp` is `traj.observable` --
+                # the points with `n > 0` -- which is NOT guaranteed to be a horizon-1
+                # prefix. A horizon is emptied when its Kish effective size falls under
+                # `MIN_EFFECTIVE_ROWS`, and `keep = seasons + h <= last` makes the
+                # fitting rows a SHRINKING subset as h grows, so dropping a high-weight
+                # row RAISES the Kish size: h=1 can fail the gate while h=2 and h=3 pass.
+                #
+                # Zipping the two positionally then reads the comp's +1 and +2 into
+                # columns headed age+2 and age+3 -- every comp line drawn a year left of
+                # the projection it exists to be compared against, on a chart whose whole
+                # job is that comparison. `p.age` is already `age + horizon`, so the
+                # ages come off the same field the projection's own columns do.
+                #
+                # This also subsumes the truncation the positional slice was doing: a
+                # player fitted at fewer horizons than the sweep stored simply has fewer
+                # points to pair against. BOTH halves of the bound are load-bearing on a
+                # hand-built or older blob: the upper one stops a SHORT stored path
+                # raising IndexError, and the lower one stops a horizon of 0 indexing
+                # `[-1]` and drawing the comp's FIFTH year as his first -- silently, which
+                # is worse than either raising or dropping the cell.
                 "path": [
-                    {"age": sp.age + h, "value": float(v) - floor}
-                    for h, v in enumerate(c["path"][: len(sp.sgp)], start=1)
+                    {"age": p.age, "value": float(c["path"][p.horizon - 1]) - floor}
+                    for p in sp.sgp
+                    if 0 < p.horizon <= len(c["path"])
                 ],
                 # HIS WHOLE ARC, on the same entry as his forward path rather than in a
                 # second list beside it. A parallel list would have to stay the same
@@ -1364,4 +1398,5 @@ def build_player_view(
             # Sliced ONCE, here. This is the only comp list there is.
             for c in extras.get("comps", [])[:want]
         ],
+        no_comps_reason=str(extras.get("no_comps", "")),
     )
