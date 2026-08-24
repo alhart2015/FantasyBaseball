@@ -195,13 +195,22 @@ def closest_careers(
             exactly that age, so with no anchor value there is nothing to anchor to -- and
             a caller reaching this has a construction bug, not an empty result.
     """
+    if not prepared.lookback:
+        raise ValueError(
+            "this Prepared carries no backward window; call prepare(..., lookback=N). "
+            "It is opt-in because only this module reads it and every other prepare() "
+            "caller would pay N full-history reindexes for nothing."
+        )
     if age not in career:
         raise ValueError(
             f"career carries no value at the anchor age {age} (has {sorted(career)}); "
             "the in-progress season must be supplied by the caller"
         )
-    lookback = len(prepared.back)
-    horizons = tuple(sorted(prepared.horizons))
+    # NOT `len(prepared.back)`. The window size is a stated field, so a `Prepared` built
+    # by hand with a sparse `back` fails as a contract violation rather than as a
+    # KeyError from indexing a dict whose keys were assumed to be `range(len(...))`.
+    lookback = prepared.lookback
+    horizons = prepared.horizons  # `prepare` stores these sorted and deduped.
 
     # The subject's side of the comparison: his own realized ages inside the window,
     # newest last. Ages he never played are simply absent, which is the same treatment

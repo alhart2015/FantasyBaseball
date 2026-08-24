@@ -111,10 +111,13 @@ def _swept(n_points: int):
 
 
 def _prepared(horizons):
+    from fantasy_baseball.trajectory.model import DEFAULT_LOOKBACK
     from fantasy_baseball.trajectory.shape import prepare
     from tests._trajectory_panel import synthetic_panel
 
-    return prepare(synthetic_panel(), kind="hitter", horizons=horizons)
+    # `lookback=` mirrors what `build_payload` passes. Without it `back` is empty and
+    # `closest_careers` refuses -- which is the opt-in contract working, not a fixture bug.
+    return prepare(synthetic_panel(), kind="hitter", horizons=horizons, lookback=DEFAULT_LOOKBACK)
 
 
 #: A subject career over the synthetic panel's ages. Its players run 24-32, so a

@@ -1348,29 +1348,62 @@ def test_a_comp_value_is_paired_to_the_horizon_it_belongs_to_not_to_its_position
     from fantasy_baseball.trajectory.sweep import SweptPlayer, YearPoint, to_payload
 
     gapped = SweptPlayer(
-        mlbam_id=1, name="Gapped", pool="hitter", age=27, slot="OF", floor=0.0,
-        now=12.0, prior=11.0, support=0.5, extrapolated=False,
+        mlbam_id=1,
+        name="Gapped",
+        pool="hitter",
+        age=27,
+        slot="OF",
+        floor=0.0,
+        now=12.0,
+        prior=11.0,
+        support=0.5,
+        extrapolated=False,
         # NO h=1: observable, and not a prefix.
         sgp=tuple(
-            YearPoint(horizon=h, age=27 + h, mean=12.0, p10=9.0, p90=15.0,
-                      n_effective=50.0, band_fell_back=False)
+            YearPoint(
+                horizon=h,
+                age=27 + h,
+                mean=12.0,
+                p10=9.0,
+                p90=15.0,
+                n_effective=50.0,
+                band_fell_back=False,
+            )
             for h in (2, 3)
         ),
     )
     payload = to_payload(
-        [gapped], base_season=BASE, max_horizon=3, min_sgp=0.0, season_elapsed=0.7,
-        generated_at="hand-gapped", panel_vintage={"hitter": "h.csv"},
-        floors={"OF": 0.0}, excluded={"total": 0},
+        [gapped],
+        base_season=BASE,
+        max_horizon=3,
+        min_sgp=0.0,
+        season_elapsed=0.7,
+        generated_at="hand-gapped",
+        panel_vintage={"hitter": "h.csv"},
+        floors={"OF": 0.0},
+        excluded={"total": 0},
     )
     chart = to_chart_payload(
-        {(1, "hitter"): {"history": [], "comps": [{
-            "id": 100, "name": "Comp", "season": 2010, "rmse": 0.5,
-            "overlap": 7, "pt": 600.0,
-            # One value per horizon 1..5, each equal to its own horizon so a
-            # mispairing is readable straight off the assertion.
-            "path": [1.0, 2.0, 3.0, 4.0, 5.0],
-        }]}},
-        careers={}, generated_at="hand-gapped",
+        {
+            (1, "hitter"): {
+                "history": [],
+                "comps": [
+                    {
+                        "id": 100,
+                        "name": "Comp",
+                        "season": 2010,
+                        "rmse": 0.5,
+                        "overlap": 7,
+                        "pt": 600.0,
+                        # One value per horizon 1..5, each equal to its own horizon so a
+                        # mispairing is readable straight off the assertion.
+                        "path": [1.0, 2.0, 3.0, 4.0, 5.0],
+                    }
+                ],
+            }
+        },
+        careers={},
+        generated_at="hand-gapped",
     )
     view = build_player_view(payload, chart=chart, player="Gapped", scale="sgp")
 

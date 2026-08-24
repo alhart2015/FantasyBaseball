@@ -67,7 +67,6 @@ import pandas as pd
 from .model import (
     DEFAULT_BAND,
     DEFAULT_HORIZONS,
-    DEFAULT_LOOKBACK,
     PathPoint,
     Trajectory,
     collapse_split_seasons,
@@ -353,6 +352,13 @@ class Prepared:
     #: it from the error and counts the overlap instead. Anything else reading this must
     #: decide what a NaN means for its own question rather than `nan_to_num`-ing it.
     back: dict[int, np.ndarray]
+    #: How many offsets `back` holds, so a reader never has to infer the window size
+    #: from `len(back)`. The two are the same number today and the field is what keeps
+    #: them the same number: `Prepared` is a plain dataclass, anything can construct one
+    #: (the test helpers do), and a sparse or short `back` inferred as a contiguous
+    #: `range` surfaces as a bare `KeyError` deep in a matcher rather than as the
+    #: contract violation it is. 0 means NO backward window was built -- see `prepare`.
+    lookback: int = 0
 
 
 def prepare(
@@ -360,7 +366,7 @@ def prepare(
     *,
     kind: str,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
-    lookback: int = DEFAULT_LOOKBACK,
+    lookback: int = 0,
     last_complete_season: int | None = None,
 ) -> Prepared:
     """Hoist the panel-level half of `shape_trajectory` out of the per-query loop.
@@ -370,18 +376,27 @@ def prepare(
     `kind` names the pool `panel` was loaded from, and every query against the result
     must agree with it -- see `Prepared.kind`.
 
-    `lookback` sizes `back`, the realized-career window `career_comps` matches on. It
-    is built HERE rather than in that module because it is panel-level state exactly
-    like `forward` -- one vectorized reindex per offset over the whole history, against
-    one per query -- and because building it beside `forward` is what makes the two
+    `lookback` sizes `back`, the realized-career window `career_comps` matches on. It is
+    built HERE rather than in that module because it is panel-level state exactly like
+    `forward` -- one vectorized reindex per offset over the whole history, against one
+    per query -- and because building it beside `forward` is what makes the two
     conventions (0 versus NaN) sit next to each other where a reader meets both.
+
+    OPT-IN, defaulting to OFF, which is the opposite of how it started. `back` is read by
+    exactly one consumer (`career_comps`, reached through `push_trajectory_board`) while
+    `prepare` is called by `sweep_pool` once per pool, by the single-player CLI, and by
+    `tune_shape_windows` INSIDE ITS TUNING LOOP. Building it unconditionally charged every
+    one of those `DEFAULT_LOOKBACK` extra full-history reindexes for state they never
+    touch, and the sweep paid it twice per pool. Nothing about the fit changes either way,
+    so the default that costs nothing is the right one and the one caller that needs it
+    says so.
     """
     if not horizons:
         raise ValueError("horizons must not be empty")
     if min(horizons) < 1:
         raise ValueError(f"horizons must be at least 1, got {sorted(horizons)}")
-    if lookback < 1:
-        raise ValueError(f"lookback must be at least 1, got {lookback}")
+    if lookback < 0:
+        raise ValueError(f"lookback must not be negative, got {lookback}")
 
     last = last_complete_season if last_complete_season is not None else int(panel["season"].max())
     collapsed, index = collapsed_index(panel)
@@ -399,10 +414,21 @@ def prepare(
         )
         for h in sorted(set(horizons))
     }
+    current = history["current"].to_numpy(dtype=float)
     # The same reindex run backwards, WITHOUT `nan_to_num` -- see `Prepared.back`. The
     # NaN is load-bearing there, so this must not be folded into the loop above.
+    #
+    # Offset 0 is `current` ITSELF, aliased rather than reindexed: `(id, season - 0)` is
+    # the row's own key, so the lookup can only return the value already in that column.
+    # It is kept in the dict rather than special-cased at the read site, because a
+    # matcher that has to remember "offset 0 lives somewhere else" is a matcher one edit
+    # from reading the wrong array.
     back = {
-        k: index.reindex(pd.MultiIndex.from_arrays([ids, seasons - k])).to_numpy(dtype=float)
+        k: (
+            current
+            if k == 0
+            else index.reindex(pd.MultiIndex.from_arrays([ids, seasons - k])).to_numpy(dtype=float)
+        )
         for k in range(lookback)
     }
     return Prepared(
@@ -410,12 +436,13 @@ def prepare(
         horizons=tuple(sorted(set(horizons))),
         last=last,
         age=history["age"].to_numpy(dtype=float),
-        current=history["current"].to_numpy(dtype=float),
+        current=current,
         prior=history["prior"].to_numpy(dtype=float),
         season=seasons,
         mlbam_id=ids,
         forward=forward,
         back=back,
+        lookback=lookback,
     )
 
 

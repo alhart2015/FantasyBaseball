@@ -39,6 +39,7 @@ def _prepared(
         back={
             k: np.array([r[3].get(k, np.nan) for r in rows], dtype=float) for k in range(LOOKBACK)
         },
+        lookback=LOOKBACK,
     )
 
 

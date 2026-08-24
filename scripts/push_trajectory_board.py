@@ -69,6 +69,7 @@ MIN_SGP = 0.0
 #: rather than re-declared here. See its docstring in `career_comps`; a second literal
 #: beside this one is what the deleted parity test existed to police.
 from fantasy_baseball.trajectory.career_comps import MAX_COMPS, closest_careers
+from fantasy_baseball.trajectory.model import DEFAULT_LOOKBACK
 
 
 def _career_by_age(seasons) -> dict[int, float]:
@@ -342,7 +343,10 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         # second time costs one vectorized reindex per pool -- cheap next to the sweep,
         # and far cheaper than widening `sweep_pool`'s signature, which the CLI and its
         # tests also call.
-        prepared = prepare(complete, kind=kind, horizons=horizons)
+        # `lookback=` is what turns the backward window on. It is opt-in (see `prepare`)
+        # because this is its only consumer, and `sweep_pool` above just called `prepare`
+        # without it -- so the sweep no longer pays for a window it never reads.
+        prepared = prepare(complete, kind=kind, horizons=horizons, lookback=DEFAULT_LOOKBACK)
         # THROUGH THE SHARED COLLAPSE, like every other reader of this panel. A
         # mid-season trade can put two rows on one player-year, and `collapse_split_seasons`
         # is where that rule lives -- `collapsed_index`'s docstring names it as the single
