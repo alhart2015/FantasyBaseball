@@ -3211,6 +3211,34 @@ def test_trajectory_chart_js_disables_the_default_aspect_ratio():
     assert re.search(r"^\s*responsive: true,$", src, re.M)
 
 
+def test_trajectory_chart_js_draws_the_comps_over_the_band_not_under_it():
+    """#358 acceptance criterion 5: "draws the comp spread legibly with the band still
+    visible". Both halves, and the branch originally shipped only the first.
+
+    Chart.js paints HIGHER `order` first, so a comp at `order: 3` under a band fill at
+    `order: 2` was being washed out by the 0.18-alpha rectangle it exists to be compared
+    against -- de-emphasis that made sense only while comps were selected ON the forecast
+    and were therefore not evidence about it. The band keeps its fill and the projection
+    and career line still paint last, so "still visible" holds in both directions.
+
+    A source-text assertion because no JS runtime lives in this suite, anchored on the
+    option lines rather than a bare substring: the header comment above them discusses
+    drawing order in prose, and a substring check would be satisfied by the explanation
+    with the real options deleted.
+    """
+    src = _trajectory_chart_js_source()
+    comps = src[src.index("...data.comps.map") : src.index('label: "p10-p90"')]
+    band = src[src.index('label: "p10-p90"') : src.index('label: "projected"')]
+
+    comp_order = int(re.search(r"^\s*order: (\d+),$", comps, re.M).group(1))
+    band_order = int(re.search(r"^\s*order: (\d+),$", band, re.M).group(1))
+    assert comp_order < band_order, (
+        "a higher order paints first, so the comps must sit ABOVE the band's fill"
+    )
+    assert re.search(r"^\s*borderWidth: 1\.5,$", comps, re.M), "and be drawn legibly"
+    assert "rgba(120,120,120,0.7)" in comps, "the un-faded stroke from #358"
+
+
 def test_trajectory_chart_js_discloses_the_var_netting_on_the_axis():
     """Spec requirement 6: the y-axis title must say what was subtracted on the VAR
     scale, not just repeat the scale name (#324 F2).

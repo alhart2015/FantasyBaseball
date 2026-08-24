@@ -68,7 +68,7 @@ MIN_SGP = 0.0
 #: Comps stored per player -- the SAME constant the view clamps `n` against, imported
 #: rather than re-declared here. See its docstring in `career_comps`; a second literal
 #: beside this one is what the deleted parity test existed to police.
-from fantasy_baseball.trajectory.career_comps import MAX_COMPS, closest_careers
+from fantasy_baseball.trajectory.career_comps import MAX_COMPS, closest_careers, match_pool
 from fantasy_baseball.trajectory.model import DEFAULT_LOOKBACK
 
 
@@ -76,7 +76,8 @@ def _career_by_age(seasons) -> dict[int, float]:
     """One player's REALIZED SGP keyed by age, with holes left as holes.
 
     The raw reading of the stored frame, shared by everything that needs it: `_arc`
-    fills the holes to draw a line, `player_comps` must not fill them at all. They were
+    fills the holes to draw a line, and the `career` dict `build_payload` assembles for
+    `player_comps` must not fill them at all. They were
     one comprehension doing both jobs, and the fill is exactly the thing backward
     matching cannot tolerate -- see `Prepared.back`.
 
@@ -89,7 +90,7 @@ def _career_by_age(seasons) -> dict[int, float]:
 
 
 def _arc(seasons) -> list[list[float]]:
-    """One player's stored career as ``[[age, sgp]]``, ascending, ``[]`` when absent.
+    """One player's stored career as ``[[age, sgp], ...]``, ascending, ``[]`` when absent.
 
     ONE spelling for the two arcs a chart pairs on a single axis -- the subject's own
     history and a comp's whole career. They came off the same `by_id` frame through two
@@ -120,7 +121,9 @@ def _arc(seasons) -> list[list[float]]:
     return [[age, scored.get(age, 0.0)] for age in range(min(scored), max(scored) + 1)]
 
 
-def player_comps(prepared, player, career: dict[int, float], names: dict, pt: dict) -> list[dict]:
+def player_comps(
+    prepared, age: int, mlbam_id: int, career: dict[int, float], names: dict, pt: dict
+) -> list[dict]:
     """One player's stored comp block -- the careers that looked like his, and what
     happened to them. ``[]`` when nothing historical resembles him closely enough.
 
@@ -168,12 +171,12 @@ def player_comps(prepared, player, career: dict[int, float], names: dict, pt: di
         for c in closest_careers(
             prepared,
             career,
-            age=player.age,
+            age=age,
             n=MAX_COMPS,
             # He is not his own comp. The forward-observability mask usually removes him
             # anyway, but only because his anchor season is the newest one -- a fact
             # about this panel, not a rule. See `closest_careers`.
-            exclude_id=player.mlbam_id,
+            exclude_id=mlbam_id,
         )
     ]
 
@@ -400,7 +403,9 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
                 if pd.notna(v):
                     pt[(int(i), int(sn))] = round(float(v), 1)
 
-        no_comps = 0
+        # Keyed by `MatchPool.reason`, so the summary below names the cause it actually
+        # observed rather than the one cause the old message assumed.
+        no_comps: dict[str, int] = {}
         for player in produced:
             history = _arc(by_id.get(player.mlbam_id))
             # WHAT HE HAS ACTUALLY DONE, which is what the comps are matched on (#358).
@@ -413,9 +418,14 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
             # UNFILLED. `_career_by_age`, not `_arc`: a year he did not play must stay
             # absent here, or an injured star matches a journeyman.
             career = {**_career_by_age(by_id.get(player.mlbam_id)), player.age: player.now}
-            comps = player_comps(prepared, player, career, names, pt)
+            comps = player_comps(prepared, player.age, player.mlbam_id, career, names, pt)
             if not comps:
-                no_comps += 1
+                # Only on the empty branch: `match_pool` repeats the candidate mask and
+                # the overlap count, and paying that for the ~85% of players who DO get
+                # comps would be a second full pass over the pool for a number nothing
+                # reads.
+                reason = match_pool(prepared, career, player.age, exclude_id=player.mlbam_id).reason
+                no_comps[reason] = no_comps.get(reason, 0) + 1
             else:
                 # THE SAME `by_id` the subject's own history comes from, so a comp's arc
                 # and the subject overlay drawn on top of it are on one scale by
@@ -432,17 +442,20 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
             extras[(player.mlbam_id, player.pool)] = {"history": history, "comps": comps}
         print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
         if no_comps:
-            # SAID OUT LOUD. A push that quietly drops comps for part of the pool
-            # renders exactly like one that did not, and the page's "none stored" note
-            # reads as "this player has no comps" rather than "this run skipped them".
-            # Here it genuinely IS the former: no historical career shared enough of his
-            # ages to be matched. Common for the very young, who have two or three
-            # seasons, and for anyone whose window reaches back past the panel's start.
+            # SAID OUT LOUD, AND BY CAUSE. A push that quietly drops comps for part of
+            # the pool renders exactly like one that did not. Broken out because the
+            # three causes point at different things: "no career shares enough of his
+            # ages" is about the player and is expected for the very young, while
+            # "too recent to follow forward" and "no player of this age" are facts about
+            # the PANEL, and an operator told the first when the truth is the third goes
+            # looking in the wrong place entirely.
+            total = sum(no_comps.values())
             print(
-                f"    {no_comps} matched no historical career closely enough; "
-                f"comps empty for those (their rows and career lines are intact)",
+                f"    {total} got no comps (their rows and career lines are intact):",
                 flush=True,
             )
+            for reason, count in sorted(no_comps.items(), key=lambda kv: -kv[1]):
+                print(f"      {count:5} -- {reason}", flush=True)
 
     # ONE stamp for both blobs -- see this function's docstring.
     generated_at = local_now().isoformat(timespec="seconds")

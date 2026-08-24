@@ -158,6 +158,107 @@ class CareerComp:
     path: tuple[float, ...]
 
 
+def _candidates(prepared: Prepared, age: int, exclude_id: int | None) -> tuple[np.ndarray, int]:
+    """Rows at exactly `age` that can be followed forward, and how many sat at that age
+    at all.
+
+    EXACT age, and every forward year observABLE. `forward` stores a real 0.0 for "out
+    of the league", which is indistinguishable from "has not happened yet" -- so the
+    censoring has to come from the SEASON, not the value. Horizons ascend, so clearing
+    the longest clears them all.
+
+    The second return is the pool BEFORE censoring, which is the only thing that tells
+    "nobody was ever this old in the panel" apart from "everyone this old is too recent
+    to follow" -- see `MatchPool`.
+    """
+    horizons = prepared.horizons
+    at_age = prepared.age == float(age)
+    if exclude_id is not None:
+        at_age = at_age & (prepared.mlbam_id != exclude_id)
+    followable = at_age & (prepared.season + horizons[-1] <= prepared.last)
+    return np.flatnonzero(followable), int(at_age.sum())
+
+
+def _overlap(
+    prepared: Prepared,
+    candidates: np.ndarray,
+    ages: list[int],
+    subject: np.ndarray,
+    age: int,
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Per-candidate `(difference, matched-mask, overlap-count)` over the shared ages.
+
+    One column per shared age, NaN where the candidate has no season there. `age - a` is
+    an age offset and a season offset at once -- a player's age advances by exactly one
+    per season, verified against the shipped panel (0 exceptions in 29,424 rows).
+    """
+    window = np.column_stack([prepared.back[age - a][candidates] for a in ages])
+    diff = window - subject
+    matched = ~np.isnan(diff)
+    return diff, matched, matched.sum(axis=1)
+
+
+@dataclass(frozen=True)
+class MatchPool:
+    """Why a player got the comps he got -- or why he got none.
+
+    An empty comp list has THREE causes and they point at different things. The push
+    script's summary named only the middle one, so an operator reading "matched no
+    historical career closely enough" about a 40-year-old was told the player was
+    unusual when the real answer was that nobody his age has five realized forward
+    seasons in this panel -- a fact about the panel's vintage, fixable by rebuilding it.
+
+    Same class of misdirection the message it replaced was written to avoid.
+    """
+
+    #: Rows at exactly the anchor age, before any censoring. Zero means the panel has
+    #: nobody this old at all.
+    at_age: int
+    #: ...of those, with a realized outcome at every horizon. Zero with `at_age` positive
+    #: means every one of them is too recent to follow forward.
+    followable: int
+    #: ...of those, sharing enough ages to be matched. Zero with `followable` positive is
+    #: the only case that is genuinely about THIS player's career being unusual or short.
+    overlapping: int
+
+    @property
+    def reason(self) -> str:
+        """One short phrase for an operator summary, or "" when comps were produced."""
+        if self.overlapping:
+            return ""
+        if not self.at_age:
+            return "no player of this age in the panel"
+        if not self.followable:
+            return "every player this age is too recent to follow forward"
+        return "no career shares enough of his ages"
+
+
+def match_pool(
+    prepared: Prepared,
+    career: Mapping[int, float],
+    age: int,
+    *,
+    exclude_id: int | None = None,
+) -> MatchPool:
+    """How `closest_careers` arrived at its answer, for diagnostics only.
+
+    Shares `_candidates` and `_overlap` with the matcher rather than restating their
+    masks, which is the whole point: a diagnostic that computes its own version of the
+    rule eventually explains a decision the code did not make.
+    """
+    candidates, at_age = _candidates(prepared, age, exclude_id)
+    if candidates.size == 0:
+        return MatchPool(at_age=at_age, followable=0, overlapping=0)
+    ages = [a for a in range(age - prepared.lookback + 1, age + 1) if a in career]
+    subject = np.array([career[a] for a in ages], dtype=float)
+    _, _, overlap = _overlap(prepared, candidates, ages, subject, age)
+    return MatchPool(
+        at_age=at_age,
+        followable=int(candidates.size),
+        overlapping=int((overlap >= required_overlap(len(ages))).sum()),
+    )
+
+
 def closest_careers(
     prepared: Prepared,
     career: Mapping[int, float],
@@ -201,10 +302,17 @@ def closest_careers(
             "It is opt-in because only this module reads it and every other prepare() "
             "caller would pay N full-history reindexes for nothing."
         )
-    if age not in career:
+    # PRESENT AND FINITE, not merely present. A NaN slips through a `in` test and then
+    # makes the anchor column all-NaN for every candidate: `matched` goes False there,
+    # so the one age every candidate was SELECTED at contributes nothing to the error
+    # and `overlap` reads one lower for the whole pool, with no exception anywhere. The
+    # comps would still be returned, ranked on a window silently shorter than the number
+    # printed beside them.
+    if age not in career or not math.isfinite(career[age]):
         raise ValueError(
-            f"career carries no value at the anchor age {age} (has {sorted(career)}); "
-            "the in-progress season must be supplied by the caller"
+            f"career carries no usable value at the anchor age {age} "
+            f"(got {career.get(age)!r}); the in-progress season must be supplied by the "
+            "caller as a finite number"
         )
     # NOT `len(prepared.back)`. The window size is a stated field, so a `Prepared` built
     # by hand with a sparse `back` fails as a contract violation rather than as a
@@ -219,24 +327,10 @@ def closest_careers(
     subject = np.array([career[a] for a in ages], dtype=float)
     need = required_overlap(len(ages))
 
-    # EXACT age, and every forward year observABLE. `forward` stores a real 0.0 for "out
-    # of the league", which is indistinguishable from "has not happened yet" -- so the
-    # censoring has to come from the season, not the value. Horizons ascend, so clearing
-    # the longest clears them all.
-    eligible = (prepared.age == float(age)) & (prepared.season + horizons[-1] <= prepared.last)
-    if exclude_id is not None:
-        eligible &= prepared.mlbam_id != exclude_id
-    candidates = np.flatnonzero(eligible)
+    candidates, _ = _candidates(prepared, age, exclude_id)
     if candidates.size == 0:
         return []
-
-    # One column per shared age, NaN where the candidate has no season there. `age - a`
-    # is an age offset and a season offset at once -- a player's age advances by exactly
-    # one per season, verified against the shipped panel (0 exceptions in 29,424 rows).
-    window = np.column_stack([prepared.back[age - a][candidates] for a in ages])
-    diff = window - subject
-    matched = ~np.isnan(diff)
-    overlap = matched.sum(axis=1)
+    diff, matched, overlap = _overlap(prepared, candidates, ages, subject, age)
 
     keep = overlap >= need
     if not keep.any():
@@ -244,7 +338,9 @@ def closest_careers(
     candidates, overlap = candidates[keep], overlap[keep]
     # Squared error over the SHARED ages only: a NaN column contributes nothing to the
     # sum and nothing to the divisor, so an absent season neither helps nor hurts.
-    squared = np.where(matched[keep], np.nan_to_num(diff[keep], nan=0.0) ** 2, 0.0)
+    # `np.where` alone discards the unmatched lanes -- a second `nan_to_num` over the
+    # same lanes was two spellings of one rule.
+    squared = np.where(matched[keep], diff[keep] ** 2, 0.0)
     rmse = np.sqrt(squared.sum(axis=1) / overlap)
 
     paths = np.column_stack([prepared.forward[h][candidates] for h in horizons])

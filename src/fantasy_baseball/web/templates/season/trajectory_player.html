@@ -129,6 +129,8 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   players actually went on to do, which is the honest spread to read the band against.
   A <strong>0.0</strong> means he was out of the league that year; those are kept
   deliberately, because dropping them would leave only the players who lasted.
+  No <em>recent</em> player can appear: a comp must already have played every year
+  being projected, so the last few seasons in the panel supply none.
   <strong>PA/IP</strong> is stated on a 162-game footing, like the SGP beside it -- a
   short schedule such as 2020 is scaled up, so the figure is comparable across eras
   rather than being the count the box scores printed.
@@ -201,12 +203,21 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 {% if board.chart_vintage_mismatch %}
 <p class="muted">{{ mismatch_note }}</p>
 {% else %}
+{#- THREE CAUSES, and the page used to name one. The board carries no per-player
+    marker saying which applied, so the honest rendering lists them; the push script's
+    own summary breaks the pool down by cause for whoever runs it. -#}
 <p class="muted">
   None stored. Either this board predates the career-comp feature (#358) and a
-  re-push of <code>push_trajectory_board.py</code> will fill it in, or no historical
-  career shares enough of his ages to be matched against -- which is the usual answer
-  for a player with only two or three seasons behind him.
+  re-push of <code>push_trajectory_board.py</code> will fill it in, or one of:
 </p>
+<ul class="muted">
+  <li>no historical career shares enough of his ages -- the usual answer for a player
+    with only two or three seasons behind him;</li>
+  <li>the panel holds nobody who reached this age;</li>
+  <li>everyone who reached this age did so too recently to be followed forward. A comp
+    has to have <em>already played</em> all the years being projected, so the most
+    recent seasons in the panel can never supply one.</li>
+</ul>
 {% endif %}
 {% endif %}
 

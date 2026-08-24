@@ -146,8 +146,8 @@ def test_a_player_observable_at_fewer_horizons_than_the_sweep_still_gets_comps()
     horizons = (1, 2, 3)
     prepared = _prepared(horizons)
 
-    short = module.player_comps(prepared, _swept(2), _CAREER, {}, {})
-    full = module.player_comps(prepared, _swept(3), _CAREER, {}, {})
+    short = module.player_comps(prepared, _swept(2).age, _swept(2).mlbam_id, _CAREER, {}, {})
+    full = module.player_comps(prepared, _swept(3).age, _swept(3).mlbam_id, _CAREER, {}, {})
 
     assert short, "a short fit is no longer a reason to withhold comps"
     assert [c["id"] for c in short] == [c["id"] for c in full], (
@@ -172,8 +172,11 @@ def test_a_comp_is_selected_on_the_career_never_on_the_prediction() -> None:
     # The same man, with the model predicting something wildly different about him.
     elsewhere = replace(player, sgp=tuple(replace(p, mean=p.mean + 40.0) for p in player.sgp))
 
-    assert [c["id"] for c in module.player_comps(prepared, player, _CAREER, {}, {})] == [
-        c["id"] for c in module.player_comps(prepared, elsewhere, _CAREER, {}, {})
+    assert [
+        c["id"] for c in module.player_comps(prepared, player.age, player.mlbam_id, _CAREER, {}, {})
+    ] == [
+        c["id"]
+        for c in module.player_comps(prepared, elsewhere.age, elsewhere.mlbam_id, _CAREER, {}, {})
     ]
 
 
@@ -218,7 +221,7 @@ def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
     of them gets the other's career drawn under his own. The per-comp career cards
     (#346) look their arc up by `chart_key(id, pool)`, so the id has to be stored."""
     module = _script()
-    comps = module.player_comps(_prepared((1, 2, 3)), _swept(3), _CAREER, {}, {})
+    comps = module.player_comps(_prepared((1, 2, 3)), 27, 1, _CAREER, {}, {})
 
     assert comps, "the fixture player has comps"
     assert all(isinstance(c["id"], int) for c in comps)

@@ -6,6 +6,7 @@ import pytest
 from fantasy_baseball.trajectory.career_comps import (
     MIN_OVERLAP,
     closest_careers,
+    match_pool,
     required_overlap,
 )
 from fantasy_baseball.trajectory.shape import Prepared
@@ -229,3 +230,67 @@ def test_a_career_missing_the_anchor_age_is_a_caller_bug() -> None:
 def test_n_larger_than_the_candidate_pool_returns_what_exists() -> None:
     prepared = _prepared([(1, 2010, 25, _flat(10.0), [10.0] * 5)])
     assert len(closest_careers(prepared, _career(10.0), age=25, n=10)) == 1
+
+
+def test_the_three_ways_of_getting_no_comps_are_told_apart() -> None:
+    """An empty list means three different things and they point at different places.
+
+    "No career shares enough of his ages" is about the PLAYER and is expected for the
+    very young. The other two are facts about the PANEL -- it holds nobody this old, or
+    everyone this old is too recent to follow forward -- and an operator told the first
+    when the truth is the third goes looking in entirely the wrong place. Same class of
+    misdirection the message this replaced was written to avoid.
+    """
+    subject = _career(10.0)
+
+    empty = _prepared([(1, 2010, 30, _flat(10.0), [10.0] * 5)])
+    assert match_pool(empty, subject, age=25).reason == "no player of this age in the panel"
+
+    # At the right age, but his season + 5 runs past `last`.
+    too_recent = _prepared([(1, 2019, 25, _flat(10.0), [10.0] * 5)], last=2021)
+    pool = match_pool(too_recent, subject, age=25)
+    assert (pool.at_age, pool.followable) == (1, 0)
+    assert pool.reason == "every player this age is too recent to follow forward"
+
+    # Followable, but only two ages in common against a subject who has eight.
+    thin = _prepared([(1, 2010, 25, {0: 10.0, 1: 10.0}, [10.0] * 5)])
+    pool = match_pool(thin, subject, age=25)
+    assert (pool.at_age, pool.followable, pool.overlapping) == (1, 1, 0)
+    assert pool.reason == "no career shares enough of his ages"
+
+    # And a pool that DID produce comps reports no reason at all.
+    ok = _prepared([(1, 2010, 25, _flat(10.0), [10.0] * 5)])
+    assert match_pool(ok, subject, age=25).reason == ""
+    assert closest_careers(ok, subject, age=25, n=5), "the same pool, matched"
+
+
+def test_a_nan_anchor_value_is_refused_rather_than_silently_shortening_the_window() -> None:
+    """A NaN passes an `in` test. It then makes the anchor column all-NaN for EVERY
+    candidate -- so the one age they were all selected at contributes nothing to the
+    error, `overlap` reads one lower across the pool, and comps come back ranked on a
+    window shorter than the number printed beside them, with no exception anywhere."""
+    prepared = _prepared([(1, 2010, 25, _flat(10.0), [10.0] * 5)])
+    with pytest.raises(ValueError, match="no usable value at the anchor age 25"):
+        closest_careers(prepared, {**_career(10.0), 25: float("nan")}, age=25, n=5)
+
+
+def test_a_prepared_with_no_backward_window_is_refused_by_name() -> None:
+    """`prepare` no longer builds `back` unless asked, so the failure a caller who
+    forgot `lookback=` actually hits must say that, rather than dying in `column_stack`."""
+    from fantasy_baseball.trajectory.shape import Prepared
+
+    bare = Prepared(
+        kind="hitter",
+        horizons=HORIZONS,
+        last=2020,
+        age=np.array([25.0]),
+        current=np.array([10.0]),
+        prior=np.array([10.0]),
+        season=np.array([2010]),
+        mlbam_id=np.array([1]),
+        forward={h: np.array([10.0]) for h in HORIZONS},
+        back={},
+        lookback=0,
+    )
+    with pytest.raises(ValueError, match="no backward window"):
+        closest_careers(bare, _career(10.0), age=25, n=5)
