@@ -610,3 +610,97 @@ def test_an_arc_with_no_holes_is_unchanged_and_a_missing_player_is_empty() -> No
 
     assert module._arc(solid) == [[24, 3.0], [25, 4.0], [26, 5.0]]
     assert module._arc(None) == []
+
+
+@pytest.mark.skipif(
+    not PANEL_DIR.exists() or not any(PANEL_DIR.glob("*_pt_panel_*.csv")),
+    reason=(
+        "matches a named player against the real 2000-2026 panel, which is gitignored "
+        "and so absent on a fresh clone"
+    ),
+)
+def test_a_real_comp_set_is_matched_on_career_complete_and_deep_enough() -> None:
+    """#358 acceptance criterion 4, on output that actually came through `prepare`.
+
+    THE PROPERTIES, NOT THE NAMES. The issue is explicit that membership shifts with the
+    panel and the snapshot, so asserting "Marte is in the list" would be a test of this
+    week's data. What must hold for every comp on every board is:
+
+      1. MATCHED ON CAREER -- `overlap` is at least `required_overlap` for the number of
+         realized ages the subject actually has, so no comp got in on a thin window;
+      2. A COMPLETE OUTCOME -- one realized value per horizon, and the comp's own anchor
+         season is far enough back that all of them had already happened. A 0.0 is a real
+         outcome (he left the league) and is NOT what this checks; the check is that the
+         season could be observed at all, which is the censoring rule;
+      3. and the anchor age is EXACTLY the subject's, since that is what makes the comp's
+         forward path line up with the projection it is drawn against.
+
+    The unit tests cover each property against a hand-built `Prepared`, which is a
+    different claim -- it says the matcher would honour them, not that the pipeline
+    produced them. This is the only test that reads real output.
+
+    Alvarez by NAME, resolved to an id in this snippet rather than typed as a literal
+    (CLAUDE.md): a hand-written mlbam_id lands on a real row belonging to someone else
+    and the assertions below would pass on it.
+    """
+    import math
+
+    from fantasy_baseball.config import load_config
+    from fantasy_baseball.trajectory.board import player_names
+    from fantasy_baseball.trajectory.career_comps import (
+        COMP_LOOKBACK,
+        closest_careers,
+        required_overlap,
+    )
+    from fantasy_baseball.trajectory.model import collapse_split_seasons
+    from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
+    from fantasy_baseball.trajectory.shape import prepare
+
+    config = load_config(PROJECT_ROOT / "config" / "league.yaml")
+    loaded = load_anchored_panels(
+        systems=config.projection_systems,
+        weights={s: config.projection_weights[s] for s in config.projection_systems},
+        panel_dir=PANEL_DIR,
+        sgp_overrides=config.sgp_overrides,
+    )
+    live = loaded.panels["hitter"]
+    names = player_names(PROJECT_ROOT / "data" / "cache" / "keeper_skills")
+    matches = [pid for pid, name in names.items() if name == "Yordan Alvarez"]
+    assert len(matches) == 1, f"expected exactly one Yordan Alvarez, got {matches}"
+    pid = matches[0]
+
+    horizons = (1, 2, 3, 4, 5)
+    complete = live[~live["partial_season"]].reset_index(drop=True)
+    prepared = prepare(complete, kind="hitter", horizons=horizons, lookback=COMP_LOOKBACK)
+    by_id = {int(i): g for i, g in collapse_split_seasons(complete).groupby("mlbam_id")}
+    mine = by_id[pid]
+    career = {int(a): float(s) for a, s in zip(mine["age"], mine["sgp"], strict=True)}
+    current = live[(live["mlbam_id"] == pid) & (live["season"] == loaded.season)]
+    age = int(current["age"].iloc[0])
+    career[age] = float(current["sgp"].iloc[0])
+
+    comps = closest_careers(prepared, career, age=age, n=10, exclude_id=pid)
+    assert comps, "the subject is a 29-year-old with a full career; he must match somebody"
+
+    realized = [a for a in range(age - COMP_LOOKBACK + 1, age + 1) if a in career]
+    # SPELLED OUT, not taken from `required_overlap`. Deriving the threshold from the
+    # function under test makes the assertion move with the code: loosening
+    # `required_overlap` to a flat `MIN_OVERLAP` left this green, because both sides
+    # dropped together. The test is the specification, so it states the rule -- three
+    # quarters of the subject's own realized ages, never below two -- and the second
+    # assertion checks the shipped constant still agrees with it.
+    need = max(2, math.ceil(0.75 * len(realized)))
+    assert required_overlap(len(realized)) == need, (
+        "MIN_OVERLAP_FRACTION or MIN_OVERLAP moved; if that was deliberate, change this "
+        "number and say why in the same commit"
+    )
+    for c in comps:
+        assert c.overlap >= need, f"{c.mlbam_id} matched on {c.overlap} ages, needs {need}"
+        assert c.overlap <= len(realized), "cannot share more ages than the subject has"
+        assert len(c.path) == len(horizons), "one realized value per projected year"
+        assert c.season + horizons[-1] <= prepared.last, (
+            f"{c.mlbam_id}'s {c.season} runs past {prepared.last}; his forward path "
+            "contains years that have not happened"
+        )
+        assert c.mlbam_id != pid, "he is not his own comp"
+    assert [c.rmse for c in comps] == sorted(c.rmse for c in comps), "closest first"
