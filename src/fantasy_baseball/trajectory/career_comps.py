@@ -16,12 +16,26 @@ question is "which players actually looked like this one, and what happened to t
 which is answerable without our model and therefore usable as evidence about it. The
 forward paths that come back fan out, and that fan is real.
 
-The two sets are almost disjoint in practice. On Alvarez at 29, forward matching returned
-Todd Frazier 2015, Edgar Renteria 2005, Howie Kendrick 2013, Evan Longoria 2015 and Melky
-Cabrera 2014; backward matching returns Starling Marte, Nick Castellanos, Eugenio Suarez,
-Joey Votto, Nick Swisher and Ian Kinsler -- recognisably the same KIND of player, high-peak
-bats with interruption years, and their outcomes spread from Kinsler holding 16.3 at 34
-to Swisher at 2.4.
+The two sets are almost disjoint in practice. Measured 2026-08-24 on Alvarez at 29, against
+the 2000-2026 hitter panel anchored to the 2026-08-22 rest-of-season snapshot -- which is
+THIS code's output, not the issue's prototype's (see `MIN_OVERLAP_FRACTION` for why the two
+differ). Forward matching returned Todd Frazier 2015, Edgar Renteria 2005, Howie Kendrick
+2013, Evan Longoria 2015 and Melky Cabrera 2014. Backward matching returns:
+
+    Starling Marte  2018  rmse 2.96  16.5 16.0 19.2 13.9  6.7
+    Ian Kinsler     2011       3.96  13.9 13.1 16.0 13.2 16.5
+    Joey Votto      2013       4.41   4.0 16.6 16.8 16.6  9.4
+    Alex Rios       2010       4.61   7.5 17.3 18.6  9.8  5.6
+    Carlos Gonzalez 2015       4.98  13.8  8.1 10.1  1.1  0.0
+    Adam Dunn       2009       5.02  14.4  2.6 12.6 10.9  8.3
+
+Recognisably the same KIND of player -- high-peak bats with interruption years -- and the
+outcomes are the point: Kinsler is still at 16.5 five years on, Gonzalez is out of the
+league. That fan is what the old set could not show, because it was picked for agreeing
+with the forecast.
+
+RE-MEASURE RATHER THAN TRUST THIS PARAGRAPH. It is pinned to one panel vintage and one
+snapshot, and both move.
 
 TWO CONVENTIONS FOR A MISSING SEASON, on purpose. See `Prepared.back` for the full
 reasoning; in short, an age the player did not play is dropped from the BACKWARD error
@@ -51,9 +65,25 @@ from fantasy_baseball.trajectory.shape import Prepared
 #: stored, and a ceiling above the stored count asks for comps that do not exist.
 #:
 #: Ten, not the five the chart draws by default: every legal `n` has to be servable.
-#: Costs ~370 bytes a player over five. It lives HERE, beside `closest_careers`, because
-#: this is the module both sides go through; it was defined twice, once per side, and
-#: kept honest by a test asserting the two literals were equal.
+#: It lives HERE, beside `closest_careers`, because this is the module both sides go
+#: through; it was defined twice, once per side, and kept honest by a test asserting the
+#: two literals were equal.
+#:
+#: WHAT IT COSTS, re-measured 2026-08-24 because backward matching moved it. The old note
+#: quoted "~370 bytes a player over five" and was written for the forward matcher; that
+#: figure no longer describes anything. Built at max_horizon=5 against the 2000-2026
+#: panels and the 2026-08-22 snapshot, the whole `cache:trajectory_chart_data` blob is
+#: **1,739 KB** over 1,290 players -- against **1,515 KB** for the forward-matched blob
+#: currently deployed, so +15%.
+#:
+#: The growth is NOT the two new per-comp fields. It is the deduped `careers` map going
+#: 1,216 -> 2,755 arcs: forward comps were selected for landing near one predicted path,
+#: so the same few hundred careers served the whole board, while backward comps are drawn
+#: from a far wider and less correlated pool and share far less. Comp ENTRIES actually
+#: fell, 12,590 -> 10,980, because the `MIN_OVERLAP` floor leaves the very young with
+#: none. Well inside what the KV takes -- the deployed blob is already this size -- but
+#: it is the number to check before raising this constant, since the careers map is what
+#: grows and it grows faster than the comp count.
 MAX_COMPS = 10
 
 #: Share of the subject's own realized ages a candidate must also have played to be
@@ -62,8 +92,21 @@ MAX_COMPS = 10
 #: unreachable for a 23-year-old who has only three professional seasons -- and a
 #: 23-year-old is precisely the ambiguous keeper call this board exists for.
 #:
-#: 0.75 reproduces the >= 6 of 8 the #358 prototype used, so the published Alvarez
-#: numbers are the numbers this ships with.
+#: 0.75 reproduces the >= 6 of 8 the #358 prototype used. THE RULE, NOT THE NUMBERS --
+#: the shipped comp list is close to the issue's prototype but not equal to it, and
+#: claiming parity would send the next reader hunting for a regression that is not there.
+#: Six things differ, none of them a drift from a decision anyone made:
+#:
+#:  1. the approved deviation on survivorship admits candidates the prototype's
+#:     `all(a in hist for a in FWD)` dropped, which changes who is in the top ten;
+#:  2. the subject's anchor-age value is `player.now`, the ROS-anchored full-season
+#:     estimate, where the prototype used the raw partial-season row;
+#:  3. the panel here is `load_scored_panel`-filtered (observed, `_in_role`, volume > 0,
+#:     `_scale_short_schedules`) where the prototype read the CSV bare;
+#:  4. era factors are computed pre-injection by `ros_anchor.load_anchored_panels`, not
+#:     `era_normalize(score(raw))`;
+#:  5. `build_history` drops each player's first panel season, so it can never anchor;
+#:  6. `exclude_id` is explicit here.
 MIN_OVERLAP_FRACTION = 0.75
 
 #: ...and the floor under it, in ages. Two, so a "career comp" is never a single point.
@@ -128,6 +171,18 @@ def closest_careers(
     `career` is the subject's REALIZED SGP by age -- his complete seasons, plus the
     anchored in-progress one at `age` (see `ros_anchor`). Ages outside the lookback
     window are ignored, so a caller may pass a whole career.
+
+    THE ANCHOR AGE IS NOT PURELY REALIZED, and this is the one place "matched on realized
+    career only" needs qualifying. While the base season is in progress the caller passes
+    `SweptPlayer.now` for that age: season-to-date PLUS a rest-of-season projection,
+    re-scored (#348). Deliberate -- dropping the newest and most decision-relevant year
+    would match a player on a career that stops a year before the question being asked,
+    and passing his two-thirds-season partial line would read his missed time as decline.
+    What matters for #358 is that no value from the SHAPE FIT enters, which is what makes
+    the resulting comps independent of the forecast they are drawn against; that is
+    pinned by `test_a_comp_is_selected_on_the_career_never_on_the_prediction`. A
+    rest-of-season blend is not a trajectory prediction and does not reintroduce the
+    circularity. On a COMPLETE base season the distinction vanishes.
 
     `exclude_id` drops the subject from his own candidate pool. The forward-observability
     mask usually removes him anyway -- his anchor season is the most recent one -- but
