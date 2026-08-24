@@ -80,10 +80,15 @@ from fantasy_baseball.trajectory.shape import Prepared
 #: 1,216 -> 2,755 arcs: forward comps were selected for landing near one predicted path,
 #: so the same few hundred careers served the whole board, while backward comps are drawn
 #: from a far wider and less correlated pool and share far less. Comp ENTRIES actually
-#: fell, 12,590 -> 10,980, because the `MIN_OVERLAP` floor leaves the very young with
-#: none. Well inside what the KV takes -- the deployed blob is already this size -- but
-#: it is the number to check before raising this constant, since the careers map is what
-#: grows and it grows faster than the comp count.
+#: fell, 12,590 -> 10,980, because `required_overlap` leaves the young with none -- mostly
+#: `MIN_OVERLAP_FRACTION`'s 0.75 doing the excluding for three-to-five-season players,
+#: with the flat `MIN_OVERLAP` binding only at two realized ages or fewer.
+#:
+#: COMPARABLE to the deployed blob, not equal to it: 1,739 against 1,515 KB is the +15%
+#: stated above, and "the deployed blob is already this size" contradicted those two
+#: figures four lines after printing them. Well inside what the KV takes either way, but
+#: this is the number to check before raising this constant, since the careers map is
+#: what grows and it grows faster than the comp count.
 MAX_COMPS = 10
 
 #: Share of the subject's own realized ages a candidate must also have played to be
@@ -119,6 +124,28 @@ MIN_OVERLAP_FRACTION = 0.75
 #: across both 2026 pools, every age from 20 up -- which reads as the feature working and
 #: is really the floor being defeated at exactly the ages nobody can check by eye.
 MIN_OVERLAP = 2
+
+#: How many ages a backward career match looks over, counting the anchor age itself, so
+#: eight means the anchor plus the seven before it.
+#:
+#: NOT NAMED "DEFAULT" ANY MORE, and not living in `model` any more either. It was
+#: `model.DEFAULT_LOOKBACK`, next to `DEFAULT_HORIZONS`, back when `prepare` defaulted to
+#: building a backward window for everyone. `prepare` now defaults to building none, so a
+#: constant called DEFAULT sat beside `lookback: int = 0` asserting a default that was
+#: not one -- and it has exactly one consumer, the push script, which wants it for THIS
+#: module's matcher. It belongs here, beside `MAX_COMPS`, with the other numbers that
+#: describe what a career comp is.
+#:
+#: Eight is roughly a career's worth of established play without reaching back into the
+#: minors for a late-20s subject -- ages 22-29 for a 29-year-old, which is the window the
+#: #358 prototype matched Alvarez on. Longer buys little (few candidates have twelve
+#: qualifying ages and the extra ones are teenage partial seasons); shorter stops
+#: distinguishing "peaked early then dipped" from "climbed steadily", which is the whole
+#: shape a career comp is supposed to carry.
+#:
+#: A subject with fewer realized ages than this is matched on what he HAS -- see
+#: `required_overlap`. It is a ceiling on the window, not a requirement.
+COMP_LOOKBACK = 8
 
 
 def required_overlap(subject_ages: int) -> int:
@@ -158,25 +185,84 @@ class CareerComp:
     path: tuple[float, ...]
 
 
-def _candidates(prepared: Prepared, age: int, exclude_id: int | None) -> tuple[np.ndarray, int]:
-    """Rows at exactly `age` that can be followed forward, and how many sat at that age
-    at all.
+def _check(prepared: Prepared, career: Mapping[int, float], age: int) -> None:
+    """The preconditions BOTH public entry points share.
+
+    One function because they must not drift: `match_pool` exists to explain what
+    `closest_careers` did, and a diagnostic that accepts input the matcher rejects
+    explains a decision the code never made. `match_pool` shipped briefly with neither
+    check and died inside `np.column_stack([])` -- the bare crash these named errors
+    were added to replace, reintroduced one function over.
+
+    Raises:
+        ValueError: no backward window, or no usable value at the anchor age.
+    """
+    if not prepared.lookback:
+        raise ValueError(
+            "this Prepared carries no backward window; call prepare(..., lookback=N). "
+            "It is opt-in because only this module reads it and every other prepare() "
+            "caller would pay N full-history reindexes for nothing."
+        )
+    # PRESENT AND FINITE, not merely present. A NaN slips through an `in` test and then
+    # makes the anchor column all-NaN for every candidate: `matched` goes False there, so
+    # the one age every candidate was SELECTED at contributes nothing to the error and
+    # `overlap` reads one lower for the whole pool, with no exception anywhere. The comps
+    # would still be returned, ranked on a window silently shorter than the number
+    # printed beside them.
+    if age not in career or not math.isfinite(career[age]):
+        raise ValueError(
+            f"career carries no usable value at the anchor age {age} "
+            f"(got {career.get(age)!r}); the in-progress season must be supplied by the "
+            "caller as a finite number"
+        )
+
+
+def _subject_window(
+    career: Mapping[int, float], age: int, lookback: int
+) -> tuple[list[int], np.ndarray]:
+    """The subject's own realized ages inside the window, newest last, and their values.
+
+    Ages he never played are simply absent, which is the same treatment `back` gives the
+    candidates. A non-finite value is dropped for the same reason a non-finite ANCHOR is
+    refused: an age that cannot be compared is not an age in common, and leaving it in
+    lengthens `ages`, raises `required_overlap`, and then contributes nothing to any
+    candidate's `overlap` -- the whole pool judged against a window none of them can
+    reach.
+
+    Shared with `match_pool` so the two cannot disagree about what the window IS. It was
+    spelled out in both, which is exactly the duplication `match_pool`'s own docstring
+    claims it exists to avoid.
+    """
+    ages = [
+        a for a in range(age - lookback + 1, age + 1) if a in career and math.isfinite(career[a])
+    ]
+    return ages, np.array([career[a] for a in ages], dtype=float)
+
+
+def _candidates(
+    prepared: Prepared, age: int, exclude_id: int | None
+) -> tuple[np.ndarray, np.ndarray]:
+    """Rows at exactly `age` that can be followed forward, and the MASK of those at that
+    age at all.
 
     EXACT age, and every forward year observABLE. `forward` stores a real 0.0 for "out
     of the league", which is indistinguishable from "has not happened yet" -- so the
     censoring has to come from the SEASON, not the value. Horizons ascend, so clearing
     the longest clears them all.
 
-    The second return is the pool BEFORE censoring, which is the only thing that tells
-    "nobody was ever this old in the panel" apart from "everyone this old is too recent
-    to follow" -- see `MatchPool`.
+    The second return is the pool BEFORE censoring but AFTER `exclude_id` -- the subject
+    himself is never in it -- which is the only thing that tells "nobody ELSE was ever
+    this old in the panel" apart from "everyone else this old is too recent to follow".
+    See `MatchPool`. A MASK rather than its count, because the matcher does not want the
+    count and should not pay a full `.sum()` over the panel on every query to produce a
+    number only the diagnostic path reads.
     """
-    horizons = prepared.horizons
+    horizons = tuple(sorted(prepared.horizons))
     at_age = prepared.age == float(age)
     if exclude_id is not None:
         at_age = at_age & (prepared.mlbam_id != exclude_id)
     followable = at_age & (prepared.season + horizons[-1] <= prepared.last)
-    return np.flatnonzero(followable), int(at_age.sum())
+    return np.flatnonzero(followable), at_age
 
 
 def _overlap(
@@ -185,8 +271,13 @@ def _overlap(
     ages: list[int],
     subject: np.ndarray,
     age: int,
-) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
-    """Per-candidate `(difference, matched-mask, overlap-count)` over the shared ages.
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per-candidate `(difference, matched-mask)` over the shared ages.
+
+    The overlap COUNT is `matched.sum(axis=1)`, derived by each caller rather than
+    returned here: the diagnostic wants only the count and the matcher wants all of it,
+    and a shared helper shaped for one caller's convenience is how a shared seam stops
+    being shared.
 
     One column per shared age, NaN where the candidate has no season there. `age - a` is
     an age offset and a season offset at once -- a player's age advances by exactly one
@@ -194,8 +285,7 @@ def _overlap(
     """
     window = np.column_stack([prepared.back[age - a][candidates] for a in ages])
     diff = window - subject
-    matched = ~np.isnan(diff)
-    return diff, matched, matched.sum(axis=1)
+    return diff, ~np.isnan(diff)
 
 
 @dataclass(frozen=True)
@@ -211,8 +301,12 @@ class MatchPool:
     Same class of misdirection the message it replaced was written to avoid.
     """
 
-    #: Rows at exactly the anchor age, before any censoring. Zero means the panel has
-    #: nobody this old at all.
+    #: Rows at exactly the anchor age, before censoring but AFTER `exclude_id` -- so the
+    #: subject himself is never counted here. "Excluding him" rather than "before any
+    #: censoring", which is what this said while the exclusion was already applied: for
+    #: the only 43-year-old in the panel that reads `at_age == 0` and the summary would
+    #: have told an operator the panel holds nobody that old, sending them to rebuild a
+    #: panel that holds exactly one.
     at_age: int
     #: ...of those, with a realized outcome at every horizon. Zero with `at_age` positive
     #: means every one of them is too recent to follow forward.
@@ -227,7 +321,7 @@ class MatchPool:
         if self.overlapping:
             return ""
         if not self.at_age:
-            return "no player of this age in the panel"
+            return "no other player of this age in the panel"
         if not self.followable:
             return "every player this age is too recent to follow forward"
         return "no career shares enough of his ages"
@@ -242,18 +336,24 @@ def match_pool(
 ) -> MatchPool:
     """How `closest_careers` arrived at its answer, for diagnostics only.
 
-    Shares `_candidates` and `_overlap` with the matcher rather than restating their
-    masks, which is the whole point: a diagnostic that computes its own version of the
-    rule eventually explains a decision the code did not make.
+    Shares EVERY step with the matcher rather than restating it -- the preconditions
+    (`_check`), the candidate mask (`_candidates`), the subject window
+    (`_subject_window`) and the overlap (`_overlap`). That is the whole point: a
+    diagnostic that computes its own version of the rule eventually explains a decision
+    the code did not make. It first shipped sharing only the two masks, and the two
+    halves it still spelled for itself were the window construction and the
+    preconditions -- so it accepted input the matcher refuses and built a window the
+    matcher would have built differently.
     """
+    _check(prepared, career, age)
     candidates, at_age = _candidates(prepared, age, exclude_id)
     if candidates.size == 0:
-        return MatchPool(at_age=at_age, followable=0, overlapping=0)
-    ages = [a for a in range(age - prepared.lookback + 1, age + 1) if a in career]
-    subject = np.array([career[a] for a in ages], dtype=float)
-    _, _, overlap = _overlap(prepared, candidates, ages, subject, age)
+        return MatchPool(at_age=int(at_age.sum()), followable=0, overlapping=0)
+    ages, subject = _subject_window(career, age, prepared.lookback)
+    _, matched = _overlap(prepared, candidates, ages, subject, age)
+    overlap = matched.sum(axis=1)
     return MatchPool(
-        at_age=at_age,
+        at_age=int(at_age.sum()),
         followable=int(candidates.size),
         overlapping=int((overlap >= required_overlap(len(ages))).sum()),
     )
@@ -296,41 +396,23 @@ def closest_careers(
             exactly that age, so with no anchor value there is nothing to anchor to -- and
             a caller reaching this has a construction bug, not an empty result.
     """
-    if not prepared.lookback:
-        raise ValueError(
-            "this Prepared carries no backward window; call prepare(..., lookback=N). "
-            "It is opt-in because only this module reads it and every other prepare() "
-            "caller would pay N full-history reindexes for nothing."
-        )
-    # PRESENT AND FINITE, not merely present. A NaN slips through a `in` test and then
-    # makes the anchor column all-NaN for every candidate: `matched` goes False there,
-    # so the one age every candidate was SELECTED at contributes nothing to the error
-    # and `overlap` reads one lower for the whole pool, with no exception anywhere. The
-    # comps would still be returned, ranked on a window silently shorter than the number
-    # printed beside them.
-    if age not in career or not math.isfinite(career[age]):
-        raise ValueError(
-            f"career carries no usable value at the anchor age {age} "
-            f"(got {career.get(age)!r}); the in-progress season must be supplied by the "
-            "caller as a finite number"
-        )
-    # NOT `len(prepared.back)`. The window size is a stated field, so a `Prepared` built
-    # by hand with a sparse `back` fails as a contract violation rather than as a
-    # KeyError from indexing a dict whose keys were assumed to be `range(len(...))`.
-    lookback = prepared.lookback
-    horizons = prepared.horizons  # `prepare` stores these sorted and deduped.
-
-    # The subject's side of the comparison: his own realized ages inside the window,
-    # newest last. Ages he never played are simply absent, which is the same treatment
-    # `back` gives the candidates.
-    ages = [a for a in range(age - lookback + 1, age + 1) if a in career]
-    subject = np.array([career[a] for a in ages], dtype=float)
+    _check(prepared, career, age)
+    # SORTED HERE TOO, not merely trusted. `Prepared.horizons` states the contract and
+    # `prepare` honours it, but this module both CENSORS on `horizons[-1]` and stacks
+    # `path` in iteration order, so an unsorted tuple from a hand-built `Prepared`
+    # censors on the wrong horizon AND emits a path the view then reads positionally --
+    # every comp's third year drawn in the age+1 column, silently. A pass-1 review called
+    # this re-sort redundant and it was removed; it is not redundant, it is the one line
+    # standing between a malformed input and a wrong chart.
+    horizons = tuple(sorted(prepared.horizons))
+    ages, subject = _subject_window(career, age, prepared.lookback)
     need = required_overlap(len(ages))
 
     candidates, _ = _candidates(prepared, age, exclude_id)
     if candidates.size == 0:
         return []
-    diff, matched, overlap = _overlap(prepared, candidates, ages, subject, age)
+    diff, matched = _overlap(prepared, candidates, ages, subject, age)
+    overlap = matched.sum(axis=1)
 
     keep = overlap >= need
     if not keep.any():

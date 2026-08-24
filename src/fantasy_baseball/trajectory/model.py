@@ -36,23 +36,6 @@ MIN_LOCAL_SUPPORT = 0.10
 DEFAULT_HORIZONS = (1, 2, 3, 4, 5)
 
 
-#: How many ages a BACKWARD career match looks over, counting the anchor age itself, so
-#: eight means the anchor plus the seven before it. Beside `DEFAULT_HORIZONS` because the
-#: two are the same kind of constant read from opposite directions: horizons are what a
-#: comp is followed forward through, this is what he had to look like to become one.
-#:
-#: Eight is roughly a career's worth of established play without reaching back into the
-#: minors for a late-20s subject -- ages 22-29 for a 29-year-old, which is the window the
-#: #358 prototype matched Alvarez on. Longer buys little (few candidates have twelve
-#: qualifying ages and the extra ones are teenage partial seasons); shorter stops
-#: distinguishing "peaked early then dipped" from "climbed steadily", which is the whole
-#: shape a career comp is supposed to carry.
-#:
-#: A subject with fewer realized ages than this is matched on what he HAS -- see
-#: `career_comps.required_overlap`. It is a ceiling on the window, not a requirement.
-DEFAULT_LOOKBACK = 8
-
-
 #: A forward season is "he did not play" only when it is EXACTLY zero. SGP is genuinely
 #: negative for a below-replacement season -- 7.7% of hitter-seasons and 15.0% of
 #: pitcher-seasons in the panel, down to -3.87 -- so testing `> 0` would file every one

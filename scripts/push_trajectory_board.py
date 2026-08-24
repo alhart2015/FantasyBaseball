@@ -33,6 +33,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import time
 from pathlib import Path
@@ -68,8 +69,12 @@ MIN_SGP = 0.0
 #: Comps stored per player -- the SAME constant the view clamps `n` against, imported
 #: rather than re-declared here. See its docstring in `career_comps`; a second literal
 #: beside this one is what the deleted parity test existed to police.
-from fantasy_baseball.trajectory.career_comps import MAX_COMPS, closest_careers, match_pool
-from fantasy_baseball.trajectory.model import DEFAULT_LOOKBACK
+from fantasy_baseball.trajectory.career_comps import (
+    COMP_LOOKBACK,
+    MAX_COMPS,
+    closest_careers,
+    match_pool,
+)
 
 
 def _career_by_age(seasons) -> dict[int, float]:
@@ -86,7 +91,17 @@ def _career_by_age(seasons) -> dict[int, float]:
     """
     if seasons is None:
         return {}
-    return {int(a): round(float(s), 4) for a, s in zip(seasons["age"], seasons["sgp"], strict=True)}
+    # NON-FINITE VALUES ARE DROPPED, not carried. A NaN sgp passes every `in` test
+    # downstream, lengthens the matched window, raises `required_overlap` through it, and
+    # then matches no candidate at that age -- the whole pool judged against a window
+    # none of them can reach. `_subject_window` drops it too; doing it here as well keeps
+    # the drawn career line from carrying a point that renders as a gap in one place and
+    # a zero in another.
+    return {
+        int(a): round(float(s), 4)
+        for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
+        if math.isfinite(s)
+    }
 
 
 def _arc(seasons) -> list[list[float]]:
@@ -145,6 +160,13 @@ def _playing_time(frame, volume: str) -> dict[tuple[int, int], float]:
     exact hurt-versus-finished signal the column exists for (#357). A PARTLY-NaN group is
     worse than useless too: it sums only the half it can see and understates a split
     season. Both become absent, which the table renders as a dash.
+
+    HOW A NaN GETS HERE AT ALL, since `load_scored_panel` admits a row only on
+    `volume.notna() & volume > 0`: that filter runs BEFORE `_scale_short_schedules`
+    multiplies the column by `162 / scheduled_games`, so a season carrying no
+    `scheduled_games` produces a NaN volume downstream of the very check usually cited as
+    making this impossible. Not observed on the shipped panels -- the point is that
+    "unreachable" is a claim about two functions, not one, and the guard is cheap.
 
     A FUNCTION, not four lines inline in `build_payload`, for one reason: the test that
     covers it was written inline against a local frame and therefore asserted pandas'
@@ -404,13 +426,15 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         swept += produced
 
         # `sweep_pool` builds its own prepared state and does not return it. Preparing a
-        # second time costs one vectorized reindex per pool -- cheap next to the sweep,
-        # and far cheaper than widening `sweep_pool`'s signature, which the CLI and its
-        # tests also call.
+        # second time costs one vectorized reindex per horizon PLUS one per lookback
+        # offset. That second term is new, and it is the whole reason `lookback` is
+        # opt-in: `sweep_pool`'s own `prepare` does not pass it, so the sweep does not pay
+        # it. Still cheap next to the sweep, and far cheaper than widening `sweep_pool`'s
+        # signature, which the CLI and its tests also call.
         # `lookback=` is what turns the backward window on. It is opt-in (see `prepare`)
         # because this is its only consumer, and `sweep_pool` above just called `prepare`
         # without it -- so the sweep no longer pays for a window it never reads.
-        prepared = prepare(complete, kind=kind, horizons=horizons, lookback=DEFAULT_LOOKBACK)
+        prepared = prepare(complete, kind=kind, horizons=horizons, lookback=COMP_LOOKBACK)
         # THROUGH THE SHARED COLLAPSE, like every other reader of this panel. A
         # mid-season trade can put two rows on one player-year, and `collapse_split_seasons`
         # is where that rule lives -- `collapsed_index`'s docstring names it as the single
@@ -442,15 +466,30 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
             # UNFILLED. `_career_by_age`, not `_arc`: a year he did not play must stay
             # absent here, or an injured star matches a journeyman.
             career = {**_career_by_age(by_id.get(player.mlbam_id)), player.age: player.now}
-            comps = player_comps(prepared, player, career, names, pt)
-            if not comps:
-                # Only on the empty branch: `match_pool` repeats the candidate mask and
-                # the overlap count, and paying that for the ~85% of players who DO get
-                # comps would be a second full pass over the pool for a number nothing
-                # reads.
-                reason = match_pool(prepared, career, player.age, exclude_id=player.mlbam_id).reason
-                no_comps[reason] = no_comps.get(reason, 0) + 1
+            # ONE BAD PLAYER MUST NOT DISCARD THE SWEEP. `closest_careers` refuses a
+            # non-finite anchor by design -- silently matching on a window one age
+            # shorter than the `overlap` printed beside it is worse than no comps -- but
+            # raising out of this loop aborts both pools and pushes nothing, which is
+            # verbatim the failure `player_comps`'s own docstring says was removed. He
+            # keeps his row and his career line and loses only his comps, exactly like a
+            # player nothing matches.
+            reason = ""
+            if not math.isfinite(player.now):
+                reason = "no usable current-season value"
+                comps = []
             else:
+                comps = player_comps(prepared, player, career, names, pt)
+                if not comps:
+                    # Only on the empty branch: `match_pool` repeats the candidate mask
+                    # and the overlap count, and paying that for the ~85% of players who
+                    # DO get comps would be a second full pass over the pool for a number
+                    # nothing reads.
+                    reason = match_pool(
+                        prepared, career, player.age, exclude_id=player.mlbam_id
+                    ).reason
+            if reason:
+                no_comps[reason] = no_comps.get(reason, 0) + 1
+            if comps:
                 # THE SAME `by_id` the subject's own history comes from, so a comp's arc
                 # and the subject overlay drawn on top of it are on one scale by
                 # construction. Resolved per pool, because `by_id` is per pool: a hitter
@@ -463,7 +502,15 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
                     key = chart_key(comp["id"], kind)
                     if key not in careers and (arc := _arc(by_id.get(comp["id"]))):
                         careers[key] = arc
-            extras[(player.mlbam_id, player.pool)] = {"history": history, "comps": comps}
+            entry = {"history": history, "comps": comps}
+            # WHY HE HAS NONE, stored per player rather than only counted. The page has
+            # no other way to know which of the three causes applied to the man on
+            # screen, so without this it had to list all three at every affected player
+            # and let him guess -- documenting the gap instead of closing it. Written
+            # only when there is something to say, so a player with comps costs nothing.
+            if reason:
+                entry["no_comps"] = reason
+            extras[(player.mlbam_id, player.pool)] = entry
         print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
         if no_comps:
             # SAID OUT LOUD, AND BY CAUSE. A push that quietly drops comps for part of

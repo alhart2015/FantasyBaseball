@@ -85,7 +85,10 @@
   // longer carries `floor` or `scale` at all.
 
   const datasets = [
-    // Comps first so later datasets paint over them.
+    // Array position decides nothing here -- `order` does, and the block at the top of
+    // this file explains which way round it runs. Comps stay first in the array only
+    // because `fill: "+1"` on the band below resolves by array INDEX, so the band and
+    // its hidden p10 partner have to stay adjacent and in that order.
     ...data.comps.map((c) => ({
       label: `${c.name} (${c.season})`,
       data: c.path.map((p) => ({ x: p.age, y: p.value })),

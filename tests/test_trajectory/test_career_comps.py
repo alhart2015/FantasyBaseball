@@ -244,7 +244,7 @@ def test_the_three_ways_of_getting_no_comps_are_told_apart() -> None:
     subject = _career(10.0)
 
     empty = _prepared([(1, 2010, 30, _flat(10.0), [10.0] * 5)])
-    assert match_pool(empty, subject, age=25).reason == "no player of this age in the panel"
+    assert match_pool(empty, subject, age=25).reason == "no other player of this age in the panel"
 
     # At the right age, but his season + 5 runs past `last`.
     too_recent = _prepared([(1, 2019, 25, _flat(10.0), [10.0] * 5)], last=2021)
@@ -294,3 +294,87 @@ def test_a_prepared_with_no_backward_window_is_refused_by_name() -> None:
     )
     with pytest.raises(ValueError, match="no backward window"):
         closest_careers(bare, _career(10.0), age=25, n=5)
+
+
+def test_an_unsorted_hand_built_prepared_still_censors_and_orders_correctly() -> None:
+    """`Prepared` is a plain dataclass and these helpers build one by hand, so the sort
+    is a guard, not a formality.
+
+    Unsorted, `horizons[-1]` is not the maximum: censoring runs on the wrong window and
+    admits candidates with no realized year at the true longest horizon, AND `path` is
+    stacked in iteration order, which the view then reads positionally by
+    `p.horizon - 1`. The result is every comp's third year drawn in the age+1 column,
+    with nothing raising.
+
+    A pass-1 quality review called the re-sort redundant because `prepare` sorts; this
+    test is why it went back in.
+    """
+    rows = [(1, 2010, 25, _flat(10.0), [1.0, 2.0, 3.0, 4.0, 5.0])]
+    ordered = _prepared(rows)
+    shuffled = _prepared(rows)
+    object.__setattr__(shuffled, "horizons", (3, 1, 2, 5, 4))
+
+    got = closest_careers(shuffled, _career(10.0), age=25, n=5)
+    assert got, "the candidate still matches"
+    assert got[0].path == closest_careers(ordered, _career(10.0), age=25, n=5)[0].path, (
+        "the forward path is emitted horizon-ascending whatever order the tuple carried"
+    )
+    assert got[0].path == (1.0, 2.0, 3.0, 4.0, 5.0)
+
+
+def test_a_censoring_window_is_taken_from_the_true_longest_horizon() -> None:
+    """The other half: `horizons[-1]` on an unsorted tuple censors on the wrong year, so
+    a candidate with no realized value at the true maximum slips into the pool."""
+    # season 2016 + 5 = 2021 > last, so he must NOT be a candidate; + 2 would let him in.
+    rows = [(1, 2016, 25, _flat(10.0), [10.0] * 5)]
+    shuffled = _prepared(rows, last=2020)
+    object.__setattr__(shuffled, "horizons", (5, 1, 2, 3, 4))
+    assert closest_careers(shuffled, _career(10.0), age=25, n=5) == []
+
+
+def test_the_diagnostic_refuses_exactly_what_the_matcher_refuses() -> None:
+    """`match_pool` explains what `closest_careers` did, so it must not accept input the
+    matcher rejects -- otherwise it explains a decision the code never made.
+
+    It shipped with neither precondition and died inside `np.column_stack([])` on a
+    `Prepared` with no window: the bare crash the named errors were added to replace,
+    reintroduced one function over. Both now route through `_check`.
+    """
+    from fantasy_baseball.trajectory.shape import Prepared
+
+    bare = Prepared(
+        kind="hitter",
+        horizons=HORIZONS,
+        last=2020,
+        age=np.array([25.0]),
+        current=np.array([10.0]),
+        prior=np.array([10.0]),
+        season=np.array([2010]),
+        mlbam_id=np.array([1]),
+        forward={h: np.array([10.0]) for h in HORIZONS},
+        back={},
+        lookback=0,
+    )
+    with pytest.raises(ValueError, match="no backward window"):
+        match_pool(bare, _career(10.0), age=25)
+
+    ok = _prepared([(1, 2010, 25, _flat(10.0), [10.0] * 5)])
+    with pytest.raises(ValueError, match="no usable value at the anchor age 25"):
+        match_pool(ok, {**_career(10.0), 25: float("nan")}, age=25)
+
+
+def test_a_non_finite_value_at_a_non_anchor_age_is_dropped_from_the_window() -> None:
+    """The anchor guard only ever covered the anchor. A NaN one year back passes every
+    check, lengthens `ages`, raises `required_overlap` through it, and then contributes
+    nothing to any candidate's `overlap` -- so the whole pool is judged against a window
+    none of them can reach and everyone is refused.
+
+    Here: eight ages of which one is NaN. Dropped, the subject has seven and needs six,
+    which the candidate meets. Kept, he would appear to have eight and need six while
+    the NaN column matches nobody.
+    """
+    prepared = _prepared([(1, 2010, 25, _flat(10.0), [10.0] * 5)])
+    holed = {**_career(10.0), 21: float("nan")}
+    got = closest_careers(prepared, holed, age=25, n=5)
+    assert [c.mlbam_id for c in got] == [1]
+    assert got[0].overlap == LOOKBACK - 1, "the NaN age is not an age in common"

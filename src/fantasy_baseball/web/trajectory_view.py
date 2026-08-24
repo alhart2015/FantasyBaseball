@@ -817,6 +817,13 @@ class PlayerView:
     #: means the two keys are out of step and one re-push fixes it. Saying "predates"
     #: for a mismatch sends a reader looking in the wrong place.
     chart_vintage_mismatch: bool = False
+    #: WHY there are no comps, in the push's own words, when the blob says so. Empty when
+    #: comps exist, and empty on a board written before the field did -- the page falls
+    #: back to listing every possible cause, which is what it had to do for everyone.
+    #: Stored per player rather than derived here because only the push has the panel:
+    #: "the panel holds nobody else this old" and "everyone this old is too recent to
+    #: follow forward" are facts about the fitting data, not about this row.
+    no_comps_reason: str = ""
 
     @property
     def axis_label(self) -> str:
@@ -1361,8 +1368,11 @@ def build_player_view(
                 #
                 # This also subsumes the truncation the positional slice was doing: a
                 # player fitted at fewer horizons than the sweep stored simply has fewer
-                # points to pair against. The `len` test is for a SHORT stored path --
-                # a hand-built or older blob -- which would otherwise IndexError.
+                # points to pair against. BOTH halves of the bound are load-bearing on a
+                # hand-built or older blob: the upper one stops a SHORT stored path
+                # raising IndexError, and the lower one stops a horizon of 0 indexing
+                # `[-1]` and drawing the comp's FIFTH year as his first -- silently, which
+                # is worse than either raising or dropping the cell.
                 "path": [
                     {"age": p.age, "value": float(c["path"][p.horizon - 1]) - floor}
                     for p in sp.sgp
@@ -1388,4 +1398,5 @@ def build_player_view(
             # Sliced ONCE, here. This is the only comp list there is.
             for c in extras.get("comps", [])[:want]
         ],
+        no_comps_reason=str(extras.get("no_comps", "")),
     )

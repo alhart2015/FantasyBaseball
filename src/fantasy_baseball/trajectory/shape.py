@@ -316,7 +316,13 @@ class Prepared:
     #: shape, different survival -- and print it under `kind='pitcher'` with a plausible
     #: `n_comps` and no warning.
     kind: str
-    #: Horizons whose forward values are available. A query may ask for any subset.
+    #: Horizons whose forward values are available, ASCENDING AND DEDUPED. `prepare`
+    #: normalizes them; a reader is entitled to `horizons[-1]` being the true maximum and
+    #: to `forward` iterating in path order. Stated here because `Prepared` is a plain
+    #: dataclass that tests and any caller construct by hand -- the same reason
+    #: `lookback` is carried rather than inferred -- and because `career_comps` both
+    #: censors on `horizons[-1]` and stacks `path` in this order, so an unsorted tuple
+    #: mis-censors and mis-orders with no exception anywhere.
     horizons: tuple[int, ...]
     #: Last season with an observable outcome; a row is censored past it.
     last: int
@@ -386,7 +392,7 @@ def prepare(
     exactly one consumer (`career_comps`, reached through `push_trajectory_board`) while
     `prepare` is called by `sweep_pool` once per pool, by the single-player CLI, and by
     `tune_shape_windows` INSIDE ITS TUNING LOOP. Building it unconditionally charged every
-    one of those `DEFAULT_LOOKBACK` extra full-history reindexes for state they never
+    one of those `lookback` extra full-history reindexes for state they never
     touch, and the sweep paid it twice per pool. Nothing about the fit changes either way,
     so the default that costs nothing is the right one and the one caller that needs it
     says so.
@@ -414,21 +420,18 @@ def prepare(
         )
         for h in sorted(set(horizons))
     }
-    current = history["current"].to_numpy(dtype=float)
     # The same reindex run backwards, WITHOUT `nan_to_num` -- see `Prepared.back`. The
     # NaN is load-bearing there, so this must not be folded into the loop above.
     #
-    # Offset 0 is `current` ITSELF, aliased rather than reindexed: `(id, season - 0)` is
-    # the row's own key, so the lookup can only return the value already in that column.
-    # It is kept in the dict rather than special-cased at the read site, because a
-    # matcher that has to remember "offset 0 lives somewhere else" is a matcher one edit
-    # from reading the wrong array.
+    # OFFSET 0 IS REINDEXED LIKE THE REST, even though `(id, season - 0)` is the row's own
+    # key and can only return the value already sitting in `current`. Aliasing the two was
+    # tried and reverted: `Prepared` is `frozen=True`, which advertises an immutability its
+    # ndarrays do not have, so a single in-place edit to either array -- and the natural
+    # one is exactly the `nan_to_num` that `Prepared.back` warns readers off -- silently
+    # rewrote `current`, which every fit reads. One reindex, paid only by the single
+    # caller that opts into a window at all, buys that hazard away.
     back = {
-        k: (
-            current
-            if k == 0
-            else index.reindex(pd.MultiIndex.from_arrays([ids, seasons - k])).to_numpy(dtype=float)
-        )
+        k: index.reindex(pd.MultiIndex.from_arrays([ids, seasons - k])).to_numpy(dtype=float)
         for k in range(lookback)
     }
     return Prepared(
@@ -436,7 +439,7 @@ def prepare(
         horizons=tuple(sorted(set(horizons))),
         last=last,
         age=history["age"].to_numpy(dtype=float),
-        current=current,
+        current=history["current"].to_numpy(dtype=float),
         prior=history["prior"].to_numpy(dtype=float),
         season=seasons,
         mlbam_id=ids,

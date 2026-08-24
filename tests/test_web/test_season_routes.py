@@ -2883,6 +2883,45 @@ def test_one_comp_missing_its_playing_time_does_not_take_the_page_down(client):
     assert "None" not in table
 
 
+def test_a_player_with_no_comps_is_told_which_of_the_three_causes_applied(client):
+    """The push knows which cause applied; the page used to list all three and let the
+    reader guess.
+
+    Two of the three -- "no other player of this age in the panel" and "everyone this age
+    is too recent to follow forward" -- are facts about the FITTING PANEL, not about the
+    man on screen, and telling someone his career is unusual when the answer is a panel
+    vintage sends him to the wrong place entirely. Stored per player because only the
+    push has the panel to know.
+    """
+    payload, chart = _trajectory_board_and_chart()
+    for extras in chart["players"].values():
+        extras["comps"] = []
+        extras["no_comps"] = "every player this age is too recent to follow forward"
+
+    with _trajectory_cache(payload, chart):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200
+    body = resp.data.decode()
+    assert "every player this age is too recent to follow forward" in body
+    assert "a fact about the panel" in body, "and that it is not about him"
+    assert "no historical career shares enough of his ages" not in body, (
+        "the menu of causes is for a blob that does not say which one; this one does"
+    )
+
+
+def test_a_board_with_no_comps_and_no_stored_cause_still_lists_the_candidates(client):
+    """The deploy window again: a blob written before the cause was stored. The page
+    falls back to naming every possible reason, which is what it did for everyone."""
+    payload, chart = _trajectory_board_and_chart()
+    for extras in chart["players"].values():
+        extras["comps"] = []
+
+    with _trajectory_cache(payload, chart):
+        body = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
+    assert "no historical career shares enough of his ages" in body
+    assert "too recently to be followed forward" in body
+
+
 def test_a_board_pushed_before_the_backward_match_still_renders_its_comps(client):
     """The deploy window. A board written by the previous push carries no `overlap` and
     no `pt`, and the page has to drop those two COLUMNS rather than print a table of
