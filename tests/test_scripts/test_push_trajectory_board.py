@@ -117,30 +117,61 @@ def _prepared(horizons):
     return prepare(synthetic_panel(), kind="hitter", horizons=horizons)
 
 
-def test_a_player_observable_at_fewer_horizons_than_the_sweep_loses_only_his_comps() -> None:
-    """One short path must not discard the whole ~52s sweep.
+#: A subject career over the synthetic panel's ages. Its players run 24-32, so a
+#: 27-year-old shares four ages with the lookback window rather than all eight -- which
+#: is the ordinary case for anyone whose window reaches past the panel's start.
+_CAREER = {24: 9.0, 25: 10.0, 26: 11.0, 27: 12.0}
+
+
+def test_a_player_observable_at_fewer_horizons_than_the_sweep_still_gets_comps() -> None:
+    """One short path must not discard the whole ~52s sweep -- and since #358 it no
+    longer even costs him his comps.
 
     `player.sgp` is `traj.observable` -- points with `n > 0` only -- and the candidate
     mask `seasons + h <= last` shrinks as h grows, so a player can be observable at
     h=1..3 and not at h=4..5. `sweep_pool` keeps him (it drops only an ENTIRELY empty
-    path), `closest_paths` raises when `len(predicted) != len(prepared.horizons)`, and
-    nothing catches it, so the push writes nothing at all. Directly reachable via the
-    documented `--max-horizon` flag.
+    path). The forward matcher then raised on `len(predicted) != len(prepared.horizons)`
+    and nothing caught it, so the push wrote nothing at all; the guard against that was
+    to skip his comps.
 
-    HIS COMPS ARE SKIPPED, not padded. `forward` stores a real 0.0 for "out of the
-    league", so padding the path with zeros would match him against a cohort that
-    stopped playing -- and the page already renders an empty comps list with an
-    explanation of why.
+    Backward matching has no `predicted`, so there is no length contract left to
+    violate. He is matched on his realized career like everyone else, gets full-length
+    comp paths, and the view truncates them to the horizons he was actually fitted at.
+    The old skip is deleted rather than kept: it existed only to dodge that exception.
     """
     module = _script()
     horizons = (1, 2, 3)
     prepared = _prepared(horizons)
 
-    assert module.player_comps(prepared, _swept(2), horizons, {}) is None, "skipped"
+    short = module.player_comps(prepared, _swept(2), _CAREER, {}, {})
+    full = module.player_comps(prepared, _swept(3), _CAREER, {}, {})
 
-    full = module.player_comps(prepared, _swept(3), horizons, {})
-    assert full is not None and full, "a full-length path still gets its comps"
-    assert set(full[0]) == {"id", "name", "season", "rmse", "path"}
+    assert short, "a short fit is no longer a reason to withhold comps"
+    assert [c["id"] for c in short] == [c["id"] for c in full], (
+        "the match reads his career, which the fit length says nothing about"
+    )
+    assert set(full[0]) == {"id", "name", "season", "rmse", "overlap", "pt", "path"}
+    assert len(full[0]["path"]) == len(horizons)
+
+
+def test_a_comp_is_selected_on_the_career_never_on_the_prediction() -> None:
+    """THE POINT OF #358. The fitted path is not an input, so moving it cannot move the
+    comps. A forward matcher returns a different set for every prediction; this one
+    returns the same set, because the question it answers is about history.
+    """
+    module = _script()
+    horizons = (1, 2, 3)
+    prepared = _prepared(horizons)
+
+    from dataclasses import replace
+
+    player = _swept(3)
+    # The same man, with the model predicting something wildly different about him.
+    elsewhere = replace(player, sgp=tuple(replace(p, mean=p.mean + 40.0) for p in player.sgp))
+
+    assert [c["id"] for c in module.player_comps(prepared, player, _CAREER, {}, {})] == [
+        c["id"] for c in module.player_comps(prepared, elsewhere, _CAREER, {}, {})
+    ]
 
 
 def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
@@ -149,8 +180,7 @@ def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
     of them gets the other's career drawn under his own. The per-comp career cards
     (#346) look their arc up by `chart_key(id, pool)`, so the id has to be stored."""
     module = _script()
-    horizons = (1, 2, 3)
-    comps = module.player_comps(_prepared(horizons), _swept(3), horizons, {})
+    comps = module.player_comps(_prepared((1, 2, 3)), _swept(3), _CAREER, {}, {})
 
     assert comps, "the fixture player has comps"
     assert all(isinstance(c["id"], int) for c in comps)
@@ -442,10 +472,14 @@ def test_the_chart_data_carries_career_history_and_comps(monkeypatch) -> None:
     assert len(player["comps"]) <= module.MAX_COMPS
     if player["comps"]:
         first = player["comps"][0]
-        assert set(first) == {"id", "name", "season", "rmse", "path"}
+        assert set(first) == {"id", "name", "season", "rmse", "overlap", "pt", "path"}
         assert len(first["path"]) == 5
         rmses = [c["rmse"] for c in player["comps"]]
         assert rmses == sorted(rmses), "closest first"
+        # MATCHED, not merely stored. `overlap` is how many ages entered the RMSE, and
+        # a real push must produce a number of them rather than the 0 an unwired
+        # backward window would hand back with a perfect-looking distance beside it.
+        assert all(c["overlap"] >= 2 for c in player["comps"])
 
 
 @pytest.mark.skipif(

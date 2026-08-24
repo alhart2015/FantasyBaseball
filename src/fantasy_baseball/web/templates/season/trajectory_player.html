@@ -117,13 +117,34 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   "projection": board.projection, "comps": board.comps} | tojson }}</script>
 
 {% if board.comps %}
-<h3>Closest realized paths <span class="muted">({{ board.comps | length }})</span></h3>
+<h3>Careers that looked like his <span class="muted">({{ board.comps | length }})</span></h3>
+{#- WHAT THE READER IS LOOKING AT, said before the numbers. These are matched BACKWARD
+    (#358): chosen only on what they had already DONE by this age, with nothing from our
+    forecast entering the choice. That is what makes their spread evidence about the
+    projection rather than a picture of it -- the previous version picked the historical
+    paths that landed closest to the forecast, which could only ever agree with it. -#}
+<p class="muted">
+  Chosen on their <strong>realized career up to age {{ board.age }}</strong> -- our
+  projection plays no part in picking them. The columns to the right are what those
+  players actually went on to do, which is the honest spread to read the band against.
+  A <strong>0.0</strong> means he was out of the league that year; those are kept
+  deliberately, because dropping them would leave only the players who lasted.
+</p>
 <table class="data-table">
   <thead><tr><th>Player</th><th>Season</th><th>RMSE</th>
+    {#- HOW MUCH CAREER THE MATCH SAW, and how much he played in the match season. A
+        3-age match and an 8-age match at the same RMSE are not the same claim, and a
+        comp whose SGP collapsed on 199 PA was hurt rather than finished (#357). Both
+        columns are dropped whole when the blob predates them, rather than printing a
+        column of blanks. -#}
+    {% if board.comps[0].overlap is not none %}<th>Ages</th>{% endif %}
+    {% if board.comps[0].pt is not none %}<th>PA/IP</th>{% endif %}
     {% for pt in board.projection %}<th>{{ pt.age }}</th>{% endfor %}</tr></thead>
   <tbody>
     {% for c in board.comps %}
     <tr><td>{{ c.name }}</td><td>{{ c.season }}</td><td>{{ '%.2f'|format(c.rmse) }}</td>
+      {% if board.comps[0].overlap is not none %}<td>{{ c.overlap }}</td>{% endif %}
+      {% if board.comps[0].pt is not none %}<td>{{ '%.0f'|format(c.pt) }}</td>{% endif %}
       {% for pt in c.path %}<td>{{ '%.1f'|format(pt.value) }}</td>{% endfor %}</tr>
     {% endfor %}
   </tbody>
@@ -158,7 +179,7 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 </p>
 {% endif %}
 {% else %}
-<h3>Closest realized paths</h3>
+<h3>Careers that looked like his</h3>
 {#- TWO CAUSES, TWO MESSAGES. A mismatch is not a missing feature: the chart data is
     there, stamped for a different board than the one on screen, and one re-push fixes
     it. Telling that reader the board "predates" anything sends him looking in the
@@ -169,9 +190,10 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 <p class="muted">{{ mismatch_note }}</p>
 {% else %}
 <p class="muted">
-  None stored. Either this board predates the closest-comp feature (#324) and a
-  re-push of <code>push_trajectory_board.py</code> will fill it in, or this player has
-  no scored comps yet.
+  None stored. Either this board predates the career-comp feature (#358) and a
+  re-push of <code>push_trajectory_board.py</code> will fill it in, or no historical
+  career shares enough of his ages to be matched against -- which is the usual answer
+  for a player with only two or three seasons behind him.
 </p>
 {% endif %}
 {% endif %}

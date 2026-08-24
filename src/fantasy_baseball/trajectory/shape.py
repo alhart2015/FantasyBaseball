@@ -67,6 +67,7 @@ import pandas as pd
 from .model import (
     DEFAULT_BAND,
     DEFAULT_HORIZONS,
+    DEFAULT_LOOKBACK,
     PathPoint,
     Trajectory,
     collapse_split_seasons,
@@ -333,6 +334,25 @@ class Prepared:
     #: Rows whose `season + horizon` runs past `last` are unobservable and are masked
     #: off per query rather than being trusted here.
     forward: dict[int, np.ndarray]
+    #: offset -> PRIOR SGP for every history row, `offset` seasons back, **NaN** where he
+    #: has no season there. `back[0]` is the row's own season and equals `current`.
+    #:
+    #: THE OPPOSITE CONVENTION TO `forward`, DELIBERATELY, and the asymmetry is the point
+    #: rather than an oversight (#358). The two answer different questions:
+    #:
+    #: * `forward` asks WHAT HAPPENED TO HIM. A player out of the league at 33 was worth
+    #:   nothing to a roster slot that year, so 0 is the honest outcome and filling it is
+    #:   what keeps a comp set from being all survivors.
+    #: * `back` asks WHAT DID HE LOOK LIKE. A year he did not play says nothing about the
+    #:   kind of player he was, and scoring it as a 0 makes an injured star and a
+    #:   replacement-level journeyman look alike -- which is exactly the match
+    #:   `career_comps` exists to stop making. It also cannot be told apart from a season
+    #:   that falls before the panel begins, which is unobservable rather than absent.
+    #:
+    #: So NaN here means "no comparison available at this age", and `career_comps` drops
+    #: it from the error and counts the overlap instead. Anything else reading this must
+    #: decide what a NaN means for its own question rather than `nan_to_num`-ing it.
+    back: dict[int, np.ndarray]
 
 
 def prepare(
@@ -340,6 +360,7 @@ def prepare(
     *,
     kind: str,
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
+    lookback: int = DEFAULT_LOOKBACK,
     last_complete_season: int | None = None,
 ) -> Prepared:
     """Hoist the panel-level half of `shape_trajectory` out of the per-query loop.
@@ -348,11 +369,19 @@ def prepare(
 
     `kind` names the pool `panel` was loaded from, and every query against the result
     must agree with it -- see `Prepared.kind`.
+
+    `lookback` sizes `back`, the realized-career window `career_comps` matches on. It
+    is built HERE rather than in that module because it is panel-level state exactly
+    like `forward` -- one vectorized reindex per offset over the whole history, against
+    one per query -- and because building it beside `forward` is what makes the two
+    conventions (0 versus NaN) sit next to each other where a reader meets both.
     """
     if not horizons:
         raise ValueError("horizons must not be empty")
     if min(horizons) < 1:
         raise ValueError(f"horizons must be at least 1, got {sorted(horizons)}")
+    if lookback < 1:
+        raise ValueError(f"lookback must be at least 1, got {lookback}")
 
     last = last_complete_season if last_complete_season is not None else int(panel["season"].max())
     collapsed, index = collapsed_index(panel)
@@ -370,6 +399,12 @@ def prepare(
         )
         for h in sorted(set(horizons))
     }
+    # The same reindex run backwards, WITHOUT `nan_to_num` -- see `Prepared.back`. The
+    # NaN is load-bearing there, so this must not be folded into the loop above.
+    back = {
+        k: index.reindex(pd.MultiIndex.from_arrays([ids, seasons - k])).to_numpy(dtype=float)
+        for k in range(lookback)
+    }
     return Prepared(
         kind=kind,
         horizons=tuple(sorted(set(horizons))),
@@ -380,6 +415,7 @@ def prepare(
         season=seasons,
         mlbam_id=ids,
         forward=forward,
+        back=back,
     )
 
 

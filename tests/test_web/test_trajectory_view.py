@@ -1320,9 +1320,10 @@ def test_a_comp_path_is_truncated_to_the_projected_horizons(payload: dict) -> No
     """The fixture's comp paths are stored 5 long; the fixture sweeps 3 horizons.
 
     Deleting the `[: len(row["sgp"])]` slice leaves every other test in this module
-    green -- this is the one assertion that can catch it. The current push script
-    always produces paths that already agree in length (`closest_paths` raises on a
-    mismatch), so the slice defends a hand-built or future blob, not today's pipeline.
+    green -- this is the one assertion that can catch it. Since #358 the pipeline
+    reaches this too: comp paths are stored at the full swept horizon while a player
+    fitted at fewer keeps the shorter projection, a pair the forward matcher could not
+    produce because it refused to match such a player at all.
     """
     view = _view(payload, player="Big Bat")
     assert len(view.comps[0]["path"]) == 3, "a comp draws only the projected years"
@@ -1402,14 +1403,14 @@ def test_every_comp_carries_the_career_belonging_to_HIS_OWN_id(payload: dict) ->
 
 
 def test_every_comp_was_observed_at_the_age_he_matched_at(payload: dict) -> None:
-    """`closest_paths` selects on `prepared.age == float(age)` -- an EXACT match -- so a
+    """`closest_careers` selects on `prepared.age == float(age)` -- an EXACT match -- so a
     comp necessarily has a season at the subject's own age, which is where every card
     draws its match rule (`data.age`, shipped once).
 
     Asserted against the stored ARC, not against a number the view synthesized: the
     previous version of this test compared `c["path"][0]["age"]` to `view.age + 1`, and
     both sides came from `sp.age` inside `build_player_view`, so it held by construction
-    and could not fail whatever `closest_paths` returned. This one fails if a card is
+    and could not fail whatever `closest_careers` returned. This one fails if a card is
     handed an arc that does not cover the age its rule is drawn at.
     """
     view = _view(payload, player="Big Bat")

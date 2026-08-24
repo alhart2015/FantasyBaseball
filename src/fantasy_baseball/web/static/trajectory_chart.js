@@ -1,9 +1,15 @@
 // One player's trajectory: career solid, projection dashed, p10-p90 as a filled band,
-// comps thin and faint across the projected ages only.
+// comps thin across the projected ages only.
 //
-// The band must stay visually dominant over the comps. They were selected ON the outcome
-// -- the closest paths out of ~1,200 -- so drawn as equals they hug the projection and
-// make the forecast look far more certain than it is.
+// THE COMPS ARE VISIBLE ON PURPOSE (#358). They used to be near-invisible, and correctly
+// so: they were chosen by how close their realized path landed to THIS forecast, so drawn
+// as equals they hugged the projection and made it look far more certain than it was.
+// They are now chosen on their REALIZED CAREER before the match age, with no predicted
+// value entering, and what they draw is what actually happened to those players. That
+// fan is real information about the forecast rather than a redrawing of it, and hiding
+// it would understate the uncertainty exactly as drawing the old ones boldly overstated
+// it. The band still reads first -- it is the model's own claim -- but the comps must be
+// legible enough to be read against it.
 (function () {
   const node = document.getElementById("trajectory-chart-data");
   const canvas = document.getElementById("trajectory-chart");
@@ -72,7 +78,7 @@
     ...data.comps.map((c) => ({
       label: `${c.name} (${c.season})`,
       data: c.path.map((p) => ({ x: p.age, y: p.value })),
-      borderColor: "rgba(120,120,120,0.35)",
+      borderColor: "rgba(120,120,120,0.7)",
       borderWidth: 1,
       pointRadius: 0,
       order: 3,
@@ -219,7 +225,7 @@
           },
           plugins: {
             legend: { display: false },
-            // The subject's own age, identical on every card: `closest_paths` selects
+            // The subject's own age, identical on every card: `closest_careers` selects
             // on an EXACT age match, so the rule sits at the same x throughout, which
             // is what makes the grid comparable. One number, shipped once.
             matchLine: { age: data.age },

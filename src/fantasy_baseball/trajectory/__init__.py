@@ -22,6 +22,12 @@ Layers:
   `shape`   fit forward SGP on last year AND this year, kernel-weighted -- the estimator
   `value`   restate any of them as value above the position-aware waiver floor
 
+  `career_comps`  NOT an estimator and not part of the fit: the historical players whose
+            REALIZED career up to a given age most resembles a subject's, and what
+            happened to them afterwards. It exists to be read AGAINST the fit, so it is
+            deliberately blind to it -- see its module docstring for why a comp selected
+            on the prediction cannot be evidence about the prediction (#358).
+
 `shape` is the default matcher because it wins where the decision is. Level matching
 under-predicts a star coming off a down year by **3.31 SGP a year** (n=239, out of
 sample, the query player removed from the panel so neither estimator can match him to

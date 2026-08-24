@@ -66,13 +66,29 @@ DEFAULT_MAX_HORIZON = 5
 MIN_SGP = 0.0
 
 #: Comps stored per player -- the SAME constant the view clamps `n` against, imported
-#: rather than re-declared here. See its docstring in `comp_paths`; a second literal
+#: rather than re-declared here. See its docstring in `career_comps`; a second literal
 #: beside this one is what the deleted parity test existed to police.
-from fantasy_baseball.trajectory.comp_paths import MAX_COMPS, closest_paths
+from fantasy_baseball.trajectory.career_comps import MAX_COMPS, closest_careers
+
+
+def _career_by_age(seasons) -> dict[int, float]:
+    """One player's REALIZED SGP keyed by age, with holes left as holes.
+
+    The raw reading of the stored frame, shared by everything that needs it: `_arc`
+    fills the holes to draw a line, `player_comps` must not fill them at all. They were
+    one comprehension doing both jobs, and the fill is exactly the thing backward
+    matching cannot tolerate -- see `Prepared.back`.
+
+    Ages within one player are distinct: `collapse_split_seasons` gives one row per
+    (mlbam_id, season) and age advances with the season, so nothing is collapsed here.
+    """
+    if seasons is None:
+        return {}
+    return {int(a): round(float(s), 4) for a, s in zip(seasons["age"], seasons["sgp"], strict=True)}
 
 
 def _arc(seasons) -> list[list[float]]:
-    """One player's stored career as ``[[age, sgp], ...]``, ascending, ``[]`` when absent.
+    """One player's stored career as ``[[age, sgp]]``, ascending, ``[]`` when absent.
 
     ONE spelling for the two arcs a chart pairs on a single axis -- the subject's own
     history and a comp's whole career. They came off the same `by_id` frame through two
@@ -80,15 +96,15 @@ def _arc(seasons) -> list[list[float]]:
     blob's two `[[age, sgp]]` lists carried different ordering guarantees for no reason
     a reader could find.
 
-    **A MISSED SEASON IS A ZERO, NOT A GAP.** `load_scored_panel` drops a season the
-    player did not play (`observed` False, `pa <= 0`) and `_in_role` drops one he played
-    in the other role, so a career with a lost year arrives here as a frame with a hole
-    in it. `shape.prepare` takes the opposite convention on the very same data -- it
-    reindexes and `np.nan_to_num(..., nan=0.0)`, commented "a missing key means he was
-    out of the league that year -- a real 0" -- and that zero is part of the RMSE that
-    made him a comp and is what the comps table prints. An arc that skipped the age drew
-    a straight line through a year the rest of the page shows as nothing, on a card whose
-    whole job is showing where the busts sit in the arc.
+    **A MISSED SEASON IS A ZERO HERE, AND A GAP IN THE MATCH.** This is a DRAWING, and a
+    line that skips an age draws straight through a year the rest of the page shows as
+    nothing, on a card whose whole job is showing where the busts sit in the arc. So the
+    hole is filled with the 0 a roster slot actually got.
+
+    That is the opposite of what `closest_careers` does with the same hole, deliberately
+    (#358): matching on a filled 0 makes an injured star and a journeyman look alike.
+    The two conventions live one function apart on purpose -- `Prepared.back` and
+    `Prepared.forward` carry the same split for the same reason.
 
     Filled only BETWEEN observed seasons. Before his debut and after his last year he was
     not a zero, he was absent, and the career span is what the arc is about.
@@ -97,40 +113,37 @@ def _arc(seasons) -> list[list[float]]:
     ascending: nothing in the panel contract promises it, and `_netted` on the read side
     sorts for the same reason.
     """
-    if seasons is None:
-        return []
-    # Ages within one player are distinct: `collapse_split_seasons` gives one row per
-    # (mlbam_id, season) and age advances with the season, so nothing is collapsed here.
-    scored = {
-        int(a): round(float(s), 4) for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
-    }
+    scored = _career_by_age(seasons)
     if not scored:
         return []
     return [[age, scored.get(age, 0.0)] for age in range(min(scored), max(scored) + 1)]
 
 
-def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> list[dict] | None:
-    """One player's stored comp block, or ``None`` when his path is too short to match.
+def player_comps(prepared, player, career: dict[int, float], names: dict, pt: dict) -> list[dict]:
+    """One player's stored comp block -- the careers that looked like his, and what
+    happened to them. ``[]`` when nothing historical resembles him closely enough.
 
-    ``player.sgp`` is ``traj.observable`` -- the points with ``n > 0`` -- and the
-    candidate mask ``seasons + h <= last`` shrinks as the horizon grows, so a player can
-    be observable at h=1..3 and not at h=4..5. ``sweep_pool`` keeps him: it drops a
-    player only when the path is ENTIRELY empty. ``closest_paths`` then raises on
-    ``len(predicted) != len(prepared.horizons)``, and nothing caught it -- one such
-    player discarded the whole ~52s sweep and pushed nothing. Latent on the default
-    horizon, directly reachable via ``--max-horizon``.
+    MATCHED BACKWARD (#358). ``career`` is what he has actually DONE, and the comps are
+    chosen on that alone; the fitted path never enters. The forward matcher this replaced
+    chose them by how close their realized path landed to our PREDICTION, which made the
+    comp set a redrawing of the forecast rather than evidence about it.
 
-    SKIPPED, NEVER PADDED. ``forward`` stores a real 0.0 for "out of the league", so
-    padding the short tail with zeros would match him against the cohort that stopped
-    playing -- a confident wrong answer in place of an honest gap. The page already
-    renders an empty comps list with an explanation, so an absent block degrades.
+    That also removed a failure mode rather than moving it. The old matcher raised when
+    ``len(predicted) != len(prepared.horizons)`` -- reachable for a player observable at
+    h=1..3 but not h=4..5, whom ``sweep_pool`` keeps -- and one such player discarded a
+    whole ~52s sweep and pushed nothing. There is no ``predicted`` here, so a short fit
+    is no longer a length contract to violate: he gets full-length comp paths and the
+    view truncates them to the horizons he was actually fitted at.
 
-    Names are attached HERE, not in ``closest_paths``: naming needs the people cache, and
-    keeping it out of that module is what lets it be tested with no data files. An
-    unknown id renders as its id rather than vanishing -- a comp is still a comp.
+    An EMPTY list means no candidate shared enough of his ages (`required_overlap`) --
+    the honest answer for a career the panel has no parallel for, and the page already
+    renders it with an explanation.
+
+    Names and playing time are attached HERE, not in ``closest_careers``: naming needs
+    the people cache and volume needs the panel frame, and keeping both out of that
+    module is what lets it be tested with no data files. An unknown id renders as its id
+    rather than vanishing -- a comp is still a comp.
     """
-    if len(player.sgp) != len(horizons):
-        return None
     return [
         {
             # THE JOIN KEY for the stored career map, not decoration. `chart_key(id,
@@ -141,10 +154,25 @@ def player_comps(prepared, player, horizons: tuple[int, ...], names: dict) -> li
             "name": names.get(c.mlbam_id, str(c.mlbam_id)),
             "season": c.season,
             "rmse": round(c.rmse, 3),
+            # HOW MUCH CAREER THE MATCH ACTUALLY SAW. Stored rather than derived on read:
+            # the reader has no way to recompute it, and a 3-age match and an 8-age match
+            # at the same RMSE are not the same claim.
+            "overlap": c.overlap,
+            # PA (hitters) or IP (pitchers) in the anchor season, so a reader can tell a
+            # comp who declined from one who was hurt (#357). None when the pool frame
+            # carried no volume column.
+            "pt": pt.get((c.mlbam_id, c.season)),
             "path": [round(v, 3) for v in c.path],
         }
-        for c in closest_paths(
-            prepared, [point.mean for point in player.sgp], age=player.age, n=MAX_COMPS
+        for c in closest_careers(
+            prepared,
+            career,
+            age=player.age,
+            n=MAX_COMPS,
+            # He is not his own comp. The forward-observability mask usually removes him
+            # anyway, but only because his anchor season is the newest one -- a fact
+            # about this panel, not a rule. See `closest_careers`.
+            exclude_id=player.mlbam_id,
         )
     ]
 
@@ -327,16 +355,38 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         # panel unchanged when there are none. This is consistency insurance against a
         # future panel build, not a fix for anything currently wrong.
         by_id = {int(i): g for i, g in collapse_split_seasons(complete).groupby("mlbam_id")}
+        # Anchor-season volume for every candidate comp, so a card can say whether a
+        # collapse was decline or absence (#357). PA for hitters, IP for pitchers -- one
+        # column, named by pool, because the two pools never share a frame here.
+        volume = "pa" if kind == "hitter" else "ip"
+        # SUMMED over a split season, like `collapse_split_seasons` sums its SGP. A
+        # traded player's two rows are half a season each, and taking either one alone
+        # would print a 300-PA year beside the full-season SGP the same row was matched
+        # on. `collapse_split_seasons` cannot supply this: it keeps only sgp and age.
+        # NaN volumes are dropped rather than carried -- `json.dumps` writes them as the
+        # bare token `NaN`, which no strict JSON reader will parse back.
+        pt = {}
+        if volume in complete.columns:
+            for (i, sn), v in complete.groupby(["mlbam_id", "season"])[volume].sum().items():
+                if pd.notna(v):
+                    pt[(int(i), int(sn))] = round(float(v), 1)
 
-        short_paths = 0
+        no_comps = 0
         for player in produced:
             history = _arc(by_id.get(player.mlbam_id))
-            # None means his observable path is shorter than the swept horizons, so no
-            # honest match exists -- see `player_comps`. He keeps his row and his career
-            # line; only the comps go.
-            comps = player_comps(prepared, player, horizons, names)
-            if comps is None:
-                short_paths += 1
+            # WHAT HE HAS ACTUALLY DONE, which is what the comps are matched on (#358).
+            # His complete seasons out of the same `by_id` the career line is drawn from,
+            # plus the base season at his current age -- which `complete` does not carry
+            # while it is in progress, and which is `now`: season-to-date plus the
+            # rest-of-season blend, re-scored (`ros_anchor`). Without it the newest and
+            # most decision-relevant year of his career is missing from the match.
+            #
+            # UNFILLED. `_career_by_age`, not `_arc`: a year he did not play must stay
+            # absent here, or an injured star matches a journeyman.
+            career = {**_career_by_age(by_id.get(player.mlbam_id)), player.age: player.now}
+            comps = player_comps(prepared, player, career, names, pt)
+            if not comps:
+                no_comps += 1
             else:
                 # THE SAME `by_id` the subject's own history comes from, so a comp's arc
                 # and the subject overlay drawn on top of it are on one scale by
@@ -350,18 +400,18 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
                     key = chart_key(comp["id"], kind)
                     if key not in careers and (arc := _arc(by_id.get(comp["id"]))):
                         careers[key] = arc
-            extras[(player.mlbam_id, player.pool)] = {
-                "history": history,
-                "comps": comps if comps is not None else [],
-            }
+            extras[(player.mlbam_id, player.pool)] = {"history": history, "comps": comps}
         print(f"    swept in {time.perf_counter() - started:.1f}s", flush=True)
-        if short_paths:
+        if no_comps:
             # SAID OUT LOUD. A push that quietly drops comps for part of the pool
             # renders exactly like one that did not, and the page's "none stored" note
             # reads as "this player has no comps" rather than "this run skipped them".
+            # Here it genuinely IS the former: no historical career shared enough of his
+            # ages to be matched. Common for the very young, who have two or three
+            # seasons, and for anyone whose window reaches back past the panel's start.
             print(
-                f"    {short_paths} observable at fewer than {len(horizons)} horizons; "
-                f"comps skipped for those (their rows and career lines are intact)",
+                f"    {no_comps} matched no historical career closely enough; "
+                f"comps empty for those (their rows and career lines are intact)",
                 flush=True,
             )
 
