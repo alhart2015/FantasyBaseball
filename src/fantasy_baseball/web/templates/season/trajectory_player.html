@@ -137,14 +137,23 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
         comp whose SGP collapsed on 199 PA was hurt rather than finished (#357). Both
         columns are dropped whole when the blob predates them, rather than printing a
         column of blanks. -#}
-    {% if board.comps[0].overlap is not none %}<th>Ages</th>{% endif %}
-    {% if board.comps[0].pt is not none %}<th>PA/IP</th>{% endif %}
+    {#- THE WHOLE LIST decides whether a column exists; the ROW decides what goes in
+        its own cell. Deciding both from `comps[0]` is a guard that does not guard: a
+        blob whose first comp carries `pt` and whose fourth does not passed the header
+        test and then ran `'%.0f'|format(None)`, which is `soft_str(None) % args` and
+        raises -- a 500 on the player page. The `overlap` column had the same shape and
+        printed the literal string "None" instead of crashing, which is quieter and no
+        more correct. A missing value is a dash, and a dash is a fact about that comp. -#}
+    {% if board.comps | selectattr('overlap', 'ne', None) | first %}<th>Ages</th>{% endif %}
+    {% if board.comps | selectattr('pt', 'ne', None) | first %}<th>PA/IP</th>{% endif %}
     {% for pt in board.projection %}<th>{{ pt.age }}</th>{% endfor %}</tr></thead>
   <tbody>
     {% for c in board.comps %}
     <tr><td>{{ c.name }}</td><td>{{ c.season }}</td><td>{{ '%.2f'|format(c.rmse) }}</td>
-      {% if board.comps[0].overlap is not none %}<td>{{ c.overlap }}</td>{% endif %}
-      {% if board.comps[0].pt is not none %}<td>{{ '%.0f'|format(c.pt) }}</td>{% endif %}
+      {% if board.comps | selectattr('overlap', 'ne', None) | first %}
+      <td>{{ c.overlap if c.overlap is not none else '--' }}</td>{% endif %}
+      {% if board.comps | selectattr('pt', 'ne', None) | first %}
+      <td>{{ '%.0f'|format(c.pt) if c.pt is not none else '--' }}</td>{% endif %}
       {% for pt in c.path %}<td>{{ '%.1f'|format(pt.value) }}</td>{% endfor %}</tr>
     {% endfor %}
   </tbody>

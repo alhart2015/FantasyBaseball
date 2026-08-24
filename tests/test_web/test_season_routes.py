@@ -2852,6 +2852,34 @@ def test_the_comps_table_shows_how_much_career_the_match_saw(client):
     assert "<td>188</td>" in table, "Reynolds played 188 PA in the season he matched at"
 
 
+def test_one_comp_missing_its_playing_time_does_not_take_the_page_down(client):
+    """The MIXED blob -- some comps carry `pt`, some do not.
+
+    The column test and the cell format used to be decided from different rows: the
+    header asked `comps[0].pt is not none` and every cell then ran
+    `'%.0f'|format(c.pt)`, which is `soft_str(value) % args` and raises `TypeError` on
+    None. First comp populated plus any later one absent was a 500 on the player page.
+    `overlap` had the same shape and printed the literal string "None", which is quieter
+    and no more correct.
+
+    The all-absent case was already covered and could not catch this: deleting the keys
+    from EVERY comp makes the header test false, so no cell is ever formatted.
+    """
+    payload, chart = _trajectory_board_and_chart()
+    for extras in chart["players"].values():
+        del extras["comps"][1]["pt"], extras["comps"][1]["overlap"]
+
+    with _trajectory_cache(payload, chart):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
+    assert resp.status_code == 200, "a comp with no volume is not a broken page"
+    table = resp.data.decode()
+    table = table[table.index("Careers that looked like his") : table.index("The numbers")]
+    assert "<th>PA/IP</th>" in table, "the comps that DO carry it still get their column"
+    assert "612" in table, "Ethier's volume still prints"
+    assert "--" in table, "and the one without it reads as absent, not as zero or None"
+    assert "None" not in table
+
+
 def test_a_board_pushed_before_the_backward_match_still_renders_its_comps(client):
     """The deploy window. A board written by the previous push carries no `overlap` and
     no `pt`, and the page has to drop those two COLUMNS rather than print a table of

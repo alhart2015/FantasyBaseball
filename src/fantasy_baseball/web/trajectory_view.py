@@ -1345,14 +1345,28 @@ def build_player_view(
                 # 500 on a stale blob. The template hides the columns when they are None.
                 "overlap": c.get("overlap"),
                 "pt": c.get("pt"),
-                # Truncated to the PROJECTED horizons, not the stored path length. Comp
-                # paths are stored at the full swept horizon while a player fitted at
-                # fewer keeps the shorter projection, so this slice is load-bearing
-                # since #358 -- the forward matcher it replaced could not produce the
-                # pair because it refused to match such a player at all.
+                # PAIRED BY HORIZON, never by position. A comp's stored path is one
+                # value per horizon 1..N ascending, and `sp.sgp` is `traj.observable` --
+                # the points with `n > 0` -- which is NOT guaranteed to be a horizon-1
+                # prefix. A horizon is emptied when its Kish effective size falls under
+                # `MIN_EFFECTIVE_ROWS`, and `keep = seasons + h <= last` makes the
+                # fitting rows a SHRINKING subset as h grows, so dropping a high-weight
+                # row RAISES the Kish size: h=1 can fail the gate while h=2 and h=3 pass.
+                #
+                # Zipping the two positionally then reads the comp's +1 and +2 into
+                # columns headed age+2 and age+3 -- every comp line drawn a year left of
+                # the projection it exists to be compared against, on a chart whose whole
+                # job is that comparison. `p.age` is already `age + horizon`, so the
+                # ages come off the same field the projection's own columns do.
+                #
+                # This also subsumes the truncation the positional slice was doing: a
+                # player fitted at fewer horizons than the sweep stored simply has fewer
+                # points to pair against. The `len` test is for a SHORT stored path --
+                # a hand-built or older blob -- which would otherwise IndexError.
                 "path": [
-                    {"age": sp.age + h, "value": float(v) - floor}
-                    for h, v in enumerate(c["path"][: len(sp.sgp)], start=1)
+                    {"age": p.age, "value": float(c["path"][p.horizon - 1]) - floor}
+                    for p in sp.sgp
+                    if 0 < p.horizon <= len(c["path"])
                 ],
                 # HIS WHOLE ARC, on the same entry as his forward path rather than in a
                 # second list beside it. A parallel list would have to stay the same

@@ -1329,6 +1329,61 @@ def test_a_comp_path_is_truncated_to_the_projected_horizons(payload: dict) -> No
     assert len(view.comps[0]["path"]) == 3, "a comp draws only the projected years"
 
 
+def test_a_comp_value_is_paired_to_the_horizon_it_belongs_to_not_to_its_position() -> None:
+    """A comp's Nth STORED value is its year N, and it must be drawn against the
+    projection's year N -- not against the projection's Nth OBSERVABLE point.
+
+    `SweptPlayer.sgp` is `traj.observable`, the points with `n > 0`, and nothing makes
+    that a horizon-1 prefix. A horizon is emptied when its Kish effective size falls
+    under `MIN_EFFECTIVE_ROWS`, and `keep = seasons + h <= last` makes the fitting rows
+    a SHRINKING SUBSET as h grows -- so dropping a high-weight row RAISES the Kish size
+    (`w=[10,1,1]` is 1.41; `w=[1,1]` is 2.0). h=1 can fail the gate while h=2 and h=3
+    pass.
+
+    Pairing by position then reads the comp's +1 and +2 values into columns headed
+    age+2 and age+3: every comp line drawn a year left of the projection it exists to be
+    compared against, on a chart whose whole job is that comparison. Hand-built because
+    the synthetic panel cannot be coaxed into emptying only its first horizon.
+    """
+    from fantasy_baseball.trajectory.sweep import SweptPlayer, YearPoint, to_payload
+
+    gapped = SweptPlayer(
+        mlbam_id=1, name="Gapped", pool="hitter", age=27, slot="OF", floor=0.0,
+        now=12.0, prior=11.0, support=0.5, extrapolated=False,
+        # NO h=1: observable, and not a prefix.
+        sgp=tuple(
+            YearPoint(horizon=h, age=27 + h, mean=12.0, p10=9.0, p90=15.0,
+                      n_effective=50.0, band_fell_back=False)
+            for h in (2, 3)
+        ),
+    )
+    payload = to_payload(
+        [gapped], base_season=BASE, max_horizon=3, min_sgp=0.0, season_elapsed=0.7,
+        generated_at="hand-gapped", panel_vintage={"hitter": "h.csv"},
+        floors={"OF": 0.0}, excluded={"total": 0},
+    )
+    chart = to_chart_payload(
+        {(1, "hitter"): {"history": [], "comps": [{
+            "id": 100, "name": "Comp", "season": 2010, "rmse": 0.5,
+            "overlap": 7, "pt": 600.0,
+            # One value per horizon 1..5, each equal to its own horizon so a
+            # mispairing is readable straight off the assertion.
+            "path": [1.0, 2.0, 3.0, 4.0, 5.0],
+        }]}},
+        careers={}, generated_at="hand-gapped",
+    )
+    view = build_player_view(payload, chart=chart, player="Gapped", scale="sgp")
+
+    assert [p["age"] for p in view.projection] == [29, 30], "the fit's own observable ages"
+    comp = view.comps[0]
+    assert [pt["age"] for pt in comp["path"]] == [29, 30], (
+        "a comp is drawn at the ages the projection occupies, not at age+1, age+2"
+    )
+    assert [pt["value"] for pt in comp["path"]] == [2.0, 3.0], (
+        "and carries his year-2 and year-3 values, not his year-1 and year-2"
+    )
+
+
 def test_the_projection_and_comp_ages_are_derived_from_the_players_own_age(
     payload: dict,
 ) -> None:
