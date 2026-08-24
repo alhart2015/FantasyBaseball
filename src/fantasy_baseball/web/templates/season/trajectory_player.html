@@ -94,19 +94,27 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   simply wrong. The projection below comes from the board on screen and is unaffected;
   re-run <code>push_trajectory_board.py</code>, which writes both keys together.
 {% endset %}
+{#- THE CHART IS WHY THE PAGE IS OPEN (#361), so nothing but the subject's own
+    identity stands above it. What used to sit here -- a full vintage paragraph -- was
+    roughly eighty words a reader had to scroll past to reach the thing he came for.
+    The extrapolation flag stays: it changes how the band below is read, which is the
+    only test a sentence above the chart has to pass. -#}
 <p class="muted">
   {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
   {% if board.extrapolated %}<strong>(!)</strong> This fit was evaluated outside its own
   support -- read the band, not the point estimate.{% endif %}
 </p>
 
-{#- THE SAME VINTAGE DISCLOSURE trajectory.html and trajectory_teams.html print --
-    this page reads the same `meta`/`base_season` and had never shown either. -#}
-<p class="muted trajectory-vintage">
-  {{ ctl.vintage_note(board) }}
-</p>
-
 <div class="chart-wrapper"><canvas id="trajectory-chart"></canvas></div>
+
+{#- THE SAME VINTAGE DISCLOSURE trajectory.html and trajectory_teams.html print, but as
+    a date with the rest behind it. The board is pushed offline and does not move with a
+    dashboard refresh, so the stamp is load-bearing and stays VISIBLE -- it is the four
+    clauses qualifying it that are reference material. -#}
+<details class="trajectory-vintage prose-aside">
+  <summary>{{ ctl.vintage_summary(board) }}</summary>
+  <p class="muted">{{ ctl.vintage_note(board) }}</p>
+</details>
 {#- `axis_label` rather than `scale`/`floor`: the chart used to be handed the raw
     offset and rebuild the label from it, which made the y-axis title a second
     spelling of the header below. Ship the finished string and there is nothing
@@ -123,21 +131,34 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     forecast entering the choice. That is what makes their spread evidence about the
     projection rather than a picture of it -- the previous version picked the historical
     paths that landed closest to the forecast, which could only ever agree with it. -#}
+{#- ONE SENTENCE VISIBLE (#361). The paragraph this replaces said six true things at
+    once and was 144 words, printed above the table on every player who has comps at
+    all. Only the first of the six changes how the chart is READ -- a reader who takes
+    these for the forecast's own range reads a far more certain page than the model
+    produced -- so that one stays in the open and the other five move down one click.
+    Nothing is deleted: the column semantics are on the columns themselves as `title`
+    tooltips, and what has no column to hang on is in the disclosure below. -#}
 <p class="muted">
   Chosen on their <strong>realized career up to age {{ board.age }}</strong> -- our
-  projection plays no part in picking them. The columns to the right are what those
-  players actually went on to do, which is the honest spread to read the band against.
-  A <strong>0.0</strong> means he was out of the league that year; those are kept
-  deliberately, because dropping them would leave only the players who lasted.
-  No <em>recent</em> player can appear: a comp must already have played out every year
-  the sweep follows a comp through -- five, whatever end year you are looking at -- so
-  the last few seasons in the panel supply none.
-  <strong>PA/IP</strong> is stated on a 162-game footing, like the SGP beside it -- a
-  short schedule such as 2020 is scaled up, so the figure is comparable across eras
-  rather than being the count the box scores printed.
+  projection plays no part in picking them.
 </p>
+<details class="prose-aside">
+  <summary>How to read this table</summary>
+  <p class="muted">
+    The year columns are what those players actually went on to do, which is the honest
+    spread to read the band against. A <strong>0.0</strong> means he was out of the
+    league that year; those are kept deliberately, because dropping them would leave
+    only the players who lasted.
+  </p>
+  <p class="muted">
+    No <em>recent</em> player can appear: a comp must already have played out every year
+    the sweep follows a comp through -- five, whatever end year you are looking at -- so
+    the last few seasons in the panel supply none.
+  </p>
+</details>
 <table class="data-table">
-  <thead><tr><th>Player</th><th>Season</th><th>RMSE</th>
+  <thead><tr><th>Player</th><th>Season</th><th
+    title="Distance between his realized career and this player's, over the shared ages. Lower is a closer match; our projection plays no part in it.">RMSE</th>
     {#- HOW MUCH CAREER THE MATCH SAW, and how much he played in the match season. A
         3-age match and an 8-age match at the same RMSE are not the same claim, and a
         comp whose SGP collapsed on 199 PA was hurt rather than finished (#357). Both
@@ -150,8 +171,14 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
         raises -- a 500 on the player page. The `overlap` column had the same shape and
         printed the literal string "None" instead of crashing, which is quieter and no
         more correct. A missing value is a dash, and a dash is a fact about that comp. -#}
-    {% if board.comps | selectattr('overlap', 'ne', None) | first %}<th>Ages</th>{% endif %}
-    {% if board.comps | selectattr('pt', 'ne', None) | first %}<th>PA/IP</th>{% endif %}
+    {#- The two columns carry their own meaning (#361) rather than being explained in a
+        preamble the reader has already scrolled past. `title` puts it under the cursor,
+        on the header it describes; `.data-table th[title]` gets `cursor: help` so it is
+        discoverable rather than merely present. -#}
+    {% if board.comps | selectattr('overlap', 'ne', None) | first %}<th
+      title="Shared ages the match was measured over. The same RMSE over 8 ages is a much stronger claim than over 3.">Ages</th>{% endif %}
+    {% if board.comps | selectattr('pt', 'ne', None) | first %}<th
+      title="Plate appearances or innings in the matched season, on a 162-game footing so a short schedule such as 2020 is comparable. A low figure means the SGP beside it is absence rather than decline.">PA/IP</th>{% endif %}
     {% for pt in board.projection %}<th>{{ pt.age }}</th>{% endfor %}</tr></thead>
   <tbody>
     {% for c in board.comps %}
@@ -217,19 +244,29 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   {% endif %}
 </p>
 {% else %}
+{#- ONE LINE, WITH THE MENU BEHIND IT (#361). This is the fallback for a blob written
+    before `no_comps_reason` existed; the branch above prints the stored cause and is
+    what a current push reaches. Guessing from a three-item list is what a reader does
+    only when nothing better was recorded, so the list keeps its reasoning but stops
+    being the first thing on screen. "predates" stays in the visible sentence -- it is
+    the actionable half, and `test_trajectory_player_view_explains_a_missing_chart_key`
+    counts on the word being the one that distinguishes this from the mismatch note. -#}
 <p class="muted">
-  None stored. Either this board predates the career-comp feature (#358) and a
-  re-push of <code>push_trajectory_board.py</code> will fill it in, or one of:
+  None stored -- this board likely predates the feature (#358); a re-push of
+  <code>push_trajectory_board.py</code> will fill it in.
 </p>
-<ul class="muted">
-  <li>no historical career shares enough of his ages -- the usual answer for a player
-    with only two or three seasons behind him;</li>
-  <li>the panel holds nobody who reached this age;</li>
-  <li>everyone who reached this age did so too recently to be followed forward. A comp
-    has to have <em>already played out</em> every year the sweep follows a comp
-    through -- five, regardless of the end year on screen -- so the most recent seasons
-    in the panel can never supply one.</li>
-</ul>
+<details class="prose-aside">
+  <summary>Other reasons a player has no comps</summary>
+  <ul class="muted">
+    <li>no historical career shares enough of his ages -- the usual answer for a player
+      with only two or three seasons behind him;</li>
+    <li>the panel holds nobody who reached this age;</li>
+    <li>everyone who reached this age did so too recently to be followed forward. A comp
+      has to have <em>already played out</em> every year the sweep follows a comp
+      through -- five, regardless of the end year on screen -- so the most recent seasons
+      in the panel can never supply one.</li>
+  </ul>
+</details>
 {% endif %}
 {% endif %}
 {% endif %}
