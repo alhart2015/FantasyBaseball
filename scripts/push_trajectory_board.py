@@ -121,11 +121,72 @@ def _arc(seasons) -> list[list[float]]:
     return [[age, scored.get(age, 0.0)] for age in range(min(scored), max(scored) + 1)]
 
 
-def player_comps(
-    prepared, age: int, mlbam_id: int, career: dict[int, float], names: dict, pt: dict
-) -> list[dict]:
+def _playing_time(frame, volume: str) -> dict[tuple[int, int], float]:
+    """``(mlbam_id, season) -> PA or IP`` for every row in ``frame``, absent where unknown.
+
+    ON A 162-GAME FOOTING, not as the box score printed it. `_scale_short_schedules`
+    multiplies this column by `162 / scheduled_games` on load, so a 2020 season arrives at
+    2.7x its literal count -- Alvarez's nine 2020 plate appearances are 24 here. That is
+    the RIGHT number for the question the column is asked ("was this a part-time
+    season?"), because the SGP printed beside it was scaled by the very same factor; an
+    unscaled volume against a scaled SGP is the pair that actually misleads. It does have
+    to be SAID, which the page does -- a column headed "PA/IP" showing 24 for a 9-PA
+    season is a wrong number until it is labelled.
+
+    SUMMED over a split season, like `collapse_split_seasons` sums its SGP. A traded
+    player's two rows are half a season each, and taking either one alone would print a
+    300-PA year beside the full-season SGP the same row was matched on.
+    `collapse_split_seasons` cannot supply this: it keeps only sgp and age.
+
+    A GROUP HOLDING ANY NaN IS DROPPED, and the two-part test is what makes that true.
+    `Series.sum()` defaults to `skipna=True, min_count=0`, so an ALL-NaN group sums to a
+    real `0.0` that sails through `notna` -- a single-part guard could never fire, and it
+    would store `pt: 0.0`, printing "PA/IP: 0" beside a real SGP figure and inverting the
+    exact hurt-versus-finished signal the column exists for (#357). A PARTLY-NaN group is
+    worse than useless too: it sums only the half it can see and understates a split
+    season. Both become absent, which the table renders as a dash.
+
+    A FUNCTION, not four lines inline in `build_payload`, for one reason: the test that
+    covers it was written inline against a local frame and therefore asserted pandas'
+    behaviour rather than this rule, so reverting the guard would have left it green.
+    A named seam is what lets the test drive the real thing.
+
+    Vectorized, because the per-group Python alternative would run once per
+    (player, season) over ~16k rows per pool.
+    """
+    if volume not in frame.columns:
+        return {}
+    keys = [frame["mlbam_id"], frame["season"]]
+    totals = frame[volume].groupby(keys).sum(min_count=1)
+    totals = totals.where(~frame[volume].isna().groupby(keys).any())
+    return {
+        (int(i), int(season)): round(float(v), 1)
+        for (i, season), v in totals.items()
+        if pd.notna(v)
+    }
+
+
+def player_comps(prepared, player, career: dict[int, float], names: dict, pt: dict) -> list[dict]:
     """One player's stored comp block -- the careers that looked like his, and what
     happened to them. ``[]`` when nothing historical resembles him closely enough.
+
+    TAKES THE PLAYER, not his `age` and `mlbam_id` as separate arguments. It was briefly
+    split into the two fields it reads, on the theory that a function should ask for the
+    narrowest thing it needs. That was wrong twice over, and both showed up immediately:
+
+    * Two same-typed ints sit adjacent in the signature, so `player_comps(prepared,
+      player.mlbam_id, player.age, ...)` -- the natural id-then-age ordering -- type-checks
+      under mypy, runs without error, and returns `[]` for every player, because no
+      candidate sits at `age == 592885`. The result is a comp-less board that renders
+      perfectly. The object made that unrepresentable.
+    * It silently gutted two tests. `_swept(2)` and `_swept(3)` differ ONLY in path
+      length, so once the function stopped reading the path, both tests were calling it
+      twice with identical arguments and comparing the result to itself -- including
+      `test_a_comp_is_selected_on_the_career_never_on_the_prediction`, the named pin for
+      this issue's whole premise, which `closest_careers`'s docstring cites by name.
+
+    The object is the narrowest thing it needs: it is what guarantees the age and the id
+    describe one player.
 
     MATCHED BACKWARD (#358). ``career`` is what he has actually DONE, and the comps are
     chosen on that alone; the fitted path never enters. The forward matcher this replaced
@@ -171,12 +232,12 @@ def player_comps(
         for c in closest_careers(
             prepared,
             career,
-            age=age,
+            age=player.age,
             n=MAX_COMPS,
             # He is not his own comp. The forward-observability mask usually removes him
             # anyway, but only because his anchor season is the newest one -- a fact
             # about this panel, not a rule. See `closest_careers`.
-            exclude_id=mlbam_id,
+            exclude_id=player.mlbam_id,
         )
     ]
 
@@ -366,45 +427,8 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
         # collapse was decline or absence (#357). PA for hitters, IP for pitchers -- one
         # column, named by pool, because the two pools never share a frame here.
         volume = "pa" if kind == "hitter" else "ip"
-        # ON A 162-GAME FOOTING, not as the box score printed it. `_scale_short_schedules`
-        # multiplies this column by `162 / scheduled_games` on load, so a 2020 season
-        # arrives at 2.7x its literal count -- Alvarez's nine 2020 plate appearances are
-        # 24 here. That is the RIGHT number for the question the column is asked ("was
-        # this a part-time season?"), because the SGP printed beside it was scaled by the
-        # very same factor; an unscaled volume against a scaled SGP is the pair that
-        # actually misleads. It does have to be SAID, which the page now does -- a column
-        # headed "PA/IP" showing 24 for a 9-PA season is a wrong number until it is
-        # labelled.
-        #
-        # SUMMED over a split season, like `collapse_split_seasons` sums its SGP. A
-        # traded player's two rows are half a season each, and taking either one alone
-        # would print a 300-PA year beside the full-season SGP the same row was matched
-        # on. `collapse_split_seasons` cannot supply this: it keeps only sgp and age.
-        #
-        # A GROUP HOLDING ANY NaN IS DROPPED, and the two-part test is what makes that
-        # true. `Series.sum()` defaults to `skipna=True, min_count=0`, so an ALL-NaN group
-        # sums to a real `0.0` that sails through `notna` -- the previous spelling's guard
-        # could never fire, and it would have stored `pt: 0.0`, printing "PA/IP: 0" beside
-        # a real SGP figure and inverting the exact hurt-versus-finished signal the column
-        # exists for. A PARTLY-NaN group is worse than useless too: it sums only the half
-        # it can see and understates a split season. Both become absent, which the table
-        # renders as a dash.
-        #
-        # Unreachable on today's panels -- `load_scored_panel` admits a row only on
-        # `volume.notna() & volume > 0` -- so this is the guard being honest about what it
-        # claims rather than a fix for live data. Vectorized, because the per-group Python
-        # alternative would run once per (player, season) over ~16k rows per pool.
-        pt = {}
-        if volume in complete.columns:
-            keys = [complete["mlbam_id"], complete["season"]]
-            totals = complete[volume].groupby(keys).sum(min_count=1)
-            totals = totals.where(~complete[volume].isna().groupby(keys).any())
-            for (i, sn), v in totals.items():
-                if pd.notna(v):
-                    pt[(int(i), int(sn))] = round(float(v), 1)
+        pt = _playing_time(complete, volume)
 
-        # Keyed by `MatchPool.reason`, so the summary below names the cause it actually
-        # observed rather than the one cause the old message assumed.
         no_comps: dict[str, int] = {}
         for player in produced:
             history = _arc(by_id.get(player.mlbam_id))
@@ -418,7 +442,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
             # UNFILLED. `_career_by_age`, not `_arc`: a year he did not play must stay
             # absent here, or an injured star matches a journeyman.
             career = {**_career_by_age(by_id.get(player.mlbam_id)), player.age: player.now}
-            comps = player_comps(prepared, player.age, player.mlbam_id, career, names, pt)
+            comps = player_comps(prepared, player, career, names, pt)
             if not comps:
                 # Only on the empty branch: `match_pool` repeats the candidate mask and
                 # the overlap count, and paying that for the ~85% of players who DO get

@@ -146,8 +146,8 @@ def test_a_player_observable_at_fewer_horizons_than_the_sweep_still_gets_comps()
     horizons = (1, 2, 3)
     prepared = _prepared(horizons)
 
-    short = module.player_comps(prepared, _swept(2).age, _swept(2).mlbam_id, _CAREER, {}, {})
-    full = module.player_comps(prepared, _swept(3).age, _swept(3).mlbam_id, _CAREER, {}, {})
+    short = module.player_comps(prepared, _swept(2), _CAREER, {}, {})
+    full = module.player_comps(prepared, _swept(3), _CAREER, {}, {})
 
     assert short, "a short fit is no longer a reason to withhold comps"
     assert [c["id"] for c in short] == [c["id"] for c in full], (
@@ -172,29 +172,35 @@ def test_a_comp_is_selected_on_the_career_never_on_the_prediction() -> None:
     # The same man, with the model predicting something wildly different about him.
     elsewhere = replace(player, sgp=tuple(replace(p, mean=p.mean + 40.0) for p in player.sgp))
 
-    assert [
-        c["id"] for c in module.player_comps(prepared, player.age, player.mlbam_id, _CAREER, {}, {})
-    ] == [
-        c["id"]
-        for c in module.player_comps(prepared, elsewhere.age, elsewhere.mlbam_id, _CAREER, {}, {})
-    ]
+    here = module.player_comps(prepared, player, _CAREER, {}, {})
+    there = module.player_comps(prepared, elsewhere, _CAREER, {}, {})
+    assert here, "the fixture player has comps at all"
+    assert [c["id"] for c in here] == [c["id"] for c in there]
+    assert [c["rmse"] for c in here] == [c["rmse"] for c in there], (
+        "the distances too -- a matcher that read the prediction would move these even "
+        "when the membership happened to survive"
+    )
 
 
 def test_a_volume_column_that_is_all_nan_stores_no_playing_time_rather_than_zero() -> None:
     """`Series.sum()` is `skipna=True, min_count=0`, so an all-NaN group sums to a real
-    `0.0` -- a `pd.notna` guard over it can never fire.
+    `0.0` -- a one-part `pd.notna` guard over it can never fire.
 
     Stored, that becomes "PA/IP: 0" printed beside a real SGP figure: the exact
     hurt-versus-finished signal the column was added for (#357), inverted. A partly-NaN
     group is its own defect -- it sums the half it can see and understates a split
     season. Both must come out absent, which the table renders as a dash.
 
-    Drives the real grouping expression rather than a hand-rolled copy of it, so a
-    future rewrite back to a bare `.sum()` fails here.
+    DRIVES `_playing_time` ITSELF. The first version of this test re-typed the grouping
+    expression against a local frame and never imported the script, so it asserted
+    pandas' behaviour rather than this rule -- reverting the guard to a bare `.sum()`
+    would have left it green, which is the whole defect it exists to catch. The rule was
+    extracted into a named function so the test could reach it.
     """
     import numpy as np
     import pandas as pd
 
+    module = _script()
     frame = pd.DataFrame(
         {
             "mlbam_id": [1, 1, 2, 3, 3],
@@ -205,14 +211,12 @@ def test_a_volume_column_that_is_all_nan_stores_no_playing_time_rather_than_zero
             "pa": [300.0, 250.0, np.nan, np.nan, 300.0],
         }
     )
-    keys = [frame["mlbam_id"], frame["season"]]
-    totals = frame["pa"].groupby(keys).sum(min_count=1)
-    totals = totals.where(~frame["pa"].isna().groupby(keys).any())
-    got = {(int(i), int(s)): float(v) for (i, s), v in totals.items() if pd.notna(v)}
+    got = module._playing_time(frame, "pa")
 
     assert got == {(1, 2010): 550.0}, "only the fully-recorded split season survives"
     assert (2, 2011) not in got, "an all-NaN group is absent, not 0.0"
     assert (3, 2012) not in got, "a partly-NaN group is absent, not an understatement"
+    assert module._playing_time(frame, "ip") == {}, "a pool with no volume column at all"
 
 
 def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
@@ -221,7 +225,7 @@ def test_a_stored_comp_carries_the_id_its_career_is_keyed_on() -> None:
     of them gets the other's career drawn under his own. The per-comp career cards
     (#346) look their arc up by `chart_key(id, pool)`, so the id has to be stored."""
     module = _script()
-    comps = module.player_comps(_prepared((1, 2, 3)), 27, 1, _CAREER, {}, {})
+    comps = module.player_comps(_prepared((1, 2, 3)), _swept(3), _CAREER, {}, {})
 
     assert comps, "the fixture player has comps"
     assert all(isinstance(c["id"], int) for c in comps)

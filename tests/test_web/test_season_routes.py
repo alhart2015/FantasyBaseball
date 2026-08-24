@@ -2875,8 +2875,11 @@ def test_one_comp_missing_its_playing_time_does_not_take_the_page_down(client):
     table = resp.data.decode()
     table = table[table.index("Careers that looked like his") : table.index("The numbers")]
     assert "<th>PA/IP</th>" in table, "the comps that DO carry it still get their column"
-    assert "612" in table, "Ethier's volume still prints"
-    assert "--" in table, "and the one without it reads as absent, not as zero or None"
+    assert "<td>612</td>" in table, "Ethier's volume still prints"
+    # ON THE CELL, not on the table. `assert "--" in table` passed against the intro
+    # paragraph above it, which carries three em-dash pairs of its own -- so it stayed
+    # green with the cell rendered empty, which is the state it was written to reject.
+    assert "<td>--</td>" in table, "the comp without it reads as absent, not as zero"
     assert "None" not in table
 
 
@@ -3230,11 +3233,17 @@ def test_trajectory_chart_js_draws_the_comps_over_the_band_not_under_it():
     comps = src[src.index("...data.comps.map") : src.index('label: "p10-p90"')]
     band = src[src.index('label: "p10-p90"') : src.index('label: "projected"')]
 
+    projected = src[src.index('label: "projected"') : src.index("// ONE line, history")]
+
     comp_order = int(re.search(r"^\s*order: (\d+),$", comps, re.M).group(1))
     band_order = int(re.search(r"^\s*order: (\d+),$", band, re.M).group(1))
+    proj_order = int(re.search(r"^\s*order: (\d+),$", projected, re.M).group(1))
     assert comp_order < band_order, (
         "a higher order paints first, so the comps must sit ABOVE the band's fill"
     )
+    # THE OTHER DIRECTION, which the docstring claimed and the assertions did not cover:
+    # moving the comps above the projection would have passed the test as written.
+    assert proj_order < comp_order, "the model's own line still paints over the comps"
     assert re.search(r"^\s*borderWidth: 1\.5,$", comps, re.M), "and be drawn legibly"
     assert "rgba(120,120,120,0.7)" in comps, "the un-faded stroke from #358"
 
