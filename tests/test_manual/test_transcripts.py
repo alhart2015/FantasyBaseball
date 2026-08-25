@@ -547,16 +547,27 @@ def test_ip_notation_preserved_verbatim() -> None:
     than normalising ``.1`` into a decimal third.
     """
     raw = REAL_STANDINGS.read_text(encoding="utf-8")
-    # name -> the IP literal exactly as typed, e.g. "1057.1"
+    # name -> the IP literal exactly as typed, e.g. "1057.1".
+    #
+    # Scraped per TEAM BLOCK rather than by walking lines carrying a "current
+    # team", which associates positionally: an `extras:` written above its
+    # `name:` would shift every IP one team earlier and surface as a confusing
+    # coverage failure. Splitting on the block boundary makes a reordered block
+    # a miss for that team, and makes a second IP-bearing line inside one block
+    # an explicit error rather than silently last-match-wins.
     typed: dict[str, str] = {}
-    current: str | None = None
-    for line in raw.splitlines():
-        name = re.search(r'^\s*-\s*name:\s*"(.+)"\s*$', line)
-        if name:
-            current = name.group(1)
-        ip = re.search(r"\bIP:\s*([0-9]+\.[0-9]+)", line)
-        if ip and current is not None:
-            typed[current] = ip.group(1)
+    blocks = re.split(r"^(?=\s*-\s+name:)", raw, flags=re.MULTILINE)[1:]
+    for block in blocks:
+        name = re.search(r'^\s*-\s+name:\s*"(.+?)"\s*$', block, flags=re.MULTILINE)
+        assert name is not None, f"team block without a quoted name:\n{block[:200]}"
+        # An integer IP is accepted here (YAML permits `IP: 1094`); the outs
+        # check below is what rejects a malformed one, not the scrape.
+        ips = re.findall(r"\bIP:\s*([0-9]+(?:\.[0-9]+)?)", block)
+        assert len(ips) == 1, (
+            f"{name.group(1)}: expected exactly one IP literal in the team block, "
+            f"found {len(ips)}: {ips}"
+        )
+        typed[name.group(1)] = ips[0]
 
     by_team = load_manual_standings(REAL_STANDINGS, team_keys={}).by_team()
     assert set(typed) == set(by_team), (
@@ -565,7 +576,8 @@ def test_ip_notation_preserved_verbatim() -> None:
     )
 
     for team, literal in typed.items():
-        whole_text, outs_text = literal.split(".")
+        whole_text, _, outs_text = literal.partition(".")
+        outs_text = outs_text or "0"
         assert outs_text in ("0", "1", "2"), (
             f"{team}: IP {literal} is not Yahoo innings.outs notation -- the "
             "digit after the point counts outs"

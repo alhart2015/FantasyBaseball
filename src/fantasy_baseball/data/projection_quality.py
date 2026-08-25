@@ -235,8 +235,8 @@ def _check_player_counts(
                 # so the blended frame for this player type has no rows at all.
                 _record_systemic(
                     report,
-                    f"{head}, and so is every other configured system "
-                    f"({len(counts)} of {len(counts)}) -- there are no "
+                    f"{head}, and so is every other configured system -- "
+                    f"NO systems have {player_type} rows, so there are no "
                     f"{player_type} projections at all, not merely fewer. "
                     f"Re-download them from FanGraphs.",
                 )

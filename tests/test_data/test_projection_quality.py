@@ -826,8 +826,12 @@ class TestEmptyExportMessageAccuracy:
         empties = [w for w in report.warnings if "NO pitcher rows" in w]
         assert len(empties) == 3
         for w in empties:
-            assert "0 of" not in w, f"claims zero survivors renormalize: {w}"
+            # Not `"0 of" not in w`: that substring also appears in "10 of 10",
+            # so it tests the wrong property the moment a league configures ten
+            # systems. Assert the claim itself is absent instead.
             assert "renormalize" not in w, f"nothing renormalizes here: {w}"
+            assert "of 3" not in w, f"must not report a survivor count: {w}"
+            assert "NO systems have pitcher rows" in w, f"must say none survive: {w}"
             assert "no pitcher projections at all" in w, (
                 f"must say the blend has no rows of this type: {w}"
             )
