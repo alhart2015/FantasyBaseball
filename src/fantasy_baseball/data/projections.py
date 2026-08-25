@@ -276,18 +276,9 @@ def blend_projections(
     report = None
     if len(system_dfs) >= 2:
         report = check_projection_quality(system_dfs, roster_names)
-        # Reporting used to be gated entirely on progress_cb, so a caller that
-        # only wants the frames saw nothing -- and every such caller also
-        # discards the returned QualityReport, so the warnings reached no one.
-        # `trajectory/ros_anchor.py` and `analysis/draft_value.py` are both in
-        # that position; `data/db.py` and `scripts/build_db.py` do pass a
-        # progress_cb and were never silent.
-        #
-        # Only the SYSTEMIC warnings are logged for the silent callers, and
-        # only when there is no progress_cb to mirror to. Logging every warning
-        # unconditionally would double build_db's console output and flood
-        # db.py's per-year loop, because _check_roster_coverage emits one
-        # warning per rostered player it cannot find, uncapped.
+        # A caller with no progress_cb gets the systemic warnings logged, so a
+        # missing export is not silent. Logging ALL of them would double the
+        # output of callers that do pass one, and roster coverage is uncapped.
         if progress_cb:
             for warning in report.warnings:
                 progress_cb(f"QUALITY: {warning}")

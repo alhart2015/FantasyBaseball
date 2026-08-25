@@ -17,8 +17,7 @@
 #
 # EMPTY starting slots are simply omitted rather than written as placeholders,
 # so a team's slot counts can come up short of the configured lineup. The bench
-# is overflow, not a fixed count -- the real constraint is total roster size,
-# which run_manual_refresh.py --dry-run checks and prints per team.
+# is overflow, not a fixed count -- the real constraint is total roster size.
 
 snapshot_date: "2026-08-25"
 

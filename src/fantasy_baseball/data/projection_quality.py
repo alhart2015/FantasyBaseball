@@ -28,14 +28,10 @@ class QualityReport:
     exclusions: dict[str, set[str]] = field(default_factory=dict)
     missing_players: dict[str, list[str]] = field(default_factory=dict)
     systemic: list[str] = field(default_factory=list)
-    """Warnings about a whole projection SYSTEM rather than one player.
+    """Warnings about a whole projection system, not one player.
 
-    A subset of ``warnings``, duplicated here rather than moved so existing
-    consumers keep seeing everything. The split exists because the two have
-    very different volumes: ``_check_roster_coverage`` emits one warning per
-    rostered player it cannot find, uncapped, while a missing export is a
-    single fact about the blend. Only the latter is worth logging for a caller
-    that passed no ``progress_cb``.
+    A subset of ``warnings``, duplicated rather than moved. Per-player
+    coverage warnings are uncapped; these are bounded by the system count.
     """
 
 
@@ -64,6 +60,12 @@ def check_projection_quality(
         _check_roster_coverage(system_dfs, roster_names, report)
 
     return report
+
+
+def _record_systemic(report: QualityReport, message: str) -> None:
+    """File a whole-system warning in both ``warnings`` and ``systemic``."""
+    report.warnings.append(message)
+    report.systemic.append(message)
 
 
 def _check_stat_outliers(
@@ -140,7 +142,7 @@ def _check_stat_outliers(
                 col_all_nan = sys_name in all_nan_systems
 
                 if col_all_nan:
-                    report.warnings.append(f"EXCLUDE: {sys_name} {player_type} {stat} all NaN")
+                    _record_systemic(report, f"EXCLUDE: {sys_name} {player_type} {stat} all NaN")
                     if sys_name not in report.exclusions:
                         report.exclusions[sys_name] = set()
                     report.exclusions[sys_name].add(stat)
@@ -157,25 +159,21 @@ def _check_stat_outliers(
                 ratio = sys_median / consensus
 
                 if ratio < EXCLUDE_THRESHOLD:
-                    report.warnings.append(
+                    _record_systemic(
+                        report,
                         f"EXCLUDE: {sys_name} {player_type} {stat} "
-                        f"median ({sys_median:.1f}) is <{EXCLUDE_THRESHOLD * 100:.0f}% of consensus ({consensus:.1f})"
+                        f"median ({sys_median:.1f}) is <{EXCLUDE_THRESHOLD * 100:.0f}% of consensus ({consensus:.1f})",
                     )
                     if sys_name not in report.exclusions:
                         report.exclusions[sys_name] = set()
                     report.exclusions[sys_name].add(stat)
                 elif abs(ratio - 1.0) > WARN_THRESHOLD:
                     direction = "above" if ratio > 1 else "below"
-                    report.warnings.append(
+                    _record_systemic(
+                        report,
                         f"WARNING: {sys_name} {player_type} {stat} median ({sys_median:.1f}) "
-                        f"is {abs(ratio - 1.0) * 100:.0f}% {direction} consensus ({consensus:.1f})"
+                        f"is {abs(ratio - 1.0) * 100:.0f}% {direction} consensus ({consensus:.1f})",
                     )
-
-
-def _record_systemic(report: QualityReport, message: str) -> None:
-    """File a whole-system warning in both ``warnings`` and ``systemic``."""
-    report.warnings.append(message)
-    report.systemic.append(message)
 
 
 def _check_player_counts(
@@ -184,25 +182,8 @@ def _check_player_counts(
 ) -> None:
     """Warn if a system has dramatically fewer players than others.
 
-    An EMPTY export (zero rows) is reported separately. The proportional check
-    below cannot see it: it compares against the median of the NON-ZERO counts,
-    and its own ``count > 0`` guard skipped exactly the worst case, so a
-    header-only CSV passed silently. ``TestEmptySystemExport`` pins that.
-
-    Two limits on that report, both stated because the caller cannot infer
-    them. It is not unconditional: :func:`check_projection_quality` returns
-    early below two loaded systems, and a system whose load RAISES never
-    reaches ``system_dfs`` at all (``blend_projections`` catches and
-    continues), so neither is reported here. And "empty" cannot be
-    distinguished from "missing" at this layer -- ``load_projection_set``
-    returns an empty frame for a file it could not find as well as for one
-    that parsed to zero rows -- which is why the warning says both.
-
-    Empty systems are already excluded from the blend and the surviving
-    weights already renormalize per player (``_blend_players`` divides each
-    stat by the summed weight of the systems that actually cover that player),
-    so this is a reporting gap, not a math one -- the blended values are
-    correct, they are just built from fewer opinions than configured.
+    An EMPTY export (zero rows) is reported separately: the proportional check
+    compares against the median of the NON-ZERO counts, so it cannot see one.
     """
     for player_type, df_idx in [(PlayerType.HITTER, 0), (PlayerType.PITCHER, 1)]:
         counts = {}
@@ -247,9 +228,10 @@ def _check_player_counts(
 
         for sys_name, count in counts.items():
             if count > 0 and count < median_count * 0.5:
-                report.warnings.append(
+                _record_systemic(
+                    report,
                     f"WARNING: {sys_name} player count ({count} {player_type}s) is "
-                    f"below 50% of median ({median_count:.0f}) -- possible bad export"
+                    f"below 50% of median ({median_count:.0f}) -- possible bad export",
                 )
 
 

@@ -335,21 +335,14 @@ def _team_pts_with(
 ) -> float:
     """Team roto pts for ``roster`` with ``overrides`` applied to its members.
 
-    The one place this module scores a hypothetical roster against the frozen
-    baseline of other teams' stats.
+    ``displacement=False`` is required: callers pass a roster whose committed
+    factors are already baked in, so re-deriving would double-apply.
 
-    ``displacement=False`` is not optional: callers pass a roster whose
-    already-committed factors are baked in, so re-deriving would double-apply.
-
-    Overrides are keyed on the BARE NAME, matching the ``factors`` mapping the
-    callers build and :func:`_apply_displacement` later applies. That violates
-    CLAUDE.md's ``name::player_type`` rule and co-scales a same-named hitter
-    and pitcher on one roster. Keying only this helper by type was tried and
-    reverted: it made the scored state disagree with the state that ships,
-    which is worse than being wrong consistently. Fixing it properly means
-    re-keying the whole ``factors`` contract -- both writers, three readers,
-    and ``mc_roster``, which currently raises on the collision. Tracked as
-    follow-up, not done here.
+    ``overrides`` is keyed on the BARE NAME, matching the ``factors`` mapping
+    callers build. A same-named hitter and pitcher on one roster are therefore
+    scaled together. Keying only this helper by ``(name, player_type)`` does
+    NOT fix that and makes it worse -- the scored state stops matching the
+    state that ships; the whole ``factors`` contract has to move together.
     """
     state: list[Player | dict] = [
         _scale_stats(p, overrides[p.name]) if isinstance(p, Player) and p.name in overrides else p
@@ -368,12 +361,7 @@ def _find_delta_roto_optimal(
 ) -> Player | None:
     """Pick the candidate whose displacement maximizes team roto pts.
 
-    For each candidate, builds a hypothetical roster with that
-    candidate scaled by the displacement factor, sums the team's
-    projected stats (with ``displacement=False`` to avoid recursion;
-    upstream displacement state is already baked into
-    ``current_roster``), then scores via :func:`score_roto_dict`
-    against the frozen baseline of other teams' stats.
+    Scores each candidate through :func:`_team_pts_with`.
     """
     il_pt = _playing_time(il_player)
     if il_pt <= 0:
@@ -494,27 +482,13 @@ def _compute_substitution_factors(
     scored correctly.
 
     IMPROVEMENT GATE (``league_context`` only). :func:`_find_worst_match`
-    picks the least damaging displacement target, but it only ever compares
-    candidates against EACH OTHER -- never against not displacing anyone. An
-    IL player whose return would not help was therefore still activated at
-    full ROS, discounting a healthy starter on playing-time arithmetic alone.
-    Note the clamp in that arithmetic: when the IL player's projected playing
-    time meets or exceeds the target's, ``max(0, active_pt - il_pt)`` is zero
-    and the healthy starter is erased outright -- so the worse the IL player's
-    projection is at equal volume, the more of a better starter it displaced.
+    ranks candidate targets against each other, never against displacing
+    nobody, so the gate asks that question: score the team with the IL player
+    activated and the target discounted, score it benched with nobody
+    displaced, and take the swap only if it wins.
 
-    The gate mirrors :func:`_compute_pitcher_pool_factors`, which has always
-    had it: score the team with the IL player activated and the target
-    discounted, score it with the IL player benched and nobody displaced, and
-    take the swap only if it wins.
-
-    Without a ``league_context`` there is no baseline of other teams' stats to
-    score against, so no gate is possible and the unconditional legacy
-    substitution is preserved unchanged.
-
-    ``TestDeltaRotoDisplacement`` and ``TestFactorsInvariant`` in
-    tests/test_scoring.py hold the worked numbers; none are repeated here,
-    because a docstring cannot fail when they change.
+    Without a ``league_context`` there is no baseline to score against, so the
+    swap is applied unconditionally, as it always was.
     """
     il_sorted = sorted(il_subset, key=_playing_time, reverse=True)
     already_displaced: set[str] = set()
@@ -618,14 +592,7 @@ def _compute_pitcher_pool_factors(
     full_pool_roster: list[Player | dict] = [*all_il, *all_active]
 
     def pool_pts(overrides: dict[str, float]) -> float:
-        """Team roto pts with `overrides` (name -> factor) applied to the pool.
-
-        Every name this function overrides is a pitcher -- `factors` only ever
-        holds pool targets and IL pitchers -- so lifting the name-keyed dict to
-        the helper's `(name, player_type)` key is exact, and it stops a
-        same-named hitter elsewhere on the roster being scaled along with the
-        pitcher.
-        """
+        """Score the pool with `overrides` (name -> factor) applied."""
         return _team_pts_with(full_pool_roster, overrides, league_context)
 
     factors: dict[str, float] = {}

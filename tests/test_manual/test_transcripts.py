@@ -547,14 +547,9 @@ def test_ip_notation_preserved_verbatim() -> None:
     than normalising ``.1`` into a decimal third.
     """
     raw = REAL_STANDINGS.read_text(encoding="utf-8")
-    # name -> the IP literal exactly as typed, e.g. "1057.1".
-    #
-    # Scraped per TEAM BLOCK rather than by walking lines carrying a "current
-    # team", which associates positionally: an `extras:` written above its
-    # `name:` would shift every IP one team earlier and surface as a confusing
-    # coverage failure. Splitting on the block boundary makes a reordered block
-    # a miss for that team, and makes a second IP-bearing line inside one block
-    # an explicit error rather than silently last-match-wins.
+    # name -> the IP literal exactly as typed, e.g. "1057.1". Scoped per team
+    # BLOCK so a reordered or duplicated IP line is an error naming the team,
+    # rather than a silent mis-pairing with its neighbour.
     typed: dict[str, str] = {}
     blocks = re.split(r"^(?=\s*-\s+name:)", raw, flags=re.MULTILINE)[1:]
     for block in blocks:

@@ -11,6 +11,7 @@ class TestQualityReport:
         assert report.warnings == []
         assert report.exclusions == {}
         assert report.missing_players == {}
+        assert report.systemic == []
 
     def test_has_warnings(self):
         report = QualityReport(warnings=["test warning"])
