@@ -330,34 +330,29 @@ def _find_worst_match(
 
 def _team_pts_with(
     roster: Sequence[Player | dict],
-    overrides: Mapping[tuple[str, PlayerType], float],
+    overrides: Mapping[str, float],
     ctx: LeagueContext,
 ) -> float:
     """Team roto pts for ``roster`` with ``overrides`` applied to its members.
 
     The one place this module scores a hypothetical roster against the frozen
-    baseline of other teams' stats. Three callers had grown their own copy of
-    it -- the DeltaRoto picker, the hitter improvement gate, and the pitcher
-    pair-swap picker -- which is three places for the scoring convention to
-    drift apart.
+    baseline of other teams' stats.
 
-    ``displacement=False`` is not optional: every caller passes a roster whose
-    already-committed factors are baked in, so re-deriving them here would
-    double-apply and recurse.
+    ``displacement=False`` is not optional: callers pass a roster whose
+    already-committed factors are baked in, so re-deriving would double-apply.
 
-    Overrides are keyed on ``(name, player_type)``, never a bare name. Each
-    copy of this used to scale every roster member whose ``.name`` matched,
-    which co-scales a same-named hitter and pitcher on one roster -- the
-    two-way Shohei Ohtani case, and the reason CLAUDE.md makes
-    ``name::player_type`` the player identity. The ``factors`` mapping these
-    callers ultimately RETURN is still name-keyed and read that way by
-    :func:`_apply_displacement` and :func:`compute_roster_breakdown`; that is a
-    wider contract than this helper and is not changed here.
+    Overrides are keyed on the BARE NAME, matching the ``factors`` mapping the
+    callers build and :func:`_apply_displacement` later applies. That violates
+    CLAUDE.md's ``name::player_type`` rule and co-scales a same-named hitter
+    and pitcher on one roster. Keying only this helper by type was tried and
+    reverted: it made the scored state disagree with the state that ships,
+    which is worse than being wrong consistently. Fixing it properly means
+    re-keying the whole ``factors`` contract -- both writers, three readers,
+    and ``mc_roster``, which currently raises on the collision. Tracked as
+    follow-up, not done here.
     """
     state: list[Player | dict] = [
-        _scale_stats(p, overrides[(p.name, p.player_type)])
-        if isinstance(p, Player) and (p.name, p.player_type) in overrides
-        else p
+        _scale_stats(p, overrides[p.name]) if isinstance(p, Player) and p.name in overrides else p
         for p in roster
     ]
     all_team_stats: dict[str, CategoryStats] = dict(ctx.baseline_other_team_stats)
@@ -393,7 +388,7 @@ def _find_delta_roto_optimal(
         if active_pt <= 0:
             continue
         factor = max(0.0, active_pt - il_pt) / active_pt
-        pts = _team_pts_with(current_roster, {(cand.name, cand.player_type): factor}, ctx)
+        pts = _team_pts_with(current_roster, {cand.name: factor}, ctx)
         if pts > best_pts:
             best_pts = pts
             best_target = cand
@@ -551,12 +546,8 @@ def _compute_substitution_factors(
             # IL player is unscaled in running_roster, so the swap state needs
             # only the target override; the bench state zeroes the IL player
             # and leaves the target whole.
-            swap_pts = _team_pts_with(
-                running_roster, {(target.name, target.player_type): factor}, league_context
-            )
-            bench_pts = _team_pts_with(
-                running_roster, {(il_p.name, il_p.player_type): 0.0}, league_context
-            )
+            swap_pts = _team_pts_with(running_roster, {target.name: factor}, league_context)
+            bench_pts = _team_pts_with(running_roster, {il_p.name: 0.0}, league_context)
             if swap_pts <= bench_pts:
                 factors[il_p.name] = 0.0
                 running_roster = [
@@ -635,11 +626,7 @@ def _compute_pitcher_pool_factors(
         same-named hitter elsewhere on the roster being scaled along with the
         pitcher.
         """
-        return _team_pts_with(
-            full_pool_roster,
-            {(name, PlayerType.PITCHER): f for name, f in overrides.items()},
-            league_context,
-        )
+        return _team_pts_with(full_pool_roster, overrides, league_context)
 
     factors: dict[str, float] = {}
     already_discounted: set[str] = set()
@@ -880,18 +867,10 @@ def _apply_displacement(
         league_context=league_context,
     )
 
-    # Build output: each player in active or IL is either passed through
-    # at full scale or scaled per the factors dict. Who can be in that dict:
-    #
-    #   active pitcher   discounted by the pool or substitution model
-    #   active hitter    discounted by the substitution model
-    #   IL pitcher       sf=0 when the pool model found no positive swap
-    #   IL hitter        sf=0 when the substitution model's improvement gate
-    #                    rejected the swap -- see _compute_substitution_factors
-    #   bench (non-IL)   never; excluded entirely
-    #
-    # An IL entry therefore means "benched, contributes nothing", not
-    # "discounted". TestFactorsInvariant in tests/test_scoring.py pins this.
+    # Active players in this dict are DISCOUNTED. IL players are BENCHED at
+    # sf=0 -- the pool model does that to an IL pitcher whose return would not
+    # help, and the substitution model's improvement gate to an IL hitter.
+    # Bench (non-IL) players never appear.
     result: list[Player | dict] = list(pass_through)
     for p in [*il_players, *active]:
         if p.name in displacement_factors:
