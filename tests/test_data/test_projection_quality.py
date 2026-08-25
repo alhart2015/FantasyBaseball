@@ -675,3 +675,95 @@ class TestBlendWithQualityChecks:
             progress_cb=messages.append,
         )
         assert isinstance(messages, list)
+
+
+class TestEmptySystemExport:
+    """A system whose export has zero data rows must be reported.
+
+    Regression for 2026-08-25: ``the-bat-x-pitchers.csv`` arrived header-only
+    (0 rows, 675 the run before) and NOTHING warned. ``_check_player_counts``
+    guarded its proportional test with ``count > 0``, so the one case that
+    should shout loudest -- a completely empty file -- was the only case it
+    could not see.
+    """
+
+    @staticmethod
+    def _hitters(n, offset=0):
+        return pd.DataFrame(
+            [
+                {
+                    "name": f"Hitter {i + offset}",
+                    "fg_id": str(i + offset),
+                    "hr": 20,
+                    "r": 80,
+                    "rbi": 75,
+                    "sb": 8,
+                    "h": 140,
+                    "ab": 520,
+                }
+                for i in range(n)
+            ]
+        )
+
+    @staticmethod
+    def _pitchers(n):
+        return pd.DataFrame(
+            [
+                {
+                    "name": f"Pitcher {i}",
+                    "fg_id": f"p{i}",
+                    "w": 10,
+                    "k": 150,
+                    "sv": 0,
+                    "ip": 150,
+                    "er": 60,
+                    "bb": 45,
+                    "h_allowed": 140,
+                }
+                for i in range(n)
+            ]
+        )
+
+    def test_empty_pitcher_export_is_reported(self):
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        empties = [w for w in report.warnings if "NO pitcher rows" in w]
+        assert len(empties) == 1, f"expected one empty-export warning, got {report.warnings}"
+        assert "the-bat-x" in empties[0]
+        # Names the consequence so the reader knows the blend still produced
+        # correct numbers, just from fewer systems.
+        assert "2 of 3" in empties[0]
+
+    def test_healthy_hitters_do_not_warn_when_only_pitchers_are_empty(self):
+        """Emptiness is per player type: the-bat-x hitters were fine that day."""
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        assert not [w for w in report.warnings if "NO hitter rows" in w]
+
+    def test_all_systems_present_produces_no_empty_warning(self):
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+        }
+        report = check_projection_quality(system_dfs)
+        assert not [w for w in report.warnings if "the export is" in w]
+
+    def test_warnings_are_ascii(self):
+        """These strings reach print() on a cp1252 console; see CLAUDE.md."""
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(8, offset=100), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        assert report.warnings, "fixture should trip at least one warning"
+        for w in report.warnings:
+            w.encode("ascii")

@@ -10,8 +10,8 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.name_utils import normalize_name
 
 # Thresholds for cross-system outlier detection
-EXCLUDE_THRESHOLD = 0.20  # System median < 20% of consensus → exclude
-WARN_THRESHOLD = 0.50  # System median deviates > 50% from consensus → warn
+EXCLUDE_THRESHOLD = 0.20  # System median < 20% of consensus -> exclude
+WARN_THRESHOLD = 0.50  # System median deviates > 50% from consensus -> warn
 
 # Minimum playing time to include a player in outlier detection.
 # Filters out fringe players that inflate large-pool systems (Steamer, Oopsy)
@@ -166,7 +166,21 @@ def _check_player_counts(
     system_dfs: dict[str, tuple[pd.DataFrame, pd.DataFrame]],
     report: QualityReport,
 ) -> None:
-    """Warn if a system has dramatically fewer players than others."""
+    """Warn if a system has dramatically fewer players than others.
+
+    An EMPTY export (zero rows) is reported separately and unconditionally.
+    The proportional check below cannot see it: it compares against the median
+    of the non-zero counts, and its own ``count > 0`` guard skipped exactly the
+    worst case. A header-only CSV therefore passed silently -- observed on
+    2026-08-25, when ``the-bat-x-pitchers.csv`` arrived with 0 data rows (675
+    the run before) and nothing said so.
+
+    Empty systems are already excluded from the blend and the surviving
+    weights already renormalize per player (``_blend_players`` divides each
+    stat by the summed weight of the systems that actually cover that player),
+    so this is a reporting gap, not a math one -- the blended values are
+    correct, they are just built from fewer opinions than configured.
+    """
     for player_type, df_idx in [(PlayerType.HITTER, 0), (PlayerType.PITCHER, 1)]:
         counts = {}
         for sys_name, dfs in system_dfs.items():
@@ -174,6 +188,17 @@ def _check_player_counts(
             counts[sys_name] = len(df) if not df.empty else 0
 
         nonzero_counts = [c for c in counts.values() if c > 0]
+
+        for sys_name, count in sorted(counts.items()):
+            if count == 0:
+                report.warnings.append(
+                    f"WARNING: {sys_name} has NO {player_type} rows -- the export is "
+                    f"empty. It is excluded from the blend; the remaining "
+                    f"{len(nonzero_counts)} of {len(counts)} systems renormalize to "
+                    f"cover it, so {player_type} projections are built from fewer "
+                    f"systems than configured. Re-download it from FanGraphs."
+                )
+
         if not nonzero_counts:
             continue
         median_count = float(np.median(nonzero_counts))
@@ -182,7 +207,7 @@ def _check_player_counts(
             if count > 0 and count < median_count * 0.5:
                 report.warnings.append(
                     f"WARNING: {sys_name} player count ({count} {player_type}s) is "
-                    f"below 50% of median ({median_count:.0f}) — possible bad export"
+                    f"below 50% of median ({median_count:.0f}) -- possible bad export"
                 )
 
 
@@ -213,7 +238,7 @@ def _check_roster_coverage(
 
         if len(missing_from) == len(systems):
             report.warnings.append(
-                f"WARNING: {player_name} missing from ALL projection systems — "
+                f"WARNING: {player_name} missing from ALL projection systems -- "
                 f"no projection available"
             )
         else:
