@@ -276,8 +276,16 @@ def blend_projections(
     report = None
     if len(system_dfs) >= 2:
         report = check_projection_quality(system_dfs, roster_names)
-        if progress_cb:
-            for warning in report.warnings:
+        # Log unconditionally, then mirror to progress_cb when the caller
+        # supplied one. Reporting used to be gated entirely on progress_cb, so
+        # every caller that just wants the frames -- ros_anchor, draft_value,
+        # db, build_db -- discarded every warning; they all discard the
+        # returned QualityReport too, so nothing surfaced anywhere. A blend
+        # missing a whole projection system should not be silent just because
+        # the caller had no console to print to.
+        for warning in report.warnings:
+            logger.warning("projection quality: %s", warning)
+            if progress_cb:
                 progress_cb(f"QUALITY: {warning}")
 
         # Apply exclusions: zero out excluded stat columns so they don't contribute

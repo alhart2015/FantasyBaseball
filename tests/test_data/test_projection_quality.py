@@ -855,3 +855,52 @@ class TestEmptyExportMessageAccuracy:
         report = check_projection_quality(system_dfs)
         w = next(x for x in report.warnings if "NO pitcher rows" in x)
         assert "empty or missing" in w, f"must not claim the file exists: {w}"
+
+
+class TestQualityWarningsReachCallersWithoutProgressCb:
+    """A quality warning must not be invisible to a caller that passes no
+    ``progress_cb``.
+
+    Reporting used to be gated entirely on ``progress_cb`` being truthy, so
+    every consumer that just wants the blended frames -- ``ros_anchor``,
+    ``draft_value``, ``db``, ``build_db`` -- silently discarded every warning,
+    including the empty-export one. They all also discard the returned
+    ``QualityReport``, so nothing surfaced anywhere.
+    """
+
+    @staticmethod
+    def _snapshot(tmp_path, *, empty_pitchers_for=()):
+        import csv
+
+        snap = tmp_path / "2026-01-01"
+        snap.mkdir()
+        h_cols = ["Name", "Team", "G", "AB", "PA", "H", "R", "HR", "RBI", "SB", "AVG", "PlayerId"]
+        p_cols = ["Name", "Team", "W", "SV", "IP", "SO", "ER", "BB", "H", "ERA", "WHIP", "PlayerId"]
+        for system in ("steamer", "zips"):
+            with open(snap / f"{system}-hitters.csv", "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                w.writerow(h_cols)
+                for i in range(30):
+                    w.writerow([f"H{i}", "NYY", 150, 520, 570, 140, 80, 20, 75, 8, 0.269, i])
+            with open(snap / f"{system}-pitchers.csv", "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                w.writerow(p_cols)
+                if system not in empty_pitchers_for:
+                    for i in range(30):
+                        w.writerow([f"P{i}", "NYY", 10, 0, 150, 150, 60, 45, 140, 3.60, 1.23, i])
+        return snap
+
+    def test_an_empty_export_is_logged_when_no_progress_cb_is_given(self, tmp_path, caplog):
+        snap = self._snapshot(tmp_path, empty_pitchers_for=("zips",))
+        with caplog.at_level("WARNING", logger="fantasy_baseball.data.projections"):
+            blend_projections(snap, ["steamer", "zips"], None, normalizer=None)
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert "NO pitcher rows" in logged, (
+            f"empty export was invisible to a caller with no progress_cb: {logged!r}"
+        )
+
+    def test_progress_cb_still_receives_the_warning(self, tmp_path):
+        snap = self._snapshot(tmp_path, empty_pitchers_for=("zips",))
+        seen: list[str] = []
+        blend_projections(snap, ["steamer", "zips"], None, progress_cb=seen.append, normalizer=None)
+        assert any("NO pitcher rows" in m for m in seen)
