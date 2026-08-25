@@ -10,10 +10,13 @@
 # the loader keys on (name, player_type), never the bare name.
 #
 # slot / positions / status are copied verbatim from the Yahoo UI. status carries
-# the red badge and is load-bearing: several teams park an IL'd player in an
-# ACTIVE or BN slot (Work in Progress has IL10 players at 2B and SS; Springfield
-# Isotopes has an IL60 on the bench; Send in the Cavalli has four), which is
-# detectable ONLY from this field.
+# the red badge and is load-bearing: managers routinely park an IL'd player in an
+# ACTIVE or BN slot, which is detectable ONLY from this field -- the slot alone
+# says "active". No tally of which teams do it is kept here, because it changes
+# every refresh and a stale count in a comment is worse than none; ask the data:
+#
+#   python -c "import yaml,io; d=yaml.safe_load(io.open('data/manual/rosters.yaml',encoding='utf-8')); \
+# [print(t['name'], [p['name'] for p in t['players'] if p.get('status','').startswith('IL') and p['slot']!='IL']) for t in d['teams']]"
 #
 # Send in the Cavalli carries two EMPTY starting slots (one OF, one Util) and
 # four bench players. Empty slots are simply omitted -- the bench is overflow,
