@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import pytest
 
@@ -827,11 +829,11 @@ class TestEmptyExportMessageAccuracy:
         empties = [w for w in report.warnings if "NO pitcher rows" in w]
         assert len(empties) == 3
         for w in empties:
-            # Not `"0 of" not in w`: that substring also appears in "10 of 10",
-            # so it tests the wrong property the moment a league configures ten
-            # systems. Assert the claim itself is absent instead.
+            # Assert on the CLAIM, not on any count spelling: `"0 of" not in w`
+            # also matches "10 of 10", and `"of 3" not in w` is tied to this
+            # fixture's three systems. Both stop guarding when the shape changes.
             assert "renormalize" not in w, f"nothing renormalizes here: {w}"
-            assert "of 3" not in w, f"must not report a survivor count: {w}"
+            assert not re.search(r"\d+ of \d+", w), f"must not report a count: {w}"
             assert "NO systems have pitcher rows" in w, f"must say none survive: {w}"
             assert "no pitcher projections at all" in w, (
                 f"must say the blend has no rows of this type: {w}"
@@ -870,8 +872,8 @@ class TestQualityWarningsReachCallersWithoutProgressCb:
     consumer that only wants the blended frames discarded every warning,
     including the empty-export one -- and they discard the returned
     ``QualityReport`` too, so nothing surfaced anywhere. ``ros_anchor`` and
-    ``draft_value`` are in that position; ``db`` and ``build_db`` do pass a
-    ``progress_cb`` and were never silent.
+    ``draft_value`` are in that position, and so is ``db`` -- it forwards a
+    ``progress_cb`` its own callers never supply.
 
     Only SYSTEMIC warnings are logged, and only when there is no
     ``progress_cb``: logging everything would double ``build_db``'s output and
@@ -905,7 +907,8 @@ class TestQualityWarningsReachCallersWithoutProgressCb:
         snap = self._snapshot(tmp_path, empty_pitchers_for=("zips",))
         with caplog.at_level("WARNING", logger="fantasy_baseball.data.projections"):
             blend_projections(snap, ["steamer", "zips"], None, normalizer=None)
-        logged = " ".join(r.getMessage() for r in caplog.records)
+        ours = [r for r in caplog.records if r.name == "fantasy_baseball.data.projections"]
+        logged = " ".join(r.getMessage() for r in ours)
         assert "NO pitcher rows" in logged, (
             f"empty export was invisible to a caller with no progress_cb: {logged!r}"
         )
@@ -933,14 +936,16 @@ class TestSystemicWarningsAreSeparatedFromPerPlayerNoise:
         roster = {"nobody projects this guy", "or this one"}
         with caplog.at_level("WARNING", logger="fantasy_baseball.data.projections"):
             blend_projections(snap, ["steamer", "zips"], None, roster_names=roster, normalizer=None)
-        logged = " ".join(r.getMessage() for r in caplog.records)
+        ours = [r for r in caplog.records if r.name == "fantasy_baseball.data.projections"]
+        logged = " ".join(r.getMessage() for r in ours)
         assert "NO pitcher rows" in logged, "the systemic warning must still be logged"
         assert "nobody projects this guy" not in logged, (
             f"per-player coverage noise must not reach the log: {logged!r}"
         )
 
-    def test_a_caller_with_progress_cb_is_not_also_logged(self, tmp_path, caplog):
-        """build_db passes progress_cb=print; it must not get every line twice."""
+    def test_a_systemic_warning_logs_even_when_a_progress_cb_is_given(self, tmp_path, caplog):
+        """A progress_cb can be a print into a discarded stdout (build_db under
+        cron), so the durable record must not depend on it."""
         snap = TestQualityWarningsReachCallersWithoutProgressCb._snapshot(
             tmp_path, empty_pitchers_for=("zips",)
         )
@@ -949,7 +954,8 @@ class TestSystemicWarningsAreSeparatedFromPerPlayerNoise:
             blend_projections(
                 snap, ["steamer", "zips"], None, progress_cb=seen.append, normalizer=None
             )
-        assert any("NO pitcher rows" in m for m in seen)
-        assert not [r for r in caplog.records], (
-            "a caller that supplied progress_cb must not also be logged to"
+        assert any("NO pitcher rows" in m for m in seen), "the callback still gets it"
+        ours = [r for r in caplog.records if r.name == "fantasy_baseball.data.projections"]
+        assert any("NO pitcher rows" in r.getMessage() for r in ours), (
+            "and it is logged too -- stdout is not a durable record"
         )
