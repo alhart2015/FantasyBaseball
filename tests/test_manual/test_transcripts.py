@@ -528,12 +528,32 @@ def test_unresolvable_team_key_is_blank_not_invented(tmp_path: Path) -> None:
 
 
 def test_ip_notation_preserved_verbatim() -> None:
-    """Yahoo's innings.outs display format survives the load untouched."""
-    standings = load_manual_standings(REAL_STANDINGS, team_keys={})
-    entry = standings.by_team()[USER_TEAM]
-    assert entry.extras[OpportunityStat.IP] == pytest.approx(1079.1)
-    # NOT "fixed" to 1079.333 -- that would diverge from the Yahoo path.
-    assert entry.extras[OpportunityStat.IP] != pytest.approx(1079 + 1 / 3)
+    """Yahoo's innings.outs display format survives the load untouched.
+
+    The expected value is READ FROM the transcription rather than pinned to a
+    literal. standings.yaml is re-transcribed on every refresh, so a hardcoded
+    IP asserts the snapshot date, not the behaviour, and fails on the next
+    refresh for no real reason. What is load-bearing is the NOTATION: the digit
+    after the point is a count of outs (0, 1 or 2) and must survive as itself,
+    never normalised into decimal thirds. Checked for all ten teams, not just
+    one, so a fat-fingered IP anywhere in the file is caught.
+    """
+    payload = _real_standings_payload()
+    by_team = load_manual_standings(REAL_STANDINGS, team_keys={}).by_team()
+    for row in payload["teams"]:
+        transcribed = float(row["extras"]["IP"])
+        loaded = by_team[row["name"]].extras[OpportunityStat.IP]
+        assert loaded == pytest.approx(transcribed)
+
+        whole = int(transcribed)
+        outs = round((transcribed - whole) * 10)
+        assert outs in (0, 1, 2), (
+            f"{row['name']}: IP {transcribed} is not Yahoo innings.outs notation"
+        )
+        # NOT "fixed" to whole + 1/3 or whole + 2/3 -- either would diverge
+        # from the Yahoo path.
+        assert loaded != pytest.approx(whole + 1 / 3)
+        assert loaded != pytest.approx(whole + 2 / 3)
 
 
 def test_points_for_maps_onto_yahoo_points_for() -> None:
