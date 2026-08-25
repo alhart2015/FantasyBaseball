@@ -16,6 +16,7 @@ Two jobs here:
 from __future__ import annotations
 
 import copy
+import re
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -530,30 +531,57 @@ def test_unresolvable_team_key_is_blank_not_invented(tmp_path: Path) -> None:
 def test_ip_notation_preserved_verbatim() -> None:
     """Yahoo's innings.outs display format survives the load untouched.
 
-    The expected value is READ FROM the transcription rather than pinned to a
-    literal. standings.yaml is re-transcribed on every refresh, so a hardcoded
-    IP asserts the snapshot date, not the behaviour, and fails on the next
-    refresh for no real reason. What is load-bearing is the NOTATION: the digit
-    after the point is a count of outs (0, 1 or 2) and must survive as itself,
-    never normalised into decimal thirds. Checked for all ten teams, not just
-    one, so a fat-fingered IP anywhere in the file is caught.
-    """
-    payload = _real_standings_payload()
-    by_team = load_manual_standings(REAL_STANDINGS, team_keys={}).by_team()
-    for row in payload["teams"]:
-        transcribed = float(row["extras"]["IP"])
-        loaded = by_team[row["name"]].extras[OpportunityStat.IP]
-        assert loaded == pytest.approx(transcribed)
+    Scope, stated narrowly on purpose: this guards the LOADER, not the
+    transcription. It cannot catch a mistyped IP -- 1094.0 entered as 1049.0 is
+    a well-formed innings.outs value and no property of the file contradicts
+    it. An earlier version of this docstring claimed otherwise.
 
-        whole = int(transcribed)
-        outs = round((transcribed - whole) * 10)
-        assert outs in (0, 1, 2), (
-            f"{row['name']}: IP {transcribed} is not Yahoo innings.outs notation"
+    The expected digits come from the raw YAML TEXT rather than from the parsed
+    payload, so the comparison is against what a human typed rather than against
+    another read of the same parse. The previous literal (``1079.1``) pinned one
+    snapshot's value and broke on the next re-transcription, which asserts the
+    snapshot date rather than any behaviour.
+
+    What is load-bearing: the digit after the point counts OUTS, so it is
+    always 0, 1 or 2, and the loader must carry it through as itself rather
+    than normalising ``.1`` into a decimal third.
+    """
+    raw = REAL_STANDINGS.read_text(encoding="utf-8")
+    # name -> the IP literal exactly as typed, e.g. "1057.1"
+    typed: dict[str, str] = {}
+    current: str | None = None
+    for line in raw.splitlines():
+        name = re.search(r'^\s*-\s*name:\s*"(.+)"\s*$', line)
+        if name:
+            current = name.group(1)
+        ip = re.search(r"\bIP:\s*([0-9]+\.[0-9]+)", line)
+        if ip and current is not None:
+            typed[current] = ip.group(1)
+
+    by_team = load_manual_standings(REAL_STANDINGS, team_keys={}).by_team()
+    assert set(typed) == set(by_team), (
+        f"IP literals scraped from the YAML text {sorted(typed)} do not cover "
+        f"every loaded team {sorted(by_team)}"
+    )
+
+    for team, literal in typed.items():
+        whole_text, outs_text = literal.split(".")
+        assert outs_text in ("0", "1", "2"), (
+            f"{team}: IP {literal} is not Yahoo innings.outs notation -- the "
+            "digit after the point counts outs"
         )
-        # NOT "fixed" to whole + 1/3 or whole + 2/3 -- either would diverge
-        # from the Yahoo path.
-        assert loaded != pytest.approx(whole + 1 / 3)
-        assert loaded != pytest.approx(whole + 2 / 3)
+        loaded = by_team[team].extras[OpportunityStat.IP]
+        # The loader must reproduce the typed digits, NOT convert them: an
+        # outs digit of 1 stays .1 and never becomes .333.
+        assert loaded == pytest.approx(float(literal)), (
+            f"{team}: loader returned {loaded} for a typed {literal}"
+        )
+        if outs_text != "0":
+            third = int(whole_text) + int(outs_text) / 3
+            assert loaded != pytest.approx(third), (
+                f"{team}: IP was normalised to decimal thirds ({third}); "
+                "that diverges from the Yahoo path"
+            )
 
 
 def test_points_for_maps_onto_yahoo_points_for() -> None:
