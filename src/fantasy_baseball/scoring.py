@@ -391,10 +391,15 @@ def _compute_displacement_factors(
     """Map player-name -> scale factor for IL-induced displacement.
 
     Hitters (always) and pitchers (when ``league_context`` is None) use
-    the legacy substitution model: process IL players in descending
-    playing-time order; each picks the displacement target via
-    :func:`_find_worst_match` and scales them by
-    ``max(0, active_pt - il_pt) / active_pt``.
+    the substitution model: process IL players in descending playing-time
+    order; each picks the displacement target via :func:`_find_worst_match`
+    and scales them by ``max(0, active_pt - il_pt) / active_pt``. With a
+    ``league_context`` the hitter path additionally gates that swap on
+    whether it improves team roto, and benches the IL hitter at sf=0 when it
+    does not -- so an IL HITTER can appear in the returned mapping, which was
+    not true before that gate existed. See
+    :func:`_compute_substitution_factors` for the gate and
+    :func:`_apply_displacement` for the full list of who may carry a factor.
 
     Pitchers WITH ``league_context`` use the pair-swap model: each IL
     pitcher (sorted by descending preseason IP) is activated at full ROS
@@ -409,8 +414,9 @@ def _compute_displacement_factors(
     """
     factors: dict[str, float] = {}
 
-    # Hitters: always legacy substitution (position constraints make a
-    # pool-slot model more complex; out of scope for the current change).
+    # Hitters: substitution model, gated on improvement when a league_context
+    # is available. Position constraints make a pitcher-style pool-slot model
+    # more complex, so the target is still picked one IL player at a time.
     active_hitters = [p for p in active if p.player_type == PlayerType.HITTER]
     il_hitters = [p for p in il_players if p.player_type == PlayerType.HITTER]
     factors.update(
@@ -874,9 +880,17 @@ def _apply_displacement(
     )
 
     # Build output: each player in active or IL is either passed through
-    # at full scale or scaled per the factors dict. Pool model can put an
-    # IL pitcher in factors with sf=0; substitution model only ever puts
-    # active players in factors. Bench players are excluded entirely.
+    # at full scale or scaled per the factors dict. Who can be in that dict:
+    #
+    #   active pitcher   discounted by the pool or substitution model
+    #   active hitter    discounted by the substitution model
+    #   IL pitcher       sf=0 when the pool model found no positive swap
+    #   IL hitter        sf=0 when the substitution model's improvement gate
+    #                    rejected the swap -- see _compute_substitution_factors
+    #   bench (non-IL)   never; excluded entirely
+    #
+    # An IL entry therefore means "benched, contributes nothing", not
+    # "discounted". TestFactorsInvariant in tests/test_scoring.py pins this.
     result: list[Player | dict] = list(pass_through)
     for p in [*il_players, *active]:
         if p.name in displacement_factors:
@@ -995,11 +1009,12 @@ def compute_roster_breakdown(
             status = ContributionStatus.NO_PROJECTION
             factor = 0.0
         elif p.name in displacement_factors:
-            # Pool model can put an IL pitcher in the bench tier (sf=0)
-            # when the team's other pitchers are projected to outproduce
-            # the returning IL guy. Tag as DISPLACED to surface this in
-            # the breakdown UI rather than IL_FULL (which would
-            # mis-imply they're contributing).
+            # An IL player carrying a factor was benched, not discounted:
+            # the pool model does this to an IL pitcher whose return would
+            # not improve the team, and the substitution model's improvement
+            # gate does it to an IL hitter for the same reason. Tag as
+            # DISPLACED to surface it in the breakdown UI rather than
+            # IL_FULL (which would mis-imply they're contributing).
             status = ContributionStatus.DISPLACED
             factor = displacement_factors[p.name]
         else:

@@ -47,7 +47,7 @@ Each row carries a status tag explaining why its scale factor is what it is:
 |---|---|---|
 | `ACTIVE` | Player is in an active slot; counts at face value | 1.00 |
 | `IL_FULL` | Player is in an IL slot or on BN with Yahoo IL status; counts at full ROS for displacement math | 1.00 |
-| `DISPLACED` | Player is in an active slot but was picked as a displacement target by an IL-classified teammate; scaled down | (0, 1) |
+| `DISPLACED` | Either an active-slot player picked as a displacement target by an IL-classified teammate (scaled down), or an IL-classified player the model benched because activating them would not improve the team | (0, 1) for a displaced starter; `0.00` for a benched IL player |
 | `BENCH` | Player is on BN with no IL status; excluded from the team total | 0.00 |
 | `NO_PROJECTION` | Player's `rest_of_season` is `None` (data-quality miss); contributes 0 | n/a — display as `—` |
 

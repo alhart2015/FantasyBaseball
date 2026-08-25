@@ -4249,3 +4249,105 @@ def test_project_team_sds_counting_variance_equals_negbin_helper_sum():
         cv_pt = playing_time_params(PlayerType.HITTER, _full_season_volume(p, True))[1]
         exp_var += float(negbin_perf_variance("sb", v)) + v * v * cv_pt**2
     assert abs(sds[Category.SB] - exp_var**0.5) < 1e-9
+
+
+class TestFactorsInvariant:
+    """Who may appear in ``displacement_factors``, and what an entry means.
+
+    Three call sites read this contract -- ``_apply_displacement``,
+    ``compute_roster_breakdown``, and ``mc_roster.build_effective_roster`` --
+    and until the IL-hitter improvement gate existed the substitution model
+    could only ever put ACTIVE players in the dict. It can now put a benched
+    IL hitter there at sf=0, exactly as the pool model has always done for IL
+    pitchers. That is the invariant this class pins, so a future reader gets a
+    failing test rather than a stale comment.
+    """
+
+    @staticmethod
+    def _il_hitter_roster():
+        """An IL SS clearly worse than the healthy SS in front of him."""
+        healthy = _hitter(
+            "Healthy SS",
+            r=90,
+            hr=20,
+            rbi=75,
+            sb=30,
+            h=140,
+            ab=520,
+            pa=570,
+            positions=[Position.SS],
+            selected_position=Position.SS,
+        )
+        il = _hitter(
+            "IL SS",
+            r=70,
+            hr=15,
+            rbi=62,
+            sb=4,
+            h=105,
+            ab=470,
+            pa=575,
+            positions=[Position.SS],
+            selected_position=Position.IL,
+            status="IL10",
+        )
+        fillers = [
+            _hitter(
+                f"Filler {i}",
+                r=80,
+                hr=22,
+                rbi=77,
+                sb=12,
+                h=140,
+                ab=540,
+                positions=[Position.OF],
+                selected_position=Position.OF,
+            )
+            for i in range(10)
+        ]
+        arms = [
+            _pitcher(
+                f"SP {i}",
+                w=14,
+                k=190,
+                sv=0,
+                ip=190,
+                er=70,
+                bb=50,
+                h_allowed=160,
+                positions=[Position.SP],
+                selected_position=Position.SP,
+            )
+            for i in range(3)
+        ]
+        return healthy, il, [healthy, *fillers, *arms, il]
+
+    def test_a_benched_il_hitter_is_tagged_displaced_not_il_full(self):
+        """The breakdown must not report a benched IL hitter as contributing."""
+        _, _, roster = self._il_hitter_roster()
+        ctx = TestDeltaRotoDisplacement()._league_context_for("My Team")
+        bd = compute_roster_breakdown("My Team", roster, league_context=ctx)
+        from fantasy_baseball.scoring import ContributionStatus
+
+        il_row = next(p for p in bd.hitters if p.name == "IL SS")
+        assert il_row.scale_factor == pytest.approx(0.0)
+        assert il_row.status == ContributionStatus.DISPLACED, (
+            "an IL hitter carrying a factor must be tagged DISPLACED, not IL_FULL -- "
+            f"IL_FULL would mis-imply he is contributing; got {il_row.status}"
+        )
+
+    def test_apply_displacement_scales_the_benched_il_hitter_to_zero(self):
+        """`_apply_displacement` iterates [*il, *active]; the IL hitter must be
+        scaled by his factor there, not passed through at full ROS."""
+        _, _, roster = self._il_hitter_roster()
+        ctx = TestDeltaRotoDisplacement()._league_context_for("My Team")
+        with_gate = project_team_stats(roster, displacement=True, league_context=ctx)
+        # The IL SS contributes nothing, so the team's totals must equal the
+        # roster scored without him at all.
+        without_il = project_team_stats(
+            [p for p in roster if p.name != "IL SS"], displacement=True, league_context=ctx
+        )
+        for cat in ("R", "HR", "RBI", "SB"):
+            assert with_gate.to_dict()[cat] == pytest.approx(without_il.to_dict()[cat]), (
+                f"{cat}: a benched IL hitter still reached the team total"
+            )
