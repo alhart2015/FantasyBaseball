@@ -169,9 +169,9 @@ def _check_player_counts(
     """Warn if a system has dramatically fewer players than others.
 
     An EMPTY export (zero rows) is reported separately. The proportional check
-    below cannot see it: it compares against the median of the non-zero counts,
+    below cannot see it: it compares against the median of the NON-ZERO counts,
     and its own ``count > 0`` guard skipped exactly the worst case, so a
-    header-only CSV passed silently.
+    header-only CSV passed silently. ``TestEmptySystemExport`` pins that.
 
     Two limits on that report, both stated because the caller cannot infer
     them. It is not unconditional: :func:`check_projection_quality` returns

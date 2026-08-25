@@ -493,32 +493,33 @@ def _compute_substitution_factors(
     all_active: list[Player],
     all_il: list[Player],
 ) -> dict[str, float]:
-    """Legacy per-IL-player substitution displacement, restricted to a
-    player-type subset. ``all_active``/``all_il`` (the full team) are
-    used to build the ΔRoto picker's running-state roster so cross-type
-    interactions are scored correctly.
+    """Per-IL-player substitution displacement, restricted to a player-type
+    subset. ``all_active``/``all_il`` (the full team) are used to build the
+    DeltaRoto picker's running-state roster so cross-type interactions are
+    scored correctly.
 
-    IMPROVEMENT GATE (``league_context`` only). ``_find_worst_match`` picks
-    the least damaging displacement target, but it only ever compares
-    candidates against EACH OTHER -- never against not displacing anyone. So
-    an IL player whose return would not help was still activated at full ROS,
-    zeroing a healthy starter purely on playing-time arithmetic. That is how a
-    .229 IL shortstop projected for 29.3 games fully erased a healthy .254
-    shortstop projected for 29.1: ``max(0, 29.14 - 29.34) / 29.14 == 0.0``,
-    with nothing anywhere asking whether the swap was an upgrade.
+    IMPROVEMENT GATE (``league_context`` only). :func:`_find_worst_match`
+    picks the least damaging displacement target, but it only ever compares
+    candidates against EACH OTHER -- never against not displacing anyone. An
+    IL player whose return would not help was therefore still activated at
+    full ROS, discounting a healthy starter on playing-time arithmetic alone.
+    Note the clamp in that arithmetic: when the IL player's projected playing
+    time meets or exceeds the target's, ``max(0, active_pt - il_pt)`` is zero
+    and the healthy starter is erased outright -- so the worse the IL player's
+    projection is at equal volume, the more of a better starter it displaced.
 
     The gate mirrors :func:`_compute_pitcher_pool_factors`, which has always
-    had it ("If no positive-DeltaRoto swap exists ... the IL pitcher is set to
-    sf=0"): score the team with the IL player activated and the target
+    had it: score the team with the IL player activated and the target
     discounted, score it with the IL player benched and nobody displaced, and
-    take the swap only if it wins. The pitcher docstring's asymmetry was
-    acknowledged tech debt -- hitters used "legacy substitution (position
-    constraints make a pool-slot model more complex; out of scope for the
-    current change)".
+    take the swap only if it wins.
 
     Without a ``league_context`` there is no baseline of other teams' stats to
     score against, so no gate is possible and the unconditional legacy
     substitution is preserved unchanged.
+
+    ``TestDeltaRotoDisplacement`` and ``TestFactorsInvariant`` in
+    tests/test_scoring.py hold the worked numbers; none are repeated here,
+    because a docstring cannot fail when they change.
     """
     il_sorted = sorted(il_subset, key=_playing_time, reverse=True)
     already_displaced: set[str] = set()
