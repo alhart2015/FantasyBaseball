@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 import pytest
 
@@ -11,6 +13,7 @@ class TestQualityReport:
         assert report.warnings == []
         assert report.exclusions == {}
         assert report.missing_players == {}
+        assert report.systemic == []
 
     def test_has_warnings(self):
         report = QualityReport(warnings=["test warning"])
@@ -675,3 +678,284 @@ class TestBlendWithQualityChecks:
             progress_cb=messages.append,
         )
         assert isinstance(messages, list)
+
+
+class TestEmptySystemExport:
+    """A system whose export has zero data rows must be reported.
+
+    Regression for 2026-08-25: ``the-bat-x-pitchers.csv`` arrived header-only
+    (0 rows, 675 the run before) and NOTHING warned. ``_check_player_counts``
+    guarded its proportional test with ``count > 0``, so the one case that
+    should shout loudest -- a completely empty file -- was the only case it
+    could not see.
+    """
+
+    @staticmethod
+    def _hitters(n, offset=0):
+        return pd.DataFrame(
+            [
+                {
+                    "name": f"Hitter {i + offset}",
+                    "fg_id": str(i + offset),
+                    "hr": 20,
+                    "r": 80,
+                    "rbi": 75,
+                    "sb": 8,
+                    "h": 140,
+                    "ab": 520,
+                }
+                for i in range(n)
+            ]
+        )
+
+    @staticmethod
+    def _pitchers(n):
+        return pd.DataFrame(
+            [
+                {
+                    "name": f"Pitcher {i}",
+                    "fg_id": f"p{i}",
+                    "w": 10,
+                    "k": 150,
+                    "sv": 0,
+                    "ip": 150,
+                    "er": 60,
+                    "bb": 45,
+                    "h_allowed": 140,
+                }
+                for i in range(n)
+            ]
+        )
+
+    def test_empty_pitcher_export_is_reported(self):
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        empties = [w for w in report.warnings if "NO pitcher rows" in w]
+        assert len(empties) == 1, f"expected one empty-export warning, got {report.warnings}"
+        assert "the-bat-x" in empties[0]
+        # Names the consequence so the reader knows the blend still produced
+        # correct numbers, just from fewer systems.
+        assert "2 of 3" in empties[0]
+
+    def test_healthy_hitters_do_not_warn_when_only_pitchers_are_empty(self):
+        """Emptiness is per player type: the-bat-x hitters were fine that day."""
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        assert not [w for w in report.warnings if "NO hitter rows" in w]
+
+    def test_all_systems_present_produces_no_empty_warning(self):
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+        }
+        report = check_projection_quality(system_dfs)
+        assert not [w for w in report.warnings if "the export is" in w]
+
+    def test_warnings_are_ascii(self):
+        """These strings reach print() on a cp1252 console; see CLAUDE.md."""
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(8, offset=100), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        assert report.warnings, "fixture should trip at least one warning"
+        for w in report.warnings:
+            w.encode("ascii")
+
+
+class TestEmptyExportMessageAccuracy:
+    """The empty-export warning must not assert things that are false.
+
+    The first version said "the remaining N of M systems renormalize to cover
+    it" unconditionally. When EVERY system is empty that renders "0 of M" and
+    the sentence is wrong twice over: nothing renormalizes, and there are no
+    projections of that type at all. It also said "the export is empty" for a
+    case it cannot distinguish from a file that was never downloaded.
+    """
+
+    @staticmethod
+    def _pitchers(n):
+        return pd.DataFrame(
+            [
+                {
+                    "name": f"P{i}",
+                    "fg_id": f"p{i}",
+                    "w": 10,
+                    "k": 150,
+                    "sv": 0,
+                    "ip": 150,
+                    "er": 60,
+                    "bb": 45,
+                    "h_allowed": 140,
+                }
+                for i in range(n)
+            ]
+        )
+
+    @staticmethod
+    def _hitters(n):
+        return pd.DataFrame(
+            [
+                {
+                    "name": f"H{i}",
+                    "fg_id": str(i),
+                    "hr": 20,
+                    "r": 80,
+                    "rbi": 75,
+                    "sb": 8,
+                    "h": 140,
+                    "ab": 520,
+                }
+                for i in range(n)
+            ]
+        )
+
+    def test_all_systems_empty_does_not_claim_survivors_renormalize(self):
+        system_dfs = {
+            "steamer": (self._hitters(40), pd.DataFrame()),
+            "zips": (self._hitters(40), pd.DataFrame()),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        empties = [w for w in report.warnings if "NO pitcher rows" in w]
+        assert len(empties) == 3
+        for w in empties:
+            # Assert on the CLAIM, not on any count spelling: `"0 of" not in w`
+            # also matches "10 of 10", and `"of 3" not in w` is tied to this
+            # fixture's three systems. Both stop guarding when the shape changes.
+            assert "renormalize" not in w, f"nothing renormalizes here: {w}"
+            assert not re.search(r"\d+ of \d+", w), f"must not report a count: {w}"
+            assert "NO systems have pitcher rows" in w, f"must say none survive: {w}"
+            assert "no pitcher projections at all" in w, (
+                f"must say the blend has no rows of this type: {w}"
+            )
+
+    def test_partial_emptiness_still_names_the_survivors(self):
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        empties = [w for w in report.warnings if "NO pitcher rows" in w]
+        assert len(empties) == 1
+        assert "2 of 3" in empties[0]
+        assert "renormalize" in empties[0]
+
+    def test_message_does_not_assert_the_file_exists(self):
+        """load_projection_set returns an empty frame for a MISSING file too,
+        so the warning must not tell the user their download is corrupt."""
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        w = next(x for x in report.warnings if "NO pitcher rows" in x)
+        assert "empty or missing" in w, f"must not claim the file exists: {w}"
+
+
+class TestQualityWarningsReachCallersWithoutProgressCb:
+    """A quality warning must not be invisible to a caller that passes no
+    ``progress_cb``.
+
+    Reporting used to be gated entirely on ``progress_cb`` being truthy, so a
+    consumer that only wants the blended frames discarded every warning,
+    including the empty-export one -- and they discard the returned
+    ``QualityReport`` too, so nothing surfaced anywhere. ``ros_anchor`` and
+    ``draft_value`` are in that position, and so is ``db`` -- it forwards a
+    ``progress_cb`` its own callers never supply.
+
+    Only SYSTEMIC warnings are logged, and only when there is no
+    ``progress_cb``: logging everything would double ``build_db``'s output and
+    flood ``db``'s per-year loop, since roster-coverage emits one warning per
+    missing player, uncapped.
+    """
+
+    @staticmethod
+    def _snapshot(tmp_path, *, empty_pitchers_for=()):
+        import csv
+
+        snap = tmp_path / "2026-01-01"
+        snap.mkdir()
+        h_cols = ["Name", "Team", "G", "AB", "PA", "H", "R", "HR", "RBI", "SB", "AVG", "PlayerId"]
+        p_cols = ["Name", "Team", "W", "SV", "IP", "SO", "ER", "BB", "H", "ERA", "WHIP", "PlayerId"]
+        for system in ("steamer", "zips"):
+            with open(snap / f"{system}-hitters.csv", "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                w.writerow(h_cols)
+                for i in range(30):
+                    w.writerow([f"H{i}", "NYY", 150, 520, 570, 140, 80, 20, 75, 8, 0.269, i])
+            with open(snap / f"{system}-pitchers.csv", "w", newline="", encoding="utf-8") as fh:
+                w = csv.writer(fh)
+                w.writerow(p_cols)
+                if system not in empty_pitchers_for:
+                    for i in range(30):
+                        w.writerow([f"P{i}", "NYY", 10, 0, 150, 150, 60, 45, 140, 3.60, 1.23, i])
+        return snap
+
+    def test_an_empty_export_is_logged_when_no_progress_cb_is_given(self, tmp_path, caplog):
+        snap = self._snapshot(tmp_path, empty_pitchers_for=("zips",))
+        with caplog.at_level("WARNING", logger="fantasy_baseball.data.projections"):
+            blend_projections(snap, ["steamer", "zips"], None, normalizer=None)
+        ours = [r for r in caplog.records if r.name == "fantasy_baseball.data.projections"]
+        logged = " ".join(r.getMessage() for r in ours)
+        assert "NO pitcher rows" in logged, (
+            f"empty export was invisible to a caller with no progress_cb: {logged!r}"
+        )
+
+    def test_progress_cb_still_receives_the_warning(self, tmp_path):
+        snap = self._snapshot(tmp_path, empty_pitchers_for=("zips",))
+        seen: list[str] = []
+        blend_projections(snap, ["steamer", "zips"], None, progress_cb=seen.append, normalizer=None)
+        assert any("NO pitcher rows" in m for m in seen)
+
+
+class TestSystemicWarningsAreSeparatedFromPerPlayerNoise:
+    """Only whole-system warnings are logged for a caller with no progress_cb.
+
+    `_check_roster_coverage` emits one warning per rostered player it cannot
+    find, uncapped, and `data/db.py` blends once per season directory. Logging
+    every warning would flood that loop and double the output of
+    `scripts/build_db.py`, which passes `progress_cb=print`.
+    """
+
+    def test_per_player_coverage_warnings_are_not_logged(self, tmp_path, caplog):
+        snap = TestQualityWarningsReachCallersWithoutProgressCb._snapshot(
+            tmp_path, empty_pitchers_for=("zips",)
+        )
+        roster = {"nobody projects this guy", "or this one"}
+        with caplog.at_level("WARNING", logger="fantasy_baseball.data.projections"):
+            blend_projections(snap, ["steamer", "zips"], None, roster_names=roster, normalizer=None)
+        ours = [r for r in caplog.records if r.name == "fantasy_baseball.data.projections"]
+        logged = " ".join(r.getMessage() for r in ours)
+        assert "NO pitcher rows" in logged, "the systemic warning must still be logged"
+        assert "nobody projects this guy" not in logged, (
+            f"per-player coverage noise must not reach the log: {logged!r}"
+        )
+
+    def test_a_systemic_warning_logs_even_when_a_progress_cb_is_given(self, tmp_path, caplog):
+        """A progress_cb can be a print into a discarded stdout (build_db under
+        cron), so the durable record must not depend on it."""
+        snap = TestQualityWarningsReachCallersWithoutProgressCb._snapshot(
+            tmp_path, empty_pitchers_for=("zips",)
+        )
+        seen: list[str] = []
+        with caplog.at_level("WARNING", logger="fantasy_baseball.data.projections"):
+            blend_projections(
+                snap, ["steamer", "zips"], None, progress_cb=seen.append, normalizer=None
+            )
+        assert any("NO pitcher rows" in m for m in seen), "the callback still gets it"
+        ours = [r for r in caplog.records if r.name == "fantasy_baseball.data.projections"]
+        assert any("NO pitcher rows" in r.getMessage() for r in ours), (
+            "and it is logged too -- stdout is not a durable record"
+        )

@@ -16,6 +16,7 @@ Two jobs here:
 from __future__ import annotations
 
 import copy
+import re
 from datetime import timedelta
 from pathlib import Path
 from typing import Any
@@ -528,12 +529,66 @@ def test_unresolvable_team_key_is_blank_not_invented(tmp_path: Path) -> None:
 
 
 def test_ip_notation_preserved_verbatim() -> None:
-    """Yahoo's innings.outs display format survives the load untouched."""
-    standings = load_manual_standings(REAL_STANDINGS, team_keys={})
-    entry = standings.by_team()[USER_TEAM]
-    assert entry.extras[OpportunityStat.IP] == pytest.approx(1079.1)
-    # NOT "fixed" to 1079.333 -- that would diverge from the Yahoo path.
-    assert entry.extras[OpportunityStat.IP] != pytest.approx(1079 + 1 / 3)
+    """Yahoo's innings.outs display format survives the load untouched.
+
+    Scope, stated narrowly on purpose: this guards the LOADER, not the
+    transcription. It cannot catch a mistyped IP -- 1094.0 entered as 1049.0 is
+    a well-formed innings.outs value and no property of the file contradicts
+    it. An earlier version of this docstring claimed otherwise.
+
+    The expected digits come from the raw YAML TEXT rather than from the parsed
+    payload, so the comparison is against what a human typed rather than against
+    another read of the same parse. The previous literal (``1079.1``) pinned one
+    snapshot's value and broke on the next re-transcription, which asserts the
+    snapshot date rather than any behaviour.
+
+    What is load-bearing: the digit after the point counts OUTS, so it is
+    always 0, 1 or 2, and the loader must carry it through as itself rather
+    than normalising ``.1`` into a decimal third.
+    """
+    raw = REAL_STANDINGS.read_text(encoding="utf-8")
+    # name -> the IP literal exactly as typed, e.g. "1057.1". Scoped per team
+    # BLOCK so a reordered or duplicated IP line is an error naming the team,
+    # rather than a silent mis-pairing with its neighbour.
+    typed: dict[str, str] = {}
+    blocks = re.split(r"^(?=\s*-\s+name:)", raw, flags=re.MULTILINE)[1:]
+    for block in blocks:
+        name = re.search(r'^\s*-\s+name:\s*"(.+?)"\s*$', block, flags=re.MULTILINE)
+        assert name is not None, f"team block without a quoted name:\n{block[:200]}"
+        # An integer IP is accepted here (YAML permits `IP: 1094`); the outs
+        # check below is what rejects a malformed one, not the scrape.
+        ips = re.findall(r"\bIP:\s*([0-9]+(?:\.[0-9]+)?)", block)
+        assert len(ips) == 1, (
+            f"{name.group(1)}: expected exactly one IP literal in the team block, "
+            f"found {len(ips)}: {ips}"
+        )
+        typed[name.group(1)] = ips[0]
+
+    by_team = load_manual_standings(REAL_STANDINGS, team_keys={}).by_team()
+    assert set(typed) == set(by_team), (
+        f"IP literals scraped from the YAML text {sorted(typed)} do not cover "
+        f"every loaded team {sorted(by_team)}"
+    )
+
+    for team, literal in typed.items():
+        whole_text, _, outs_text = literal.partition(".")
+        outs_text = outs_text or "0"
+        assert outs_text in ("0", "1", "2"), (
+            f"{team}: IP {literal} is not Yahoo innings.outs notation -- the "
+            "digit after the point counts outs"
+        )
+        loaded = by_team[team].extras[OpportunityStat.IP]
+        # The loader must reproduce the typed digits, NOT convert them: an
+        # outs digit of 1 stays .1 and never becomes .333.
+        assert loaded == pytest.approx(float(literal)), (
+            f"{team}: loader returned {loaded} for a typed {literal}"
+        )
+        if outs_text != "0":
+            third = int(whole_text) + int(outs_text) / 3
+            assert loaded != pytest.approx(third), (
+                f"{team}: IP was normalised to decimal thirds ({third}); "
+                "that diverges from the Yahoo path"
+            )
 
 
 def test_points_for_maps_onto_yahoo_points_for() -> None:

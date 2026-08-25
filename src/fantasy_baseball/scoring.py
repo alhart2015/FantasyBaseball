@@ -328,6 +328,31 @@ def _find_worst_match(
     return min(candidates, key=lambda a: _player_sgp(a))
 
 
+def _team_pts_with(
+    roster: Sequence[Player | dict],
+    overrides: Mapping[str, float],
+    ctx: LeagueContext,
+) -> float:
+    """Team roto pts for ``roster`` with ``overrides`` applied to its members.
+
+    ``displacement=False`` is required: callers pass a roster whose committed
+    factors are already baked in, so re-deriving would double-apply.
+
+    ``overrides`` is keyed on the BARE NAME, matching the ``factors`` mapping
+    callers build. A same-named hitter and pitcher on one roster are therefore
+    scaled together. Keying only this helper by ``(name, player_type)`` does
+    NOT fix that and makes it worse -- the scored state stops matching the
+    state that ships; the whole ``factors`` contract has to move together.
+    """
+    state: list[Player | dict] = [
+        _scale_stats(p, overrides[p.name]) if isinstance(p, Player) and p.name in overrides else p
+        for p in roster
+    ]
+    all_team_stats: dict[str, CategoryStats] = dict(ctx.baseline_other_team_stats)
+    all_team_stats[ctx.team_name] = project_team_stats(state, displacement=False)
+    return score_roto(_dict_table(all_team_stats), team_sds=ctx.team_sds)[ctx.team_name].total
+
+
 def _find_delta_roto_optimal(
     il_player: Player,
     candidates: list[Player],
@@ -336,12 +361,7 @@ def _find_delta_roto_optimal(
 ) -> Player | None:
     """Pick the candidate whose displacement maximizes team roto pts.
 
-    For each candidate, builds a hypothetical roster with that
-    candidate scaled by the displacement factor, sums the team's
-    projected stats (with ``displacement=False`` to avoid recursion;
-    upstream displacement state is already baked into
-    ``current_roster``), then scores via :func:`score_roto_dict`
-    against the frozen baseline of other teams' stats.
+    Scores each candidate through :func:`_team_pts_with`.
     """
     il_pt = _playing_time(il_player)
     if il_pt <= 0:
@@ -356,15 +376,7 @@ def _find_delta_roto_optimal(
         if active_pt <= 0:
             continue
         factor = max(0.0, active_pt - il_pt) / active_pt
-        hyp_roster: list[Player | dict] = [
-            _scale_stats(cand, factor) if isinstance(p, Player) and p.name == cand.name else p
-            for p in current_roster
-        ]
-        team_stats = project_team_stats(hyp_roster, displacement=False)
-        all_team_stats: dict[str, CategoryStats] = dict(ctx.baseline_other_team_stats)
-        all_team_stats[ctx.team_name] = team_stats
-        roto = score_roto(_dict_table(all_team_stats), team_sds=ctx.team_sds)
-        pts = roto[ctx.team_name].total
+        pts = _team_pts_with(current_roster, {cand.name: factor}, ctx)
         if pts > best_pts:
             best_pts = pts
             best_target = cand
@@ -391,10 +403,15 @@ def _compute_displacement_factors(
     """Map player-name -> scale factor for IL-induced displacement.
 
     Hitters (always) and pitchers (when ``league_context`` is None) use
-    the legacy substitution model: process IL players in descending
-    playing-time order; each picks the displacement target via
-    :func:`_find_worst_match` and scales them by
-    ``max(0, active_pt - il_pt) / active_pt``.
+    the substitution model: process IL players in descending playing-time
+    order; each picks the displacement target via :func:`_find_worst_match`
+    and scales them by ``max(0, active_pt - il_pt) / active_pt``. With a
+    ``league_context`` the hitter path additionally gates that swap on
+    whether it improves team roto, and benches the IL hitter at sf=0 when it
+    does not -- so an IL HITTER can appear in the returned mapping, which was
+    not true before that gate existed. See
+    :func:`_compute_substitution_factors` for the gate and
+    :func:`_apply_displacement` for the full list of who may carry a factor.
 
     Pitchers WITH ``league_context`` use the pair-swap model: each IL
     pitcher (sorted by descending preseason IP) is activated at full ROS
@@ -409,8 +426,9 @@ def _compute_displacement_factors(
     """
     factors: dict[str, float] = {}
 
-    # Hitters: always legacy substitution (position constraints make a
-    # pool-slot model more complex; out of scope for the current change).
+    # Hitters: substitution model, gated on improvement when a league_context
+    # is available. Position constraints make a pitcher-style pool-slot model
+    # more complex, so the target is still picked one IL player at a time.
     active_hitters = [p for p in active if p.player_type == PlayerType.HITTER]
     il_hitters = [p for p in il_players if p.player_type == PlayerType.HITTER]
     factors.update(
@@ -458,10 +476,19 @@ def _compute_substitution_factors(
     all_active: list[Player],
     all_il: list[Player],
 ) -> dict[str, float]:
-    """Legacy per-IL-player substitution displacement, restricted to a
-    player-type subset. ``all_active``/``all_il`` (the full team) are
-    used to build the ΔRoto picker's running-state roster so cross-type
-    interactions are scored correctly.
+    """Per-IL-player substitution displacement, restricted to a player-type
+    subset. ``all_active``/``all_il`` (the full team) are used to build the
+    DeltaRoto picker's running-state roster so cross-type interactions are
+    scored correctly.
+
+    IMPROVEMENT GATE (``league_context`` only). :func:`_find_worst_match`
+    ranks candidate targets against each other, never against displacing
+    nobody, so the gate asks that question: score the team with the IL player
+    activated and the target discounted, score it benched with nobody
+    displaced, and take the swap only if it wins.
+
+    Without a ``league_context`` there is no baseline to score against, so the
+    swap is applied unconditionally, as it always was.
     """
     il_sorted = sorted(il_subset, key=_playing_time, reverse=True)
     already_displaced: set[str] = set()
@@ -488,6 +515,21 @@ def _compute_substitution_factors(
         if active_pt <= 0:
             continue
         factor = max(0.0, active_pt - il_pt) / active_pt
+
+        if league_context is not None:
+            # IL player is unscaled in running_roster, so the swap state needs
+            # only the target override; the bench state zeroes the IL player
+            # and leaves the target whole.
+            swap_pts = _team_pts_with(running_roster, {target.name: factor}, league_context)
+            bench_pts = _team_pts_with(running_roster, {il_p.name: 0.0}, league_context)
+            if swap_pts <= bench_pts:
+                factors[il_p.name] = 0.0
+                running_roster = [
+                    _scale_stats(p, 0.0) if isinstance(p, Player) and p.name == il_p.name else p
+                    for p in running_roster
+                ]
+                continue
+
         already_displaced.add(target.name)
         factors[target.name] = factor
         if league_context is not None:
@@ -549,23 +591,9 @@ def _compute_pitcher_pool_factors(
 
     full_pool_roster: list[Player | dict] = [*all_il, *all_active]
 
-    def team_pts(stats: CategoryStats) -> float:
-        all_team_stats: dict[str, CategoryStats] = dict(league_context.baseline_other_team_stats)
-        all_team_stats[league_context.team_name] = stats
-        return score_roto(_dict_table(all_team_stats), team_sds=league_context.team_sds)[
-            league_context.team_name
-        ].total
-
-    def state_with(overrides: dict[str, float]) -> list[Player | dict]:
-        """Roster with every name in `overrides` replaced by a `_scale_stats`
-        dict at the given factor; all other players pass through."""
-        out: list[Player | dict] = []
-        for p in full_pool_roster:
-            if isinstance(p, Player) and p.name in overrides:
-                out.append(_scale_stats(p, overrides[p.name]))
-            else:
-                out.append(p)
-        return out
+    def pool_pts(overrides: dict[str, float]) -> float:
+        """Score the pool with `overrides` (name -> factor) applied."""
+        return _team_pts_with(full_pool_roster, overrides, league_context)
 
     factors: dict[str, float] = {}
     already_discounted: set[str] = set()
@@ -583,12 +611,7 @@ def _compute_pitcher_pool_factors(
         # "No swap" baseline for this IL pitcher: bench them (sf=0) and keep
         # all currently-committed discounts. This is the cost of NOT activating
         # the IL pitcher -- compare every candidate target against this.
-        bench_il_overrides = {**factors, il_p.name: 0.0}
-        bench_il_stats = project_team_stats(
-            state_with(bench_il_overrides),
-            displacement=False,
-        )
-        bench_il_pts = team_pts(bench_il_stats)
+        bench_il_pts = pool_pts({**factors, il_p.name: 0.0})
 
         # Find the (target, factor) pair that maximizes team pts when the IL
         # pitcher is activated at full ROS and the target absorbs the swap.
@@ -605,12 +628,7 @@ def _compute_pitcher_pool_factors(
             f = discount_factor(tgt_ros_ip, window)
             # Swap state: IL pitcher at full ROS (not in overrides = sf=1.0),
             # target at discount_factor, all previously committed discounts applied.
-            overrides = {**factors, target.name: f}
-            stats = project_team_stats(
-                state_with(overrides),
-                displacement=False,
-            )
-            pts = team_pts(stats)
+            pts = pool_pts({**factors, target.name: f})
             if pts > best_pts:
                 best_pts = pts
                 best_target = target
@@ -816,10 +834,10 @@ def _apply_displacement(
         league_context=league_context,
     )
 
-    # Build output: each player in active or IL is either passed through
-    # at full scale or scaled per the factors dict. Pool model can put an
-    # IL pitcher in factors with sf=0; substitution model only ever puts
-    # active players in factors. Bench players are excluded entirely.
+    # Active players in this dict are DISCOUNTED. IL players are BENCHED at
+    # sf=0 -- the pool model does that to an IL pitcher whose return would not
+    # help, and the substitution model's improvement gate to an IL hitter.
+    # Bench (non-IL) players never appear.
     result: list[Player | dict] = list(pass_through)
     for p in [*il_players, *active]:
         if p.name in displacement_factors:
@@ -938,11 +956,12 @@ def compute_roster_breakdown(
             status = ContributionStatus.NO_PROJECTION
             factor = 0.0
         elif p.name in displacement_factors:
-            # Pool model can put an IL pitcher in the bench tier (sf=0)
-            # when the team's other pitchers are projected to outproduce
-            # the returning IL guy. Tag as DISPLACED to surface this in
-            # the breakdown UI rather than IL_FULL (which would
-            # mis-imply they're contributing).
+            # An IL player carrying a factor was benched, not discounted:
+            # the pool model does this to an IL pitcher whose return would
+            # not improve the team, and the substitution model's improvement
+            # gate does it to an IL hitter for the same reason. Tag as
+            # DISPLACED to surface it in the breakdown UI rather than
+            # IL_FULL (which would mis-imply they're contributing).
             status = ContributionStatus.DISPLACED
             factor = displacement_factors[p.name]
         else:

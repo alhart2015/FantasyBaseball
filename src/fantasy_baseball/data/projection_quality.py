@@ -10,8 +10,8 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.name_utils import normalize_name
 
 # Thresholds for cross-system outlier detection
-EXCLUDE_THRESHOLD = 0.20  # System median < 20% of consensus → exclude
-WARN_THRESHOLD = 0.50  # System median deviates > 50% from consensus → warn
+EXCLUDE_THRESHOLD = 0.20  # System median < 20% of consensus -> exclude
+WARN_THRESHOLD = 0.50  # System median deviates > 50% from consensus -> warn
 
 # Minimum playing time to include a player in outlier detection.
 # Filters out fringe players that inflate large-pool systems (Steamer, Oopsy)
@@ -27,6 +27,12 @@ class QualityReport:
     warnings: list[str] = field(default_factory=list)
     exclusions: dict[str, set[str]] = field(default_factory=dict)
     missing_players: dict[str, list[str]] = field(default_factory=dict)
+    systemic: list[str] = field(default_factory=list)
+    """Warnings about a whole projection system, not one player.
+
+    A subset of ``warnings``, duplicated rather than moved. Per-player
+    coverage warnings are uncapped; these are bounded by the system count.
+    """
 
 
 def check_projection_quality(
@@ -54,6 +60,12 @@ def check_projection_quality(
         _check_roster_coverage(system_dfs, roster_names, report)
 
     return report
+
+
+def _record_systemic(report: QualityReport, message: str) -> None:
+    """File a whole-system warning in both ``warnings`` and ``systemic``."""
+    report.warnings.append(message)
+    report.systemic.append(message)
 
 
 def _check_stat_outliers(
@@ -130,7 +142,7 @@ def _check_stat_outliers(
                 col_all_nan = sys_name in all_nan_systems
 
                 if col_all_nan:
-                    report.warnings.append(f"EXCLUDE: {sys_name} {player_type} {stat} all NaN")
+                    _record_systemic(report, f"EXCLUDE: {sys_name} {player_type} {stat} all NaN")
                     if sys_name not in report.exclusions:
                         report.exclusions[sys_name] = set()
                     report.exclusions[sys_name].add(stat)
@@ -147,18 +159,20 @@ def _check_stat_outliers(
                 ratio = sys_median / consensus
 
                 if ratio < EXCLUDE_THRESHOLD:
-                    report.warnings.append(
+                    _record_systemic(
+                        report,
                         f"EXCLUDE: {sys_name} {player_type} {stat} "
-                        f"median ({sys_median:.1f}) is <{EXCLUDE_THRESHOLD * 100:.0f}% of consensus ({consensus:.1f})"
+                        f"median ({sys_median:.1f}) is <{EXCLUDE_THRESHOLD * 100:.0f}% of consensus ({consensus:.1f})",
                     )
                     if sys_name not in report.exclusions:
                         report.exclusions[sys_name] = set()
                     report.exclusions[sys_name].add(stat)
                 elif abs(ratio - 1.0) > WARN_THRESHOLD:
                     direction = "above" if ratio > 1 else "below"
-                    report.warnings.append(
+                    _record_systemic(
+                        report,
                         f"WARNING: {sys_name} {player_type} {stat} median ({sys_median:.1f}) "
-                        f"is {abs(ratio - 1.0) * 100:.0f}% {direction} consensus ({consensus:.1f})"
+                        f"is {abs(ratio - 1.0) * 100:.0f}% {direction} consensus ({consensus:.1f})",
                     )
 
 
@@ -166,7 +180,11 @@ def _check_player_counts(
     system_dfs: dict[str, tuple[pd.DataFrame, pd.DataFrame]],
     report: QualityReport,
 ) -> None:
-    """Warn if a system has dramatically fewer players than others."""
+    """Warn if a system has dramatically fewer players than others.
+
+    An EMPTY export (zero rows) is reported separately: the proportional check
+    compares against the median of the NON-ZERO counts, so it cannot see one.
+    """
     for player_type, df_idx in [(PlayerType.HITTER, 0), (PlayerType.PITCHER, 1)]:
         counts = {}
         for sys_name, dfs in system_dfs.items():
@@ -174,15 +192,46 @@ def _check_player_counts(
             counts[sys_name] = len(df) if not df.empty else 0
 
         nonzero_counts = [c for c in counts.values() if c > 0]
+
+        for sys_name, count in sorted(counts.items()):
+            if count != 0:
+                continue
+            # "empty or missing", not "empty": load_projection_set returns an
+            # empty frame for a file it could not find as well as for one that
+            # parsed to zero rows, and this layer cannot tell them apart.
+            head = (
+                f"WARNING: {sys_name} has NO {player_type} rows -- the export is "
+                f"empty or missing. It is excluded from the blend"
+            )
+            if nonzero_counts:
+                _record_systemic(
+                    report,
+                    f"{head}; the remaining {len(nonzero_counts)} of {len(counts)} "
+                    f"systems renormalize to cover it, so {player_type} projections "
+                    f"are built from fewer systems than configured. "
+                    f"Re-download it from FanGraphs.",
+                )
+            else:
+                # Every system is empty: nothing survives to absorb the weight,
+                # so the blended frame for this player type has no rows at all.
+                _record_systemic(
+                    report,
+                    f"{head}, and so is every other configured system -- "
+                    f"NO systems have {player_type} rows, so there are no "
+                    f"{player_type} projections at all, not merely fewer. "
+                    f"Re-download them from FanGraphs.",
+                )
+
         if not nonzero_counts:
             continue
         median_count = float(np.median(nonzero_counts))
 
         for sys_name, count in counts.items():
             if count > 0 and count < median_count * 0.5:
-                report.warnings.append(
+                _record_systemic(
+                    report,
                     f"WARNING: {sys_name} player count ({count} {player_type}s) is "
-                    f"below 50% of median ({median_count:.0f}) — possible bad export"
+                    f"below 50% of median ({median_count:.0f}) -- possible bad export",
                 )
 
 
@@ -213,7 +262,7 @@ def _check_roster_coverage(
 
         if len(missing_from) == len(systems):
             report.warnings.append(
-                f"WARNING: {player_name} missing from ALL projection systems — "
+                f"WARNING: {player_name} missing from ALL projection systems -- "
                 f"no projection available"
             )
         else:

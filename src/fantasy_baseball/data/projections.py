@@ -276,6 +276,12 @@ def blend_projections(
     report = None
     if len(system_dfs) >= 2:
         report = check_projection_quality(system_dfs, roster_names)
+        # Systemic warnings ALWAYS log: a console callback can be a `print` into
+        # a discarded stdout, and "a whole projection system is missing" has to
+        # survive that. They are bounded by the system count. Per-player
+        # coverage warnings are not -- they go only to a caller that asked.
+        for warning in report.systemic:
+            logger.warning("projection quality: %s", warning)
         if progress_cb:
             for warning in report.warnings:
                 progress_cb(f"QUALITY: {warning}")
