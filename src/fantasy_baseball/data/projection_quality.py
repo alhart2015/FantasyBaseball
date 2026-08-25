@@ -168,12 +168,19 @@ def _check_player_counts(
 ) -> None:
     """Warn if a system has dramatically fewer players than others.
 
-    An EMPTY export (zero rows) is reported separately and unconditionally.
-    The proportional check below cannot see it: it compares against the median
-    of the non-zero counts, and its own ``count > 0`` guard skipped exactly the
-    worst case. A header-only CSV therefore passed silently -- observed on
-    2026-08-25, when ``the-bat-x-pitchers.csv`` arrived with 0 data rows (675
-    the run before) and nothing said so.
+    An EMPTY export (zero rows) is reported separately. The proportional check
+    below cannot see it: it compares against the median of the non-zero counts,
+    and its own ``count > 0`` guard skipped exactly the worst case, so a
+    header-only CSV passed silently.
+
+    Two limits on that report, both stated because the caller cannot infer
+    them. It is not unconditional: :func:`check_projection_quality` returns
+    early below two loaded systems, and a system whose load RAISES never
+    reaches ``system_dfs`` at all (``blend_projections`` catches and
+    continues), so neither is reported here. And "empty" cannot be
+    distinguished from "missing" at this layer -- ``load_projection_set``
+    returns an empty frame for a file it could not find as well as for one
+    that parsed to zero rows -- which is why the warning says both.
 
     Empty systems are already excluded from the blend and the surviving
     weights already renormalize per player (``_blend_players`` divides each
@@ -190,13 +197,30 @@ def _check_player_counts(
         nonzero_counts = [c for c in counts.values() if c > 0]
 
         for sys_name, count in sorted(counts.items()):
-            if count == 0:
+            if count != 0:
+                continue
+            # "empty or missing", not "empty": load_projection_set returns an
+            # empty frame for a file it could not find as well as for one that
+            # parsed to zero rows, and this layer cannot tell them apart.
+            head = (
+                f"WARNING: {sys_name} has NO {player_type} rows -- the export is "
+                f"empty or missing. It is excluded from the blend"
+            )
+            if nonzero_counts:
                 report.warnings.append(
-                    f"WARNING: {sys_name} has NO {player_type} rows -- the export is "
-                    f"empty. It is excluded from the blend; the remaining "
-                    f"{len(nonzero_counts)} of {len(counts)} systems renormalize to "
-                    f"cover it, so {player_type} projections are built from fewer "
-                    f"systems than configured. Re-download it from FanGraphs."
+                    f"{head}; the remaining {len(nonzero_counts)} of {len(counts)} "
+                    f"systems renormalize to cover it, so {player_type} projections "
+                    f"are built from fewer systems than configured. "
+                    f"Re-download it from FanGraphs."
+                )
+            else:
+                # Every system is empty: nothing survives to absorb the weight,
+                # so the blended frame for this player type has no rows at all.
+                report.warnings.append(
+                    f"{head}, and so is every other configured system "
+                    f"({len(counts)} of {len(counts)}) -- there are no "
+                    f"{player_type} projections at all, not merely fewer. "
+                    f"Re-download them from FanGraphs."
                 )
 
         if not nonzero_counts:

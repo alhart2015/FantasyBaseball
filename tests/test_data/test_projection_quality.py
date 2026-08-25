@@ -767,3 +767,91 @@ class TestEmptySystemExport:
         assert report.warnings, "fixture should trip at least one warning"
         for w in report.warnings:
             w.encode("ascii")
+
+
+class TestEmptyExportMessageAccuracy:
+    """The empty-export warning must not assert things that are false.
+
+    The first version said "the remaining N of M systems renormalize to cover
+    it" unconditionally. When EVERY system is empty that renders "0 of M" and
+    the sentence is wrong twice over: nothing renormalizes, and there are no
+    projections of that type at all. It also said "the export is empty" for a
+    case it cannot distinguish from a file that was never downloaded.
+    """
+
+    @staticmethod
+    def _pitchers(n):
+        return pd.DataFrame(
+            [
+                {
+                    "name": f"P{i}",
+                    "fg_id": f"p{i}",
+                    "w": 10,
+                    "k": 150,
+                    "sv": 0,
+                    "ip": 150,
+                    "er": 60,
+                    "bb": 45,
+                    "h_allowed": 140,
+                }
+                for i in range(n)
+            ]
+        )
+
+    @staticmethod
+    def _hitters(n):
+        return pd.DataFrame(
+            [
+                {
+                    "name": f"H{i}",
+                    "fg_id": str(i),
+                    "hr": 20,
+                    "r": 80,
+                    "rbi": 75,
+                    "sb": 8,
+                    "h": 140,
+                    "ab": 520,
+                }
+                for i in range(n)
+            ]
+        )
+
+    def test_all_systems_empty_does_not_claim_survivors_renormalize(self):
+        system_dfs = {
+            "steamer": (self._hitters(40), pd.DataFrame()),
+            "zips": (self._hitters(40), pd.DataFrame()),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        empties = [w for w in report.warnings if "NO pitcher rows" in w]
+        assert len(empties) == 3
+        for w in empties:
+            assert "0 of" not in w, f"claims zero survivors renormalize: {w}"
+            assert "renormalize" not in w, f"nothing renormalizes here: {w}"
+            assert "no pitcher projections at all" in w, (
+                f"must say the blend has no rows of this type: {w}"
+            )
+
+    def test_partial_emptiness_still_names_the_survivors(self):
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        empties = [w for w in report.warnings if "NO pitcher rows" in w]
+        assert len(empties) == 1
+        assert "2 of 3" in empties[0]
+        assert "renormalize" in empties[0]
+
+    def test_message_does_not_assert_the_file_exists(self):
+        """load_projection_set returns an empty frame for a MISSING file too,
+        so the warning must not tell the user their download is corrupt."""
+        system_dfs = {
+            "steamer": (self._hitters(40), self._pitchers(40)),
+            "zips": (self._hitters(40), self._pitchers(40)),
+            "the-bat-x": (self._hitters(40), pd.DataFrame()),
+        }
+        report = check_projection_quality(system_dfs)
+        w = next(x for x in report.warnings if "NO pitcher rows" in x)
+        assert "empty or missing" in w, f"must not claim the file exists: {w}"
