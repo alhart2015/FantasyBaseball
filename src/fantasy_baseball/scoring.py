@@ -462,6 +462,28 @@ def _compute_substitution_factors(
     player-type subset. ``all_active``/``all_il`` (the full team) are
     used to build the ΔRoto picker's running-state roster so cross-type
     interactions are scored correctly.
+
+    IMPROVEMENT GATE (``league_context`` only). ``_find_worst_match`` picks
+    the least damaging displacement target, but it only ever compares
+    candidates against EACH OTHER -- never against not displacing anyone. So
+    an IL player whose return would not help was still activated at full ROS,
+    zeroing a healthy starter purely on playing-time arithmetic. That is how a
+    .229 IL shortstop projected for 29.3 games fully erased a healthy .254
+    shortstop projected for 29.1: ``max(0, 29.14 - 29.34) / 29.14 == 0.0``,
+    with nothing anywhere asking whether the swap was an upgrade.
+
+    The gate mirrors :func:`_compute_pitcher_pool_factors`, which has always
+    had it ("If no positive-DeltaRoto swap exists ... the IL pitcher is set to
+    sf=0"): score the team with the IL player activated and the target
+    discounted, score it with the IL player benched and nobody displaced, and
+    take the swap only if it wins. The pitcher docstring's asymmetry was
+    acknowledged tech debt -- hitters used "legacy substitution (position
+    constraints make a pool-slot model more complex; out of scope for the
+    current change)".
+
+    Without a ``league_context`` there is no baseline of other teams' stats to
+    score against, so no gate is possible and the unconditional legacy
+    substitution is preserved unchanged.
     """
     il_sorted = sorted(il_subset, key=_playing_time, reverse=True)
     already_displaced: set[str] = set()
@@ -470,6 +492,26 @@ def _compute_substitution_factors(
     running_roster: list[Player | dict] = []
     if league_context is not None:
         running_roster = [*all_il, *all_active]
+
+    def _pts_with(overrides: dict[str, float]) -> float:
+        """Team roto pts for ``running_roster`` with ``overrides`` applied.
+
+        ``displacement=False`` avoids recursion: the running roster already
+        carries every factor committed so far, exactly as the pitcher
+        pair-swap picker does.
+        """
+        assert league_context is not None  # only called on the gated path
+        state: list[Player | dict] = [
+            _scale_stats(p, overrides[p.name])
+            if isinstance(p, Player) and p.name in overrides
+            else p
+            for p in running_roster
+        ]
+        all_team_stats: dict[str, CategoryStats] = dict(league_context.baseline_other_team_stats)
+        all_team_stats[league_context.team_name] = project_team_stats(state, displacement=False)
+        return score_roto(_dict_table(all_team_stats), team_sds=league_context.team_sds)[
+            league_context.team_name
+        ].total
 
     for il_p in il_sorted:
         il_pt = _playing_time(il_p)
@@ -488,6 +530,21 @@ def _compute_substitution_factors(
         if active_pt <= 0:
             continue
         factor = max(0.0, active_pt - il_pt) / active_pt
+
+        if league_context is not None:
+            # IL player is unscaled in running_roster, so the swap state needs
+            # only the target override; the bench state zeroes the IL player
+            # and leaves the target whole.
+            swap_pts = _pts_with({target.name: factor})
+            bench_pts = _pts_with({il_p.name: 0.0})
+            if swap_pts <= bench_pts:
+                factors[il_p.name] = 0.0
+                running_roster = [
+                    _scale_stats(p, 0.0) if isinstance(p, Player) and p.name == il_p.name else p
+                    for p in running_roster
+                ]
+                continue
+
         already_displaced.add(target.name)
         factors[target.name] = factor
         if league_context is not None:
