@@ -861,11 +861,17 @@ class TestQualityWarningsReachCallersWithoutProgressCb:
     """A quality warning must not be invisible to a caller that passes no
     ``progress_cb``.
 
-    Reporting used to be gated entirely on ``progress_cb`` being truthy, so
-    every consumer that just wants the blended frames -- ``ros_anchor``,
-    ``draft_value``, ``db``, ``build_db`` -- silently discarded every warning,
-    including the empty-export one. They all also discard the returned
-    ``QualityReport``, so nothing surfaced anywhere.
+    Reporting used to be gated entirely on ``progress_cb`` being truthy, so a
+    consumer that only wants the blended frames discarded every warning,
+    including the empty-export one -- and they discard the returned
+    ``QualityReport`` too, so nothing surfaced anywhere. ``ros_anchor`` and
+    ``draft_value`` are in that position; ``db`` and ``build_db`` do pass a
+    ``progress_cb`` and were never silent.
+
+    Only SYSTEMIC warnings are logged, and only when there is no
+    ``progress_cb``: logging everything would double ``build_db``'s output and
+    flood ``db``'s per-year loop, since roster-coverage emits one warning per
+    missing player, uncapped.
     """
 
     @staticmethod
@@ -904,3 +910,41 @@ class TestQualityWarningsReachCallersWithoutProgressCb:
         seen: list[str] = []
         blend_projections(snap, ["steamer", "zips"], None, progress_cb=seen.append, normalizer=None)
         assert any("NO pitcher rows" in m for m in seen)
+
+
+class TestSystemicWarningsAreSeparatedFromPerPlayerNoise:
+    """Only whole-system warnings are logged for a caller with no progress_cb.
+
+    `_check_roster_coverage` emits one warning per rostered player it cannot
+    find, uncapped, and `data/db.py` blends once per season directory. Logging
+    every warning would flood that loop and double the output of
+    `scripts/build_db.py`, which passes `progress_cb=print`.
+    """
+
+    def test_per_player_coverage_warnings_are_not_logged(self, tmp_path, caplog):
+        snap = TestQualityWarningsReachCallersWithoutProgressCb._snapshot(
+            tmp_path, empty_pitchers_for=("zips",)
+        )
+        roster = {"nobody projects this guy", "or this one"}
+        with caplog.at_level("WARNING", logger="fantasy_baseball.data.projections"):
+            blend_projections(snap, ["steamer", "zips"], None, roster_names=roster, normalizer=None)
+        logged = " ".join(r.getMessage() for r in caplog.records)
+        assert "NO pitcher rows" in logged, "the systemic warning must still be logged"
+        assert "nobody projects this guy" not in logged, (
+            f"per-player coverage noise must not reach the log: {logged!r}"
+        )
+
+    def test_a_caller_with_progress_cb_is_not_also_logged(self, tmp_path, caplog):
+        """build_db passes progress_cb=print; it must not get every line twice."""
+        snap = TestQualityWarningsReachCallersWithoutProgressCb._snapshot(
+            tmp_path, empty_pitchers_for=("zips",)
+        )
+        seen: list[str] = []
+        with caplog.at_level("WARNING", logger="fantasy_baseball.data.projections"):
+            blend_projections(
+                snap, ["steamer", "zips"], None, progress_cb=seen.append, normalizer=None
+            )
+        assert any("NO pitcher rows" in m for m in seen)
+        assert not [r for r in caplog.records], (
+            "a caller that supplied progress_cb must not also be logged to"
+        )

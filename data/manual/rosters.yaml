@@ -12,15 +12,13 @@
 # slot / positions / status are copied verbatim from the Yahoo UI. status carries
 # the red badge and is load-bearing: managers routinely park an IL'd player in an
 # ACTIVE or BN slot, which is detectable ONLY from this field -- the slot alone
-# says "active". No tally of which teams do it is kept here, because it changes
-# every refresh and a stale count in a comment is worse than none; ask the data:
+# says "active". No tally of which teams do it is kept here: it changes every
+# refresh, nothing recomputes it, and a stale count reads as authoritative.
 #
-#   python -c "import yaml,io; d=yaml.safe_load(io.open('data/manual/rosters.yaml',encoding='utf-8')); \
-# [print(t['name'], [p['name'] for p in t['players'] if p.get('status','').startswith('IL') and p['slot']!='IL']) for t in d['teams']]"
-#
-# Send in the Cavalli carries two EMPTY starting slots (one OF, one Util) and
-# four bench players. Empty slots are simply omitted -- the bench is overflow,
-# not a fixed count, and the real constraint is total roster size.
+# EMPTY starting slots are simply omitted rather than written as placeholders,
+# so a team's slot counts can come up short of the configured lineup. The bench
+# is overflow, not a fixed count -- the real constraint is total roster size,
+# which run_manual_refresh.py --dry-run checks and prints per team.
 
 snapshot_date: "2026-08-25"
 

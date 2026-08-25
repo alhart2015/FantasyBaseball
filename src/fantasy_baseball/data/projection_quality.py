@@ -27,6 +27,16 @@ class QualityReport:
     warnings: list[str] = field(default_factory=list)
     exclusions: dict[str, set[str]] = field(default_factory=dict)
     missing_players: dict[str, list[str]] = field(default_factory=dict)
+    systemic: list[str] = field(default_factory=list)
+    """Warnings about a whole projection SYSTEM rather than one player.
+
+    A subset of ``warnings``, duplicated here rather than moved so existing
+    consumers keep seeing everything. The split exists because the two have
+    very different volumes: ``_check_roster_coverage`` emits one warning per
+    rostered player it cannot find, uncapped, while a missing export is a
+    single fact about the blend. Only the latter is worth logging for a caller
+    that passed no ``progress_cb``.
+    """
 
 
 def check_projection_quality(
@@ -162,6 +172,12 @@ def _check_stat_outliers(
                     )
 
 
+def _record_systemic(report: QualityReport, message: str) -> None:
+    """File a whole-system warning in both ``warnings`` and ``systemic``."""
+    report.warnings.append(message)
+    report.systemic.append(message)
+
+
 def _check_player_counts(
     system_dfs: dict[str, tuple[pd.DataFrame, pd.DataFrame]],
     report: QualityReport,
@@ -207,20 +223,22 @@ def _check_player_counts(
                 f"empty or missing. It is excluded from the blend"
             )
             if nonzero_counts:
-                report.warnings.append(
+                _record_systemic(
+                    report,
                     f"{head}; the remaining {len(nonzero_counts)} of {len(counts)} "
                     f"systems renormalize to cover it, so {player_type} projections "
                     f"are built from fewer systems than configured. "
-                    f"Re-download it from FanGraphs."
+                    f"Re-download it from FanGraphs.",
                 )
             else:
                 # Every system is empty: nothing survives to absorb the weight,
                 # so the blended frame for this player type has no rows at all.
-                report.warnings.append(
+                _record_systemic(
+                    report,
                     f"{head}, and so is every other configured system "
                     f"({len(counts)} of {len(counts)}) -- there are no "
                     f"{player_type} projections at all, not merely fewer. "
-                    f"Re-download them from FanGraphs."
+                    f"Re-download them from FanGraphs.",
                 )
 
         if not nonzero_counts:

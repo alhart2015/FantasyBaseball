@@ -276,17 +276,24 @@ def blend_projections(
     report = None
     if len(system_dfs) >= 2:
         report = check_projection_quality(system_dfs, roster_names)
-        # Log unconditionally, then mirror to progress_cb when the caller
-        # supplied one. Reporting used to be gated entirely on progress_cb, so
-        # every caller that just wants the frames -- ros_anchor, draft_value,
-        # db, build_db -- discarded every warning; they all discard the
-        # returned QualityReport too, so nothing surfaced anywhere. A blend
-        # missing a whole projection system should not be silent just because
-        # the caller had no console to print to.
-        for warning in report.warnings:
-            logger.warning("projection quality: %s", warning)
-            if progress_cb:
+        # Reporting used to be gated entirely on progress_cb, so a caller that
+        # only wants the frames saw nothing -- and every such caller also
+        # discards the returned QualityReport, so the warnings reached no one.
+        # `trajectory/ros_anchor.py` and `analysis/draft_value.py` are both in
+        # that position; `data/db.py` and `scripts/build_db.py` do pass a
+        # progress_cb and were never silent.
+        #
+        # Only the SYSTEMIC warnings are logged for the silent callers, and
+        # only when there is no progress_cb to mirror to. Logging every warning
+        # unconditionally would double build_db's console output and flood
+        # db.py's per-year loop, because _check_roster_coverage emits one
+        # warning per rostered player it cannot find, uncapped.
+        if progress_cb:
+            for warning in report.warnings:
                 progress_cb(f"QUALITY: {warning}")
+        else:
+            for warning in report.systemic:
+                logger.warning("projection quality: %s", warning)
 
         # Apply exclusions: zero out excluded stat columns so they don't contribute
         if report.exclusions:
