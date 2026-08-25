@@ -3861,6 +3861,38 @@ td[style*="--neg"] {
 /* The board is pushed offline and does not move with a dashboard refresh, so its
    vintage is load-bearing rather than decorative -- see push_trajectory_board.py. */
 .trajectory-vintage code { font-size: 11px; }
+
+/* Reference prose, one click away (#361). The trajectory player page had grown ~449
+   words of explanation around charts that are the reason to open it, and the fix was
+   not to delete the explanations -- most encode a misreading someone actually made --
+   but to stop charging every reader for them on every load. `<details>` and not a JS
+   toggle: it works with scripting off, it is a native disclosure widget so the ARIA
+   comes free, and the browser's own find-in-page opens it. */
+.prose-aside {
+  margin: 0 0 14px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.prose-aside > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  list-style: revert;
+}
+.prose-aside > summary:hover { color: var(--accent); }
+.prose-aside p,
+.prose-aside ul { margin: 8px 0 0; }
+.prose-aside ul { padding-left: 18px; }
+.prose-aside li { margin-bottom: 4px; }
+/* A header that carries its meaning in `title` has to LOOK like it does, or the
+   tooltip is present and undiscoverable -- the same reason .trajectory-table .flag
+   above sets it. */
+.data-table th[title] { cursor: help; }
+/* The extrapolation flag on the PLAYER page, where it is not inside .trajectory-table
+   and so does not inherit the rule above (#361). Same glyph, same colour and the same
+   `cursor: help` the board's flags carry -- one condition should not look like two
+   different warnings depending on which view you reached it from. */
+.page-trajectory .flag { font-size: 11px; cursor: help; }
+.page-trajectory .flag-extrap { color: var(--gold-deep); }
 .trajectory-table th a { color: inherit; text-decoration: none; }
 .trajectory-table th a:hover { text-decoration: underline; }
 .trajectory-table th.sorted { color: var(--accent); }

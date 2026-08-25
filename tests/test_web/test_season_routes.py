@@ -2821,17 +2821,129 @@ def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
     # the matcher in #358 -- "closest realized path" described a set chosen by how near
     # it landed to the forecast, which is no longer how one is chosen.
     assert "Careers that looked like his" in body, "the comps section rendered"
-    # AND THE CLAIM THE SECTION MAKES. A reader who takes these for the forecast's own
-    # range reads a far more certain page than the one the model produced, so the
-    # sentence that says they are picked on realized career alone is load-bearing copy,
-    # not decoration.
-    assert "realized career up to age" in body
+    # AND THE CLAIM THE SECTION MAKES, which is still load-bearing and no longer a
+    # sentence. A reader who takes these for the forecast's own range reads a far more
+    # certain page than the one the model produced. #358 said that above the table;
+    # #361 moved it onto the RMSE column, beside the number it qualifies, and this
+    # assertion followed it there rather than being dropped.
+    assert "our projection plays no part in it" in body
     # The TABLE markup, not the `#trajectory-chart-data` JSON island -- that island
     # also serializes `board.comps` verbatim, so a plain substring match on "Andre
     # Ethier"/"1.25" is satisfied by the JSON alone and stays green even if the
     # honesty table renders nothing.
     assert "<td>Andre Ethier</td>" in body, "comps are named in the table"
     assert "<td>1.25</td>" in body, "each comp shows its RMSE in the table"
+
+
+def _visible_words(html):
+    """The words a reader actually sees, for the prose budget below.
+
+    `<details>` bodies are one click away and do not count; their `<summary>` does,
+    because that line is on screen. Scripts and styles are not prose -- and the
+    `#trajectory-chart-data` island in particular would otherwise contribute every
+    comp name on the page to a word count meant to measure ENGLISH.
+    """
+    h = html
+    for tag in ("script", "style"):
+        h = re.sub(f"<{tag}[^>]*>.*?</{tag}>", " ", h, flags=re.S | re.I)
+    h = re.sub(
+        "<details[^>]*>.*?(?:<summary[^>]*>(.*?)</summary>)?.*?</details>",
+        lambda m: m.group(1) or " ",
+        h,
+        flags=re.S | re.I,
+    )
+    return re.sub("<[^>]+>", " ", h).split()
+
+
+#: Words of the page's own prose allowed above the first chart (#361 AC1). Enough for
+#: the subject line and its extrapolation flag, and not enough for a paragraph.
+PROSE_BUDGET_ABOVE_CHART = 40
+
+
+def test_the_chart_is_not_buried_under_prose(client):
+    """#361 AC1. The chart is the reason the page is open; almost nothing precedes it.
+
+    This page had grown to roughly 165 visible words above the first canvas -- a full
+    vintage paragraph and, below it, a 144-word preamble to the comps table -- all of it
+    true, all of it written to close a real misreading, and all of it between a reader
+    and the thing he came for. The budget is ASSERTED rather than described because
+    prose returns one well-meant sentence at a time, and every sentence that got cut was
+    well-meant the first time.
+
+    Measured on the RENDERED page, never the template: the template's branches are
+    mutually exclusive, so counting its source charges the reader for a mismatch note
+    and a candidate list he is not being shown.
+    """
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        body = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
+
+    # From this template's own root, so the base layout's nav is not charged to it.
+    page = body[body.index('<div class="page-trajectory">') :]
+    above = _visible_words(page[: page.index('<canvas id="trajectory-chart"')])
+    assert len(above) <= PROSE_BUDGET_ABOVE_CHART, (
+        f"{len(above)} words above the chart, budget {PROSE_BUDGET_ABOVE_CHART}: " + " ".join(above)
+    )
+    # AND THE FLAG SURVIVES THE CUT, on a player who actually carries it. It is the one
+    # sentence up there that changes how the band below is read, so a budget met by
+    # dropping it would be met wrongly -- and the default fixture is not extrapolated,
+    # so asserting it on THAT render would have passed for no reason at all.
+    board, chart = _trajectory_board_and_chart()
+    # Both blobs, or the vintage guard unpairs them. `_ranked_rows` caches on
+    # `generated_at` plus the shape, and this mutation changes neither, so without a
+    # distinct stamp the unflagged rows from the render above are served here.
+    board["generated_at"] = chart["generated_at"] = "2026-08-07T09:00:00-extrap"
+    board["players"][0]["extrapolated"] = 1
+    with _trajectory_cache(board, chart):
+        flagged = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
+    # ON THE GLYPH, not beside it. Asserting the sentence alone would pass against a
+    # bare paragraph too, which is exactly what #361 removed -- the flag has to be the
+    # thing carrying it, or the warning is back above the chart in another form.
+    assert 'class="flag flag-extrap"' in flagged, "the glyph itself"
+    assert 'title="This fit was evaluated outside its own support' in flagged
+
+    flagged_page = flagged[flagged.index('<div class="page-trajectory">') :]
+    above_flagged = _visible_words(
+        flagged_page[: flagged_page.index('<canvas id="trajectory-chart"')]
+    )
+    assert len(above_flagged) <= PROSE_BUDGET_ABOVE_CHART, (
+        f"{len(above_flagged)} words above the chart with the flag shown, budget "
+        f"{PROSE_BUDGET_ABOVE_CHART}: " + " ".join(above_flagged)
+    )
+
+
+def test_the_prose_that_moved_is_still_on_the_page(client):
+    """#361 AC2. Cut from view, not deleted -- each fact has somewhere it still lives.
+
+    The paragraphs #361 removed each encode a misreading someone actually made, so
+    "shorter" is only correct if nothing became unreachable. Every claim below was
+    visible before and is now behind a disclosure or on the column it describes; this
+    test is what stops the next trim from turning a move into a deletion.
+    """
+    with _trajectory_cache(*_trajectory_board_and_chart()):
+        body = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
+
+    # ONE LINE, so a phrase is not missed for having wrapped. The template hard-wraps
+    # its prose at roughly 90 columns, so "out of the league" reaches the browser with a
+    # newline and four spaces inside it -- a plain substring test would report a fact as
+    # deleted purely because of where the source line broke.
+    body = " ".join(body.split())
+
+    for fact, where in [
+        ("out of the league", "what a 0.0 in a year column means"),
+        ("must already have played out", "why no recent player can be a comp"),
+        ("honest spread to read the band against", "what the year columns are for"),
+        ("162-game footing", "the footing PA/IP is stated on -- now the column tooltip"),
+        ("8 ages is a much stronger claim", "what Ages means -- now the column tooltip"),
+        ("does not refresh with the dashboard", "the staleness disclosure"),
+    ]:
+        assert fact in body, f"{where} went missing rather than moving"
+
+    # THE PAIR THAT MAKES THE WHOLE CUT SAFE. Comps selected on the forecast would make
+    # the band look far more certain than the model is, so the page may not stop saying
+    # they are not. It says it on the RMSE column now instead of in a sentence above the
+    # table -- if that tooltip is ever dropped, the sentence has to come back somewhere,
+    # and this is the assertion that will say so.
+    assert "our projection plays no part in it" in body
 
 
 def test_the_comps_table_shows_how_much_career_the_match_saw(client):
@@ -2847,7 +2959,12 @@ def test_the_comps_table_shows_how_much_career_the_match_saw(client):
         body = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
 
     table = body[body.index("Careers that looked like his") : body.index("The numbers")]
-    assert "<th>Ages</th>" in table and "<th>PA/IP</th>" in table
+    # THE HEADER TEXT, not the whole tag. Both headers carry a `title` explaining what
+    # the column means (#361) -- the semantics moved onto the columns when the paragraph
+    # that used to carry them was cut -- so pinning `<th>Ages</th>` asserted the absence
+    # of an attribute nobody meant to promise. `>Ages</th>` still says the column
+    # rendered with that exact heading and nothing else does.
+    assert ">Ages</th>" in table and ">PA/IP</th>" in table
     assert "<td>7</td>" in table, "Ethier's shared-age count"
     assert "<td>188</td>" in table, "Reynolds played 188 PA in the season he matched at"
 
@@ -2874,7 +2991,7 @@ def test_one_comp_missing_its_playing_time_does_not_take_the_page_down(client):
     assert resp.status_code == 200, "a comp with no volume is not a broken page"
     table = resp.data.decode()
     table = table[table.index("Careers that looked like his") : table.index("The numbers")]
-    assert "<th>PA/IP</th>" in table, "the comps that DO carry it still get their column"
+    assert ">PA/IP</th>" in table, "the comps that DO carry it still get their column"
     assert "<td>612</td>" in table, "Ethier's volume still prints"
     # ON THE CELL, not on the table. `assert "--" in table` passed against the intro
     # paragraph above it, which carries three em-dash pairs of its own -- so it stayed
@@ -2937,7 +3054,12 @@ def test_a_board_pushed_before_the_backward_match_still_renders_its_comps(client
     assert resp.status_code == 200
     table = resp.data.decode()
     table = table[table.index("Careers that looked like his") : table.index("The numbers")]
-    assert "<th>Ages</th>" not in table and "<th>PA/IP</th>" not in table
+    # A NEGATIVE ASSERTION HAS TO MATCH WHAT THE TEMPLATE ACTUALLY EMITS or it passes
+    # for the wrong reason forever. When #361 put a `title` on both headers, this line
+    # went on passing against markup it could no longer have matched either way -- the
+    # column could have rendered in full and nothing here would have gone red. Matching
+    # the header text alone is what keeps "these columns are absent" a real claim.
+    assert ">Ages</th>" not in table and ">PA/IP</th>" not in table
     assert "<td>Andre Ethier</td>" in table, "the comp itself still renders"
 
 
