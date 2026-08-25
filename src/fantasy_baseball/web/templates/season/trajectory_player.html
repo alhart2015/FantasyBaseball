@@ -95,14 +95,17 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
   re-run <code>push_trajectory_board.py</code>, which writes both keys together.
 {% endset %}
 {#- THE CHART IS WHY THE PAGE IS OPEN (#361), so nothing but the subject's own
-    identity stands above it. What used to sit here -- a full vintage paragraph -- was
-    roughly eighty words a reader had to scroll past to reach the thing he came for.
-    The extrapolation flag stays: it changes how the band below is read, which is the
-    only test a sentence above the chart has to pass. -#}
+    identity stands above it -- no prose at all now, only the line naming him.
+
+    THE FLAG IS THE GLYPH, not a sentence beside it. `(!)` still marks a fit evaluated
+    outside its own support and the warning is on its `title`, the same shape the league
+    board's `row_flags` already uses (`.flag`/`.flag-extrap`, `cursor: help`) -- so the
+    two views flag the same condition the same way instead of one spelling it out in
+    words above the chart. -#}
 <p class="muted">
   {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
-  {% if board.extrapolated %}<strong>(!)</strong> This fit was evaluated outside its own
-  support -- read the band, not the point estimate.{% endif %}
+  {% if board.extrapolated %}<span class="flag flag-extrap"
+    title="This fit was evaluated outside its own support -- read the band, not the point estimate.">(!)</span>{% endif %}
 </p>
 
 <div class="chart-wrapper"><canvas id="trajectory-chart"></canvas></div>
@@ -131,17 +134,16 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
     forecast entering the choice. That is what makes their spread evidence about the
     projection rather than a picture of it -- the previous version picked the historical
     paths that landed closest to the forecast, which could only ever agree with it. -#}
-{#- ONE SENTENCE VISIBLE (#361). The paragraph this replaces said six true things at
-    once and was 144 words, printed above the table on every player who has comps at
-    all. Only the first of the six changes how the chart is READ -- a reader who takes
-    these for the forecast's own range reads a far more certain page than the model
-    produced -- so that one stays in the open and the other five move down one click.
-    Nothing is deleted: the column semantics are on the columns themselves as `title`
-    tooltips, and what has no column to hang on is in the disclosure below. -#}
-<p class="muted">
-  Chosen on their <strong>realized career up to age {{ board.age }}</strong> -- our
-  projection plays no part in picking them.
-</p>
+{#- NO VISIBLE PROSE AT ALL (#361). This was a 144-word paragraph, then one sentence,
+    and now none: the page has a single reader, who wrote the matcher and does not need
+    to be told each visit how his own comps were chosen.
+
+    THE CLAIM ITSELF IS NOT GONE, which is the only thing that made cutting it safe. It
+    is on the RMSE column -- "our projection plays no part in it" -- where the number it
+    qualifies actually sits. Comps selected on the forecast would make the band look far
+    more certain than the model is, so if that tooltip is ever dropped the sentence has
+    to come back somewhere. `test_the_prose_that_moved_is_still_on_the_page` is what
+    holds the pair together. -#}
 <details class="prose-aside">
   <summary>How to read this table</summary>
   <p class="muted">

@@ -2821,11 +2821,12 @@ def test_trajectory_player_view_renders_a_chart_for_a_resolved_name(client):
     # the matcher in #358 -- "closest realized path" described a set chosen by how near
     # it landed to the forecast, which is no longer how one is chosen.
     assert "Careers that looked like his" in body, "the comps section rendered"
-    # AND THE CLAIM THE SECTION MAKES. A reader who takes these for the forecast's own
-    # range reads a far more certain page than the one the model produced, so the
-    # sentence that says they are picked on realized career alone is load-bearing copy,
-    # not decoration.
-    assert "realized career up to age" in body
+    # AND THE CLAIM THE SECTION MAKES, which is still load-bearing and no longer a
+    # sentence. A reader who takes these for the forecast's own range reads a far more
+    # certain page than the one the model produced. #358 said that above the table;
+    # #361 moved it onto the RMSE column, beside the number it qualifies, and this
+    # assertion followed it there rather than being dropped.
+    assert "our projection plays no part in it" in body
     # The TABLE markup, not the `#trajectory-chart-data` JSON island -- that island
     # also serializes `board.comps` verbatim, so a plain substring match on "Andre
     # Ethier"/"1.25" is satisfied by the JSON alone and stays green even if the
@@ -2894,7 +2895,11 @@ def test_the_chart_is_not_buried_under_prose(client):
     board["players"][0]["extrapolated"] = 1
     with _trajectory_cache(board, chart):
         flagged = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
-    assert "read the band, not the point estimate" in flagged
+    # ON THE GLYPH, not beside it. Asserting the sentence alone would pass against a
+    # bare paragraph too, which is exactly what #361 removed -- the flag has to be the
+    # thing carrying it, or the warning is back above the chart in another form.
+    assert 'class="flag flag-extrap"' in flagged, "the glyph itself"
+    assert 'title="This fit was evaluated outside its own support' in flagged
 
     flagged_page = flagged[flagged.index('<div class="page-trajectory">') :]
     above_flagged = _visible_words(
@@ -2933,10 +2938,12 @@ def test_the_prose_that_moved_is_still_on_the_page(client):
     ]:
         assert fact in body, f"{where} went missing rather than moving"
 
-    # THE ONE THAT STAYED IN THE OPEN, and the reason the cut is safe at all: a reader
-    # who takes the comps for the forecast's own range reads a far more certain page
-    # than the model produced. Everything else can be one click away; this cannot.
-    assert "realized career up to age" in body
+    # THE PAIR THAT MAKES THE WHOLE CUT SAFE. Comps selected on the forecast would make
+    # the band look far more certain than the model is, so the page may not stop saying
+    # they are not. It says it on the RMSE column now instead of in a sentence above the
+    # table -- if that tooltip is ever dropped, the sentence has to come back somewhere,
+    # and this is the assertion that will say so.
+    assert "our projection plays no part in it" in body
 
 
 def test_the_comps_table_shows_how_much_career_the_match_saw(client):

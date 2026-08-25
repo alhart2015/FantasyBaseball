@@ -3887,6 +3887,12 @@ td[style*="--neg"] {
    tooltip is present and undiscoverable -- the same reason .trajectory-table .flag
    above sets it. */
 .data-table th[title] { cursor: help; }
+/* The extrapolation flag on the PLAYER page, where it is not inside .trajectory-table
+   and so does not inherit the rule above (#361). Same glyph, same colour and the same
+   `cursor: help` the board's flags carry -- one condition should not look like two
+   different warnings depending on which view you reached it from. */
+.page-trajectory .flag { font-size: 11px; cursor: help; }
+.page-trajectory .flag-extrap { color: var(--gold-deep); }
 .trajectory-table th a { color: inherit; text-decoration: none; }
 .trajectory-table th a:hover { text-decoration: underline; }
 .trajectory-table th.sorted { color: var(--accent); }
