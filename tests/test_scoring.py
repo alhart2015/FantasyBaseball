@@ -4351,3 +4351,72 @@ class TestFactorsInvariant:
             assert with_gate.to_dict()[cat] == pytest.approx(without_il.to_dict()[cat]), (
                 f"{cat}: a benched IL hitter still reached the team total"
             )
+
+
+class TestTeamPtsWithKeying:
+    """`_team_pts_with` overrides one player, not everyone sharing his name.
+
+    The three hypothetical-roster scorers this helper replaced each scaled
+    every roster member whose bare `.name` matched, so a team holding both
+    Shohei Ohtanis would have had the pitcher discounted along with the hitter.
+    CLAUDE.md makes `name::player_type` the player identity for exactly this
+    reason.
+    """
+
+    def test_a_same_named_pitcher_is_not_scaled_with_the_hitter(self):
+        from fantasy_baseball.models.player import PlayerType
+        from fantasy_baseball.scoring import _team_pts_with
+
+        hitter = _hitter(
+            "Shohei Ohtani",
+            r=90,
+            hr=35,
+            rbi=95,
+            sb=10,
+            h=150,
+            ab=520,
+            positions=[Position.OF],
+            selected_position=Position.OF,
+        )
+        pitcher = _pitcher(
+            "Shohei Ohtani",
+            w=12,
+            k=180,
+            sv=0,
+            ip=150,
+            er=55,
+            bb=40,
+            h_allowed=120,
+            positions=[Position.SP],
+            selected_position=Position.SP,
+        )
+        others = [
+            _hitter(
+                f"Filler {i}",
+                r=80,
+                hr=22,
+                rbi=77,
+                sb=12,
+                h=140,
+                ab=540,
+                positions=[Position.OF],
+                selected_position=Position.OF,
+            )
+            for i in range(9)
+        ]
+        roster = [hitter, pitcher, *others]
+        ctx = TestDeltaRotoDisplacement()._league_context_for("My Team")
+
+        # Zero the HITTER only.
+        scaled = _team_pts_with(roster, {("Shohei Ohtani", PlayerType.HITTER): 0.0}, ctx)
+        # Reference: the same roster with the hitter genuinely removed. If the
+        # override had also caught the pitcher, this would not match.
+        reference = _team_pts_with([pitcher, *others], {}, ctx)
+        assert scaled == pytest.approx(reference), (
+            "zeroing the hitter must leave the same-named pitcher untouched"
+        )
+
+        # And the converse: zeroing the pitcher must leave the hitter alone.
+        scaled_p = _team_pts_with(roster, {("Shohei Ohtani", PlayerType.PITCHER): 0.0}, ctx)
+        reference_p = _team_pts_with([hitter, *others], {}, ctx)
+        assert scaled_p == pytest.approx(reference_p)
