@@ -97,34 +97,52 @@ def guard_sync_target(kv_path: Path | None) -> int:
     return RC_REFUSED
 
 
-def guard_manual_store(kv_path: Path | None) -> int:
-    """``RC_OK`` when ``--manual`` bound a real, seeded manual store.
+def guard_manual_store(bound: Path | None) -> int:
+    """``RC_OK`` when ``--manual`` really bound a real, seeded manual store.
 
-    Checks the OUTCOME, not the flag, and checks the store rather than the
-    path: `manual_store_refusal` inspects the file without opening it through
-    `get_kv()`, which would create it.
+    ``bound`` is what ``activate_manual_environment`` reports it set, NOT the
+    constant this compares against -- passing the constant would make the
+    identity check compare a value with itself and assert nothing.
     """
     expected = _manual_env.DEFAULT_MANUAL_KV_PATH.resolve()
-    if kv_path is None:
-        print(
-            "--manual is meaningless on Render: the KV there is Upstash, which no "
-            "environment variable can redirect."
-        )
-        return RC_REFUSED
-    if kv_path != expected:
+    if bound is None or bound != expected:
         print(
             "--manual did not bind the manual store.\n"
             f"  expected : {expected}\n"
-            f"  resolved : {kv_path}\n"
+            f"  bound    : {bound}\n"
             "Refusing rather than serving the wrong store under a manual banner."
         )
         return RC_REFUSED
 
-    refusal = _manual_env.manual_store_refusal(kv_path)
+    refusal = _manual_env.manual_store_refusal(expected)
     if refusal is None:
         return RC_OK
     print(refusal)
     return RC_REFUSED
+
+
+def enter_manual_mode(args) -> int:
+    """Bind the manual store and verify it, or refuse. ``RC_OK`` to continue.
+
+    Everything ``--manual`` does lives here: bind, skip the sync, check the
+    store. The sync is skipped rather than merely allowed to fail --
+    ``sync_remote_to_local()`` wipes its destination before refilling from
+    production, which against the transcription is pure loss.
+    """
+    try:
+        bound = _manual_env.activate_manual_environment()
+    except RuntimeError as exc:
+        print(f"{exc}\n--manual is a local-only mode.")
+        return RC_REFUSED
+
+    args.no_sync = True
+    print(f"KV store: {bound}")
+
+    rc = guard_manual_store(bound)
+    if rc != RC_OK:
+        return rc
+    print("Manual mode: Yahoo disabled, startup sync skipped.")
+    return RC_OK
 
 
 def _should_run_sync(no_sync: bool) -> bool:
@@ -168,48 +186,29 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Bind (or unbind) the store BEFORE anything resolves one. This can live
-    # here rather than at import time because nothing in src/ or scripts/ calls
-    # get_kv() at module level, and both helpers discard any singleton that
-    # already exists -- so argparse gets to decide, and main() stays re-entrant.
+    # The store is decided here rather than at import time: nothing in src/ or
+    # scripts/ resolves one at module level, and both helpers discard an
+    # existing singleton, so argparse gets to decide and main() stays
+    # re-entrant.
     if args.manual:
-        _manual_env.activate_manual_environment()
-        cleared: dict[str, str] = {}
-    else:
-        cleared = _manual_env.deactivate_manual_environment()
-
-    # --manual implies --no-sync rather than merely being compatible with it:
-    # sync_remote_to_local() wipes its destination before refilling, so on the
-    # manual store it is a silent destroy-and-replace. guard_sync_target()
-    # would refuse anyway; making it implicit means the user never has to
-    # remember the second flag to avoid an error they should never see.
-    if args.manual:
-        args.no_sync = True
-
-    # Printed before any sync or serve so a terminal's mode is never
-    # ambiguous: an exported FANTASY_LOCAL_KV_PATH is invisible otherwise.
-    # Before resolve_kv_target(), which calls get_kv() and would CREATE the file.
-    if args.manual:
-        rc = guard_manual_store(_manual_env.DEFAULT_MANUAL_KV_PATH.resolve())
+        rc = enter_manual_mode(args)
         if rc != RC_OK:
             return rc
+        kv_path = _manual_env.DEFAULT_MANUAL_KV_PATH.resolve()
+    else:
+        cleared = _manual_env.deactivate_manual_environment()
+        kv_path, kv_description = resolve_kv_target()
+        print(f"KV store: {kv_description}")
 
-    kv_path, kv_description = resolve_kv_target()
-    print(f"KV store: {kv_description}")
-
-    # Say what was taken away. Clearing an inherited manual binding is the right
-    # default, but doing it silently would make a shell that "worked yesterday"
-    # behave differently today with nothing on screen to explain it.
-    if cleared:
-        names = ", ".join(sorted(cleared))
-        print(f"Ignored inherited {names} (no --manual); reading the Yahoo baseline.")
-
-    # The early sys.argv sniff above is what actually bound the store; this
-    # asserts the outcome matches the parsed flag, so a future refactor that
-    # moves or breaks that sniff fails loudly here instead of serving the Yahoo
-    # baseline while the banner says "manual".
-    if args.manual:
-        print("Manual mode: Yahoo disabled, startup sync skipped.")
+        # Name what changed and what did not. Clearing silently would make a
+        # shell that worked yesterday behave differently today; leaving
+        # FB_SKIP_YAHOO set silently would put the run in stale-data mode with
+        # nothing on screen saying so.
+        if cleared:
+            names = ", ".join(sorted(cleared))
+            print(f"Ignored inherited {names} (no --manual); reading the Yahoo baseline.")
+        for name, value in sorted(_manual_env.surviving_manual_vars().items()):
+            print(f"Note: {name}={value} is still set -- Yahoo calls stay disabled.")
 
     if _should_run_sync(args.no_sync):
         rc = guard_sync_target(kv_path)

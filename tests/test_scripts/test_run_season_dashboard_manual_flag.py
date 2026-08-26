@@ -32,22 +32,6 @@ from fantasy_baseball.manual.environment import (
 )
 
 
-@pytest.fixture(autouse=True)
-def _fresh_kv_singleton():
-    """Discard the process-wide KV singleton around every test.
-
-    ``get_kv()`` caches its backend, so a store built against this test's
-    ``tmp_path`` would otherwise outlive the directory and be handed to
-    whatever runs next in the same worker. Autouse and symmetric, so a failing
-    assertion cannot skip the teardown.
-    """
-    from fantasy_baseball.data import kv_store
-
-    kv_store._reset_singleton()
-    yield
-    kv_store._reset_singleton()
-
-
 def _seeded_store(path: Path) -> Path:
     from fantasy_baseball.data.kv_store import SqliteKVStore
 
@@ -210,11 +194,23 @@ class TestGuardManualStore:
         assert rc == run_season_dashboard.RC_REFUSED
         assert "did not bind the manual store" in capsys.readouterr().out
 
-    def test_refuses_on_render(self, capsys):
+    def test_render_refuses_with_an_exit_code_not_a_traceback(self, monkeypatch, capsys):
+        """`activate_manual_environment` raises on Render. `main()` must turn
+        that into RC_REFUSED (2) -- a wrapper distinguishes "refused, nothing
+        happened" from "started and failed", which a traceback destroys."""
+        import argparse
+
         import run_season_dashboard  # type: ignore[import-not-found]
 
-        assert run_season_dashboard.guard_manual_store(None) == run_season_dashboard.RC_REFUSED
-        assert "Upstash" in capsys.readouterr().out
+        monkeypatch.setenv("RENDER", "true")
+        args = argparse.Namespace(manual=True, no_sync=False, port=5001)
+
+        rc = run_season_dashboard.enter_manual_mode(args)
+
+        assert rc == run_season_dashboard.RC_REFUSED
+        out = capsys.readouterr().out
+        assert "Upstash" in out
+        assert "local-only" in out
 
     def test_refuses_an_unseeded_manual_store(self, tmp_path, monkeypatch, capsys):
         """Identity passes, the store check does not -- the case that would

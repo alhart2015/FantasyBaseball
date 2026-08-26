@@ -88,13 +88,12 @@ Run either from a shell where `FANTASY_LOCAL_KV_PATH=data/manual.db` is still
 exported and the hand-transcribed store is destroyed and replaced with the last
 Yahoo snapshot, with no error and no prompt.
 
-For `run_season_dashboard.py` this is now prevented one step earlier: a launch
-without `--manual` CLEARS an inherited `FANTASY_LOCAL_KV_PATH`, so the sync
-resolves `data/local.db` and there is nothing of yours at the destination. The
-refusal below is the backstop, not the first line of defence, and you should
-not expect to see it from the dashboard any more.
+`run_season_dashboard.py` clears an inherited `FANTASY_LOCAL_KV_PATH` unless
+`--manual` was passed, so its sync resolves `data/local.db` and your store is
+never the destination. The refusal is its backstop rather than its first line
+of defence.
 
-Both still refuse when the resolved KV path is not `data/local.db`: they print
+Both refuse when the resolved KV path is not `data/local.db`: they print
 the path, exit `2`, and delete nothing. `refresh_remote.py` checks at the very top of
 its run, so a refused launch has not written production Upstash either. The
 reliable habit is still a fresh terminal per mode -- the guard is a backstop, not
@@ -146,17 +145,28 @@ KV store: C:\Users\HartAlden\FantasyBaseball\data\manual.db
 Manual mode: Yahoo disabled, startup sync skipped.
 ```
 
-**Setting the environment variables by hand no longer works for this.** A
-launch WITHOUT `--manual` now clears an inherited `FANTASY_LOCAL_KV_PATH` and
-says so, precisely so a stale export from a previous manual shell cannot serve
-the transcription to someone who believes they are reading Yahoo. `FB_SKIP_YAHOO`
+A launch WITHOUT `--manual` clears an inherited `FANTASY_LOCAL_KV_PATH` and
+says so, so a stale export from a previous manual shell cannot serve the
+transcription to someone who believes they are reading Yahoo. `FB_SKIP_YAHOO`
 is left alone -- it is a separate stale-data switch (see
-`docs/stale-data-refresh-runbook.md`), not part of the store binding.
+`docs/stale-data-refresh-runbook.md`), not part of the store binding -- but the
+launcher now names it when it survives, so the mode is never invisible.
+
+The old incantation (`FANTASY_LOCAL_KV_PATH=... --no-sync`) still opens the
+manual store, because `--no-sync` skips the clearing path's only hazard. Use
+`--manual` anyway: it is the one that checks the store is actually seeded.
 
 **Do not press the dashboard's Refresh button in this mode.** `POST /api/refresh`
-runs the full pipeline against whatever store the process is bound to. Re-run
-`scripts/run_manual_refresh.py` instead. `FB_SKIP_YAHOO=1` above is a seatbelt
-for a stray click, not a licence to click.
+calls `run_full_refresh()`, which passes no `free_agent_source` -- and
+`RefreshRun.manual_mode` is `free_agent_source is not None`. So a click runs
+STALE-DATA mode, not manual mode: `_audit_roster` takes its
+`skip_yahoo and not manual_mode` early-out, so the roster audit, the synthesized
+free-agent pool and the position merge never run, and `_mlb_cache_dir` writes to
+the tracked `data/` directory instead of `data/cache/manual`.
+
+Re-run `scripts/run_manual_refresh.py` instead -- it is the only entry point
+that supplies `free_agent_source`. The `FB_SKIP_YAHOO=1` that `--manual` sets is
+a seatbelt for a stray click, not a licence to click.
 
 Close that terminal when you are done with it.
 

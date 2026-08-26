@@ -45,21 +45,6 @@ import run_season_dashboard as dash  # type: ignore[import-not-found]
 SCRIPT_PATH = PROJECT_ROOT / "scripts" / "run_season_dashboard.py"
 
 
-@pytest.fixture(autouse=True)
-def _fresh_kv_singleton():
-    """Discard the process-wide KV singleton around every test.
-
-    ``get_kv()`` caches its backend, so a store built against this test's
-    ``tmp_path`` would otherwise outlive the directory and be handed to
-    whatever runs next in the same worker.
-    """
-    from fantasy_baseball.data import kv_store
-
-    kv_store._reset_singleton()
-    yield
-    kv_store._reset_singleton()
-
-
 class _FakeStats:
     def summary(self) -> str:
         return "0 string keys, 0 hashes"
@@ -316,7 +301,7 @@ def test_script_is_ascii_only():
 # --------------------------------------------------------------------------
 
 
-def test_manual_mode_never_syncs(monkeypatch, tmp_path, harness, capsys):
+def test_manual_mode_never_syncs(monkeypatch, seeded_store, harness, capsys):
     """`sync_remote_to_local()` WIPES its destination and refills it from
     production Upstash. Against the manual store that deletes the hand-typed
     transcription and replaces it with the last Yahoo snapshot -- it is a
@@ -327,12 +312,9 @@ def test_manual_mode_never_syncs(monkeypatch, tmp_path, harness, capsys):
     `scripts/run_manual_refresh.py`), which runs the blend/score/audit against
     the store and is unaffected by this.
     """
-    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
-    from fantasy_baseball.data.kv_store import SqliteKVStore
     from fantasy_baseball.manual import environment as env
 
-    manual = tmp_path / "manual.db"
-    SqliteKVStore(manual).set(MANUAL_PROVENANCE_KEY, '{"seeded": "yes"}')
+    manual = seeded_store()
     monkeypatch.setattr(env, "DEFAULT_MANUAL_KV_PATH", manual)
 
     rc = _run(monkeypatch, "--manual")
@@ -344,24 +326,13 @@ def test_manual_mode_never_syncs(monkeypatch, tmp_path, harness, capsys):
     assert "Manual mode" in capsys.readouterr().out
 
 
-def test_manual_mode_ignores_an_explicit_sync_request(monkeypatch, tmp_path, harness):
-    """`--manual` alongside a plain launch (no `--no-sync`) must still not sync.
-    The implication is not advisory."""
-    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
-    from fantasy_baseball.data.kv_store import SqliteKVStore
-    from fantasy_baseball.manual import environment as env
+def test_only_two_call_sites_can_reach_the_sync():
+    """Pin the blast radius. A third caller has to be a deliberate decision.
 
-    manual = tmp_path / "manual.db"
-    SqliteKVStore(manual).set(MANUAL_PROVENANCE_KEY, '{"seeded": "yes"}')
-    monkeypatch.setattr(env, "DEFAULT_MANUAL_KV_PATH", manual)
-
-    assert _run(monkeypatch, "--manual") == dash.RC_OK
-    assert harness.sync_calls == 0
-
-
-def test_only_two_call_sites_can_reach_the_sync(monkeypatch):
-    """Pin the blast radius. If a third caller appears, this fails and someone
-    has to decide whether it can be pointed at the manual store."""
+    Matches BOTH `sync_remote_to_local(...)` and `kv_sync.sync_remote_to_local(...)`
+    -- the module-alias form is this repo's house style, so a guard blind to it
+    would pass on the case it exists to catch.
+    """
     import ast
 
     callers = set()
@@ -372,11 +343,17 @@ def test_only_two_call_sites_can_reach_the_sync(monkeypatch):
             except (SyntaxError, UnicodeDecodeError):
                 continue
             for node in ast.walk(tree):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "sync_remote_to_local"
-                ):
+                if not isinstance(node, ast.Call):
+                    continue
+                fn = node.func
+                name = (
+                    fn.id
+                    if isinstance(fn, ast.Name)
+                    else fn.attr
+                    if isinstance(fn, ast.Attribute)
+                    else None
+                )
+                if name == "sync_remote_to_local":
                     callers.add(f.relative_to(PROJECT_ROOT).as_posix())
 
     assert callers == {
