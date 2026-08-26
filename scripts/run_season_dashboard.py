@@ -91,28 +91,6 @@ def guard_sync_target(kv_path: Path | None) -> int:
     return RC_REFUSED
 
 
-def guard_manual_store(resolved: Path | None) -> int:
-    """``RC_OK`` when the store ``get_kv()`` resolved is at the manual PATH.
-
-    Identity only. Whether that store is SEEDED is :func:`enter_manual_mode`'s
-    job, via ``manual_store_refusal``, and it has to run first -- resolving a
-    store creates the file.
-
-    ``resolved`` must come from :func:`resolve_kv_target`, so this checks the
-    outcome rather than the constant it compares against.
-    """
-    expected = _manual_env.DEFAULT_MANUAL_KV_PATH.resolve()
-    if resolved != expected:
-        print(
-            "--manual did not bind the manual store.\n"
-            f"  expected : {expected}\n"
-            f"  resolved : {resolved}\n"
-            "Refusing rather than serving the wrong store under a manual banner."
-        )
-        return RC_REFUSED
-    return RC_OK
-
-
 def enter_manual_mode(args) -> int:
     """Bind the manual store and check it exists and is seeded.
 
@@ -184,6 +162,7 @@ def main() -> int:
     # a store at module level, so argparse gets to choose and main() stays
     # re-entrant.
     cleared: dict[str, str] = {}
+    cleared: dict[str, str] = {}
     if args.manual:
         rc = enter_manual_mode(args)
         if rc != RC_OK:
@@ -191,22 +170,20 @@ def main() -> int:
     else:
         cleared = _manual_env.deactivate_manual_environment()
 
+    # After the branch above, so it reports the store that was actually
+    # resolved rather than the one either path intended.
     kv_path, kv_description = resolve_kv_target()
     print(f"KV store: {kv_description}")
 
     if args.manual:
-        rc = guard_manual_store(kv_path)
-        if rc != RC_OK:
-            return rc
         print("Manual mode: Yahoo disabled, startup sync skipped.")
-
-    # Name what changed and what did not: clearing silently would make a shell
-    # that worked yesterday behave differently today, and a surviving
-    # FB_SKIP_YAHOO would put the run in stale-data mode invisibly.
-    if cleared:
-        names = ", ".join(sorted(cleared))
-        print(f"Ignored inherited {names} (no --manual); reading the Yahoo baseline.")
-    if not args.manual:
+    else:
+        # Name what changed and what did not: clearing silently would make a
+        # shell that worked yesterday behave differently today, and a surviving
+        # FB_SKIP_YAHOO would put the run in stale-data mode invisibly.
+        if cleared:
+            names = ", ".join(sorted(cleared))
+            print(f"Ignored inherited {names} (no --manual); reading the Yahoo baseline.")
         # Only FB_SKIP_YAHOO can survive, and its VALUE decides: FB_SKIP_YAHOO=0
         # is set but off, so presence alone guarantees nothing.
         state = (

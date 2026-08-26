@@ -337,16 +337,17 @@ class TestDeactivate:
         assert os.environ["FANTASY_LOCAL_KV_PATH"] == "/whatever"
 
 
-class TestGuardManualStore:
-    """The script-level wrapper: identity first, then the store itself."""
+class TestEnterManualMode:
+    """The whole `--manual` entry: bind, force no-sync, refuse a store that is
+    not a seeded manual one.
 
-    def test_refuses_a_store_that_is_not_the_manual_one(self, tmp_path, capsys):
-        import run_season_dashboard  # type: ignore[import-not-found]
-
-        rc = run_season_dashboard.guard_manual_store(tmp_path / "somewhere-else.db")
-
-        assert rc == run_season_dashboard.RC_REFUSED
-        assert "did not bind the manual store" in capsys.readouterr().out
+    There is no separate identity check. One existed and was deleted: it
+    compared `resolve_kv_target()` against `DEFAULT_MANUAL_KV_PATH`, and both
+    operands derived from that same constant, so nothing an operator could type
+    made them differ. What it was reaching for -- that the binding really
+    reaches `get_kv()` -- is asserted directly in
+    `test_enter_manual_mode_binds_and_accepts_a_seeded_store`.
+    """
 
     def test_render_refuses_with_an_exit_code_not_a_traceback(self, monkeypatch, capsys):
         """`activate_manual_environment` raises on Render. `main()` must turn
@@ -388,12 +389,17 @@ class TestGuardManualStore:
         assert MANUAL_PROVENANCE_KEY in capsys.readouterr().out
 
     def test_accepts_a_seeded_manual_store(self, seeded_store, monkeypatch):
+        import argparse
+
         import run_season_dashboard  # type: ignore[import-not-found]
 
         seeded = seeded_store()
         monkeypatch.setattr(run_season_dashboard._manual_env, "DEFAULT_MANUAL_KV_PATH", seeded)
+        monkeypatch.delenv("RENDER", raising=False)
 
-        rc = run_season_dashboard.guard_manual_store(seeded.resolve())
+        rc = run_season_dashboard.enter_manual_mode(
+            argparse.Namespace(manual=True, no_sync=False, port=5001)
+        )
 
         assert rc == run_season_dashboard.RC_OK
 
@@ -483,9 +489,12 @@ class TestTheFlagBindsTheStoreEndToEnd:
 
     def test_enter_manual_mode_binds_and_accepts_a_seeded_store(self, monkeypatch, seeded_store):
         """The whole `--manual` path in one call: bind, force no-sync, and
-        leave `get_kv()` resolving the manual store -- which is what
-        `guard_manual_store` is then handed, so the guard checks an OUTCOME
-        rather than the constant it compares against.
+        leave `get_kv()` resolving the manual store.
+
+        That last assertion is the one that matters, and it is why the old
+        identity guard could be deleted: it checks the OUTCOME -- what
+        `get_kv()` actually resolved -- rather than re-reading the constant the
+        binding came from.
         """
         import argparse
 
@@ -502,4 +511,3 @@ class TestTheFlagBindsTheStoreEndToEnd:
         assert args.no_sync is True, "--manual must force the sync off"
         resolved, _ = run_season_dashboard.resolve_kv_target()
         assert resolved == store.resolve(), "get_kv() must resolve the manual store"
-        assert run_season_dashboard.guard_manual_store(resolved) == run_season_dashboard.RC_OK
