@@ -1,54 +1,52 @@
-"""Point a process at the isolated manual KV store.
+"""Bind a process to the isolated manual KV store.
 
-The manual pipeline's isolation is by whole store, not by key prefix: a manual
-run writes hand-typed data into ``cache:standings``, ``weekly_rosters_history``
-and the rest of the ``cache:*`` family, the same keys the Yahoo pipeline owns.
-Nothing separates them but the file, so every entry point that wants manual mode
-has to bind this process to ``data/manual.db`` before anything resolves a store.
-
-One copy of that sequence lives here because getting it subtly wrong is silent:
-the store binds on the FIRST ``get_kv()``, and a process that imported something
-which already resolved one keeps the old binding with no error.
+Isolation is by whole store rather than key prefix -- see the package docstring
+-- so binding has to happen before anything resolves a store, and getting the
+sequence subtly wrong is silent.
 """
 
 from __future__ import annotations
 
 import os
-import sys
 from pathlib import Path
 
-#: Repo root, from ``src/fantasy_baseball/manual/environment.py``.
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 #: The isolated store the Yahoo-free pipeline reads and writes. Never
 #: ``data/local.db``, which is the only copy of the pre-outage Yahoo history.
-DEFAULT_MANUAL_KV_PATH = PROJECT_ROOT / "data" / "manual.db"
+DEFAULT_MANUAL_KV_PATH = _PROJECT_ROOT / "data" / "manual.db"
 
 
 def activate_manual_environment(kv_path: Path | None = None) -> Path:
-    """Bind this process to the manual store and disable every Yahoo step.
+    """Bind this process to the manual store; return the absolute path bound.
 
-    Call BEFORE anything resolves a KV store. Returns the absolute path bound,
-    so a caller can print it rather than re-deriving it and risking a banner
-    that names a different store than the one in use.
+    Call before anything resolves a KV store: ``get_kv()`` caches on its first
+    call. Sets an ABSOLUTE path -- ``kv_store`` resolves the variable against
+    the working directory, so a relative value creates a second, empty store.
 
-    ``FANTASY_LOCAL_KV_PATH`` is set to an ABSOLUTE path deliberately:
-    ``kv_store`` resolves it against the current working directory, so a
-    relative value silently creates a second, empty store when the process is
-    launched from anywhere but the repo root.
+    Does NOT verify the store is a real manual store; that is
+    :func:`manual_store_refusal`, which the caller runs before touching it.
+
+    Refuses on Render rather than binding: the KV there is Upstash, this
+    variable cannot reach it, and disabling Yahoo against production is not
+    something a helper should do by side effect.
     """
-    resolved = (kv_path or DEFAULT_MANUAL_KV_PATH).resolve()
-    os.environ["FANTASY_LOCAL_KV_PATH"] = str(resolved)
-    os.environ["FB_SKIP_YAHOO"] = "1"
+    from fantasy_baseball.data.kv_store import LOCAL_KV_PATH_ENV, is_remote
+    from fantasy_baseball.web.refresh_pipeline import SKIP_YAHOO_ENV
 
-    src = str(PROJECT_ROOT / "src")
-    if src not in sys.path:
-        sys.path.insert(0, src)
+    if is_remote():
+        raise RuntimeError(
+            "activate_manual_environment() called with RENDER set. The KV there is "
+            "Upstash, which no environment variable can redirect, and the manual "
+            "pipeline never runs against production."
+        )
 
-    # Belt and braces: if anything in this process already built the KV
-    # singleton (an ambient import, an earlier run in the same interpreter, a
-    # test harness), discard it so the next get_kv() rebinds to the env var
-    # just set.
+    resolved = (kv_path if kv_path is not None else DEFAULT_MANUAL_KV_PATH).resolve()
+    os.environ[LOCAL_KV_PATH_ENV] = str(resolved)
+    os.environ[SKIP_YAHOO_ENV] = "1"
+
+    # Discard any singleton an earlier import already built, so the next
+    # get_kv() rebinds to the variable just set.
     from fantasy_baseball.data import kv_store
 
     kv_store._reset_singleton()
@@ -58,34 +56,75 @@ def activate_manual_environment(kv_path: Path | None = None) -> Path:
 def deactivate_manual_environment() -> dict[str, str]:
     """Unbind this process from the manual store; return what was cleared.
 
-    The mirror of :func:`activate_manual_environment`, and the reason both
-    exist: these variables are EXPORTED into a shell, so they outlive the
-    command that set them. Without an explicit clear, a launcher run with no
-    manual flag inherits whatever the last manual session left behind and
-    serves the hand-transcribed store while the caller believes it is reading
-    the Yahoo baseline. The banner shows the path, but nothing contradicts the
-    expectation.
+    Clears ONLY the store binding. ``FB_SKIP_YAHOO`` is deliberately left
+    alone: it is a standalone stale-data switch against the ordinary
+    ``data/local.db`` (``docs/stale-data-refresh-runbook.md``), and with the
+    Yahoo API unavailable, clearing someone's seatbelt would re-arm live auth
+    on their next refresh.
 
-    Clearing is the only way the flag can be the single control. Returns the
-    variables actually removed, so a caller can say so rather than changing the
-    environment silently.
-
-    No-op on Render: the KV is Upstash there, ``FANTASY_LOCAL_KV_PATH`` cannot
-    reach it, and ``FB_SKIP_YAHOO`` may be a deliberate service setting that
-    this function has no business overriding.
+    These variables are exported into a shell, so they outlive the command that
+    set them -- without an explicit clear, a later launch inherits the previous
+    manual session and serves the transcription while the caller believes they
+    are reading Yahoo. No-op on Render, where the KV is Upstash.
     """
-    from fantasy_baseball.data.kv_store import is_remote
+    from fantasy_baseball.data.kv_store import LOCAL_KV_PATH_ENV, is_remote
 
     if is_remote():
         return {}
 
-    cleared = {
-        name: os.environ.pop(name)
-        for name in ("FANTASY_LOCAL_KV_PATH", "FB_SKIP_YAHOO")
-        if name in os.environ
-    }
-    if cleared:
+    cleared = {}
+    if LOCAL_KV_PATH_ENV in os.environ:
+        cleared[LOCAL_KV_PATH_ENV] = os.environ.pop(LOCAL_KV_PATH_ENV)
         from fantasy_baseball.data import kv_store
 
         kv_store._reset_singleton()
     return cleared
+
+
+def manual_store_refusal(kv_path: Path) -> str | None:
+    """Why ``kv_path`` is not a usable manual store, or None if it is.
+
+    Checks the file WITHOUT opening it through ``get_kv()``, because
+    ``SqliteKVStore.__init__`` creates the file and schema on open -- asking
+    the question would answer it. An empty store then carries no provenance
+    stamp, ``rosters.manual_store_active()`` reads it as Yahoo mode, and
+    ``live_rosters()`` falls through to production Upstash. That is how
+    month-stale prod rosters get spliced into a page labelled manual, and it is
+    what ``bootstrap_manual_kv`` stamps the store to prevent.
+
+    Returns the refusal text so each caller keeps its own exit code and
+    recovery advice, mirroring ``kv_sync.sync_destination_refusal``.
+    """
+    if not kv_path.exists():
+        return (
+            f"the manual KV store does not exist: {kv_path}\n"
+            "Create it first with 'python scripts/bootstrap_manual_kv.py'.\n"
+            "Refusing rather than creating an empty one: an unstamped store reads as "
+            "Yahoo mode, so the dashboard would serve production rosters under a "
+            "manual banner."
+        )
+
+    import sqlite3
+
+    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
+
+    try:
+        with sqlite3.connect(f"file:{kv_path}?mode=ro", uri=True) as conn:
+            row = conn.execute(
+                "SELECT 1 FROM kv WHERE key = ? LIMIT 1", (MANUAL_PROVENANCE_KEY,)
+            ).fetchone()
+    except sqlite3.Error as exc:
+        return (
+            f"{kv_path} exists but could not be read as a KV store ({exc}).\n"
+            "Rebuild it with 'python scripts/bootstrap_manual_kv.py --force'."
+        )
+
+    if row is None:
+        return (
+            f"{kv_path} exists but is not a manual store -- it carries no "
+            f"'{MANUAL_PROVENANCE_KEY}' provenance stamp.\n"
+            "Seed it with 'python scripts/bootstrap_manual_kv.py --force'.\n"
+            "Refusing because an unstamped store reads as Yahoo mode, so the "
+            "dashboard would serve production rosters under a manual banner."
+        )
+    return None

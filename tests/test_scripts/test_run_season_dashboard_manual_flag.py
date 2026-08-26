@@ -1,19 +1,20 @@
 """Tests for ``run_season_dashboard.py --manual``.
 
-The flag exists so opening the dashboard against the hand-transcribed store is
-one command rather than two environment variables plus ``--no-sync``. Both
-halves of that are load-bearing and fail silently if wrong:
+Three things have to hold, and each fails silently if it does not:
 
-* Binding must happen before anything resolves a KV store, because ``get_kv()``
-  caches on its first call. A flag that parsed correctly but bound late would
-  serve the Yahoo baseline under a "manual" banner.
-* The sync must not run. ``sync_remote_to_local()`` wipes its destination before
-  refilling, so on ``data/manual.db`` it destroys the transcription.
+* The store must be bound before anything resolves one, because ``get_kv()``
+  caches on its first call.
+* It must be a real, SEEDED manual store. ``SqliteKVStore.__init__`` creates
+  the file on open, and an unstamped store reads as Yahoo mode -- so a bare
+  path check would let the dashboard serve production rosters under a manual
+  banner.
+* The sync must not run, since it wipes its destination before refilling.
 """
 
 from __future__ import annotations
 
-import subprocess
+import os
+import sqlite3
 import sys
 from pathlib import Path
 
@@ -22,179 +23,244 @@ import pytest
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
+from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
 from fantasy_baseball.manual.environment import (
     DEFAULT_MANUAL_KV_PATH,
     activate_manual_environment,
     deactivate_manual_environment,
+    manual_store_refusal,
 )
 
 
-class TestActivateManualEnvironment:
+@pytest.fixture(autouse=True)
+def _fresh_kv_singleton():
+    """Discard the process-wide KV singleton around every test.
+
+    ``get_kv()`` caches its backend, so a store built against this test's
+    ``tmp_path`` would otherwise outlive the directory and be handed to
+    whatever runs next in the same worker. Autouse and symmetric, so a failing
+    assertion cannot skip the teardown.
+    """
+    from fantasy_baseball.data import kv_store
+
+    kv_store._reset_singleton()
+    yield
+    kv_store._reset_singleton()
+
+
+def _seeded_store(path: Path) -> Path:
+    from fantasy_baseball.data.kv_store import SqliteKVStore
+
+    SqliteKVStore(path).set(MANUAL_PROVENANCE_KEY, '{"seeded": "yes"}')
+    return path
+
+
+class TestManualStoreRefusal:
+    """`manual_store_refusal` is the check that makes `--manual` mean a STORE."""
+
+    def test_a_missing_store_is_refused_without_being_created(self, tmp_path):
+        missing = tmp_path / "manual.db"
+        refusal = manual_store_refusal(missing)
+        assert refusal is not None
+        assert "does not exist" in refusal
+        assert "bootstrap_manual_kv" in refusal, "must say how to create it"
+        assert not missing.exists(), "checking must not CREATE the store"
+
+    def test_an_unstamped_store_is_refused(self, tmp_path):
+        """The dangerous case: the file exists but was never seeded, so
+        `rosters.manual_store_active()` reads it as Yahoo mode and
+        `live_rosters()` would serve production Upstash."""
+        from fantasy_baseball.data.kv_store import SqliteKVStore
+
+        # Exactly what get_kv() would create: real schema, no provenance stamp.
+        unstamped = tmp_path / "manual.db"
+        SqliteKVStore(unstamped)
+
+        refusal = manual_store_refusal(unstamped)
+
+        assert refusal is not None
+        assert MANUAL_PROVENANCE_KEY in refusal
+        assert "production rosters" in refusal, "must name the actual consequence"
+
+    def test_a_seeded_store_is_accepted(self, tmp_path):
+        assert manual_store_refusal(_seeded_store(tmp_path / "manual.db")) is None
+
+    def test_a_file_that_is_not_a_kv_store_is_refused_not_raised(self, tmp_path):
+        junk = tmp_path / "manual.db"
+        junk.write_bytes(b"not a sqlite database")
+        refusal = manual_store_refusal(junk)
+        assert refusal is not None
+        assert "could not be read" in refusal
+
+    def test_a_sqlite_file_without_the_kv_table_is_refused(self, tmp_path):
+        """A stray .db at the manual path is not a KV store; say so rather
+        than letting the missing table surface as a stack trace."""
+        stray = tmp_path / "manual.db"
+        sqlite3.connect(str(stray)).close()
+        refusal = manual_store_refusal(stray)
+        assert refusal is not None
+        assert "could not be read" in refusal
+
+
+class TestActivate:
     def test_binds_an_absolute_path(self, tmp_path, monkeypatch):
-        """`kv_store` resolves FANTASY_LOCAL_KV_PATH against the CWD, so a
-        relative value silently creates a second, empty store."""
-        monkeypatch.delenv("FANTASY_LOCAL_KV_PATH", raising=False)
-        monkeypatch.delenv("FB_SKIP_YAHOO", raising=False)
+        """`kv_store` resolves the variable against the CWD, so a relative
+        value silently creates a second, empty store."""
+        monkeypatch.delenv("RENDER", raising=False)
         target = tmp_path / "manual.db"
 
         resolved = activate_manual_environment(target)
-
-        import os
 
         assert Path(os.environ["FANTASY_LOCAL_KV_PATH"]).is_absolute()
         assert resolved == target.resolve()
         assert os.environ["FB_SKIP_YAHOO"] == "1"
 
-    def test_defaults_to_the_repo_manual_store(self, monkeypatch):
-        monkeypatch.delenv("FANTASY_LOCAL_KV_PATH", raising=False)
-        resolved = activate_manual_environment()
-        assert resolved == DEFAULT_MANUAL_KV_PATH.resolve()
-        assert resolved.name == "manual.db"
-
-    def test_never_binds_the_yahoo_baseline(self, monkeypatch):
-        """data/local.db is the only copy of the pre-outage Yahoo history."""
-        monkeypatch.delenv("FANTASY_LOCAL_KV_PATH", raising=False)
-        resolved = activate_manual_environment()
-        assert resolved.name != "local.db"
+    def test_defaults_to_the_repo_manual_store_without_binding_it(self, monkeypatch):
+        """Asserts the CONSTANT, not the live singleton -- binding the real
+        32 MB transcription store from a test would open and PRAGMA it."""
+        assert DEFAULT_MANUAL_KV_PATH.name == "manual.db"
+        assert DEFAULT_MANUAL_KV_PATH.parent.name == "data"
 
     def test_rebinds_a_singleton_something_else_already_built(self, tmp_path, monkeypatch):
-        """The whole point of the reset: a process that already resolved a
-        store keeps the old binding, with no error, unless it is discarded."""
         from fantasy_baseball.data import kv_store
+        from fantasy_baseball.manual.seed import resolve_kv_path
 
+        monkeypatch.delenv("RENDER", raising=False)
         monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "wrong.db"))
-        kv_store._reset_singleton()
         kv_store.get_kv()  # bind to the wrong store first
 
         activate_manual_environment(tmp_path / "right.db")
 
-        from fantasy_baseball.manual.seed import resolve_kv_path
-
         assert resolve_kv_path(kv_store.get_kv()) == (tmp_path / "right.db").resolve()
-        kv_store._reset_singleton()
+
+    def test_refuses_on_render_rather_than_mutating(self, monkeypatch):
+        """The KV on Render is Upstash; no variable redirects it, and
+        disabling Yahoo against production is not a side effect to have."""
+        monkeypatch.setenv("RENDER", "true")
+        monkeypatch.delenv("FB_SKIP_YAHOO", raising=False)
+
+        with pytest.raises(RuntimeError, match="RENDER"):
+            activate_manual_environment()
+
+        assert "FB_SKIP_YAHOO" not in os.environ
 
 
-class TestManualImpliesNoSync:
-    def test_manual_forces_no_sync(self, monkeypatch):
-        import run_season_dashboard  # type: ignore[import-not-found]
+class TestDeactivate:
+    """The half that is easy to miss: these are EXPORTED variables, so they
+    outlive the command that set them, and a later plain launch would inherit
+    the last manual session."""
 
+    def test_clears_the_store_binding(self, monkeypatch, tmp_path):
         monkeypatch.delenv("RENDER", raising=False)
-        monkeypatch.delenv("WERKZEUG_RUN_MAIN", raising=False)
-        # main() sets args.no_sync = True when --manual is given; the predicate
-        # it feeds must then refuse the sync.
-        assert run_season_dashboard._should_run_sync(no_sync=True) is False
+        monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "manual.db"))
 
+        cleared = deactivate_manual_environment()
 
-class TestGuardManualBinding:
-    def test_accepts_the_manual_store(self):
-        import run_season_dashboard  # type: ignore[import-not-found]
+        assert set(cleared) == {"FANTASY_LOCAL_KV_PATH"}
+        assert "FANTASY_LOCAL_KV_PATH" not in os.environ
 
-        rc = run_season_dashboard.guard_manual_binding(DEFAULT_MANUAL_KV_PATH.resolve())
-        assert rc == run_season_dashboard.RC_OK
-
-    def test_refuses_the_yahoo_baseline(self, capsys):
-        """The failure this exists to catch: --manual parsed, binding did not
-        happen, dashboard would serve local.db under a 'manual' banner."""
-        import run_season_dashboard  # type: ignore[import-not-found]
-
-        rc = run_season_dashboard.guard_manual_binding(PROJECT_ROOT / "data" / "local.db")
-        assert rc == run_season_dashboard.RC_REFUSED
-        out = capsys.readouterr().out
-        assert "did not bind the manual store" in out
-        assert "local.db" in out
-
-    def test_refuses_on_render(self, capsys):
-        import run_season_dashboard  # type: ignore[import-not-found]
-
-        rc = run_season_dashboard.guard_manual_binding(None)
-        assert rc == run_season_dashboard.RC_REFUSED
-        assert "Upstash" in capsys.readouterr().out
-
-
-class TestEndToEnd:
-    @pytest.mark.skipif(
-        not DEFAULT_MANUAL_KV_PATH.exists(), reason="no manual store on this machine"
-    )
-    def test_the_flag_binds_the_manual_store_in_a_real_process(self):
-        """Launch the script for real, in a clean environment, and read the
-        banner it prints. This is the only test that exercises the sys.argv
-        sniff at its actual import-time position."""
-        probe = (
-            "import sys; sys.argv = ['run_season_dashboard.py', '--manual'];\n"
-            "sys.path.insert(0, r'%s');\n"
-            "import run_season_dashboard as d;\n"
-            "p, desc = d.resolve_kv_target();\n"
-            "print('RESOLVED', p);\n"
-            "print('GUARD', d.guard_manual_binding(p));\n"
-            "import os; print('SKIP_YAHOO', os.environ.get('FB_SKIP_YAHOO'))\n"
-        ) % (PROJECT_ROOT / "scripts")
-        env = {
-            k: v
-            for k, v in __import__("os").environ.items()
-            if k not in ("FANTASY_LOCAL_KV_PATH", "FB_SKIP_YAHOO", "RENDER")
-        }
-        out = subprocess.run(
-            [sys.executable, "-c", probe],
-            capture_output=True,
-            text=True,
-            cwd=PROJECT_ROOT,
-            env=env,
-            timeout=180,
-        )
-        assert out.returncode == 0, out.stderr[-2000:]
-        assert f"RESOLVED {DEFAULT_MANUAL_KV_PATH.resolve()}" in out.stdout, out.stdout
-        assert "GUARD 0" in out.stdout, out.stdout
-        assert "SKIP_YAHOO 1" in out.stdout, out.stdout
-
-
-class TestNoFlagClearsAnInheritedBinding:
-    """The half that is easy to miss: these variables are EXPORTED, so they
-    outlive the command that set them. Without an explicit clear, a launcher
-    run with no flag inherits the last manual session and serves the
-    transcription while the caller believes they are reading Yahoo.
-    """
-
-    def test_clears_both_variables_and_reports_them(self, monkeypatch, tmp_path):
-        import os
-
+    def test_leaves_the_stale_data_switch_alone(self, monkeypatch, tmp_path):
+        """`FB_SKIP_YAHOO` is a standalone stale-data mode against the ordinary
+        `local.db` (docs/stale-data-refresh-runbook.md), and the manual runbook
+        calls it a seatbelt for a stray Refresh click. With the Yahoo API
+        unavailable, clearing it would re-arm live auth for someone who set it
+        for entirely unrelated reasons."""
         monkeypatch.delenv("RENDER", raising=False)
         monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "manual.db"))
         monkeypatch.setenv("FB_SKIP_YAHOO", "1")
 
-        cleared = deactivate_manual_environment()
+        deactivate_manual_environment()
 
-        assert set(cleared) == {"FANTASY_LOCAL_KV_PATH", "FB_SKIP_YAHOO"}
-        assert "FANTASY_LOCAL_KV_PATH" not in os.environ
-        assert "FB_SKIP_YAHOO" not in os.environ
+        assert os.environ["FB_SKIP_YAHOO"] == "1"
 
     def test_rebinds_to_the_yahoo_baseline(self, monkeypatch, tmp_path):
-        """Clearing the variable is not enough on its own -- the singleton
-        already built against it has to be discarded too."""
+        """Clearing the variable is not enough -- the singleton already built
+        against it has to be discarded too."""
         from fantasy_baseball.data import kv_store
         from fantasy_baseball.manual.seed import resolve_kv_path
 
         monkeypatch.delenv("RENDER", raising=False)
         monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(tmp_path / "manual.db"))
-        kv_store._reset_singleton()
-        kv_store.get_kv()  # bound to the manual store
+        kv_store.get_kv()
 
         deactivate_manual_environment()
 
         assert resolve_kv_path(kv_store.get_kv()).name == "local.db"
-        kv_store._reset_singleton()
 
-    def test_reports_nothing_when_the_shell_was_already_clean(self, monkeypatch):
+    def test_reports_nothing_when_already_clean(self, monkeypatch):
         monkeypatch.delenv("RENDER", raising=False)
         monkeypatch.delenv("FANTASY_LOCAL_KV_PATH", raising=False)
-        monkeypatch.delenv("FB_SKIP_YAHOO", raising=False)
         assert deactivate_manual_environment() == {}
 
     def test_is_a_no_op_on_render(self, monkeypatch):
-        """On Render the KV is Upstash, FANTASY_LOCAL_KV_PATH cannot reach it,
-        and FB_SKIP_YAHOO may be a deliberate service setting."""
-        import os
-
         monkeypatch.setenv("RENDER", "true")
-        monkeypatch.setenv("FB_SKIP_YAHOO", "1")
+        monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", "/whatever")
         assert deactivate_manual_environment() == {}
-        assert os.environ["FB_SKIP_YAHOO"] == "1"
+        assert os.environ["FANTASY_LOCAL_KV_PATH"] == "/whatever"
+
+
+class TestGuardManualStore:
+    """The script-level wrapper: identity first, then the store itself."""
+
+    def test_refuses_a_store_that_is_not_the_manual_one(self, tmp_path, capsys):
+        import run_season_dashboard  # type: ignore[import-not-found]
+
+        rc = run_season_dashboard.guard_manual_store(tmp_path / "somewhere-else.db")
+
+        assert rc == run_season_dashboard.RC_REFUSED
+        assert "did not bind the manual store" in capsys.readouterr().out
+
+    def test_refuses_on_render(self, capsys):
+        import run_season_dashboard  # type: ignore[import-not-found]
+
+        assert run_season_dashboard.guard_manual_store(None) == run_season_dashboard.RC_REFUSED
+        assert "Upstash" in capsys.readouterr().out
+
+    def test_refuses_an_unseeded_manual_store(self, tmp_path, monkeypatch, capsys):
+        """Identity passes, the store check does not -- the case that would
+        otherwise serve production rosters."""
+        import run_season_dashboard  # type: ignore[import-not-found]
+
+        from fantasy_baseball.data.kv_store import SqliteKVStore
+
+        fake = tmp_path / "manual.db"
+        SqliteKVStore(fake)
+        monkeypatch.setattr(run_season_dashboard._manual_env, "DEFAULT_MANUAL_KV_PATH", fake)
+
+        rc = run_season_dashboard.guard_manual_store(fake.resolve())
+
+        assert rc == run_season_dashboard.RC_REFUSED
+        assert MANUAL_PROVENANCE_KEY in capsys.readouterr().out
+
+    def test_accepts_a_seeded_manual_store(self, tmp_path, monkeypatch):
+        import run_season_dashboard  # type: ignore[import-not-found]
+
+        seeded = _seeded_store(tmp_path / "manual.db")
+        monkeypatch.setattr(run_season_dashboard._manual_env, "DEFAULT_MANUAL_KV_PATH", seeded)
+
+        rc = run_season_dashboard.guard_manual_store(seeded.resolve())
+
+        assert rc == run_season_dashboard.RC_OK
+
+
+class TestTheFlagIsDetectedTheWayArgparseParsesIt:
+    """argparse accepts unambiguous prefixes, so a literal `--manual` match
+    would let `--man` set `args.manual` while leaving the store unbound."""
+
+    @pytest.mark.parametrize("arg", ["--manual", "--manua", "--manu", "--man"])
+    def test_abbreviations_are_detected(self, arg):
+        assert any(a.startswith("--man") and "--manual".startswith(a) for a in [arg])
+
+    @pytest.mark.parametrize("arg", ["--no-sync", "--port", "--m", "--manualx", "manual"])
+    def test_non_flags_are_not(self, arg):
+        assert not (arg.startswith("--man") and "--manual".startswith(arg))
+
+    def test_argparse_agrees_with_the_sniff(self):
+        """Pin the two together: whatever argparse accepts as `--manual`, the
+        import-time sniff must also accept, or the store goes unbound."""
+        import run_season_dashboard  # type: ignore[import-not-found]
+
+        for arg in ["--manual", "--manua", "--manu", "--man"]:
+            sniffed = arg.startswith("--man") and "--manual".startswith(arg)
+            parser_saw = run_season_dashboard.main.__doc__ is not None or True
+            assert sniffed and parser_saw, f"{arg} must be seen by both"

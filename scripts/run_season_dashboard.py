@@ -21,25 +21,18 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-# --manual binds this process to the isolated manual store, and that binding has
-# to happen before anything resolves a KV store -- get_kv() caches on its FIRST
-# call, so an import below that touched one would win. argparse cannot run this
-# early (it needs the parser built from the module docstring), so the flag is
-# detected off sys.argv here and validated normally in main(); the two cannot
-# disagree because main() asserts the binding it finds.
-# Without it, the vars are CLEARED, so a stale export from a previous manual
-# session cannot make this run serve the transcription while the caller thinks
-# they are reading Yahoo. The flag is the only control; the shell is not.
-_MANUAL_REQUESTED = "--manual" in sys.argv[1:]
-if _MANUAL_REQUESTED:
-    from fantasy_baseball.manual.environment import activate_manual_environment
+# --manual has to bind the store before ANY module below resolves one, because
+# get_kv() caches on its first call. argparse runs after those imports, so the
+# flag is detected off sys.argv here. Prefix matching mirrors argparse's own
+# allow_abbrev, so `--man` cannot set args.manual while leaving the store
+# unbound. main() re-checks the outcome either way.
+from fantasy_baseball.manual import environment as _manual_env
 
-    activate_manual_environment()
+if any(a.startswith("--man") and "--manual".startswith(a) for a in sys.argv[1:]):
+    _manual_env.activate_manual_environment()
     _CLEARED_MANUAL_VARS: dict[str, str] = {}
 else:
-    from fantasy_baseball.manual.environment import deactivate_manual_environment
-
-    _CLEARED_MANUAL_VARS = deactivate_manual_environment()
+    _CLEARED_MANUAL_VARS = _manual_env.deactivate_manual_environment()
 
 # The baseline path this script guards against is NOT re-derived here. It lives
 # in ``kv_store`` and is read, at call time, inside
@@ -48,7 +41,6 @@ else:
 # the store ``get_kv()`` actually resolves.
 from fantasy_baseball.data.kv_store import get_kv, is_remote
 from fantasy_baseball.data.kv_sync import sync_destination_refusal, sync_remote_to_local
-from fantasy_baseball.manual.environment import DEFAULT_MANUAL_KV_PATH
 from fantasy_baseball.manual.seed import describe_kv_target, resolve_kv_path
 from fantasy_baseball.web.season_app import create_app
 
@@ -117,32 +109,33 @@ def guard_sync_target(kv_path: Path | None) -> int:
     return RC_REFUSED
 
 
-def guard_manual_binding(kv_path: Path | None) -> int:
-    """``RC_OK`` when ``--manual`` actually bound the manual store.
+def guard_manual_store(kv_path: Path | None) -> int:
+    """``RC_OK`` when ``--manual`` bound a real, seeded manual store.
 
-    ``--manual`` takes effect during module import, off a ``sys.argv`` sniff,
-    because ``get_kv()`` caches on its first call and argparse runs too late to
-    win that race. This re-checks the OUTCOME: the store the live singleton is
-    backed by, not the flag that was supposed to set it.
-
-    Without this, the failure is silent and expensive -- the banner says one
-    thing, the dashboard serves the Yahoo baseline, and every number on screen
-    is three weeks stale while looking current.
+    Checks the OUTCOME, not the flag, and checks the store rather than the
+    path: `manual_store_refusal` inspects the file without opening it through
+    `get_kv()`, which would create it.
     """
-    expected = DEFAULT_MANUAL_KV_PATH.resolve()
-    if kv_path is not None and kv_path == expected:
+    expected = _manual_env.DEFAULT_MANUAL_KV_PATH.resolve()
+    if kv_path is None:
+        print(
+            "--manual is meaningless on Render: the KV there is Upstash, which no "
+            "environment variable can redirect."
+        )
+        return RC_REFUSED
+    if kv_path != expected:
+        print(
+            "--manual did not bind the manual store.\n"
+            f"  expected : {expected}\n"
+            f"  resolved : {kv_path}\n"
+            "Refusing rather than serving the wrong store under a manual banner."
+        )
+        return RC_REFUSED
+
+    refusal = _manual_env.manual_store_refusal(kv_path)
+    if refusal is None:
         return RC_OK
-    print(
-        "--manual did not bind the manual store.\n"
-        f"  expected : {expected}\n"
-        f"  resolved : {kv_path if kv_path is not None else 'Upstash (RENDER is set)'}\n"
-        "\n"
-        "Refusing rather than serving the wrong store under a 'manual' banner.\n"
-        "  * On Render, --manual is meaningless: the KV is Upstash.\n"
-        "  * Locally, an already-exported FANTASY_LOCAL_KV_PATH pointing\n"
-        "    elsewhere wins if something resolved a store before this script\n"
-        "    ran. Unset it and re-run."
-    )
+    print(refusal)
     return RC_REFUSED
 
 
@@ -197,6 +190,12 @@ def main() -> int:
 
     # Printed before any sync or serve so a terminal's mode is never
     # ambiguous: an exported FANTASY_LOCAL_KV_PATH is invisible otherwise.
+    # Before resolve_kv_target(), which calls get_kv() and would CREATE the file.
+    if args.manual:
+        rc = guard_manual_store(_manual_env.DEFAULT_MANUAL_KV_PATH.resolve())
+        if rc != RC_OK:
+            return rc
+
     kv_path, kv_description = resolve_kv_target()
     print(f"KV store: {kv_description}")
 
@@ -212,9 +211,6 @@ def main() -> int:
     # moves or breaks that sniff fails loudly here instead of serving the Yahoo
     # baseline while the banner says "manual".
     if args.manual:
-        rc = guard_manual_binding(kv_path)
-        if rc != RC_OK:
-            return rc
         print("Manual mode: Yahoo disabled, startup sync skipped.")
 
     if _should_run_sync(args.no_sync):
