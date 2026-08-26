@@ -290,3 +290,55 @@ class TestTheTwoDefaultPathsCannotDrift:
         body = inspect.getsource(run_manual_refresh._activate_manual_environment)
         assert "activate_manual_environment(kv_path)" in body
         assert "os.environ[" not in body, "must not set the variables itself"
+
+
+class TestTheFlagBindsTheStoreEndToEnd:
+    """`activate_manual_environment()` with no argument is otherwise never
+    exercised: every other test passes an explicit path. This is the only
+    coverage that the DEFAULT binding -- the one `--manual` actually uses --
+    reaches the singleton."""
+
+    def test_the_default_binding_reaches_get_kv(self, monkeypatch, seeded_store):
+        from fantasy_baseball.data import kv_store
+        from fantasy_baseball.manual import environment as env
+        from fantasy_baseball.manual.seed import resolve_kv_path
+
+        store = seeded_store()
+        monkeypatch.setattr(env, "DEFAULT_MANUAL_KV_PATH", store)
+        monkeypatch.delenv("RENDER", raising=False)
+
+        # Build a singleton against a DIFFERENT store first. Without that, the
+        # conftest has already cleared it and get_kv() would rebuild from the
+        # env var whether or not activate_manual_environment reset anything --
+        # so the assertion below would hold for a broken implementation too.
+        monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", str(seeded_store("other.db")))
+        kv_store.get_kv()
+
+        bound = env.activate_manual_environment()
+
+        assert bound == store.resolve()
+        assert resolve_kv_path(kv_store.get_kv()) == store.resolve(), (
+            "the variable was set but get_kv() did not follow it"
+        )
+        assert os.environ["FB_SKIP_YAHOO"] == "1"
+
+    def test_enter_manual_mode_binds_and_accepts_a_seeded_store(
+        self, monkeypatch, seeded_store, capsys
+    ):
+        """The whole `--manual` path in one call: bind, force no-sync, guard."""
+        import argparse
+
+        import run_season_dashboard  # type: ignore[import-not-found]
+
+        store = seeded_store()
+        monkeypatch.setattr(run_season_dashboard._manual_env, "DEFAULT_MANUAL_KV_PATH", store)
+        monkeypatch.delenv("RENDER", raising=False)
+        args = argparse.Namespace(manual=True, no_sync=False, port=5001)
+
+        rc = run_season_dashboard.enter_manual_mode(args)
+
+        assert rc == run_season_dashboard.RC_OK
+        assert args.no_sync is True, "--manual must force the sync off"
+        out = capsys.readouterr().out
+        assert f"KV store: {store.resolve()}" in out
+        assert "Manual mode" in out
