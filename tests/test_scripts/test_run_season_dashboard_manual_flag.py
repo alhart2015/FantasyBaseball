@@ -29,14 +29,25 @@ from fantasy_baseball.manual.environment import (
     activate_manual_environment,
     deactivate_manual_environment,
     manual_store_refusal,
+    skip_yahoo_is_on,
 )
 
 
-def _seeded_store(path: Path) -> Path:
-    from fantasy_baseball.data.kv_store import SqliteKVStore
+class TestSkipYahooIsOn:
+    """The launcher tells the operator whether Yahoo is disabled. Reading
+    PRESENCE instead of VALUE makes it say "disabled" for FB_SKIP_YAHOO=0,
+    while a Refresh click would happily attempt live Yahoo auth."""
 
-    SqliteKVStore(path).set(MANUAL_PROVENANCE_KEY, '{"seeded": "yes"}')
-    return path
+    @pytest.mark.parametrize(
+        "value,expected", [("1", True), ("true", True), ("0", False), ("", False), ("no", False)]
+    )
+    def test_reads_the_value_not_the_presence(self, monkeypatch, value, expected):
+        monkeypatch.setenv("FB_SKIP_YAHOO", value)
+        assert skip_yahoo_is_on() is expected
+
+    def test_absent_is_off(self, monkeypatch):
+        monkeypatch.delenv("FB_SKIP_YAHOO", raising=False)
+        assert skip_yahoo_is_on() is False
 
 
 class TestManualStoreRefusal:
@@ -66,24 +77,59 @@ class TestManualStoreRefusal:
         assert MANUAL_PROVENANCE_KEY in refusal
         assert "production rosters" in refusal, "must name the actual consequence"
 
-    def test_a_seeded_store_is_accepted(self, tmp_path):
-        assert manual_store_refusal(_seeded_store(tmp_path / "manual.db")) is None
+    def test_a_seeded_store_is_accepted(self, seeded_store):
+        assert manual_store_refusal(seeded_store()) is None
 
-    def test_a_file_that_is_not_a_kv_store_is_refused_not_raised(self, tmp_path):
+    def test_a_stray_file_is_told_to_use_force(self, tmp_path):
+        """A file that is not a KV store is safe to overwrite -- say so.
+
+        Getting this wrong strands the operator: the recovery message for an
+        unreadable store explicitly forbids --force, which is the only command
+        that clears a stray file.
+        """
         junk = tmp_path / "manual.db"
         junk.write_bytes(b"not a sqlite database")
-        refusal = manual_store_refusal(junk)
-        assert refusal is not None
-        assert "could not be read" in refusal
 
-    def test_a_sqlite_file_without_the_kv_table_is_refused(self, tmp_path):
-        """A stray .db at the manual path is not a KV store; say so rather
-        than letting the missing table surface as a stack trace."""
+        refusal = manual_store_refusal(junk)
+
+        assert refusal is not None
+        assert "--force" in refusal
+        assert "Do NOT" not in refusal
+
+    def test_a_sqlite_file_without_the_kv_table_is_told_to_use_force(self, tmp_path):
         stray = tmp_path / "manual.db"
         sqlite3.connect(str(stray)).close()
+
         refusal = manual_store_refusal(stray)
+
+        assert refusal is not None
+        assert "is not a KV store" in refusal
+        assert "--force" in refusal
+        assert "Do NOT" not in refusal
+
+    def test_an_unreadable_store_is_warned_OFF_force(self, tmp_path):
+        """The opposite case, and the reason the two must not be conflated:
+        --force overwrites the destination with a copy of data/local.db, and a
+        store that cannot be opened is not evidence its contents are gone.
+        """
+        unreadable = tmp_path / "manual.db"
+        unreadable.mkdir()
+
+        refusal = manual_store_refusal(unreadable)
+
         assert refusal is not None
         assert "could not be read" in refusal
+        assert "Do NOT" in refusal
+
+    def test_a_relative_path_is_refused_not_raised(self, tmp_path, monkeypatch, seeded_store):
+        """`as_uri()` raises ValueError on a relative path, which is not in the
+        caught tuple -- the contract is a string or None, never a traceback.
+        """
+        monkeypatch.chdir(tmp_path)
+        # The file must EXIST: a missing one returns before reaching as_uri().
+        seeded_store()
+
+        assert manual_store_refusal(Path("manual.db")) is None
 
 
 class TestActivate:
@@ -213,8 +259,10 @@ class TestGuardManualStore:
         assert "local-only" in out
 
     def test_refuses_an_unseeded_manual_store(self, tmp_path, monkeypatch, capsys):
-        """Identity passes, the store check does not -- the case that would
-        otherwise serve production rosters."""
+        """Binding succeeds, the store check does not -- the case that would
+        otherwise serve production rosters under a manual banner."""
+        import argparse
+
         import run_season_dashboard  # type: ignore[import-not-found]
 
         from fantasy_baseball.data.kv_store import SqliteKVStore
@@ -222,16 +270,19 @@ class TestGuardManualStore:
         fake = tmp_path / "manual.db"
         SqliteKVStore(fake)
         monkeypatch.setattr(run_season_dashboard._manual_env, "DEFAULT_MANUAL_KV_PATH", fake)
+        monkeypatch.delenv("RENDER", raising=False)
 
-        rc = run_season_dashboard.guard_manual_store(fake.resolve())
+        rc = run_season_dashboard.enter_manual_mode(
+            argparse.Namespace(manual=True, no_sync=False, port=5001)
+        )
 
         assert rc == run_season_dashboard.RC_REFUSED
         assert MANUAL_PROVENANCE_KEY in capsys.readouterr().out
 
-    def test_accepts_a_seeded_manual_store(self, tmp_path, monkeypatch):
+    def test_accepts_a_seeded_manual_store(self, seeded_store, monkeypatch):
         import run_season_dashboard  # type: ignore[import-not-found]
 
-        seeded = _seeded_store(tmp_path / "manual.db")
+        seeded = seeded_store()
         monkeypatch.setattr(run_season_dashboard._manual_env, "DEFAULT_MANUAL_KV_PATH", seeded)
 
         rc = run_season_dashboard.guard_manual_store(seeded.resolve())
@@ -322,10 +373,12 @@ class TestTheFlagBindsTheStoreEndToEnd:
         )
         assert os.environ["FB_SKIP_YAHOO"] == "1"
 
-    def test_enter_manual_mode_binds_and_accepts_a_seeded_store(
-        self, monkeypatch, seeded_store, capsys
-    ):
-        """The whole `--manual` path in one call: bind, force no-sync, guard."""
+    def test_enter_manual_mode_binds_and_accepts_a_seeded_store(self, monkeypatch, seeded_store):
+        """The whole `--manual` path in one call: bind, force no-sync, and
+        leave `get_kv()` resolving the manual store -- which is what
+        `guard_manual_store` is then handed, so the guard checks an OUTCOME
+        rather than the constant it compares against.
+        """
         import argparse
 
         import run_season_dashboard  # type: ignore[import-not-found]
@@ -339,6 +392,6 @@ class TestTheFlagBindsTheStoreEndToEnd:
 
         assert rc == run_season_dashboard.RC_OK
         assert args.no_sync is True, "--manual must force the sync off"
-        out = capsys.readouterr().out
-        assert f"KV store: {store.resolve()}" in out
-        assert "Manual mode" in out
+        resolved, _ = run_season_dashboard.resolve_kv_target()
+        assert resolved == store.resolve(), "get_kv() must resolve the manual store"
+        assert run_season_dashboard.guard_manual_store(resolved) == run_season_dashboard.RC_OK

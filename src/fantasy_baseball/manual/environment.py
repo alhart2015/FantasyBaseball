@@ -77,32 +77,79 @@ def deactivate_manual_environment() -> dict[str, str]:
 
 
 def surviving_manual_vars() -> dict[str, str]:
-    """Manual-mode variables still set after :func:`deactivate_manual_environment`.
-
-    ``FB_SKIP_YAHOO`` is left in place deliberately, which means a plain launch
-    can still be in stale-data mode with nothing on screen saying so. The
-    caller reports these so the mode is never invisible.
-    """
+    """Manual-mode variables still set after :func:`deactivate_manual_environment`."""
     from fantasy_baseball.web.refresh_pipeline import SKIP_YAHOO_ENV
 
     return {k: os.environ[k] for k in (SKIP_YAHOO_ENV,) if k in os.environ}
 
 
+def skip_yahoo_is_on() -> bool:
+    """Whether ``FB_SKIP_YAHOO``'s VALUE actually disables Yahoo.
+
+    ``FB_SKIP_YAHOO=0`` is set but off; presence alone guarantees nothing.
+    """
+    from fantasy_baseball.web.refresh_pipeline import skip_yahoo_requested
+
+    return skip_yahoo_requested()
+
+
+class _NotAKVStore(Exception):
+    """The file at the manual path is not a KV store -- safe to overwrite."""
+
+
+def _has_live_provenance(kv_path: Path) -> bool:
+    """True when ``kv_path`` carries an unexpired manual stamp.
+
+    Raises :class:`_NotAKVStore` when the file is not one, and lets read
+    failures (locks, permissions) propagate: the two need opposite advice.
+    """
+    uri = f"{kv_path.as_uri()}?mode=ro"
+    with contextlib.closing(sqlite3.connect(uri, uri=True)) as conn:
+        try:
+            has_table = conn.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'kv'"
+            ).fetchone()
+        except sqlite3.DatabaseError as exc:
+            if "not a database" in str(exc):
+                raise _NotAKVStore from exc
+            raise
+        if has_table is None:
+            raise _NotAKVStore
+        # Same liveness rule as kv_store.get(): a stamp past its expiry is not a
+        # stamp. rosters.manual_store_active() reads it through get_kv(), which
+        # applies that filter, and the two must not disagree.
+        row = conn.execute(
+            "SELECT 1 FROM kv WHERE key = ? AND (expires_at IS NULL OR expires_at >= ?) LIMIT 1",
+            (MANUAL_PROVENANCE_KEY, time.time()),
+        ).fetchone()
+    return row is not None
+
+
+def _overwritable(kv_path: Path, problem: str) -> str:
+    """Refusal for a file that is safe to overwrite with --force."""
+    return (
+        f"{kv_path} exists but {problem}.\n"
+        "If it is a stray file, seed it with 'python scripts/bootstrap_manual_kv.py "
+        "--force' (which OVERWRITES it with a copy of data/local.db -- check what is "
+        "there first).\n"
+        "Refusing because an unstamped store reads as Yahoo mode, so the dashboard "
+        "would serve production rosters under a manual banner."
+    )
+
+
 def manual_store_refusal(kv_path: Path) -> str | None:
     """Why ``kv_path`` is not a usable manual store, or None if it is.
 
-    Reads the file directly rather than through ``get_kv()``, which would
-    CREATE it -- an empty store carries no provenance stamp, so
-    ``rosters.manual_store_active()`` reads it as Yahoo mode and the dashboard
-    serves production rosters under a manual banner.
+    Reads the file directly rather than through ``get_kv()``, which would CREATE
+    it -- and an unstamped store reads as Yahoo mode.
 
-    Recovery advice is deliberately asymmetric. A MISSING store is safe to
-    bootstrap. An unreadable one is NOT told to run ``--force``: that copies
-    ``data/local.db`` over the destination, and a store can be unreadable for
-    reasons that have nothing to do with its contents -- a read-only directory,
-    a network share, or sidecars locked by another process, since SQLite must
-    create a ``-shm`` file even to open a WAL database read-only.
+    A file that is not a KV store and one that cannot be READ need opposite
+    advice: the first is safe to overwrite, the second is not, because --force
+    copies ``data/local.db`` over the destination.
     """
+    # as_uri() below raises ValueError on a relative path.
+    kv_path = kv_path.resolve()
+
     try:
         exists = kv_path.exists()
     except OSError as exc:
@@ -111,42 +158,24 @@ def manual_store_refusal(kv_path: Path) -> str | None:
     if not exists:
         return (
             f"the manual KV store does not exist: {kv_path}\n"
-            "Create it with 'python scripts/bootstrap_manual_kv.py'.\n"
-            "Refusing rather than creating an empty one: an unstamped store reads as "
-            "Yahoo mode, so the dashboard would serve production rosters under a "
-            "manual banner."
+            "Create it with 'python scripts/bootstrap_manual_kv.py'."
         )
 
     try:
-        with contextlib.closing(sqlite3.connect(f"{kv_path.as_uri()}?mode=ro", uri=True)) as conn:
-            # Same liveness rule as kv_store.get(): a stamp past its expiry is
-            # not a stamp. rosters.manual_store_active() reads it through
-            # get_kv(), which applies that filter, and the two must not
-            # disagree about whether a store is manual.
-            row = conn.execute(
-                "SELECT 1 FROM kv WHERE key = ? "
-                "AND (expires_at IS NULL OR expires_at >= ?) LIMIT 1",
-                (MANUAL_PROVENANCE_KEY, time.time()),
-            ).fetchone()
+        stamped = _has_live_provenance(kv_path)
+    except _NotAKVStore:
+        return _overwritable(kv_path, "is not a KV store")
     except (OSError, sqlite3.Error) as exc:
         return (
             f"{kv_path} exists but could not be read ({exc}).\n"
-            "Check that the file and its -wal/-shm sidecars are readable and not "
-            "held by another process -- SQLite creates a -shm file even to open a "
-            "WAL database read-only.\n"
+            "Check that the file and its -wal/-shm sidecars are readable and not held "
+            "by another process -- SQLite creates a -shm file even to open a WAL "
+            "database read-only.\n"
             "Do NOT reach for 'bootstrap_manual_kv.py --force' to clear this: it "
             "overwrites the destination with a copy of data/local.db, and an "
             "unreadable store is not evidence that its contents are gone."
         )
 
-    if row is None:
-        return (
-            f"{kv_path} exists but is not a manual store -- no live "
-            f"'{MANUAL_PROVENANCE_KEY}' stamp.\n"
-            "If it is a stray file, seed it with "
-            "'python scripts/bootstrap_manual_kv.py --force' (which OVERWRITES it "
-            "with a copy of data/local.db -- check what is there first).\n"
-            "Refusing because an unstamped store reads as Yahoo mode, so the "
-            "dashboard would serve production rosters under a manual banner."
-        )
+    if not stamped:
+        return _overwritable(kv_path, f"has no live '{MANUAL_PROVENANCE_KEY}' stamp")
     return None
