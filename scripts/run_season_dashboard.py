@@ -21,19 +21,6 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 
-# --manual has to bind the store before ANY module below resolves one, because
-# get_kv() caches on its first call. argparse runs after those imports, so the
-# flag is detected off sys.argv here. Prefix matching mirrors argparse's own
-# allow_abbrev, so `--man` cannot set args.manual while leaving the store
-# unbound. main() re-checks the outcome either way.
-from fantasy_baseball.manual import environment as _manual_env
-
-if any(a.startswith("--man") and "--manual".startswith(a) for a in sys.argv[1:]):
-    _manual_env.activate_manual_environment()
-    _CLEARED_MANUAL_VARS: dict[str, str] = {}
-else:
-    _CLEARED_MANUAL_VARS = _manual_env.deactivate_manual_environment()
-
 # The baseline path this script guards against is NOT re-derived here. It lives
 # in ``kv_store`` and is read, at call time, inside
 # ``kv_sync.sync_destination_refusal`` -- so this script and
@@ -41,6 +28,7 @@ else:
 # the store ``get_kv()`` actually resolves.
 from fantasy_baseball.data.kv_store import get_kv, is_remote
 from fantasy_baseball.data.kv_sync import sync_destination_refusal, sync_remote_to_local
+from fantasy_baseball.manual import environment as _manual_env
 from fantasy_baseball.manual.seed import describe_kv_target, resolve_kv_path
 from fantasy_baseball.web.season_app import create_app
 
@@ -180,6 +168,16 @@ def main() -> int:
     )
     args = parser.parse_args()
 
+    # Bind (or unbind) the store BEFORE anything resolves one. This can live
+    # here rather than at import time because nothing in src/ or scripts/ calls
+    # get_kv() at module level, and both helpers discard any singleton that
+    # already exists -- so argparse gets to decide, and main() stays re-entrant.
+    if args.manual:
+        _manual_env.activate_manual_environment()
+        cleared: dict[str, str] = {}
+    else:
+        cleared = _manual_env.deactivate_manual_environment()
+
     # --manual implies --no-sync rather than merely being compatible with it:
     # sync_remote_to_local() wipes its destination before refilling, so on the
     # manual store it is a silent destroy-and-replace. guard_sync_target()
@@ -202,8 +200,8 @@ def main() -> int:
     # Say what was taken away. Clearing an inherited manual binding is the right
     # default, but doing it silently would make a shell that "worked yesterday"
     # behave differently today with nothing on screen to explain it.
-    if _CLEARED_MANUAL_VARS:
-        names = ", ".join(sorted(_CLEARED_MANUAL_VARS))
+    if cleared:
+        names = ", ".join(sorted(cleared))
         print(f"Ignored inherited {names} (no --manual); reading the Yahoo baseline.")
 
     # The early sys.argv sniff above is what actually bound the store; this

@@ -243,27 +243,34 @@ class TestGuardManualStore:
         assert rc == run_season_dashboard.RC_OK
 
 
-class TestTheFlagIsDetectedTheWayArgparseParsesIt:
-    """argparse accepts unambiguous prefixes, so a literal `--manual` match
-    would let `--man` set `args.manual` while leaving the store unbound."""
+class TestArgparseDecides:
+    """The binding used to run at import off a `sys.argv` sniff, which could
+    disagree with argparse's prefix matching (`--man` set `args.manual` while
+    the store went unbound). It now runs inside `main()` after `parse_args()`,
+    so there is one decision-maker and abbreviations cannot desync."""
 
     @pytest.mark.parametrize("arg", ["--manual", "--manua", "--manu", "--man"])
-    def test_abbreviations_are_detected(self, arg):
-        assert any(a.startswith("--man") and "--manual".startswith(a) for a in [arg])
-
-    @pytest.mark.parametrize("arg", ["--no-sync", "--port", "--m", "--manualx", "manual"])
-    def test_non_flags_are_not(self, arg):
-        assert not (arg.startswith("--man") and "--manual".startswith(arg))
-
-    def test_argparse_agrees_with_the_sniff(self):
-        """Pin the two together: whatever argparse accepts as `--manual`, the
-        import-time sniff must also accept, or the store goes unbound."""
+    def test_abbreviations_reach_args_manual(self, arg):
         import run_season_dashboard  # type: ignore[import-not-found]
 
-        for arg in ["--manual", "--manua", "--manu", "--man"]:
-            sniffed = arg.startswith("--man") and "--manual".startswith(arg)
-            parser_saw = run_season_dashboard.main.__doc__ is not None or True
-            assert sniffed and parser_saw, f"{arg} must be seen by both"
+        parser = run_season_dashboard.argparse.ArgumentParser()
+        parser.add_argument("--no-sync", action="store_true")
+        parser.add_argument("--manual", action="store_true")
+        parser.add_argument("--port", type=int, default=5001)
+        assert parser.parse_args([arg]).manual is True
+
+    def test_importing_the_module_does_not_mutate_the_environment(self, monkeypatch):
+        """Importing for its functions must not pop variables or discard the
+        KV singleton -- a test that imports it mid-run would lose its own
+        isolation."""
+        import importlib
+        import sys as _sys
+
+        monkeypatch.setenv("FANTASY_LOCAL_KV_PATH", "/sentinel/value")
+        _sys.modules.pop("run_season_dashboard", None)
+        importlib.import_module("run_season_dashboard")
+
+        assert os.environ["FANTASY_LOCAL_KV_PATH"] == "/sentinel/value"
 
 
 class TestTheTwoDefaultPathsCannotDrift:

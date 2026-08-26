@@ -8,12 +8,18 @@ launching it from a shell with ``FANTASY_LOCAL_KV_PATH=data/manual.db`` still
 exported (the Yahoo-free manual pipeline sets exactly that) used to destroy the
 hand-transcribed manual store and silently refill it with the Yahoo snapshot.
 
-Two defences are pinned here:
+Three defences are pinned here, in the order they now fire:
 
-  * the resolved absolute KV path is printed before anything else, so a
-    terminal's mode is never ambiguous; and
-  * the sync REFUSES to run against any store other than the default
-    ``data/local.db``, exiting non-zero without deleting anything.
+  * a launch without ``--manual`` CLEARS an inherited binding, so the sync
+    resolves the baseline and the manual store is never the destination;
+  * ``--manual`` never syncs at all, because the operation is a wipe-and-
+    download from production rather than a re-derivation; and
+  * the sync still REFUSES any store other than ``data/local.db`` -- now a
+    backstop rather than the first line of defence, and still the live guard
+    for ``scripts/refresh_remote.py``.
+
+The resolved absolute KV path is printed before any of it, so a terminal's
+mode is never ambiguous.
 
 The default path -- no ``FANTASY_LOCAL_KV_PATH`` set -- must keep behaving
 exactly as it did, which the "still syncs and serves" test exists to pin.
@@ -169,13 +175,17 @@ def test_port_flag_still_reaches_the_server(monkeypatch, tmp_path, harness):
 
 
 def test_banner_prints_the_resolved_absolute_path_first(monkeypatch, tmp_path, harness, capsys):
-    manual = tmp_path / "manual.db"
-    _point_at(monkeypatch, manual)
+    """An inherited export no longer decides the store, so point the baseline
+    itself at tmp_path: what is pinned here is that the FIRST line names the
+    resolved absolute path, whatever that path is."""
+    baseline = tmp_path / "local.db"
+    _relocate_baseline(monkeypatch, baseline)
+    _point_at(monkeypatch, baseline)
 
     _run(monkeypatch, "--no-sync")
 
     lines = capsys.readouterr().out.splitlines()
-    assert lines[0] == f"KV store: {manual.resolve()}"
+    assert lines[0] == f"KV store: {baseline.resolve()}"
     assert Path(lines[0].split("KV store: ", 1)[1]).is_absolute()
 
 
@@ -197,24 +207,36 @@ def test_banner_precedes_the_sync(monkeypatch, tmp_path, harness, capsys):
 # --------------------------------------------------------------------------
 
 
-def test_refuses_to_sync_a_non_baseline_store(monkeypatch, tmp_path, harness, capsys):
+def test_a_plain_launch_ignores_an_inherited_manual_binding(monkeypatch, tmp_path, harness, capsys):
+    """Without ``--manual`` the launcher CLEARS an inherited export rather than
+    refusing on it.
+
+    This replaced a refusal test. The refusal still exists and still protects
+    ``scripts/refresh_remote.py``, but the dashboard can no longer reach it:
+    clearing the binding first means the sync resolves the Yahoo baseline and
+    the manual store is not at the destination at all. Not reaching the cliff
+    beats a guard rail at its edge -- so what is pinned now is the outcome
+    (baseline synced, manual store never named) rather than the mechanism.
+    """
+    baseline = tmp_path / "local.db"
     manual = tmp_path / "manual.db"
-    _relocate_baseline(monkeypatch, tmp_path / "local.db")
+    _relocate_baseline(monkeypatch, baseline)
     _point_at(monkeypatch, manual)
 
     rc = _run(monkeypatch)
 
-    assert rc == dash.RC_REFUSED
-    assert harness.sync_calls == 0, "a refused launch must not sync"
-    assert harness.created_apps == 0, "a refused launch must not serve"
+    assert rc == dash.RC_OK
+    assert harness.sync_calls == 1, "the baseline is a legitimate sync target"
+    assert harness.created_apps == 1
     out = capsys.readouterr().out
-    assert "REFUSING TO SYNC" in out
-    assert str(manual.resolve()) in out
-    assert "--no-sync" in out
+    assert f"KV store: {baseline.resolve()}" in out
+    assert "Ignored inherited FANTASY_LOCAL_KV_PATH" in out
+    assert str(manual.resolve()) not in out, "the manual store must not be touched or named"
 
 
-def test_refused_launch_leaves_the_manual_store_intact(monkeypatch, tmp_path, harness):
-    """The regression this guard exists for: hand-typed rows must survive."""
+def test_a_plain_launch_leaves_the_manual_store_intact(monkeypatch, tmp_path, harness):
+    """The regression this has always been about: hand-typed rows must survive
+    a launch by someone who forgot they had exported the variable."""
     from fantasy_baseball.data.kv_store import SqliteKVStore
 
     manual = tmp_path / "manual.db"
@@ -225,11 +247,20 @@ def test_refused_launch_leaves_the_manual_store_intact(monkeypatch, tmp_path, ha
     _relocate_baseline(monkeypatch, tmp_path / "local.db")
     _point_at(monkeypatch, manual)
 
-    assert _run(monkeypatch) == dash.RC_REFUSED
+    assert _run(monkeypatch) == dash.RC_OK
 
     survivor = SqliteKVStore(manual)
     assert survivor.get("cache:standings") == '{"source": "manual-transcription"}'
     assert survivor.hgetall("weekly_rosters_history") == {"2026-08-17": '{"teams": 10}'}
+
+
+def test_the_sync_refusal_still_guards_a_deliberate_binding(monkeypatch, tmp_path):
+    """`guard_sync_target` is not dead code -- `scripts/refresh_remote.py` still
+    reaches it, and it is the backstop if the dashboard ever stops clearing."""
+    manual = tmp_path / "manual.db"
+    _relocate_baseline(monkeypatch, tmp_path / "local.db")
+
+    assert dash.guard_sync_target(manual.resolve()) == dash.RC_REFUSED
 
 
 def test_no_sync_opens_a_manual_store_without_refusing(monkeypatch, tmp_path, harness, capsys):
@@ -278,3 +309,77 @@ def test_script_is_ascii_only():
         if any(byte > 127 for byte in line)
     ]
     assert offenders == []
+
+
+# --------------------------------------------------------------------------
+# sync_remote_to_local() must never run in manual mode.
+# --------------------------------------------------------------------------
+
+
+def test_manual_mode_never_syncs(monkeypatch, tmp_path, harness, capsys):
+    """`sync_remote_to_local()` WIPES its destination and refills it from
+    production Upstash. Against the manual store that deletes the hand-typed
+    transcription and replaces it with the last Yahoo snapshot -- it is a
+    download, not a re-derivation, and there is no circumstance in which it is
+    wanted here. `--manual` must therefore never reach it.
+
+    Re-deriving with a changed pipeline is `POST /api/refresh` (or
+    `scripts/run_manual_refresh.py`), which runs the blend/score/audit against
+    the store and is unaffected by this.
+    """
+    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
+    from fantasy_baseball.data.kv_store import SqliteKVStore
+    from fantasy_baseball.manual import environment as env
+
+    manual = tmp_path / "manual.db"
+    SqliteKVStore(manual).set(MANUAL_PROVENANCE_KEY, '{"seeded": "yes"}')
+    monkeypatch.setattr(env, "DEFAULT_MANUAL_KV_PATH", manual)
+
+    rc = _run(monkeypatch, "--manual")
+
+    assert rc == dash.RC_OK
+    assert harness.sync_calls == 0, (
+        "sync_remote_to_local wipes its destination; in manual mode that is the transcription"
+    )
+    assert "Manual mode" in capsys.readouterr().out
+
+
+def test_manual_mode_ignores_an_explicit_sync_request(monkeypatch, tmp_path, harness):
+    """`--manual` alongside a plain launch (no `--no-sync`) must still not sync.
+    The implication is not advisory."""
+    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
+    from fantasy_baseball.data.kv_store import SqliteKVStore
+    from fantasy_baseball.manual import environment as env
+
+    manual = tmp_path / "manual.db"
+    SqliteKVStore(manual).set(MANUAL_PROVENANCE_KEY, '{"seeded": "yes"}')
+    monkeypatch.setattr(env, "DEFAULT_MANUAL_KV_PATH", manual)
+
+    assert _run(monkeypatch, "--manual") == dash.RC_OK
+    assert harness.sync_calls == 0
+
+
+def test_only_two_call_sites_can_reach_the_sync(monkeypatch):
+    """Pin the blast radius. If a third caller appears, this fails and someone
+    has to decide whether it can be pointed at the manual store."""
+    import ast
+
+    callers = set()
+    for root in (PROJECT_ROOT / "src", PROJECT_ROOT / "scripts"):
+        for f in root.rglob("*.py"):
+            try:
+                tree = ast.parse(f.read_text(encoding="utf-8"))
+            except (SyntaxError, UnicodeDecodeError):
+                continue
+            for node in ast.walk(tree):
+                if (
+                    isinstance(node, ast.Call)
+                    and isinstance(node.func, ast.Name)
+                    and node.func.id == "sync_remote_to_local"
+                ):
+                    callers.add(f.relative_to(PROJECT_ROOT).as_posix())
+
+    assert callers == {
+        "scripts/refresh_remote.py",
+        "scripts/run_season_dashboard.py",
+    }, f"a new caller of sync_remote_to_local appeared: {sorted(callers)}"
