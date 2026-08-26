@@ -88,11 +88,20 @@ Run either from a shell where `FANTASY_LOCAL_KV_PATH=data/manual.db` is still
 exported and the hand-transcribed store is destroyed and replaced with the last
 Yahoo snapshot, with no error and no prompt.
 
-Both now refuse when the resolved KV path is not `data/local.db`: they print the
-path, exit `2`, and delete nothing. `refresh_remote.py` checks at the very top of
-its run, so a refused launch has not written production Upstash either. The
-reliable habit is still a fresh terminal per mode -- the guard is a backstop, not
-a licence.
+`run_season_dashboard.py` clears an inherited `FANTASY_LOCAL_KV_PATH` unless
+`--manual` was passed, so its sync resolves `data/local.db` and your store is
+never the destination. The refusal is its backstop rather than its first line
+of defence.
+
+`refresh_remote.py` still refuses outright when the resolved KV path is not
+`data/local.db`: it prints the path, exits `2`, and deletes nothing. It checks at
+the very top of its run, so a refused launch has not written production Upstash
+either.
+
+`run_season_dashboard.py` no longer reaches that refusal, because it clears the
+variable first and then syncs the baseline -- it prints `Ignored inherited
+FANTASY_LOCAL_KV_PATH` and carries on. The refusal is still in the code as a
+backstop. Either way the reliable habit is a fresh terminal per mode.
 
 **(b) Never run `scripts/ingest_ros_export.py` without `--no-push`.**
 
@@ -119,37 +128,57 @@ copy of the pre-outage Yahoo history.
 
 ## 4. Open the dashboard against the manual store
 
-`--no-sync` is mandatory here; without it the launcher refuses (that is (a)
-above).
-
-PowerShell:
-
-```powershell
-$env:FANTASY_LOCAL_KV_PATH = "C:\Users\HartAlden\FantasyBaseball\data\manual.db"
-$env:FB_SKIP_YAHOO = "1"
-python scripts/run_season_dashboard.py --no-sync
-```
-
-bash / Git Bash:
-
 ```bash
-FANTASY_LOCAL_KV_PATH="$PWD/data/manual.db" FB_SKIP_YAHOO=1 \
-  python scripts/run_season_dashboard.py --no-sync
+python scripts/run_season_dashboard.py --manual
 ```
 
-Use an **absolute** path. `kv_store` resolves this variable against the current
-working directory, not the repo root, so `data/manual.db` from the wrong
-directory silently creates a second empty store. The launcher's first line of
-output is the resolved absolute path -- confirm it before using the numbers:
+That is the whole command. `--manual` binds the manual store, disables Yahoo,
+and implies `--no-sync` -- the sync wipes its destination before refilling, so
+on `data/manual.db` it is a destroy-and-replace.
+
+It refuses rather than guessing. A missing or unseeded store exits `2` and
+tells you to run `bootstrap_manual_kv.py`, because merely asking `get_kv()`
+where the store is CREATES an empty one, and an empty store carries no
+provenance stamp -- `manual_store_active()` then reads it as Yahoo mode and the
+dashboard serves production rosters under a manual banner.
+
+Confirm the first two lines before using any number on the page:
 
 ```
 KV store: C:\Users\HartAlden\FantasyBaseball\data\manual.db
+Manual mode: Yahoo disabled, startup sync skipped.
 ```
 
-**Do not press the dashboard's Refresh button in this mode.** `POST /api/refresh`
-runs the full pipeline against whatever store the process is bound to. Re-run
-`scripts/run_manual_refresh.py` instead. `FB_SKIP_YAHOO=1` above is a seatbelt
-for a stray click, not a licence to click.
+A launch WITHOUT `--manual` clears an inherited `FANTASY_LOCAL_KV_PATH` and
+says so, so a stale export from a previous manual shell cannot serve the
+transcription to someone who believes they are reading Yahoo. `FB_SKIP_YAHOO`
+is left alone -- it is a separate stale-data switch (see
+`docs/stale-data-refresh-runbook.md`), not part of the store binding -- but the
+launcher now names it when it survives, so the mode is never invisible.
+
+The old incantation (`FANTASY_LOCAL_KV_PATH=... --no-sync`) does NOT work any
+more. `--no-sync` skips the sync, but the clearing above happens first, so the
+dashboard opens `data/local.db` and serves the pre-outage Yahoo baseline. It
+prints the `Ignored inherited ...` line when it does -- which is the only thing
+between you and reading production rosters as though they were your
+transcription. Use `--manual`.
+
+**The dashboard's Refresh button is disabled in this mode.** `POST /api/refresh`
+returns `409` when the store carries a manual provenance stamp, and the page
+shows the reason.
+
+It is blocked because a click would have WRITTEN to your transcription, not
+merely displayed worse numbers. The route runs stale-data mode, not manual mode
+-- `run_full_refresh()` supplies no `free_agent_source`, which is what
+`RefreshRun.manual_mode` keys on -- so the roster audit, the synthesized
+free-agent pool and the position merge are all skipped. But the KV is still
+bound to `data/manual.db`, so the run's `_write_meta` stamps a fresh
+`last_refresh` over the transcription's and the recomputed standings and
+leverage caches land there too. The result: degraded numbers, in your manual
+store, wearing a recent timestamp.
+
+Re-run `scripts/run_manual_refresh.py` instead -- it is the only entry point that
+supplies `free_agent_source`.
 
 Close that terminal when you are done with it.
 

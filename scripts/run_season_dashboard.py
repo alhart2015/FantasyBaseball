@@ -5,9 +5,13 @@ First step: sync the remote Upstash KV down to the local SQLite KV so
 the dashboard reads the same state the Render app writes. Skip with
 ``--no-sync`` when offline or when the remote is known-empty.
 
-The resolved KV store is printed first, every time, and the startup sync
-refuses to run against anything but the default ``data/local.db`` -- see
-:func:`guard_sync_target` and ``docs/manual-pipeline-runbook.md``.
+Pass ``--manual`` to open the dashboard against the hand-transcribed manual
+store with Yahoo disabled; it implies ``--no-sync`` and needs no environment
+variables set by hand.
+
+A launch without ``--manual`` clears an inherited ``FANTASY_LOCAL_KV_PATH``,
+so the sync resolves the baseline. The refusal in :func:`guard_sync_target` is
+the backstop behind that. See ``docs/manual-pipeline-runbook.md``.
 """
 
 import argparse
@@ -24,7 +28,9 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 # the store ``get_kv()`` actually resolves.
 from fantasy_baseball.data.kv_store import get_kv, is_remote
 from fantasy_baseball.data.kv_sync import sync_destination_refusal, sync_remote_to_local
+from fantasy_baseball.manual import environment as _manual_env
 from fantasy_baseball.manual.seed import describe_kv_target, resolve_kv_path
+from fantasy_baseball.web.refresh_pipeline import skip_yahoo_requested
 from fantasy_baseball.web.season_app import create_app
 
 #: Exit codes, matching ``scripts/run_manual_refresh.py``: 2 means "refused,
@@ -55,37 +61,56 @@ def resolve_kv_target() -> tuple[Path | None, str]:
 def guard_sync_target(kv_path: Path | None) -> int:
     """``RC_OK`` when the startup sync may run, else ``RC_REFUSED``.
 
-    ``kv_sync.sync_remote_to_local()`` resolves its destination as
-    ``local if local is not None else get_kv()`` and then wipes it
-    UNCONDITIONALLY -- ``DELETE FROM kv; DELETE FROM hash_kv;`` -- before
-    refilling it from Upstash. This script is one of the callers that
-    passes ``local=None``, so the destination is whatever
-    ``FANTASY_LOCAL_KV_PATH`` points at.
+    The sync wipes its destination -- ``DELETE FROM kv; DELETE FROM hash_kv;``
+    -- before refilling from Upstash, and this script passes ``local=None``, so
+    the destination is whatever ``FANTASY_LOCAL_KV_PATH`` points at.
 
-    That makes an exported ``FANTASY_LOCAL_KV_PATH=data/manual.db`` -- the
-    isolated store the Yahoo-free pipeline writes, which
-    ``scripts/run_manual_refresh.py`` sets in the same shell -- a silent
-    destroy-and-replace: the hand-transcribed standings and rosters are
-    deleted and the store is refilled with the last Yahoo snapshot, with
-    no error and no prompt. So the sync runs only against the default
-    baseline; ``--no-sync`` is how you open the dashboard against a
-    manual store.
+    This runs on every syncing launch; it is the REFUSAL that ``main()`` can no
+    longer trigger, because the non-manual branch clears the variable first and
+    ``--manual`` forces ``--no-sync``. Kept as a backstop against an edit that
+    relaxes either -- do not mistake the dead branch for a dead call.
 
-    The comparison and the wording live in ``kv_sync.sync_destination_refusal``,
-    shared with ``scripts/refresh_remote.py``. This wrapper keeps the dashboard's
-    own recovery advice and exit code. ``kv_path`` is the path the startup banner
-    already printed, passed through so the banner and the refusal cannot name
-    different stores.
+    ``kv_path`` is the path the banner already printed, so the two cannot name
+    different stores. The comparison lives in
+    ``kv_sync.sync_destination_refusal``.
     """
     refusal = sync_destination_refusal(
         kv_path,
         action="The startup sync",
+        # Not "--manual": that binds DEFAULT_MANUAL_KV_PATH unconditionally, and
+        # the only way to reach this refusal is FANTASY_LOCAL_KV_PATH naming
+        # some OTHER store -- which --manual would not open.
         recovery=[
-            "Either:",
-            "  * re-run with --no-sync to open the dashboard against this store, or",
-            "  * unset FANTASY_LOCAL_KV_PATH and re-run to sync the Yahoo baseline.",
+            "Unset FANTASY_LOCAL_KV_PATH and re-run to sync the Yahoo baseline.",
+            "To open the hand-transcribed store instead, re-run with --manual.",
         ],
     )
+    if refusal is None:
+        return RC_OK
+    print(refusal)
+    return RC_REFUSED
+
+
+def enter_manual_mode(args) -> int:
+    """Bind the manual store and check it exists and is seeded.
+
+    Runs before :func:`resolve_kv_target`, which would CREATE the file.
+    """
+    try:
+        bound = _manual_env.activate_manual_environment()
+    except RuntimeError as exc:
+        # activate_manual_environment raises its Render refusal, but also
+        # imports the web layer, and a RuntimeError from anywhere in that chain
+        # would otherwise be reported as a Render problem it has nothing to do
+        # with. Only claim Render when Render is actually set.
+        if is_remote():
+            print(f"{exc}\n--manual is a local-only mode.")
+        else:
+            print(f"--manual could not bind the manual store: {exc}")
+        return RC_REFUSED
+
+    args.no_sync = True
+    refusal = _manual_env.manual_store_refusal(bound)
     if refusal is None:
         return RC_OK
     print(refusal)
@@ -116,6 +141,16 @@ def main() -> int:
         help="Skip the initial remote->local KV sync.",
     )
     parser.add_argument(
+        "--manual",
+        action="store_true",
+        help=(
+            "Open the dashboard against the hand-transcribed manual store "
+            "(data/manual.db) with Yahoo disabled. Implies --no-sync, because "
+            "the sync would wipe that store. Equivalent to setting "
+            "FANTASY_LOCAL_KV_PATH and FB_SKIP_YAHOO by hand."
+        ),
+    )
+    parser.add_argument(
         "--port",
         type=int,
         default=5001,
@@ -123,10 +158,39 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # Printed before any sync or serve so a terminal's mode is never
-    # ambiguous: an exported FANTASY_LOCAL_KV_PATH is invisible otherwise.
+    # Decided here rather than at import: nothing in src/ or scripts/ resolves
+    # a store at module level, so argparse gets to choose and main() stays
+    # re-entrant.
+    cleared: dict[str, str] = {}
+    cleared: dict[str, str] = {}
+    if args.manual:
+        rc = enter_manual_mode(args)
+        if rc != RC_OK:
+            return rc
+    else:
+        cleared = _manual_env.deactivate_manual_environment()
+
+    # After the branch above, so it reports the store that was actually
+    # resolved rather than the one either path intended.
     kv_path, kv_description = resolve_kv_target()
     print(f"KV store: {kv_description}")
+
+    if args.manual:
+        print("Manual mode: Yahoo disabled, startup sync skipped.")
+    else:
+        # Name what changed and what did not: clearing silently would make a
+        # shell that worked yesterday behave differently today, and a surviving
+        # FB_SKIP_YAHOO would put the run in stale-data mode invisibly.
+        if cleared:
+            names = ", ".join(sorted(cleared))
+            print(f"Ignored inherited {names} (no --manual); reading the Yahoo baseline.")
+        # Only FB_SKIP_YAHOO can survive, and its VALUE decides: FB_SKIP_YAHOO=0
+        # is set but off, so presence alone guarantees nothing.
+        state = (
+            "Yahoo calls disabled" if skip_yahoo_requested() else "not a value that disables Yahoo"
+        )
+        for name, value in sorted(_manual_env.surviving_manual_vars().items()):
+            print(f"Note: inherited {name}={value} -- {state}.")
 
     if _should_run_sync(args.no_sync):
         rc = guard_sync_target(kv_path)
