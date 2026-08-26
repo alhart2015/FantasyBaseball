@@ -2280,7 +2280,29 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/api/refresh", methods=["POST"])
     def api_refresh():
+        from fantasy_baseball.data.rosters import manual_store_active
         from fantasy_baseball.web.refresh_pipeline import run_full_refresh
+
+        # `run_full_refresh` supplies no `free_agent_source`, and
+        # `RefreshRun.manual_mode` is `free_agent_source is not None` -- so on a
+        # manual store this runs STALE-DATA mode, skipping the roster audit, the
+        # synthesized free-agent pool and the position merge. It still WRITES:
+        # the KV is bound to data/manual.db, so `_write_meta` stamps a fresh
+        # `last_refresh` over the transcription's and the recomputed caches land
+        # there too. Refuse rather than silently degrade hand-typed data.
+        if manual_store_active():
+            return jsonify(
+                {
+                    "error": "manual store",
+                    "message": (
+                        "Refresh is disabled against the hand-transcribed store: this "
+                        "route runs stale-data mode, not manual mode, and would write "
+                        "its results into data/manual.db. Run "
+                        "'python scripts/run_manual_refresh.py' instead -- it is the "
+                        "only entry point that supplies a free-agent source."
+                    ),
+                }
+            ), 409
 
         return _job_status_response(_spawn_guarded_refresh_job(run_full_refresh))
 

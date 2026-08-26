@@ -93,11 +93,15 @@ Yahoo snapshot, with no error and no prompt.
 never the destination. The refusal is its backstop rather than its first line
 of defence.
 
-Both refuse when the resolved KV path is not `data/local.db`: they print
-the path, exit `2`, and delete nothing. `refresh_remote.py` checks at the very top of
-its run, so a refused launch has not written production Upstash either. The
-reliable habit is still a fresh terminal per mode -- the guard is a backstop, not
-a licence.
+`refresh_remote.py` still refuses outright when the resolved KV path is not
+`data/local.db`: it prints the path, exits `2`, and deletes nothing. It checks at
+the very top of its run, so a refused launch has not written production Upstash
+either.
+
+`run_season_dashboard.py` no longer reaches that refusal, because it clears the
+variable first and then syncs the baseline -- it prints `Ignored inherited
+FANTASY_LOCAL_KV_PATH` and carries on. The refusal is still in the code as a
+backstop. Either way the reliable habit is a fresh terminal per mode.
 
 **(b) Never run `scripts/ingest_ros_export.py` without `--no-push`.**
 
@@ -159,15 +163,22 @@ prints the `Ignored inherited ...` line when it does -- which is the only thing
 between you and reading production rosters as though they were your
 transcription. Use `--manual`.
 
-**Do not press the dashboard's Refresh button in this mode.** It runs
-STALE-DATA mode, not manual mode -- `run_full_refresh()` supplies no
-`free_agent_source`, and that is what `RefreshRun.manual_mode` keys on. The
-roster audit, the synthesized free-agent pool and the position merge are all
-skipped, and the MLB cache writes to `data/` instead of `data/cache/manual`.
+**The dashboard's Refresh button is disabled in this mode.** `POST /api/refresh`
+returns `409` when the store carries a manual provenance stamp, and the page
+shows the reason.
+
+It is blocked because a click would have WRITTEN to your transcription, not
+merely displayed worse numbers. The route runs stale-data mode, not manual mode
+-- `run_full_refresh()` supplies no `free_agent_source`, which is what
+`RefreshRun.manual_mode` keys on -- so the roster audit, the synthesized
+free-agent pool and the position merge are all skipped. But the KV is still
+bound to `data/manual.db`, so the run's `_write_meta` stamps a fresh
+`last_refresh` over the transcription's and the recomputed standings and
+leverage caches land there too. The result: degraded numbers, in your manual
+store, wearing a recent timestamp.
 
 Re-run `scripts/run_manual_refresh.py` instead -- it is the only entry point that
-supplies `free_agent_source`. The `FB_SKIP_YAHOO=1` that `--manual` sets is a
-seatbelt for a stray click, not a licence to click.
+supplies `free_agent_source`.
 
 Close that terminal when you are done with it.
 

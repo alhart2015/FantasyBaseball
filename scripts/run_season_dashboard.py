@@ -30,6 +30,7 @@ from fantasy_baseball.data.kv_store import get_kv, is_remote
 from fantasy_baseball.data.kv_sync import sync_destination_refusal, sync_remote_to_local
 from fantasy_baseball.manual import environment as _manual_env
 from fantasy_baseball.manual.seed import describe_kv_target, resolve_kv_path
+from fantasy_baseball.web.refresh_pipeline import skip_yahoo_requested
 from fantasy_baseball.web.season_app import create_app
 
 #: Exit codes, matching ``scripts/run_manual_refresh.py``: 2 means "refused,
@@ -64,9 +65,11 @@ def guard_sync_target(kv_path: Path | None) -> int:
     -- before refilling from Upstash, and this script passes ``local=None``, so
     the destination is whatever ``FANTASY_LOCAL_KV_PATH`` points at.
 
-    Unreachable from ``main()`` today: the non-manual branch clears that
-    variable first, and ``--manual`` forces ``--no-sync``. It is kept as a
-    backstop against a future edit that relaxes either, not as a live check.
+    This runs on every syncing launch; it is the REFUSAL that ``main()`` can no
+    longer trigger, because the non-manual branch clears the variable first and
+    ``--manual`` forces ``--no-sync``. Kept as a backstop against an edit that
+    relaxes either -- do not mistake the dead branch for a dead call.
+
     ``kv_path`` is the path the banner already printed, so the two cannot name
     different stores. The comparison lives in
     ``kv_sync.sync_destination_refusal``.
@@ -74,10 +77,12 @@ def guard_sync_target(kv_path: Path | None) -> int:
     refusal = sync_destination_refusal(
         kv_path,
         action="The startup sync",
+        # Not "--manual": that binds DEFAULT_MANUAL_KV_PATH unconditionally, and
+        # the only way to reach this refusal is FANTASY_LOCAL_KV_PATH naming
+        # some OTHER store -- which --manual would not open.
         recovery=[
-            "Either:",
-            "  * re-run with --manual to open the dashboard against the manual store, or",
-            "  * unset FANTASY_LOCAL_KV_PATH and re-run to sync the Yahoo baseline.",
+            "Unset FANTASY_LOCAL_KV_PATH and re-run to sync the Yahoo baseline.",
+            "To open the hand-transcribed store instead, re-run with --manual.",
         ],
     )
     if refusal is None:
@@ -87,10 +92,14 @@ def guard_sync_target(kv_path: Path | None) -> int:
 
 
 def guard_manual_store(resolved: Path | None) -> int:
-    """``RC_OK`` when the store ``get_kv()`` resolved is the seeded manual one.
+    """``RC_OK`` when the store ``get_kv()`` resolved is at the manual PATH.
 
-    ``resolved`` must come from :func:`resolve_kv_target` -- the store actually
-    in use. Passing the constant this compares against would assert nothing.
+    Identity only. Whether that store is SEEDED is :func:`enter_manual_mode`'s
+    job, via ``manual_store_refusal``, and it has to run first -- resolving a
+    store creates the file.
+
+    ``resolved`` must come from :func:`resolve_kv_target`, so this checks the
+    outcome rather than the constant it compares against.
     """
     expected = _manual_env.DEFAULT_MANUAL_KV_PATH.resolve()
     if resolved != expected:
@@ -112,7 +121,14 @@ def enter_manual_mode(args) -> int:
     try:
         bound = _manual_env.activate_manual_environment()
     except RuntimeError as exc:
-        print(f"{exc}\n--manual is a local-only mode.")
+        # activate_manual_environment raises its Render refusal, but also
+        # imports the web layer, and a RuntimeError from anywhere in that chain
+        # would otherwise be reported as a Render problem it has nothing to do
+        # with. Only claim Render when Render is actually set.
+        if is_remote():
+            print(f"{exc}\n--manual is a local-only mode.")
+        else:
+            print(f"--manual could not bind the manual store: {exc}")
         return RC_REFUSED
 
     args.no_sync = True
@@ -191,12 +207,12 @@ def main() -> int:
         names = ", ".join(sorted(cleared))
         print(f"Ignored inherited {names} (no --manual); reading the Yahoo baseline.")
     if not args.manual:
+        # Only FB_SKIP_YAHOO can survive, and its VALUE decides: FB_SKIP_YAHOO=0
+        # is set but off, so presence alone guarantees nothing.
+        state = (
+            "Yahoo calls disabled" if skip_yahoo_requested() else "not a value that disables Yahoo"
+        )
         for name, value in sorted(_manual_env.surviving_manual_vars().items()):
-            state = (
-                "Yahoo calls disabled"
-                if _manual_env.skip_yahoo_is_on()
-                else "not a value that disables Yahoo"
-            )
             print(f"Note: inherited {name}={value} -- {state}.")
 
     if _should_run_sync(args.no_sync):

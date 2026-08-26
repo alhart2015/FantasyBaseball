@@ -301,6 +301,40 @@ def test_fetch_ros_route_acquires_slot_when_free(
     assert refresh_pipeline.get_refresh_status()["running"] is True
 
 
+def test_refresh_route_refuses_against_a_manual_store(client, monkeypatch, free_refresh_slot):
+    """A click in --manual mode would WRITE stale-data results into the
+    hand-transcribed store: the KV is bound to data/manual.db, so `_write_meta`
+    stamps a fresh `last_refresh` over the transcription's. The route runs
+    stale-data mode, not manual mode, because `run_full_refresh` supplies no
+    `free_agent_source`. Refuse rather than silently degrade typed-in data.
+    """
+    from fantasy_baseball.web import season_routes
+
+    started = MagicMock()
+    monkeypatch.setattr(season_routes.threading, "Thread", MagicMock(return_value=started))
+    monkeypatch.setattr("fantasy_baseball.data.rosters.manual_store_active", lambda: True)
+
+    resp = client.post("/api/refresh")
+
+    assert resp.status_code == 409
+    assert "run_manual_refresh.py" in resp.get_json()["message"]
+    started.start.assert_not_called()
+
+
+def test_refresh_route_still_runs_against_the_yahoo_baseline(
+    client, monkeypatch, free_refresh_slot
+):
+    """The other half: the 409 must not fire off a manual store."""
+    from fantasy_baseball.web import season_routes
+
+    monkeypatch.setattr(season_routes.threading, "Thread", MagicMock())
+    monkeypatch.setattr("fantasy_baseball.data.rosters.manual_store_active", lambda: False)
+
+    resp = client.post("/api/refresh")
+
+    assert resp.status_code != 409
+
+
 def test_refresh_route_rejected_while_ros_fetch_holds_slot(client, monkeypatch, free_refresh_slot):
     """The slot is shared: a refresh cannot start while a ROS fetch holds it."""
     from fantasy_baseball.web import refresh_pipeline, season_routes

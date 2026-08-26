@@ -15,11 +15,14 @@ Three defences are pinned here, in the order they now fire:
   * ``--manual`` never syncs at all, because the operation is a wipe-and-
     download from production rather than a re-derivation; and
   * the sync still REFUSES any store other than ``data/local.db`` -- now a
-    backstop rather than the first line of defence, and still the live guard
-    for ``scripts/refresh_remote.py``.
+    backstop whose refusal ``main()`` can no longer trigger, kept against an
+    edit that stops the clearing. The refusal TEXT and the comparison are
+    shared with ``scripts/refresh_remote.py``, which wraps them itself.
 
-The resolved absolute KV path is printed before any of it, so a terminal's
-mode is never ambiguous.
+The absolute KV path is always named: by the ``KV store:`` banner when the
+launch proceeds, and by the refusal text when it does not, so a terminal's mode
+is never ambiguous. The banner reports the store ``get_kv()`` RESOLVED, not the
+variable, so it cannot disagree with what the sync would target.
 
 The default path -- no ``FANTASY_LOCAL_KV_PATH`` set -- must keep behaving
 exactly as it did, which the "still syncs and serves" test exists to pin.
@@ -240,8 +243,13 @@ def test_a_plain_launch_leaves_the_manual_store_intact(monkeypatch, tmp_path, ha
 
 
 def test_the_sync_refusal_still_guards_a_deliberate_binding(monkeypatch, tmp_path):
-    """`guard_sync_target` is not dead code -- `scripts/refresh_remote.py` still
-    reaches it, and it is the backstop if the dashboard ever stops clearing."""
+    """The backstop if the dashboard ever stops clearing the binding.
+
+    `scripts/refresh_remote.py` does NOT reach this function -- it wraps
+    `kv_sync.sync_destination_refusal` itself. What the two share is that
+    refusal, not this wrapper, so this test is the only thing keeping the
+    dashboard's half honest.
+    """
     manual = tmp_path / "manual.db"
     _relocate_baseline(monkeypatch, tmp_path / "local.db")
 
@@ -266,10 +274,15 @@ def test_no_sync_does_NOT_open_an_inherited_manual_store(monkeypatch, tmp_path, 
 
     assert rc == dash.RC_OK
     assert harness.sync_calls == 0
+    assert harness.created_apps == 1
     out = capsys.readouterr().out
     assert "REFUSING TO SYNC" not in out
+    # The banner is the load-bearing assertion: it names the store that was
+    # actually resolved. `manual` is only ever the value of the env var, which
+    # the "Ignored inherited" line reports by NAME, so searching `out` for its
+    # path would pass no matter what main() did.
     assert f"KV store: {baseline.resolve()}" in out
-    assert str(manual.resolve()) not in out.split("Ignored inherited")[0]
+    assert dash.resolve_kv_target()[0] == baseline.resolve()
 
 
 def test_guard_refuses_a_store_with_no_local_file(capsys):

@@ -29,25 +29,7 @@ from fantasy_baseball.manual.environment import (
     activate_manual_environment,
     deactivate_manual_environment,
     manual_store_refusal,
-    skip_yahoo_is_on,
 )
-
-
-class TestSkipYahooIsOn:
-    """The launcher tells the operator whether Yahoo is disabled. Reading
-    PRESENCE instead of VALUE makes it say "disabled" for FB_SKIP_YAHOO=0,
-    while a Refresh click would happily attempt live Yahoo auth."""
-
-    @pytest.mark.parametrize(
-        "value,expected", [("1", True), ("true", True), ("0", False), ("", False), ("no", False)]
-    )
-    def test_reads_the_value_not_the_presence(self, monkeypatch, value, expected):
-        monkeypatch.setenv("FB_SKIP_YAHOO", value)
-        assert skip_yahoo_is_on() is expected
-
-    def test_absent_is_off(self, monkeypatch):
-        monkeypatch.delenv("FB_SKIP_YAHOO", raising=False)
-        assert skip_yahoo_is_on() is False
 
 
 class TestManualStoreRefusal:
@@ -76,6 +58,7 @@ class TestManualStoreRefusal:
         assert refusal is not None
         assert MANUAL_PROVENANCE_KEY in refusal
         assert "production rosters" in refusal, "must name the actual consequence"
+        assert "--force" in refusal, "an unstamped store IS safe to re-seed"
 
     def test_a_seeded_store_is_accepted(self, seeded_store):
         assert manual_store_refusal(seeded_store()) is None
@@ -107,6 +90,77 @@ class TestManualStoreRefusal:
         assert "--force" in refusal
         assert "Do NOT" not in refusal
 
+    def test_checking_a_wal_store_leaves_no_sidecars(self, tmp_path):
+        """The probe inspects a file the caller may be about to refuse, so it
+        must not modify the directory. A plain `mode=ro` open of a WAL database
+        CREATES `-shm`/`-wal` beside it and, being read-only, cannot remove them
+        on close -- which the refusal text then blames on another process.
+
+        Built inline rather than via `seeded_store`, which holds the connection
+        open: the sidecars cannot be cleared while a handle owns them.
+        """
+        from fantasy_baseball.data.kv_store import SqliteKVStore
+
+        store = tmp_path / "manual.db"
+        opened = SqliteKVStore(store)
+        opened.set(MANUAL_PROVENANCE_KEY, '{"seeded": "yes"}')
+        opened._conn.close()
+        for sidecar in tmp_path.glob("manual.db-*"):
+            sidecar.unlink()
+        before = sorted(p.name for p in tmp_path.iterdir())
+
+        assert manual_store_refusal(store) is None
+        assert sorted(p.name for p in tmp_path.iterdir()) == before
+
+    def test_a_store_with_a_clobbered_header_is_NOT_offered_force(self, seeded_store):
+        """A crash mid-write clobbers page 1, so a REAL store loses its SQLite
+        header and looks exactly like a stray file. Its sidecars say otherwise.
+        Getting this wrong tells the operator to run --force, which copies
+        data/local.db over the only record of the hand transcription.
+        """
+        store = seeded_store()
+        raw = bytearray(store.read_bytes())
+        raw[0:16] = b"\x00" * 16
+        store.write_bytes(raw)
+        assert list(store.parent.glob(f"{store.name}-*")), "precondition: sidecars present"
+
+        refusal = manual_store_refusal(store)
+
+        assert refusal is not None
+        assert "Do NOT" in refusal
+        assert "damaged" in refusal
+
+    def test_a_foreign_kv_table_is_not_stranded(self, tmp_path):
+        """A table named `kv` with somebody else's columns made the stamp query
+        raise `no such column`, which landed in the read-failure branch -- the
+        one that forbids the only recovery. It is a stray file; say so.
+        """
+        stray = tmp_path / "manual.db"
+        con = sqlite3.connect(str(stray))
+        con.execute("CREATE TABLE kv(a TEXT, b TEXT)")
+        con.commit()
+        con.close()
+
+        refusal = manual_store_refusal(stray)
+
+        assert refusal is not None
+        assert "--force" in refusal
+        assert "Do NOT" not in refusal
+
+    def test_a_corrupt_real_database_is_NOT_called_a_stray_file(self, seeded_store):
+        """It keeps the SQLite header, so it may be the operator's real store
+        with damage. Classifying it as a stray file would advise --force, which
+        overwrites it with a copy of data/local.db.
+        """
+        store = seeded_store()
+        raw = bytearray(store.read_bytes())
+        store.write_bytes(raw[:16] + bytearray(b"\xff" * 400) + raw[416:])
+
+        refusal = manual_store_refusal(store)
+
+        assert refusal is not None
+        assert "Do NOT" in refusal, "must not advise --force over a real database"
+
     def test_an_unreadable_store_is_warned_OFF_force(self, tmp_path):
         """The opposite case, and the reason the two must not be conflated:
         --force overwrites the destination with a copy of data/local.db, and a
@@ -121,7 +175,7 @@ class TestManualStoreRefusal:
         assert "could not be read" in refusal
         assert "Do NOT" in refusal
 
-    def test_a_relative_path_is_refused_not_raised(self, tmp_path, monkeypatch, seeded_store):
+    def test_a_relative_path_is_resolved_not_raised(self, tmp_path, monkeypatch, seeded_store):
         """`as_uri()` raises ValueError on a relative path, which is not in the
         caught tuple -- the contract is a string or None, never a traceback.
         """
@@ -130,6 +184,60 @@ class TestManualStoreRefusal:
         seeded_store()
 
         assert manual_store_refusal(Path("manual.db")) is None
+
+
+class TestTheInheritedVariableNote:
+    """Nothing asserted this line, so a wrong branch or a wrong state string
+    would ship green. It is the only thing on screen telling an operator their
+    plain launch inherited stale-data mode from a previous manual shell."""
+
+    def _run(self, monkeypatch, capsys, *argv):
+        import run_season_dashboard  # type: ignore[import-not-found]
+
+        monkeypatch.delenv("RENDER", raising=False)
+        monkeypatch.setattr(run_season_dashboard, "create_app", lambda: _NoServe())
+        monkeypatch.setattr(run_season_dashboard, "_should_run_sync", lambda _: False)
+        monkeypatch.setattr(sys, "argv", ["run_season_dashboard.py", *argv])
+        run_season_dashboard.main()
+        return capsys.readouterr().out
+
+    def test_reports_a_value_that_really_disables_yahoo(self, monkeypatch, capsys):
+        monkeypatch.setenv("FB_SKIP_YAHOO", "1")
+        out = self._run(monkeypatch, capsys)
+        assert "Note: inherited FB_SKIP_YAHOO=1 -- Yahoo calls disabled." in out
+
+    def test_does_not_claim_disabled_for_a_value_that_is_off(self, monkeypatch, capsys):
+        """`FB_SKIP_YAHOO=0` is set but off. Reporting presence as a behavioral
+        guarantee tells the operator Yahoo is disabled while a refresh would
+        attempt live auth."""
+        monkeypatch.setenv("FB_SKIP_YAHOO", "0")
+        out = self._run(monkeypatch, capsys)
+        assert "FB_SKIP_YAHOO=0" in out
+        assert "Yahoo calls disabled" not in out
+
+    def test_silent_when_nothing_was_inherited(self, monkeypatch, capsys):
+        monkeypatch.delenv("FB_SKIP_YAHOO", raising=False)
+        assert "Note: inherited" not in self._run(monkeypatch, capsys)
+
+    def test_silent_under_manual_which_set_the_variable_itself(
+        self, monkeypatch, capsys, seeded_store
+    ):
+        """`--manual` sets FB_SKIP_YAHOO two calls earlier, so "inherited" would
+        be a claim about a variable this process created."""
+        import run_season_dashboard  # type: ignore[import-not-found]
+
+        monkeypatch.setattr(
+            run_season_dashboard._manual_env, "DEFAULT_MANUAL_KV_PATH", seeded_store()
+        )
+        out = self._run(monkeypatch, capsys, "--manual")
+        assert "Note: inherited" not in out
+
+
+class _NoServe:
+    """A create_app() stand-in whose run() returns instead of serving."""
+
+    def run(self, **kwargs):
+        return None
 
 
 class TestActivate:
