@@ -248,18 +248,28 @@ def test_the_sync_refusal_still_guards_a_deliberate_binding(monkeypatch, tmp_pat
     assert dash.guard_sync_target(manual.resolve()) == dash.RC_REFUSED
 
 
-def test_no_sync_opens_a_manual_store_without_refusing(monkeypatch, tmp_path, harness, capsys):
-    """``--no-sync`` remains the way to view a manual store."""
+def test_no_sync_does_NOT_open_an_inherited_manual_store(monkeypatch, tmp_path, harness, capsys):
+    """``--no-sync`` is not a way to view a manual store -- ``--manual`` is.
+
+    Without ``--manual``, ``main()`` clears the inherited binding before the
+    ``--no-sync`` check is ever reached, so the dashboard opens the Yahoo
+    baseline. Asserting only "did not refuse" let the runbook claim the
+    opposite: the operator reads production rosters believing they are their
+    own transcription.
+    """
+    baseline = tmp_path / "local.db"
     manual = tmp_path / "manual.db"
-    _relocate_baseline(monkeypatch, tmp_path / "local.db")
+    _relocate_baseline(monkeypatch, baseline)
     _point_at(monkeypatch, manual)
 
     rc = _run(monkeypatch, "--no-sync")
 
     assert rc == dash.RC_OK
     assert harness.sync_calls == 0
-    assert harness.created_apps == 1
-    assert "REFUSING TO SYNC" not in capsys.readouterr().out
+    out = capsys.readouterr().out
+    assert "REFUSING TO SYNC" not in out
+    assert f"KV store: {baseline.resolve()}" in out
+    assert str(manual.resolve()) not in out.split("Ignored inherited")[0]
 
 
 def test_guard_refuses_a_store_with_no_local_file(capsys):

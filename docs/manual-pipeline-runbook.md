@@ -152,21 +152,22 @@ is left alone -- it is a separate stale-data switch (see
 `docs/stale-data-refresh-runbook.md`), not part of the store binding -- but the
 launcher now names it when it survives, so the mode is never invisible.
 
-The old incantation (`FANTASY_LOCAL_KV_PATH=... --no-sync`) still opens the
-manual store, because `--no-sync` skips the clearing path's only hazard. Use
-`--manual` anyway: it is the one that checks the store is actually seeded.
+The old incantation (`FANTASY_LOCAL_KV_PATH=... --no-sync`) does NOT work any
+more. `--no-sync` skips the sync, but the clearing above happens first, so the
+dashboard opens `data/local.db` and serves the pre-outage Yahoo baseline. It
+prints the `Ignored inherited ...` line when it does -- which is the only thing
+between you and reading production rosters as though they were your
+transcription. Use `--manual`.
 
-**Do not press the dashboard's Refresh button in this mode.** `POST /api/refresh`
-calls `run_full_refresh()`, which passes no `free_agent_source` -- and
-`RefreshRun.manual_mode` is `free_agent_source is not None`. So a click runs
-STALE-DATA mode, not manual mode: `_audit_roster` takes its
-`skip_yahoo and not manual_mode` early-out, so the roster audit, the synthesized
-free-agent pool and the position merge never run, and `_mlb_cache_dir` writes to
-the tracked `data/` directory instead of `data/cache/manual`.
+**Do not press the dashboard's Refresh button in this mode.** It runs
+STALE-DATA mode, not manual mode -- `run_full_refresh()` supplies no
+`free_agent_source`, and that is what `RefreshRun.manual_mode` keys on. The
+roster audit, the synthesized free-agent pool and the position merge are all
+skipped, and the MLB cache writes to `data/` instead of `data/cache/manual`.
 
-Re-run `scripts/run_manual_refresh.py` instead -- it is the only entry point
-that supplies `free_agent_source`. The `FB_SKIP_YAHOO=1` that `--manual` sets is
-a seatbelt for a stray click, not a licence to click.
+Re-run `scripts/run_manual_refresh.py` instead -- it is the only entry point that
+supplies `free_agent_source`. The `FB_SKIP_YAHOO=1` that `--manual` sets is a
+seatbelt for a stray click, not a licence to click.
 
 Close that terminal when you are done with it.
 

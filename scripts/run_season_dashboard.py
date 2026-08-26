@@ -9,9 +9,9 @@ Pass ``--manual`` to open the dashboard against the hand-transcribed manual
 store with Yahoo disabled; it implies ``--no-sync`` and needs no environment
 variables set by hand.
 
-The resolved KV store is printed first, every time, and the startup sync
-refuses to run against anything but the default ``data/local.db`` -- see
-:func:`guard_sync_target` and ``docs/manual-pipeline-runbook.md``.
+A launch without ``--manual`` clears an inherited ``FANTASY_LOCAL_KV_PATH``,
+so the sync resolves the baseline. The refusal in :func:`guard_sync_target` is
+the backstop behind that. See ``docs/manual-pipeline-runbook.md``.
 """
 
 import argparse
@@ -60,34 +60,23 @@ def resolve_kv_target() -> tuple[Path | None, str]:
 def guard_sync_target(kv_path: Path | None) -> int:
     """``RC_OK`` when the startup sync may run, else ``RC_REFUSED``.
 
-    ``kv_sync.sync_remote_to_local()`` resolves its destination as
-    ``local if local is not None else get_kv()`` and then wipes it
-    UNCONDITIONALLY -- ``DELETE FROM kv; DELETE FROM hash_kv;`` -- before
-    refilling it from Upstash. This script is one of the callers that
-    passes ``local=None``, so the destination is whatever
-    ``FANTASY_LOCAL_KV_PATH`` points at.
+    The sync wipes its destination -- ``DELETE FROM kv; DELETE FROM hash_kv;``
+    -- before refilling from Upstash, and this script passes ``local=None``, so
+    the destination is whatever ``FANTASY_LOCAL_KV_PATH`` points at.
 
-    That makes an exported ``FANTASY_LOCAL_KV_PATH=data/manual.db`` -- the
-    isolated store the Yahoo-free pipeline writes, which
-    ``scripts/run_manual_refresh.py`` sets in the same shell -- a silent
-    destroy-and-replace: the hand-transcribed standings and rosters are
-    deleted and the store is refilled with the last Yahoo snapshot, with
-    no error and no prompt. So the sync runs only against the default
-    baseline; ``--no-sync`` is how you open the dashboard against a
-    manual store.
-
-    The comparison and the wording live in ``kv_sync.sync_destination_refusal``,
-    shared with ``scripts/refresh_remote.py``. This wrapper keeps the dashboard's
-    own recovery advice and exit code. ``kv_path`` is the path the startup banner
-    already printed, passed through so the banner and the refusal cannot name
-    different stores.
+    Unreachable from ``main()`` today: the non-manual branch clears that
+    variable first, and ``--manual`` forces ``--no-sync``. It is kept as a
+    backstop against a future edit that relaxes either, not as a live check.
+    ``kv_path`` is the path the banner already printed, so the two cannot name
+    different stores. The comparison lives in
+    ``kv_sync.sync_destination_refusal``.
     """
     refusal = sync_destination_refusal(
         kv_path,
         action="The startup sync",
         recovery=[
             "Either:",
-            "  * re-run with --no-sync to open the dashboard against this store, or",
+            "  * re-run with --manual to open the dashboard against the manual store, or",
             "  * unset FANTASY_LOCAL_KV_PATH and re-run to sync the Yahoo baseline.",
         ],
     )
@@ -97,37 +86,28 @@ def guard_sync_target(kv_path: Path | None) -> int:
     return RC_REFUSED
 
 
-def guard_manual_store(bound: Path | None) -> int:
-    """``RC_OK`` when ``--manual`` really bound a real, seeded manual store.
+def guard_manual_store(resolved: Path | None) -> int:
+    """``RC_OK`` when the store ``get_kv()`` resolved is the seeded manual one.
 
-    ``bound`` is what ``activate_manual_environment`` reports it set, NOT the
-    constant this compares against -- passing the constant would make the
-    identity check compare a value with itself and assert nothing.
+    ``resolved`` must come from :func:`resolve_kv_target` -- the store actually
+    in use. Passing the constant this compares against would assert nothing.
     """
     expected = _manual_env.DEFAULT_MANUAL_KV_PATH.resolve()
-    if bound is None or bound != expected:
+    if resolved != expected:
         print(
             "--manual did not bind the manual store.\n"
             f"  expected : {expected}\n"
-            f"  bound    : {bound}\n"
+            f"  resolved : {resolved}\n"
             "Refusing rather than serving the wrong store under a manual banner."
         )
         return RC_REFUSED
-
-    refusal = _manual_env.manual_store_refusal(expected)
-    if refusal is None:
-        return RC_OK
-    print(refusal)
-    return RC_REFUSED
+    return RC_OK
 
 
 def enter_manual_mode(args) -> int:
-    """Bind the manual store and verify it, or refuse. ``RC_OK`` to continue.
+    """Bind the manual store and check it exists and is seeded.
 
-    Everything ``--manual`` does lives here: bind, skip the sync, check the
-    store. The sync is skipped rather than merely allowed to fail --
-    ``sync_remote_to_local()`` wipes its destination before refilling from
-    production, which against the transcription is pure loss.
+    Runs before :func:`resolve_kv_target`, which would CREATE the file.
     """
     try:
         bound = _manual_env.activate_manual_environment()
@@ -136,13 +116,11 @@ def enter_manual_mode(args) -> int:
         return RC_REFUSED
 
     args.no_sync = True
-    print(f"KV store: {bound}")
-
-    rc = guard_manual_store(bound)
-    if rc != RC_OK:
-        return rc
-    print("Manual mode: Yahoo disabled, startup sync skipped.")
-    return RC_OK
+    refusal = _manual_env.manual_store_refusal(bound)
+    if refusal is None:
+        return RC_OK
+    print(refusal)
+    return RC_REFUSED
 
 
 def _should_run_sync(no_sync: bool) -> bool:
@@ -186,29 +164,40 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # The store is decided here rather than at import time: nothing in src/ or
-    # scripts/ resolves one at module level, and both helpers discard an
-    # existing singleton, so argparse gets to decide and main() stays
+    # Decided here rather than at import: nothing in src/ or scripts/ resolves
+    # a store at module level, so argparse gets to choose and main() stays
     # re-entrant.
+    cleared: dict[str, str] = {}
     if args.manual:
         rc = enter_manual_mode(args)
         if rc != RC_OK:
             return rc
-        kv_path = _manual_env.DEFAULT_MANUAL_KV_PATH.resolve()
     else:
         cleared = _manual_env.deactivate_manual_environment()
-        kv_path, kv_description = resolve_kv_target()
-        print(f"KV store: {kv_description}")
 
-        # Name what changed and what did not. Clearing silently would make a
-        # shell that worked yesterday behave differently today; leaving
-        # FB_SKIP_YAHOO set silently would put the run in stale-data mode with
-        # nothing on screen saying so.
-        if cleared:
-            names = ", ".join(sorted(cleared))
-            print(f"Ignored inherited {names} (no --manual); reading the Yahoo baseline.")
+    kv_path, kv_description = resolve_kv_target()
+    print(f"KV store: {kv_description}")
+
+    if args.manual:
+        rc = guard_manual_store(kv_path)
+        if rc != RC_OK:
+            return rc
+        print("Manual mode: Yahoo disabled, startup sync skipped.")
+
+    # Name what changed and what did not: clearing silently would make a shell
+    # that worked yesterday behave differently today, and a surviving
+    # FB_SKIP_YAHOO would put the run in stale-data mode invisibly.
+    if cleared:
+        names = ", ".join(sorted(cleared))
+        print(f"Ignored inherited {names} (no --manual); reading the Yahoo baseline.")
+    if not args.manual:
         for name, value in sorted(_manual_env.surviving_manual_vars().items()):
-            print(f"Note: {name}={value} is still set -- Yahoo calls stay disabled.")
+            state = (
+                "Yahoo calls disabled"
+                if _manual_env.skip_yahoo_is_on()
+                else "not a value that disables Yahoo"
+            )
+            print(f"Note: inherited {name}={value} -- {state}.")
 
     if _should_run_sync(args.no_sync):
         rc = guard_sync_target(kv_path)
