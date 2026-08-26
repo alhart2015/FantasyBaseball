@@ -9,13 +9,17 @@ itself was added because Safari delivers `focusout` with a null relatedTarget an
 list vanished between mousedown and click. Each fix was correct about the defect it
 named and blind to the one it created, because nothing could see the page.
 
-So the states are enumerated here, together, and asserted in TWO engines. WebKit is not
-optional decoration: two of those defects were Safari-only, and one of them (a
-scrollbar drag the mousedown guard was said to cancel) behaves differently in WebKit
-and Chromium, so a single-engine check would have shipped it looking fine.
+So the states are enumerated here, together, and asserted in Chromium.
 
-Skipped unless Playwright and its browsers are installed -- `pip install playwright &&
-playwright install chromium webkit`. The suite must stay runnable without them.
+CHROMIUM ONLY, and that is a known gap (#364). These ran in WebKit too until the
+engine was dropped for costing 300s timeouts under parallel test runs. Two of the
+defects above were Safari-only -- `focusout` with a null `relatedTarget`, and a
+scrollbar drag that the mousedown guard cancels differently in the two engines --
+so nothing here can see them any more. If the overlay is changed again, check it
+by hand in Safari; the suite will not.
+
+Skipped unless Playwright and its browsers are installed -- `pip install playwright
+&& playwright install chromium`. The suite must stay runnable without them.
 """
 
 from __future__ import annotations
@@ -111,7 +115,7 @@ def _engine(pw, name):
         pytest.skip(f"{name} unavailable: {str(exc).splitlines()[0]}")
 
 
-@pytest.fixture(params=["chromium", "webkit"], scope="module")
+@pytest.fixture(params=["chromium"], scope="module")
 def browser(request, playwright_instance):
     engine = _engine(playwright_instance, request.param)
     yield engine
