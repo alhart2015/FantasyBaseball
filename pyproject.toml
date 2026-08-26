@@ -28,6 +28,7 @@ dev = [
     "pytest-cov>=4.0",
     "pytest-timeout>=2.3",
     "pytest-xdist>=3.6",
+    "threadpoolctl>=3.1",
     "mypy>=1.10",
     "fakeredis>=2.21",
     "ruff>=0.6",
@@ -153,6 +154,13 @@ pythonpath = ["src"]
 # @pytest.mark.timeout(N) (0 disables).
 timeout = 300
 timeout_method = "thread"
+# Parallel by default: 8m15s against 22m37s serially. Reliable only because
+# `pytest_configure` in tests/conftest.py caps each worker's BLAS pool at one
+# thread -- without that, 32 workers x 24 OpenBLAS threads starve each other and
+# the browser and fixture-heavy tests fail on timeouts, which reads as flakiness
+# in whichever test happened to be running (#364).
+# Override with `-n0` for a single test or when reading a traceback.
+addopts = "-n auto"
 
 [tool.ruff]
 line-length = 100

@@ -60,25 +60,37 @@ class TestFlaskBackgroundThread:
     """Verify the Flask server can start in a background thread."""
 
     def test_flask_app_starts_in_daemon_thread(self, tmp_path):
+        """`run_draft.py` serves the dashboard from a background thread.
+
+        The server is SHUT DOWN here. `daemon=True` reaps at interpreter exit,
+        not at test exit, so `app.run()` in a bare thread left a live werkzeug
+        server polling a socket for the remaining ~20 minutes of the suite --
+        which is what the pytest-timeout stack dumps kept showing (#364).
+        `make_server` is the same server `app.run()` builds, minus the part
+        that gives away the handle needed to stop it.
+        """
+        from werkzeug.serving import make_server
+
         from fantasy_baseball.web.app import create_app
 
         state_path = tmp_path / "draft_state.json"
         write_state({"current_pick": 1}, state_path)
         app = create_app(state_path=state_path)
 
-        # Start in background thread (like run_draft.py will)
-        server_thread = threading.Thread(
-            target=lambda: app.run(port=5099, use_reloader=False),
-            daemon=True,
-        )
+        # Port 0: let the OS pick a free one. A fixed port collides with any
+        # other worker running this test under `pytest -n auto`.
+        server = make_server("127.0.0.1", 0, app)
+        server_thread = threading.Thread(target=server.serve_forever, daemon=True)
         server_thread.start()
+        try:
+            assert server_thread.is_alive()
+            assert server.port != 0, "the OS must have bound a real port"
+        finally:
+            server.shutdown()
+            server.server_close()
+            server_thread.join(timeout=5)
 
-        # Give server a moment to start, then test it's alive
-        import time
-
-        time.sleep(0.5)
-        assert server_thread.is_alive()
-        # Thread is daemon, will be cleaned up when test exits
+        assert not server_thread.is_alive(), "the server thread must not outlive the test"
 
 
 # ---------------------------------------------------------------------------

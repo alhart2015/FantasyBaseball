@@ -10,6 +10,38 @@ import pytest
 collect_ignore = ["test_integration.py"]
 
 
+def pytest_configure(config):
+    """Give each xdist worker ONE BLAS thread.
+
+    OpenBLAS sizes its pool to the machine, not to the process count: 24
+    threads per process on a 32-core box. Under ``-n auto`` that is 32 workers
+    x 24 threads competing for 32 cores, and the symptoms are not "some tests
+    are slow" -- they are starvation. Measured on the full suite (#364):
+
+        -n auto, unpinned : 14m52s, 2 failed + 3 errors
+        -n auto, pinned   :  8m15s, all green
+        serial            : 22m37s
+
+    The failures were 200s+ FIXTURE TEARDOWNS, ``Page.goto`` exceeding 30s in
+    the browser tests, and `RuntimeError: can't create new thread`, which is
+    also what stopped xdist from spawning workers at all. None of them were
+    caused by the tests they landed on, which is why they looked flaky.
+
+    Applied only inside workers -- a serial run has nothing to oversubscribe,
+    and its BLAS-heavy tests (Monte Carlo, sklearn fits) should keep the pool.
+    ``threadpool_limits`` is used rather than ``OMP_NUM_THREADS`` because the
+    environment variable is read when numpy is first imported, which has
+    already happened by the time any hook here can run. The controller is
+    parked on ``config`` so it is not garbage-collected, which would restore
+    the old limits immediately.
+    """
+    if getattr(config, "workerinput", None) is None:
+        return
+    from threadpoolctl import threadpool_limits
+
+    config._blas_thread_limit = threadpool_limits(limits=1)
+
+
 class _KVFakeRedis(fakeredis.FakeRedis):
     """fakeredis plus the two KVStore methods the app adds on top of the
     plain Redis subset (``set_if_absent`` / ``compare_delete``).
