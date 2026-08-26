@@ -332,24 +332,23 @@ def _activate_manual_environment(kv_path: Path) -> None:
     """Point this process at the manual store and disable every Yahoo step.
 
     Must run BEFORE the first ``fantasy_baseball`` import -- see the module
-    docstring. ``sys.path`` is extended here too so the repo's ``src/`` layout
+    docstring. ``sys.path`` is extended first so the repo's ``src/`` layout
     works without the editable install, matching every other script in
-    ``scripts/``.
-    """
-    os.environ["FANTASY_LOCAL_KV_PATH"] = str(kv_path)
-    os.environ["FB_SKIP_YAHOO"] = "1"
+    ``scripts/``; only then can the shared implementation be imported.
 
+    The sequence itself lives in ``manual.environment`` so the dashboard
+    launcher and this script cannot drift apart on a step whose failure is
+    silent. The import stays inside this function body: the module-level
+    ``fantasy_baseball`` ban is an AST invariant pinned by
+    ``tests/test_scripts/test_run_manual_refresh.py``.
+    """
     src = str(PROJECT_ROOT / "src")
     if src not in sys.path:
         sys.path.insert(0, src)
 
-    # Belt and braces: if anything in this process already built the KV
-    # singleton (an ambient import, an earlier run in the same interpreter, a
-    # test harness), discard it so the next get_kv() rebinds to the env var
-    # just set. Same move as scripts/refresh_remote.py.
-    from fantasy_baseball.data import kv_store
+    from fantasy_baseball.manual.environment import activate_manual_environment
 
-    kv_store._reset_singleton()
+    activate_manual_environment(kv_path)
 
 
 def _verify_kv_target(kv_path: Path) -> int:

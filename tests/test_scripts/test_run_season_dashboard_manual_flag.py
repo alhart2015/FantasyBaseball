@@ -264,3 +264,26 @@ class TestTheFlagIsDetectedTheWayArgparseParsesIt:
             sniffed = arg.startswith("--man") and "--manual".startswith(arg)
             parser_saw = run_season_dashboard.main.__doc__ is not None or True
             assert sniffed and parser_saw, f"{arg} must be seen by both"
+
+
+class TestTheTwoDefaultPathsCannotDrift:
+    """`run_manual_refresh` cannot import the constant -- its module-level
+    `fantasy_baseball` ban is an AST invariant -- so it spells the path itself.
+    Pin the two together, the way `test_run_manual_refresh_guard` already pins
+    `PROTECTED_DBS` against the literals it mirrors."""
+
+    def test_the_refresh_script_default_matches_the_shared_constant(self):
+        import run_manual_refresh  # type: ignore[import-not-found]
+
+        assert run_manual_refresh.DEFAULT_KV_PATH == DEFAULT_MANUAL_KV_PATH
+
+    def test_the_refresh_script_delegates_rather_than_reimplementing(self):
+        """The activation sequence exists once. A second copy is how the two
+        entry points drift on a step whose failure is silent."""
+        import inspect
+
+        import run_manual_refresh  # type: ignore[import-not-found]
+
+        body = inspect.getsource(run_manual_refresh._activate_manual_environment)
+        assert "activate_manual_environment(kv_path)" in body
+        assert "os.environ[" not in body, "must not set the variables itself"

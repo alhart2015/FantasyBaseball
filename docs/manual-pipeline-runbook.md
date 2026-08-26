@@ -88,8 +88,14 @@ Run either from a shell where `FANTASY_LOCAL_KV_PATH=data/manual.db` is still
 exported and the hand-transcribed store is destroyed and replaced with the last
 Yahoo snapshot, with no error and no prompt.
 
-Both now refuse when the resolved KV path is not `data/local.db`: they print the
-path, exit `2`, and delete nothing. `refresh_remote.py` checks at the very top of
+For `run_season_dashboard.py` this is now prevented one step earlier: a launch
+without `--manual` CLEARS an inherited `FANTASY_LOCAL_KV_PATH`, so the sync
+resolves `data/local.db` and there is nothing of yours at the destination. The
+refusal below is the backstop, not the first line of defence, and you should
+not expect to see it from the dashboard any more.
+
+Both still refuse when the resolved KV path is not `data/local.db`: they print
+the path, exit `2`, and delete nothing. `refresh_remote.py` checks at the very top of
 its run, so a refused launch has not written production Upstash either. The
 reliable habit is still a fresh terminal per mode -- the guard is a backstop, not
 a licence.
@@ -119,32 +125,33 @@ copy of the pre-outage Yahoo history.
 
 ## 4. Open the dashboard against the manual store
 
-`--no-sync` is mandatory here; without it the launcher refuses (that is (a)
-above).
-
-PowerShell:
-
-```powershell
-$env:FANTASY_LOCAL_KV_PATH = "C:\Users\HartAlden\FantasyBaseball\data\manual.db"
-$env:FB_SKIP_YAHOO = "1"
-python scripts/run_season_dashboard.py --no-sync
-```
-
-bash / Git Bash:
-
 ```bash
-FANTASY_LOCAL_KV_PATH="$PWD/data/manual.db" FB_SKIP_YAHOO=1 \
-  python scripts/run_season_dashboard.py --no-sync
+python scripts/run_season_dashboard.py --manual
 ```
 
-Use an **absolute** path. `kv_store` resolves this variable against the current
-working directory, not the repo root, so `data/manual.db` from the wrong
-directory silently creates a second empty store. The launcher's first line of
-output is the resolved absolute path -- confirm it before using the numbers:
+That is the whole command. `--manual` binds the manual store, disables Yahoo,
+and implies `--no-sync` -- the sync wipes its destination before refilling, so
+on `data/manual.db` it is a destroy-and-replace.
+
+It refuses rather than guessing. A missing or unseeded store exits `2` and
+tells you to run `bootstrap_manual_kv.py`, because merely asking `get_kv()`
+where the store is CREATES an empty one, and an empty store carries no
+provenance stamp -- `manual_store_active()` then reads it as Yahoo mode and the
+dashboard serves production rosters under a manual banner.
+
+Confirm the first two lines before using any number on the page:
 
 ```
 KV store: C:\Users\HartAlden\FantasyBaseball\data\manual.db
+Manual mode: Yahoo disabled, startup sync skipped.
 ```
+
+**Setting the environment variables by hand no longer works for this.** A
+launch WITHOUT `--manual` now clears an inherited `FANTASY_LOCAL_KV_PATH` and
+says so, precisely so a stale export from a previous manual shell cannot serve
+the transcription to someone who believes they are reading Yahoo. `FB_SKIP_YAHOO`
+is left alone -- it is a separate stale-data switch (see
+`docs/stale-data-refresh-runbook.md`), not part of the store binding.
 
 **Do not press the dashboard's Refresh button in this mode.** `POST /api/refresh`
 runs the full pipeline against whatever store the process is bound to. Re-run
