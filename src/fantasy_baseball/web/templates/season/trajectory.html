@@ -57,18 +57,32 @@
 <table class="data-table trajectory-table">
   <thead>
     <tr>
-      <th title="Rank by {{ board.span }} {{ board.scale|upper }} over the whole scored pool, both pools, regardless of the filter above">#</th>
+      {#- `sorted` MARKS THE COLUMN THE ROWS ARE ACTUALLY IN. `build_board` orders on
+          `rank_total`, so this is it. It was moved onto Elite when the probability
+          columns landed, which claimed an ordering no code performs -- and the CLI
+          board DOES sort on P(keeper), so the mark was also the only thing on screen
+          saying the two surfaces agree. -#}
+      <th class="sorted" title="Rank by {{ board.span }} {{ board.scale|upper }} over the whole scored pool, both pools, regardless of the filter above">#</th>
       <th></th>
       <th>Player</th>
       <th>Age</th>
       <th>Slot</th>
+      {#- THE PROBABILITIES LEAD. They are what a keeper call reads; the projection they
+          are computed from is behind ?detail=1. Cumulative rather than an exclusive
+          partition -- "worth a keeper slot" includes "elite", and a reader should not
+          have to add two columns to get the number they came for. -#}
+      <th title="Probability his realized {{ board.span }} {{ board.scale|upper }} clears the top-{{ board.meta.bar_ranks.elite }} bar measured on completed seasons">Elite</th>
+      <th title="Probability he clears the top-{{ board.meta.bar_ranks.keeper }} bar -- every keeper slot in the league. Includes the elite share.">Keeper</th>
+      <th title="Probability he finishes BELOW the top-{{ board.meta.bar_ranks.bust }} bar">Bust</th>
+      {% if cur.detail %}
       <th title="{{ board.base_season }} {{ board.scale|upper }} on the anchored full-season line -- what he has done plus what the rest-of-season blend projects for the remainder{% if board.scale == 'var' %}, minus this slot's replacement level, so a below-replacement player reads negative{% endif %}">Now</th>
-      <th class="sorted">{{ board.span }} {{ board.scale|upper }}</th>
-      <th title="p10..p90 of the {{ board.span }} {{ board.scale|upper }} total, summed across years -- assumes the years move together, so it is if anything too wide">Band</th>
+      <th>{{ board.span }} {{ board.scale|upper }}</th>
+      <th title="Calibrated p10..p90 of the {{ board.span }} {{ board.scale|upper }} total. Each tail holds its nominal 10%, measured by rolling origin.">Band</th>
       {% for y in board.year_columns %}
       <th title="{{ board.scale|upper }} in {{ y }} alone">'{{ (y|string)[2:] }}</th>
       {% endfor %}
       <th title="Share of the fitting weight sitting near this player's own current season">Supp</th>
+      {% endif %}
     </tr>
   </thead>
   <tbody>
@@ -82,17 +96,22 @@
       </td>
       <td class="team-name">
         {{ r.name }}
-        {{ ctl.row_flags(r, board.meta.min_local_support) }}
+        {{ ctl.row_flags(r) }}
       </td>
       <td>{{ r.age }}</td>
       <td>{{ r.slot }}</td>
+      <td class="total-col">{% if r.p_elite is not none %}{{ '%.0f'|format(r.p_elite * 100) }}%{% else %}--{% endif %}</td>
+      <td>{% if r.p_keeper is not none %}{{ '%.0f'|format(r.p_keeper * 100) }}%{% else %}--{% endif %}</td>
+      <td>{% if r.p_bust is not none %}{{ '%.0f'|format(r.p_bust * 100) }}%{% else %}--{% endif %}</td>
+      {% if cur.detail %}
       <td>{{ '%.1f'|format(r.now) }}</td>
-      <td class="total-col">{{ '%.1f'|format(r.total) }}</td>
+      <td>{{ '%.1f'|format(r.total) }}</td>
       <td class="band-col">[{{ '%.1f'|format(r.p10) }}, {{ '%.1f'|format(r.p90) }}]</td>
       {%- for cell in r.year_cells %}
       <td class="year-col">{% if cell is not none %}{{ '%.1f'|format(cell) }}{% else %}--{% endif %}</td>
       {%- endfor %}
       <td>{{ '%.0f'|format(r.support * 100) }}%</td>
+      {% endif %}
     </tr>
     {% endfor %}
   </tbody>
@@ -100,17 +119,13 @@
 
 <div class="card trajectory-footer">
   <p>
-    <strong>(!)</strong> under {{ '%.0f'|format(board.meta.min_local_support * 100) }}% of the fitting weight sits near this player's own
-    current season. LAST season is kernel-weighted and THIS one is not, so a season that
-    far outruns its prior is priced by extrapolating a line fitted on players unlike him.
-    The <em>band</em> already accounts for it and is wide on these rows -- read it rather
-    than the point estimate. The estimate itself leans on the fitted line holding outside
-    its own data: locally unbiased where checked, but assumed.
-  </p>
-  <p>
-    <strong>(!!)</strong> at least one year in this range also reverted to the cohort's
-    own residual scatter, which is the narrower interval the reweighting exists to
-    replace -- so on these rows even the band understates.
+    <strong>The probabilities are the metric.</strong> Each is the chance this player's
+    REALIZED {{ board.span }} total clears a bar measured on completed seasons -- not a
+    quantile of the projected pool, which sits about two tiers lower because projections
+    regress to the mean and outcomes do not. Read off the calibrated outcome distribution,
+    whose tails hold their nominal 10% by construction. <em>Keeper</em> includes
+    <em>Elite</em>; <em>Bust</em> is the chance he finishes below the top-{{ board.meta.bar_ranks.bust }} bar.
+    Add <code>?detail=1</code> for the projection, band and support behind them.
   </p>
   <p>
     <strong>VAR against SGP.</strong> One fit, read two ways: VAR is the raw projection

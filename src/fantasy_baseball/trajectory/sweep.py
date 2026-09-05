@@ -38,7 +38,13 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.trajectory.board import BoardRow
+from fantasy_baseball.trajectory.calibration import (
+    BandCalibration,
+    load_shipped,
+    span_target,
+)
 from fantasy_baseball.trajectory.shape import prepare, shape_trajectory
+from fantasy_baseball.trajectory.value_bars import ValueBars, load_shipped_bars
 
 #: Bootstrap refits per query. The board reports no SE column, and `se` enters the band
 #: only through `spread`, which moves by 0.0006 between 250 draws and 1000 -- so the
@@ -213,23 +219,99 @@ def sweep_pool(
     return swept
 
 
+#: Bar name -> the key it is reported under. `bust` is the COMPLEMENT of clearing its
+#: bar, so the three read directly rather than as a partition the reader has to add up.
+BAR_KEYS = (("elite", "p_elite"), ("keeper", "p_keeper"), ("bust", "p_bust"))
+
+
+def bar_probabilities(
+    bars: ValueBars | None,
+    table: BandCalibration | None,
+    target: str | None,
+    *,
+    pool: str,
+    support: float,
+    mean: float,
+    p10: float,
+    p90: float,
+) -> dict[str, float | None]:
+    """P(elite), P(keeper) and P(bust) against the REALIZED bars for this span.
+
+    Computed off the RAW band, like every other calibrated read: `exceedance` normalises
+    the threshold by the raw half-widths its curve was fitted against, so handing it a
+    corrected band would double-apply the correction. The corrected band is what gets
+    DISPLAYED; this is what gets measured.
+
+    PLAIN VALUES, not a `SweptPlayer`, because `scripts/player_trajectory.py` prices a
+    `Trajectory` and had a second copy of this loop -- same bar lookup, same bust
+    complement, same all-or-nothing blank. Two spellings of "what are the odds he is
+    worth the slot" is the one number that must not differ between the board and the
+    page a reader opens to check it.
+
+    ALL THREE OR NONE. A partial row would let a template print two numbers and a dash
+    and read as a measurement, when what happened is that a bar or a cell was missing.
+    """
+    blank: dict[str, float | None] = {key: None for _, key in BAR_KEYS}
+    if bars is None or table is None or target is None:
+        return blank
+    out: dict[str, float | None] = {}
+    for name, key in BAR_KEYS:
+        bar = bars.bar(target, name)
+        if bar is None:
+            return blank
+        hit = table.exceedance(bar, mean, p10, p90, pool=pool, target=target, support=support)
+        if hit is None:
+            return blank
+        out[key] = (1.0 - hit) if name == "bust" else hit
+    return out
+
+
 def totals(
-    players: Iterable[SweptPlayer], horizons: tuple[int, ...], scale: str = "var"
+    players: Iterable[SweptPlayer],
+    horizons: tuple[int, ...],
+    scale: str = "var",
+    *,
+    calibration: BandCalibration | None = None,
+    value_bars: ValueBars | None = None,
 ) -> list[dict]:
     """Collapse the per-year points to one row per player over `horizons`.
 
-    The prefix sum the cached sweep exists to make cheap. Bands are summed the way
-    `Trajectory.total` sums them, which assumes the years move together and overstates
-    the width if they do not -- stated rather than hidden, and it is the conservative
-    direction for a keep-or-cut call.
+    The prefix sum the cached sweep exists to make cheap.
+
+    THE BAND IS SUMMED AND THEN CALIBRATED, in that order. Summing alone assumes the years
+    move together and over-widens by ~1.7x; the `s{k}` multiplier is fitted against exactly
+    that raw sum, so it absorbs the assumption rather than requiring it to be true. Never
+    correct the yearly bands and sum THOSE -- see `calibration`, where the ordering bug is
+    documented with the numbers it produced.
+
+    An uncalibrated range (not 1..k, or past `MAX_HORIZON`) leaves the band alone rather
+    than reaching for the nearest multiplier. `span_target` explains why, and the CLI
+    clamps `--horizon` so the board cannot ask for one.
     """
     wanted = set(horizons)
+    target = span_target(tuple(horizons))
+    table = load_shipped() if calibration is None else calibration
+    bars = load_shipped_bars() if value_bars is None else value_bars
     scored = []
     for player in players:
         points = [p for p in player.points(scale) if p.horizon in wanted]
         if not points:
             continue
         first = [p for p in points if p.horizon == 1]
+        summed_mean = sum(p.mean for p in points)
+        raw_p10, raw_p90 = sum(p.p10 for p in points), sum(p.p90 for p in points)
+        band = (
+            table.apply(
+                summed_mean,
+                raw_p10,
+                raw_p90,
+                pool=player.pool,
+                target=target,
+                support=player.support,
+            )
+            if table is not None and target is not None
+            else (raw_p10, raw_p90)
+        )
         scored.append(
             {
                 "id": player.mlbam_id,
@@ -252,9 +334,9 @@ def totals(
                 # last year's production. Tracked as #333 -- named here so the deferral
                 # is checkable rather than a promise that a reader has to take on faith.
                 "prior": player.prior,
-                "total": sum(p.mean for p in points),
-                "p10": sum(p.p10 for p in points),
-                "p90": sum(p.p90 for p in points),
+                "total": summed_mean,
+                "p10": band[0],
+                "p90": band[1],
                 "years": len(points),
                 "n_eff": min(p.n_effective for p in points),
                 "support": player.support,
@@ -265,6 +347,25 @@ def totals(
                 # multi-year board answer different questions -- who helps now versus who
                 # is worth holding -- and the gap between a player's two ranks is the
                 # keeper decision in one number.
+                # THE HEADLINE METRICS. P(clears each realized bar), cumulative -- a
+                # keeper call reads "what are the odds he is worth the slot", which
+                # includes the odds he is elite. `p_bust` is the complement of clearing
+                # the bust bar, so the three are directly readable rather than a
+                # partition the reader has to add up.
+                #
+                # None, never a number, when the span has no measured bar or the tables
+                # are missing. A fabricated probability is the one output this whole
+                # feature exists to prevent.
+                **bar_probabilities(
+                    bars,
+                    table,
+                    target,
+                    pool=player.pool,
+                    support=player.support,
+                    mean=summed_mean,
+                    p10=raw_p10,
+                    p90=raw_p90,
+                ),
                 "next": first[0].mean if first else float("nan"),
                 "by_year": [{"horizon": p.horizon, "age": p.age, "mean": p.mean} for p in points],
             }

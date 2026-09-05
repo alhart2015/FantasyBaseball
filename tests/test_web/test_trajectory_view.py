@@ -975,27 +975,31 @@ def test_mine_missing_when_my_team_names_no_block(payload: dict) -> None:
     assert build_teams_board(payload, spots=_teams_fixture(), my_team=None).mine_missing
 
 
-def test_a_teams_block_carries_the_flag_threshold_and_its_flagged_rows(payload: dict) -> None:
-    """The (!) rule is a tuned constant behind an open issue (#310), so the template
-    renders the threshold from `meta` rather than restating it as prose -- exactly as the
-    league board does. `TeamsBoard.meta` did not carry it, which meant the teams view
-    could not have rendered the flag even if it wanted to: it was dropped structurally,
-    and every block total then summed extrapolated rows with nothing on screen to say so.
-    """
-    from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT
+def test_a_teams_block_carries_per_row_support_for_its_thin_rows(payload: dict) -> None:
+    """Every block row carries `support`, the number that replaced the `(!)` glyph.
 
+    This used to assert `meta["min_local_support"]`, the threshold the flag was drawn at,
+    on the reasoning that a template must render the rule rather than restate it as
+    prose. `scripts/calibrate_band_coverage.py` retired the rule: at 10% it separated
+    neither calibrated bands from miscalibrated ones (the unflagged 10-30% bucket runs
+    as hot as the flagged rows below it) nor biased estimates from unbiased ones. So the
+    threshold left `meta` and the per-row share is what the views print.
+
+    The block total is still asserted here for the reason the flag version was: a thin
+    row is summed into the number that ORDERS the page, so the page can rank a block on
+    its least-supported estimates and `support` is the only thing that says which.
+    """
     spots = [*_teams_fixture(), _spot("Thin Support", "Mine")]
     board = build_teams_board(payload, spots=spots, my_team="Mine")
 
-    assert board.meta["min_local_support"] == MIN_LOCAL_SUPPORT
-    assert board.meta["min_local_support"] == build_board(payload).meta["min_local_support"], (
-        "both views flag on the same rule, so both must read the same constant"
-    )
+    assert "min_local_support" not in board.meta, "the retired threshold must not come back"
+    assert "min_local_support" not in build_board(payload).meta
 
     mine = next(b for b in board.blocks if b.team == "Mine")
-    flagged = [r for r in mine.rows if r["extrapolated"]]
-    assert [r["name"] for r in flagged] == ["Thin Support"], (
-        "the fixture must put an extrapolated row in a block, or the flag is unreachable"
+    assert all("support" in r for r in mine.rows), "every row must carry the share"
+    thin = next(r for r in mine.rows if r["name"] == "Thin Support")
+    assert thin["support"] < next(r for r in mine.rows if r["name"] != "Thin Support")["support"], (
+        "the fixture must put a genuinely thin row in a block, or the column is untested"
     )
     assert mine.total == pytest.approx(sum(r["total"] for r in mine.rows)), (
         "and it is summed into the total that orders the page like any other row"

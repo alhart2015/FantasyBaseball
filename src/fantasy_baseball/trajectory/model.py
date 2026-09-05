@@ -30,6 +30,16 @@ DEFAULT_BAND = 2.5
 #: Juan Soto (12.9 / 21.5) 33.1% and Bobby Witt Jr. (15.5 / 18.9) 40.1% are supported.
 #: The obvious gauge, `sgp - mean_start`, cannot make that split -- it reads "above this
 #: cohort's mean" and "outside this cohort" the same way, and flagged 11 of the top 20.
+#:
+#: IT IS NOT A CALIBRATION BOUNDARY, and nothing displays it any more.
+#: `scripts/calibrate_band_coverage.py` (62k held-out query-horizons, 2026-09-04) put the
+#: coverage cliff at ~30%, not here: at h+3 the below-p10 share runs 12-20% for hitters
+#: and 24% for pitchers across EVERY bucket under 30% support -- the unflagged 10-30%
+#: rows as hot as the flagged ones beneath them -- then drops to 4% above it. The summed
+#: multi-year range is calibrated at every level, and the point estimate is unbiased at
+#: every level (bias CIs straddle zero in all eight pool-by-bucket cells). So this
+#: constant survives as the `Trajectory.extrapolated` data field and as the calibration
+#: script's bucket edge; `--min-support 0.3` is the cut that tracks measured coverage.
 MIN_LOCAL_SUPPORT = 0.10
 
 
@@ -208,11 +218,9 @@ class Trajectory:
     def extrapolated(self) -> bool:
         """True when the fitted line was evaluated outside its own support.
 
-        The THRESHOLD lives here, beside the field it qualifies, so every consumer shares
-        one definition of "unsupported". It did not: the board owned the number and
-        flagged rows with `(!)`, while `player_trajectory.py` -- the tool a human actually
-        uses to make a single keep-or-cut call -- printed the same extrapolated fit with
-        no warning at all. 10% separates the two failure modes on the real board; see
+        A DATA FIELD, carried on the board payload and the CSV. It is no longer rendered:
+        every surface prints `local_support` itself, because `calibrate_band_coverage.py`
+        found this boolean's cutoff split nothing a reader needed split. See
         `MIN_LOCAL_SUPPORT`. NaN (the comp matchers, where the band IS the matching rule)
         is not extrapolation.
         """

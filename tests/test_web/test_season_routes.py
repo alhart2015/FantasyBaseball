@@ -2256,12 +2256,21 @@ def test_trajectory_page_renders_a_board(client):
 
     with patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload):
         resp = client.get("/trajectory?end=2028")
+        # INSIDE the patch, and carrying `end` -- outside it the route renders the "no
+        # board cached" page, which has no year columns for an entirely different reason
+        # and would pass a "hidden by default" assertion for free.
+        detailed = client.get("/trajectory?end=2028&detail=1").data
     assert resp.status_code == 200
     assert b"Testy McTestface" in resp.data
     # The vintage is load-bearing: this board does not move with a dashboard refresh.
     assert b"2026-08-04T09:00:00" in resp.data
     # Per-year columns appear once the range spans more than one season.
-    assert b"'27" in resp.data and b"'28" in resp.data
+    # PROBABILITIES ARE THE DEFAULT COLUMNS now; the per-year projection is behind
+    # ?detail=1. Both halves asserted, because "the year columns are gone" and "the
+    # detail view is broken" render identically on the default page.
+    assert b"Keeper" in resp.data and b"Bust" in resp.data
+    assert b"'27" not in resp.data, "the projection must be hidden by default"
+    assert b"'27" in detailed and b"'28" in detailed
 
     # ONE mechanism for the control state. Every control is a URL from `board_url`; the
     # dropdowns used to sit in a <form> that needed a hidden input per filter to carry
@@ -2485,6 +2494,10 @@ def test_trajectory_controls_carry_every_filter_on_every_link(client, view):
         "n",
         "pid",
         "ppool",
+        # A DISPLAY preference, not a filter on what is scored -- but it still has to
+        # ride every link, or toggling a pool pill silently reverts the reader to the
+        # probability-only columns. Which is the drift this test exists to catch.
+        "detail",
     ]
     assert sorted(names) == sorted(filter_state(view, None, {})), (
         "the literal above and `filter_state` must name the same filters -- add to both"
@@ -2667,15 +2680,20 @@ def test_a_board_with_no_ros_snapshot_does_not_claim_it_was_anchored(client):
     )
 
 
-def test_trajectory_teams_view_keeps_a_flagged_rows_marker(client):
-    """The league board marks a row evaluated outside its own support (!) and a
-    band-fallback row (!!). The teams view printed both as bare totals -- and those
-    totals are summed into `block.total`, which ORDERS the page, so a block could sort
-    above its neighbour on precisely the estimates the model is least sure about.
+def test_trajectory_teams_view_shows_per_row_support_not_a_glyph(client):
+    """Both views print each row's `supp` share; neither prints `(!)` or `(!!)`.
 
-    The flags are set on the payload rather than shaped out of the panel: `extrapolated`
-    is per player and `band_fell_back` per year, so setting them directly is the only way
-    to reach BOTH branches of the template's elif from one render.
+    This asserted the two glyphs. `scripts/calibrate_band_coverage.py` measured what they
+    were worth over 62k held-out query-horizons: the summed range these views headline is
+    calibrated at EVERY support level, and the per-year range is miscalibrated well above
+    the 10% cutoff `(!)` fired at -- the unflagged 10-30% bucket runs 18% (hitters) to 24%
+    (pitchers) below a nominal-10% p10. A mark firing on the wrong rows while staying
+    silent on equally bad ones is worse than the number it decorated, so the number won.
+
+    Still set on the payload rather than shaped out of the panel, for the original
+    reason: `extrapolated` is per player and `band_fell_back` per year, so setting them
+    directly is the only way to reach both from one render -- and both must now be
+    INVISIBLE, which is the harder half to get right by accident.
     """
     payload = _trajectory_payload()
     # A distinct vintage: `_ranked_rows` caches on `generated_at` plus the shape, and
@@ -2696,16 +2714,14 @@ def test_trajectory_teams_view_keeps_a_flagged_rows_marker(client):
         teams = client.get("/trajectory?view=teams").data.decode()
         board = client.get("/trajectory?view=board").data.decode()
 
-    # ON THE MARKUP THE FLAG EMITS, never on a bare "(!)" in the page. Both templates
-    # ALSO explain the flags in prose -- `<strong>(!)</strong>` in the teams view's
-    # vintage line and in the league board's footer -- so a substring check passes with
-    # every flag deleted. Measured: it did. (Same trap as the dropdown-ordering test on
-    # #336, where "Hart of the Order" was also the site header.)
+    # BARE SUBSTRINGS ARE RIGHT HERE, where they were wrong before. The old assertion had
+    # to match `>(!)</span>` because the prose beside the glyph contained `(!)` too, so a
+    # substring check passed with every flag deleted. That prose is gone, so a bare check
+    # is now the strict one: it fails on the glyph AND on any sentence reintroducing it.
     for body, where in ((teams, "teams view"), (board, "league board")):
-        assert ">(!)</span>" in body, f"{where}: the thin-support marker"
-        assert ">(!!)</span>" in body, f"{where}: the band-fallback marker"
-    # Rendered from the constant, not restated as prose -- #310 may move the threshold.
-    assert "Under 10% of the fitting weight" in teams
+        assert "(!)" not in body, f"{where}: the thin-support marker must be gone"
+        assert "(!!)" not in body, f"{where}: the band-fallback marker must be gone"
+        assert "supp" in body, f"{where}: the support column replaced them"
 
 
 def test_trajectory_defaults_to_the_league_board(client):
@@ -2917,23 +2933,26 @@ def test_the_chart_is_not_buried_under_prose(client):
     assert len(above) <= PROSE_BUDGET_ABOVE_CHART, (
         f"{len(above)} words above the chart, budget {PROSE_BUDGET_ABOVE_CHART}: " + " ".join(above)
     )
-    # AND THE FLAG SURVIVES THE CUT, on a player who actually carries it. It is the one
-    # sentence up there that changes how the band below is read, so a budget met by
-    # dropping it would be met wrongly -- and the default fixture is not extrapolated,
-    # so asserting it on THAT render would have passed for no reason at all.
+    # AND THE SUPPORT SHARE SURVIVES THE CUT, on a thin player. It is the one thing up
+    # there that changes how the band below is read, so a budget met by dropping it would
+    # be met wrongly -- and the default fixture is well-supported, so asserting it on THAT
+    # render would have passed for no reason at all.
+    #
+    # This used to assert the `(!)` glyph and its "evaluated outside its own support"
+    # title. `scripts/calibrate_band_coverage.py` measured the point estimate as unbiased
+    # at every support level, so a mark telling the reader to distrust it was asserting
+    # something untrue; the share itself is what stayed.
     board, chart = _trajectory_board_and_chart()
     # Both blobs, or the vintage guard unpairs them. `_ranked_rows` caches on
     # `generated_at` plus the shape, and this mutation changes neither, so without a
     # distinct stamp the unflagged rows from the render above are served here.
     board["generated_at"] = chart["generated_at"] = "2026-08-07T09:00:00-extrap"
     board["players"][0]["extrapolated"] = 1
+    board["players"][0]["support"] = 0.03
     with _trajectory_cache(board, chart):
         flagged = client.get("/trajectory?view=player&player=Testy+McTestface").data.decode()
-    # ON THE GLYPH, not beside it. Asserting the sentence alone would pass against a
-    # bare paragraph too, which is exactly what #361 removed -- the flag has to be the
-    # thing carrying it, or the warning is back above the chart in another form.
-    assert 'class="flag flag-extrap"' in flagged, "the glyph itself"
-    assert 'title="This fit was evaluated outside its own support' in flagged
+    assert "3% local support" in flagged, "the share itself, above the chart"
+    assert "(!)" not in flagged, "and not the retired glyph"
 
     flagged_page = flagged[flagged.index('<div class="page-trajectory">') :]
     above_flagged = _visible_words(

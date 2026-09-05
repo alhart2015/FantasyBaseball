@@ -41,7 +41,18 @@ data/playing_time/
 # Trajectory comp panel: same generator, wider span, deliberately kept out of
 # data/playing_time/ so it cannot become the keeper curve's training set. 8.3 MB of
 # regenerable CSV that would otherwise re-diff on every rebuild.
-data/trajectory/
+# `/*` rather than `/`: git cannot re-include a file whose PARENT DIRECTORY is
+# excluded, so a trailing-slash rule here makes the two negations below silently dead.
+data/trajectory/*
+# ...but the FITTED ARTIFACTS ship. They are 43 KB and 1 KB of JSON, not megabytes of
+# CSV, and the deployed dashboard reads them off disk -- `load_shipped` /
+# `load_shipped_bars` resolve `PROJECT_ROOT / data/trajectory/`. Without them Render
+# has no band calibration and no realized bars, so the board silently falls back to the
+# uncorrected band and prints no probabilities at all: the failure looks like a design
+# choice rather than a missing file. They are also the only derived inputs a reviewer
+# can diff, which is what makes a recalibration visible in a PR.
+!data/trajectory/band_calibration.json
+!data/trajectory/value_bars.json
 
 # SQLite databases (populated at runtime), and their sidecars. The -wal/-shm
 # pair is created whenever a WAL store is open, so `git add -A` during a run

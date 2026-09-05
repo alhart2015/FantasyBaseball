@@ -23,20 +23,26 @@ from __future__ import annotations
 import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field, replace
+from functools import lru_cache
 from typing import Any, NoReturn
 
 from fantasy_baseball.data.rosters import RosterSpot
+from fantasy_baseball.trajectory.calibration import load_shipped
 from fantasy_baseball.trajectory.career_comps import MAX_COMPS
-from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT
 from fantasy_baseball.trajectory.roster_join import index_rosters
 from fantasy_baseball.trajectory.sweep import (
     SCALES,
+    SweptPlayer,
     add_ranks,
     chart_key,
     from_payload,
     player_from_row,
     rank_move,
     totals,
+)
+from fantasy_baseball.trajectory.value_bars import (
+    load_shipped_bars,
+    longest_calibrated_span,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -259,26 +265,68 @@ def _sweep_setup(
     return base, end_year, end_years, pool, scale, horizons, _ranked_rows(payload, horizons, scale)
 
 
+def _player_probabilities(sp: SweptPlayer, horizons: tuple[int, ...], scale: str) -> dict:
+    """The three headline probabilities for the longest measurable prefix of `horizons`.
+
+    VAR ONLY -- the bars are realized VAR totals, so on the SGP scale there is nothing to
+    compare against and the page shows the chart alone rather than a number against the
+    wrong quantity.
+    """
+    span = longest_calibrated_span(len(horizons), load_shipped_bars())
+    if not span or scale != "var":
+        return {"probabilities": {}, "prob_span": 0}
+    row = totals([sp], tuple(range(1, span + 1)), scale)
+    if not row:
+        return {"probabilities": {}, "prob_span": 0}
+    keys = ("p_elite", "p_keeper", "p_bust")
+    values = {k: row[0].get(k) for k in keys}
+    return {
+        "probabilities": values if any(v is not None for v in values.values()) else {},
+        "prob_span": span,
+    }
+
+
+def _calibrated_projection(sp: SweptPlayer, scale: str) -> list[dict]:
+    """The chart's projected series, with each year's band on its own multiplier.
+
+    `y{h}` per point, not one multiplier for the series: the correction varies by horizon
+    (hitters run x1.26 at year 1 and x1.06 at year 5), so a single scale would be wrong at
+    both ends to make itself right in the middle.
+    """
+    table = load_shipped()
+    out = []
+    for point in sp.points(scale):
+        lo, hi = point.p10, point.p90
+        if table is not None:
+            lo, hi = table.apply_year(
+                point.mean,
+                point.p10,
+                point.p90,
+                pool=sp.pool,
+                horizon=point.horizon,
+                support=sp.support,
+            )
+        out.append({"age": point.age, "mean": point.mean, "p10": lo, "p90": hi})
+    return out
+
+
 def _board_meta(payload: dict) -> dict:
     """The vintage and provenance block, identical for all three views -- and now built
     HERE for all three. `build_board` used to spell the same seven fields inline, so a
     field added here had to be remembered into there as well.
-
-    `min_local_support` is in here because its ABSENCE was not something a template
-    could route around: without the threshold the (!) flag has no rule to name, so
-    the teams view dropped the flags entirely and every block total silently summed
-    unmarked extrapolated rows. That is the cost of the copy, already paid once.
 
     `excluded` is who is NOT on the board. A shortened board reads as "these are the
     best players" when it is "these are the ones the model can price", and the larger
     exclusion is the silent one: a player with no current-season line was never a
     candidate, so he is absent with no row and no flag.
 
-    `min_local_support` travels as the RULE behind the (!) flag, not just the verdict.
-    It is a tuned number with a measured table behind it and an open issue (#310) to
-    change the estimator it guards, so the page must not restate it as prose: the CLI
-    renders it from the constant and a hardcoded template string would say "under 10%"
-    about rows now flagged at something else.
+    `min_local_support` USED to travel here, as the rule behind the (!) flag, so no
+    template would restate the threshold as prose. Both are gone: the views print each
+    row's own `support` share instead of a mark, and there is no rule left to name.
+    `scripts/calibrate_band_coverage.py` is why -- the 10% cutoff separated neither
+    calibrated bands from miscalibrated ones (the unflagged 10-30% bucket runs as hot as
+    the flagged rows below it) nor biased estimates from unbiased ones (bias CIs straddle
+    zero in every bucket).
     """
     return {
         "generated_at": payload.get("generated_at"),
@@ -291,8 +339,20 @@ def _board_meta(payload: dict) -> dict:
         "min_sgp": payload.get("min_sgp"),
         "floors": payload.get("floors", {}),
         "excluded": payload.get("excluded", {}),
-        "min_local_support": MIN_LOCAL_SUPPORT,
+        # The ranks the probability columns are cut at, and the realized VAR each one
+        # sits at. Rendered rather than hardcoded in the template for the same reason
+        # `min_local_support` used to be: they are DERIVED from `league.yaml` (one per
+        # team, and every keeper slot in the league), so a rule change must move the
+        # column headers with them.
+        "bar_ranks": _bar_ranks(),
     }
+
+
+@lru_cache(maxsize=1)
+def _bar_ranks() -> dict[str, int]:
+    """The headline ranks, or an empty dict when no bars artifact is built."""
+    bars = load_shipped_bars()
+    return dict(bars.ranks) if bars is not None else {}
 
 
 def _annotate(
@@ -382,9 +442,19 @@ _STATE: tuple[tuple, list, dict[tuple, list[dict]]] | None = None
 
 
 def clear_board_cache() -> None:
-    """Drop the derived-state cache. For tests, and for anything needing a cold read."""
+    """Drop the derived-state cache. For tests, and for anything needing a cold read.
+
+    THE ARTIFACT CACHES GO WITH IT. `load_shipped`, `load_shipped_bars` and `_bar_ranks`
+    are `lru_cache`d for the same reason the rows are -- `totals` runs per render -- but
+    they are keyed on nothing that changes when the artifact on disk does, so a cold read
+    that left them warm would rank the new payload against the old calibration, and a
+    test could not reach the no-artifact path at all.
+    """
     global _STATE
     _STATE = None
+    load_shipped.cache_clear()
+    load_shipped_bars.cache_clear()
+    _bar_ranks.cache_clear()
 
 
 def _derive(payload: dict, horizons: tuple[int, ...], scale: str) -> list[dict]:
@@ -599,6 +669,11 @@ def filter_state(view: str, board: Any, args: Mapping[str, str]) -> dict:
         # board filter and a tie-break between two rows sharing a name.
         "pid": board.pid if (owned_player and board) else args.get("pid", ""),
         "ppool": board.ppool if (owned_player and board) else args.get("ppool", ""),
+        # SHOW THE PROJECTION BEHIND THE PROBABILITIES. Owned by no board -- it is a
+        # display preference, not a filter on what is scored -- so it passes through from
+        # the query string on every view, which is what keeps it set across a round trip.
+        # "1" and "" rather than a bool: these keys are query-string values verbatim.
+        "detail": "1" if str(args.get("detail", "")).strip() in {"1", "true", "yes"} else "",
     }
 
 
@@ -775,6 +850,22 @@ class PlayerView:
     ppool: str
     found: bool
     extrapolated: bool
+    #: P(elite) / P(keeper) / P(bust) over `prob_span` years, or an empty dict when no
+    #: span on this board has measured bars. Same three numbers the ranked boards lead
+    #: with, so a reader moving from a board row to this page sees one answer.
+    probabilities: dict[str, float | None]
+    #: How many years those probabilities cover. Usually SHORTER than the chart, which
+    #: draws the board's full range while the longest measurable window is currently
+    #: four years -- so the page has to say which span it answered for.
+    prob_span: int
+    #: Share of the fitting weight sitting near this player's own current season, or None
+    #: on a board that resolved nobody. RENDERED, where `extrapolated` above is not: the
+    #: page used to print a `(!)` glyph off that boolean, and the coverage backtest
+    #: (`scripts/calibrate_band_coverage.py`) found its 10% cutoff split neither the
+    #: calibrated rows from the miscalibrated ones nor a biased estimate from an unbiased
+    #: one. The boolean stays because the payload and the CSV carry it; the NUMBER is what
+    #: a reader gets.
+    support: float | None
     #: True when `candidates` came from the substring fallback rather than from an
     #: exact-name collision (#350). THE TWO READ DIFFERENTLY: "more than one player is
     #: named Max Muncy, pick one" is a statement about the board, and it is false of a
@@ -1214,6 +1305,9 @@ def build_player_view(
         ppool="",
         found=False,
         extrapolated=False,
+        probabilities={},
+        prob_span=0,
+        support=None,
         suggested=False,
         base_season=base,
         end_years=end_years,
@@ -1312,6 +1406,11 @@ def build_player_view(
         floor=floor,
         found=True,
         extrapolated=sp.extrapolated,
+        # THROUGH `totals`, not a second derivation: it already computes these for every
+        # board row, and a page that priced one player its own way would be the surface
+        # a reader trusts least -- the one they opened to check a board number.
+        **_player_probabilities(sp, horizons_all, scale),
+        support=sp.support,
         chart_vintage_mismatch=mismatch,
         history=history,
         anchor=anchor,
@@ -1338,9 +1437,13 @@ def build_player_view(
         if bool(payload.get("base_season_partial", True))
         else str(base),
         # `points(scale)` applies the offset; `YearPoint.age` is already `age + horizon`.
-        projection=[
-            {"age": p.age, "mean": p.mean, "p10": p.p10, "p90": p.p90} for p in sp.points(scale)
-        ],
+        #
+        # AND THE BAND IS CALIBRATED HERE, because `points` must keep returning the raw
+        # one: `sweep.totals` sums raw bands before applying its own span multiplier, so a
+        # correction inside the accessor would be applied twice on the board and once here.
+        # This is the chart's shaded p10-p90 region, so it is a displayed band and takes
+        # the per-year multiplier -- `y{h}`, never the span's.
+        projection=_calibrated_projection(sp, scale),
         comps=[
             {
                 "name": c["name"],

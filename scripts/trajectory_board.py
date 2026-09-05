@@ -27,7 +27,7 @@ two answers pulled from one file cannot disagree with each other the way two swe
     python scripts/trajectory_board.py --top 25                    # league board only
     python scripts/trajectory_board.py --team "Hello Peanuts!"     # one roster, in full
     python scripts/trajectory_board.py --pool pitcher --horizon 5
-    python scripts/trajectory_board.py --by-team --min-support 0.1 # drop extrapolations
+    python scripts/trajectory_board.py --by-team --min-support 0.3 # thin rows dropped
 
 `--min-sgp 4` trims the fringe without touching anyone rankable; `--by-team` and `--team`
 read LIVE rosters from Upstash, so they need `.env` credentials and a network.
@@ -36,9 +36,15 @@ The band is p10..p90 from the empirical outcome distribution, NOT a multiple of 
 standard deviation -- see `PathPoint.p10`. Read it: at three years out the interval is
 most of the story, especially for pitchers, where the point estimate carries little.
 
-`(!)` marks a row whose fitted line was evaluated outside its own support. The BAND is
-honest on those and is what to read; the point estimate is the part still assuming the
-line holds out there. See `MIN_LOCAL_SUPPORT`.
+THE BAND IS CALIBRATED. Each tail holds its nominal 10%, measured by rolling origin on
+held-out seasons -- see `trajectory.calibration` and
+`docs/trajectory-band-calibration-2026-09-04.md`. Read it as it prints; there is no
+support level or horizon at which it needs discounting.
+
+`supp` is the share of fitting weight sitting near the query's own current season. It is
+no longer a warning -- the band already accounts for it, and the correction it earns is
+larger below 30% -- but it is still what separates a number the model has seen many
+players make from one it is reaching for.
 
 Build the panel first (one time, ~1 minute):
     python scripts/build_pt_panel.py --start 2000 --end 2026 --out-dir data/trajectory
@@ -63,11 +69,12 @@ from fantasy_baseball.data.rosters import RosterSpot, live_rosters, manual_store
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
-from fantasy_baseball.trajectory.model import MIN_LOCAL_SUPPORT
+from fantasy_baseball.trajectory.calibration import MAX_HORIZON, span_target
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR
 from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
 from fantasy_baseball.trajectory.roster_join import RosterIndex, index_rosters
 from fantasy_baseball.trajectory.sweep import add_ranks, rank_move, sweep_pool, totals
+from fantasy_baseball.trajectory.value_bars import load_shipped_bars
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -82,11 +89,13 @@ def by_team(
     only: str | None = None,
     *,
     keep: int,
+    detail: bool = False,
 ) -> None:
     """Every player on your team, then the best `per_team` on each other team.
 
-    Ranks shown are LEAGUE ranks, carried from `add_ranks`, not ranks within the team --
-    otherwise every team's best player reads as a 1.
+    Rows are ordered by P(keeper), like the league board. The `#mean` rank `--detail`
+    prints is a LEAGUE rank, carried from `add_ranks`, not a rank within the team --
+    otherwise every team's best player would read as a 1.
 
     `per_team` is how many rows to PRINT; `keep` is how many a team may actually keep,
     and the headline sums the latter. Required, with no default: a headline that
@@ -104,14 +113,29 @@ def by_team(
         both. `r["team"]` is the single winning team and is what the CSV carries, but
         it is not the ownership test.
         """
-        return sorted(
-            (r for r in scored if team in r["teams"]), key=lambda r: r["total"], reverse=True
-        )
+        # ORDERED BY P(keeper), matching the league board -- `keeper_order` is the shared
+        # key, so the two surfaces cannot drift and an all-None span still falls through
+        # to the mean rank rather than printing in arrival order.
+        return sorted((r for r in scored if team in r["teams"]), key=keeper_order, reverse=True)
+
+    def kept_by_var(rows: list[dict]) -> tuple[float, int]:
+        """`(VAR of the best `keep` rows, how many were summed)` -- BY VAR, never by the
+        display order.
+
+        `rows_for` orders on P(keeper) so the printed rows lead with the decision number.
+        This is a VALUE sum, and the web view's `TeamBlock.keep_total` takes the best
+        `keep` by `rank_total`, so taking a prefix of the DISPLAY order made the two
+        surfaces rank teams differently -- the exact drift `by_team`'s docstring says was
+        fixed. It also made the headline arbitrary on a span with no measured bar, where
+        every `p_keeper` is None and the prefix is whatever order the rows arrived in.
+        """
+        best = sorted(rows, key=lambda r: r["total"], reverse=True)
+        kept = min(keep, len(best))
+        return sum(r["total"] for r in best[:kept]), kept
 
     def keeper_strength(team: str) -> float:
         """The headline number, as an ordering key. Same rule, one definition."""
-        rows = rows_for(team)
-        return sum(r["total"] for r in rows[: min(keep, len(rows))])
+        return kept_by_var(rows_for(team))[0]
 
     def block(team: str, limit: int | None, note: str = "") -> None:
         """One team's block. Takes the TEAM, never a decorated title -- the missing list is keyed
@@ -148,27 +172,37 @@ def by_team(
         # players over a header naming three, a number the visible rows cannot make.
         # `kept`, not `keep`, in the slice -- a team with two scored players sums two,
         # and the label has to be the number that was actually summed.
-        kept = min(keep, len(rows))
-        total = sum(r["total"] for r in rows[:kept])
+        total, kept = kept_by_var(rows)
         head = (
             f"{team}{note}  ({len(rows)} scored, "
             f"{total:.1f} total {span} VAR from the best {kept} they may keep)"
         )
         print(f"\n{head}\n{'-' * len(head)}")
+        cols = f"  {'player':<22} {'age':>3} {'slot':>4} {'elite':>7} {'keeper':>7} {'bust':>7}"
+        if detail:
+            cols += f"   {'#mean':<5} {span:>6} {one:>5} {'p10..p90':>14} {'supp':>5}"
+        print(cols)
         for r in shown:
-            band = f"{r['p10']:5.1f}..{r['p90']:<5.1f}"
-            flag = " (!!)" if r["band_fell_back"] else (" (!)" if r["extrapolated"] else "    ")
             hurt = f" [{r['status']}]" if r["status"] else ""
-            print(
-                f"  #{r['rank_total']:<4d} #{r['rank_next']:<4d} {r['name'][:22]:<22} "
-                f"{r['age']:3d} {r['slot']:>4} {r['total']:6.1f} {r['next']:5.1f}  "
-                f"{band:>14}{flag}{hurt}"
+            line = (
+                f"  {r['name'][:22]:<22} {r['age']:3d} {r['slot']:>4} "
+                f"{pct(r.get('p_elite')):>7} {pct(r.get('p_keeper')):>7} "
+                f"{pct(r.get('p_bust')):>7}"
             )
+            if detail:
+                band = f"{r['p10']:5.1f}..{r['p90']:<5.1f}"
+                line += (
+                    f"   #{r['rank_total']:<4d} {r['total']:6.1f} {r['next']:5.1f} "
+                    f"{band:>14} {r['support']:5.0%}"
+                )
+            print(line + hurt)
         missing = index.unscored_for(team)
         if missing:
             print(f"  not scored: {', '.join(missing)}")
 
-    print(f"\n\n{'=' * 78}\nPER-TEAM  (#{span} and #{one} are LEAGUE ranks)\n{'=' * 78}")
+    # The banner named the two rank columns; `--detail` now carries one of them and the
+    # default view carries neither, so it named columns that are not on screen.
+    print(f"\n\n{'=' * 78}\nPER-TEAM  (ordered by P(keeper); `#mean` is a LEAGUE rank)\n{'=' * 78}")
     # Teams come from the ROSTERS, not from the scored rows. A team whose players were all
     # filtered out -- by --min-sgp, by --min-support, or by the join failing wholesale --
     # has no scored rows at all, so deriving the list from `scored` dropped it and its
@@ -200,6 +234,49 @@ def _header(base: int, horizons: tuple[int, ...]) -> tuple[str, str]:
     return f"{base + 1}", f"{base + min(horizons)}-{str(base + max(horizons))[-2:]}"
 
 
+def pct(value: float | None) -> str:
+    """A probability, or `--` when the span has no measured bar to compute one against."""
+    return "  --" if value is None else f"{value:.0%}"
+
+
+def keeper_order(row: dict) -> tuple[float, float]:
+    """Sort key for every board on this page: P(keeper), with the mean rank underneath.
+
+    ONE key, shared by the league board and the per-team blocks, so the two cannot order
+    the same rows differently.
+
+    THE SECOND ELEMENT IS A FALLBACK, NOT DECORATION. `p_keeper` is None for EVERY row
+    whenever the span has no measured bar -- `s5` has no complete window today, and a
+    fresh clone has no artifacts at all -- and a constant key leaves `list.sort` stable,
+    so the board printed in `totals()` order (every hitter, then every pitcher) under a
+    header claiming it was ranked. Falling through to `rank_total` keeps the board
+    ordered by the projection it is still showing.
+    """
+    prob = row.get("p_keeper")
+    return (prob if prob is not None else -1.0, -float(row["rank_total"]))
+
+
+def bar_note(horizons: tuple[int, ...]) -> str:
+    """The realized bars this board's probabilities are measured against, named on screen.
+
+    PRINTED, not assumed. These are realized VAR totals from completed seasons, not
+    quantiles of the projected pool -- a distinction that cost two whole tiers when it was
+    got wrong -- so the numbers and the window count are on the page rather than in a
+    docstring somebody would have to go find.
+    """
+    bars, target = load_shipped_bars(), span_target(horizons)
+    if bars is None or target is None or not bars.bars.get(target):
+        return "  no realized bars for this range -- probabilities unavailable"
+    starts = bars.windows.get(target, [])
+    named = "  ".join(
+        f"{name} {bars.bar(target, name):.1f}"
+        for name in ("elite", "keeper", "bust")
+        if bars.bar(target, name) is not None
+    )
+    window = f"{len(starts)} window{'s' if len(starts) != 1 else ''} ({min(starts)}-{max(starts)})"
+    return f"  bars, realized VAR over {window}:  {named}"
+
+
 def render(
     scored: list[dict],
     top: int,
@@ -207,52 +284,62 @@ def render(
     levels: dict,
     base: int,
     ranked: int,
+    *,
+    detail: bool = False,
 ) -> None:
-    scored.sort(key=lambda r: r["total"], reverse=True)
+    """The league board. Probabilities lead; the projection behind them is `--detail`.
+
+    SORTED BY P(keeper), not by the projected mean. The mean is an input to the
+    probability, and the two order the pool differently wherever the bands differ -- a
+    thin projection with a wide band can out-mean a supported one and still be less likely
+    to clear the bar. Ranking on the number the decision reads is the point of the
+    feature.
+
+    ...AND THE TITLE SAYS SO ONLY WHEN IT IS TRUE. `keeper_order` falls back to the mean
+    rank on a range with no measured bar (`--horizon 5` today), so a fixed "by P(keeper)"
+    headline would name a column of dashes as the sort key.
+    """
+    scored.sort(key=keeper_order, reverse=True)
     one, span = _header(base, horizons)
-    floors = "  ".join(f"{s} {levels[s]:.2f}" for s in sorted(levels, key=lambda s: levels[s]))
-    print(f"\nTOP {min(top, len(scored))} by {span} TOTAL VAR   (floors: {floors})")
-    # Two numbers, because ranks are stamped over the WHOLE pool before any filter.
-    # Printing only the post-filter count beside a # column that runs past it is the
-    # contradiction the web board was fixed for in 1eea2062.
+    priced = any(r.get("p_keeper") is not None for r in scored)
+    by = "P(keeper)" if priced else "projected VAR (no measured bar for this range)"
+    print(f"\nTOP {min(top, len(scored))} by {by} over {span}")
+    print(bar_note(horizons))
     if ranked != len(scored):
-        print(f"{len(scored)} scored after --min-support, ranked against all {ranked}" + chr(10))
+        print(f"  {len(scored)} scored after --min-support, ranked against all {ranked}")
     else:
-        print(f"{len(scored)} players scored" + chr(10))
-    print(
-        f"{'#' + span:>8} {'#' + one:>6}  {'player':<24} {'age':>3} {'slot':>4} {'now':>6} "
-        f"{'prior':>6} {span + ' VAR':>10} {one + ' VAR':>9}  {'p10..p90':>16} {'yrs':>4} {'supp':>5}"
+        print(f"  {len(scored)} players scored")
+    if detail:
+        floors = "  ".join(f"{s} {levels[s]:.2f}" for s in sorted(levels, key=lambda s: levels[s]))
+        print(f"  floors: {floors}")
+
+    head = (
+        f"\n  {'#':>3}  {'player':<24} {'age':>3} {'slot':>4} "
+        f"{'elite':>7} {'keeper':>7} {'bust':>7}"
     )
-    for r in scored[:top]:
-        band = f"{r['p10']:6.1f}..{r['p90']:<6.1f}"
-        # (!) is a warning, not decoration: below the threshold the fitted line was
-        # evaluated outside its own support, so the band is wide because the model is
-        # extrapolating rather than because this player is genuinely volatile.
-        flag = " (!!)" if r["band_fell_back"] else (" (!)" if r["extrapolated"] else "")
-        # The MOVE between the two ranks is the keeper signal: a player far better over
-        # three years than next year is who you hold rather than who you start.
-        shift = rank_move(r)
-        arrow = f"{shift:+d}" if shift else ""
-        print(
-            f"{r['rank_total']:8d} {r['rank_next']:6d}  {r['name'][:24]:<24} {r['age']:3d} "
-            f"{r['slot']:>4} {r['now']:6.1f} {r['prior']:6.1f} {r['total']:10.1f} "
-            f"{r['next']:9.1f}  {band:>16} {r['years']:4d} {r['support']:5.0%}{flag}{arrow:>5}"
+    if detail:
+        head += (
+            f"   {'now':>6} {'prior':>6} {span + ' VAR':>10} {one + ' VAR':>9} "
+            f"{'p10..p90':>16} {'supp':>5} {'#mean':>6}"
         )
-    if any(r["extrapolated"] for r in scored[:top]):
-        print(
-            f"\n  (!) under {MIN_LOCAL_SUPPORT:.0%} of the fitting weight sits near this"
-            "\n      player's own current season -- LAST season is kernel-weighted and THIS"
-            "\n      one is not, so a season that far outruns its prior is priced by"
-            "\n      extrapolating a line fitted on players unlike him."
-            "\n"
-            "\n      The BAND already accounts for this and is wide on these rows, so read it"
-            "\n      rather than the point estimate: measured on breakouts the interval is"
-            "\n      calibrated for hitters (12%/11% against a nominal 10%/10%) and still"
-            "\n      optimistic for pitchers three years out (24% below p10). What stays"
-            "\n      unguarded is the estimate itself, which leans on the fitted line holding"
-            "\n      outside its own data -- locally unbiased where checked, but assumed."
-            "\n      Estimator fix is #310; --min-support drops these rows entirely."
+    print(head)
+    for i, r in enumerate(scored[:top], start=1):
+        line = (
+            f"  {i:>3}  {r['name'][:24]:<24} {r['age']:3d} {r['slot']:>4} "
+            f"{pct(r.get('p_elite')):>7} {pct(r.get('p_keeper')):>7} {pct(r.get('p_bust')):>7}"
         )
+        if detail:
+            band = f"{r['p10']:6.1f}..{r['p90']:<6.1f}"
+            # The MOVE between the two mean-ranks is the old keeper signal, kept in detail
+            # because it says something the probabilities do not: whether a player is
+            # worth HOLDING rather than STARTING.
+            shift = rank_move(r)
+            arrow = f"{shift:+d}" if shift else ""
+            line += (
+                f"   {r['now']:6.1f} {r['prior']:6.1f} {r['total']:10.1f} {r['next']:9.1f} "
+                f"{band:>16} {r['support']:5.0%} {r['rank_total']:>6}{arrow:>5}"
+            )
+        print(line)
 
 
 def main() -> int:
@@ -272,7 +359,8 @@ def main() -> int:
         default=0.0,
         help=(
             "drop rows whose fitting weight near the query's own current season falls "
-            f"below this (try {MIN_LOCAL_SUPPORT}); by default they are flagged, not removed"
+            "below this; the band is calibrated at every level, so this trims the pool "
+            "rather than hiding anything untrustworthy"
         ),
     )
     parser.add_argument(
@@ -294,10 +382,25 @@ def main() -> int:
             "answers taken from one file cannot disagree with each other."
         ),
     )
+    parser.add_argument(
+        "--detail",
+        action="store_true",
+        help=(
+            "add the projection behind the probabilities -- mean VAR, band, support and "
+            "the mean-based rank. Hidden by default because the probability is the "
+            "decision and the mean is one of its inputs"
+        ),
+    )
     parser.add_argument("--panel-dir", type=Path, default=DEFAULT_PANEL_DIR)
     args = parser.parse_args()
     if args.horizon < 1:
         parser.error("--horizon must be at least 1")
+    if args.horizon > MAX_HORIZON:
+        # REFUSED, not clamped silently. Past this there is no `s{k}` multiplier, so the
+        # board would print a band nothing measured -- and it would look exactly like a
+        # calibrated one. `build_band_calibration.py` fits 1..MAX_HORIZON; raising this
+        # means raising that.
+        parser.error(f"--horizon max is {MAX_HORIZON} (the calibrated range)")
     if args.top < 1:
         parser.error("--top must be at least 1")
     if not args.panel_dir.is_absolute():
@@ -382,7 +485,7 @@ def main() -> int:
     if not scored:
         print("\nnothing scored -- check --min-sgp and that the panel covers this season")
         return 1
-    render(scored, args.top, horizons, levels, season, ranked)
+    render(scored, args.top, horizons, levels, season, ranked, detail=args.detail)
     show_teams = bool(args.by_team or args.team)
     if show_teams or args.csv:
         # Live Upstash, not the local mirror: roster membership is exactly the kind of
@@ -432,6 +535,7 @@ def main() -> int:
                 horizons,
                 args.team,
                 keep=config.keepers_per_team,
+                detail=args.detail,
             )
     if args.csv:
         pd.DataFrame(scored).sort_values("rank_total").to_csv(args.csv, index=False)

@@ -7,6 +7,7 @@ from dataclasses import replace
 import pytest
 
 from fantasy_baseball.trajectory.board import BoardRow
+from fantasy_baseball.trajectory.calibration import IDENTITY, load_shipped
 from fantasy_baseball.trajectory.shape import shape_trajectory
 from fantasy_baseball.trajectory.sweep import (
     SWEEP_DRAWS,
@@ -316,7 +317,13 @@ def test_a_swept_row_matches_shape_trajectory_itself() -> None:
     horizons = (1, 2, 3)
 
     swept = sweep_pool([row], panel, "hitter", horizons)
-    got = totals(swept, horizons, scale="var")[0]
+    # IDENTITY, because this test grounds the FIELD MAPPING -- `_points` -> `YearPoint` ->
+    # `totals` -- against `shape_trajectory` itself, and `totals` now also applies the
+    # span calibration. Comparing a corrected total against a raw sum would fail for a
+    # reason that has nothing to do with the mapping, and "fix" it by deleting the one
+    # assertion that catches a transposed p10/p90. The correction gets its own assertion
+    # below, and its coverage guarantee is pinned in `test_calibration.py`.
+    got = totals(swept, horizons, scale="var", calibration=IDENTITY)[0]
 
     traj, _ = shape_trajectory(
         panel,
@@ -343,6 +350,18 @@ def test_a_swept_row_matches_shape_trajectory_itself() -> None:
     assert got["next"] == pytest.approx(
         next(p.mean for p in observable if p.horizon == 1), abs=1e-9
     )
+
+    # AND THE SHIPPED TABLE ACTUALLY MOVES THE BAND, so `calibration=IDENTITY` above is a
+    # deliberate choice rather than a way of not testing the correction. The mean must NOT
+    # move: calibration scales p10/p90 about `predicted` and touches nothing else, which
+    # is what keeps every rank on the board identical to the uncalibrated one.
+    live = totals(swept, horizons, scale="var")[0]
+    assert live["total"] == pytest.approx(got["total"], abs=1e-9), "calibration moved a mean"
+    assert live["next"] == pytest.approx(got["next"], abs=1e-9)
+    if load_shipped() is not None:
+        assert (live["p90"] - live["p10"]) != pytest.approx(got["p90"] - got["p10"], abs=1e-6), (
+            "the shipped calibration must change the width, or it is not being applied"
+        )
     assert [c["mean"] for c in got["by_year"]] == [
         pytest.approx(p.mean, abs=1e-9) for p in observable
     ]
