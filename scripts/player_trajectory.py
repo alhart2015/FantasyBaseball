@@ -33,6 +33,7 @@ from datetime import date
 from functools import lru_cache
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 # --show-comps prints real MLBAM names; 369 of them are non-ASCII and mangle (or, off
@@ -47,6 +48,7 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import people as board_people
 from fantasy_baseball.trajectory.board import player_names, season_slots
+from fantasy_baseball.trajectory.calibration import load_shipped, span_target
 from fantasy_baseball.trajectory.model import Trajectory
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR
 from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
@@ -56,6 +58,10 @@ from fantasy_baseball.trajectory.value import (
     check_position,
     replacement_for,
     resolve_slots,
+)
+from fantasy_baseball.trajectory.value_bars import (
+    load_shipped_bars,
+    longest_calibrated_span,
 )
 from fantasy_baseball.utils.ansi import DIM_GRAY, column_widths, pad, paint
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -340,31 +346,49 @@ def _no_support(traj: Trajectory) -> bool:
     return not traj.observable
 
 
-def _warn_if_extrapolated(traj: Trajectory) -> None:
-    """Say so when the fitted line was evaluated outside its own support.
+def _year_band(traj: Trajectory, point) -> tuple[float, float]:
+    """This year's calibrated p10/p90.
 
-    A DIFFERENT failure from `_warn_if_thin`, which reads `n_effective`: a query can have
-    1,100 effective rows behind it and still have almost none of them near its own current
-    season, because only the prior season is kernel-weighted. That is the 13.6-now /
-    0.0-prior case, and without this the board flagged it with `(!)` while this CLI --
-    the one used for a single keep-or-cut call -- printed the same numbers unmarked.
+    The band `shape` returns is RAW -- `sweep.totals` has to sum raw bands before applying
+    its own span multiplier, so the correction cannot live inside the fit. Every surface
+    that DISPLAYS a band therefore applies its own, and this is that call for the two
+    per-age tables below.
     """
-    if not (traj.extrapolated or traj.band_fell_back):
+    table = load_shipped()
+    if table is None:
+        return point.p10, point.p90
+    return table.apply_year(
+        point.mean,
+        point.p10,
+        point.p90,
+        pool=traj.kind,
+        horizon=point.horizon,
+        support=traj.local_support,
+    )
+
+
+def _print_support(traj: Trajectory) -> None:
+    """The share of fitting weight sitting near his own current season, as a number.
+
+    A DIFFERENT quantity from `_warn_if_thin`'s `n_effective`: a query can have 1,100
+    effective rows behind it and still have almost none of them near its own current
+    season, because only the prior season is kernel-weighted. That is the 13.6-now /
+    0.0-prior case.
+
+    Printed rather than judged. This used to fire a paragraph headed `*** EXTRAPOLATED`
+    below a 10% threshold, matching the board's `(!)`; the coverage backtest
+    (`scripts/calibrate_band_coverage.py`) then put that threshold in the wrong place --
+    the 10-30%% band is as miscalibrated per-year as the flagged rows below it, and the
+    summed range is honest at every level. A cutoff that splits neither is worse than the
+    number it was hiding, so the number is what prints.
+    """
+    if np.isnan(traj.local_support):
+        # The comp matchers, where the band IS the matching rule and no line was fitted.
         return
-    if traj.band_fell_back:
-        print(
-            "\n  *** BAND REVERTED: too few comps near his current season to read a band"
-            "\n      from, so it falls back to the whole cohort's scatter -- the UNDERSTATED"
-            "\n      interval the reweighting exists to replace, on the query that needed it"
-            "\n      most. Treat the band below as a lower bound on the real uncertainty. ***"
-        )
+    fallback = " [band fell back to the whole cohort's scatter]" if traj.band_fell_back else ""
     print(
-        f"\n  *** EXTRAPOLATED: only {traj.local_support:.0%} of the fitting weight sits"
-        f" near his own {traj.sgp:.1f} SGP season."
-        "\n      LAST season is kernel-weighted and THIS one is not, so a season that far"
-        "\n      outruns its prior is priced by extending a line fitted on players unlike"
-        "\n      him. Read the p10..p90 band rather than the point estimate: the band"
-        "\n      accounts for this and the estimate does not. See #310. ***"
+        f"  local support: {traj.local_support:.0%} of the fitting weight sits near his"
+        f" own {traj.sgp:.1f} SGP season{fallback}"
     )
 
 
@@ -398,6 +422,61 @@ def _print_total(traj: Trajectory) -> None:
     covered, asked = len(traj.observable), len(traj.path)
     note = "" if covered == asked else f"  (only {covered} of {asked} are observable)"
     print(f"\n   total over {covered} years: {traj.total:.1f} {_units(traj)}{note}")
+    _print_probabilities(traj)
+
+
+def _print_probabilities(traj: Trajectory) -> None:
+    """P(elite) / P(keeper) / P(bust) for the span, against the realized bars.
+
+    VAR ONLY. The bars are realized VAR totals, so on the SGP scale there is nothing to
+    compare against and the block is skipped rather than printed against the wrong
+    quantity -- a catcher and an outfielder are not on one scale until the floor is
+    netted, which is the whole reason the board ranks on VAR.
+
+    The RAW summed band, matching `sweep.totals`: `exceedance` normalises by the
+    half-widths its curve was fitted on, and `shape` returns those uncorrected.
+    """
+    if traj.scale != "var":
+        return
+    bars, table = load_shipped_bars(), load_shipped()
+    if bars is None or table is None:
+        return
+    # THE LONGEST CALIBRATED PREFIX, which is usually shorter than what is on screen: the
+    # CLI projects five years by default and no five-year window is measurable yet
+    # (`value_bars`). Falling back to 1..k and NAMING k beats printing nothing, and beats
+    # silently answering a different span than the table above -- so the label carries it.
+    span = longest_calibrated_span(len(traj.observable), bars)
+    target = span_target(tuple(range(1, span + 1)))
+    if not span or target is None:
+        return
+    observable = [p for p in traj.observable if p.horizon <= span]
+    total = sum(p.mean for p in observable)
+    raw_p10 = sum(p.p10 for p in observable)
+    raw_p90 = sum(p.p90 for p in observable)
+    shown = []
+    for name in ("elite", "keeper", "bust"):
+        bar = bars.bar(target, name)
+        if bar is None:
+            return
+        hit = table.exceedance(
+            bar,
+            total,
+            raw_p10,
+            raw_p90,
+            pool=traj.kind,
+            target=target,
+            support=traj.local_support,
+        )
+        if hit is None:
+            return
+        shown.append(f"{name} {(1 - hit) if name == 'bust' else hit:.0%}")
+    starts = bars.windows.get(target, [])
+    named = "  ".join(f"{n} {bars.bar(target, n):.1f}" for n in ("elite", "keeper", "bust"))
+    print(
+        f"   P(clears the bar): {'   '.join(shown)}"
+        f"\n     bars, realized VAR over {len(starts)} window(s) "
+        f"({min(starts)}-{max(starts)}): {named}"
+    )
 
 
 def _cell(value: object) -> str:
@@ -496,8 +575,8 @@ def render(traj: Trajectory, show_comps: int) -> None:
             f"  their average shape: {traj.mean_prior:.1f} -> {traj.mean_start:.1f} SGP "
             "(kernel-weighted)"
         )
+        _print_support(traj)
         _warn_if_thin(traj)
-        _warn_if_extrapolated(traj)
         # Weighted survival against the EFFECTIVE size, so every column in the row
         # describes the same population the fit used. A raw count beside a weighted
         # median invited the reader to take both as properties of the prediction.
@@ -514,7 +593,8 @@ def render(traj: Trajectory, show_comps: int) -> None:
             # neither symmetric nor Gaussian in the same way across pools and horizons:
             # +/-1 spread holds 59% of pitchers at +3 against a nominal 68%. The
             # quantiles are the interval actually measured.
-            band = f"{p.p10:5.1f}..{p.p90:<5.1f}"
+            lo, hi = _year_band(traj, p)
+            band = f"{lo:5.1f}..{hi:<5.1f}"
             print(
                 f"   {p.age:3d}   {p.mean:7.2f}   {p.se:5.2f}  {band:>13}  {p.median:7.2f}"
                 f"     {p.survival:5.0%} (of {p.n_effective:5.0f})  {p.mean_if_survived:6.2f}"
@@ -563,7 +643,8 @@ def render(traj: Trajectory, show_comps: int) -> None:
         # it into a symmetric interval -- the Gaussian reading measured at 59% coverage
         # against a nominal 68% for pitchers at +3. These comps ARE the empirical
         # distribution, so the quantiles cost nothing to report.
-        band = f"{p.p10:5.1f}..{p.p90:<5.1f}"
+        lo, hi = _year_band(traj, p)
+        band = f"{lo:5.1f}..{hi:<5.1f}"
         print(
             f"   {p.age:3d}   {p.mean:7.2f}    {p.se:5.2f}  {band:>13}  {p.median:7.2f}"
             f"    {p.survivors:5d}/{p.n} ({p.survival:4.0%})  {p.mean_if_survived:6.2f}"

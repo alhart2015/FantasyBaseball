@@ -45,6 +45,11 @@ def _row(name: str, total: float, team: str) -> dict:
         "rank_next": 1,
         "band_fell_back": False,
         "extrapolated": False,
+        # `totals` puts this on every real row, and the per-team block now PRINTS it --
+        # it replaced the `(!)` glyph, which fired on a threshold the coverage backtest
+        # found split nothing. Keyed, not `.get`-ed, in the renderer for the same reason
+        # every other column here is: a row reaching it without one is a defect.
+        "support": 0.42,
     }
 
 
@@ -132,7 +137,14 @@ def test_your_own_team_caps_the_headline_while_still_listing_everyone(capsys) ->
     out = capsys.readouterr().out
 
     assert _headline(out, "MINE") == 30.0, "your headline summed past the keeper cut"
-    listed = [ln for ln in out.splitlines() if "Mine" in ln and ln.startswith("  #")]
+    # Rows no longer start with "  #<rank>": the probability columns replaced the two
+    # rank columns that used to lead. Keyed on the name and the two-space indent, which
+    # is what actually distinguishes a player row from the header and the headline.
+    listed = [
+        ln
+        for ln in out.splitlines()
+        if "Mine" in ln and ln.startswith("  ") and not ln.startswith("  player")
+    ]
     assert len(listed) == 14, f"your own block stopped listing every player: {len(listed)}"
 
 

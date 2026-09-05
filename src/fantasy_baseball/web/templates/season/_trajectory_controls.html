@@ -119,17 +119,33 @@
     </span>
     {% endif %}
   </noscript>
+  {#- The one control that changes what is SHOWN rather than what is scored. Its own
+      group so it does not read as another filter on the pool. -#}
+  <span class="pill-group">
+    <a class="pill {% if not cur.detail %}active{% endif %}" href="{{ board_url(cur, detail='') }}">probabilities</a>
+    <a class="pill {% if cur.detail %}active{% endif %}" href="{{ board_url(cur, detail='1') }}">+ projection</a>
+  </span>
 </div>
 {%- endmacro %}
 
 {#- The per-row reliability flags, shared by both views. Byte-identical markup in two
     templates is how a wording change lands in one and not the other -- the same reason
-    the control bar above became a macro. #310 will touch this copy. -#}
-{% macro row_flags(r, min_local_support) -%}
+    the control bar above became a macro.
+
+    THE SUPPORT FLAGS ARE GONE, deliberately. `(!)` marked local support under 10% and
+    `(!!)` marked a band that fell back to the cohort's scatter, both telling the reader
+    to distrust the row. `scripts/calibrate_band_coverage.py` measured what that was
+    worth: the summed range these views headline is calibrated at EVERY support level
+    (hitters under 5% support hold 5%/7% of outcomes outside a nominal 10%/10%), and the
+    per-year range is miscalibrated well ABOVE the 10% cutoff the glyph was drawn at --
+    the unflagged 10-30% bucket runs 18% (hitters) to 24% (pitchers) below p10. A mark
+    that fires on the wrong rows and stays silent on equally bad ones is worse than the
+    `supp` column it was decorating, so the column is what these views print now.
+
+    `(?)` stays: it is an OWNERSHIP fact (#284, the name join), not a model-confidence
+    judgement, and nothing else on the page carries it. -#}
+{% macro row_flags(r) -%}
 {%- if r.owner_ambiguous %} <span class="flag flag-extrap" title="This name is not unique -- either the board carries more than one player under it, or more than one team rosters one. Roster blobs have no MLBAM id (#284), so the name is the only join available and it cannot tell them apart. Who owns this row is a guess; check before acting on it.">(?)</span>
-{%- endif %}
-{%- if r.band_fell_back %} <span class="flag flag-band" title="The band on at least one year in this range fell back to the whole cohort's residual scatter -- the understated interval the reweighting exists to replace. It happens on the deepest extrapolations, the ones most in need of a wide band.">(!!)</span>
-{%- elif r.extrapolated %} <span class="flag flag-extrap" title="Under {{ '%.0f'|format(min_local_support * 100) }}% of the fitting weight sits near this player's own current season, so the line was evaluated outside its own support. Read the band, not the point estimate.">(!)</span>
 {%- endif %}
 {%- endmacro %}
 

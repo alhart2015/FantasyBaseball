@@ -31,9 +31,9 @@
 <p class="muted trajectory-vintage">
   Start year is locked at {{ board.base_season + 1 }}.
   {{ ctl.vintage_note(board) }}
-  Rows marked <strong>(!)</strong> or <strong>(!!)</strong> are counted in their block's
-  total like any other, so a block can be ordered above its neighbour on estimates the
-  model is least sure about -- read those rows' bands before comparing rosters.
+  Every row is counted in its block's total, so a block can be ordered above its
+  neighbour on thinly-supported estimates -- the <strong>supp</strong> column is what
+  says which those are.
 </p>
 
 {% if board.mine_missing %}
@@ -59,10 +59,19 @@ statement about the lookup, not about what you own.</p>
         <th>Player</th>
         <th>Age</th>
         <th>Slot</th>
-        <th class="sorted">{{ board.span }} {{ board.scale|upper }}</th>
+        {#- Probabilities lead here too, and for a sharper reason than on the league
+            board: comparing two ROSTERS is exactly where a mean and a band get traded
+            off by eye, and the probability has already done that trade correctly. -#}
+        <th class="sorted" title="Probability his realized {{ board.span }} clears the top-{{ board.meta.bar_ranks.elite }} bar">Elite</th>
+        <th title="Probability he clears the top-{{ board.meta.bar_ranks.keeper }} bar -- every keeper slot in the league. Includes the elite share.">Keeper</th>
+        <th title="Probability he finishes BELOW the top-{{ board.meta.bar_ranks.bust }} bar">Bust</th>
+        {% if cur.detail %}
+        <th>{{ board.span }} {{ board.scale|upper }}</th>
         {% for y in board.year_columns %}
         <th title="{{ board.scale|upper }} in {{ y }} alone">'{{ (y|string)[2:] }}</th>
         {% endfor %}
+        <th title="Share of the fitting weight sitting near this player's own current season">supp</th>
+        {% endif %}
       </tr>
     </thead>
     <tbody>
@@ -70,14 +79,20 @@ statement about the lookup, not about what you own.</p>
       <tr>
         <td>{{ r.rank_total }}</td>
         <td>{{ r.name }}
-          {{ ctl.row_flags(r, board.meta.min_local_support) }}
+          {{ ctl.row_flags(r) }}
         </td>
         <td>{{ r.age }}</td>
         <td>{{ r.slot }}</td>
+        <td>{% if r.p_elite is not none %}{{ '%.0f'|format(r.p_elite * 100) }}%{% else %}--{% endif %}</td>
+        <td>{% if r.p_keeper is not none %}{{ '%.0f'|format(r.p_keeper * 100) }}%{% else %}--{% endif %}</td>
+        <td>{% if r.p_bust is not none %}{{ '%.0f'|format(r.p_bust * 100) }}%{% else %}--{% endif %}</td>
+        {% if cur.detail %}
         <td>{{ '%.1f'|format(r.total) }}</td>
         {% for cell in r.year_cells %}
         <td>{% if cell is not none %}{{ '%.1f'|format(cell) }}{% else %}--{% endif %}</td>
         {% endfor %}
+        <td>{{ '%.0f'|format(r.support * 100) }}%</td>
+        {% endif %}
       </tr>
       {% endfor %}
     </tbody>

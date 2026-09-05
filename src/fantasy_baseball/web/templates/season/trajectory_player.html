@@ -97,15 +97,22 @@ blobs carry no MLBAM id (#284), so the name cannot tell them apart -- pick one:<
 {#- THE CHART IS WHY THE PAGE IS OPEN (#361), so nothing but the subject's own
     identity stands above it -- no prose at all now, only the line naming him.
 
-    THE FLAG IS THE GLYPH, not a sentence beside it. `(!)` still marks a fit evaluated
-    outside its own support and the warning is on its `title`, the same shape the league
-    board's `row_flags` already uses (`.flag`/`.flag-extrap`, `cursor: help`) -- so the
-    two views flag the same condition the same way instead of one spelling it out in
-    words above the chart. -#}
+    SUPPORT IS A NUMBER HERE TOO. This carried a `(!)` glyph whose title told the reader
+    to distrust the point estimate; `scripts/calibrate_band_coverage.py` measured that
+    the point estimate is unbiased at every support level, and that the miscalibration
+    the glyph pointed at belongs to the per-year band and extends well above the 10%
+    cutoff it fired at. The share itself is the honest thing to show. -#}
 <p class="muted">
   {{ board.name }} -- age {{ board.age }}, {{ board.slot }}.
-  {% if board.extrapolated %}<span class="flag flag-extrap"
-    title="This fit was evaluated outside its own support -- read the band, not the point estimate.">(!)</span>{% endif %}
+  {%- if board.probabilities %}
+  {#- The same three numbers the ranked boards lead with, over the longest span that has
+      measured bars -- named, because it is usually shorter than the chart below. -#}
+  Over {{ board.prob_span }} year{{ '' if board.prob_span == 1 else 's' }}:
+  <strong>{{ '%.0f'|format(board.probabilities.p_elite * 100) }}%</strong> elite,
+  <strong>{{ '%.0f'|format(board.probabilities.p_keeper * 100) }}%</strong> keeper,
+  <strong>{{ '%.0f'|format(board.probabilities.p_bust * 100) }}%</strong> bust.
+  {%- endif %}
+  {% if board.support is not none %}{{ '%.0f'|format(board.support * 100) }}% local support.{% endif %}
 </p>
 
 <div class="chart-wrapper"><canvas id="trajectory-chart"></canvas></div>
