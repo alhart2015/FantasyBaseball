@@ -149,17 +149,38 @@ CALIBRATION_PATH = Path("data") / "trajectory" / "band_calibration.json"
 #: `shape`, so in production the scaling happens while both sides still have width.
 MIN_HALF_WIDTH = 1e-9
 
+#: Narrowest a correction may make a half-width. A conformal quantile is signed, so an
+#: over-wide cell can in principle fit a multiplier at or below zero, and `apply` would
+#: then emit p10 at or above the point estimate -- an inverted band that prints as an
+#: ordinary one. Small enough to bind on nothing the fit has ever produced (the shipped
+#: table bottoms out at 0.67) and large enough that the band stays an interval.
+MIN_MULTIPLIER = 1e-3
 
-def panel_vintage_of(panel_dir: Path | None = None) -> str:
+
+def panel_vintage_of(panel_dir: Path | None = None, *, missing_ok: bool = False) -> str | None:
     """The panel filenames, joined -- the identity a calibration is fitted against.
 
     FILENAMES, not a timestamp, matching `push_trajectory_board.py`'s vintage line: the
     panel is a build artifact whose name carries its season range, and an mtime changes
     on a copy that did not rebuild anything.
+
+    `missing_ok` RETURNS None WHERE THERE IS NO PANEL AT ALL, and that is the deployed
+    case, not an exotic one. `data/trajectory/*` is gitignored except the two fitted JSON
+    artifacts, so Render has the calibration and NOT the CSVs it was fitted on --
+    `panel_path` raises FileNotFoundError there. `load_shipped` sits on the board render
+    path, so raising took every trajectory page to a 500; the vintage guard exists to
+    catch a calibration paired with the WRONG panel, and with no panel present there is
+    no pairing to be wrong about. The build scripts leave it False: they are about to
+    read the panel anyway, and a missing one there must still be an error.
     """
     from .panel import panel_path
 
-    return "+".join(panel_path(kind, panel_dir).name for kind in ("hitter", "pitcher"))
+    try:
+        return "+".join(panel_path(kind, panel_dir).name for kind in ("hitter", "pitcher"))
+    except FileNotFoundError:
+        if missing_ok:
+            return None
+        raise
 
 
 def bucket_of(support: float) -> str:
@@ -170,7 +191,11 @@ def bucket_of(support: float) -> str:
     """
     if math.isnan(support):
         return BUCKET_LABELS[-1]
-    for edge, label in zip(SUPPORT_EDGES, BUCKET_LABELS, strict=False):
+    # `strict=True`: `BUCKET_LABELS` has exactly one more entry than `SUPPORT_EDGES` (the
+    # open top bucket), so pairing the edges with all but the last label is total. Adding
+    # an edge without its label would otherwise be SILENT -- the extra bucket would fold
+    # into the one above it and every query in it would take the wrong multiplier.
+    for edge, label in zip(SUPPORT_EDGES, BUCKET_LABELS[:-1], strict=True):
         if support < edge:
             return label
     return BUCKET_LABELS[-1]
@@ -199,6 +224,12 @@ def conformal_multipliers(
     Taken over ALL rows rather than only the rows that fell outside. A quantile
     conditioned on having already missed answers a different question, and there is no
     guarantee attached to it.
+
+    FLOORED AT `MIN_MULTIPLIER`. The quantile is a signed score, so a cell whose band is
+    grossly too wide can hand back a non-positive multiplier -- and `apply` would then
+    put p10 ON or ABOVE the point estimate, an INVERTED band that renders as a plausible
+    "[12.4, 9.1]" rather than as an error. The shipped table's smallest is 0.67, so this
+    binds on nothing today; it is the guard that keeps a future refit from shipping one.
     """
     lo_w = predicted - p10
     hi_w = p90 - predicted
@@ -210,8 +241,8 @@ def conformal_multipliers(
         return 1.0, 1.0, 0
     level = _conformal_level(n)
     return (
-        float(np.quantile(-err / lo_w, level)),
-        float(np.quantile(err / hi_w, level)),
+        max(MIN_MULTIPLIER, float(np.quantile(-err / lo_w, level))),
+        max(MIN_MULTIPLIER, float(np.quantile(err / hi_w, level))),
         n,
     )
 
@@ -533,7 +564,7 @@ def load_shipped(panel_dir: Path | None = None) -> BandCalibration | None:
     path = PROJECT_ROOT / CALIBRATION_PATH
     if not path.exists():
         return None
-    return BandCalibration.load(path, panel_vintage=panel_vintage_of(panel_dir))
+    return BandCalibration.load(path, panel_vintage=panel_vintage_of(panel_dir, missing_ok=True))
 
 
 def newest_outcome(frame: pd.DataFrame) -> int:
@@ -588,35 +619,27 @@ def build_table(
     curves: dict[str, dict[str, dict[str, tuple[float, ...]]]] = {}
     fallbacks: dict[str, int] = {}
 
+    def arrays(rows: pd.DataFrame) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
+        """The four columns both fits read. Extracted once per frame rather than four
+        times -- `conformal_multipliers` and `signed_scores` want the same vectors."""
+        return (
+            rows["predicted"].to_numpy(),
+            rows["p10"].to_numpy(),
+            rows["p90"].to_numpy(),
+            rows["actual"].to_numpy(),
+        )
+
     def fit(pool_rows: pd.DataFrame, pool: str, target: str) -> None:
-        pooled = conformal_multipliers(
-            pool_rows["predicted"].to_numpy(),
-            pool_rows["p10"].to_numpy(),
-            pool_rows["p90"].to_numpy(),
-            pool_rows["actual"].to_numpy(),
-        )
-        pooled_scores = signed_scores(
-            pool_rows["predicted"].to_numpy(),
-            pool_rows["p10"].to_numpy(),
-            pool_rows["p90"].to_numpy(),
-            pool_rows["actual"].to_numpy(),
-        )
+        pooled_arrays = arrays(pool_rows)
+        pooled = conformal_multipliers(*pooled_arrays)
+        pooled_scores = signed_scores(*pooled_arrays)
         cells: dict[str, tuple[float, float]] = {}
         curve_cells: dict[str, tuple[float, ...]] = {}
+        buckets = pool_rows["support"].map(bucket_of)
         for label in BUCKET_LABELS:
-            sub = pool_rows[pool_rows["support"].map(bucket_of) == label]
-            lo, hi, n = conformal_multipliers(
-                sub["predicted"].to_numpy(),
-                sub["p10"].to_numpy(),
-                sub["p90"].to_numpy(),
-                sub["actual"].to_numpy(),
-            )
-            scores = signed_scores(
-                sub["predicted"].to_numpy(),
-                sub["p10"].to_numpy(),
-                sub["p90"].to_numpy(),
-                sub["actual"].to_numpy(),
-            )
+            sub_arrays = arrays(pool_rows[buckets == label])
+            lo, hi, n = conformal_multipliers(*sub_arrays)
+            scores = signed_scores(*sub_arrays)
             if n < MIN_CELL_ROWS:
                 fallbacks[f"{pool}/{target}/{label}"] = n
                 lo, hi = pooled[0], pooled[1]
@@ -630,11 +653,12 @@ def build_table(
         multipliers.setdefault(pool, {})[target] = cells
         curves.setdefault(pool, {})[target] = curve_cells
 
+    # ONCE, over the WHOLE frame: the window is a property of the panel, not of a pool or
+    # a target, and recomputing it inside the loop was 20 full-frame passes per build.
+    newest = newest_outcome(frame)
     for pool, pool_rows in frame.groupby("pool", sort=False):
         for target in TARGETS:
-            rows = fit_rows(
-                pool_rows, target, window_years=window_years, newest=newest_outcome(frame)
-            )
+            rows = fit_rows(pool_rows, target, window_years=window_years, newest=newest)
             if not rows.empty:
                 fit(rows, str(pool), target)
 

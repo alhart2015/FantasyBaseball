@@ -53,6 +53,7 @@ from fantasy_baseball.trajectory.model import Trajectory
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR
 from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
 from fantasy_baseball.trajectory.shape import shape_trajectory
+from fantasy_baseball.trajectory.sweep import BAR_KEYS, bar_probabilities
 from fantasy_baseball.trajectory.value import (
     ROLE_MIN_GAMES,
     check_position,
@@ -378,7 +379,7 @@ def _print_support(traj: Trajectory) -> None:
     Printed rather than judged. This used to fire a paragraph headed `*** EXTRAPOLATED`
     below a 10% threshold, matching the board's `(!)`; the coverage backtest
     (`scripts/calibrate_band_coverage.py`) then put that threshold in the wrong place --
-    the 10-30%% band is as miscalibrated per-year as the flagged rows below it, and the
+    the 10-30% band is as miscalibrated per-year as the flagged rows below it, and the
     summed range is honest at every level. A cutoff that splits neither is worse than the
     number it was hiding, so the number is what prints.
     """
@@ -450,30 +451,30 @@ def _print_probabilities(traj: Trajectory) -> None:
     if not span or target is None:
         return
     observable = [p for p in traj.observable if p.horizon <= span]
-    total = sum(p.mean for p in observable)
-    raw_p10 = sum(p.p10 for p in observable)
-    raw_p90 = sum(p.p90 for p in observable)
-    shown = []
-    for name in ("elite", "keeper", "bust"):
-        bar = bars.bar(target, name)
-        if bar is None:
-            return
-        hit = table.exceedance(
-            bar,
-            total,
-            raw_p10,
-            raw_p90,
-            pool=traj.kind,
-            target=target,
-            support=traj.local_support,
-        )
-        if hit is None:
-            return
-        shown.append(f"{name} {(1 - hit) if name == 'bust' else hit:.0%}")
+    # THROUGH `bar_probabilities`, the same call `sweep.totals` makes for a board row.
+    # This loop was written out a second time here, and two spellings of the keeper
+    # probability is exactly the pair a reader would open this page to reconcile.
+    probs = bar_probabilities(
+        bars,
+        table,
+        target,
+        pool=traj.kind,
+        support=traj.local_support,
+        mean=sum(p.mean for p in observable),
+        p10=sum(p.p10 for p in observable),
+        p90=sum(p.p90 for p in observable),
+    )
+    if any(v is None for v in probs.values()):
+        return
+    shown = "   ".join(f"{name} {probs[key]:.0%}" for name, key in BAR_KEYS)
     starts = bars.windows.get(target, [])
-    named = "  ".join(f"{n} {bars.bar(target, n):.1f}" for n in ("elite", "keeper", "bust"))
+    named = "  ".join(f"{n} {bars.bar(target, n):.1f}" for n, _ in BAR_KEYS)
+    # THE SPAN IS IN THE LABEL. `--horizon` defaults to 5 and the longest measurable
+    # window is 4, so the table above says "total over 5 years" while these three answer
+    # a four-year question -- unlabelled, the reader reconciles two numbers that were
+    # never about the same thing.
     print(
-        f"   P(clears the bar): {'   '.join(shown)}"
+        f"   P(clears the bar) over {span} year{'' if span == 1 else 's'}: {shown}"
         f"\n     bars, realized VAR over {len(starts)} window(s) "
         f"({min(starts)}-{max(starts)}): {named}"
     )

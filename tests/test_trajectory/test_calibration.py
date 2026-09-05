@@ -311,3 +311,28 @@ def test_a_curve_grid_change_is_refused_rather_than_silently_misread(tmp_path) -
     path.write_text(json.dumps(blob), encoding="utf-8")
     with pytest.raises(ValueError, match=r"curve levels"):
         BandCalibration.load(path)
+
+
+def test_a_shipped_artifact_loads_where_the_panel_it_was_fitted_on_is_absent(tmp_path) -> None:
+    """THE DEPLOYED SHAPE. `.gitignore` ships `band_calibration.json` and NOT the panel
+    CSVs it was fitted on, so Render has the artifact and an otherwise empty
+    `data/trajectory/`. `panel_vintage_of` raises FileNotFoundError there, and it is
+    called from `load_shipped`, which `sweep.totals` calls on EVERY board render -- so
+    the vintage guard took every trajectory page to a 500 instead of the graceful
+    degradation the ignore rule's own comment promises.
+
+    The guard exists to catch a calibration paired with the WRONG panel. With no panel
+    present there is no pairing to be wrong about, so the check is skipped, not fatal --
+    and it must still raise for the build scripts, which are about to read the panel.
+    """
+    from fantasy_baseball.trajectory.calibration import panel_vintage_of
+
+    assert panel_vintage_of(tmp_path, missing_ok=True) is None
+    with pytest.raises(FileNotFoundError):
+        panel_vintage_of(tmp_path)
+
+    path = tmp_path / "band_calibration.json"
+    build_table(_frame(n=600), panel_vintage="v1", window_years=50).save(path)
+    assert BandCalibration.load(path, panel_vintage=None).panel_vintage == "v1", (
+        "a None vintage means 'nothing to compare against', not 'compare against None'"
+    )

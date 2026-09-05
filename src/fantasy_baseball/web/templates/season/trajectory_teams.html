@@ -32,8 +32,8 @@
   Start year is locked at {{ board.base_season + 1 }}.
   {{ ctl.vintage_note(board) }}
   Every row is counted in its block's total, so a block can be ordered above its
-  neighbour on thinly-supported estimates -- the <strong>supp</strong> column is what
-  says which those are.
+  neighbour on thinly-supported estimates -- <a href="{{ ctl.board_url(cur, detail='1') }}">the
+  <strong>supp</strong> column</a> is what says which those are.
 </p>
 
 {% if board.mine_missing %}
@@ -55,14 +55,14 @@ statement about the lookup, not about what you own.</p>
   <table class="data-table trajectory-table">
     <thead>
       <tr>
-        <th title="League-wide rank over the whole scored pool">#</th>
+        <th class="sorted" title="League-wide rank over the whole scored pool">#</th>
         <th>Player</th>
         <th>Age</th>
         <th>Slot</th>
         {#- Probabilities lead here too, and for a sharper reason than on the league
             board: comparing two ROSTERS is exactly where a mean and a band get traded
             off by eye, and the probability has already done that trade correctly. -#}
-        <th class="sorted" title="Probability his realized {{ board.span }} clears the top-{{ board.meta.bar_ranks.elite }} bar">Elite</th>
+        <th title="Probability his realized {{ board.span }} {{ board.scale|upper }} clears the top-{{ board.meta.bar_ranks.elite }} bar measured on completed seasons">Elite</th>
         <th title="Probability he clears the top-{{ board.meta.bar_ranks.keeper }} bar -- every keeper slot in the league. Includes the elite share.">Keeper</th>
         <th title="Probability he finishes BELOW the top-{{ board.meta.bar_ranks.bust }} bar">Bust</th>
         {% if cur.detail %}

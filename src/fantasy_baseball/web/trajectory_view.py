@@ -442,9 +442,19 @@ _STATE: tuple[tuple, list, dict[tuple, list[dict]]] | None = None
 
 
 def clear_board_cache() -> None:
-    """Drop the derived-state cache. For tests, and for anything needing a cold read."""
+    """Drop the derived-state cache. For tests, and for anything needing a cold read.
+
+    THE ARTIFACT CACHES GO WITH IT. `load_shipped`, `load_shipped_bars` and `_bar_ranks`
+    are `lru_cache`d for the same reason the rows are -- `totals` runs per render -- but
+    they are keyed on nothing that changes when the artifact on disk does, so a cold read
+    that left them warm would rank the new payload against the old calibration, and a
+    test could not reach the no-artifact path at all.
+    """
     global _STATE
     _STATE = None
+    load_shipped.cache_clear()
+    load_shipped_bars.cache_clear()
+    _bar_ranks.cache_clear()
 
 
 def _derive(payload: dict, horizons: tuple[int, ...], scale: str) -> list[dict]:

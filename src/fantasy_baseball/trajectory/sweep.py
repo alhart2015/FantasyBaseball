@@ -219,11 +219,18 @@ def sweep_pool(
     return swept
 
 
-def _probabilities(
+#: Bar name -> the key it is reported under. `bust` is the COMPLEMENT of clearing its
+#: bar, so the three read directly rather than as a partition the reader has to add up.
+BAR_KEYS = (("elite", "p_elite"), ("keeper", "p_keeper"), ("bust", "p_bust"))
+
+
+def bar_probabilities(
     bars: ValueBars | None,
     table: BandCalibration | None,
     target: str | None,
-    player: SweptPlayer,
+    *,
+    pool: str,
+    support: float,
     mean: float,
     p10: float,
     p90: float,
@@ -234,18 +241,25 @@ def _probabilities(
     the threshold by the raw half-widths its curve was fitted against, so handing it a
     corrected band would double-apply the correction. The corrected band is what gets
     DISPLAYED; this is what gets measured.
+
+    PLAIN VALUES, not a `SweptPlayer`, because `scripts/player_trajectory.py` prices a
+    `Trajectory` and had a second copy of this loop -- same bar lookup, same bust
+    complement, same all-or-nothing blank. Two spellings of "what are the odds he is
+    worth the slot" is the one number that must not differ between the board and the
+    page a reader opens to check it.
+
+    ALL THREE OR NONE. A partial row would let a template print two numbers and a dash
+    and read as a measurement, when what happened is that a bar or a cell was missing.
     """
-    blank: dict[str, float | None] = {"p_elite": None, "p_keeper": None, "p_bust": None}
+    blank: dict[str, float | None] = {key: None for _, key in BAR_KEYS}
     if bars is None or table is None or target is None:
         return blank
     out: dict[str, float | None] = {}
-    for name, key in (("elite", "p_elite"), ("keeper", "p_keeper"), ("bust", "p_bust")):
+    for name, key in BAR_KEYS:
         bar = bars.bar(target, name)
         if bar is None:
             return blank
-        hit = table.exceedance(
-            bar, mean, p10, p90, pool=player.pool, target=target, support=player.support
-        )
+        hit = table.exceedance(bar, mean, p10, p90, pool=pool, target=target, support=support)
         if hit is None:
             return blank
         out[key] = (1.0 - hit) if name == "bust" else hit
@@ -342,7 +356,16 @@ def totals(
                 # None, never a number, when the span has no measured bar or the tables
                 # are missing. A fabricated probability is the one output this whole
                 # feature exists to prevent.
-                **_probabilities(bars, table, target, player, summed_mean, raw_p10, raw_p90),
+                **bar_probabilities(
+                    bars,
+                    table,
+                    target,
+                    pool=player.pool,
+                    support=player.support,
+                    mean=summed_mean,
+                    p10=raw_p10,
+                    p90=raw_p90,
+                ),
                 "next": first[0].mean if first else float("nan"),
                 "by_year": [{"horizon": p.horizon, "age": p.age, "mean": p.mean} for p in points],
             }

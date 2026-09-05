@@ -81,8 +81,18 @@ class ValueBars:
     ranks: dict[str, int]
 
     def bar(self, span: str, name: str) -> float | None:
-        """The realized VAR for one bar, or None when the span has no complete window."""
-        value = self.bars.get(span, {}).get(str(self.ranks[name]))
+        """The realized VAR for one bar, or None when it is not measured here.
+
+        `.get(name)` rather than `[name]`: `ranks` comes out of a JSON artifact, so an
+        older or hand-edited one can be missing a bar the code asks for, and a KeyError
+        raised from a board render takes out the whole page over one absent threshold.
+        None is already the "no bar for this span" answer every caller handles, and
+        `bar_probabilities` turns it into a blank row rather than a fabricated number.
+        """
+        rank = self.ranks.get(name)
+        if rank is None:
+            return None
+        value = self.bars.get(span, {}).get(str(rank))
         return None if value is None else float(value)
 
     def spans(self) -> tuple[str, ...]:
@@ -129,7 +139,9 @@ def load_shipped_bars(panel_dir: Path | None = None) -> ValueBars | None:
     path = PROJECT_ROOT / VALUE_BARS_PATH
     if not path.exists():
         return None
-    return ValueBars.load(path, panel_vintage=panel_vintage_of(panel_dir))
+    # `missing_ok`: the deployed dashboard ships these bars and NOT the panel CSVs they
+    # were measured on -- see `panel_vintage_of`.
+    return ValueBars.load(path, panel_vintage=panel_vintage_of(panel_dir, missing_ok=True))
 
 
 def eligible_seasons(cache_dir: Path) -> list[int]:

@@ -57,7 +57,12 @@
 <table class="data-table trajectory-table">
   <thead>
     <tr>
-      <th title="Rank by {{ board.span }} {{ board.scale|upper }} over the whole scored pool, both pools, regardless of the filter above">#</th>
+      {#- `sorted` MARKS THE COLUMN THE ROWS ARE ACTUALLY IN. `build_board` orders on
+          `rank_total`, so this is it. It was moved onto Elite when the probability
+          columns landed, which claimed an ordering no code performs -- and the CLI
+          board DOES sort on P(keeper), so the mark was also the only thing on screen
+          saying the two surfaces agree. -#}
+      <th class="sorted" title="Rank by {{ board.span }} {{ board.scale|upper }} over the whole scored pool, both pools, regardless of the filter above">#</th>
       <th></th>
       <th>Player</th>
       <th>Age</th>
@@ -66,7 +71,7 @@
           are computed from is behind ?detail=1. Cumulative rather than an exclusive
           partition -- "worth a keeper slot" includes "elite", and a reader should not
           have to add two columns to get the number they came for. -#}
-      <th class="sorted" title="Probability his realized {{ board.span }} {{ board.scale|upper }} clears the top-{{ board.meta.bar_ranks.elite }} bar measured on completed seasons">Elite</th>
+      <th title="Probability his realized {{ board.span }} {{ board.scale|upper }} clears the top-{{ board.meta.bar_ranks.elite }} bar measured on completed seasons">Elite</th>
       <th title="Probability he clears the top-{{ board.meta.bar_ranks.keeper }} bar -- every keeper slot in the league. Includes the elite share.">Keeper</th>
       <th title="Probability he finishes BELOW the top-{{ board.meta.bar_ranks.bust }} bar">Bust</th>
       {% if cur.detail %}

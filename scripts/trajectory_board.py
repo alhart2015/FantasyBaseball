@@ -93,8 +93,9 @@ def by_team(
 ) -> None:
     """Every player on your team, then the best `per_team` on each other team.
 
-    Ranks shown are LEAGUE ranks, carried from `add_ranks`, not ranks within the team --
-    otherwise every team's best player reads as a 1.
+    Rows are ordered by P(keeper), like the league board. The `#mean` rank `--detail`
+    prints is a LEAGUE rank, carried from `add_ranks`, not a rank within the team --
+    otherwise every team's best player would read as a 1.
 
     `per_team` is how many rows to PRINT; `keep` is how many a team may actually keep,
     and the headline sums the latter. Required, with no default: a headline that
@@ -112,19 +113,29 @@ def by_team(
         both. `r["team"]` is the single winning team and is what the CSV carries, but
         it is not the ownership test.
         """
-        # ORDERED BY P(keeper), matching the league board. The block's headline VAR sum
-        # still uses the mean -- that is a value total, not a ranking -- but the rows a
-        # reader scans are ordered by the number the decision is actually made on.
-        return sorted(
-            (r for r in scored if team in r["teams"]),
-            key=lambda r: r["p_keeper"] if r.get("p_keeper") is not None else -1,
-            reverse=True,
-        )
+        # ORDERED BY P(keeper), matching the league board -- `keeper_order` is the shared
+        # key, so the two surfaces cannot drift and an all-None span still falls through
+        # to the mean rank rather than printing in arrival order.
+        return sorted((r for r in scored if team in r["teams"]), key=keeper_order, reverse=True)
+
+    def kept_by_var(rows: list[dict]) -> tuple[float, int]:
+        """`(VAR of the best `keep` rows, how many were summed)` -- BY VAR, never by the
+        display order.
+
+        `rows_for` orders on P(keeper) so the printed rows lead with the decision number.
+        This is a VALUE sum, and the web view's `TeamBlock.keep_total` takes the best
+        `keep` by `rank_total`, so taking a prefix of the DISPLAY order made the two
+        surfaces rank teams differently -- the exact drift `by_team`'s docstring says was
+        fixed. It also made the headline arbitrary on a span with no measured bar, where
+        every `p_keeper` is None and the prefix is whatever order the rows arrived in.
+        """
+        best = sorted(rows, key=lambda r: r["total"], reverse=True)
+        kept = min(keep, len(best))
+        return sum(r["total"] for r in best[:kept]), kept
 
     def keeper_strength(team: str) -> float:
         """The headline number, as an ordering key. Same rule, one definition."""
-        rows = rows_for(team)
-        return sum(r["total"] for r in rows[: min(keep, len(rows))])
+        return kept_by_var(rows_for(team))[0]
 
     def block(team: str, limit: int | None, note: str = "") -> None:
         """One team's block. Takes the TEAM, never a decorated title -- the missing list is keyed
@@ -161,8 +172,7 @@ def by_team(
         # players over a header naming three, a number the visible rows cannot make.
         # `kept`, not `keep`, in the slice -- a team with two scored players sums two,
         # and the label has to be the number that was actually summed.
-        kept = min(keep, len(rows))
-        total = sum(r["total"] for r in rows[:kept])
+        total, kept = kept_by_var(rows)
         head = (
             f"{team}{note}  ({len(rows)} scored, "
             f"{total:.1f} total {span} VAR from the best {kept} they may keep)"
@@ -183,14 +193,16 @@ def by_team(
                 band = f"{r['p10']:5.1f}..{r['p90']:<5.1f}"
                 line += (
                     f"   #{r['rank_total']:<4d} {r['total']:6.1f} {r['next']:5.1f} "
-                    f"{band:>14} {r['support']:4.0%}"
+                    f"{band:>14} {r['support']:5.0%}"
                 )
             print(line + hurt)
         missing = index.unscored_for(team)
         if missing:
             print(f"  not scored: {', '.join(missing)}")
 
-    print(f"\n\n{'=' * 78}\nPER-TEAM  (#{span} and #{one} are LEAGUE ranks)\n{'=' * 78}")
+    # The banner named the two rank columns; `--detail` now carries one of them and the
+    # default view carries neither, so it named columns that are not on screen.
+    print(f"\n\n{'=' * 78}\nPER-TEAM  (ordered by P(keeper); `#mean` is a LEAGUE rank)\n{'=' * 78}")
     # Teams come from the ROSTERS, not from the scored rows. A team whose players were all
     # filtered out -- by --min-sgp, by --min-support, or by the join failing wholesale --
     # has no scored rows at all, so deriving the list from `scored` dropped it and its
@@ -225,6 +237,23 @@ def _header(base: int, horizons: tuple[int, ...]) -> tuple[str, str]:
 def pct(value: float | None) -> str:
     """A probability, or `--` when the span has no measured bar to compute one against."""
     return "  --" if value is None else f"{value:.0%}"
+
+
+def keeper_order(row: dict) -> tuple[float, float]:
+    """Sort key for every board on this page: P(keeper), with the mean rank underneath.
+
+    ONE key, shared by the league board and the per-team blocks, so the two cannot order
+    the same rows differently.
+
+    THE SECOND ELEMENT IS A FALLBACK, NOT DECORATION. `p_keeper` is None for EVERY row
+    whenever the span has no measured bar -- `s5` has no complete window today, and a
+    fresh clone has no artifacts at all -- and a constant key leaves `list.sort` stable,
+    so the board printed in `totals()` order (every hitter, then every pitcher) under a
+    header claiming it was ranked. Falling through to `rank_total` keeps the board
+    ordered by the projection it is still showing.
+    """
+    prob = row.get("p_keeper")
+    return (prob if prob is not None else -1.0, -float(row["rank_total"]))
 
 
 def bar_note(horizons: tuple[int, ...]) -> str:
@@ -265,10 +294,16 @@ def render(
     thin projection with a wide band can out-mean a supported one and still be less likely
     to clear the bar. Ranking on the number the decision reads is the point of the
     feature.
+
+    ...AND THE TITLE SAYS SO ONLY WHEN IT IS TRUE. `keeper_order` falls back to the mean
+    rank on a range with no measured bar (`--horizon 5` today), so a fixed "by P(keeper)"
+    headline would name a column of dashes as the sort key.
     """
-    scored.sort(key=lambda r: r["p_keeper"] if r.get("p_keeper") is not None else -1, reverse=True)
+    scored.sort(key=keeper_order, reverse=True)
     one, span = _header(base, horizons)
-    print(f"\nTOP {min(top, len(scored))} by P(keeper) over {span}")
+    priced = any(r.get("p_keeper") is not None for r in scored)
+    by = "P(keeper)" if priced else "projected VAR (no measured bar for this range)"
+    print(f"\nTOP {min(top, len(scored))} by {by} over {span}")
     print(bar_note(horizons))
     if ranked != len(scored):
         print(f"  {len(scored)} scored after --min-support, ranked against all {ranked}")

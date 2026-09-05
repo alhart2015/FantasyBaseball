@@ -981,7 +981,7 @@ def test_a_teams_block_carries_per_row_support_for_its_thin_rows(payload: dict) 
     This used to assert `meta["min_local_support"]`, the threshold the flag was drawn at,
     on the reasoning that a template must render the rule rather than restate it as
     prose. `scripts/calibrate_band_coverage.py` retired the rule: at 10% it separated
-    neither calibrated bands from miscalibrated ones (the unflagged 10-30%% bucket runs
+    neither calibrated bands from miscalibrated ones (the unflagged 10-30% bucket runs
     as hot as the flagged rows below it) nor biased estimates from unbiased ones. So the
     threshold left `meta` and the per-row share is what the views print.
 
