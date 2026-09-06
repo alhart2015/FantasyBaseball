@@ -1,28 +1,70 @@
-# Manual roster transcription -- Yahoo web UI, Team > Roster tab, 2026-08-31.
+# Manual roster snapshot, 2026-09-06 -- DERIVED, not a fresh Roster-tab capture.
 #
-# Player names are CANONICAL names resolved by lookup against the ROS projection
-# rows (name + team + player_type), not typed from memory. Yahoo prints only a
-# first initial, which is ambiguous: this league rosters both Cade Smith (CLE, P,
-# SkeleThor) and Cam Smith (HOU, OF, Boston Estrellas), both Max Muncy (LAD,
-# Spacemen) and the other Max Muncy, and three Durans -- Ezequiel (TEX, hitter,
-# Spacemen), Jarren (BOS, hitter, Tortured Baseball Department) and Jhoan (PHI,
-# pitcher, Springfield Isotopes). Shohei Ohtani appears TWICE across the league --
-# the batter on Work in Progress and the pitcher on Tortured Baseball Department --
-# and is stored under the same canonical name both times, because the loader keys
-# on (name, player_type), never the bare name. Tortured Baseball Department also
-# rosters Matt Chapman (SF, 3B) and Aroldis Chapman (BOS, P) on the same team.
+# HOW THIS ONE WAS BUILT, and why that matters. The 2026-08-31 transcription was
+# a real Yahoo Team > Roster capture. This file is that snapshot with the Yahoo
+# League Transactions feed replayed onto it: 19 drops and 17 adds across four
+# teams (Boston Estrellas, Jon's Underdogs, Hello Peanuts!, Springfield
+# Isotopes) between Mon Aug 31 02:01 PM and Sat Sep 05 03:18 PM. The window is
+# closed on both ends -- the feed reaches back past the 08-31 capture (the two
+# Aug 29 moves in it are already reflected there), so no transaction fell
+# between the snapshots. Consequences, field by field:
 #
-# slot / positions / status are copied verbatim from the Yahoo UI. status carries
-# the red badge and is load-bearing: managers routinely park an IL'd player in an
-# ACTIVE or BN slot, which is detectable ONLY from this field -- the slot alone
-# says "active". No tally of which teams do it is kept here: it changes every
-# refresh, nothing recomputes it, and a stale count reads as authoritative.
+#   name       TRUSTWORTHY. Every drop was matched against the canonical name
+#              already on that exact roster, and an unmatched drop was a hard
+#              error rather than a silent no-op; every add was resolved by
+#              lookup against the ROS projection rows, never typed from memory.
+#              The two ambiguous initials were settled on projected volume:
+#              J. Lopez is Jacob Lopez (ATH -- the only Lopez with real ROS
+#              innings, 23 IP in all five systems; every other Lopez is a 1-IP
+#              placeholder row) and B. Lee is Brooks Lee (MIN, 93 PA, and
+#              2B/3B/SS matches the transaction) rather than the 1-PA
+#              Bennett Lee.
+#
+#   slot       PLACEHOLDER for the 17 added players, which all sit on BN. That
+#              is an artifact of the replay, not an observation -- the feed says
+#              who joined a roster, never where the manager slotted them. In
+#              reality those managers filled the starting slots their drops
+#              emptied, so Boston Estrellas (BN=8) and Jon's Underdogs (BN=6)
+#              read far more bench-heavy here than they are. No team is over the
+#              23-active cap; nine sit exactly on it and Hello Peanuts! sits at
+#              22, carrying one genuinely open spot from the bare Brandon Marsh
+#              drop on Aug 31 10:28 PM that they never replaced. Re-transcribe
+#              from the Roster tab before trusting an opponent's starter/bench
+#              split.
+#
+#   status     STALE for everyone carried over, BLANK for everyone added. An
+#              injury since 2026-08-31 that involved no transaction is invisible
+#              to the feed and therefore invisible here. status carries Yahoo's
+#              red badge and is load-bearing: managers routinely park an IL'd
+#              player in an ACTIVE or BN slot, which is detectable ONLY from
+#              this field -- the slot alone says "active". Treat every badge
+#              below as at least six days old.
+#
+# Hart of the Order made no transactions in this window, so the user's own team
+# is byte-identical to the 2026-08-31 capture -- slots and statuses included --
+# and lineup work against it is unaffected by everything above.
 #
 # EMPTY starting slots are simply omitted rather than written as placeholders,
 # so a team's slot counts can come up short of the configured lineup. The bench
 # is overflow, not a fixed count -- the real constraint is total roster size.
+#
+# Player names are CANONICAL names resolved by lookup against the ROS projection
+# rows (name + team + player_type), not typed from memory. Yahoo prints only a
+# first initial, which is ambiguous. Re-derived from THIS file, the collisions
+# are: Cade Smith (P, SkeleThor) vs Cam Smith (OF, Boston Estrellas); Jhoan
+# Duran (pitcher, Springfield Isotopes) vs Jarren Duran (hitter, Tortured
+# Baseball Department), with Ezequiel Duran (Spacemen) a third Duran that the
+# initial happens to separate; and William Contreras (C, Spacemen) vs Willson
+# Contreras (Tortured Baseball Department). Shohei Ohtani appears TWICE across
+# the league -- the batter on Work in Progress and the pitcher on Tortured
+# Baseball Department -- and is stored under the same canonical name both times,
+# because the loader keys on (name, player_type), never the bare name. Tortured
+# Baseball Department also rosters Matt Chapman (3B) and Aroldis Chapman (P) on
+# the same team, which the differing initials do separate. The LAD Max Muncy is
+# no longer in the league; only the Spacemen one remains, so that pair -- called
+# out as a collision in earlier snapshots -- is not one here.
 
-snapshot_date: '2026-08-31'
+snapshot_date: '2026-09-06'
 teams:
 - name: Hart of the Order
   players:
@@ -121,9 +163,6 @@ teams:
     slot: SS
     positions: SS
     status: DTD
-  - name: Sam Antonacci
-    slot: IF
-    positions: 2B,3B,OF
   - name: Corbin Carroll
     slot: OF
     positions: OF
@@ -135,12 +174,6 @@ teams:
     positions: OF
   - name: Chase DeLauter
     slot: OF
-    positions: OF
-  - name: Brandon Marsh
-    slot: UTIL
-    positions: OF
-  - name: Spencer Jones
-    slot: UTIL
     positions: OF
   - name: James Wood
     slot: IL
@@ -176,9 +209,15 @@ teams:
   - name: Carlos Rodón
     slot: BN
     positions: P
-  - name: Eury Pérez
+  - name: George Springer
     slot: BN
-    positions: P
+    positions: OF
+  - name: Brooks Lee
+    slot: BN
+    positions: 2B,3B,SS
+  - name: Mookie Betts
+    slot: BN
+    positions: SS
 - name: Jon's Underdogs
   players:
   - name: Drake Baldwin
@@ -187,10 +226,6 @@ teams:
   - name: Ben Rice
     slot: 1B
     positions: C,1B
-  - name: Xavier Edwards
-    slot: 2B
-    positions: 2B,SS
-    status: DTD
   - name: Manny Machado
     slot: 3B
     positions: 3B
@@ -203,9 +238,6 @@ teams:
   - name: Daylen Lile
     slot: OF
     positions: OF
-  - name: Trent Grisham
-    slot: OF
-    positions: OF
   - name: Cody Bellinger
     slot: OF
     positions: OF
@@ -215,13 +247,6 @@ teams:
   - name: Ty France
     slot: UTIL
     positions: 1B
-  - name: Cole Carrigg
-    slot: UTIL
-    positions: SS,OF
-  - name: George Lombard Jr.
-    slot: BN
-    positions: 2B,3B,SS
-    status: DTD
   - name: Nick Kurtz
     slot: IL
     positions: 1B
@@ -250,9 +275,6 @@ teams:
   - name: Ian Seymour
     slot: P
     positions: P
-  - name: Noah Cameron
-    slot: P
-    positions: P
   - name: Kenley Jansen
     slot: BN
     positions: P
@@ -260,6 +282,21 @@ teams:
     slot: IL
     positions: P
     status: IL15
+  - name: Aaron Nola
+    slot: BN
+    positions: P
+  - name: Brady House
+    slot: BN
+    positions: 3B
+  - name: Henry Bolte
+    slot: BN
+    positions: OF
+  - name: Zack Gelof
+    slot: BN
+    positions: 2B,3B,OF
+  - name: Jacob Lopez
+    slot: BN
+    positions: P
 - name: Springfield Isotopes
   players:
   - name: Gabriel Moreno
@@ -332,13 +369,13 @@ teams:
   - name: Taj Bradley
     slot: P
     positions: P
-  - name: Kyle Bradish
-    slot: P
-    positions: P
   - name: Michael Soroka
     slot: IL
     positions: P
     status: IL15
+  - name: Clay Holmes
+    slot: BN
+    positions: P
 - name: SkeleThor
   players:
   - name: Liam Hicks
@@ -589,12 +626,6 @@ teams:
   - name: Bryson Stott
     slot: 2B
     positions: 2B,3B,SS
-  - name: Caleb Durbin
-    slot: 3B
-    positions: 2B,3B
-  - name: Mookie Betts
-    slot: SS
-    positions: SS
   - name: José Ramírez
     slot: IF
     positions: 3B
@@ -613,53 +644,52 @@ teams:
   - name: Mike Trout
     slot: UTIL
     positions: OF
-  - name: Chase Meidroth
-    slot: UTIL
-    positions: 2B,3B,SS
-  - name: JJ Wetherholt
-    slot: BN
-    positions: 2B,3B,SS
-    status: IL10
   - name: Michael King
     slot: P
     positions: P
   - name: Shota Imanaga
     slot: P
     positions: P
-  - name: Roki Sasaki
-    slot: P
-    positions: P
-    status: IL15
   - name: Paul Skenes
     slot: P
     positions: P
   - name: Eduardo Rodriguez
     slot: P
     positions: P
-  - name: Gregory Soto
-    slot: P
-    positions: P
-  - name: Ryan Weathers
-    slot: P
-    positions: P
-    status: IL15
   - name: Kyle Leahy
     slot: P
     positions: P
   - name: Kade Anderson
     slot: P
     positions: P
-  - name: Andrew Painter
-    slot: BN
-    positions: P
-  - name: Ryan Helsley
-    slot: IL
-    positions: P
-    status: IL60
   - name: Max Meyer
     slot: IL
     positions: P
     status: IL15
+  - name: Héctor Rodríguez
+    slot: BN
+    positions: OF
+  - name: Coby Mayo
+    slot: BN
+    positions: 1B,3B
+  - name: Bryce Elder
+    slot: BN
+    positions: P
+  - name: Gage Jump
+    slot: BN
+    positions: P
+  - name: Grant Taylor
+    slot: BN
+    positions: P
+  - name: Jake Burger
+    slot: BN
+    positions: 1B
+  - name: Trevor Story
+    slot: BN
+    positions: SS
+  - name: Mickey Gasper
+    slot: BN
+    positions: C,1B
 - name: Tortured Baseball Department
   players:
   - name: Cal Raleigh
