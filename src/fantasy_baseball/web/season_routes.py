@@ -1,5 +1,6 @@
 """Route handlers for the season dashboard."""
 
+import dataclasses
 import hmac
 import logging
 import math
@@ -30,6 +31,7 @@ from fantasy_baseball.utils.constants import (
     PITCHING_CATEGORIES,
     RATE_STATS,
     Category,
+    OpportunityStat,
 )
 from fantasy_baseball.web.season_data import (
     CacheKey,
@@ -99,6 +101,56 @@ def _projected_from_cache(raw: dict) -> ProjectedStandings:
 def _team_sds_from_cache(raw: dict | None) -> dict[str, dict[Category, float]] | None:
     """Deserialize a cached ``team_sds`` payload (or ``None``) into typed form."""
     return team_sds_from_json(raw) if raw else None
+
+
+def _ytd_anchor_standings(roster: list[Player], team_name: str) -> Standings | None:
+    """The cached standings snapshot with the user's YTD AB filled in, or None.
+
+    ``optimizer.team_roto_total`` needs the user's row anchored at team_YTD +
+    ROS to match the opponent rows inside ``ProjectedStandings``; it reads that
+    anchor from ``StandingsEntry.ytd_components()``. The cached STANDINGS blob
+    carries IP but no AB or PA for this league, so ``ytd_components`` would
+    return ``ab=0`` and collapse the AVG anchor to ROS-only while every
+    counting stat stayed full-season. ``roster_ytd_ab`` supplies the tier-3
+    hint for the user's team -- the only row the optimizer rebuilds.
+
+    The refresh pipeline builds the same augmentation from ownership-attributed
+    game logs (``compute_team_ytd_ab``) but never caches the result, so a
+    read-only route cannot reuse it; see the ``ytd_standings`` block in
+    ``refresh_pipeline``.
+
+    THE ANCHOR IS OPTIONAL, so every failure path returns None rather than
+    raising: a missing key, or a legacy/unparseable payload that
+    ``Standings.from_json`` rejects. The caller then falls back to the
+    pre-#368 ROS-only behavior -- a worse drop ranking, but a served response.
+    An IL-return plan must not 500 because a *supporting* blob is stale.
+    """
+    from fantasy_baseball.analysis.team_ytd_attribution import roster_ytd_ab
+
+    raw = read_cache_dict(CacheKey.STANDINGS)
+    if not raw:
+        return None
+    try:
+        standings = _standings_from_cache(raw)
+    except ValueError:
+        logger.warning(
+            "Cached standings payload is not a Standings blob; IL-return plans "
+            "fall back to a ROS-only user row (drop ranking will be off).",
+            exc_info=True,
+        )
+        return None
+    ab = roster_ytd_ab(roster)
+    if ab <= 0.0:
+        return standings
+    return Standings(
+        effective_date=standings.effective_date,
+        entries=[
+            dataclasses.replace(e, extras={**e.extras, OpportunityStat.AB: ab})
+            if e.team_name == team_name
+            else e
+            for e in standings.entries
+        ],
+    )
 
 
 def _projected_as_standings(raw: dict) -> Standings:
@@ -979,6 +1031,7 @@ def register_routes(app: Flask) -> None:
             fraction_remaining=fr,
             team_sds=team_sds,
             sgp_overrides=config.sgp_overrides,
+            actual_standings=_ytd_anchor_standings(roster, config.team_name),
         )
         return jsonify(scenarios.to_dict())
 

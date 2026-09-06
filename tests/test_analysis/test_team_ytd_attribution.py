@@ -14,8 +14,10 @@ from pathlib import Path
 from fantasy_baseball.analysis.team_ytd_attribution import (
     _load_per_game_hitter_ab,
     compute_team_ytd_ab,
+    roster_ytd_ab,
 )
 from fantasy_baseball.models.league import League
+from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.models.roster import Roster, RosterEntry
 from fantasy_baseball.models.team import Team
@@ -671,3 +673,53 @@ def test_zero_game_phantom_id_does_not_exclude_the_real_player():
     # The real player's games are attributed; the phantom id is ignored, not
     # treated as a collision.
     assert len(out[normalize_name("Real Player")]) == 1
+
+
+class TestRosterYtdAb:
+    """``roster_ytd_ab`` -- the tier-3 fallback_ab hint for read-only callers.
+
+    Derives season-to-date AB per hitter as ``full_season_projection.ab -
+    rest_of_season.ab``, which holds because ``cache:full_season_projections``
+    is built as ROS + YTD actuals.
+    """
+
+    @staticmethod
+    def _hitter(name: str, fs_ab: float | None, ros_ab: float | None) -> Player:
+        return Player(
+            name=name,
+            positions=[Position.OF],
+            player_type=PlayerType.HITTER,
+            full_season_projection=(None if fs_ab is None else HitterStats(ab=fs_ab)),
+            rest_of_season=(None if ros_ab is None else HitterStats(ab=ros_ab)),
+        )
+
+    def test_sums_full_season_minus_ros(self):
+        roster = [self._hitter("A", 600, 100), self._hitter("B", 500, 120)]
+        assert roster_ytd_ab(roster) == 880.0
+
+    def test_skips_pitchers(self):
+        arm = Player(
+            name="Arm",
+            positions=[Position.P],
+            player_type=PlayerType.PITCHER,
+            full_season_projection=PitcherStats(ip=180),
+            rest_of_season=PitcherStats(ip=40),
+        )
+        assert roster_ytd_ab([self._hitter("A", 600, 100), arm]) == 500.0
+
+    def test_missing_projection_rows_are_skipped_not_counted_as_zero_ab(self):
+        roster = [
+            self._hitter("A", 600, 100),
+            self._hitter("NoRos", 600, None),
+            self._hitter("NoFs", None, 100),
+        ]
+        assert roster_ytd_ab(roster) == 500.0
+
+    def test_negative_difference_floors_at_zero(self):
+        """A stale ROS snapshot can outrun its full-season partner. Flooring
+        keeps that row at zero instead of cancelling another player's real AB."""
+        roster = [self._hitter("A", 600, 100), self._hitter("Stale", 100, 300)]
+        assert roster_ytd_ab(roster) == 500.0
+
+    def test_empty_roster_is_zero(self):
+        assert roster_ytd_ab([]) == 0.0
