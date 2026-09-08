@@ -10,6 +10,10 @@ import pytest
 from fantasy_baseball.data import kv_store
 from fantasy_baseball.data.cache_keys import redis_key
 from fantasy_baseball.data.kv_store import get_kv
+from fantasy_baseball.models.player import HitterStats, Player, PlayerType
+from fantasy_baseball.models.positions import Position
+from fantasy_baseball.utils.constants import OpportunityStat
+from fantasy_baseball.web import season_routes
 from fantasy_baseball.web.season_app import create_app
 from fantasy_baseball.web.season_data import CacheKey
 from fantasy_baseball.web.trajectory_view import VIEWS, filter_state
@@ -3855,3 +3859,67 @@ def test_an_absent_player_is_distinguished_from_an_excluded_one(client):
     body = resp.data.decode()
     assert "No player named" in body, "the refusal itself stays"
     assert "excluded" in body.lower(), "and it now says what the board left out"
+
+
+class TestYtdAnchorStandings:
+    """``_ytd_anchor_standings`` -- fills the user's YTD AB into the cached
+    standings so ``optimizer.team_roto_total`` can anchor the user's row at
+    team_YTD + ROS instead of ROS-only.
+    """
+
+    @staticmethod
+    def _roster():
+        return [
+            Player(
+                name="Bat",
+                positions=[Position.OF],
+                player_type=PlayerType.HITTER,
+                full_season_projection=HitterStats(ab=600),
+                rest_of_season=HitterStats(ab=100),
+            )
+        ]
+
+    def test_fills_ab_on_the_user_row_only(self):
+        with patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_cache:
+            mock_cache.side_effect = lambda k: _mock_standings() if k == CacheKey.STANDINGS else {}
+            out = season_routes._ytd_anchor_standings(self._roster(), "Hart of the Order")
+        by_name = {e.team_name: e for e in out.entries}
+        assert by_name["Hart of the Order"].extras[OpportunityStat.AB] == 500.0
+        assert OpportunityStat.AB not in by_name["SkeleThor"].extras
+
+    def test_user_row_ytd_components_recombine_hits(self):
+        """AB present means ``h = avg * ab`` is recoverable; without it the AVG
+        anchor silently collapses to ROS-only while counting stats stay
+        full-season."""
+        with patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_cache:
+            mock_cache.side_effect = lambda k: _mock_standings() if k == CacheKey.STANDINGS else {}
+            out = season_routes._ytd_anchor_standings(self._roster(), "Hart of the Order")
+        me = next(e for e in out.entries if e.team_name == "Hart of the Order")
+        comp = me.ytd_components()
+        assert comp.ab == 500.0
+        assert comp.h == pytest.approx(0.270 * 500.0)
+
+    def test_returns_none_without_cached_standings(self):
+        with patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_cache:
+            mock_cache.return_value = None
+            assert season_routes._ytd_anchor_standings(self._roster(), "Hart of the Order") is None
+
+    def test_zero_ab_returns_standings_unchanged(self):
+        """No hitters with both projection rows -> no hint to add. Returning the
+        snapshot as-is still anchors the counting stats, which is strictly better
+        than dropping the anchor entirely."""
+        with patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_cache:
+            mock_cache.side_effect = lambda k: _mock_standings() if k == CacheKey.STANDINGS else {}
+            out = season_routes._ytd_anchor_standings([], "Hart of the Order")
+        me = next(e for e in out.entries if e.team_name == "Hart of the Order")
+        assert OpportunityStat.AB not in me.extras
+
+    def test_unparseable_standings_payload_falls_back_to_none(self, caplog):
+        """A stale/legacy STANDINGS blob must not 500 the IL-return API -- the
+        anchor is optional, so a rejected payload degrades to ROS-only."""
+        with patch("fantasy_baseball.web.season_routes.read_cache_dict") as mock_cache:
+            mock_cache.return_value = {"projected_standings": {"teams": []}}
+            with caplog.at_level("WARNING"):
+                out = season_routes._ytd_anchor_standings(self._roster(), "Hart of the Order")
+        assert out is None
+        assert "ROS-only" in caplog.text

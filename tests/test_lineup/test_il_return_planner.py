@@ -17,7 +17,7 @@ from fantasy_baseball.lineup.il_return_planner import (
 )
 from fantasy_baseball.models.player import HitterStats, PitcherStats, Player, PlayerType
 from fantasy_baseball.models.positions import Position
-from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.models.standings import ProjectedStandings, Standings
 
 ROSTER_SLOTS = {
     "C": 1,
@@ -60,6 +60,47 @@ def _standings():
             "teams": [
                 {"name": TEAM_NAME, "stats": dict(base)},
                 {"name": "Opponent", "stats": {**base, "SV": 30, "ERA": 3.80}},
+            ],
+        }
+    )
+
+
+def _actual_standings():
+    """A live-snapshot ``Standings`` usable as the team-YTD anchor.
+
+    Carries AB and IP in ``extras`` so ``ytd_components`` can recombine H and
+    ER/BB+H rather than zeroing the rate-stat ingredients.
+    """
+    row = {
+        "R": 400,
+        "HR": 100,
+        "RBI": 400,
+        "SB": 50,
+        "AVG": 0.260,
+        "W": 35,
+        "K": 600,
+        "SV": 25,
+        "ERA": 3.50,
+        "WHIP": 1.20,
+    }
+    return Standings.from_json(
+        {
+            "effective_date": "2026-04-01",
+            "teams": [
+                {
+                    "name": TEAM_NAME,
+                    "team_key": "t.1",
+                    "rank": 1,
+                    "stats": dict(row),
+                    "extras": {"AB": 2500, "IP": 700},
+                },
+                {
+                    "name": "Opponent",
+                    "team_key": "t.2",
+                    "rank": 2,
+                    "stats": dict(row),
+                    "extras": {"AB": 2500, "IP": 700},
+                },
             ],
         }
     )
@@ -283,7 +324,7 @@ class TestSolveLineup:
         ]
         slots = {"OF": 1, "P": 1, "BN": 1, "IL": 0}
         h_assign, ps, pb = _solve_lineup(
-            hitters + pitchers, slots, _standings(), TEAM_NAME, None, 1.0
+            hitters + pitchers, slots, _standings(), TEAM_NAME, None, 1.0, None
         )
         assert len(h_assign) == 1
         assert h_assign[0].name == "OF1"
@@ -754,3 +795,81 @@ class TestPlanIlReturnsScenarios:
             )
 
         assert _tops_differ(_drop("hitter"), _drop("pitcher")) is True
+
+
+class TestYtdAnchorThreading:
+    """The team-YTD anchor must reach BOTH optimizers on every solve.
+
+    Without it the user's row is rebuilt as ROS-only while the opponent rows
+    inside ``projected_standings`` stay team_YTD + ROS, so the user sits in a
+    low-mu region of the score_roto S-curve. That does not raise -- it quietly
+    reorders which lineup is optimal and therefore which drop the planner
+    recommends, so only a threading assertion catches a dropped kwarg.
+    """
+
+    @staticmethod
+    def _spy(monkeypatch):
+        import fantasy_baseball.lineup.il_return_planner as ilp
+
+        seen: list[object] = []
+        real_h, real_p = ilp.optimize_hitter_lineup, ilp.optimize_pitcher_lineup
+
+        def spy_h(*a, **kw):
+            seen.append(kw.get("actual_standings"))
+            return real_h(*a, **kw)
+
+        def spy_p(*a, **kw):
+            seen.append(kw.get("actual_standings"))
+            return real_p(*a, **kw)
+
+        monkeypatch.setattr(ilp, "optimize_hitter_lineup", spy_h)
+        monkeypatch.setattr(ilp, "optimize_pitcher_lineup", spy_p)
+        return seen
+
+    def _run(self, actual, max_plans=5):
+        roster = _webb_hader_roster()
+        webb = next(p for p in roster if p.name == "Webb")
+        hader = next(p for p in roster if p.name == "Hader")
+        return plan_il_returns(
+            roster,
+            [webb, hader],
+            SMALL_SLOTS,
+            projected_standings=_contending_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=1.0,
+            team_sds=None,
+            max_plans=max_plans,
+            actual_standings=actual,
+        )
+
+    def test_anchor_reaches_every_optimizer_call(self, monkeypatch):
+        seen = self._spy(monkeypatch)
+        anchor = _actual_standings()
+        self._run(anchor)
+        assert seen, "expected at least one optimizer call"
+        assert all(s is anchor for s in seen), (
+            "every optimize_* call must carry the team-YTD anchor, including the "
+            "per-dropset re-solves inside _make_plan"
+        )
+
+    def test_default_none_preserves_legacy_behavior(self, monkeypatch):
+        seen = self._spy(monkeypatch)
+        self._run(None)
+        assert seen and all(s is None for s in seen)
+
+    def test_scenarios_forwards_the_anchor(self, monkeypatch):
+        seen = self._spy(monkeypatch)
+        anchor = _actual_standings()
+        roster = _webb_hader_roster()
+        webb = next(p for p in roster if p.name == "Webb")
+        plan_il_returns_scenarios(
+            roster,
+            [webb],
+            SMALL_SLOTS,
+            projected_standings=_contending_standings(),
+            team_name=TEAM_NAME,
+            fraction_remaining=1.0,
+            team_sds=None,
+            actual_standings=anchor,
+        )
+        assert seen and all(s is anchor for s in seen)

@@ -1,823 +1,841 @@
-# Manual roster transcription -- Yahoo web UI, Team > Roster tab, 2026-08-25.
+# Manual roster snapshot, 2026-09-08 -- DERIVED, not a fresh Roster-tab capture.
 #
-# Player names are CANONICAL names resolved by lookup against the ROS projection
-# rows (name + team + player_type), not typed from memory. Yahoo prints only a
-# first initial, which is ambiguous: this league rosters both Cade Smith (CLE, P,
-# SkeleThor) and Cam Smith (HOU, OF, Boston Estrellas), and both Mason Miller
-# (SDP, Hart) and Bryce Miller (SEA). Shohei Ohtani appears TWICE across the
-# league -- the batter on Work in Progress and the pitcher on Tortured Baseball
-# Department -- and is stored under the same canonical name both times, because
-# the loader keys on (name, player_type), never the bare name.
+# HOW THIS ONE WAS BUILT. It is the 2026-09-06 file (itself the 2026-08-31
+# Roster-tab capture with a first transaction replay on top) with a SECOND
+# replay of the Yahoo League Transactions feed: 9 drops and 8 adds across five
+# teams (Hart of the Order, Hello Peanuts!, Jon's Underdogs, Springfield
+# Isotopes, Boston Estrellas) between Sat Sep 05 03:18 PM, exclusive, and Tue
+# Sep 08 04:09 AM. The window is closed on both ends -- the feed page still
+# shows the Sep 05 03:18 PM Betts-for-Tawa move that the previous replay
+# already applied, so nothing fell between the two snapshots. This file is now
+# two replays deep on a capture that is eight days old; a fresh Roster-tab
+# transcription is the fix, not another replay. Consequences, field by field:
 #
-# slot / positions / status are copied verbatim from the Yahoo UI. status carries
-# the red badge and is load-bearing: managers routinely park an IL'd player in an
-# ACTIVE or BN slot, which is detectable ONLY from this field -- the slot alone
-# says "active". No tally of which teams do it is kept here: it changes every
-# refresh, nothing recomputes it, and a stale count reads as authoritative.
+#   name       TRUSTWORTHY. Every drop was matched against the canonical name
+#              already on that exact roster, and an unmatched drop was a hard
+#              error rather than a silent no-op; every add was resolved by
+#              lookup against the ROS projection rows (name + team), never
+#              typed from memory, and an add still rostered elsewhere in the
+#              file was also a hard error. This feed printed full first names
+#              rather than initials, so no ambiguity had to be settled.
+#
+#   slot       PLACEHOLDER for the 8 players added here, which all sit on BN,
+#              stacked on the placeholder BN entries the previous replay left.
+#              The feed says who joined a roster, never where the manager
+#              slotted them. Boston Estrellas (BN=10) and Jon's Underdogs
+#              (BN=7) are the worst of it and are nowhere near that bench-heavy
+#              in reality. Re-transcribe from the Roster tab before trusting an
+#              opponent's starter/bench split.
+#
+#   status     STALE for everyone carried over, BLANK for everyone added. An
+#              injury since 2026-08-31 that involved no transaction is invisible
+#              to the feed and therefore invisible here. status carries Yahoo's
+#              red badge and is load-bearing: managers routinely park an IL'd
+#              player in an ACTIVE or BN slot, which is detectable ONLY from
+#              this field -- the slot alone says "active". Treat every badge
+#              below as at least eight days old.
+#
+# HART OF THE ORDER. The user's own team was untouched in the previous replay;
+# here it dropped Willy Adames off the IL (Sep 07 08:50 AM) and added Cole
+# Carrigg (Sep 07 08:55 AM). That alone left the file at 24 active + 1 IL, one
+# OVER the 23-active cap, because a Hart player had moved to the IL with no
+# transaction for the feed to record. The user resolved it directly, from their
+# own Roster tab: Ceddanne Rafaela and Byron Buxton hold the two IL slots, Juan
+# Soto is active, and Adames is gone. Rafaela is therefore moved IF -> IL here,
+# which is an OBSERVATION, not an inference; his `status` is left blank because
+# the badge type (IL10 vs IL60) was not stated and is not worth inventing. That
+# empties the IF slot, which is omitted rather than written as a placeholder.
+# Every other Hart slot is still the 2026-08-31 capture.
 #
 # EMPTY starting slots are simply omitted rather than written as placeholders,
 # so a team's slot counts can come up short of the configured lineup. The bench
 # is overflow, not a fixed count -- the real constraint is total roster size.
-
-snapshot_date: "2026-08-25"
-
+#
+# Player names are CANONICAL names resolved by lookup against the ROS projection
+# rows (name + team + player_type), not typed from memory. Yahoo prints only a
+# first initial on most surfaces, which is ambiguous. Re-derived from THIS file,
+# the collisions are: Jhoan Duran (pitcher, Springfield Isotopes) vs Jarren
+# Duran (hitter, Tortured Baseball Department), with Ezequiel Duran (Spacemen) a
+# third Duran that the initial happens to separate; and William Contreras (C,
+# Spacemen) vs Willson Contreras (Tortured Baseball Department). Shohei Ohtani
+# appears TWICE across the league -- the batter on Work in Progress and the
+# pitcher on Tortured Baseball Department -- and is stored under the same
+# canonical name both times, because the loader keys on (name, player_type),
+# never the bare name. Tortured Baseball Department also rosters Matt Chapman
+# (3B) and Aroldis Chapman (P) on the same team, which the differing initials do
+# separate. The Cade Smith / Cam Smith pair called out in the previous snapshot
+# is gone: Boston Estrellas dropped Cam Smith on Sep 08.
+snapshot_date: '2026-09-08'
 teams:
-  - name: "Hart of the Order"
-    players:
-      - name: "Iván Herrera"
-        slot: "C"
-        positions: "C"
-      - name: "Freddie Freeman"
-        slot: "1B"
-        positions: "1B"
-      - name: "Otto Lopez"
-        slot: "2B"
-        positions: "2B,SS"
-      - name: "Junior Caminero"
-        slot: "3B"
-        positions: "3B"
-      - name: "CJ Abrams"
-        slot: "SS"
-        positions: "SS"
-      - name: "Ceddanne Rafaela"
-        slot: "IF"
-        positions: "2B,OF"
-      - name: "Randy Arozarena"
-        slot: "OF"
-        positions: "OF"
-      - name: "Teoscar Hernández"
-        slot: "OF"
-        positions: "OF"
-      - name: "Kyle Tucker"
-        slot: "OF"
-        positions: "OF"
-      - name: "Oneil Cruz"
-        slot: "OF"
-        positions: "OF"
-      - name: "Byron Buxton"
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Dominic Canzone"
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Austin Riley"
-        slot: "BN"
-        positions: "3B"
-      - name: "Willy Adames"
-        slot: "IL"
-        positions: "SS"
-        status: "IL10"
-      - name: "Juan Soto"
-        slot: "IL"
-        positions: "OF"
-        status: "IL10"
-      - name: "Mason Miller"
-        slot: "P"
-        positions: "P"
-      - name: "Jesús Luzardo"
-        slot: "P"
-        positions: "P"
-      - name: "Logan Webb"
-        slot: "P"
-        positions: "P"
-      - name: "Josh Hader"
-        slot: "P"
-        positions: "P"
-      - name: "Zack Wheeler"
-        slot: "P"
-        positions: "P"
-      - name: "Emilio Pagán"
-        slot: "P"
-        positions: "P"
-      - name: "Blake Snell"
-        slot: "P"
-        positions: "P"
-      - name: "Sonny Gray"
-        slot: "P"
-        positions: "P"
-      - name: "Bryan Woo"
-        slot: "P"
-        positions: "P"
-        status: "DTD"
-      - name: "Yoendrys Gómez"
-        slot: "BN"
-        positions: "P"
-
-  - name: "Hello Peanuts!"
-    players:
-      - name: "Dillon Dingler"
-        slot: "C"
-        positions: "C"
-      - name: "Jonathan Aranda"
-        slot: "1B"
-        positions: "1B"
-      - name: "Sal Stewart"
-        slot: "2B"
-        positions: "1B,2B,3B"
-      - name: "Kevin McGonigle"
-        slot: "3B"
-        positions: "3B,SS"
-      - name: "Elly De La Cruz"
-        slot: "SS"
-        positions: "SS"
-      - name: "Griffin Conine"
-        slot: "IF"
-        positions: "1B,OF"
-      - name: "Corbin Carroll"
-        slot: "OF"
-        positions: "OF"
-      - name: "Jordan Walker"
-        slot: "OF"
-        positions: "OF"
-      - name: "Wyatt Langford"
-        slot: "OF"
-        positions: "OF"
-      - name: "Chase DeLauter"
-        slot: "OF"
-        positions: "OF"
-        status: "DTD"
-      - name: "Brandon Marsh"
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Spencer Jones"
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Sam Antonacci"
-        slot: "BN"
-        positions: "2B,3B,OF"
-      - name: "James Wood"
-        slot: "IL"
-        positions: "OF"
-        status: "IL10"
-      - name: "Nolan McLean"
-        slot: "P"
-        positions: "P"
-      - name: "Chase Burns"
-        slot: "P"
-        positions: "P"
-      - name: "Braxton Ashcraft"
-        slot: "P"
-        positions: "P"
-      - name: "Bryan Baker"
-        slot: "P"
-        positions: "P"
-      - name: "Troy Melton"
-        slot: "P"
-        positions: "P"
-      - name: "Jacob deGrom"
-        slot: "P"
-        positions: "P"
-      - name: "Hunter Brown"
-        slot: "P"
-        positions: "P"
-      - name: "Eury Pérez"
-        slot: "P"
-        positions: "P"
-      - name: "Louis Varland"
-        slot: "P"
-        positions: "P"
-      - name: "Carlos Rodón"
-        slot: "BN"
-        positions: "P"
-      - name: "Tyler Glasnow"
-        slot: "IL"
-        positions: "P"
-        status: "IL60"
-
-  - name: "Jon's Underdogs"
-    players:
-      - name: "Drake Baldwin"
-        slot: "C"
-        positions: "C"
-      - name: "Ben Rice"
-        slot: "1B"
-        positions: "C,1B"
-      - name: "Xavier Edwards"
-        slot: "2B"
-        positions: "2B,SS"
-      - name: "Manny Machado"
-        slot: "3B"
-        positions: "3B"
-      - name: "Bobby Witt Jr."
-        slot: "SS"
-        positions: "SS"
-      - name: "Miguel Vargas"
-        slot: "IF"
-        positions: "1B,3B"
-      - name: "Daylen Lile"
-        slot: "OF"
-        positions: "OF"
-      - name: "Trent Grisham"
-        slot: "OF"
-        positions: "OF"
-      - name: "Zack Gelof"
-        slot: "OF"
-        positions: "2B,3B,OF"
-      - name: "Cody Bellinger"
-        slot: "OF"
-        positions: "OF"
-      - name: "Ty France"
-        slot: "UTIL"
-        positions: "1B"
-      - name: "George Lombard Jr."
-        slot: "UTIL"
-        positions: "2B,3B,SS"
-      - name: "Jac Caglianone"
-        slot: "BN"
-        positions: "1B,OF"
-        status: "DTD"
-      - name: "Nick Kurtz"
-        slot: "IL"
-        positions: "1B"
-        status: "IL60"
-      - name: "Cam Schlittler"
-        slot: "P"
-        positions: "P"
-      - name: "Dylan Cease"
-        slot: "P"
-        positions: "P"
-      - name: "Gerrit Cole"
-        slot: "P"
-        positions: "P"
-      - name: "Logan Henderson"
-        slot: "P"
-        positions: "P"
-      - name: "Parker Messick"
-        slot: "P"
-        positions: "P"
-      - name: "David Bednar"
-        slot: "P"
-        positions: "P"
-      - name: "Tanner Scott"
-        slot: "P"
-        positions: "P"
-      - name: "Ian Seymour"
-        slot: "P"
-        positions: "P"
-      - name: "Noah Cameron"
-        slot: "P"
-        positions: "P"
-      - name: "Kenley Jansen"
-        slot: "BN"
-        positions: "P"
-      - name: "Edwin Díaz"
-        slot: "IL"
-        positions: "P"
-        status: "IL15"
-
-  - name: "Springfield Isotopes"
-    players:
-      - name: "Gabriel Moreno"
-        slot: "C"
-        positions: "C"
-      - name: "Michael Busch"
-        slot: "1B"
-        positions: "1B"
-      - name: "Nico Hoerner"
-        slot: "2B"
-        positions: "2B,SS"
-      - name: "Munetaka Murakami"
-        slot: "3B"
-        positions: "1B,3B"
-      - name: "Geraldo Perdomo"
-        slot: "SS"
-        positions: "SS"
-      - name: "Colson Montgomery"
-        slot: "IF"
-        positions: "3B,SS"
-      - name: "Alec Burleson"
-        slot: "OF"
-        positions: "1B,OF"
-      - name: "Ian Happ"
-        slot: "OF"
-        positions: "OF"
-      - name: "Jackson Chourio"
-        slot: "OF"
-        positions: "OF"
-      - name: "Fernando Tatis Jr."
-        slot: "OF"
-        positions: "2B,OF"
-      - name: "Francisco Lindor"
-        slot: "UTIL"
-        positions: "SS"
-      - name: "Max Clark"
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Joshua Báez"
-        slot: "BN"
-        positions: "OF"
-      - name: "Roman Anthony"
-        slot: "BN"
-        positions: "OF"
-        status: "IL60"
-      - name: "Konnor Griffin"
-        slot: "IL"
-        positions: "SS,OF"
-        status: "IL60"
-      - name: "Yoshinobu Yamamoto"
-        slot: "P"
-        positions: "P"
-      - name: "Logan Gilbert"
-        slot: "P"
-        positions: "P"
-      - name: "George Kirby"
-        slot: "P"
-        positions: "P"
-      - name: "Gavin Williams"
-        slot: "P"
-        positions: "P"
-      - name: "Jacob Latz"
-        slot: "P"
-        positions: "P"
-      - name: "Jhoan Duran"
-        slot: "P"
-        positions: "P"
-      - name: "Jacob Misiorowski"
-        slot: "P"
-        positions: "P"
-      - name: "Taj Bradley"
-        slot: "P"
-        positions: "P"
-      - name: "Kyle Bradish"
-        slot: "P"
-        positions: "P"
-      - name: "Michael Soroka"
-        slot: "IL"
-        positions: "P"
-        status: "IL15"
-
-  - name: "SkeleThor"
-    players:
-      - name: "Liam Hicks"
-        slot: "C"
-        positions: "C,1B"
-      - name: "Yandy Díaz"
-        slot: "1B"
-        positions: "1B"
-      - name: "Luis García Jr."
-        slot: "2B"
-        positions: "1B,2B"
-      - name: "Kazuma Okamoto"
-        slot: "3B"
-        positions: "1B,3B"
-      - name: "Jeremy Peña"
-        slot: "SS"
-        positions: "SS"
-      - name: "José Caballero"
-        slot: "IF"
-        positions: "2B,3B,SS,OF"
-      - name: "Bryan Reynolds"
-        slot: "OF"
-        positions: "OF"
-      - name: "Jake Bauers"
-        slot: "OF"
-        positions: "1B,OF"
-      - name: "Jake McCarthy"
-        slot: "OF"
-        positions: "OF"
-      - name: "Seiya Suzuki"
-        slot: "OF"
-        positions: "OF"
-      - name: "Ronald Acuña Jr."
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Julio Rodríguez"
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Gunnar Henderson"
-        slot: "BN"
-        positions: "SS"
-      - name: "Andy Pages"
-        slot: "IL"
-        positions: "OF"
-        status: "IL10"
-      - name: "Cristopher Sánchez"
-        slot: "P"
-        positions: "P"
-      - name: "Chris Sale"
-        slot: "P"
-        positions: "P"
-      - name: "Cade Smith"
-        slot: "P"
-        positions: "P"
-      - name: "Drew Rasmussen"
-        slot: "P"
-        positions: "P"
-      - name: "Nick Martinez"
-        slot: "P"
-        positions: "P"
-      - name: "Foster Griffin"
-        slot: "P"
-        positions: "P"
-      - name: "Sean Burke"
-        slot: "P"
-        positions: "P"
-      - name: "Reid Detmers"
-        slot: "P"
-        positions: "P"
-      - name: "Kodai Senga"
-        slot: "P"
-        positions: "P"
-      - name: "Peter Lambert"
-        slot: "BN"
-        positions: "P"
-      - name: "Devin Williams"
-        slot: "IL"
-        positions: "P"
-        status: "IL15"
-
-  - name: "Work in Progress"
-    players:
-      - name: "Adley Rutschman"
-        slot: "C"
-        positions: "C"
-      - name: "Pete Alonso"
-        slot: "1B"
-        positions: "1B"
-      - name: "Ketel Marte"
-        slot: "2B"
-        positions: "2B"
-        status: "IL10"
-      - name: "Alex Bregman"
-        slot: "3B"
-        positions: "3B"
-      - name: "Jacob Wilson"
-        slot: "SS"
-        positions: "SS"
-        status: "IL10"
-      - name: "Matt Olson"
-        slot: "IF"
-        positions: "1B"
-      - name: "Jackson Merrill"
-        slot: "OF"
-        positions: "OF"
-      - name: "Christian Yelich"
-        slot: "OF"
-        positions: "OF"
-      - name: "Jose Altuve"
-        slot: "OF"
-        positions: "2B,OF"
-      - name: "Michael Harris II"
-        slot: "OF"
-        positions: "OF"
-      - name: "Shohei Ohtani"
-        slot: "UTIL"
-        positions: "Util"
-      - name: "Josh Naylor"
-        slot: "UTIL"
-        positions: "1B"
-      - name: "Trea Turner"
-        slot: "BN"
-        positions: "SS"
-      - name: "Kyle Stowers"
-        slot: "BN"
-        positions: "1B,OF"
-      - name: "Freddy Peralta"
-        slot: "P"
-        positions: "P"
-      - name: "Tanner Bibee"
-        slot: "P"
-        positions: "P"
-      - name: "Shane Baz"
-        slot: "P"
-        positions: "P"
-      - name: "Casey Mize"
-        slot: "P"
-        positions: "P"
-        status: "DTD"
-      - name: "Lucas Erceg"
-        slot: "P"
-        positions: "P"
-        status: "NA"
-      - name: "MacKenzie Gore"
-        slot: "P"
-        positions: "P"
-      - name: "Jared Jones"
-        slot: "P"
-        positions: "P"
-      - name: "Dylan Lee"
-        slot: "P"
-        positions: "P"
-      - name: "Emerson Hancock"
-        slot: "P"
-        positions: "P"
-      - name: "Abner Uribe"
-        slot: "IL"
-        positions: "P"
-        status: "IL15"
-
-  - name: "Spacemen"
-    players:
-      - name: "William Contreras"
-        slot: "C"
-        positions: "C"
-      - name: "Bryce Harper"
-        slot: "1B"
-        positions: "1B,OF"
-      - name: "Brice Turang"
-        slot: "2B"
-        positions: "2B"
-      - name: "Nick Gonzales"
-        slot: "3B"
-        positions: "2B,3B,SS"
-      - name: "Corey Seager"
-        slot: "SS"
-        positions: "SS"
-      - name: "Josh Bell"
-        slot: "IF"
-        positions: "1B"
-      - name: "Carson Benge"
-        slot: "OF"
-        positions: "OF"
-      - name: "Ezequiel Duran"
-        slot: "OF"
-        positions: "1B,2B,3B,SS,OF"
-      - name: "Chandler Simpson"
-        slot: "OF"
-        positions: "OF"
-      - name: "Willi Castro"
-        slot: "OF"
-        positions: "1B,2B,3B,SS,OF"
-      - name: "Max Muncy"
-        slot: "UTIL"
-        positions: "3B"
-      - name: "Christian Walker"
-        slot: "UTIL"
-        positions: "1B"
-      - name: "Maikel Garcia"
-        slot: "BN"
-        positions: "2B,3B,SS,OF"
-        status: "IL10"
-      - name: "Aaron Judge"
-        slot: "IL"
-        positions: "OF"
-        status: "IL60"
-      - name: "Riley O'Brien"
-        slot: "P"
-        positions: "P"
-      - name: "Michael Wacha"
-        slot: "P"
-        positions: "P"
-      - name: "Raisel Iglesias"
-        slot: "P"
-        positions: "P"
-      - name: "José Soriano"
-        slot: "P"
-        positions: "P"
-      - name: "Robbie Ray"
-        slot: "P"
-        positions: "P"
-      - name: "Ranger Suarez"
-        slot: "P"
-        positions: "P"
-      - name: "Kyle Harrison"
-        slot: "P"
-        positions: "P"
-      - name: "Shane McClanahan"
-        slot: "P"
-        positions: "P"
-      - name: "Walker Buehler"
-        slot: "P"
-        positions: "P"
-      - name: "Max Fried"
-        slot: "BN"
-        positions: "P"
-        status: "IL15"
-      - name: "Joe Ryan"
-        slot: "IL"
-        positions: "P"
-        status: "IL15"
-
-  - name: "Boston Estrellas"
-    players:
-      - name: "Ryan Jeffers"
-        slot: "C"
-        positions: "C"
-      - name: "Royce Lewis"
-        slot: "1B"
-        positions: "1B,2B,3B"
-      - name: "Bryson Stott"
-        slot: "2B"
-        positions: "2B,3B,SS"
-      - name: "Caleb Durbin"
-        slot: "3B"
-        positions: "2B,3B"
-      - name: "Mookie Betts"
-        slot: "SS"
-        positions: "SS"
-      - name: "José Ramírez"
-        slot: "IF"
-        positions: "3B"
-      - name: "Pete Crow-Armstrong"
-        slot: "OF"
-        positions: "OF"
-      - name: "Yordan Alvarez"
-        slot: "OF"
-        positions: "OF"
-      - name: "JJ Bleday"
-        slot: "OF"
-        positions: "OF"
-      - name: "Cam Smith"
-        slot: "OF"
-        positions: "OF"
-      - name: "Mike Trout"
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Chase Meidroth"
-        slot: "UTIL"
-        positions: "2B,3B,SS"
-      - name: "JJ Wetherholt"
-        slot: "BN"
-        positions: "2B,3B,SS"
-      - name: "Michael King"
-        slot: "P"
-        positions: "P"
-      - name: "Shota Imanaga"
-        slot: "P"
-        positions: "P"
-      - name: "Roki Sasaki"
-        slot: "P"
-        positions: "P"
-      - name: "Paul Skenes"
-        slot: "P"
-        positions: "P"
-      - name: "Eduardo Rodriguez"
-        slot: "P"
-        positions: "P"
-      - name: "Gregory Soto"
-        slot: "P"
-        positions: "P"
-      - name: "Ryan Weathers"
-        slot: "P"
-        positions: "P"
-        status: "IL15"
-      - name: "Kyle Leahy"
-        slot: "P"
-        positions: "P"
-      - name: "Kade Anderson"
-        slot: "P"
-        positions: "P"
-      - name: "Andrew Painter"
-        slot: "BN"
-        positions: "P"
-      - name: "Ryan Helsley"
-        slot: "IL"
-        positions: "P"
-        status: "IL60"
-      - name: "Max Meyer"
-        slot: "IL"
-        positions: "P"
-        status: "IL15"
-
-  - name: "Tortured Baseball Department"
-    players:
-      - name: "Cal Raleigh"
-        slot: "C"
-        positions: "C"
-      - name: "Vladimir Guerrero Jr."
-        slot: "1B"
-        positions: "1B"
-      - name: "Ozzie Albies"
-        slot: "2B"
-        positions: "2B"
-      - name: "Bo Bichette"
-        slot: "3B"
-        positions: "3B,SS"
-      - name: "Zach Neto"
-        slot: "SS"
-        positions: "SS"
-      - name: "Luke Keaschall"
-        slot: "IF"
-        positions: "2B,OF"
-      - name: "Jarren Duran"
-        slot: "OF"
-        positions: "OF"
-      - name: "Brandon Nimmo"
-        slot: "OF"
-        positions: "OF"
-      - name: "Wilyer Abreu"
-        slot: "OF"
-        positions: "OF"
-      - name: "Lawrence Butler"
-        slot: "OF"
-        positions: "OF"
-      - name: "Willson Contreras"
-        slot: "UTIL"
-        positions: "1B"
-      - name: "Steven Kwan"
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Matt Chapman"
-        slot: "BN"
-        positions: "3B"
-        status: "IL60"
-      - name: "Shohei Ohtani"
-        slot: "P"
-        positions: "P"
-        status: "IL"
-      - name: "Aroldis Chapman"
-        slot: "P"
-        positions: "P"
-      - name: "Sandy Alcantara"
-        slot: "P"
-        positions: "P"
-      - name: "Bubba Chandler"
-        slot: "P"
-        positions: "P"
-      - name: "Trevor Rogers"
-        slot: "P"
-        positions: "P"
-      - name: "Andrew Abbott"
-        slot: "P"
-        positions: "P"
-      - name: "Tarik Skubal"
-        slot: "P"
-        positions: "P"
-      - name: "Matthew Boyd"
-        slot: "P"
-        positions: "P"
-      - name: "Payton Tolle"
-        slot: "P"
-        positions: "P"
-      - name: "Cole Ragans"
-        slot: "BN"
-        positions: "P"
-        status: "IL60"
-
-  - name: "Send in the Cavalli"
-    players:
-      - name: "Hunter Goodman"
-        slot: "C"
-        positions: "C"
-        status: "IL10"
-      - name: "Rafael Devers"
-        slot: "1B"
-        positions: "1B"
-      - name: "Jazz Chisholm Jr."
-        slot: "2B"
-        positions: "2B,3B"
-      - name: "Eugenio Suárez"
-        slot: "3B"
-        positions: "3B"
-      - name: "Dansby Swanson"
-        slot: "SS"
-        positions: "SS"
-        status: "IL10"
-      - name: "Brandon Lowe"
-        slot: "IF"
-        positions: "2B"
-      - name: "Kyle Schwarber"
-        slot: "OF"
-        positions: "OF"
-      - name: "Riley Greene"
-        slot: "OF"
-        positions: "OF"
-        status: "IL10"
-      - name: "Kerry Carpenter"
-        slot: "OF"
-        positions: "OF"
-        status: "IL10"
-      - name: "Jo Adell"
-        slot: "UTIL"
-        positions: "OF"
-      - name: "Luis Arraez"
-        slot: "BN"
-        positions: "1B,2B"
-      - name: "Taylor Ward"
-        slot: "BN"
-        positions: "OF"
-      - name: "Salvador Perez"
-        slot: "BN"
-        positions: "C,1B"
-      - name: "Pete Fairbanks"
-        slot: "P"
-        positions: "P"
-        status: "DTD"
-      - name: "Andrés Muñoz"
-        slot: "P"
-        positions: "P"
-      - name: "Framber Valdez"
-        slot: "P"
-        positions: "P"
-      - name: "Zac Gallen"
-        slot: "P"
-        positions: "P"
-        status: "IL60"
-      - name: "Kevin Gausman"
-        slot: "P"
-        positions: "P"
-      - name: "Daniel Palencia"
-        slot: "P"
-        positions: "P"
-      - name: "Chris Bassitt"
-        slot: "P"
-        positions: "P"
-      - name: "Trevor Megill"
-        slot: "P"
-        positions: "P"
-      - name: "Cade Cavalli"
-        slot: "P"
-        positions: "P"
-      - name: "Tyler Alexander"
-        slot: "BN"
-        positions: "P"
+- name: Hart of the Order
+  players:
+  - name: Iván Herrera
+    slot: C
+    positions: C
+  - name: Freddie Freeman
+    slot: 1B
+    positions: 1B
+  - name: Otto Lopez
+    slot: 2B
+    positions: 2B,SS
+  - name: Junior Caminero
+    slot: 3B
+    positions: 3B
+  - name: CJ Abrams
+    slot: SS
+    positions: SS
+  - name: Ceddanne Rafaela
+    slot: IL
+    positions: 2B,OF
+  - name: Randy Arozarena
+    slot: OF
+    positions: OF
+  - name: Teoscar Hernández
+    slot: OF
+    positions: OF
+  - name: Kyle Tucker
+    slot: OF
+    positions: OF
+  - name: Oneil Cruz
+    slot: OF
+    positions: OF
+  - name: Dominic Canzone
+    slot: UTIL
+    positions: OF
+  - name: Juan Soto
+    slot: UTIL
+    positions: OF
+  - name: Austin Riley
+    slot: BN
+    positions: 3B
+  - name: Byron Buxton
+    slot: IL
+    positions: OF
+    status: IL10
+  - name: Mason Miller
+    slot: P
+    positions: P
+  - name: Jesús Luzardo
+    slot: P
+    positions: P
+  - name: Logan Webb
+    slot: P
+    positions: P
+  - name: Josh Hader
+    slot: P
+    positions: P
+  - name: Zack Wheeler
+    slot: P
+    positions: P
+  - name: Emilio Pagán
+    slot: P
+    positions: P
+  - name: Blake Snell
+    slot: P
+    positions: P
+  - name: Sonny Gray
+    slot: P
+    positions: P
+  - name: Bryan Woo
+    slot: P
+    positions: P
+  - name: Yoendrys Gómez
+    slot: BN
+    positions: P
+  - name: Cole Carrigg
+    slot: BN
+    positions: SS,OF
+- name: Hello Peanuts!
+  players:
+  - name: Jonathan Aranda
+    slot: 1B
+    positions: 1B
+  - name: Sal Stewart
+    slot: 2B
+    positions: 1B,2B,3B
+  - name: Kevin McGonigle
+    slot: 3B
+    positions: 3B,SS
+  - name: Elly De La Cruz
+    slot: SS
+    positions: SS
+    status: DTD
+  - name: Corbin Carroll
+    slot: OF
+    positions: OF
+  - name: Jordan Walker
+    slot: OF
+    positions: OF
+  - name: Chase DeLauter
+    slot: OF
+    positions: OF
+  - name: James Wood
+    slot: IL
+    positions: OF
+    status: IL10
+  - name: Nolan McLean
+    slot: P
+    positions: P
+  - name: Chase Burns
+    slot: P
+    positions: P
+  - name: Braxton Ashcraft
+    slot: P
+    positions: P
+  - name: Bryan Baker
+    slot: P
+    positions: P
+  - name: Hunter Brown
+    slot: P
+    positions: P
+  - name: Louis Varland
+    slot: P
+    positions: P
+  - name: Mason Montgomery
+    slot: P
+    positions: P
+  - name: Tyler Glasnow
+    slot: P
+    positions: P
+  - name: Jacob deGrom
+    slot: P
+    positions: P
+  - name: Carlos Rodón
+    slot: BN
+    positions: P
+  - name: George Springer
+    slot: BN
+    positions: OF
+  - name: Brooks Lee
+    slot: BN
+    positions: 2B,3B,SS
+  - name: Mookie Betts
+    slot: BN
+    positions: SS
+  - name: Jeff McNeil
+    slot: BN
+    positions: 1B,2B,OF
+  - name: Alejandro Kirk
+    slot: BN
+    positions: C
+- name: Jon's Underdogs
+  players:
+  - name: Drake Baldwin
+    slot: C
+    positions: C
+  - name: Ben Rice
+    slot: 1B
+    positions: C,1B
+  - name: Manny Machado
+    slot: 3B
+    positions: 3B
+  - name: Bobby Witt Jr.
+    slot: SS
+    positions: SS
+  - name: Miguel Vargas
+    slot: IF
+    positions: 1B,3B
+  - name: Daylen Lile
+    slot: OF
+    positions: OF
+  - name: Cody Bellinger
+    slot: OF
+    positions: OF
+  - name: Jac Caglianone
+    slot: OF
+    positions: 1B,OF
+  - name: Ty France
+    slot: UTIL
+    positions: 1B
+  - name: Nick Kurtz
+    slot: IL
+    positions: 1B
+    status: IL60
+  - name: Cam Schlittler
+    slot: P
+    positions: P
+  - name: Dylan Cease
+    slot: P
+    positions: P
+  - name: Gerrit Cole
+    slot: P
+    positions: P
+  - name: Logan Henderson
+    slot: P
+    positions: P
+  - name: Parker Messick
+    slot: P
+    positions: P
+  - name: David Bednar
+    slot: P
+    positions: P
+  - name: Tanner Scott
+    slot: P
+    positions: P
+  - name: Kenley Jansen
+    slot: BN
+    positions: P
+  - name: Edwin Díaz
+    slot: IL
+    positions: P
+    status: IL15
+  - name: Aaron Nola
+    slot: BN
+    positions: P
+  - name: Brady House
+    slot: BN
+    positions: 3B
+  - name: Henry Bolte
+    slot: BN
+    positions: OF
+  - name: Zack Gelof
+    slot: BN
+    positions: 2B,3B,OF
+  - name: Jacob Lopez
+    slot: BN
+    positions: P
+  - name: Spencer Jones
+    slot: BN
+    positions: OF
+- name: Springfield Isotopes
+  players:
+  - name: Gabriel Moreno
+    slot: C
+    positions: C
+  - name: Michael Busch
+    slot: 1B
+    positions: 1B
+  - name: Nico Hoerner
+    slot: 2B
+    positions: 2B,SS
+  - name: Munetaka Murakami
+    slot: 3B
+    positions: 1B,3B
+  - name: Geraldo Perdomo
+    slot: SS
+    positions: SS
+  - name: Colson Montgomery
+    slot: IF
+    positions: 3B,SS
+  - name: Alec Burleson
+    slot: OF
+    positions: 1B,OF
+  - name: Jackson Chourio
+    slot: OF
+    positions: OF
+  - name: Fernando Tatis Jr.
+    slot: OF
+    positions: 2B,OF
+  - name: Francisco Lindor
+    slot: UTIL
+    positions: SS
+  - name: Roman Anthony
+    slot: UTIL
+    positions: OF
+  - name: Max Clark
+    slot: BN
+    positions: OF
+  - name: Joshua Báez
+    slot: BN
+    positions: OF
+  - name: Konnor Griffin
+    slot: IL
+    positions: SS,OF
+    status: IL60
+  - name: Yoshinobu Yamamoto
+    slot: P
+    positions: P
+  - name: Logan Gilbert
+    slot: P
+    positions: P
+  - name: George Kirby
+    slot: P
+    positions: P
+  - name: Gavin Williams
+    slot: P
+    positions: P
+  - name: Jacob Latz
+    slot: P
+    positions: P
+  - name: Jhoan Duran
+    slot: P
+    positions: P
+  - name: Jacob Misiorowski
+    slot: P
+    positions: P
+  - name: Taj Bradley
+    slot: P
+    positions: P
+  - name: Michael Soroka
+    slot: IL
+    positions: P
+    status: IL15
+  - name: Nick Pivetta
+    slot: BN
+    positions: P
+- name: SkeleThor
+  players:
+  - name: Liam Hicks
+    slot: C
+    positions: C,1B
+  - name: Yandy Díaz
+    slot: 1B
+    positions: 1B
+  - name: Luis García Jr.
+    slot: 2B
+    positions: 1B,2B
+  - name: Kazuma Okamoto
+    slot: 3B
+    positions: 1B,3B
+  - name: Jeremy Peña
+    slot: SS
+    positions: SS
+  - name: José Caballero
+    slot: IF
+    positions: 2B,3B,SS,OF
+  - name: Bryan Reynolds
+    slot: OF
+    positions: OF
+  - name: Jake Bauers
+    slot: OF
+    positions: 1B,OF
+  - name: Jake McCarthy
+    slot: OF
+    positions: OF
+  - name: Seiya Suzuki
+    slot: OF
+    positions: OF
+  - name: Ronald Acuña Jr.
+    slot: UTIL
+    positions: OF
+  - name: Julio Rodríguez
+    slot: UTIL
+    positions: OF
+  - name: Gunnar Henderson
+    slot: BN
+    positions: SS
+  - name: Andy Pages
+    slot: IL
+    positions: OF
+    status: IL10
+  - name: Cristopher Sánchez
+    slot: P
+    positions: P
+  - name: Chris Sale
+    slot: P
+    positions: P
+  - name: Cade Smith
+    slot: P
+    positions: P
+  - name: Drew Rasmussen
+    slot: P
+    positions: P
+  - name: Nick Martinez
+    slot: P
+    positions: P
+  - name: Foster Griffin
+    slot: P
+    positions: P
+  - name: Sean Burke
+    slot: P
+    positions: P
+  - name: Reid Detmers
+    slot: P
+    positions: P
+  - name: Kodai Senga
+    slot: P
+    positions: P
+  - name: Peter Lambert
+    slot: BN
+    positions: P
+  - name: Devin Williams
+    slot: IL
+    positions: P
+    status: IL15
+- name: Work in Progress
+  players:
+  - name: Adley Rutschman
+    slot: C
+    positions: C
+  - name: Pete Alonso
+    slot: 1B
+    positions: 1B
+    status: DTD
+  - name: Ketel Marte
+    slot: 2B
+    positions: 2B
+    status: IL10
+  - name: Alex Bregman
+    slot: 3B
+    positions: 3B
+  - name: Jacob Wilson
+    slot: SS
+    positions: SS
+    status: IL60
+  - name: Matt Olson
+    slot: IF
+    positions: 1B
+  - name: Jackson Merrill
+    slot: OF
+    positions: OF
+  - name: Christian Yelich
+    slot: OF
+    positions: OF
+  - name: Jose Altuve
+    slot: OF
+    positions: 2B,OF
+  - name: Michael Harris II
+    slot: OF
+    positions: OF
+  - name: Shohei Ohtani
+    slot: UTIL
+    positions: UTIL
+  - name: Josh Naylor
+    slot: UTIL
+    positions: 1B
+  - name: Trea Turner
+    slot: BN
+    positions: SS
+  - name: Kyle Stowers
+    slot: BN
+    positions: 1B,OF
+  - name: Freddy Peralta
+    slot: P
+    positions: P
+  - name: Tanner Bibee
+    slot: P
+    positions: P
+  - name: Shane Baz
+    slot: P
+    positions: P
+  - name: Casey Mize
+    slot: P
+    positions: P
+  - name: Lucas Erceg
+    slot: P
+    positions: P
+    status: NA
+  - name: MacKenzie Gore
+    slot: P
+    positions: P
+  - name: Jared Jones
+    slot: P
+    positions: P
+  - name: Dylan Lee
+    slot: P
+    positions: P
+  - name: Emerson Hancock
+    slot: P
+    positions: P
+    status: IL15
+  - name: Abner Uribe
+    slot: IL
+    positions: P
+    status: IL15
+- name: Spacemen
+  players:
+  - name: William Contreras
+    slot: C
+    positions: C
+  - name: Bryce Harper
+    slot: 1B
+    positions: 1B,OF
+  - name: Brice Turang
+    slot: 2B
+    positions: 2B
+  - name: Nick Gonzales
+    slot: 3B
+    positions: 2B,3B,SS
+  - name: Corey Seager
+    slot: SS
+    positions: SS
+  - name: Josh Bell
+    slot: IF
+    positions: 1B
+  - name: Carson Benge
+    slot: OF
+    positions: OF
+  - name: Ezequiel Duran
+    slot: OF
+    positions: 1B,2B,3B,SS,OF
+  - name: Chandler Simpson
+    slot: OF
+    positions: OF
+  - name: Willi Castro
+    slot: OF
+    positions: 1B,2B,3B,SS,OF
+  - name: Max Muncy
+    slot: UTIL
+    positions: 3B
+  - name: Christian Walker
+    slot: UTIL
+    positions: 1B
+  - name: Maikel Garcia
+    slot: BN
+    positions: 2B,3B,SS,OF
+    status: IL10
+  - name: Aaron Judge
+    slot: IL
+    positions: OF
+    status: IL60
+  - name: Riley O'Brien
+    slot: P
+    positions: P
+  - name: Michael Wacha
+    slot: P
+    positions: P
+  - name: Raisel Iglesias
+    slot: P
+    positions: P
+  - name: José Soriano
+    slot: P
+    positions: P
+  - name: Robbie Ray
+    slot: P
+    positions: P
+  - name: Ranger Suarez
+    slot: P
+    positions: P
+  - name: Kyle Harrison
+    slot: P
+    positions: P
+  - name: Shane McClanahan
+    slot: P
+    positions: P
+  - name: Max Fried
+    slot: P
+    positions: P
+  - name: Walker Buehler
+    slot: BN
+    positions: P
+  - name: Joe Ryan
+    slot: IL
+    positions: P
+    status: IL15
+- name: Boston Estrellas
+  players:
+  - name: Ryan Jeffers
+    slot: C
+    positions: C
+  - name: Royce Lewis
+    slot: 1B
+    positions: 1B,2B,3B
+  - name: Bryson Stott
+    slot: 2B
+    positions: 2B,3B,SS
+  - name: José Ramírez
+    slot: IF
+    positions: 3B
+  - name: Pete Crow-Armstrong
+    slot: OF
+    positions: OF
+  - name: Yordan Alvarez
+    slot: OF
+    positions: OF
+  - name: JJ Bleday
+    slot: OF
+    positions: OF
+  - name: Mike Trout
+    slot: UTIL
+    positions: OF
+  - name: Michael King
+    slot: P
+    positions: P
+  - name: Shota Imanaga
+    slot: P
+    positions: P
+  - name: Paul Skenes
+    slot: P
+    positions: P
+  - name: Eduardo Rodriguez
+    slot: P
+    positions: P
+  - name: Kade Anderson
+    slot: P
+    positions: P
+  - name: Max Meyer
+    slot: IL
+    positions: P
+    status: IL15
+  - name: Héctor Rodríguez
+    slot: BN
+    positions: OF
+  - name: Coby Mayo
+    slot: BN
+    positions: 1B,3B
+  - name: Gage Jump
+    slot: BN
+    positions: P
+  - name: Grant Taylor
+    slot: BN
+    positions: P
+  - name: Jake Burger
+    slot: BN
+    positions: 1B
+  - name: Trevor Story
+    slot: BN
+    positions: SS
+  - name: Mickey Gasper
+    slot: BN
+    positions: C,1B
+  - name: Troy Melton
+    slot: BN
+    positions: P
+  - name: Christian Scott
+    slot: BN
+    positions: P
+  - name: Tommy Edman
+    slot: BN
+    positions: 2B,3B,OF
+- name: Tortured Baseball Department
+  players:
+  - name: Cal Raleigh
+    slot: C
+    positions: C
+  - name: Vladimir Guerrero Jr.
+    slot: 1B
+    positions: 1B
+  - name: Ozzie Albies
+    slot: 2B
+    positions: 2B
+  - name: Bo Bichette
+    slot: 3B
+    positions: 3B,SS
+  - name: Zach Neto
+    slot: SS
+    positions: SS
+  - name: Luke Keaschall
+    slot: IF
+    positions: 2B,OF
+  - name: Jarren Duran
+    slot: OF
+    positions: OF
+  - name: Brandon Nimmo
+    slot: OF
+    positions: OF
+  - name: Wilyer Abreu
+    slot: OF
+    positions: OF
+  - name: Lawrence Butler
+    slot: OF
+    positions: OF
+  - name: Willson Contreras
+    slot: UTIL
+    positions: 1B
+    status: DTD
+  - name: Steven Kwan
+    slot: UTIL
+    positions: OF
+  - name: Matt Chapman
+    slot: BN
+    positions: 3B
+    status: IL60
+  - name: Shohei Ohtani
+    slot: P
+    positions: P
+    status: IL
+  - name: Aroldis Chapman
+    slot: P
+    positions: P
+  - name: Sandy Alcantara
+    slot: P
+    positions: P
+  - name: Bubba Chandler
+    slot: P
+    positions: P
+  - name: Trevor Rogers
+    slot: P
+    positions: P
+  - name: Andrew Abbott
+    slot: P
+    positions: P
+  - name: Tarik Skubal
+    slot: P
+    positions: P
+  - name: Matthew Boyd
+    slot: P
+    positions: P
+  - name: Payton Tolle
+    slot: P
+    positions: P
+  - name: Cole Ragans
+    slot: BN
+    positions: P
+    status: IL60
+- name: Send in the Cavalli
+  players:
+  - name: Hunter Goodman
+    slot: C
+    positions: C
+  - name: Rafael Devers
+    slot: 1B
+    positions: 1B
+  - name: Jazz Chisholm Jr.
+    slot: 2B
+    positions: 2B,3B
+  - name: Eugenio Suárez
+    slot: 3B
+    positions: 3B
+  - name: Dansby Swanson
+    slot: SS
+    positions: SS
+    status: IL10
+  - name: Brandon Lowe
+    slot: IF
+    positions: 2B
+  - name: Kyle Schwarber
+    slot: OF
+    positions: OF
+  - name: Riley Greene
+    slot: OF
+    positions: OF
+    status: IL10
+  - name: Kerry Carpenter
+    slot: OF
+    positions: OF
+    status: IL10
+  - name: Jo Adell
+    slot: UTIL
+    positions: OF
+  - name: Luis Arraez
+    slot: BN
+    positions: 1B,2B
+  - name: Taylor Ward
+    slot: BN
+    positions: OF
+  - name: Salvador Perez
+    slot: BN
+    positions: C,1B
+  - name: Pete Fairbanks
+    slot: P
+    positions: P
+    status: IL15
+  - name: Andrés Muñoz
+    slot: P
+    positions: P
+  - name: Framber Valdez
+    slot: P
+    positions: P
+  - name: Zac Gallen
+    slot: P
+    positions: P
+    status: IL60
+  - name: Kevin Gausman
+    slot: P
+    positions: P
+  - name: Daniel Palencia
+    slot: P
+    positions: P
+  - name: Chris Bassitt
+    slot: P
+    positions: P
+  - name: Trevor Megill
+    slot: P
+    positions: P
+  - name: Cade Cavalli
+    slot: P
+    positions: P
+    status: DTD
+  - name: Tyler Alexander
+    slot: BN
+    positions: P

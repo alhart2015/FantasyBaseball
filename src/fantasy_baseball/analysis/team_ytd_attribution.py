@@ -30,11 +30,13 @@ from __future__ import annotations
 import json
 import logging
 from collections import defaultdict
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
 from typing import Any
 
 from fantasy_baseball.models.league import League
+from fantasy_baseball.models.player import HitterStats, Player
 from fantasy_baseball.models.positions import BENCH_SLOTS, IL_SLOTS, Position
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
@@ -225,3 +227,40 @@ def compute_team_ytd_ab(
                         continue
                 ab_by_team[team.name] += ab
     return dict(ab_by_team)
+
+
+def roster_ytd_ab(roster: Iterable[Player]) -> float:
+    """Approximate the user's team-YTD AB from their OWN roster rows.
+
+    Returns ``sum(full_season_projection.ab - rest_of_season.ab)`` over the
+    roster's hitters. ``cache:full_season_projections`` is built as ROS + YTD
+    actuals (see :mod:`fantasy_baseball.data.ros_pipeline`), so the difference
+    is that player's season-to-date AB.
+
+    THIS IS THE TIER-3 ``fallback_ab`` HINT of
+    :meth:`StandingsEntry.ytd_components`, NOT an ownership-attributed total.
+    It credits every AB a currently-rostered player has taken this season --
+    including AB accrued on another manager's team before a mid-season pickup
+    -- and credits nothing for a player since dropped. Use
+    :func:`compute_team_ytd_ab` whenever the League model and per-game logs
+    are available; this exists for read-only callers (web routes) that have a
+    roster and a cached standings row but neither of those inputs.
+
+    Zero AB is still better spent than skipped: ``ytd_components`` with
+    ``ab=0`` yields ``h=0``, which collapses the team's AVG anchor to ROS-only
+    while every counting stat stays full-season -- a mixed frame that makes
+    AVG deltas roughly a season's worth too sensitive. Negative per-player
+    differences (a stale ROS snapshot outrunning its full-season partner) are
+    floored at zero rather than allowed to cancel real AB.
+    """
+    total = 0.0
+    for p in roster:
+        # isinstance, not player_type: a two-way player's HITTER row is the one
+        # carrying HitterStats, and only that row has an `ab` to read. The type
+        # check narrows the HitterStats | PitcherStats union AND skips the
+        # pitcher rows in one pass.
+        fs, ros = p.full_season_projection, p.rest_of_season
+        if not isinstance(fs, HitterStats) or not isinstance(ros, HitterStats):
+            continue
+        total += max(0.0, float(fs.ab) - float(ros.ab))
+    return total

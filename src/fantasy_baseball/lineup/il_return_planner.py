@@ -20,7 +20,7 @@ from fantasy_baseball.lineup.delta_roto import band_reference_lineup, compute_de
 from fantasy_baseball.lineup.optimizer import optimize_hitter_lineup, optimize_pitcher_lineup
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import IL_SLOTS, Position
-from fantasy_baseball.models.standings import ProjectedStandings
+from fantasy_baseball.models.standings import ProjectedStandings, Standings
 from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import Category
@@ -212,9 +212,17 @@ def _solve_lineup(
     team_name: str,
     team_sds: Mapping[str, Mapping[Category, float]] | None,
     fraction_remaining: float,
+    actual_standings: Standings | None,
 ):
     """Run both optimizers over ``pool``; return
     ``(hitter_assignments, pitcher_starters, pitcher_bench)``.
+
+    ``actual_standings`` is threaded into BOTH optimizers so the user's row is
+    built as team_YTD + ROS, matching the opponent rows already inside
+    ``projected_standings``. Passing None (the pre-#368 behavior) collapses the
+    user row to ROS-only against full-season opponents, which parks the user in
+    a low-mu region of the score_roto S-curve and reorders the drop ranking --
+    see optimizer.team_roto_total.
 
     Both optimizer calls skip per-starter band computation (the planner
     computes a plan-level band separately): the hitter call passes
@@ -235,6 +243,7 @@ def _solve_lineup(
         roster_slots=roster_slots,
         team_sds=team_sds,
         fraction_remaining=None,
+        actual_standings=actual_standings,
     )
     pitcher_starters, pitcher_bench = optimize_pitcher_lineup(
         pitchers=pitchers,
@@ -244,6 +253,7 @@ def _solve_lineup(
         slots=roster_slots.get("P", 9),
         team_sds=team_sds,
         fraction_remaining=fraction_remaining,
+        actual_standings=actual_standings,
         compute_bands=False,
     )
     return hitter_assignments, pitcher_starters, pitcher_bench
@@ -320,6 +330,7 @@ def _make_plan(
     fraction_remaining: float,
     bn_slots: int,
     band_reference: list[Player] | None,
+    actual_standings: Standings | None,
 ) -> MovePlan | None:
     """Solve one drop-set into a MovePlan, or None if infeasible.
 
@@ -351,6 +362,7 @@ def _make_plan(
             roster_slots=roster_slots,
             team_sds=team_sds,
             fraction_remaining=None,
+            actual_standings=actual_standings,
         )
     else:
         h_assign = base_h
@@ -364,6 +376,7 @@ def _make_plan(
             slots=roster_slots.get("P", 9),
             team_sds=team_sds,
             fraction_remaining=fraction_remaining,
+            actual_standings=actual_standings,
             compute_bands=False,
         )
     else:
@@ -414,6 +427,7 @@ def plan_il_returns(
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     max_plans: int = 5,
     sgp_overrides: SgpOverrides | None = None,
+    actual_standings: Standings | None = None,
 ) -> IlReturnPlanResult:
     """Plan the roster moves to reactivate ``activating_il`` players.
 
@@ -425,6 +439,13 @@ def plan_il_returns(
     ``sgp_overrides`` (from ``config.sgp_overrides``) replaces individual
     SGP denominators with league-specific values; None keeps the code
     defaults.
+
+    ``actual_standings`` is the live standings snapshot at the same
+    effective_date as ``projected_standings``; it anchors the user's row at
+    team_YTD + ROS inside both optimizers. Pass it for every in-season call --
+    None leaves the user row ROS-only while opponents stay full-season, which
+    changes which lineup the optimizer picks and therefore the drop ranking.
+    See :func:`_solve_lineup`.
     """
     capacity = roster_capacity(roster_slots)
     activating_names = [p.name for p in activating_il]
@@ -439,7 +460,13 @@ def plan_il_returns(
 
     # Pre-drop ideal lineup -> the band baseline (returning players present here).
     base_h, base_ps, _ = _solve_lineup(
-        pool, roster_slots, projected_standings, team_name, team_sds, fraction_remaining
+        pool,
+        roster_slots,
+        projected_standings,
+        team_name,
+        team_sds,
+        fraction_remaining,
+        actual_standings,
     )
     before_active = [a.player for a in base_h] + [s.player for s in base_ps]
     # Anchor for every plan's band: the CURRENT lineup the cached standings
@@ -462,6 +489,7 @@ def plan_il_returns(
             fraction_remaining,
             bn_slots,
             band_reference,
+            actual_standings,
         )
         plans = [plan] if plan is not None else []
         return IlReturnPlanResult(
@@ -493,6 +521,7 @@ def plan_il_returns(
             fraction_remaining,
             bn_slots,
             band_reference,
+            actual_standings,
         )
         if plan is not None:
             scored.append((plan, sum(_sgp(p, denoms) for p in dropset)))
@@ -575,6 +604,7 @@ def plan_il_returns_scenarios(
     team_sds: Mapping[str, Mapping[Category, float]] | None = None,
     max_plans: int = 5,
     sgp_overrides: SgpOverrides | None = None,
+    actual_standings: Standings | None = None,
 ) -> IlReturnScenarios:
     """Plan IL returns under both the projected (injury) volume and a healthy
     remaining volume, for the ``adjusted`` returnees.
@@ -596,6 +626,7 @@ def plan_il_returns_scenarios(
         team_sds=team_sds,
         max_plans=max_plans,
         sgp_overrides=sgp_overrides,
+        actual_standings=actual_standings,
     )
 
     healthy_by_key: dict[str, Player] = {}
@@ -640,6 +671,7 @@ def plan_il_returns_scenarios(
         team_sds=team_sds,
         max_plans=max_plans,
         sgp_overrides=sgp_overrides,
+        actual_standings=actual_standings,
     )
 
     return IlReturnScenarios(
