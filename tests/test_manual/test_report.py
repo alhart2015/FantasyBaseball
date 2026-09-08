@@ -20,7 +20,7 @@ from datetime import date
 import pytest
 
 from fantasy_baseball.lineup.roster_audit import AuditEntry
-from fantasy_baseball.manual.report import NO_UPGRADE, render_audit_report
+from fantasy_baseball.manual.report import MISSING, NO_UPGRADE, render_audit_report
 
 TEAM = "Hart Attack"
 EFFECTIVE = date(2026, 8, 17)
@@ -466,3 +466,159 @@ def test_projected_standings_missing_team_is_reported_not_silent() -> None:
     report = render([make_hold("Aaron Judge")], projected_standings=standings)
 
     assert "is not in the projected standings payload" in report
+
+
+# --------------------------------------------------------------------------
+# Monte Carlo and category risk.
+# --------------------------------------------------------------------------
+
+
+def make_monte_carlo(
+    *,
+    first_pct: float = 53.4,
+    category_risk: list[dict[str, object]] | None = None,
+    scenario: str | None = "rest_of_season",
+) -> dict[str, object]:
+    """A payload shaped like ``season_data.format_monte_carlo_for_display``.
+
+    Percentages are in percentage POINTS, exactly as the simulation stores
+    them -- ``53.4`` means 53.4%, not 5340%.
+    """
+    risk = category_risk
+    if risk is None:
+        risk = [
+            {
+                "cat": "HR",
+                "median_pts": 9.0,
+                "p10": 8.0,
+                "p90": 10.0,
+                "first_pct": 29.4,
+                "top3_pct": 99.8,
+            },
+            {
+                "cat": "SB",
+                "median_pts": 4.0,
+                "p10": 1.0,
+                "p90": 8.0,
+                "first_pct": 2.5,
+                "top3_pct": 11.0,
+            },
+        ]
+    payload: dict[str, object] = {
+        "teams": [
+            {
+                "name": TEAM,
+                "median_pts": 95.0,
+                "p10": 92.0,
+                "p90": 98.0,
+                "first_pct": first_pct,
+                "top3_pct": 99.9,
+                "is_user": True,
+            },
+            {
+                "name": "Second Place",
+                "median_pts": 77.0,
+                "p10": 73.0,
+                "p90": 80.0,
+                "first_pct": 1.8,
+                "top3_pct": 88.0,
+                "is_user": False,
+            },
+        ],
+        "category_risk": risk,
+    }
+    if scenario is not None:
+        payload["scenario"] = scenario
+    return payload
+
+
+def test_monte_carlo_section_marks_the_user_and_keeps_caller_order() -> None:
+    report = render([make_hold("Aaron Judge")], monte_carlo=make_monte_carlo())
+    outlook = block(report, "SEASON OUTLOOK", "CATEGORY RISK")
+
+    assert f"{TEAM}*" in outlook
+    assert outlook.index(TEAM) < outlook.index("Second Place")
+    assert "95.0" in outlook
+    assert "92.0" in outlook and "98.0" in outlook
+
+
+def test_monte_carlo_names_the_scenario_it_read() -> None:
+    """base and rest_of_season answer different questions; the page must say which."""
+    report = render([make_hold("Aaron Judge")], monte_carlo=make_monte_carlo())
+
+    assert "scenario: rest_of_season" in block(report, "SEASON OUTLOOK", "CATEGORY RISK")
+
+
+def test_an_unnamed_scenario_is_marked_missing_not_guessed() -> None:
+    report = render([make_hold("Aaron Judge")], monte_carlo=make_monte_carlo(scenario=None))
+    outlook = block(report, "SEASON OUTLOOK", "CATEGORY RISK")
+
+    assert f"scenario: {MISSING}" in outlook
+    assert "rest_of_season" not in outlook
+
+
+def test_monte_carlo_percentages_are_not_rescaled() -> None:
+    """The cache stores percentage POINTS. Multiplying by 100 again is the bug."""
+    report = render([make_hold("Aaron Judge")], monte_carlo=make_monte_carlo(first_pct=53.4))
+
+    assert "53.4%" in report
+    assert "5340" not in report
+
+
+def test_category_risk_rows_carry_the_band_and_both_probabilities() -> None:
+    report = render([make_hold("Aaron Judge")], monte_carlo=make_monte_carlo())
+    risk = block(report, "CATEGORY RISK", "LINEUP MOVES")
+
+    assert "HR" in risk and "SB" in risk
+    assert "29.4%" in risk and "99.8%" in risk
+    # The wide-band category's own numbers, not the tight one's.
+    assert "1.0" in risk and "8.0" in risk
+
+
+def test_category_risk_first_pct_is_flagged_as_tie_inclusive() -> None:
+    """It is a different statistic from the team 1st % directly above it."""
+    report = render([make_hold("Aaron Judge")], monte_carlo=make_monte_carlo())
+    risk = block(report, "CATEGORY RISK", "LINEUP MOVES")
+
+    assert "TIE-INCLUSIVE" in risk
+
+
+def test_missing_monte_carlo_payload_is_announced_not_dropped() -> None:
+    """A silently absent section reads as 'nothing to say', which is not true."""
+    report = render([make_hold("Aaron Judge")])
+
+    assert "SEASON OUTLOOK" in report
+    assert "CATEGORY RISK" in report
+    assert "no Monte Carlo payload supplied" in block(report, "SEASON OUTLOOK", "CATEGORY RISK")
+    assert "no Monte Carlo payload supplied" in block(report, "CATEGORY RISK", "LINEUP MOVES")
+
+
+def test_empty_category_risk_names_the_cause() -> None:
+    """category_risk is {} when the user team was absent from the simulated league."""
+    report = render([make_hold("Aaron Judge")], monte_carlo=make_monte_carlo(category_risk=[]))
+    risk = block(report, "CATEGORY RISK", "LINEUP MOVES")
+
+    assert "check team_name" in risk
+
+
+def test_a_missing_monte_carlo_number_renders_as_missing_not_zero() -> None:
+    payload = make_monte_carlo()
+    teams = payload["teams"]
+    assert isinstance(teams, list)
+    teams[0].pop("first_pct")
+    report = render([make_hold("Aaron Judge")], monte_carlo=payload)
+    outlook = block(report, "SEASON OUTLOOK", "CATEGORY RISK")
+
+    user_row = next(line for line in outlook.split("\n") if f"{TEAM}*" in line)
+    assert MISSING in user_row
+    assert "0.0%" not in user_row
+
+
+def test_monte_carlo_sections_stay_ascii() -> None:
+    report = render(
+        [make_upgrade(ACCENTED_NAME, "Free Agent Bat", total=1.5)], monte_carlo=make_monte_carlo()
+    )
+
+    assert non_ascii(report) <= non_ascii(ACCENTED_NAME)
+    for glyph in BANNED_GLYPHS:
+        assert glyph not in report

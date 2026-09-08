@@ -1121,3 +1121,96 @@ def test_a_missing_optional_exclusions_file_is_not_advertised_as_untranscribed(
 
     assert rc == drv.RC_FAILED
     assert "fa_exclusions.yaml does not exist" not in capsys.readouterr().out
+
+
+# --------------------------------------------------------------------------
+# Monte Carlo payload selection.
+# --------------------------------------------------------------------------
+
+
+def _mc_cache() -> dict:
+    """A cache:monte_carlo blob holding BOTH scenarios, as the real one does."""
+    return {
+        "base": {
+            "team_results": {
+                "Hart Attack": {
+                    "median_pts": 60.0,
+                    "p10": 50,
+                    "p90": 70,
+                    "first_pct": 10.0,
+                    "top3_pct": 40.0,
+                },
+            },
+            "category_risk": {
+                "HR": {"median_pts": 5.0, "p10": 3.0, "p90": 7.0, "top3_pct": 30.0},
+            },
+        },
+        "rest_of_season": {
+            "team_results": {
+                "Hart Attack": {
+                    "median_pts": 95.0,
+                    "p10": 92,
+                    "p90": 98,
+                    "first_pct": 99.0,
+                    "top3_pct": 100.0,
+                },
+            },
+            "category_risk": {
+                "HR": {
+                    "median_pts": 9.0,
+                    "p10": 8.0,
+                    "p90": 10.0,
+                    "first_pct": 29.4,
+                    "top3_pct": 99.8,
+                },
+            },
+        },
+    }
+
+
+def _stub_mc(monkeypatch, blob) -> None:
+    import fantasy_baseball.web.season_data as season_data
+    from fantasy_baseball.data.cache_keys import CacheKey
+
+    monkeypatch.setattr(
+        season_data,
+        "read_cache_dict",
+        lambda key: blob if key is CacheKey.MONTE_CARLO else None,
+    )
+
+
+def test_monte_carlo_payload_reads_rest_of_season_not_the_frozen_base(monkeypatch):
+    """base is an April artifact; a September audit must not report on it."""
+    _stub_mc(monkeypatch, _mc_cache())
+
+    payload = drv._monte_carlo_payload("Hart Attack")
+
+    assert payload is not None
+    assert payload["scenario"] == "rest_of_season"
+    assert payload["teams"][0]["median_pts"] == 95.0
+    assert payload["category_risk"][0]["first_pct"] == 29.4
+
+
+def test_monte_carlo_payload_marks_the_user_team(monkeypatch):
+    _stub_mc(monkeypatch, _mc_cache())
+
+    payload = drv._monte_carlo_payload("Hart Attack")
+
+    assert payload is not None
+    assert payload["teams"][0]["is_user"] is True
+
+
+def test_monte_carlo_payload_is_none_when_the_cache_is_missing(monkeypatch):
+    """None, not {} -- the renderer prints a visible note for None."""
+    _stub_mc(monkeypatch, None)
+
+    assert drv._monte_carlo_payload("Hart Attack") is None
+
+
+def test_monte_carlo_payload_is_none_when_the_scenario_is_absent(monkeypatch):
+    """A cache holding only the frozen base yields nothing to report."""
+    blob = _mc_cache()
+    del blob["rest_of_season"]
+    _stub_mc(monkeypatch, blob)
+
+    assert drv._monte_carlo_payload("Hart Attack") is None

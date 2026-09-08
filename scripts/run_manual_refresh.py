@@ -881,6 +881,43 @@ def _audit_entries(raw: list[Any]) -> tuple[list[AuditEntry], int]:
     return entries, dropped
 
 
+#: Which ``cache:monte_carlo`` blob the audit reports on.
+#:
+#: The cache holds two. ``base`` is the Opening Day baseline, FROZEN in April
+#: (its own ``baseline_meta.frozen_at`` says so) and simulated from preseason
+#: projections against a March roster -- it answers "how was the year supposed
+#: to go", which is not a question a September audit is asking. ``rest_of_season``
+#: is re-simulated every refresh from today's actual standings plus the current
+#: ROS projections, so it is the one that describes the league the user is
+#: actually playing in. Named here rather than inlined so the report's scenario
+#: line and the blob it reads can never drift apart.
+MONTE_CARLO_SCENARIO = "rest_of_season"
+
+
+def _monte_carlo_payload(team_name: str) -> dict[str, Any] | None:
+    """The rest-of-season MC blob, shaped for the report, or None if unusable.
+
+    Reuses ``season_data.format_monte_carlo_for_display`` -- the same shaping
+    the web dashboard's Monte Carlo view uses -- rather than re-deriving the
+    sort and the field selection here. Returns None (not an empty dict) when
+    the cache is missing or the scenario is absent, which the renderer prints
+    as a visible 'no Monte Carlo payload' note instead of silently dropping the
+    sections.
+    """
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.web.season_data import format_monte_carlo_for_display, read_cache_dict
+
+    blob = read_cache_dict(CacheKey.MONTE_CARLO) or {}
+    scenario = blob.get(MONTE_CARLO_SCENARIO)
+    if not isinstance(scenario, dict):
+        return None
+    display = format_monte_carlo_for_display(scenario, team_name)
+    if not display.get("teams"):
+        return None
+    display["scenario"] = MONTE_CARLO_SCENARIO
+    return display
+
+
 def _render_report(
     args: argparse.Namespace,
     config: LeagueConfig,
@@ -934,6 +971,8 @@ def _render_report(
     lineup_optimal = read_cache_dict(CacheKey.LINEUP_OPTIMAL) or {}
     lineup_moves = lineup_optimal.get("moves")
 
+    monte_carlo = _monte_carlo_payload(config.team_name)
+
     report = render_audit_report(
         entries,
         team_name=config.team_name,
@@ -947,6 +986,7 @@ def _render_report(
         projected_standings=projected_standings,
         roto_standings=_current_roto_standings(standings),
         lineup_moves=lineup_moves,
+        monte_carlo=monte_carlo,
         # Into the REPORT, not just the terminal: the saved file is what gets read
         # later, and a partial audit that does not say so reads as a complete one.
         dropped_rows=skipped,

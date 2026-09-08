@@ -202,6 +202,19 @@ def _pct(value: float | None, digits: int = 0) -> str:
     return MISSING if value is None else f"{value * 100:.{digits}f}%"
 
 
+def _pct_points(value: float | None, digits: int = 1) -> str:
+    """A percentage that ARRIVES as percentage points, e.g. ``53.4 -> "53.4%"``.
+
+    Deliberately separate from :func:`_pct`, which takes a FRACTION and
+    multiplies by 100. The Monte Carlo cache stores its probabilities already
+    scaled (``simulation._category_risk_stats`` does the ``* 100`` and the
+    rounding), so running them through ``_pct`` would print a 53.4% chance as
+    "5340%" -- a number wrong by two orders of magnitude but still shaped like
+    a percentage, which is exactly the kind of error a reader scans past.
+    """
+    return MISSING if value is None else f"{value:.{digits}f}%"
+
+
 def _positions(positions: Sequence[str] | None) -> str:
     if not positions:
         return MISSING
@@ -420,6 +433,101 @@ def _category_lines(upgrades: Sequence[AuditEntry]) -> list[str]:
     return lines
 
 
+def _monte_carlo_lines(monte_carlo: Mapping[str, Any] | None) -> list[str]:
+    """Final-standings distribution per team, from ``cache:monte_carlo``.
+
+    Read, not simulated. The caller picks WHICH scenario out of the cache and
+    shapes it (``season_data.format_monte_carlo_for_display``); this prints the
+    teams in the order it was handed them.
+
+    ``scenario`` is printed rather than assumed. The cache holds both a frozen
+    Opening Day ``base`` blob and the live ``rest_of_season`` one, and they
+    answer different questions -- a reader who cannot tell which is on the page
+    cannot tell a projection of the season from a projection of what is left of
+    it.
+    """
+    if not monte_carlo:
+        return [
+            "no Monte Carlo payload supplied -- cache:monte_carlo was missing or",
+            "held no team results. The rest of this report is unaffected.",
+        ]
+    teams = monte_carlo.get("teams")
+    if not isinstance(teams, list) or not teams:
+        return ["the Monte Carlo payload carried no team results."]
+
+    headers = ["#", "TEAM", "MEDIAN", "P10", "P90", "1st %", "TOP-3 %"]
+    rows: list[list[str]] = []
+    for index, team in enumerate(teams, start=1):
+        if not isinstance(team, Mapping):
+            continue
+        marker = "*" if team.get("is_user") else ""
+        rows.append(
+            [
+                str(index),
+                f"{team.get('name', MISSING)}{marker}",
+                _num(_as_float(team.get("median_pts")), digits=1),
+                _num(_as_float(team.get("p10")), digits=1),
+                _num(_as_float(team.get("p90")), digits=1),
+                _pct_points(_as_float(team.get("first_pct"))),
+                _pct_points(_as_float(team.get("top3_pct"))),
+            ]
+        )
+    if not rows:
+        return ["the Monte Carlo payload carried no readable team rows."]
+
+    lines = _render_table(headers, rows, right_align=(0, *range(2, len(headers))))
+    scenario = monte_carlo.get("scenario")
+    lines.append("")
+    lines.append(f"(* your team; scenario: {scenario if scenario else MISSING})")
+    lines.append("MEDIAN/P10/P90 are FINAL roto points across the simulated seasons, not")
+    lines.append("points still to come. 1st % is the chance of finishing outright first.")
+    return lines
+
+
+def _category_risk_lines(monte_carlo: Mapping[str, Any] | None) -> list[str]:
+    """Your own per-category point distribution, from the same simulation.
+
+    This is the section that says WHERE a season is won or lost: a category
+    whose P10 and P90 sit on top of each other is banked, and one with a wide
+    band is still in play and worth spending a roster spot on.
+    """
+    if not monte_carlo:
+        return ["no Monte Carlo payload supplied -- no category risk to show."]
+    risk = monte_carlo.get("category_risk")
+    if not isinstance(risk, list) or not risk:
+        return [
+            "the Monte Carlo payload carried no category risk. That happens when",
+            "the simulated league did not include your team -- check team_name.",
+        ]
+
+    headers = ["CAT", "MEDIAN", "P10", "P90", "1st %", "TOP-3 %"]
+    rows: list[list[str]] = []
+    for item in risk:
+        if not isinstance(item, Mapping):
+            continue
+        rows.append(
+            [
+                str(item.get("cat", MISSING)),
+                _num(_as_float(item.get("median_pts")), digits=1),
+                _num(_as_float(item.get("p10")), digits=1),
+                _num(_as_float(item.get("p90")), digits=1),
+                _pct_points(_as_float(item.get("first_pct"))),
+                _pct_points(_as_float(item.get("top3_pct"))),
+            ]
+        )
+    if not rows:
+        return ["the Monte Carlo payload carried no readable category rows."]
+
+    lines = _render_table(headers, rows, right_align=tuple(range(1, len(headers))))
+    lines.append("")
+    lines.append("Roto points YOU take in each category. A tight P10-P90 band is banked;")
+    lines.append("a wide one is still live, and is where a move actually changes the year.")
+    lines.append("NB: this 1st % is TIE-INCLUSIVE -- a shared category lead shares the top")
+    lines.append("roto points and counts here, so the column can sum past 100% across the")
+    lines.append("league. The team 1st % above is a strict single winner. Different things.")
+    return lines
+
+
 def _hold_lines(holds: Sequence[AuditEntry]) -> list[str]:
     if not holds:
         return ["every active roster spot has an upgrade available."]
@@ -456,6 +564,8 @@ def _il_lines(injured: Sequence[AuditEntry]) -> list[str]:
 REPORT_TITLE = "MANUAL ROSTER AUDIT -- YAHOO-FREE PIPELINE"
 
 _STANDINGS_TITLE = "WHERE YOU STAND"
+_MONTE_CARLO_TITLE = "SEASON OUTLOOK -- MONTE CARLO"
+_CATEGORY_RISK_TITLE = "CATEGORY RISK -- WHERE YOUR POINTS ARE WON AND LOST"
 _LINEUP_TITLE = "LINEUP MOVES -- FREE, NO TRANSACTION NEEDED"
 _MOVES_TITLE = "RECOMMENDED MOVES -- BEST FIRST"
 _CATEGORY_TITLE = "PER-CATEGORY IMPACT OF EACH MOVE"
@@ -548,6 +658,7 @@ def render_audit_report(
     projected_standings: ProjectedStandings | None = None,
     roto_standings: Sequence[tuple[str, float]] | None = None,
     lineup_moves: Mapping[str, Any] | None = None,
+    monte_carlo: Mapping[str, Any] | None = None,
     dropped_rows: int = 0,
 ) -> str:
     """Render a roster audit as an ASCII terminal report.
@@ -577,6 +688,13 @@ def render_audit_report(
             the free start/bench swaps. Rendered ABOVE the add/drops because
             they cost nothing and the add/drop deltas are measured against
             the optimal lineup. ``None`` prints a 'no lineup data' note.
+        monte_carlo: optional, already shaped by the caller with
+            ``season_data.format_monte_carlo_for_display`` -- ``{"teams": [...],
+            "category_risk": [...]}`` plus a ``"scenario"`` string naming which
+            blob out of ``cache:monte_carlo`` it came from. The renderer prints
+            the teams in the order given and simulates nothing. ``None`` prints
+            a 'no Monte Carlo payload' note in both sections rather than
+            dropping them, so a missing cache is visible instead of silent.
         roto_standings: optional ``(team, roto_points)`` pairs **already
             scored and already ordered by the caller**. The renderer prints
             them in the given order and numbers them; it does not sort, score
@@ -624,6 +742,8 @@ def render_audit_report(
                 roto_standings=roto_standings,
             ),
         ),
+        (_MONTE_CARLO_TITLE, _monte_carlo_lines(monte_carlo)),
+        (_CATEGORY_RISK_TITLE, _category_risk_lines(monte_carlo)),
         (_LINEUP_TITLE, _lineup_lines(lineup_moves)),
         (_MOVES_TITLE, _upgrade_lines(shown, shown=len(shown), total=len(upgrades))),
         (_CATEGORY_TITLE, _category_lines(shown)),
