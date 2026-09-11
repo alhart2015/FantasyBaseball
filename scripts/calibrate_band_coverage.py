@@ -79,6 +79,7 @@ from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_pan
 from fantasy_baseball.trajectory.shape import (
     build_history,
     collapsed_index,
+    earlier_of,
     prepare,
     shape_trajectory,
 )
@@ -149,6 +150,7 @@ def score_pool(
                 age=int(q.age),
                 sgp=float(q.current),
                 prior_sgp=float(q.prior),
+                earlier_sgp=earlier_of(q),
                 horizons=observable,
                 last_complete_season=last,
                 bootstrap_draws=draws,

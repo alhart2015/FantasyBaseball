@@ -6,8 +6,13 @@ the rest of his career look like?
 STANDALONE. Reads `data/trajectory/` and touches nothing in the keeper pipeline.
 
 `shape` is the only estimator, since #325 retired level matching and its `track`
-variant. It fits forward SGP on BOTH of the player's last two seasons with
-kernel-weighted age and level (#310), so it needs both -- `--player` looks them up.
+variant. It fits forward SGP on the player's last `shape.MAX_LAG` seasons plus this one,
+with kernel-weighted age and level (#310), so it needs all of them -- `--player` looks
+them up, and without it they are `--prior-sgp` plus `--earlier-sgp`. Neither is
+defaulted: the only available fill is zeros, and a zero is the REAL value meaning "out of
+the league", so a forgotten argument would price a veteran as a two-season rookie and
+print a perfectly normal-looking row. See `shape.MAX_LAG` for what the depth buys and
+what it does not -- notably it is NOT variance information.
 
 It earned the position out of sample in both pools: on hitters it beats level matching
 by ~21% RMSE on the case a keeper decision turns on, a star coming off a down year,
@@ -17,7 +22,7 @@ retired with the matchers, so those figures live in git history and in PR #353.
 
 Usage:
     python scripts/player_trajectory.py --player "Juan Soto"
-    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --prior-sgp 18
+    python scripts/player_trajectory.py --pool hitter --age 25 --sgp 13 --prior-sgp 18         --earlier-sgp 14 9 0
     python scripts/player_trajectory.py --player "Juan Soto" --show-anchors
     python scripts/player_trajectory.py --player "Bobby Witt Jr." --show-comps 15
 
@@ -52,7 +57,7 @@ from fantasy_baseball.trajectory.calibration import load_shipped, span_target
 from fantasy_baseball.trajectory.model import Trajectory
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR
 from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
-from fantasy_baseball.trajectory.shape import shape_trajectory
+from fantasy_baseball.trajectory.shape import MAX_LAG, seasons_before, shape_trajectory
 from fantasy_baseball.trajectory.sweep import BAR_KEYS, bar_probabilities
 from fantasy_baseball.trajectory.value import (
     ROLE_MIN_GAMES,
@@ -334,6 +339,23 @@ def _prior_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> 
     prior = float(previous["sgp"].sum()) if not previous.empty else 0.0
     print(f"  prior season ({current - 1}): {prior:.1f} SGP")
     return prior
+
+
+def _earlier_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -> tuple[float, ...]:
+    """The seasons BEFORE the prior one, nearest first -- `shape.MAX_LAG - 1` of them.
+
+    Explicit --earlier-sgp wins, mirroring `_prior_for`. Otherwise `seasons_before` reads
+    them off the panel under the same rule the fit used, which is the point of going
+    through it rather than repeating the lookup here.
+    """
+    if args.earlier_sgp is not None:
+        return tuple(args.earlier_sgp)
+    rows = panel[panel["mlbam_id"] == mlbam_id]
+    current = int(rows["season"].max())
+    earlier = seasons_before(panel, mlbam_id=mlbam_id, season=current)
+    shown = ", ".join(f"{current - k}: {v:.1f}" for k, v in enumerate(earlier, start=2))
+    print(f"  earlier seasons ({shown})")
+    return earlier
 
 
 def _no_support(traj: Trajectory) -> bool:
@@ -694,6 +716,16 @@ def main() -> int:
             "(looked up automatically with --player); 0 means he was not in the majors"
         ),
     )
+    parser.add_argument(
+        "--earlier-sgp",
+        type=float,
+        nargs=MAX_LAG - 1,
+        metavar="N",
+        help=(
+            f"SGP in the {MAX_LAG - 1} seasons BEFORE --prior-sgp, nearest first "
+            "(0 for a year he was not in the majors). Looked up by --player."
+        ),
+    )
     parser.add_argument("--horizon", type=int, default=5, help="years forward to project")
     parser.add_argument("--show-comps", type=int, default=0, metavar="N")
     parser.add_argument(
@@ -813,6 +845,7 @@ def main() -> int:
                 age if args.age is None else args.age,
                 sgp if args.sgp is None else args.sgp,
                 _prior_for(live[pool], pid, args),
+                _earlier_for(live[pool], pid, args),
                 _query_slots(args, live[pool], pid, pool, len(resolved) > 1, parser),
             )
             for pool, pid, age, sgp in resolved
@@ -832,6 +865,18 @@ def main() -> int:
                 "shape needs the player's PRIOR season too; pass --prior-sgp N "
                 "(use 0 if he was not in the majors), or --player NAME to look it up"
             )
+        if args.earlier_sgp is None:
+            # Never guess it either, and for the reason --prior-sgp is refused just
+            # above. The only fill available is zeros, and zeros are not absent data
+            # here -- they are the real value meaning "produced nothing", which is
+            # what a prospect's missing years carry into the fit. Defaulting would
+            # price a ten-year veteran as a man whose career began two seasons ago,
+            # and print it as an entirely normal row.
+            parser.error(
+                f"shape needs the {MAX_LAG - 1} seasons before that too; pass "
+                "--earlier-sgp N N N (use 0 for any year he was not in the majors), "
+                "or --player NAME to look them up"
+            )
         if args.scale == "var" and args.position is None:
             # Refuse rather than guess. Defaulting a pitcher to RP would hand a starter
             # 1.87 SGP a year he never earned, and defaulting a catcher to UTIL would
@@ -846,13 +891,14 @@ def main() -> int:
                 args.age,
                 args.sgp,
                 args.prior_sgp,
+                tuple(args.earlier_sgp),
                 {args.position} if args.position else None,
             )
         ]
 
     horizons = tuple(range(1, args.horizon + 1))
     levels = position_aware_replacement_levels(denoms)
-    for pool, age, sgp, prior, slots in queries:
+    for pool, age, sgp, prior, earlier, slots in queries:
         # The floor is passed INTO the estimator, not subtracted from its answer, so it
         # carries through to the median, the band and the survivor mean instead of
         # leaving them on a different scale. It is a SHIFT and nothing is clamped: a man
@@ -865,17 +911,20 @@ def main() -> int:
             age=age,
             sgp=sgp,
             prior_sgp=prior,
+            earlier_sgp=earlier,
             horizons=horizons,
             replacement=floor,
             slot=slot,
         )
         if args.show_anchors:
-            print("\n   fitted anchors (forward = intercept + a*now + b*last year):")
-            print("     h  intercept   a(now)  b(last)   n_fit   n_eff")
+            lag_heads = "".join(f"{f'b{k}(-{k}y)':>9}" for k in range(1, MAX_LAG + 1))
+            print("\n   fitted anchors (forward = intercept + a*now + b1*last + b2.. ):")
+            print(f"     h  intercept   a(now){lag_heads}   n_fit   n_eff")
             for a in anchors:
+                lags = "".join(f"{c:9.3f}" for c in a.on_lags)
                 print(
-                    f"     {a.horizon}   {a.intercept:8.2f} {a.on_current:8.3f} "
-                    f"{a.on_prior:8.3f} {a.n_fit:7d} {a.n_effective:7.0f}"
+                    f"     {a.horizon}   {a.intercept:8.2f} {a.on_current:8.3f}{lags}"
+                    f" {a.n_fit:7d} {a.n_effective:7.0f}"
                 )
         render(traj, args.show_comps)
     return 0

@@ -5,7 +5,7 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.trajectory.board import board_inputs
-from fantasy_baseball.trajectory.shape import shape_trajectory
+from fantasy_baseball.trajectory.shape import MAX_LAG, shape_trajectory
 
 LEVELS = {"C": 7.70, "1B": 9.15, "2B": 9.45, "3B": 9.27, "SS": 9.51, "OF": 9.96, "UTIL": 9.96}
 PITCHER_LEVELS = {"SP": 9.29, "RP": 7.42}
@@ -165,13 +165,25 @@ def _cohort(level_range: tuple[float, float], n: int = 400, noise: float = 1.5) 
         prior = float(rng.uniform(*level_range))
         current = float(rng.uniform(*level_range))
         forward = current * 0.8 + float(rng.normal(0, noise))
+        # Lead-in from the cohort's own range, so `build_history` can anchor the 2011
+        # row -- its deepest lag must be inside the panel or the whole fixture is
+        # censored. Unrelated to the outcome, so nothing asserted below moves.
+        rows += [
+            (i, 2010 - k, 27 - k, float(rng.uniform(*level_range))) for k in range(MAX_LAG, 0, -1)
+        ]
         rows += [(i, 2010, 27, prior), (i, 2011, 28, current), (i, 2012, 29, forward)]
     return pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
 
 
 def test_local_support_is_high_when_the_query_sits_inside_its_cohort() -> None:
     traj, _ = shape_trajectory(
-        _cohort((10.0, 20.0)), kind="hitter", age=28, sgp=15.0, prior_sgp=15.0, horizons=(1,)
+        _cohort((10.0, 20.0)),
+        kind="hitter",
+        age=28,
+        sgp=15.0,
+        prior_sgp=15.0,
+        earlier_sgp=(15.0,) * (MAX_LAG - 1),
+        horizons=(1,),
     )
     assert traj.local_support > 0.25
 
@@ -182,10 +194,24 @@ def test_local_support_collapses_when_the_query_outruns_its_cohort() -> None:
     their fitted line. `local_support` is what measures that gap."""
     panel = _cohort((0.0, 6.0))
     inside, _ = shape_trajectory(
-        panel, kind="hitter", age=28, sgp=3.0, prior_sgp=3.0, horizons=(1,), prior_window=8.0
+        panel,
+        kind="hitter",
+        age=28,
+        sgp=3.0,
+        prior_sgp=3.0,
+        earlier_sgp=(3.0,) * (MAX_LAG - 1),
+        horizons=(1,),
+        prior_window=8.0,
     )
     outside, _ = shape_trajectory(
-        panel, kind="hitter", age=28, sgp=16.0, prior_sgp=3.0, horizons=(1,), prior_window=8.0
+        panel,
+        kind="hitter",
+        age=28,
+        sgp=16.0,
+        prior_sgp=3.0,
+        earlier_sgp=(3.0,) * (MAX_LAG - 1),
+        horizons=(1,),
+        prior_window=8.0,
     )
     assert inside.local_support > 0.25
     assert outside.local_support < 0.10
@@ -199,7 +225,14 @@ def test_an_extrapolated_query_is_not_reported_as_more_certain() -> None:
     the query's own current season, so it can no longer claim more certainty out there
     than it has in the middle of its own data."""
     panel = _cohort((0.0, 6.0))
-    kw = {"kind": "hitter", "age": 28, "prior_sgp": 3.0, "horizons": (1,), "prior_window": 8.0}
+    kw = {
+        "kind": "hitter",
+        "age": 28,
+        "prior_sgp": 3.0,
+        "earlier_sgp": (3.0,) * (MAX_LAG - 1),
+        "horizons": (1,),
+        "prior_window": 8.0,
+    }
     inside, _ = shape_trajectory(panel, sgp=3.0, **kw)
     outside, _ = shape_trajectory(panel, sgp=16.0, **kw)
     assert (outside.path[0].p90 - outside.path[0].p10) >= (inside.path[0].p90 - inside.path[0].p10)

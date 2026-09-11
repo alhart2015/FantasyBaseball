@@ -26,6 +26,7 @@ from fantasy_baseball.trajectory.calibration import (
     span_frame,
     span_target,
 )
+from fantasy_baseball.trajectory.shape import MAX_LAG
 
 
 def _frame(n: int = 4000, seed: int = 0) -> pd.DataFrame:
@@ -186,6 +187,7 @@ def test_an_unknown_cell_is_the_identity_not_an_error() -> None:
         panel_vintage="v",
         alpha=ALPHA,
         window_years=8,
+        max_lag=MAX_LAG,
         multipliers={},
         curves={},
         fallbacks={},
@@ -202,6 +204,7 @@ def test_a_mismatched_panel_vintage_is_refused(tmp_path) -> None:
         panel_vintage="hitter_pt_panel_2000_2020.csv",
         alpha=ALPHA,
         window_years=8,
+        max_lag=MAX_LAG,
         multipliers={},
         curves={},
         fallbacks={},
@@ -336,3 +339,47 @@ def test_a_shipped_artifact_loads_where_the_panel_it_was_fitted_on_is_absent(tmp
     assert BandCalibration.load(path, panel_vintage=None).panel_vintage == "v1", (
         "a None vintage means 'nothing to compare against', not 'compare against None'"
     )
+
+
+def test_a_calibration_from_another_estimator_depth_is_refused(tmp_path) -> None:
+    """The panel vintage alone does NOT catch this. Multipliers are fitted against one
+    estimator's raw band, and widening the design matrix moves `residual_var` and `se`
+    -- so every band they correct -- while the panel underneath is untouched. Before
+    `max_lag` was recorded, changing it left a table that loaded without complaint and
+    printed intervals at a coverage nothing had measured.
+    """
+    path = tmp_path / "band_calibration.json"
+    stale = BandCalibration(
+        panel_vintage="v",
+        alpha=ALPHA,
+        window_years=8,
+        max_lag=MAX_LAG + 1,
+        multipliers={},
+        curves={},
+        fallbacks={},
+    )
+    stale.save(path)
+    with pytest.raises(ValueError, match="fitted at MAX_LAG"):
+        BandCalibration.load(path)
+
+
+def test_a_table_predating_the_depth_field_is_refused_rather_than_assumed(tmp_path) -> None:
+    """An artifact written before `max_lag` existed was fitted at the two-anchor depth.
+    Defaulting it to the live constant would wave through exactly the tables this guard
+    is for, so the absent field reads as a mismatch."""
+    path = tmp_path / "band_calibration.json"
+    raw = json.loads(
+        BandCalibration(
+            panel_vintage="v",
+            alpha=ALPHA,
+            window_years=8,
+            max_lag=MAX_LAG,
+            multipliers={},
+            curves={},
+            fallbacks={},
+        ).to_json()
+    )
+    del raw["max_lag"]
+    path.write_text(json.dumps(raw), encoding="utf-8")
+    with pytest.raises(ValueError, match="fitted at MAX_LAG -1"):
+        BandCalibration.load(path)

@@ -196,6 +196,7 @@ def sweep_pool(
             age=row.age,
             sgp=row.sgp,
             prior_sgp=row.prior_sgp,
+            earlier_sgp=row.earlier_sgp,
             horizons=horizons,
             bootstrap_draws=draws,
         )
