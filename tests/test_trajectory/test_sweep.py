@@ -331,6 +331,7 @@ def test_a_swept_row_matches_shape_trajectory_itself() -> None:
         age=row.age,
         sgp=row.sgp,
         prior_sgp=row.prior_sgp,
+        earlier_sgp=row.earlier_sgp,
         horizons=horizons,
         replacement=row.floor,
         slot=row.slot,

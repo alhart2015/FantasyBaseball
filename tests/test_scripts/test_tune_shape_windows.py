@@ -13,7 +13,13 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fantasy_baseball.trajectory.shape import AGE_WINDOW, PRIOR_WINDOW, shape_trajectory
+from fantasy_baseball.trajectory.shape import (
+    AGE_WINDOW,
+    MAX_LAG,
+    PRIOR_WINDOW,
+    lag_columns,
+    shape_trajectory,
+)
 from scripts.tune_shape_windows import (
     _folds,
     _n_queries,
@@ -45,13 +51,34 @@ def _panel(rows: list[tuple[int, int, int, float]]) -> pd.DataFrame:
 
 
 def _population(n: int = 200) -> list[tuple[int, int, int, float]]:
-    """Careers whose next season is a clean 0.5x the current one."""
+    """Careers whose next season is a clean 0.5x the current one.
+
+    Carries `MAX_LAG` lead-in seasons before the two anchors: `build_history` censors any
+    row whose deepest lag falls outside the panel, so a three-season career leaves the fit
+    with nothing. The lead-in is unrelated to the outcome, so the clean 0.5x relationship
+    these tests lean on is untouched.
+    """
     rng = np.random.default_rng(0)
     rows = []
     for i in range(n):
         prior, current = float(rng.uniform(8, 16)), float(rng.uniform(8, 16))
+        rows += [(i, 2010 - k, 27 - k, float(rng.uniform(8, 16))) for k in range(MAX_LAG, 0, -1)]
         rows += [(i, 2010, 27, prior), (i, 2011, 28, current), (i, 2012, 29, 0.5 * current)]
     return rows
+
+
+def _query(mlbam_id: int, **overrides) -> pd.DataFrame:
+    """One `build_history`-shaped query row.
+
+    `score_grid` reads the LAG BLOCK off each row -- in production these frames come from
+    `build_history`, which writes `lag1..lagN` -- so a fixture carrying only `current` and
+    `prior` dies inside `earlier_of` on a missing attribute. Spelled through
+    `lag_columns` so it tracks `MAX_LAG` rather than pinning today's depth.
+    """
+    row = {"mlbam_id": mlbam_id, "season": 2011, "age": 28, "current": 12.0, "prior": 12.0}
+    row.update({column: 12.0 for column in lag_columns()})
+    row.update(overrides)
+    return pd.DataFrame([row])
 
 
 def _saboteur(mlbam_id: int, seasons: int = 60) -> list[tuple[int, int, int, float]]:
@@ -74,9 +101,7 @@ def test_the_query_player_is_absent_from_the_panel_he_is_scored_against() -> Non
     """
     saboteur_id = 9999
     panel = _panel(_population() + _saboteur(saboteur_id))
-    queries = pd.DataFrame(
-        [{"mlbam_id": saboteur_id, "season": 2011, "age": 28, "current": 12.0, "prior": 12.0}]
-    )
+    queries = _query(saboteur_id)
     scored = score_grid(
         panel,
         queries,
@@ -93,6 +118,7 @@ def test_the_query_player_is_absent_from_the_panel_he_is_scored_against() -> Non
         age=28,
         sgp=12.0,
         prior_sgp=12.0,
+        earlier_sgp=(12.0,) * (MAX_LAG - 1),
         horizons=(1,),
         last_complete_season=int(panel["season"].max()),
         bootstrap_draws=2,
@@ -106,6 +132,7 @@ def test_the_query_player_is_absent_from_the_panel_he_is_scored_against() -> Non
         age=28,
         sgp=12.0,
         prior_sgp=12.0,
+        earlier_sgp=(12.0,) * (MAX_LAG - 1),
         horizons=(1,),
         last_complete_season=int(panel["season"].max()),
         bootstrap_draws=2,
@@ -117,7 +144,7 @@ def test_the_pool_is_stamped_on_every_row_so_a_reanalysis_cannot_mislabel_it() -
     """`--from-csv` refuses a pool mismatch, which it can only do if the sweep recorded one."""
     scored = score_grid(
         _panel(_population()),
-        pd.DataFrame([{"mlbam_id": 0, "season": 2011, "age": 28, "current": 12.0, "prior": 12.0}]),
+        _query(0),
         kind="pitcher",
         horizons=(1,),
         age_windows=(AGE_WINDOW,),
