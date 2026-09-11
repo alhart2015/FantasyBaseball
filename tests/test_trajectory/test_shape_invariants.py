@@ -19,20 +19,62 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.trajectory.model import Trajectory, collapse_split_seasons, played
-from fantasy_baseball.trajectory.shape import shape_trajectory
+from fantasy_baseball.trajectory.shape import MAX_LAG, shape_trajectory
+
+
+#: `earlier_sgp` sitting at `value` in every deeper season.
+#:
+#: The fixture populations draw their lead-in seasons from the same range as their
+#: anchors, so a query has to sit in that range too. Passing zeros against a population
+#: centred at 15 puts the query three dimensions outside its own support, which inflates
+#: `se` through leverage alone -- nothing any test here is about. Each test passes the
+#: value its own population is centred on.
+def _earlier_at(value: float) -> tuple[float, ...]:
+    return (value,) * (MAX_LAG - 1)
+
+
+#: `_population` draws uniform(-3, 20) and every query below sits at 10.
+_EARLIER = _earlier_at(10.0)
 
 
 def _panel(rows: list[tuple[int, int, int, float]]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
 
 
+def _lead_in(i: int, rng: np.random.Generator, season: int, age: int) -> list[tuple]:
+    """The seasons a fixture player needs BEFORE his anchors so `build_history` keeps him.
+
+    `MAX_LAG - 1` of them, because the deepest lag of the anchor row must be observable
+    or the row is censored -- which on a three-season fixture censors the entire panel
+    and the fit sees nothing. They are drawn from the anchors' own range and have NO
+    relationship to the outcome, so nothing a test asserts about the fitted coefficients,
+    the residual scale or the band changes because they exist.
+    """
+    return [(i, season - k, age - k, float(rng.uniform(5, 25))) for k in range(MAX_LAG - 1, 0, -1)]
+
+
+#: Career length. An anchor row needs its deepest lag inside the panel AND its outcome
+#: inside it, so a career of `S` seasons yields `S - MAX_LAG - 1` usable rows -- at
+#: `MAX_LAG + 2` that is ONE per player, which starved the fit to the point of a
+#: zero-division rather than failing an assertion. Five clear of the window leaves four.
+_SPAN = MAX_LAG + 5
+
+
 def _population(n: int = 200) -> pd.DataFrame:
-    """Careers spanning three seasons, including below-replacement (negative) years."""
+    """Careers `_SPAN` seasons long, including below-replacement (negative) years.
+
+    The seasons are independent draws, so every row is exchangeable and lengthening the
+    career to clear the lag window changes nothing any test here asserts.
+    """
     rng = np.random.default_rng(1)
     rows = []
     for i in range(n):
-        for offset, age in enumerate((26, 27, 28)):
-            rows.append((i, 2010 + offset, age, float(rng.uniform(-3, 20))))
+        for offset in range(_SPAN):
+            # Aged so the FIRST usable anchor row -- offset `MAX_LAG`, the shallowest one
+            # whose deepest lag is still inside the panel -- lands on 27, the age every
+            # query here asks about. Lengthening the career without this puts every
+            # surviving row outside `AGE_WINDOW` of the query and the fit sees nothing.
+            rows.append((i, 2010 + offset, 27 - MAX_LAG + offset, float(rng.uniform(-3, 20))))
     return _panel(rows)
 
 
@@ -49,7 +91,14 @@ def test_survival_counts_only_seasons_actually_played() -> None:
     real season. Was a cross-mode agreement; now a statement about shape alone."""
     panel = _population()
     traj, _ = shape_trajectory(
-        panel, kind="hitter", age=27, sgp=10.0, prior_sgp=10.0, horizons=(1,), prior_window=60.0
+        panel,
+        kind="hitter",
+        age=27,
+        sgp=10.0,
+        prior_sgp=10.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=60.0,
     )
     assert traj.path[0].survivors <= traj.path[0].n
     assert traj.path[0].survival == pytest.approx(traj.path[0].survivors / traj.path[0].n)
@@ -63,6 +112,7 @@ def _known_sigma_population(sigma: float, n: int = 400) -> pd.DataFrame:
     for i in range(n):
         prior = float(rng.uniform(5, 25))
         current = float(rng.uniform(5, 25))
+        rows += _lead_in(i, rng, 2010, 26)
         rows.append((i, 2010, 26, prior))
         rows.append((i, 2011, 27, current))
         rows.append((i, 2012, 28, 0.4 * current + 0.5 * prior + float(rng.normal(0, sigma))))
@@ -82,6 +132,8 @@ def test_shape_spread_recovers_the_generating_sigma() -> None:
         age=27,
         sgp=15.0,
         prior_sgp=15.0,
+        # This population pads from uniform(5, 25), not `_population`'s range.
+        earlier_sgp=_earlier_at(15.0),
         horizons=(1,),
         prior_window=60.0,
     )
@@ -96,7 +148,14 @@ def test_thin_support_is_visible_as_an_effective_size() -> None:
     thin-support gate reads `n_effective`. In shape it must be strictly smaller than n."""
     panel = _population()
     traj, anchors = shape_trajectory(
-        panel, kind="hitter", age=27, sgp=10.0, prior_sgp=10.0, horizons=(1,), prior_window=8.0
+        panel,
+        kind="hitter",
+        age=27,
+        sgp=10.0,
+        prior_sgp=10.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=8.0,
     )
     assert traj.path[0].n_effective == pytest.approx(anchors[0].n_effective)
     assert traj.path[0].n_effective < traj.path[0].n
@@ -112,6 +171,7 @@ def test_only_seasons_with_an_observable_forward_year_are_counted() -> None:
         age=27,
         sgp=10.0,
         prior_sgp=10.0,
+        earlier_sgp=_EARLIER,
         horizons=(1,),
         prior_window=60.0,
         last_complete_season=2011,
@@ -145,6 +205,7 @@ def test_an_unusable_bootstrap_count_is_refused(draws: int) -> None:
             age=27,
             sgp=10.0,
             prior_sgp=10.0,
+            earlier_sgp=_EARLIER,
             horizons=(1,),
             bootstrap_draws=draws,
         )
@@ -165,9 +226,17 @@ def test_var_is_the_raw_line_minus_the_floor_unclamped() -> None:
     panel = _population()
     floor = 9.0
     query = {"kind": "hitter", "age": 27, "sgp": 10.0, "horizons": (1,)}
-    raw = shape_trajectory(panel, prior_sgp=10.0, prior_window=60.0, **query)[0]
+    raw = shape_trajectory(panel, prior_sgp=10.0, earlier_sgp=_EARLIER, prior_window=60.0, **query)[
+        0
+    ]
     var = shape_trajectory(
-        panel, prior_sgp=10.0, prior_window=60.0, replacement=floor, slot="C", **query
+        panel,
+        prior_sgp=10.0,
+        earlier_sgp=_EARLIER,
+        prior_window=60.0,
+        replacement=floor,
+        slot="C",
+        **query,
     )[0]
 
     for field in ("mean", "median", "p10", "p90", "mean_if_survived"):
@@ -184,7 +253,7 @@ def test_the_trajectory_is_labelled_shape() -> None:
     own numbers. One estimator remains, and it still has to say so."""
     panel = _population()
     traj, _ = shape_trajectory(
-        panel, kind="hitter", age=27, sgp=10.0, prior_sgp=10.0, horizons=(1,)
+        panel, kind="hitter", age=27, sgp=10.0, prior_sgp=10.0, earlier_sgp=_EARLIER, horizons=(1,)
     )
     assert traj.mode == "shape"
 
@@ -194,7 +263,14 @@ def test_no_support_is_distinguishable_from_no_data() -> None:
     0.0 printed as a forecast of no future value."""
     panel = _population()
     traj, _ = shape_trajectory(
-        panel, kind="hitter", age=99, sgp=10.0, prior_sgp=10.0, horizons=(1,), prior_window=1.0
+        panel,
+        kind="hitter",
+        age=99,
+        sgp=10.0,
+        prior_sgp=10.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=1.0,
     )
     assert isinstance(traj, Trajectory)
     assert traj.n_comps == 0

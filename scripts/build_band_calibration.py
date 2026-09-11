@@ -10,8 +10,11 @@ nominal 10% instead of the 1.3%-to-26% it held before (see
     python scripts/build_band_calibration.py --validate           # rolling-origin check
     python scripts/build_band_calibration.py --dry-run            # print, write nothing
 
-The sweep is ~35 minutes for both pools at horizons 1-5, so `--out-heldout` saves the
-predictions and `--from-csv` refits from them in seconds. Refitting from a saved sweep is
+The sweep is ~70 minutes for both pools at horizons 1-5 (measured 2026-09-11, WITH other
+work on the machine, so read it as an upper bound; it was ~35 minutes before
+`shape.MAX_LAG` widened the design matrix -- see `_bootstrap_predictions`, whose batched
+solve scales with the square of the fit's width). So `--out-heldout` saves the predictions
+and `--from-csv` refits from them in seconds. Refitting from a saved sweep is
 also what keeps a validation run and the shipped table describing the same data.
 
 WHEN TO RE-RUN: whenever `data/trajectory/` is rebuilt. The artifact carries the panel

@@ -9,7 +9,7 @@ from fantasy_baseball.trajectory.career_comps import (
     match_pool,
     required_overlap,
 )
-from fantasy_baseball.trajectory.shape import Prepared
+from fantasy_baseball.trajectory.shape import MAX_LAG, Prepared
 
 HORIZONS = (1, 2, 3, 4, 5)
 LOOKBACK = 8
@@ -34,6 +34,13 @@ def _prepared(
         age=np.array([r[2] for r in rows], dtype=float),
         current=np.array([r[3].get(0, np.nan) for r in rows], dtype=float),
         prior=np.array([r[3].get(1, np.nan) for r in rows], dtype=float),
+        # `closest_careers` never reads this -- it is the FIT's block, not the match's --
+        # but `Prepared` requires it. Built off the same `career` dict under the fit's own
+        # zero-fill convention, so the fixture cannot assert a NaN here by accident and
+        # claim something about a matcher that would never have looked.
+        lags=np.array(
+            [[r[3].get(k, 0.0) for k in range(1, MAX_LAG + 1)] for r in rows], dtype=float
+        ),
         season=np.array([r[1] for r in rows]),
         mlbam_id=np.array([r[0] for r in rows]),
         forward={h: np.array([r[4][h - 1] for r in rows], dtype=float) for h in HORIZONS},
@@ -277,7 +284,7 @@ def test_a_nan_anchor_value_is_refused_rather_than_silently_shortening_the_windo
 def test_a_prepared_with_no_backward_window_is_refused_by_name() -> None:
     """`prepare` no longer builds `back` unless asked, so the failure a caller who
     forgot `lookback=` actually hits must say that, rather than dying in `column_stack`."""
-    from fantasy_baseball.trajectory.shape import Prepared
+    from fantasy_baseball.trajectory.shape import MAX_LAG, Prepared
 
     bare = Prepared(
         kind="hitter",
@@ -286,6 +293,7 @@ def test_a_prepared_with_no_backward_window_is_refused_by_name() -> None:
         age=np.array([25.0]),
         current=np.array([10.0]),
         prior=np.array([10.0]),
+        lags=np.full((1, MAX_LAG), 10.0),
         season=np.array([2010]),
         mlbam_id=np.array([1]),
         forward={h: np.array([10.0]) for h in HORIZONS},
@@ -340,7 +348,7 @@ def test_the_diagnostic_refuses_exactly_what_the_matcher_refuses() -> None:
     `Prepared` with no window: the bare crash the named errors were added to replace,
     reintroduced one function over. Both now route through `_check`.
     """
-    from fantasy_baseball.trajectory.shape import Prepared
+    from fantasy_baseball.trajectory.shape import MAX_LAG, Prepared
 
     bare = Prepared(
         kind="hitter",
@@ -349,6 +357,7 @@ def test_the_diagnostic_refuses_exactly_what_the_matcher_refuses() -> None:
         age=np.array([25.0]),
         current=np.array([10.0]),
         prior=np.array([10.0]),
+        lags=np.full((1, MAX_LAG), 10.0),
         season=np.array([2010]),
         mlbam_id=np.array([1]),
         forward={h: np.array([10.0]) for h in HORIZONS},

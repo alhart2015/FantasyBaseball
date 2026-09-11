@@ -127,8 +127,8 @@ _CAREER = {24: 9.0, 25: 10.0, 26: 11.0, 27: 12.0}
 
 
 def test_a_player_observable_at_fewer_horizons_than_the_sweep_still_gets_comps() -> None:
-    """One short path must not discard the whole ~52s sweep -- and since #358 it no
-    longer even costs him his comps.
+    """One short path must not discard the whole multi-minute sweep -- and since #358
+    it no longer even costs him his comps.
 
     `player.sgp` is `traj.observable` -- points with `n > 0` only -- and the candidate
     mask `seasons + h <= last` shrinks as h grows, so a player can be observable at
