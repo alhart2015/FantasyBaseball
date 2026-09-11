@@ -352,7 +352,25 @@ def _earlier_for(panel: pd.DataFrame, mlbam_id: int, args: argparse.Namespace) -
         return tuple(args.earlier_sgp)
     rows = panel[panel["mlbam_id"] == mlbam_id]
     current = int(rows["season"].max())
-    earlier = seasons_before(panel, mlbam_id=mlbam_id, season=current)
+    try:
+        earlier = seasons_before(panel, mlbam_id=mlbam_id, season=current)
+    except ValueError as exc:
+        # REFUSED BY NAME, not a traceback. `seasons_before` raises when the lag
+        # window reaches before the panel begins, and its docstring notes that cannot
+        # happen on a CURRENT-season query -- but this is not always one. `--player`
+        # resolves anybody with an observed season, including the retired: 743 hitters
+        # in the 2000-2026 panel last played in 2000-2003, and every one of them
+        # reached this line and died on an unhandled ValueError where the two-anchor
+        # model printed a trajectory. He is genuinely unscorable at this depth rather
+        # than mishandled, so name the player, the reason, and the way out.
+        raise SystemExit(
+            f"{args.player or mlbam_id} cannot be scored: {exc}"
+            f"\n    His last season is {current}, so a {MAX_LAG}-lag query reaches "
+            f"outside the panel."
+            f"\n    Pass --earlier-sgp N N N to supply those seasons yourself, or "
+            f"rebuild the panel further back"
+            f"\n    (scripts/build_pt_panel.py --start ...)."
+        ) from exc
     shown = ", ".join(f"{current - k}: {v:.1f}" for k, v in enumerate(earlier, start=2))
     print(f"  earlier seasons ({shown})")
     return earlier

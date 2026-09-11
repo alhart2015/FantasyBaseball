@@ -80,6 +80,7 @@ from fantasy_baseball.trajectory.shape import (
     build_history,
     collapsed_index,
     earlier_of,
+    fittable_rows,
     prepare,
     shape_trajectory,
 )
@@ -312,7 +313,7 @@ def main() -> int:
             panel = load_scored_panel(
                 kind, panel_dir=args.panel_dir, sgp_overrides=config.sgp_overrides
             )
-            history = build_history(panel)
+            history = fittable_rows(build_history(panel))
             queries = history
             if args.sample and args.sample < len(history):
                 queries = history.sample(args.sample, random_state=args.seed)

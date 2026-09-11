@@ -368,8 +368,10 @@ def _stub_the_sweep(monkeypatch):
     # One row per pool, keyed by kind: `build_payload` sweeps both, and a stub that
     # returned the same row twice would let a hitter into the pitcher pool.
     rows = {
-        "hitter": [BoardRow(1, "Big Bat", "hitter", 27, 20.0, 19.0, "OF", 4.0)],
-        "pitcher": [BoardRow(2, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0)],
+        "hitter": [BoardRow(1, "Big Bat", "hitter", 27, 20.0, 19.0, "OF", 4.0, (18.0, 17.0, 16.0))],
+        "pitcher": [
+            BoardRow(2, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0, (16.0, 15.0, 14.0))
+        ],
     }
     stubs = {
         # `projection_systems` / `projection_weights` are what `load_anchored_panels`

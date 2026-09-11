@@ -41,6 +41,9 @@ def _prepared(
         lags=np.array(
             [[r[3].get(k, 0.0) for k in range(1, MAX_LAG + 1)] for r in rows], dtype=float
         ),
+        # Every fixture row is fittable: `closest_careers` never reads this, and a False
+        # here would assert something about the FIT from a matcher's test.
+        fittable=np.ones(len(rows), dtype=bool),
         season=np.array([r[1] for r in rows]),
         mlbam_id=np.array([r[0] for r in rows]),
         forward={h: np.array([r[4][h - 1] for r in rows], dtype=float) for h in HORIZONS},
@@ -294,6 +297,7 @@ def test_a_prepared_with_no_backward_window_is_refused_by_name() -> None:
         current=np.array([10.0]),
         prior=np.array([10.0]),
         lags=np.full((1, MAX_LAG), 10.0),
+        fittable=np.ones(1, dtype=bool),
         season=np.array([2010]),
         mlbam_id=np.array([1]),
         forward={h: np.array([10.0]) for h in HORIZONS},
@@ -358,6 +362,7 @@ def test_the_diagnostic_refuses_exactly_what_the_matcher_refuses() -> None:
         current=np.array([10.0]),
         prior=np.array([10.0]),
         lags=np.full((1, MAX_LAG), 10.0),
+        fittable=np.ones(1, dtype=bool),
         season=np.array([2010]),
         mlbam_id=np.array([1]),
         forward={h: np.array([10.0]) for h in HORIZONS},

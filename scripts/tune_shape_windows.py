@@ -66,6 +66,7 @@ from fantasy_baseball.trajectory.shape import (
     build_history,
     collapsed_index,
     earlier_of,
+    fittable_rows,
     prepare,
     shape_trajectory,
 )
@@ -499,7 +500,7 @@ def main() -> int:
         prior_windows = tuple(sorted(set(args.prior_windows)))
         ages = (args.min_age, args.max_age)
 
-        history = build_history(panel)
+        history = fittable_rows(build_history(panel))
         history = history[
             history["age"].between(args.min_age, args.max_age)
             & (history["season"] + min(horizons) <= last)

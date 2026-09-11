@@ -12,8 +12,41 @@ PITCHER_LEVELS = {"SP": 9.29, "RP": 7.42}
 NAMES = pd.Series({1: "Alpha", 2: "Bravo", 3: "Charlie", 900: "Two Way"})
 
 
+#: An id no fixture uses, and deliberately absent from `NAMES`.
+_SPAN_FILLER = 9999
+
+
 def _panel(rows: list[tuple], columns: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns)
+
+
+def _spanning(frame: pd.DataFrame) -> pd.DataFrame:
+    """`frame` plus enough earlier seasons that `board_inputs` can reach back `MAX_LAG`.
+
+    THE PADDING BELONGS TO A THROWAWAY PLAYER, never to the subjects. Giving the
+    subjects earlier seasons would rewrite what several tests here assert -- most
+    directly `test_a_missing_prior_season_is_a_real_zero`, whose whole point is a rookie
+    with nothing behind him. A filler id makes the PANEL span far enough back while every
+    fixture player's own history stays exactly as written.
+
+    He carries no current-season row, so he never becomes a `BoardRow` and no count
+    changes. Values are arbitrary and unread: nothing here asserts anything about him.
+    """
+    first = int(frame["season"].min())
+    pad = pd.DataFrame(
+        [
+            {
+                **{c: 0.0 for c in frame.columns},
+                "mlbam_id": _SPAN_FILLER,
+                "season": first - k,
+                "age": 30 - k,
+                "sgp": 1.0,
+                "partial_season": False,
+            }
+            for k in range(1, MAX_LAG + 1)
+        ]
+    )
+    return pd.concat([pad[frame.columns], frame], ignore_index=True)
 
 
 def _hitters(rows: list[tuple], games: float = 113.0) -> pd.DataFrame:
@@ -24,7 +57,7 @@ def _hitters(rows: list[tuple], games: float = 113.0) -> pd.DataFrame:
     precisely so a pitcher panel can never be used for it. 113 of 162 is ~70% elapsed.
     """
     frame = _panel(rows, ["mlbam_id", "season", "age", "sgp", "partial_season"])
-    return frame.assign(pa=500.0, games=games)
+    return _spanning(frame.assign(pa=500.0, games=games))
 
 
 def _one(rows: list, pid: int):
@@ -85,7 +118,9 @@ def test_a_multi_eligible_hitter_is_priced_at_his_scarcest_slot() -> None:
 
 def _pitchers(rows: list[tuple]) -> pd.DataFrame:
     """(mlbam_id, season, age, sgp, partial_season, starts, games)."""
-    return _panel(rows, ["mlbam_id", "season", "age", "sgp", "partial_season", "starts", "games"])
+    return _spanning(
+        _panel(rows, ["mlbam_id", "season", "age", "sgp", "partial_season", "starts", "games"])
+    )
 
 
 def test_the_split_season_rule_matches_the_shared_one() -> None:
@@ -236,3 +271,24 @@ def test_an_extrapolated_query_is_not_reported_as_more_certain() -> None:
     inside, _ = shape_trajectory(panel, sgp=3.0, **kw)
     outside, _ = shape_trajectory(panel, sgp=16.0, **kw)
     assert (outside.path[0].p90 - outside.path[0].p10) >= (inside.path[0].p90 - inside.path[0].p10)
+
+
+def test_a_panel_too_short_for_the_lag_window_is_refused_not_zero_filled() -> None:
+    """`board_inputs` and `shape.seasons_before` must agree about an unobservable season.
+
+    Zero-filling one prices every player as having produced nothing before his prior
+    year, and the board renders normally -- which is the failure this module's own
+    docstring rule ("a prior season the panel cannot see is 0 only when he was genuinely
+    out of the league") exists to prevent. It was a one-offset window before `MAX_LAG`;
+    at four offsets a trimmed `--panel-dir` reaches it.
+    """
+    short = pd.DataFrame(
+        {
+            "mlbam_id": [1] * 3,
+            "season": [2024, 2025, 2026],
+            "age": [25, 26, 27],
+            "sgp": [10.0, 11.0, 12.0],
+        }
+    )
+    with pytest.raises(ValueError, match="unobservable rather than unplayed"):
+        board_inputs(short, kind="hitter", replacement_levels={}, names={})

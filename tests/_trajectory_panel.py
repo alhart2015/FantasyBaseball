@@ -26,8 +26,17 @@ from fantasy_baseball.trajectory.shape import MAX_LAG
 #: nothing (no candidate shares those ages), `prepared.age` has no entry to index, and the
 #: tests fail on empty lookups rather than on anything they assert.
 #:
-#: The season-to-age mapping is UNCHANGED by this -- 2010 is still age 24 -- so every
-#: fixture that pins a particular age, rank or support reads exactly what it did before.
+#: THE SEASON-TO-AGE MAPPING IS UNCHANGED -- 2010 is still age 24 -- BUT THE VALUES ARE
+#: NOT, and the difference matters to whoever reads this next. Prepending draws shifts the
+#: whole `default_rng(0)` stream, so every `sgp` moved: measured against the pre-change
+#: generator, 0 of 1440 overlapping (mlbam_id, season) rows kept their value, mean
+#: |diff| 6.6 SGP and max 24.0. An earlier version of this note claimed every fixture
+#: "reads exactly what it did before" -- false, and exactly the sentence that would send
+#: someone debugging a fixture failure past the real cause.
+#:
+#: What IS safe is that no fixture here asserts a specific SGP: they assert orderings,
+#: band containment, effective sizes and rank relationships, which the draws being
+#: exchangeable preserves. A future fixture that pins a literal value would not be.
 _LEAD_IN = MAX_LAG
 
 
@@ -41,9 +50,9 @@ def synthetic_panel(n: int = 160, seasons: range = range(2010, 2019)) -> pd.Data
     Seeded, so every caller gets the same panel and a fixture that depends on a
     particular player's support or rank stays reproducible.
     """
-    # Drawn BEFORE the nominal range so each player's own `level` is still the first draw
-    # of his sequence: seeding a lead-in from a separate generator, or after the loop,
-    # would reshuffle every existing fixture's values.
+    # Drawn as part of each player's own sequence rather than from a second generator,
+    # so the panel stays reproducible from one seed. This does NOT preserve the old
+    # values -- see `_LEAD_IN`; it just keeps the construction single-seeded.
     full = range(seasons.start - _LEAD_IN, seasons.stop)
     rng = np.random.default_rng(0)
     rows = []

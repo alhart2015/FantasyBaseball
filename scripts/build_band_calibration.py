@@ -60,7 +60,7 @@ from fantasy_baseball.trajectory.calibration import (
     span_frame,
 )
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_panel
-from fantasy_baseball.trajectory.shape import build_history
+from fantasy_baseball.trajectory.shape import MAX_LAG, build_history, fittable_rows
 from fantasy_baseball.trajectory.sweep import SWEEP_DRAWS
 
 sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
@@ -77,7 +77,11 @@ def sweep(panel_dir: Path, draws: int, horizons: tuple[int, ...]) -> pd.DataFram
     frames = []
     for kind in ("hitter", "pitcher"):
         panel = load_scored_panel(kind, panel_dir=panel_dir, sgp_overrides=config.sgp_overrides)
-        queries = build_history(panel).sort_values("mlbam_id")
+        # `fittable_rows`, not `build_history` directly: the latter keeps rows whose
+        # deep lags fall outside the panel so `career_comps` keeps its oldest
+        # candidates, and those make NaN QUERIES -- 18,221 of them here before this
+        # filter, 13% of the sweep, every one predicting NaN.
+        queries = fittable_rows(build_history(panel)).sort_values("mlbam_id")
         print(
             f"\n{kind}: {len(panel)} panel rows, {len(queries)} queries "
             f"({queries['mlbam_id'].nunique()} players), horizons {horizons}",
@@ -214,21 +218,47 @@ def main() -> int:
     out = args.out or (PROJECT_ROOT / CALIBRATION_PATH)
 
     horizons = tuple(range(1, MAX_HORIZON + 1))
+    vintage = panel_vintage_of(args.panel_dir)
     if args.from_csv:
         frame = pd.read_csv(args.from_csv)
         print(f"refitting from {len(frame)} saved rows in {args.from_csv}")
         missing = set(horizons) - set(frame["horizon"].unique())
         if missing:
-            # Every span up to MAX_HORIZON must be fittable, or a board rendered at that
-            # horizon silently falls through to an uncorrected band.
+            # Every span up to MAX_HORIZON must be fittable, or a board rendered at
+            # that horizon silently falls through to an uncorrected band.
             parser.error(f"{args.from_csv} is missing horizons {sorted(missing)}; re-sweep")
+        # THE FAST PATH MUST NOT DEFEAT THE GUARD IT FEEDS. `build_table` stamps the
+        # table with the LIVE `MAX_LAG` and the live panel vintage, but the predictions
+        # it fits came out of whatever sweep wrote this file. Bump `MAX_LAG`, run the
+        # documented "refits in seconds" path, and the result is a table stamped at the
+        # new depth whose multipliers describe the OLD estimator -- which then loads
+        # without complaint and prints intervals at a coverage nothing measured. That
+        # is precisely what `BandCalibration.max_lag` was added to refuse,
+        # reintroduced one flag over. The sweep stamps its provenance; this checks it.
+        for column, want, what in (
+            ("max_lag", MAX_LAG, "estimator depth"),
+            ("panel_vintage", vintage, "panel"),
+        ):
+            if column not in frame.columns:
+                parser.error(
+                    f"{args.from_csv} records no {column}, so it cannot be shown to "
+                    f"describe this build's {what}. It predates the stamp; re-sweep."
+                )
+            found = sorted(set(frame[column].dropna()))
+            if found != [want]:
+                parser.error(
+                    f"{args.from_csv} was swept at {column}={found} but this build is "
+                    f"{want!r}. The multipliers correct the sweeping estimator's band, "
+                    f"so they do not transfer; re-sweep."
+                )
     else:
         frame = sweep(args.panel_dir, args.draws, horizons)
         if args.out_heldout:
+            # Stamped so `--from-csv` can prove what produced these rows. Added here
+            # rather than inside `sweep`, which stays a pure measurement.
+            frame = frame.assign(max_lag=MAX_LAG, panel_vintage=vintage)
             frame.to_csv(args.out_heldout, index=False)
             print(f"\n  wrote {len(frame)} held-out rows to {args.out_heldout}")
-
-    vintage = panel_vintage_of(args.panel_dir)
     table = build_table(frame, panel_vintage=vintage)
     report_fit(frame, table)
     if table.fallbacks:

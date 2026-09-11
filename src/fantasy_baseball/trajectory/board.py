@@ -243,6 +243,21 @@ def board_inputs(
     # `earlier_sgp`. A player absent from any of them was out of the league, which is a
     # real 0 rather than missing data: the same convention `shape.build_history` fills a
     # fitting row's hole with, so a query and the rows it is scored against agree.
+    #
+    # THE PANEL MUST REACH BACK FAR ENOUGH FOR THAT TO BE TRUE, which is this module's
+    # own second rule above: a season the panel cannot SEE is not a season he sat out.
+    # Zero-filling one anyway prices every player as having produced nothing before his
+    # prior year, and the board renders normally -- `shape.seasons_before` raises on
+    # exactly this case and the two must not disagree. Unreachable on the shipped
+    # 2000-start panel, and it was a one-offset window before `MAX_LAG`; at four offsets
+    # a trimmed `--panel-dir` reaches it, so it is checked rather than left to a comment.
+    first = int(live["season"].min())
+    if season - MAX_LAG < first:
+        raise ValueError(
+            f"a {MAX_LAG}-lag board at {season} needs seasons back to "
+            f"{season - MAX_LAG}, but the panel begins at {first}; those are "
+            "unobservable rather than unplayed and must not be filled with 0"
+        )
     by_offset = [
         live[live["season"] == season - k].set_index("mlbam_id")["sgp"].astype(float).to_dict()
         for k in range(1, MAX_LAG + 1)

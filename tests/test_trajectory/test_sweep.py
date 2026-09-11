@@ -31,6 +31,7 @@ def _rows() -> list[BoardRow]:
             age=27,
             sgp=18.0,
             prior_sgp=17.0,
+            earlier_sgp=(16.0, 15.0, 14.0),
             slot="OF",
             floor=4.0,
         ),
@@ -41,6 +42,8 @@ def _rows() -> list[BoardRow]:
             age=27,
             sgp=0.0,
             prior_sgp=0.0,
+            # Genuinely no career -- the zeros here are the truth, not a default.
+            earlier_sgp=(0.0, 0.0, 0.0),
             slot="OF",
             floor=4.0,
         ),
@@ -186,8 +189,10 @@ def test_a_point_missing_a_field_fails_loudly_rather_than_shifting_the_rest() ->
 def test_a_two_way_player_keeps_one_line_per_pool() -> None:
     """One MLBAM id, two pools. Anything keyed on the bare id collapses them."""
     rows = [
-        BoardRow(660271, "Shohei Ohtani", "hitter", 31, 16.6, 22.6, "UTIL", 4.0),
-        BoardRow(660271, "Shohei Ohtani", "pitcher", 31, 13.2, 12.0, "SP", 3.0),
+        BoardRow(
+            660271, "Shohei Ohtani", "hitter", 31, 16.6, 22.6, "UTIL", 4.0, (20.0, 18.0, 17.0)
+        ),
+        BoardRow(660271, "Shohei Ohtani", "pitcher", 31, 13.2, 12.0, "SP", 3.0, (11.0, 10.0, 9.0)),
     ]
     swept = sweep_pool(rows[:1], synthetic_panel(), "hitter", (1,)) + sweep_pool(
         rows[1:], synthetic_panel(), "pitcher", (1,)
@@ -313,7 +318,7 @@ def test_a_swept_row_matches_shape_trajectory_itself() -> None:
     catch it, and scripts/trajectory_board.py has no test file of its own.
     """
     panel = synthetic_panel()
-    row = BoardRow(1, "Grounded", "hitter", 27, 18.0, 16.0, "OF", 4.0)
+    row = BoardRow(1, "Grounded", "hitter", 27, 18.0, 16.0, "OF", 4.0, (15.0, 14.0, 13.0))
     horizons = (1, 2, 3)
 
     swept = sweep_pool([row], panel, "hitter", horizons)
@@ -378,7 +383,7 @@ def test_the_band_flag_is_scoped_to_the_range_on_screen() -> None:
     restores the exact regression, and nothing else would catch it.
     """
     panel = synthetic_panel()
-    row = BoardRow(1, "Flagged", "hitter", 27, 18.0, 16.0, "OF", 4.0)
+    row = BoardRow(1, "Flagged", "hitter", 27, 18.0, 16.0, "OF", 4.0, (15.0, 14.0, 13.0))
     swept = sweep_pool([row], panel, "hitter", (1, 2, 3))
 
     player = swept[0]
@@ -401,7 +406,7 @@ def test_n_eff_reports_the_worst_year_in_the_range() -> None:
     it cannot tell min from max or mean. Hand-set points make the choice observable.
     """
     swept = sweep_pool(
-        [BoardRow(1, "Solo", "hitter", 27, 18.0, 16.0, "OF", 4.0)],
+        [BoardRow(1, "Solo", "hitter", 27, 18.0, 16.0, "OF", 4.0, (15.0, 14.0, 13.0))],
         synthetic_panel(),
         "hitter",
         (1, 2, 3),

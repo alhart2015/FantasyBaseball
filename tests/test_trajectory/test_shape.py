@@ -54,7 +54,8 @@ def _linear_population(coef_current: float, coef_prior: float, n: int = 240) -> 
     """A population whose next season is EXACTLY intercept-free a*current + b*prior, so the
     fit has a known right answer to recover.
 
-    Runs `MAX_LAG` seasons of padding BEFORE the two anchors, because `build_history`
+    Runs `MAX_LAG - 1` seasons of padding BEFORE the two anchors -- `prior` is itself the
+    first lag, so that is what clears the window -- because `build_history`
     censors a row whose deepest lag falls outside the panel and a three-season population
     would leave nothing to fit. The padding is drawn from the same distribution and has
     NO relationship to the outcome, so the right answer is unchanged and the deeper
@@ -769,18 +770,40 @@ def test_a_negative_lookback_is_refused() -> None:
 # query cannot be assembled in a different order from the design it is evaluated against.
 
 
-def test_build_history_censors_every_lag_alike() -> None:
-    """A row is kept only when its DEEPEST lag is inside the panel, not just its prior.
+def test_an_unobservable_deep_lag_is_NaN_and_unfittable_not_dropped() -> None:
+    """A deep lag outside the panel must not be scored as a season he did not play -- and
+    must not throw the row away either.
 
-    Censoring on `lag1` alone and zero-filling the rest would score a player's pre-panel
-    seasons as years he produced nothing -- the exact "cannot see it" / "did not play"
-    confusion the shallow rule was written to avoid, reintroduced one offset deeper.
+    Two consumers, two needs. The FIT cannot build a design matrix without the whole lag
+    block, so it has to refuse the row. `career_comps.closest_careers` matches on
+    `Prepared.back` and never reads `lags`, so it can still score it -- and censoring in
+    `build_history` cost it 1,860 hitter and 1,798 pitcher seasons, all 2001-2003, which
+    were its OLDEST comps. `Prepared.fittable` carries the censoring instead.
     """
     seasons = [(1, 2010 + k, 25 + k, 10.0 + k) for k in range(MAX_LAG + 2)]
     frame = build_history(_panel(seasons))
-    # 2010 + MAX_LAG is the first season whose deepest lag (2010) is still in the panel.
-    assert list(frame["season"]) == [2010 + MAX_LAG, 2011 + MAX_LAG]
-    assert build_history(_panel(seasons[:MAX_LAG])).empty
+    # Kept from the first row with an observable PRIOR, not the first with a full block.
+    assert list(frame["season"]) == [2010 + k for k in range(1, MAX_LAG + 2)]
+    # ...and the shallow rows carry NaN there rather than a 0 that would read as "played".
+    early = frame[frame["season"] == 2011].iloc[0]
+    assert np.isnan(early[f"lag{MAX_LAG}"])
+    assert early["lag1"] == pytest.approx(10.0)
+
+    prepared = prepare(_panel(seasons), kind="hitter", horizons=(1,))
+    # `strict=True`: the two arrays are per-row and a length mismatch would be the bug.
+    fittable = dict(zip(prepared.season, prepared.fittable, strict=True))
+    assert fittable[2010 + MAX_LAG], "its whole lag block is inside the panel"
+    assert not fittable[2011], "its deepest lag is outside the panel"
+
+
+def test_a_row_the_fit_refuses_still_reaches_the_career_matcher() -> None:
+    """The whole point of `fittable` being a mask rather than a shorter frame."""
+    seasons = [(1, 2010 + k, 25 + k, 10.0 + k) for k in range(MAX_LAG + 2)]
+    prepared = prepare(_panel(seasons), kind="hitter", horizons=(1,), lookback=2)
+    assert not prepared.fittable.all(), "the fixture has at least one unfittable row"
+    # Present in every array a matcher reads, despite the fit refusing it.
+    assert 2011 in set(prepared.season)
+    assert len(prepared.back[1]) == len(prepared.season)
 
 
 def test_a_missing_middle_season_is_a_real_zero_at_every_depth() -> None:
