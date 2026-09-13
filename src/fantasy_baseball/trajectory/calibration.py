@@ -70,6 +70,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from fantasy_baseball.trajectory.shape import MAX_LAG
+
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 #: Nominal mass in EACH tail. The band is p10..p90, so 10% below and 10% above.
@@ -321,6 +323,19 @@ class BandCalibration:
     #: measured basis (see `CALIBRATION_WINDOW_YEARS`), so a table fitted under a different
     #: one is a different object and the artifact should say which.
     window_years: int
+    #: `shape.MAX_LAG` the sweep was run at, checked on load exactly as `panel_vintage`
+    #: is. THE PANEL IS NOT ENOUGH on its own: the multipliers are fitted against this
+    #: estimator's residual scale, and widening the design matrix moves `residual_var`
+    #: and `se` -- and therefore every raw band the multipliers correct -- while leaving
+    #: the panel untouched. Before this field, changing `MAX_LAG` left a table that
+    #: loaded without complaint and printed intervals at a coverage nothing had measured,
+    #: which is the exact silent-and-plausible failure `panel_vintage` exists to refuse.
+    #:
+    #: A stand-in for "which estimator", not a claim that `MAX_LAG` is the only thing that
+    #: can invalidate a table -- `AGE_WINDOW` and `PRIOR_WINDOW` would too. It is the one
+    #: that moved, and a field that catches one real cause beats a comment asking the next
+    #: reader to remember.
+    max_lag: int
     multipliers: dict[str, dict[str, dict[str, tuple[float, float]]]]
     #: Signed-score quantiles at `CURVE_LEVELS`, keyed like `multipliers`. The band edges
     #: are two points on this; the curve is what answers "how likely is he to clear X".
@@ -423,6 +438,7 @@ class BandCalibration:
                 "panel_vintage": self.panel_vintage,
                 "alpha": self.alpha,
                 "window_years": self.window_years,
+                "max_lag": self.max_lag,
                 "multipliers": self.multipliers,
                 "curves": self.curves,
                 "curve_levels": list(CURVE_LEVELS),
@@ -471,10 +487,21 @@ class BandCalibration:
             panel_vintage=raw["panel_vintage"],
             alpha=raw["alpha"],
             window_years=raw["window_years"],
+            # A table written before this field was recorded cannot be assumed to match
+            # the estimator in use -- it was fitted at the two-anchor depth, which is what
+            # `-1` stands for and what the load guard below then refuses by name.
+            max_lag=int(raw.get("max_lag", -1)),
             multipliers=multipliers,
             curves=curves,
             fallbacks=raw.get("fallbacks", {}),
         )
+        if table.max_lag != MAX_LAG:
+            raise ValueError(
+                f"band calibration was fitted at MAX_LAG {table.max_lag} but this build "
+                f"fits {MAX_LAG} anchors. The multipliers correct THIS estimator's raw "
+                f"band, so they do not transfer. Regenerate with "
+                f"`python scripts/build_band_calibration.py`."
+            )
         if panel_vintage is not None and table.panel_vintage != panel_vintage:
             raise ValueError(
                 f"band calibration was fitted on panel {table.panel_vintage!r} but the "
@@ -526,6 +553,9 @@ IDENTITY = BandCalibration(
     panel_vintage="identity",
     alpha=ALPHA,
     window_years=0,
+    # It corrects nothing, so it cannot be stale. Stamped with the live constant so the
+    # load guard can never refuse the one table that is depth-agnostic by construction.
+    max_lag=MAX_LAG,
     multipliers={},
     curves={},
     fallbacks={},
@@ -666,6 +696,7 @@ def build_table(
         panel_vintage=panel_vintage,
         alpha=alpha,
         window_years=window_years,
+        max_lag=MAX_LAG,
         multipliers=multipliers,
         curves=curves,
         fallbacks=fallbacks,

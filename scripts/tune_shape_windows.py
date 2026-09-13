@@ -65,6 +65,8 @@ from fantasy_baseball.trajectory.shape import (
     PRIOR_WINDOW,
     build_history,
     collapsed_index,
+    earlier_of,
+    fittable_rows,
     prepare,
     shape_trajectory,
 )
@@ -161,6 +163,10 @@ def score_grid(
                     age=int(q.age),
                     sgp=float(q.current),
                     prior_sgp=float(q.prior),
+                    # Straight off the query row: `build_history` writes the whole lag
+                    # block, so the tuning queries carry the same anchors the fit sees
+                    # rather than a second lookup that could fill a hole differently.
+                    earlier_sgp=earlier_of(q),
                     horizons=observable,
                     age_window=age_window,
                     prior_window=prior_window,
@@ -494,7 +500,7 @@ def main() -> int:
         prior_windows = tuple(sorted(set(args.prior_windows)))
         ages = (args.min_age, args.max_age)
 
-        history = build_history(panel)
+        history = fittable_rows(build_history(panel))
         history = history[
             history["age"].between(args.min_age, args.max_age)
             & (history["season"] + min(horizons) <= last)

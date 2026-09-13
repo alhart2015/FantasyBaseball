@@ -4,7 +4,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fantasy_baseball.trajectory.shape import shape_trajectory
+from fantasy_baseball.trajectory.shape import MAX_LAG, shape_trajectory
 from fantasy_baseball.trajectory.value import best_floor, replacement_for, resolve_slots
 
 LEVELS = {"RP": 7.42, "C": 7.70, "1B": 9.15, "SP": 9.29, "SS": 9.51, "OF": 9.96, "UTIL": 9.96}
@@ -126,6 +126,10 @@ def test_shape_reports_a_collapsed_veteran_as_NEGATIVE_var() -> None:
     rows = []
     for i in range(200):
         peak, down = float(rng.uniform(18, 26)), float(rng.uniform(0, 3))
+        # Lead-in at the PEAK level, so the deepest lags are inside the panel (without
+        # them `build_history` censors every row here) and the query's own deeper anchors
+        # can sit where a collapsed veteran's really would: high, not at zero.
+        rows += [(i, 2010 - k, 32 - k, float(rng.uniform(18, 26))) for k in range(MAX_LAG, 0, -1)]
         rows += [(i, 2010, 32, peak), (i, 2011, 33, down), (i, 2012, 34, float(rng.uniform(0, 4)))]
     panel = _panel(rows)
     kw = {
@@ -133,6 +137,7 @@ def test_shape_reports_a_collapsed_veteran_as_NEGATIVE_var() -> None:
         "age": 33,
         "sgp": 0.5,
         "prior_sgp": 24.0,
+        "earlier_sgp": (22.0,) * (MAX_LAG - 1),
         "horizons": (1,),
         "prior_window": 60.0,
     }

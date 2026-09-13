@@ -48,11 +48,23 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union
 #: Longest projected year offered. Five forward years is also what the player chart
 #: draws (#324).
 #:
-#: Cost, re-measured 2026-08-06 on the 2000-2026 panel: 33.5s at three years, ~52s at
-#: five, so roughly 4-5s per pool per extra year. The figure here used to be quoted "per
-#: pool per scale" -- there is only one scale now (#331 made VAR a shift, so the second
-#: fit went), and the old per-scale number does not reconcile with what one scale costs
-#: today, so this is the measurement rather than the old one halved.
+#: Cost, re-measured 2026-09-11 on the 2000-2026 panel after `shape.MAX_LAG` widened the
+#: design matrix, PER POOL, nothing else on the machine:
+#:
+#:     pool     players   three years   five years
+#:     hitter       651        50.8s        83.5s
+#:     pitcher      796        81.5s       126.0s
+#:
+#: So a full push is ~3.5 minutes at five years, against the ~52s this note used to quote
+#: for three. Roughly 1.5x the old figure, and the cause is `_bootstrap_predictions`:
+#: it solves its draws as `counts @ gram` where `gram` is (n, width**2), so widening the
+#: fit from 3 parameters to `shape.N_PARAMETERS` squares that term -- n*36 against n*9.
+#: Only part of a sweep is the bootstrap, which is why it is 1.5x and not 4x.
+#:
+#: The figure here used to be quoted "per pool per scale" -- there is only one scale now
+#: (#331 made VAR a shift, so the second fit went), and the old per-scale number does not
+#: reconcile with what one scale costs today, so this is the measurement rather than the
+#: old one halved.
 DEFAULT_MAX_HORIZON = 5
 
 #: Current-season pace below which a player is not fitted. THE SAME CUT
@@ -218,7 +230,7 @@ def player_comps(prepared, player, career: dict[int, float], names: dict, pt: di
     That also removed a failure mode rather than moving it. The old matcher raised when
     ``len(predicted) != len(prepared.horizons)`` -- reachable for a player observable at
     h=1..3 but not h=4..5, whom ``sweep_pool`` keeps -- and one such player discarded a
-    whole ~52s sweep and pushed nothing. There is no ``predicted`` here, so a short fit
+    whole sweep and pushed nothing. There is no ``predicted`` here, so a short fit
     is no longer a length contract to violate: he gets full-length comp paths and the
     view truncates them to the horizons he was actually fitted at.
 

@@ -127,8 +127,8 @@ _CAREER = {24: 9.0, 25: 10.0, 26: 11.0, 27: 12.0}
 
 
 def test_a_player_observable_at_fewer_horizons_than_the_sweep_still_gets_comps() -> None:
-    """One short path must not discard the whole ~52s sweep -- and since #358 it no
-    longer even costs him his comps.
+    """One short path must not discard the whole multi-minute sweep -- and since #358
+    it no longer even costs him his comps.
 
     `player.sgp` is `traj.observable` -- points with `n > 0` only -- and the candidate
     mask `seasons + h <= last` shrinks as h grows, so a player can be observable at
@@ -368,8 +368,10 @@ def _stub_the_sweep(monkeypatch):
     # One row per pool, keyed by kind: `build_payload` sweeps both, and a stub that
     # returned the same row twice would let a hitter into the pitcher pool.
     rows = {
-        "hitter": [BoardRow(1, "Big Bat", "hitter", 27, 20.0, 19.0, "OF", 4.0)],
-        "pitcher": [BoardRow(2, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0)],
+        "hitter": [BoardRow(1, "Big Bat", "hitter", 27, 20.0, 19.0, "OF", 4.0, (18.0, 17.0, 16.0))],
+        "pitcher": [
+            BoardRow(2, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0, (16.0, 15.0, 14.0))
+        ],
     }
     stubs = {
         # `projection_systems` / `projection_weights` are what `load_anchored_panels`

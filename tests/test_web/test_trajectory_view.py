@@ -55,22 +55,33 @@ def _spot(name: str, team: str, pool: str = "hitter", status: str = "") -> Roste
 def payload() -> dict:
     """A four-player board -- two hitters, two pitchers -- swept to three years."""
     panel = synthetic_panel()
+    # `earlier_sgp` IS SPELLED OUT for every row, at each player's own level. It defaults
+    # to zeros for positional construction, and a zero is not absent data -- it is the
+    # real value meaning "out of the league", so the default quietly makes every one of
+    # these 27-year-olds a man whose career began at 25. That is wrong for a fixture whose
+    # whole point is an established board, and it is not a neutral wrongness: it drags a
+    # high-level player's forecast down hardest, which is what put a pitcher above
+    # `Big Bat` on VAR (his SP floor is 1.0 lower) and made the two league-rank tests
+    # below read a within-subset #1. Each tuple keeps its player's SHAPE -- `Thin Support`
+    # stays a man who outran a thin cohort, `Under Water` stays under his floor.
     hitters = [
-        BoardRow(1, "Big Bat", "hitter", 27, 20.0, 19.0, "OF", 4.0),
-        BoardRow(2, "Small Bat", "hitter", 27, 8.0, 7.0, "OF", 4.0),
+        BoardRow(1, "Big Bat", "hitter", 27, 20.0, 19.0, "OF", 4.0, (18.0, 17.0, 16.0)),
+        BoardRow(2, "Small Bat", "hitter", 27, 8.0, 7.0, "OF", 4.0, (7.0, 6.0, 6.0)),
         # Observable but extrapolated: a 24.0 season off a 5.0 prior matches the
         # low-prior cohort and is then evaluated far above their own current seasons,
         # so local_support is 0 and the row carries the (!) flag. On the live board
         # this shape lands in the top five (CJ Abrams, 6.4%), so a fixture without one
-        # cannot exercise anything that treats flagged rows differently.
-        BoardRow(9, "Thin Support", "hitter", 27, 24.0, 5.0, "OF", 4.0),
+        # cannot exercise anything that treats flagged rows differently. His earlier
+        # seasons stay LOW for the same reason his prior is low -- the breakout is the
+        # shape being tested, and backfilling a strong career would erase it.
+        BoardRow(9, "Thin Support", "hitter", 27, 24.0, 5.0, "OF", 4.0, (4.0, 3.0, 2.0)),
         # Below his slot's floor, so `now` on the VAR scale is negative. Without him the
         # "deliberately not clamped" rule is unreachable and re-adding a clamp passes.
-        BoardRow(10, "Under Water", "hitter", 27, 2.5, 3.0, "C", 6.0),
+        BoardRow(10, "Under Water", "hitter", 27, 2.5, 3.0, "C", 6.0, (3.0, 2.5, 2.0)),
     ]
     pitchers = [
-        BoardRow(3, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0),
-        BoardRow(4, "Small Arm", "pitcher", 27, 6.0, 5.0, "RP", 1.0),
+        BoardRow(3, "Big Arm", "pitcher", 27, 18.0, 17.0, "SP", 3.0, (16.0, 15.0, 14.0)),
+        BoardRow(4, "Small Arm", "pitcher", 27, 6.0, 5.0, "RP", 1.0, (5.0, 5.0, 4.0)),
     ]
     swept = sweep_pool(hitters, panel, "hitter", (1, 2, 3)) + sweep_pool(
         pitchers, panel, "pitcher", (1, 2, 3)

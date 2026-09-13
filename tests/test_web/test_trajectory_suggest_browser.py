@@ -59,6 +59,9 @@ def _board_payload():
             age=26,
             sgp=20.0 - i * 0.1,
             prior_sgp=19.0,
+            # Not the zero default: these are established 26-year-olds, and zeros
+            # there mean "out of the league" rather than "no data".
+            earlier_sgp=(18.0, 17.0, 16.0),
             slot="OF",
             floor=4.0,
         )

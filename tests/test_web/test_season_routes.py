@@ -2251,7 +2251,7 @@ def test_trajectory_page_renders_a_board(client):
 
     panel = synthetic_panel()
     swept = sweep_pool(
-        [BoardRow(1, "Testy McTestface", "hitter", 27, 20.0, 19.0, "OF", 4.0)],
+        [BoardRow(1, "Testy McTestface", "hitter", 27, 20.0, 19.0, "OF", 4.0, (18.0, 17.0, 16.0))],
         panel,
         "hitter",
         (1, 2),
@@ -2327,8 +2327,10 @@ def _trajectory_payload():
 
     swept = sweep_pool(
         [
-            BoardRow(1, "Testy McTestface", "hitter", 27, 20.0, 19.0, "OF", 4.0),
-            BoardRow(2, "Someone Else", "hitter", 27, 12.0, 11.0, "OF", 4.0),
+            BoardRow(
+                1, "Testy McTestface", "hitter", 27, 20.0, 19.0, "OF", 4.0, (18.0, 17.0, 16.0)
+            ),
+            BoardRow(2, "Someone Else", "hitter", 27, 12.0, 11.0, "OF", 4.0, (11.0, 10.0, 10.0)),
         ],
         synthetic_panel(),
         "hitter",

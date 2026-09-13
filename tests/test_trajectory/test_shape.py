@@ -5,13 +5,32 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.trajectory.shape import (
+    MAX_LAG,
     MIN_EFFECTIVE_ROWS,
     _bootstrap_predictions,
     _weighted_least_squares,
     build_history,
+    earlier_of,
+    lag_columns,
     prepare,
+    seasons_before,
     shape_trajectory,
 )
+
+
+#: `earlier_sgp` sitting at `value` in every deeper season.
+#:
+#: The fixture populations draw their lead-in seasons from the same range as their
+#: anchors, so a query has to sit in that range too. Passing zeros against a population
+#: centred at 15 puts the query three dimensions outside its own support, which inflates
+#: `se` through leverage alone -- nothing any test here is about. Each test passes the
+#: value its own population is centred on.
+def _earlier_at(value: float) -> tuple[float, ...]:
+    return (value,) * (MAX_LAG - 1)
+
+
+#: Centre of every fixture population in this module: uniform(5, 25).
+_EARLIER = _earlier_at(15.0)
 
 
 def _panel(rows: list[tuple[int, int, int, float]]) -> pd.DataFrame:
@@ -19,12 +38,34 @@ def _panel(rows: list[tuple[int, int, int, float]]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=["mlbam_id", "season", "age", "sgp"])
 
 
+def _lead_in(i: int, rng: np.random.Generator, season: int, age: int) -> list[tuple]:
+    """The seasons a fixture player needs BEFORE his anchors so `build_history` keeps him.
+
+    `MAX_LAG - 1` of them, because the deepest lag of the anchor row must be observable
+    or the row is censored -- which on a three-season fixture censors the entire panel
+    and the fit sees nothing. They are drawn from the anchors' own range and have NO
+    relationship to the outcome, so nothing a test asserts about the fitted coefficients,
+    the residual scale or the band changes because they exist.
+    """
+    return [(i, season - k, age - k, float(rng.uniform(5, 25))) for k in range(MAX_LAG - 1, 0, -1)]
+
+
 def _linear_population(coef_current: float, coef_prior: float, n: int = 240) -> pd.DataFrame:
     """A population whose next season is EXACTLY intercept-free a*current + b*prior, so the
-    fit has a known right answer to recover."""
+    fit has a known right answer to recover.
+
+    Runs `MAX_LAG - 1` seasons of padding BEFORE the two anchors -- `prior` is itself the
+    first lag, so that is what clears the window -- because `build_history`
+    censors a row whose deepest lag falls outside the panel and a three-season population
+    would leave nothing to fit. The padding is drawn from the same distribution and has
+    NO relationship to the outcome, so the right answer is unchanged and the deeper
+    coefficients have a known true value of zero -- which is itself worth asserting.
+    """
     rng = np.random.default_rng(0)
     rows = []
     for i in range(n):
+        for offset in range(MAX_LAG, 1, -1):
+            rows.append((i, 2011 - offset, 28 - offset, float(rng.uniform(5, 25))))
         prior = float(rng.uniform(5, 25))
         current = float(rng.uniform(5, 25))
         rows.append((i, 2010, 27, prior))
@@ -35,14 +76,16 @@ def _linear_population(coef_current: float, coef_prior: float, n: int = 240) -> 
 
 def test_build_history_censors_a_prior_before_the_panel_begins() -> None:
     # The 2010 season's prior is 2009, outside the panel: dropped, not scored as 0.
-    frame = build_history(_panel([(1, 2010, 25, 13.0), (1, 2011, 26, 11.0)]))
+    # `max_lag=1` because this asserts the CENSORING RULE, which is the same at every
+    # depth -- the depth itself is `test_build_history_censors_every_lag_alike` below.
+    frame = build_history(_panel([(1, 2010, 25, 13.0), (1, 2011, 26, 11.0)]), max_lag=1)
     assert list(frame["season"]) == [2011]
     assert frame.iloc[0]["prior"] == pytest.approx(13.0)
 
 
 def test_build_history_scores_a_missing_year_as_zero() -> None:
     # He was in the league in 2010 and out in 2011, so his 2012 prior is a real 0.
-    frame = build_history(_panel([(1, 2010, 25, 13.0), (1, 2012, 27, 9.0)]))
+    frame = build_history(_panel([(1, 2010, 25, 13.0), (1, 2012, 27, 9.0)]), max_lag=1)
     assert list(frame["season"]) == [2012]
     assert frame.iloc[0]["prior"] == pytest.approx(0.0)
 
@@ -50,7 +93,14 @@ def test_build_history_scores_a_missing_year_as_zero() -> None:
 def test_the_fit_recovers_a_known_relationship() -> None:
     panel = _linear_population(coef_current=0.4, coef_prior=0.5)
     _, anchors = shape_trajectory(
-        panel, kind="hitter", age=28, sgp=15.0, prior_sgp=15.0, horizons=(1,), prior_window=50.0
+        panel,
+        kind="hitter",
+        age=28,
+        sgp=15.0,
+        prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=50.0,
     )
     assert anchors[0].on_current == pytest.approx(0.4, abs=0.02)
     assert anchors[0].on_prior == pytest.approx(0.5, abs=0.02)
@@ -62,10 +112,24 @@ def test_the_prediction_uses_both_anchors() -> None:
     # forecast -- that is the entire point of the mode.
     panel = _linear_population(coef_current=0.4, coef_prior=0.5)
     low, _ = shape_trajectory(
-        panel, kind="hitter", age=28, sgp=12.0, prior_sgp=8.0, horizons=(1,), prior_window=50.0
+        panel,
+        kind="hitter",
+        age=28,
+        sgp=12.0,
+        prior_sgp=8.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=50.0,
     )
     high, _ = shape_trajectory(
-        panel, kind="hitter", age=28, sgp=12.0, prior_sgp=22.0, horizons=(1,), prior_window=50.0
+        panel,
+        kind="hitter",
+        age=28,
+        sgp=12.0,
+        prior_sgp=22.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=50.0,
     )
     assert high.path[0].mean > low.path[0].mean + 5
 
@@ -75,7 +139,14 @@ def test_a_nearby_age_still_contributes_instead_of_being_discarded() -> None:
     # query is 27: with a window it still fits, which is what recovers the cohort.
     panel = _linear_population(coef_current=0.4, coef_prior=0.5)
     traj, anchors = shape_trajectory(
-        panel, kind="hitter", age=27, sgp=15.0, prior_sgp=15.0, horizons=(1,), prior_window=50.0
+        panel,
+        kind="hitter",
+        age=27,
+        sgp=15.0,
+        prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=50.0,
     )
     assert anchors[0].n_fit > 0
     assert not np.isnan(traj.path[0].mean)
@@ -84,10 +155,24 @@ def test_a_nearby_age_still_contributes_instead_of_being_discarded() -> None:
 def test_age_weight_falls_off_with_distance() -> None:
     panel = _linear_population(coef_current=0.4, coef_prior=0.5)
     near = shape_trajectory(
-        panel, kind="hitter", age=28, sgp=15.0, prior_sgp=15.0, horizons=(1,), prior_window=50.0
+        panel,
+        kind="hitter",
+        age=28,
+        sgp=15.0,
+        prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=50.0,
     )[1][0]
     far = shape_trajectory(
-        panel, kind="hitter", age=30, sgp=15.0, prior_sgp=15.0, horizons=(1,), prior_window=50.0
+        panel,
+        kind="hitter",
+        age=30,
+        sgp=15.0,
+        prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=50.0,
     )[1][0]
     assert far.n_effective < near.n_effective
 
@@ -95,7 +180,14 @@ def test_age_weight_falls_off_with_distance() -> None:
 def test_a_query_beyond_every_kernel_yields_no_fit() -> None:
     panel = _linear_population(coef_current=0.4, coef_prior=0.5)
     traj, anchors = shape_trajectory(
-        panel, kind="hitter", age=45, sgp=15.0, prior_sgp=15.0, horizons=(1,), prior_window=1.0
+        panel,
+        kind="hitter",
+        age=45,
+        sgp=15.0,
+        prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=1.0,
     )
     assert anchors[0].n_fit == 0
     assert np.isnan(traj.path[0].mean)
@@ -110,6 +202,7 @@ def test_an_unobservable_horizon_is_reported_empty_not_fitted() -> None:
         age=28,
         sgp=15.0,
         prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
         horizons=(1, 5),
         prior_window=50.0,
         last_complete_season=2012,
@@ -123,7 +216,14 @@ def test_an_unobservable_horizon_is_reported_empty_not_fitted() -> None:
 def test_the_mode_is_labelled_so_render_cannot_confuse_it_with_comps() -> None:
     panel = _linear_population(coef_current=0.4, coef_prior=0.5)
     traj, _ = shape_trajectory(
-        panel, kind="hitter", age=28, sgp=15.0, prior_sgp=15.0, horizons=(1,), prior_window=50.0
+        panel,
+        kind="hitter",
+        age=28,
+        sgp=15.0,
+        prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=50.0,
     )
     assert traj.mode == "shape"
     assert traj.prior_sgp == pytest.approx(15.0)
@@ -145,6 +245,7 @@ def test_the_band_is_empirical_not_a_gaussian_multiple_of_spread() -> None:
         prior = float(rng.uniform(8.0, 22.0))
         current = float(rng.uniform(8.0, 22.0))
         forward = 0.4 * current + 0.5 * prior + float(rng.normal(0, 3.0))
+        rows += _lead_in(i, rng, 2010, 27)
         rows += [(i, 2010, 27, prior), (i, 2011, 28, current), (i, 2012, 29, forward)]
     traj, _ = shape_trajectory(
         _panel(rows),
@@ -152,6 +253,7 @@ def test_the_band_is_empirical_not_a_gaussian_multiple_of_spread() -> None:
         age=28,
         sgp=15.0,
         prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
         horizons=(1,),
         prior_window=50.0,
     )
@@ -187,7 +289,12 @@ def test_the_band_always_contains_its_own_point_estimate() -> None:
         prior = float(rng.uniform(0.0, 14.0))
         current = float(rng.uniform(0.0, 14.0))
         forward = 0.45 * current + 0.2 * prior + float(rng.normal(0, 1.5))
-        rows += [(i, 2010, 33, prior), (i, 2011, 34, current), (i, 2012, 35, max(forward, 0.0))]
+        rows += _lead_in(i, rng, 2010, 33)
+        rows += [
+            (i, 2010, 33, prior),
+            (i, 2011, 34, current),
+            (i, 2012, 35, max(forward, 0.0)),
+        ]
     panel = _panel(rows)
 
     checked = 0
@@ -200,6 +307,7 @@ def test_the_band_always_contains_its_own_point_estimate() -> None:
                 age=34,
                 sgp=current,
                 prior_sgp=prior,
+                earlier_sgp=_EARLIER,
                 horizons=(1,),
                 replacement=8.0,
                 slot="UTIL",
@@ -225,6 +333,7 @@ def test_an_asymmetric_residual_distribution_gives_an_asymmetric_band() -> None:
         current = float(rng.uniform(12.0, 18.0))
         # 85% land near 15; 15% collapse to nearly nothing.
         forward = 1.0 if rng.random() < 0.15 else 15.0 + float(rng.normal(0, 0.5))
+        rows += _lead_in(i, rng, 2010, 27)
         rows += [(i, 2010, 27, prior), (i, 2011, 28, current), (i, 2012, 29, forward)]
     traj, _ = shape_trajectory(
         _panel(rows),
@@ -232,6 +341,7 @@ def test_an_asymmetric_residual_distribution_gives_an_asymmetric_band() -> None:
         age=28,
         sgp=15.0,
         prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
         horizons=(1,),
         prior_window=50.0,
     )
@@ -255,14 +365,22 @@ def test_the_band_fallback_is_recorded_on_the_horizon_it_happened_at() -> None:
     """
     rng = np.random.default_rng(0)
     rows = []
+    # Long enough that a horizon-2 row survives the lag window: an anchor needs its
+    # deepest lag at or after `FIRST` and its +2 outcome at or before `LAST`, which on a
+    # six-season panel is an empty intersection and made every assertion below read NaN.
+    FIRST, LAST = 2010, 2010 + MAX_LAG + 3
     # Carries the fit but no band weight: 15 SGP from the query, outside CURRENT_WINDOW.
     for i in range(120):
         level = float(rng.uniform(8.0, 12.0))
-        for offset, season in enumerate(range(2010, 2016)):
+        for offset, season in enumerate(range(FIRST, LAST + 1)):
             rows.append((i, season, 25 + offset, max(level + float(rng.normal(0, 1.5)), 0.0)))
+    # The cohort AT the query's own level, present only in the last season carrying a +1
+    # outcome -- so the band has weight near the query at +1 and none at +2, which is the
+    # asymmetry this test exists to catch. Their own lags are the zeros `build_history`
+    # fills for a man who was not in the league, which is what they were.
     for j in range(30):
-        rows.append((900 + j, 2014, 28, 25.0 + float(rng.normal(0, 1.0))))
-        rows.append((900 + j, 2015, 29, 25.0 + float(rng.normal(0, 1.0))))
+        rows.append((900 + j, LAST - 1, 28, 25.0 + float(rng.normal(0, 1.0))))
+        rows.append((900 + j, LAST, 29, 25.0 + float(rng.normal(0, 1.0))))
 
     traj, _ = shape_trajectory(
         _panel(rows),
@@ -270,6 +388,7 @@ def test_the_band_fallback_is_recorded_on_the_horizon_it_happened_at() -> None:
         age=28,
         sgp=25.0,
         prior_sgp=24.0,
+        earlier_sgp=_EARLIER,
         horizons=(1, 2),
         prior_window=50.0,
     )
@@ -284,7 +403,14 @@ def test_the_band_fallback_is_recorded_on_the_horizon_it_happened_at() -> None:
 
 def test_the_bootstrap_is_reproducible() -> None:
     panel = _linear_population(coef_current=0.4, coef_prior=0.5)
-    kw = {"kind": "hitter", "age": 28, "sgp": 15.0, "prior_sgp": 15.0, "horizons": (1,)}
+    kw = {
+        "kind": "hitter",
+        "age": 28,
+        "sgp": 15.0,
+        "prior_sgp": 15.0,
+        "earlier_sgp": _EARLIER,
+        "horizons": (1,),
+    }
     first = shape_trajectory(panel, **kw)[0].path[0].se
     assert first == shape_trajectory(panel, **kw)[0].path[0].se
 
@@ -304,7 +430,9 @@ def test_the_bootstrap_is_reproducible() -> None:
 def test_rejects_impossible_settings(kwargs: dict, match: str) -> None:
     panel = _linear_population(coef_current=0.4, coef_prior=0.5)
     with pytest.raises(ValueError, match=match):
-        shape_trajectory(panel, kind="hitter", age=28, sgp=15.0, prior_sgp=15.0, **kwargs)
+        shape_trajectory(
+            panel, kind="hitter", age=28, sgp=15.0, prior_sgp=15.0, earlier_sgp=_EARLIER, **kwargs
+        )
 
 
 # --- the batch entry point (#311) ---------------------------------------------------
@@ -319,16 +447,22 @@ def _mixed_panel() -> pd.DataFrame:
     and a prior that predates the panel -- so the batch path has to reproduce the
     censoring rules and not just the arithmetic.
 
-    Six seasons deep on purpose: on a panel that only supports horizon 1, every
-    horizon-2 assertion below would pass on a pair of NaNs.
+    `MAX_LAG + 6` seasons deep on purpose. An anchor row needs its deepest lag inside
+    the panel AND its horizon-2 outcome inside it, so a six-season panel left horizon 2
+    with no rows at all once the lag window reached back four years -- and every
+    horizon-2 assertion below would have passed on a pair of NaNs.
     """
     rng = np.random.default_rng(0)
     rows = []
     for i in range(120):
         level = float(rng.uniform(6.0, 24.0))
-        for offset, season in enumerate(range(2010, 2016)):
+        for offset, season in enumerate(range(2010, 2010 + MAX_LAG + 6)):
             rows.append((i, season, 25 + offset, max(level + float(rng.normal(0, 2.5)), 0.0)))
     rows += [
+        # Lead-in for both, so the split season and the gap year below are inside the lag
+        # window rather than censored out of the fit they were written to exercise.
+        *[(900, 2010 - k, 27 - k, 7.0 + k) for k in range(MAX_LAG, 0, -1)],
+        *[(901, 2010 - k, 26 - k, 9.0 + k) for k in range(MAX_LAG, 0, -1)],
         (900, 2010, 27, 8.0),
         (900, 2011, 28, 6.0),  # split season: two rows for one player-year
         (900, 2011, 28, 5.0),
@@ -344,7 +478,14 @@ def _mixed_panel() -> pd.DataFrame:
 @pytest.mark.parametrize("horizons", [(1,), (1, 2), (2,)])
 def test_prepared_state_gives_the_same_answer_as_the_panel(horizons: tuple[int, ...]) -> None:
     panel = _mixed_panel()
-    kw = {"kind": "hitter", "age": 28, "sgp": 15.0, "prior_sgp": 15.0, "prior_window": 50.0}
+    kw = {
+        "kind": "hitter",
+        "age": 28,
+        "sgp": 15.0,
+        "prior_sgp": 15.0,
+        "earlier_sgp": _EARLIER,
+        "prior_window": 50.0,
+    }
     direct, direct_anchors = shape_trajectory(panel, horizons=horizons, **kw)
     prepared, prepared_anchors = shape_trajectory(
         prepare(panel, kind="hitter", horizons=(1, 2)), horizons=horizons, **kw
@@ -372,7 +513,15 @@ def test_prepared_state_refuses_a_query_from_the_other_pool() -> None:
     `kind='pitcher'` with a plausible `n_comps` and no warning."""
     prepared = prepare(_mixed_panel(), kind="hitter", horizons=(1,))
     with pytest.raises(ValueError, match="pitcher"):
-        shape_trajectory(prepared, kind="pitcher", age=28, sgp=15.0, prior_sgp=15.0, horizons=(1,))
+        shape_trajectory(
+            prepared,
+            kind="pitcher",
+            age=28,
+            sgp=15.0,
+            prior_sgp=15.0,
+            earlier_sgp=_EARLIER,
+            horizons=(1,),
+        )
 
 
 def test_a_repeated_horizon_is_not_fitted_twice() -> None:
@@ -381,7 +530,14 @@ def test_a_repeated_horizon_is_not_fitted_twice() -> None:
     then fitted h1 twice -- two identical `PathPoint`s and `Anchors`, the bootstrap run
     twice, and h1 counted twice in the `total` the caller reads."""
     panel = _mixed_panel()
-    kw = {"kind": "hitter", "age": 28, "sgp": 15.0, "prior_sgp": 15.0, "prior_window": 50.0}
+    kw = {
+        "kind": "hitter",
+        "age": 28,
+        "sgp": 15.0,
+        "prior_sgp": 15.0,
+        "earlier_sgp": _EARLIER,
+        "prior_window": 50.0,
+    }
     once, once_anchors = shape_trajectory(panel, horizons=(1, 2), **kw)
     twice, twice_anchors = shape_trajectory(panel, horizons=(1, 1, 2), **kw)
 
@@ -411,6 +567,7 @@ def test_prepared_state_refuses_a_horizon_it_has_no_forward_values_for() -> None
             age=28,
             sgp=15.0,
             prior_sgp=15.0,
+            earlier_sgp=_EARLIER,
             horizons=(2,),
         )
 
@@ -421,7 +578,14 @@ def test_a_prepared_state_honours_a_lower_cutoff_without_a_rebuild() -> None:
     cutoffs instead of re-running `build_history` and a full reindex per cutoff, which is
     the exact work `prepare` exists to hoist."""
     panel = _mixed_panel()
-    kw = {"kind": "hitter", "age": 28, "sgp": 15.0, "prior_sgp": 15.0, "prior_window": 50.0}
+    kw = {
+        "kind": "hitter",
+        "age": 28,
+        "sgp": 15.0,
+        "prior_sgp": 15.0,
+        "earlier_sgp": _EARLIER,
+        "prior_window": 50.0,
+    }
     prepared = prepare(panel, kind="hitter", horizons=(1,))
 
     reused, _ = shape_trajectory(prepared, horizons=(1,), last_complete_season=2012, **kw)
@@ -445,6 +609,7 @@ def test_prepared_state_refuses_a_cutoff_past_what_it_was_built_for() -> None:
             age=28,
             sgp=15.0,
             prior_sgp=15.0,
+            earlier_sgp=_EARLIER,
             horizons=(1,),
             last_complete_season=2014,
         )
@@ -524,15 +689,21 @@ def test_the_batched_bootstrap_survives_a_rank_deficient_draw() -> None:
 def _back_panel() -> pd.DataFrame:
     """One player with a HOLE in his career, which is the whole point of these tests.
 
-    Ages 24-28 with age 26 never played. `build_history` drops the first season (no
-    observable prior), so the anchor rows are ages 25, 27 and 28.
+    The hole is age 26. The `MAX_LAG` seasons before age 24 are lead-in: `build_history`
+    censors any row whose deepest lag falls outside the panel, so without them every
+    anchor row is dropped and `prepared.age` comes back empty -- these tests then fail on
+    an empty-index IndexError rather than on anything they assert. They carry distinct
+    values so a mis-indexed offset cannot land on a coincidentally equal one.
     """
+    lead_in = [(2010 - k, 24 - k, 1.0 + k) for k in range(MAX_LAG, 0, -1)]
+    played_seasons = [(2010, 24, 5.0), (2011, 25, 6.0), (2013, 27, 8.0), (2014, 28, 9.0)]
+    rows = lead_in + played_seasons
     return pd.DataFrame(
         {
-            "mlbam_id": [1, 1, 1, 1],
-            "season": [2010, 2011, 2013, 2014],
-            "age": [24, 25, 27, 28],
-            "sgp": [5.0, 6.0, 8.0, 9.0],
+            "mlbam_id": [1] * len(rows),
+            "season": [r[0] for r in rows],
+            "age": [r[1] for r in rows],
+            "sgp": [r[2] for r in rows],
         }
     )
 
@@ -589,3 +760,142 @@ def test_back_offset_zero_is_the_rows_own_season() -> None:
 def test_a_negative_lookback_is_refused() -> None:
     with pytest.raises(ValueError, match="lookback must not be negative"):
         prepare(_back_panel(), kind="hitter", horizons=(1,), lookback=-1)
+
+
+# --- the deeper career anchors -------------------------------------------------------
+#
+# `MAX_LAG` widened the design matrix from two anchors to `1 + MAX_LAG`. What is asserted
+# here is the CONTRACT, not the measured gain: that every lag is censored and filled by
+# the same rule, that the deeper columns actually reach the prediction, and that the
+# query cannot be assembled in a different order from the design it is evaluated against.
+
+
+def test_an_unobservable_deep_lag_is_NaN_and_unfittable_not_dropped() -> None:
+    """A deep lag outside the panel must not be scored as a season he did not play -- and
+    must not throw the row away either.
+
+    Two consumers, two needs. The FIT cannot build a design matrix without the whole lag
+    block, so it has to refuse the row. `career_comps.closest_careers` matches on
+    `Prepared.back` and never reads `lags`, so it can still score it -- and censoring in
+    `build_history` cost it 1,860 hitter and 1,798 pitcher seasons, all 2001-2003, which
+    were its OLDEST comps. `Prepared.fittable` carries the censoring instead.
+    """
+    seasons = [(1, 2010 + k, 25 + k, 10.0 + k) for k in range(MAX_LAG + 2)]
+    frame = build_history(_panel(seasons))
+    # Kept from the first row with an observable PRIOR, not the first with a full block.
+    assert list(frame["season"]) == [2010 + k for k in range(1, MAX_LAG + 2)]
+    # ...and the shallow rows carry NaN there rather than a 0 that would read as "played".
+    early = frame[frame["season"] == 2011].iloc[0]
+    assert np.isnan(early[f"lag{MAX_LAG}"])
+    assert early["lag1"] == pytest.approx(10.0)
+
+    prepared = prepare(_panel(seasons), kind="hitter", horizons=(1,))
+    # `strict=True`: the two arrays are per-row and a length mismatch would be the bug.
+    fittable = dict(zip(prepared.season, prepared.fittable, strict=True))
+    assert fittable[2010 + MAX_LAG], "its whole lag block is inside the panel"
+    assert not fittable[2011], "its deepest lag is outside the panel"
+
+
+def test_a_row_the_fit_refuses_still_reaches_the_career_matcher() -> None:
+    """The whole point of `fittable` being a mask rather than a shorter frame."""
+    seasons = [(1, 2010 + k, 25 + k, 10.0 + k) for k in range(MAX_LAG + 2)]
+    prepared = prepare(_panel(seasons), kind="hitter", horizons=(1,), lookback=2)
+    assert not prepared.fittable.all(), "the fixture has at least one unfittable row"
+    # Present in every array a matcher reads, despite the fit refusing it.
+    assert 2011 in set(prepared.season)
+    assert len(prepared.back[1]) == len(prepared.season)
+
+
+def test_a_missing_middle_season_is_a_real_zero_at_every_depth() -> None:
+    """The shallow rule scores a year out of the league as 0 rather than dropping it.
+    Every deeper lag has to agree, or a prospect's first years read as censored and he
+    leaves the board he exists for."""
+    seasons = [(1, 2010 + k, 25 + k, 10.0) for k in range(MAX_LAG + 2)]
+    # Drop the season one before the last -- a gap year in the middle of the window.
+    gap = 2010 + MAX_LAG
+    frame = build_history(_panel([r for r in seasons if r[1] != gap]))
+    row = frame[frame["season"] == 2011 + MAX_LAG].iloc[0]
+    assert row["lag1"] == pytest.approx(0.0), "the gap year is a real 0, not a NaN"
+    assert row[f"lag{MAX_LAG}"] == pytest.approx(10.0)
+
+
+def test_the_deeper_anchors_reach_the_prediction() -> None:
+    """Two players identical in age, this season and last season, differing only further
+    back, must not get the same forecast -- otherwise the extra columns are decoration."""
+    rng = np.random.default_rng(5)
+    rows = []
+    for i in range(400):
+        career = [float(rng.uniform(5, 25)) for _ in range(MAX_LAG + 1)]
+        for k, value in enumerate(career):
+            rows.append((i, 2010 + k, 24 + k, value))
+        # The outcome leans on the DEEPEST lag, which two anchors cannot see at all.
+        rows.append((i, 2011 + MAX_LAG, 25 + MAX_LAG, 0.3 * career[-1] + 0.6 * career[0]))
+    panel = _panel(rows)
+    kw = {
+        "kind": "hitter",
+        "age": 24 + MAX_LAG,
+        "sgp": 15.0,
+        "prior_sgp": 15.0,
+        "horizons": (1,),
+        "prior_window": 50.0,
+    }
+    low, _ = shape_trajectory(panel, earlier_sgp=(7.0,) * (MAX_LAG - 1), **kw)
+    high, _ = shape_trajectory(panel, earlier_sgp=(23.0,) * (MAX_LAG - 1), **kw)
+    assert high.path[0].mean > low.path[0].mean + 3
+
+
+def test_a_lag_unrelated_to_the_outcome_is_fitted_near_zero() -> None:
+    """`_linear_population`'s lead-in seasons have no relationship to the forward year, so
+    their true coefficients are 0. Recovering them confirms the extra columns are fitted
+    rather than aliased onto the two that carry signal."""
+    panel = _linear_population(coef_current=0.4, coef_prior=0.5)
+    _, anchors = shape_trajectory(
+        panel,
+        kind="hitter",
+        age=28,
+        sgp=15.0,
+        prior_sgp=15.0,
+        earlier_sgp=_EARLIER,
+        horizons=(1,),
+        prior_window=50.0,
+    )
+    assert len(anchors[0].on_lags) == MAX_LAG
+    assert anchors[0].on_lags[0] == pytest.approx(anchors[0].on_prior)
+    for coefficient in anchors[0].on_lags[1:]:
+        assert coefficient == pytest.approx(0.0, abs=0.05)
+
+
+def test_a_wrong_length_earlier_sgp_is_refused() -> None:
+    """The silent version is a shape error raised after all the panel work -- or, against
+    a state built at another depth, a query that lines up anyway and prices the player on
+    anchors shifted a season."""
+    panel = _linear_population(coef_current=0.4, coef_prior=0.5)
+    with pytest.raises(ValueError, match="earlier_sgp must hold"):
+        shape_trajectory(panel, kind="hitter", age=28, sgp=15.0, prior_sgp=15.0, earlier_sgp=(1.0,))
+
+
+def test_seasons_before_fills_a_gap_and_refuses_the_unobservable() -> None:
+    """The two holes are different: inside the panel he did not play (a real 0), before it
+    we cannot see (an error, never a 0 that would read as the first case)."""
+    panel = _panel([(1, 2010 + k, 25 + k, 10.0) for k in range(MAX_LAG + 2)])
+    assert seasons_before(panel, mlbam_id=1, season=2011 + MAX_LAG) == pytest.approx(
+        (10.0,) * (MAX_LAG - 1)
+    )
+    # A player absent from a season inside the panel scores 0 there rather than raising.
+    # The hole is the FIRST season the query looks back to, which is `season - 2`.
+    query = 2011 + MAX_LAG
+    holed = _panel([r for r in panel.itertuples(index=False, name=None) if r[1] != query - 2])
+    assert seasons_before(holed, mlbam_id=1, season=query)[0] == pytest.approx(0.0)
+    # And a query whose window reaches past the panel's first season is refused outright.
+    with pytest.raises(ValueError, match="unobservable rather than unplayed"):
+        seasons_before(panel, mlbam_id=1, season=2011)
+
+
+def test_earlier_of_matches_the_design_matrix_order() -> None:
+    """The query vector and the design matrix are built in two places and must agree.
+    Reversed, every prediction still computes and every number is wrong."""
+    panel = _panel([(1, 2010 + k, 25 + k, float(k)) for k in range(MAX_LAG + 2)])
+    row = next(build_history(panel).itertuples(index=False))
+    assert earlier_of(row) == tuple(getattr(row, c) for c in lag_columns()[1:])
+    # Nearest first, so a deeper lag is an OLDER season: values decrease down the tuple.
+    assert list(earlier_of(row)) == sorted(earlier_of(row), reverse=True)

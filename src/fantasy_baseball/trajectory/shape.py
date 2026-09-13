@@ -59,7 +59,9 @@ Passing a panel still works and is the CLI's path. The numbers are the same eith
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -166,24 +168,102 @@ BOOTSTRAP_CHUNK = 250
 #: speed and nothing else -- the draws, and therefore the answer, are unchanged.
 BOOTSTRAP_BYTES = 32 * 1024 * 1024
 
-#: Intercept plus the two anchors. The residual degrees of freedom subtract this.
-N_PARAMETERS = 3
+#: How many earlier seasons the design matrix carries, counting `prior` as the first. So
+#: four means this season plus the four before it.
+#:
+#: MEASURED, by a depth sweep. 5-fold CV cut BY PLAYER (never by row: a player's seasons
+#: are correlated), 20 seeds, over the 2000-2025 panels. Every depth trains on its OWN
+#: full pool and all are scored on the rows the deepest depth can answer -- so a deeper
+#: model PAYS for the rows that requiring `lagK` to be observable censors, rather than
+#: being handed that loss. RMSE against a one-lag fit, and the rows each depth trains on:
+#:
+#:     depth   HITTER rows    RMSE     vs 1      PITCHER rows    RMSE     vs 1
+#:       1          15110   3.4653        --           16547   3.3356        --
+#:       2          14478   3.4646    -0.02%           15963   3.3349    -0.02%
+#:       3          13867   3.4571    -0.24%           15359   3.3350    -0.02%
+#:       4          13250   3.4492    -0.47%           14749   3.3340    -0.05%
+#:       5          12630   3.4427    -0.65%           14126   3.3331    -0.08%
+#:       6          11998   3.4377    -0.80%           13521   3.3313    -0.13%
+#:
+#: Monotone on hitters and 20-of-20 seeds from depth 3 on. FOUR IS A STOPPING POINT, NOT
+#: AN ARGMIN: the hitter curve was still improving at 6 and the sweep did not find its
+#: plateau. It stops here because each extra lag also spends a parameter, and the band
+#: pays for that where the table does not -- Cruz's age-28 `se` went 0.13 -> 0.30 on this
+#: change alone, while `n_fit` fell 3084 -> 2725. Anyone moving it has the table to argue
+#: from and should re-read `se` and the conformal coverage, not just the RMSE.
+#:
+#: THE GAIN IS HITTERS ONLY. Pitchers get -0.05% at this depth, which is nothing, for
+#: 1,798 fewer fitting rows -- the same shape as `PRIOR_WINDOW`'s finding that the prior
+#: kernel buys pitchers nothing measurable, from the other direction. The constant stays
+#: GLOBAL anyway, exactly as `PRIOR_WINDOW` stays global for the same reason: splitting a
+#: shared constant per pool is a decision to make on its own evidence, not a side effect
+#: of tuning one. It is recorded here so that decision has a number to start from.
+#:
+#: SMALL, AND THE SIZE IS THE POINT rather than a caveat on it. For scale, switching the
+#: age kernel off costs +2.2% and level matching lost to two anchors by ~21% on the case
+#: a keeper decision turns on. This is a fifth of the age kernel, on hitters, and nothing
+#: on pitchers. It is here because it is free at query time -- three more columns in a
+#: fit that was already being solved -- not because it moves a decision on its own.
+#:
+#: THE GAIN IS ALL IN ESTABLISHED PLAYERS, which is what makes the columns worth their
+#: cost. Split by how many of the four lag seasons the player actually produced in, it is
+#: -0.03% at none, -0.41% at three and -0.77% at four. A prospect's lags are the zeros
+#: `build_history` fills, they carry nothing, and the model neither gains nor loses on
+#: him; a keeper call on a 30-year-old is the query this improves.
+#:
+#: DO NOT READ THIS AS VARIANCE INFORMATION. The first design widened the band for
+#: players with short track records, on the intuition that one season of history should
+#: be less certain than eight. Measured age- AND level-matched -- both held, since the
+#: intuition is stated about two players at the same level -- it is not: over 10-20 SGP
+#: and age 25-30 the forward error SD is 4.39 at one prior season against 4.09 at eight,
+#: and the p10..p90 width is 12.7 against 12.4. Flat. Regressed over the whole panel with
+#: age and level held, more history predicts very slightly MORE error (+0.08 SGP per
+#: season, t=+5.69) -- the opposite sign to the intuition, small, and confounded with
+#: debut age. Track-record length belongs in the FIT and nowhere near the band.
+MAX_LAG = 4
+
+#: Intercept, this season, and `MAX_LAG` earlier ones. The residual degrees of freedom
+#: subtract this.
+N_PARAMETERS = 2 + MAX_LAG
 
 #: Minimum EFFECTIVE size before a horizon is fit at all. Applied to the Kish size
 #: rather than the row count, because kernel weights make those diverge badly: a 41-row
 #: fit can carry an effective 15. Comfortably above `N_PARAMETERS`, since a fit with
 #: barely more support than parameters interpolates its own sample.
-MIN_EFFECTIVE_ROWS = 12.0
+#:
+#: DERIVED FROM `N_PARAMETERS`, NOT A LITERAL, and that is the point rather than tidiness.
+#: It was a flat 12.0 chosen when the fit had three parameters -- a 4x margin. Widening
+#: the design matrix to `2 + MAX_LAG` halved that margin to 2x silently: the constant did
+#: not move, the docstring still claimed "comfortably above", and the regime this gate
+#: exists to refuse (a 41-row/15-effective fit that produced `on_prior` of -1.03, i.e.
+#: more production last year predicting LESS next year) got strictly closer. Four
+#: parameters of that fit are now highly collinear lag columns, which is the shape most
+#: likely to interpolate. Keeping the RATIO is what survives the next depth change.
+#:
+#: FREE ON THE LIVE BOARD, measured 2026-09-11 at the 2026-09-08 anchor: the thinnest of
+#: 543 scored rows carries `n_eff` 50.1 at h=1 and 50.1 at h=1..3, so nothing on the board
+#: is refused by moving this from 12 to 24. It bites only in the calibration sweep, which
+#: queries every historical season including the thin ones -- and refusing there is the
+#: conservative direction, since a refused horizon prints "--" rather than a number.
+MIN_EFFECTIVE_ROWS = 4.0 * N_PARAMETERS
 
 
 @dataclass(frozen=True)
 class Anchors:
-    """The fitted `forward = intercept + a*current + b*prior` for one horizon."""
+    """The fitted `forward = intercept + a*current + b.lags` for one horizon."""
 
     horizon: int
     intercept: float
     on_current: float
+    #: Coefficient on `lag1`, the season before the one being asked about. Kept under its
+    #: own name because it is the one `render` prints beside `on_current` and the one
+    #: whose sign has a documented failure mode: a fit carrying `on_prior` of -1.03, more
+    #: production last year predicting less next year, is what `MIN_EFFECTIVE_ROWS`
+    #: exists to refuse. It is `on_lags[0]` and the two cannot disagree.
     on_prior: float
+    #: Every earlier-season coefficient, nearest first, `MAX_LAG` long -- so the fitted
+    #: line can be read whole rather than through the first two terms of it.
+    on_lags: tuple[float, ...]
     n_fit: int
     #: Kish effective sample size, `(sum w)^2 / sum(w^2)`. The raw row count overstates
     #: support when most rows carry a small kernel weight.
@@ -232,7 +312,13 @@ def _triangular(distance: np.ndarray, width: float) -> np.ndarray:
 
 
 def _weighted_least_squares(x: np.ndarray, y: np.ndarray, w: np.ndarray) -> np.ndarray:
-    """Solve for [intercept, a, b] with weights `w`. `x` is (n, 2): current, prior."""
+    """Solve for [intercept, a, *lags] with weights `w`.
+
+    `x` is (n, 1 + MAX_LAG): this season, then the lag block nearest-first. Generic in the
+    column count, so widening the design matrix needs no change here -- but the QUERY
+    vector is built separately and must be stacked in the same order, which is why
+    `lag_columns` has one spelling.
+    """
     design = np.column_stack([np.ones(len(x)), x])
     root = np.sqrt(w)[:, None]
     coefficients: np.ndarray
@@ -256,13 +342,71 @@ def collapsed_index(panel: pd.DataFrame) -> tuple[pd.DataFrame, pd.Series]:
     return collapsed, collapsed.set_index(["mlbam_id", "season"])["sgp"]
 
 
-def build_history(panel: pd.DataFrame) -> pd.DataFrame:
-    """One row per season that has an OBSERVABLE prior, carrying both anchors.
+def lag_columns(max_lag: int = MAX_LAG) -> tuple[str, ...]:
+    """Names of the earlier-season columns `build_history` writes, nearest first.
+
+    One spelling, because three modules build this list and a fit whose design matrix is
+    ordered differently from the query vector it is evaluated at produces a number rather
+    than an error.
+    """
+    return tuple(f"lag{k}" for k in range(1, max_lag + 1))
+
+
+def fittable_rows(history: pd.DataFrame, max_lag: int = MAX_LAG) -> pd.DataFrame:
+    """The `build_history` rows a QUERY can be built from -- a complete lag block.
+
+    `build_history` deliberately keeps rows whose deeper lags fall outside the panel, so
+    `career_comps` keeps its oldest candidates (see `Prepared.fittable`). Those rows are
+    fine as fitting CANDIDATES, which the per-query mask excludes, and useless as
+    QUERIES: `earlier_of` reads their NaNs straight into the query vector and every
+    prediction comes back NaN.
+
+    Measured on the 2000-2026 panels, the band-calibration sweep handed itself 18,221
+    such queries -- 13% of its rows and 13% of a ~70-minute run -- and got NaN for all of
+    them. The multipliers were unaffected (verified identical with and without), because
+    the weighted quantiles drop them; that is luck holding a contract, not the contract.
+    Anything enumerating queries from a history frame goes through here.
+    """
+    return history.dropna(subset=list(lag_columns(max_lag)))
+
+
+def earlier_of(row: Any, max_lag: int = MAX_LAG) -> tuple[float, ...]:
+    """`earlier_sgp` read straight off a `build_history` row.
+
+    Shared so the three places that turn a history row into a query -- the band
+    calibration sweep, the window tuner, and any future harness -- cannot disagree with
+    `lag_columns` about the order. Reading `q.lag2, q.lag3, q.lag4` by hand is correct
+    until `MAX_LAG` moves, and then it is silently short.
+    """
+    return tuple(float(getattr(row, column)) for column in lag_columns(max_lag)[1:])
+
+
+def build_history(panel: pd.DataFrame, *, max_lag: int = MAX_LAG) -> pd.DataFrame:
+    """One row per season with `max_lag` OBSERVABLE earlier seasons, carrying all anchors.
 
     A season whose predecessor falls before the panel begins is dropped rather than
     given a prior of 0 -- the same censoring the forward path uses, for the same reason:
     "we cannot see it" must never be scored as "he did not play". A player who was
     genuinely out of the league keeps his 0, which is a real observation.
+
+    ONE RULE, APPLIED AT EVERY OFFSET, which is what makes the deeper anchors cost no new
+    machinery. `lag1` IS the old `prior` and is still exposed under that name. The reason
+    a short career needs no fallback model is this convention: a 23-year-old with two
+    professional seasons gets real zeros at `lag3` and `lag4` -- he produced nothing for a
+    fantasy roster those years, which is true and is what the forward path already says
+    about the same hole -- rather than a NaN that would drop him from the board he exists
+    on. Measured, that costs him nothing: the extra columns move a no-real-history query
+    by -0.03% RMSE, against -0.77% for a player with four real seasons behind him.
+
+    **It does conflate two holes**: a year in the minors and a year lost to injury both
+    read 0. `age` separates them in practice -- zeros at 23 are a prospect, zeros at 31
+    are a lost season -- and the age kernel is what carries that. `Prepared.back` keeps
+    the OTHER convention, NaN, because a career MATCH asks what kind of player he was
+    rather than what he produced; see its docstring, and do not converge the two.
+
+    THE CENSORING COSTS 12.3% OF ROWS, all of them within `max_lag` years of the panel's
+    first season, and that loss is priced into the measurement behind `MAX_LAG` rather
+    than assumed away: both models there train on their own full pool.
 
     A split season (a mid-season trade, two rows for one player-year) is collapsed on
     BOTH sides, as `comps.comp_trajectory` does. Collapsing only the lookup would sum his
@@ -271,19 +415,74 @@ def build_history(panel: pd.DataFrame) -> pd.DataFrame:
     value -- attenuating the fitted `on_current`, double-weighting him, and dragging
     `mean_start` low.
     """
+    if max_lag < 1:
+        raise ValueError(f"max_lag must be at least 1, got {max_lag}")
     panel, index = collapsed_index(panel)
     first = int(panel["season"].min())
 
     history = panel.copy()
+    ids = history["mlbam_id"].to_numpy()
     seasons = history["season"].to_numpy()
-    # One vectorized reindex instead of a per-row MultiIndex .get. A missing key means
-    # he was out of the league that year (a real 0); a key BEFORE the panel starts is
-    # unobservable and stays NaN so `dropna` censors it.
-    prior = index.reindex(
-        pd.MultiIndex.from_arrays([history["mlbam_id"].to_numpy(), seasons - 1])
-    ).to_numpy(dtype=float)
-    history["prior"] = np.where(seasons - 1 >= first, np.nan_to_num(prior, nan=0.0), np.nan)
-    return history.dropna(subset=["prior"]).rename(columns={"sgp": "current"})
+    columns = lag_columns(max_lag)
+    for offset, column in enumerate(columns, start=1):
+        # One vectorized reindex per offset instead of a per-row MultiIndex .get. A
+        # missing key means he was out of the league that year (a real 0); a key BEFORE
+        # the panel starts is unobservable and stays NaN so `dropna` censors it.
+        lagged = index.reindex(pd.MultiIndex.from_arrays([ids, seasons - offset])).to_numpy(
+            dtype=float
+        )
+        history[column] = np.where(
+            seasons - offset >= first, np.nan_to_num(lagged, nan=0.0), np.nan
+        )
+    # `prior` is `lag1` under the name every caller and every docstring already uses. An
+    # alias rather than a rename: the fit reads the `lag*` columns as one ordered block.
+    history["prior"] = history["lag1"]
+    # DROPPED ON `lag1` ALONE, and the deeper lags are left NaN rather than censoring the
+    # row. Censoring here would shrink a SECOND consumer that never reads the lag block:
+    # `career_comps.closest_careers` draws its candidates from these rows and matches on
+    # `Prepared.back`, so dropping on the deepest lag silently cost the pushed board's
+    # comp panel 1,860 hitter and 1,798 pitcher seasons (11.8% / 10.4%) -- every one of
+    # them 2001-2003, which is to say the OLDEST comps it had. The fit still refuses
+    # them: `Prepared.fittable` is what carries the censoring, applied per query.
+    return history.dropna(subset=["lag1"]).rename(columns={"sgp": "current"})
+
+
+def seasons_before(
+    panel: pd.DataFrame,
+    *,
+    mlbam_id: int,
+    season: int,
+    max_lag: int = MAX_LAG,
+) -> tuple[float, ...]:
+    """`earlier_sgp` for one query: what he produced BEFORE `season - 1`, nearest first.
+
+    `max_lag - 1` values, because `season - 1` is passed separately as `prior_sgp`. The
+    censoring rule is `build_history`'s, spelled once here so a query row and the fitting
+    rows it is scored against cannot fill the same hole differently -- a query zero-filled
+    where the fit censored (or the reverse) shifts the prediction with nothing failing.
+
+    A season the player did not play is a real 0. A season falling BEFORE the panel begins
+    RAISES rather than filling: for a live query that is a panel too short for the model,
+    and the 0 that would paper over it is indistinguishable from a year out of the league.
+    It cannot fire on a current-season query against a 2000-start panel, which is exactly
+    why it must be an exception rather than a branch someone reads and trusts.
+    """
+    if max_lag < 1:
+        raise ValueError(f"max_lag must be at least 1, got {max_lag}")
+    _, index = collapsed_index(panel)
+    first = int(panel["season"].min())
+    out = []
+    for offset in range(2, max_lag + 1):
+        want = season - offset
+        if want < first:
+            raise ValueError(
+                f"player {mlbam_id} needs season {want} for a {max_lag}-lag query at "
+                f"{season}, but the panel begins at {first}; a missing season there is "
+                "unobservable rather than unplayed, so it cannot be filled with 0"
+            )
+        value = index.get((mlbam_id, want), 0.0)
+        out.append(float(0.0 if pd.isna(value) else value))
+    return tuple(out)
 
 
 #: `eq=False` because the fields are ndarrays. The generated `__eq__` tuple-compares
@@ -329,6 +528,27 @@ class Prepared:
     age: np.ndarray
     current: np.ndarray
     prior: np.ndarray
+    #: The ordered earlier-season block the fit regresses on, `MAX_LAG` rows deep and
+    #: aligned to every other array here. `lags[0]` IS `prior`; it is held in the block
+    #: as well so the design matrix is one slice rather than a concatenation whose order
+    #: each call site respells.
+    #:
+    #: ZERO-FILLED, the `forward` convention and NOT `back`'s. A season the player did
+    #: not play is a real 0 here because the question this block feeds is what he will
+    #: PRODUCE, and a year he produced nothing is evidence about that. `back` answers
+    #: what he LOOKED LIKE and keeps NaN. Both conventions are correct for their own
+    #: question and neither is a default -- see `build_history` and `Prepared.back`.
+    lags: np.ndarray
+    #: Rows the FIT may use: those whose whole lag block is observable. False where a
+    #: deeper lag falls before the panel begins.
+    #:
+    #: A MASK RATHER THAN A SHORTER FRAME, because two consumers want different row sets
+    #: and only one of them reads `lags`. The fit must refuse a row it cannot build a
+    #: design matrix for; `career_comps` matches on `back` and could always have scored
+    #: those rows. Censoring them in `build_history` served the first and silently robbed
+    #: the second of its oldest comps. Anything reading `lags` must apply this; anything
+    #: reading only `age`/`back`/`forward` must not.
+    fittable: np.ndarray
     season: np.ndarray
     #: MLBAM id per history row, aligned to every other array here. `prepare` already
     #: builds this to reindex `forward` and then dropped it, so anything wanting to NAME
@@ -434,6 +654,7 @@ def prepare(
         k: index.reindex(pd.MultiIndex.from_arrays([ids, seasons - k])).to_numpy(dtype=float)
         for k in range(lookback)
     }
+    lags = history[list(lag_columns())].to_numpy(dtype=float)
     return Prepared(
         kind=kind,
         horizons=tuple(sorted(set(horizons))),
@@ -441,6 +662,12 @@ def prepare(
         age=history["age"].to_numpy(dtype=float),
         current=history["current"].to_numpy(dtype=float),
         prior=history["prior"].to_numpy(dtype=float),
+        # (n, MAX_LAG), nearest season first, matching `lag_columns` -- which is the same
+        # order `shape_trajectory` stacks its query vector in.
+        lags=lags,
+        # NaN anywhere in the block means the panel does not reach far enough back for
+        # this row, which is exactly the row the fit cannot use.
+        fittable=~np.isnan(lags).any(axis=1),
         season=seasons,
         mlbam_id=ids,
         forward=forward,
@@ -462,19 +689,27 @@ def _bootstrap_predictions(
     Solved in BATCHES through the normal equations rather than one `lstsq` per draw. A
     resampled fit differs from the original only in how many times each row appears, so
     every draw's `X'WX` and `X'Wy` is a weighted sum of the same per-row contributions --
-    which makes a batch two matrix products and a stack of 3x3 pseudo-inverses instead
-    of a thousand full-size SVDs. It was ~46% of a query's cost.
+    which makes a batch two matrix products and a stack of small pseudo-inverses instead
+    of a thousand full-size SVDs.
+
+    IT DOMINATES A QUERY, and by more since the design widened. Measured 2026-09-11 on
+    the 2000-2026 hitter panel, 13,917 fitting rows at horizons 1-5, nothing else on the
+    machine: 169.6 ms a query at `BOOTSTRAP_DRAWS`, 14.0 ms with the bootstrap off --
+    **91.8%**, against the ~46% this note recorded at three parameters. The batched solve
+    is the term that scales, `gram` being (n, width**2), so `MAX_LAG` squares it. This is
+    the number that makes `bootstrap_draws` the knob a board sweep should reach for
+    first; `sweep.SWEEP_DRAWS` already does.
 
     The resampled indices are drawn in the same order the per-draw loop drew them, so
     the draws themselves are unchanged; only the solver differs, and the two agree far
     inside the resolution `se` is reported at.
 
     `pinv` rather than `solve`, deliberately. A draw can land on too few distinct rows
-    to identify three parameters, and `solve` raises on that while the `lstsq` this
+    to identify `N_PARAMETERS` parameters, and `solve` raises on that while the `lstsq` this
     replaced returned the least-norm solution. Those two are the same answer here --
     `pinv(X'WX) X'Wy` equals `pinv(X'W^.5) W^.5 y` for any rank -- so the rank-deficient
-    draw keeps behaving exactly as it did, with no separate branch to go stale. The 3x3
-    SVDs cost about 4% of this routine.
+    draw keeps behaving exactly as it did, with no separate branch to go stale. The
+    per-draw SVDs cost about 4% of this routine.
     """
     n = len(y)
     design = np.column_stack([np.ones(n), x])
@@ -514,6 +749,7 @@ def shape_trajectory(
     age: int,
     sgp: float,
     prior_sgp: float,
+    earlier_sgp: Sequence[float],
     horizons: tuple[int, ...] = DEFAULT_HORIZONS,
     age_window: int = AGE_WINDOW,
     prior_window: float = PRIOR_WINDOW,
@@ -524,6 +760,15 @@ def shape_trajectory(
     bootstrap_draws: int = BOOTSTRAP_DRAWS,
 ) -> tuple[Trajectory, tuple[Anchors, ...]]:
     """Forward path for a player at `age`, now producing `sgp`, who produced `prior_sgp` last season.
+
+    `earlier_sgp` is what he produced in the `MAX_LAG - 1` seasons BEFORE `prior_sgp`,
+    nearest first, and is REQUIRED rather than defaulted. A default would have to be
+    zeros, and zeros are not a neutral filler here -- they are the real value that says
+    "produced nothing", which is what `build_history` fills a prospect's missing years
+    with. A caller who forgot the argument would be silently priced as a player whose
+    career began two years ago, which reads as a plausible number on a board. Callers
+    that genuinely have no deeper history (a hand-built query, a test) pass the zeros
+    explicitly and thereby say so. Use `seasons_before` to derive it from a panel.
 
     `panel` may be a season panel or a `Prepared` from `prepare`. The second form skips
     the panel-level work and is what a board sweep should pass; the answer is identical.
@@ -568,6 +813,15 @@ def shape_trajectory(
         raise ValueError(f"age_window must be at least 1, got {age_window}")
     if not horizons:
         raise ValueError("horizons must not be empty")
+    if len(earlier_sgp) != MAX_LAG - 1:
+        # Loud, because the silent version is a shape error raised deep inside the
+        # per-horizon loop AFTER the panel work -- or worse, on a `Prepared` built at a
+        # different `MAX_LAG`, a query vector that happens to line up with the design and
+        # prices the player against anchors shifted one season.
+        raise ValueError(
+            f"earlier_sgp must hold {MAX_LAG - 1} seasons (the ones before prior_sgp), "
+            f"got {len(earlier_sgp)}"
+        )
     if bootstrap_draws < 2:
         # `std(ddof=1)` on fewer than two draws is NaN plus a RuntimeWarning, which
         # reaches the caller as an SE that is silently missing rather than as a refused
@@ -626,7 +880,12 @@ def shape_trajectory(
     # recent to have even one observable forward year enters no fit, so counting it in
     # `n_comps` (which render prints as "fit on N weighted seasons") would describe the
     # fit with rows the fit never saw.
-    usable = np.flatnonzero((weights > 0) & (prepared.season + horizons[0] <= last))
+    # `fittable` is where the lag censoring lives now -- see `Prepared.fittable`. It is
+    # ANDed here rather than applied in `build_history` so `career_comps` keeps the rows
+    # it can still match on.
+    usable = np.flatnonzero(
+        (weights > 0) & prepared.fittable & (prepared.season + horizons[0] <= last)
+    )
     seasons = prepared.season[usable]
     current, prior = prepared.current[usable], prepared.prior[usable]
     weights = weights[usable]
@@ -642,7 +901,11 @@ def shape_trajectory(
     )
 
     rng = np.random.default_rng(seed)
-    anchor_columns = np.column_stack([current, prior])
+    # (n, 1 + MAX_LAG): this season, then the lag block in `lag_columns` order. The query
+    # row is stacked in the SAME order immediately below, which is the whole reason the
+    # order has one spelling.
+    anchor_columns = np.column_stack([current, prepared.lags[usable]])
+    query = np.concatenate([[1.0, sgp, prior_sgp], np.asarray(earlier_sgp, dtype=float)])
     path, anchors, rows = [], [], []
     for h in horizons:
         # Positions into the PREPARED arrays, so the forward values are a gather rather
@@ -660,21 +923,23 @@ def shape_trajectory(
         y = y - replacement
         x, w = anchor_columns[keep], weights[keep]
 
-        # Gate on the EFFECTIVE size, not the row count. Three rows fit a
-        # three-parameter model exactly -- residuals identically zero, median collapsed
-        # onto the mean, every bootstrap draw refitting a singular design that lstsq
-        # resolves silently to a least-norm solution. But the row count overstates
+        # Gate on the EFFECTIVE size, not the row count. `N_PARAMETERS` rows fit an
+        # `N_PARAMETERS`-parameter model exactly -- residuals identically zero, median
+        # collapsed onto the mean, every bootstrap draw refitting a singular design that
+        # lstsq resolves silently to a least-norm solution. But the row count overstates
         # support whenever the kernels taper: a 41-row fit carrying an effective 15 was
         # passing a raw-count floor while producing `on_prior` of -1.03, i.e. more
         # production last year predicting LESS next year.
         n_eff = _kish(w)
         if n_eff < MIN_EFFECTIVE_ROWS or w.sum() <= 0:
             path.append(_empty_point(h, age))
-            anchors.append(Anchors(h, float("nan"), float("nan"), float("nan"), len(y), n_eff))
+            nan_lags = (float("nan"),) * MAX_LAG
+            anchors.append(
+                Anchors(h, float("nan"), float("nan"), float("nan"), nan_lags, len(y), n_eff)
+            )
             continue
 
         coefficients = _weighted_least_squares(x, y, w)
-        query = np.array([1.0, sgp, prior_sgp])
         predicted = float(query @ coefficients)
 
         # Resampling rows and refitting gives the sampling variability of the fitted
@@ -690,12 +955,15 @@ def shape_trajectory(
         # the fit itself barely counted, which for an edge-of-window query is most of
         # the row count.
         median = float(predicted + _weighted_quantile(residuals, w, 0.5))
-        # These are FITTED residuals from a three-parameter model, so their weighted
-        # mean square estimates (1 - p/n_eff) * sigma^2, not sigma^2. Without the
-        # correction the spread -- the number `PathPoint.spread` tells the reader to
-        # size a decision by -- runs narrow exactly where support is thinnest: ~12% at
-        # n_eff 15, ~32% at n_eff 7. Negligible on a healthy fit (0.4% at n_eff 347),
-        # which is the point: it self-corrects toward honest at the dangerous end.
+        # These are FITTED residuals from an `N_PARAMETERS`-parameter model, so their
+        # weighted mean square estimates (1 - p/n_eff) * sigma^2, not sigma^2. Without
+        # the correction the spread -- the number `PathPoint.spread` tells the reader to
+        # size a decision by -- runs narrow exactly where support is thinnest. The
+        # understatement scales with p/n_eff, so widening the design matrix worsened it:
+        # at n_eff 15 it is ~29% at p=6 against the ~12% this note recorded at p=3, and
+        # n_eff 7 (~32% at p=3) is now below `MIN_EFFECTIVE_ROWS` and unreachable.
+        # Negligible on a healthy fit (0.9% at n_eff 347), which is the point: it
+        # self-corrects toward honest at the dangerous end.
         residual_var = float(np.average(residuals**2, weights=w)) * n_eff / (n_eff - N_PARAMETERS)
 
         # The BAND. Two things distinguish it from `predicted +/- k*spread`.
@@ -789,7 +1057,11 @@ def shape_trajectory(
                 horizon=h,
                 intercept=float(coefficients[0]),
                 on_current=float(coefficients[1]),
+                # coefficients[2:] IS the lag block, in `lag_columns` order, so `on_prior`
+                # and `on_lags[0]` are one number read twice rather than two that could
+                # drift apart.
                 on_prior=float(coefficients[2]),
+                on_lags=tuple(float(c) for c in coefficients[2:]),
                 n_fit=len(y),
                 n_effective=n_eff,
             )

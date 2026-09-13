@@ -79,6 +79,8 @@ from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR, load_scored_pan
 from fantasy_baseball.trajectory.shape import (
     build_history,
     collapsed_index,
+    earlier_of,
+    fittable_rows,
     prepare,
     shape_trajectory,
 )
@@ -149,6 +151,7 @@ def score_pool(
                 age=int(q.age),
                 sgp=float(q.current),
                 prior_sgp=float(q.prior),
+                earlier_sgp=earlier_of(q),
                 horizons=observable,
                 last_complete_season=last,
                 bootstrap_draws=draws,
@@ -310,7 +313,7 @@ def main() -> int:
             panel = load_scored_panel(
                 kind, panel_dir=args.panel_dir, sgp_overrides=config.sgp_overrides
             )
-            history = build_history(panel)
+            history = fittable_rows(build_history(panel))
             queries = history
             if args.sample and args.sample < len(history):
                 queries = history.sample(args.sample, random_state=args.seed)
