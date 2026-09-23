@@ -148,6 +148,41 @@ MIN_OVERLAP = 2
 COMP_LOOKBACK = 8
 
 
+def career_by_age(seasons) -> dict[int, float]:
+    """One player's REALIZED SGP keyed by age, with holes left as holes.
+
+    The raw reading of a player's stored seasons, shared by every caller that needs to
+    build the `career` argument `closest_careers` matches on. It lives HERE, beside the
+    matcher, for the reason `MAX_COMPS` does: both the push script and
+    `scripts/player_trajectory.py` assemble the same dict, and a second hand-rolled
+    spelling is where the two sides drift.
+
+    **HOLES STAY HOLES.** A year the player did not appear is ABSENT, never 0.0 -- see
+    `Prepared.back`. Filling it is exactly what matches an injured star to a
+    replacement-level journeyman, which is the match this module exists to stop making.
+    A drawing wants the opposite convention and must fill it itself.
+
+    Ages within one player are distinct: `collapse_split_seasons` gives one row per
+    (mlbam_id, season) and age advances with the season, so nothing is collapsed here.
+
+    Takes the frame duck-typed rather than annotated as a DataFrame, so this module
+    keeps its "testable against a hand-built `Prepared` with no data files" property.
+    """
+    if seasons is None:
+        return {}
+    # NON-FINITE VALUES ARE DROPPED, not carried. A NaN sgp passes every `in` test
+    # downstream, lengthens the matched window, raises `required_overlap` through it, and
+    # then matches no candidate at that age -- the whole pool judged against a window
+    # none of them can reach. `_subject_window` drops it too; doing it here as well keeps
+    # a drawn career line from carrying a point that renders as a gap in one place and
+    # a zero in another.
+    return {
+        int(a): round(float(s), 4)
+        for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
+        if math.isfinite(s)
+    }
+
+
 def required_overlap(subject_ages: int) -> int:
     """How many shared ages a candidate needs, given how many the subject has.
 

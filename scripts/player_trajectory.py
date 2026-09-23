@@ -54,10 +54,21 @@ from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.trajectory.board import people as board_people
 from fantasy_baseball.trajectory.board import player_names, season_slots
 from fantasy_baseball.trajectory.calibration import load_shipped, span_target
-from fantasy_baseball.trajectory.model import Trajectory
+from fantasy_baseball.trajectory.career_comps import (
+    COMP_LOOKBACK,
+    career_by_age,
+    closest_careers,
+    match_pool,
+)
+from fantasy_baseball.trajectory.model import Trajectory, collapse_split_seasons
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR
 from fantasy_baseball.trajectory.ros_anchor import load_anchored_panels
-from fantasy_baseball.trajectory.shape import MAX_LAG, seasons_before, shape_trajectory
+from fantasy_baseball.trajectory.shape import (
+    MAX_LAG,
+    prepare,
+    seasons_before,
+    shape_trajectory,
+)
 from fantasy_baseball.trajectory.sweep import BAR_KEYS, bar_probabilities
 from fantasy_baseball.trajectory.value import (
     ROLE_MIN_GAMES,
@@ -527,19 +538,6 @@ def _cell(value: object) -> str:
     return str(value)
 
 
-def comps_legend(*, scale: str, color: bool) -> str:
-    """What the reader has to know to read the table, matching what it will show.
-
-    Split out so the legend and the cell rendering cannot drift: they drifted once
-    already, which is #331's tail -- the legend still said "0 = did not play" after
-    the frame stopped containing a 0 for that.
-    """
-    if scale != "var":
-        return "0 = did not play, -- = season not played yet"
-    marker = "faint" if color else "*"
-    return f"{marker} = out of the league, -- = season not played yet"
-
-
 def comp_table_lines(
     top: pd.DataFrame,
     cols: list[str],
@@ -583,7 +581,7 @@ def comp_table_lines(
     ]
 
 
-def render(traj: Trajectory, show_comps: int) -> None:
+def render(traj: Trajectory) -> None:
     span = f"{traj.seasons[0]}-{traj.seasons[1]}" if traj.seasons else "n/a"
     print(f"\n{traj.kind.upper()}: {traj.sgp:.1f} SGP in an age-{traj.age} season")
     if traj.scale == "var":
@@ -641,14 +639,6 @@ def render(traj: Trajectory, show_comps: int) -> None:
                 f"     {p.survival:5.0%} (of {p.n_effective:5.0f})  {p.mean_if_survived:6.2f}"
             )
         _print_total(traj)
-        if show_comps:
-            # The block below reads sgp0/hN, which a shape frame does not have -- and a
-            # shape fit has no per-query comps to list, only a weighted population.
-            print(
-                f"\n   (--show-comps {show_comps} lists individual comps, which only the "
-                "estimator fits no comp cohort; use --show-anchors for the "
-                "fitted coefficients)"
-            )
         return
 
     if traj.prior_sgp is not None:
@@ -692,27 +682,118 @@ def render(traj: Trajectory, show_comps: int) -> None:
         )
     _print_total(traj)
 
-    if show_comps:
-        # Ranked by closeness to the query, not by sgp0 -- "show me the comps" means the
-        # ones actually driving the average, and nlargest would only ever show the top
-        # edge of the band.
-        top = traj.comps.assign(gap=(traj.comps["sgp0"] - traj.sgp).abs()).nsmallest(
-            show_comps, "gap"
+
+def career_comp_table(
+    comps: list, names: pd.Series, played: set[tuple[int, int]], horizons: tuple[int, ...]
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The comps frame `comp_table_lines` renders, and its out-of-league mask.
+
+    Reuses `comp_table_lines` rather than growing a second table layout, because the
+    rule it carries applies here for the same reason: a year out of the league CANNOT be
+    told from a real 0.00 by the number alone, so the mask has to reach the page.
+
+    `played` decides the mask, NOT `path == 0.0`. `Prepared.forward` zero-fills an absent
+    season on purpose, so a comp who was out of the league and a comp who produced 0.0
+    SGP carry the same value; only panel membership separates them.
+    """
+    cols = [f"h{h}" for h in horizons]
+    frame = pd.DataFrame(
+        [
+            {
+                "player": names.get(c.mlbam_id, str(c.mlbam_id)),
+                "season": c.season,
+                "rmse": float(c.rmse),
+                "ages": c.overlap,
+                **{col: float(v) for col, v in zip(cols, c.path, strict=True)},
+            }
+            for c in comps
+        ]
+    )
+    departed = pd.DataFrame(
+        [
+            {
+                col: (c.mlbam_id, c.season + h) not in played
+                for col, h in zip(cols, horizons, strict=True)
+            }
+            for c in comps
+        ]
+    )
+    return frame, departed
+
+
+def show_career_comps(
+    pool_panel: pd.DataFrame,
+    *,
+    kind: str,
+    mlbam_id: int,
+    age: int,
+    sgp: float,
+    horizons: tuple[int, ...],
+    n: int,
+) -> None:
+    """The `n` historical careers most like this player's, and what happened to them.
+
+    NOT the fit's comp cohort, because there is not one: `shape` is a weighted regression
+    over the whole panel and has no per-query shortlist to print. This is the SAME
+    backward matcher the web board's comp cards use (`career_comps.closest_careers`), so
+    the two surfaces cannot show a reader different comps for the same player.
+
+    MATCHED ON REALIZED CAREER, never on our prediction -- see the `career_comps` module
+    docstring for why a comp selected on the forecast cannot be evidence about it. That
+    is also why the paths below will disagree with the projected table above: the fan is
+    the point, not a defect.
+
+    ALWAYS RAW SGP, even under `--scale var`. The panel this matches over carries `sgp`,
+    and the floor `--scale var` nets against is applied inside the estimator rather than
+    to the panel -- so quietly labelling these VAR would put two different scales in one
+    output. The header says which it is.
+    """
+    # `lookback=` is what turns the backward window on; `prepare` leaves it off by
+    # default because the fit never reads it (see `Prepared.back`).
+    prepared = prepare(pool_panel, kind=kind, horizons=horizons, lookback=COMP_LOOKBACK)
+    # THROUGH THE SHARED COLLAPSE, like every other reader of this panel: a mid-season
+    # trade can put two rows on one player-year, and `collapse_split_seasons` is the one
+    # site that rule lives at.
+    collapsed = collapse_split_seasons(pool_panel)
+    mine = collapsed[collapsed["mlbam_id"] == mlbam_id]
+    # His complete seasons, plus the base season at his current age -- which `pool_panel`
+    # does not carry while it is in progress. UNFILLED: a year he did not play stays
+    # absent, or an injured star matches a journeyman.
+    career = {**career_by_age(mine), age: sgp}
+
+    comps = closest_careers(prepared, career, age=age, n=n, exclude_id=mlbam_id)
+    if not comps:
+        # `.reason` is "" only when the pool was non-empty, which cannot happen on this
+        # branch -- but "no career comps: " with nothing after the colon tells a reader
+        # strictly less than silence would, so the fallback names the last cause.
+        reason = match_pool(prepared, career, age, exclude_id=mlbam_id).reason
+        print(f"\n   no career comps: {reason or 'no career shares enough of his ages'}")
+        return
+
+    played = set(
+        zip(
+            collapsed["mlbam_id"].astype(int),
+            collapsed["season"].astype(int),
+            strict=True,
         )
-        top = top.assign(
-            player=top["mlbam_id"]
-            .map(player_names(PEOPLE_CACHE))
-            .fillna(top["mlbam_id"].astype(str))
-        )
-        cols = ["player", "season", "sgp0"] + [f"h{p.horizon}" for p in traj.path]
-        # `departed` is row-aligned to the FULL comps frame; `top` is an nsmallest
-        # subset that keeps its index labels, so reindexing is the join.
-        marks = traj.departed.reindex(top.index) if not traj.departed.empty else traj.departed
-        color = sys.stdout.isatty()
-        legend = comps_legend(scale=traj.scale, color=color)
-        print(f"\n   {len(top)} closest comps ({legend}):")
-        for line in comp_table_lines(top, cols, marks, color=color):
-            print(line)
+    )
+    frame, departed = career_comp_table(comps, player_names(PEOPLE_CACHE), played, horizons)
+    color = sys.stdout.isatty()
+    print(
+        f"\n   {len(comps)} closest CAREERS (matched on realized SGP through age {age}, "
+        f"not on the forecast above)"
+    )
+    print("   rmse = fit over the shared ages; ages = how many were shared")
+    # SPELLED HERE, not branched on the scale the way the cohort legend this replaced
+    # was. That one said "0 = did not play" on the raw scale and relied on the number
+    # carrying the distinction, which named exactly the wrong rows once the frame was
+    # shifted (#331). This table ALWAYS paints the mask, so an unpainted 0.00 means he
+    # played and produced nothing, on either scale. It also drops "-- = season not
+    # played yet": `closest_careers` only keeps candidates realized at EVERY horizon.
+    marker = "faint" if color else "*"
+    print(f"   forward years are raw SGP; {marker} = out of the league that year")
+    for line in comp_table_lines(frame, list(frame.columns), departed, color=color):
+        print(f"   {line}")
 
 
 def main() -> int:
@@ -745,7 +826,18 @@ def main() -> int:
         ),
     )
     parser.add_argument("--horizon", type=int, default=5, help="years forward to project")
-    parser.add_argument("--show-comps", type=int, default=0, metavar="N")
+    parser.add_argument(
+        "--show-comps",
+        type=int,
+        default=0,
+        metavar="N",
+        help=(
+            "also list the N historical players whose REALIZED career most "
+            "resembles his, and what they did next. Needs --player. These do not "
+            "drive the projection -- shape fits the whole panel and has no comp "
+            "cohort -- they are independent evidence to read it against"
+        ),
+    )
     parser.add_argument(
         "--show-anchors",
         action="store_true",
@@ -784,6 +876,11 @@ def main() -> int:
         parser.error("pass --player, or all of --pool/--age/--sgp")
     if args.horizon < 1:
         parser.error("--horizon must be at least 1")
+    # NEGATIVE IS NOT "none". `closest_careers` slices `order[:n]`, so -1 asks for every
+    # comp but the worst-matching one -- ~460 rows dumped where the user typed a number
+    # below zero. Refused at the boundary rather than clamped, so the typo is visible.
+    if args.show_comps < 0:
+        parser.error("--show-comps must not be negative")
     if args.position is not None and args.scale != "var":
         parser.error("--position selects a replacement floor and applies to --scale var")
     # Validated HERE, not in the per-query helper, because that helper only runs on the
@@ -860,6 +957,10 @@ def main() -> int:
             # `is not None`, never `or`: --sgp 0 and --age 0 are falsy but meaningful.
             (
                 pool,
+                # Carried so --show-comps can match him on his own realized career and
+                # drop him from his own candidate pool. None on the manual path, which
+                # is what refuses comps there.
+                pid,
                 age if args.age is None else args.age,
                 sgp if args.sgp is None else args.sgp,
                 _prior_for(live[pool], pid, args),
@@ -906,6 +1007,7 @@ def main() -> int:
         queries = [
             (
                 args.pool,
+                None,
                 args.age,
                 args.sgp,
                 args.prior_sgp,
@@ -916,7 +1018,7 @@ def main() -> int:
 
     horizons = tuple(range(1, args.horizon + 1))
     levels = position_aware_replacement_levels(denoms)
-    for pool, age, sgp, prior, earlier, slots in queries:
+    for pool, pid, age, sgp, prior, earlier, slots in queries:
         # The floor is passed INTO the estimator, not subtracted from its answer, so it
         # carries through to the median, the band and the survivor mean instead of
         # leaving them on a different scale. It is a SHIFT and nothing is clamped: a man
@@ -944,7 +1046,30 @@ def main() -> int:
                     f"     {a.horizon}   {a.intercept:8.2f} {a.on_current:8.3f}{lags}"
                     f" {a.n_fit:7d} {a.n_effective:7.0f}"
                 )
-        render(traj, args.show_comps)
+        render(traj)
+        if args.show_comps:
+            if pid is None:
+                # REFUSED, not approximated. The only career available on this path is
+                # --prior-sgp plus --earlier-sgp, whose zeros are the real value "he
+                # produced nothing" and cannot be told from "he did not play" -- and
+                # matching on a filled zero is precisely what pairs an injured star with
+                # a journeyman (see `Prepared.back`). Five ages is also short of
+                # COMP_LOOKBACK's eight.
+                print(
+                    "\n   --show-comps needs --player: comps are matched on the "
+                    "player's realized career, which --prior-sgp/--earlier-sgp cannot "
+                    "supply (a 0 there is indistinguishable from a season not played)"
+                )
+            else:
+                show_career_comps(
+                    complete(pool),
+                    kind=pool,
+                    mlbam_id=pid,
+                    age=age,
+                    sgp=sgp,
+                    horizons=horizons,
+                    n=args.show_comps,
+                )
     return 0
 
 

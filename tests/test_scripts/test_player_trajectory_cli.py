@@ -132,10 +132,48 @@ def test_piped_output_still_marks_the_departed_years() -> None:
     assert "-10.00*" not in bad, "a real season was marked as a departure"
 
 
-def test_the_legend_names_whatever_the_table_actually_shows() -> None:
-    """Whichever marker is in use, the header has to be the one describing it."""
+#: A comp who produced nothing at h2 and was GONE at h3. Both land as 0.0 in
+#: `CareerComp.path` -- `Prepared.forward` zero-fills an absent season on purpose -- so
+#: the two are indistinguishable by value and only panel membership separates them.
+class _Comp:
+    def __init__(self, mlbam_id, season, rmse, overlap, path):
+        self.mlbam_id = mlbam_id
+        self.season = season
+        self.rmse = rmse
+        self.overlap = overlap
+        self.path = path
+
+
+def test_the_out_of_league_mask_comes_from_the_panel_not_from_a_zero() -> None:
+    """The distinction `--show-comps` exists to keep, at the one place it can be lost.
+
+    `closest_careers` hands back 0.0 for a year the comp was out of the league AND for a
+    year he played and produced nothing. Deriving the mask from `path == 0.0` would mark
+    both -- printing a real replacement-level season as a career ending, which is the
+    #331 mistake in a new table.
+    """
     module = _script()
-    assert module.comps_legend(scale="var", color=True).startswith("faint")
-    assert "*" in module.comps_legend(scale="var", color=False)
-    # On the raw scale nothing is shifted, so the original 0.0 is still on the page.
-    assert "0 = did not play" in module.comps_legend(scale="sgp", color=True)
+    horizons = (1, 2, 3)
+    comps = [_Comp(111, 2015, 2.5, 6, (8.0, 0.0, 0.0))]
+    # He has a row at 2017 (h2: played, produced 0.0) and none at 2018 (h3: departed).
+    played = {(111, 2015), (111, 2016), (111, 2017)}
+
+    frame, departed = module.career_comp_table(comps, pd.Series(dtype=object), played, horizons)
+
+    assert frame.loc[0, "player"] == "111", "an unknown id must still render as a comp"
+    assert frame.loc[0, "ages"] == 6
+    assert not departed.loc[0, "h2"], "a played 0.0 season was marked as a departure"
+    assert departed.loc[0, "h3"], "a year out of the league was left unmarked"
+
+
+def test_every_forward_year_of_a_career_comp_is_realized() -> None:
+    """So the table never needs a "not played yet" cell, and its legend never promises one.
+
+    `closest_careers` censors candidates to those with an outcome at every horizon, so
+    unlike the cohort table this replaced, a NaN here would mean a construction bug.
+    """
+    module = _script()
+    frame, _ = module.career_comp_table(
+        [_Comp(111, 2015, 2.5, 6, (8.0, 1.0, 2.0))], pd.Series(dtype=object), set(), (1, 2, 3)
+    )
+    assert not frame[["h1", "h2", "h3"]].isna().to_numpy().any()
