@@ -1,15 +1,23 @@
-# Manual roster snapshot, 2026-09-08 -- DERIVED, not a fresh Roster-tab capture.
+# Manual roster snapshot, 2026-09-14 -- DERIVED, not a fresh Roster-tab capture.
 #
-# HOW THIS ONE WAS BUILT. It is the 2026-09-06 file (itself the 2026-08-31
-# Roster-tab capture with a first transaction replay on top) with a SECOND
-# replay of the Yahoo League Transactions feed: 9 drops and 8 adds across five
-# teams (Hart of the Order, Hello Peanuts!, Jon's Underdogs, Springfield
-# Isotopes, Boston Estrellas) between Sat Sep 05 03:18 PM, exclusive, and Tue
-# Sep 08 04:09 AM. The window is closed on both ends -- the feed page still
-# shows the Sep 05 03:18 PM Betts-for-Tawa move that the previous replay
-# already applied, so nothing fell between the two snapshots. This file is now
-# two replays deep on a capture that is eight days old; a fresh Roster-tab
-# transcription is the fix, not another replay. Consequences, field by field:
+# HOW THIS ONE WAS BUILT. It is the 2026-09-08 file (itself the 2026-08-31
+# Roster-tab capture with two transaction replays on top) with a THIRD replay
+# of the Yahoo League Transactions feed: 3 drops and 2 adds across three teams
+# between Tue Sep 08 04:09 AM, exclusive, and Sat Sep 12 09:23 PM.
+#
+#   Thu Sep 10 04:10 AM  Hart of the Order  + Wyatt Langford, - Cole Carrigg
+#   Thu Sep 10 09:21 PM  Hello Peanuts!     - Braxton Ashcraft (drop only)
+#   Sat Sep 12 09:23 PM  Jon's Underdogs    + TJ Rumfield, - Brady House
+#
+# The window is closed on both ends -- the feed page still shows the Sep 08
+# 04:09 AM Edman-for-Cam-Smith move that the previous replay already applied,
+# so nothing fell between the two snapshots. Hello Peanuts! is one player light
+# because that drop had no matching add in the feed; that is the feed's answer,
+# not a transcription gap.
+#
+# THIS FILE IS NOW THREE REPLAYS DEEP on a Roster-tab capture that is fourteen
+# days old. A fresh Roster-tab transcription is the fix, not a fourth replay.
+# Consequences, field by field:
 #
 #   name       TRUSTWORTHY. Every drop was matched against the canonical name
 #              already on that exact roster, and an unmatched drop was a hard
@@ -65,7 +73,7 @@
 # (3B) and Aroldis Chapman (P) on the same team, which the differing initials do
 # separate. The Cade Smith / Cam Smith pair called out in the previous snapshot
 # is gone: Boston Estrellas dropped Cam Smith on Sep 08.
-snapshot_date: '2026-09-08'
+snapshot_date: '2026-09-14'
 teams:
 - name: Hart of the Order
   players:
@@ -142,9 +150,9 @@ teams:
   - name: Yoendrys Gómez
     slot: BN
     positions: P
-  - name: Cole Carrigg
+  - name: Wyatt Langford
     slot: BN
-    positions: SS,OF
+    positions: OF
 - name: Hello Peanuts!
   players:
   - name: Jonathan Aranda
@@ -177,9 +185,6 @@ teams:
     slot: P
     positions: P
   - name: Chase Burns
-    slot: P
-    positions: P
-  - name: Braxton Ashcraft
     slot: P
     positions: P
   - name: Bryan Baker
@@ -282,9 +287,9 @@ teams:
   - name: Aaron Nola
     slot: BN
     positions: P
-  - name: Brady House
+  - name: TJ Rumfield
     slot: BN
-    positions: 3B
+    positions: 1B
   - name: Henry Bolte
     slot: BN
     positions: OF
