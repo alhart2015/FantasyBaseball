@@ -201,18 +201,6 @@ class Trajectory:
     #: total. A reader of this object can no longer be wrong about what its numbers mean.
     floor: float = 0.0
     slot: str | None = None
-    #: Per-horizon `h{n}` boolean columns, row-aligned to `comps`: True where the comp
-    #: was out of the league that year. Taken BEFORE the floor is netted out, because
-    #: after it a career ending reads `-floor` and is no longer recoverable from the
-    #: value -- at the OF floor that is -9.96, four hundredths from a real -10.00
-    #: season. `played` keys on the raw exact 0.0 for the same reason.
-    #:
-    #: NaN is left False: "has not happened yet" already renders as `--`, and folding
-    #: it in here would paint an unobservable year as a career ending.
-    #:
-    #: Empty for `mode="shape"`, whose `comps` frame is per-HORIZON predictions rather
-    #: than per-comp seasons and which refuses `--show-comps` outright.
-    departed: pd.DataFrame = field(default_factory=pd.DataFrame, repr=False)
 
     @property
     def extrapolated(self) -> bool:

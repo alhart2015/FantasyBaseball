@@ -84,36 +84,10 @@ MIN_SGP = 0.0
 from fantasy_baseball.trajectory.career_comps import (
     COMP_LOOKBACK,
     MAX_COMPS,
+    career_by_age,
     closest_careers,
     match_pool,
 )
-
-
-def _career_by_age(seasons) -> dict[int, float]:
-    """One player's REALIZED SGP keyed by age, with holes left as holes.
-
-    The raw reading of the stored frame, shared by everything that needs it: `_arc`
-    fills the holes to draw a line, and the `career` dict `build_payload` assembles for
-    `player_comps` must not fill them at all. They were
-    one comprehension doing both jobs, and the fill is exactly the thing backward
-    matching cannot tolerate -- see `Prepared.back`.
-
-    Ages within one player are distinct: `collapse_split_seasons` gives one row per
-    (mlbam_id, season) and age advances with the season, so nothing is collapsed here.
-    """
-    if seasons is None:
-        return {}
-    # NON-FINITE VALUES ARE DROPPED, not carried. A NaN sgp passes every `in` test
-    # downstream, lengthens the matched window, raises `required_overlap` through it, and
-    # then matches no candidate at that age -- the whole pool judged against a window
-    # none of them can reach. `_subject_window` drops it too; doing it here as well keeps
-    # the drawn career line from carrying a point that renders as a gap in one place and
-    # a zero in another.
-    return {
-        int(a): round(float(s), 4)
-        for a, s in zip(seasons["age"], seasons["sgp"], strict=True)
-        if math.isfinite(s)
-    }
 
 
 def _arc(seasons) -> list[list[float]]:
@@ -142,7 +116,7 @@ def _arc(seasons) -> list[list[float]]:
     ascending: nothing in the panel contract promises it, and `_netted` on the read side
     sorts for the same reason.
     """
-    scored = _career_by_age(seasons)
+    scored = career_by_age(seasons)
     if not scored:
         return []
     return [[age, scored.get(age, 0.0)] for age in range(min(scored), max(scored) + 1)]
@@ -475,9 +449,9 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
             # rest-of-season blend, re-scored (`ros_anchor`). Without it the newest and
             # most decision-relevant year of his career is missing from the match.
             #
-            # UNFILLED. `_career_by_age`, not `_arc`: a year he did not play must stay
+            # UNFILLED. `career_by_age`, not `_arc`: a year he did not play must stay
             # absent here, or an injured star matches a journeyman.
-            career = {**_career_by_age(by_id.get(player.mlbam_id)), player.age: player.now}
+            career = {**career_by_age(by_id.get(player.mlbam_id)), player.age: player.now}
             # ONE BAD PLAYER MUST NOT DISCARD THE SWEEP. `closest_careers` refuses a
             # non-finite anchor by design -- silently matching on a window one age
             # shorter than the `overlap` printed beside it is worse than no comps -- but
