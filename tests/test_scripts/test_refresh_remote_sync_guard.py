@@ -139,3 +139,31 @@ def test_end_manual_needs_yahoo():
 def test_a_yahoo_mode_prod_is_unaffected():
     assert refresh_remote.prod_manual_refusal(None, end_manual=False, skip_yahoo=False) is None
     assert refresh_remote.prod_manual_refusal(None, end_manual=False, skip_yahoo=True) is None
+
+
+def test_end_manual_refuses_when_fb_skip_yahoo_is_set(monkeypatch, capsys):
+    """FB_SKIP_YAHOO is stale-data mode without the flag; --end-manual must see it.
+
+    Otherwise the run recomputes over the transcription and then deletes the stamp
+    as though a real Yahoo refresh had replaced it.
+    """
+    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
+    from fantasy_baseball.web import refresh_pipeline
+
+    class _Prod:
+        def get(self, key):
+            return '{"seeded": true}' if key == MANUAL_PROVENANCE_KEY else None
+
+        def delete(self, key):  # pragma: no cover - must not be reached
+            raise AssertionError("stamp deleted on a refused run")
+
+    def _no_refresh(*_a, **_k):  # pragma: no cover - must not be reached
+        raise AssertionError("refresh ran on a refused run")
+
+    monkeypatch.setenv("FB_SKIP_YAHOO", "1")
+    monkeypatch.setattr(refresh_remote, "_sync_destination_refusal", lambda: None)
+    monkeypatch.setattr(kv_store, "build_explicit_upstash_kv", lambda: _Prod())
+    monkeypatch.setattr(refresh_pipeline, "RefreshRun", _no_refresh)
+
+    assert refresh_remote.main(["--end-manual"]) == refresh_remote.RC_REFUSED
+    assert "FB_SKIP_YAHOO" in capsys.readouterr().out

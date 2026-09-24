@@ -83,7 +83,8 @@ def prod_manual_refusal(stamp_raw: str | None, *, end_manual: bool, skip_yahoo: 
     if end_manual and skip_yahoo:
         return (
             "--end-manual needs a REAL Yahoo refresh to replace the transcription; "
-            "--skip-yahoo would only recompute on top of it. Drop --skip-yahoo."
+            "--skip-yahoo (or FB_SKIP_YAHOO) would only recompute on top of it. Drop "
+            "--skip-yahoo and unset FB_SKIP_YAHOO, including in .env."
         )
     if stamp_raw is None or end_manual:
         return None
@@ -135,23 +136,27 @@ def main(argv: list[str] | None = None) -> int:
         print(refusal)
         return RC_REFUSED
 
-    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
-    from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
-
-    prod = build_explicit_upstash_kv()
-    stamp = prod.get(MANUAL_PROVENANCE_KEY)
-    refusal = prod_manual_refusal(stamp, end_manual=args.end_manual, skip_yahoo=args.skip_yahoo)
-    if refusal is not None:
-        print(refusal)
-        return RC_REFUSED
-
     # Must flip the gate BEFORE importing the pipeline: import-time
     # module state (e.g. cached singletons) reads RENDER once.
     os.environ["RENDER"] = "true"
 
     from fantasy_baseball.data import kv_store
+    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
+    from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
     from fantasy_baseball.data.kv_sync import sync_remote_to_local
-    from fantasy_baseball.web.refresh_pipeline import RefreshRun
+    from fantasy_baseball.web.refresh_pipeline import RefreshRun, skip_yahoo_requested
+
+    # Still before anything writes. The EFFECTIVE mode, not just the flag:
+    # FB_SKIP_YAHOO (env or .env) runs stale-data mode with no --skip-yahoo, and
+    # --end-manual over that would recompute on the transcription, then drop
+    # the stamp as though a real Yahoo refresh had replaced it.
+    prod = build_explicit_upstash_kv()
+    stamp = prod.get(MANUAL_PROVENANCE_KEY)
+    skip_yahoo = True if args.skip_yahoo else skip_yahoo_requested()
+    refusal = prod_manual_refusal(stamp, end_manual=args.end_manual, skip_yahoo=skip_yahoo)
+    if refusal is not None:
+        print(refusal)
+        return RC_REFUSED
 
     # In case anything has already cached a local singleton during
     # import, clear it so the first post-flip get_kv() rebuilds as

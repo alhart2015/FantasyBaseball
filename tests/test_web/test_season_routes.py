@@ -325,6 +325,22 @@ def test_refresh_route_refuses_against_a_manual_store(client, monkeypatch, free_
     started.start.assert_not_called()
 
 
+def test_fetch_ros_route_refuses_against_a_manual_store(client, monkeypatch, free_refresh_slot):
+    """On Render with the manual store published, a ROS fetch would overwrite the
+    ROS the manual refresh computed standings and leverage from."""
+    from fantasy_baseball.web import season_routes
+
+    started = MagicMock()
+    monkeypatch.setattr(season_routes.threading, "Thread", MagicMock(return_value=started))
+    monkeypatch.setattr("fantasy_baseball.data.rosters.manual_store_active", lambda: True)
+
+    resp = client.post("/api/fetch-ros-projections")
+
+    assert resp.status_code == 409
+    assert "run_manual_refresh.py" in resp.get_json()["message"]
+    started.start.assert_not_called()
+
+
 def test_a_manual_store_replaces_the_refresh_button_with_its_dates(client, kv_isolation):
     """What Render shows once publish_manual.py has stamped prod."""
     from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY

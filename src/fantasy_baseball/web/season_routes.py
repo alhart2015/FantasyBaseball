@@ -2417,5 +2417,26 @@ def register_routes(app: Flask) -> None:
         Gates on the shared refresh slot: this fetch and a full refresh both
         sync game logs and write the same cache keys, so they must not run
         concurrently. The worker releases the slot when it finishes.
+
+        Refused on a manual store, like ``/api/refresh``: the blend lands in
+        ``cache:ros_projections``, replacing the ROS the published manual refresh
+        computed everything else from, and the next publish would put it back.
+        ``scripts/ingest_ros_export.py`` stages ROS for ``run_manual_refresh.py``.
         """
+        from fantasy_baseball.data.rosters import manual_store_active
+
+        if manual_store_active():
+            return jsonify(
+                {
+                    "error": "manual store",
+                    "message": (
+                        "ROS fetch is disabled against the hand-transcribed store: it "
+                        "would overwrite the ROS the manual refresh used. Stage ROS with "
+                        "'python scripts/ingest_ros_export.py', then run "
+                        "'python scripts/run_manual_refresh.py' and "
+                        "'python scripts/publish_manual.py'."
+                    ),
+                }
+            ), 409
+
         return _job_status_response(_spawn_guarded_refresh_job(_run_rest_of_season_fetch))
