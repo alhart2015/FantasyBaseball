@@ -4,7 +4,9 @@ Yahoo's API app is locked out, so league standings and the ten rosters are typed
 by hand into `data/manual/*.yaml` and everything downstream runs the normal
 pipeline against an **isolated KV store**, `data/manual.db`. Nothing in manual
 mode writes the Yahoo baseline `data/local.db` (it is read once, read-only, to
-create the copy) and nothing writes production Upstash.
+create the copy). Production Upstash is written by exactly one step, the explicit
+publish in [section 1b](#1b-publish-to-render), which is how Render shows the
+hand-typed league.
 
 Commands first. Reasoning is at the bottom.
 
@@ -56,6 +58,35 @@ python scripts/run_manual_refresh.py --report-out out.txt
 Exit codes: `0` ok, `1` started then failed, `2` refused before touching
 anything.
 
+## 1b. Publish to Render
+
+```bash
+python scripts/publish_manual.py --dry-run   # what would change on prod
+python scripts/publish_manual.py             # send it
+python scripts/push_trajectory_board.py      # the trajectory board has its own push
+```
+
+`publish_manual.py` copies every key in `data/manual.db` whose value differs from
+prod, plus the four history hashes field by field. It never deletes a prod key, and
+it skips the refresh lock, job logs and the two trajectory blobs. Before the first
+write it saves every prod value it is about to replace to
+`data/backups/upstash-before-publish-<UTC>.json.gz`.
+
+The store's provenance stamp goes up first. On Render that stamp is what:
+
+- replaces the Refresh button with a "Hand-entered data" note showing the roster and
+  standings dates (`/api/refresh` also returns 409);
+- makes the trajectory page read ownership from the transcribed roster history
+  rather than the last Yahoo `cache:roster`.
+
+Once prod carries the stamp, `scripts/refresh_remote.py` refuses to run (use
+`--end-manual` when Yahoo is back, [section 5](#5-revert-when-yahoo-access-comes-back)),
+and `scripts/ingest_ros_export.py` stages only, as if `--no-push` were passed.
+
+A normal `run_season_dashboard.py` (no `--manual`) syncs prod down into
+`data/local.db`, so after a publish that store holds the manual data and its stamp
+too. The pre-outage Yahoo values it replaced are in the first publish's backup file.
+
 ## 2. Update the transcriptions
 
 Three files, all under `data/manual/`:
@@ -103,13 +134,12 @@ variable first and then syncs the baseline -- it prints `Ignored inherited
 FANTASY_LOCAL_KV_PATH` and carries on. The refusal is still in the code as a
 backstop. Either way the reliable habit is a fresh terminal per mode.
 
-**(b) Never run `scripts/ingest_ros_export.py` without `--no-push`.**
+**(b) Stage ROS exports with `--no-push`.**
 
-It sets `RENDER=true` in-process (`scripts/ingest_ros_export.py`, in
-`_push_to_prod`) and writes **production Upstash**, then triggers a full prod
-refresh. That is correct for its normal job and completely wrong while the
-league's live state is hand-typed. If you need fresh ROS projections during
-manual mode, stage only:
+`scripts/ingest_ros_export.py` without it sets `RENDER=true` in-process and writes
+**production Upstash**, then triggers a full prod refresh. Once prod carries the
+manual stamp the script notices and stages only, but before the first publish it
+does not. Either way the manual refresh is what blends the staged export:
 
 ```bash
 python scripts/ingest_ros_export.py --no-push
@@ -194,9 +224,10 @@ Close that terminal when you are done with it.
 #    on the console if the OAuth token in config/oauth.json is stale.
 python scripts/run_lineup.py
 
-# 3. Then the normal refresh: writes prod Upstash, then syncs back down to
-#    data/local.db.
-python scripts/refresh_remote.py
+# 3. Then the normal refresh: writes prod Upstash, removes prod's manual stamp
+#    once the refresh completes (Render leaves manual mode), then syncs back
+#    down to data/local.db.
+python scripts/refresh_remote.py --end-manual
 
 # 4. Normal dashboard: syncs on startup, prints "KV store: ...\data\local.db".
 python scripts/run_season_dashboard.py
@@ -209,9 +240,10 @@ Then retire the manual store:
 Remove-Item data/manual.db*
 ```
 
-Nothing else needs undoing. The manual pipeline only ever wrote `data/manual.db`;
-`data/local.db` and Upstash were never opened for writing, so the baseline needs
-no repair and prod needs no rollback. Keep `data/manual/*.yaml` and the
+Nothing else needs undoing. The Yahoo refresh rewrites every `cache:*` key and
+adds a newer day to each history hash; the transcribed days stay in those hashes
+as the league's record of the outage weeks. The `data/backups/` files hold the prod values the first
+publish replaced, if the pre-outage snapshot is ever wanted. Keep `data/manual/*.yaml` and the
 `data/manual/audit-*.txt` reports -- they are the record of what the league
 looked like during the outage. `data/manual.db` is derived and can be rebuilt at
 any time with `scripts/bootstrap_manual_kv.py`.

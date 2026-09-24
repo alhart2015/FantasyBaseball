@@ -257,6 +257,20 @@ body {
     box-shadow: none;
 }
 
+/* Replaces the Refresh button when the store is hand-transcribed (manual mode). */
+.manual-data-note {
+    font-family: 'Big Shoulders Display', sans-serif;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    line-height: 1.6;
+    color: var(--amber);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+    padding: 8px 10px;
+}
+
 /* Logout link inline-styled in base.html */
 .sidebar-footer a[href*="logout"] {
     font-family: 'Outfit', sans-serif;

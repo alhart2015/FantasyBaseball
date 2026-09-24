@@ -123,19 +123,18 @@ def manual_store_active() -> bool:
     rather than sniffing `FANTASY_LOCAL_KV_PATH`. That precision is the whole point:
     every pytest run and every ad-hoc `FANTASY_LOCAL_KV_PATH` also redirects the
     store, and none of those are manual runs -- keying on the env var would refuse
-    reads that are perfectly legitimate. One breadcrumb read, from a local SQLite
-    file the caller's process has already opened.
+    reads that are perfectly legitimate. One breadcrumb read from whatever store
+    `get_kv()` resolves to.
 
-    Never consults a remote store: on Render `get_kv()` IS production Upstash, which
-    is the store `live_rosters` wants, and a manual run refuses to start with
-    `RENDER` set at all -- so the answer there is False without a round trip.
+    ON RENDER TOO. `scripts/publish_manual.py` copies the manual store, stamp
+    included, to production Upstash, so the deployed dashboard serves the same
+    hand-transcribed league the local one does. There the stamp is what turns off
+    the Refresh route (which would run stale-data mode over the transcription) and
+    what points `live_rosters` at the transcribed roster history instead of the
+    last Yahoo `cache:roster`. One Upstash GET per call.
     """
-    from .kv_store import get_kv, is_remote
-
-    if is_remote():
-        return False
-
     from .cache_keys import MANUAL_PROVENANCE_KEY
+    from .kv_store import get_kv
 
     try:
         return get_kv().get(MANUAL_PROVENANCE_KEY) is not None
@@ -149,8 +148,10 @@ def manual_store_active() -> bool:
         # AttributeError out of the probe itself -- a DEFECT in the detection logic,
         # answering "not manual" for a store that is manual, which is exactly how
         # month-stale prod rosters end up spliced into a manual page. That failure
-        # has to be loud. Off Render `get_kv()` is a local SQLite store, so these
-        # two are the fault modes it actually has.
+        # has to be loud. These are a local SQLite store's fault modes. On Render an
+        # Upstash fault is NOT caught: the same outage has already failed every other
+        # read the page makes, and a guess of "not manual" would re-enable a Refresh
+        # that overwrites the transcription.
         log.warning("live_rosters: manual-store check failed; assuming Yahoo mode")
         return False
 

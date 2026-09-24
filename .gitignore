@@ -77,3 +77,6 @@ notebooks/streaks/
 # reports are run artifacts regenerated on every run. Pattern is by extension so
 # a new report type does not have to remember to add itself here.
 data/manual/*.txt
+
+# Prod values saved by scripts/publish_manual.py before it overwrites them.
+data/backups/

@@ -114,14 +114,12 @@ class TestNonManualIsUnchanged:
             ("Juan Soto", "Team 02"),
         }
 
-    def test_remote_process_never_probes_the_store(self, monkeypatch):
-        """On Render `get_kv()` IS prod Upstash -- the mode check must not pay for it."""
+    def test_render_without_a_published_stamp_is_not_manual(self, tmp_path, monkeypatch):
+        """Prod that was never published to reads as Yahoo mode, as before."""
+        prod = kv_store.SqliteKVStore(tmp_path / "prod.db")
         monkeypatch.setenv("RENDER", "true")
+        monkeypatch.setattr(kv_store, "get_kv", lambda: prod)
 
-        def _boom():  # pragma: no cover - the point is that it never runs
-            raise AssertionError("manual_store_active must not call get_kv() on Render")
-
-        monkeypatch.setattr(kv_store, "get_kv", _boom)
         assert manual_store_active() is False
 
 
@@ -180,6 +178,32 @@ class TestManualModeServesManualRosters:
     def test_seeded_manual_store_reads_as_manual(self, local_kv):
         _stamp_manual(local_kv)
         assert manual_store_active() is True
+
+    def test_render_reads_the_stamp_publish_manual_sent_up(self, tmp_path, monkeypatch):
+        """On Render `get_kv()` is prod Upstash, which `publish_manual.py` stamps."""
+        prod = kv_store.SqliteKVStore(tmp_path / "prod.db")
+        _stamp_manual(prod)
+        monkeypatch.setenv("RENDER", "true")
+        monkeypatch.setattr(kv_store, "get_kv", lambda: prod)
+
+        assert manual_store_active() is True
+
+    def test_render_serves_the_published_transcription_not_cache_roster(
+        self, tmp_path, monkeypatch, fake_upstash
+    ):
+        """The deployed trajectory page's ownership must come from the transcribed
+        roster history on prod, not the last Yahoo `cache:roster` beside it."""
+        prod = kv_store.SqliteKVStore(tmp_path / "prod.db")
+        _stamp_manual(prod)
+        _seed_snapshot(prod)
+        monkeypatch.setenv("RENDER", "true")
+        monkeypatch.setattr(kv_store, "get_kv", lambda: prod)
+        client, built = fake_upstash
+
+        spots = live_rosters(MY_TEAM)
+
+        assert not built and client.calls == 0
+        assert ("Juan Soto", "Team 02") in {(s.name, s.team) for s in spots}
 
     def test_ownership_comes_from_the_manual_store_not_prod(self, local_kv, fake_upstash):
         """The By-team keeper view needs all ten teams; refusing left it empty.

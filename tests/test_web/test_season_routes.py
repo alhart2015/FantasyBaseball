@@ -325,6 +325,62 @@ def test_refresh_route_refuses_against_a_manual_store(client, monkeypatch, free_
     started.start.assert_not_called()
 
 
+def test_fetch_ros_route_refuses_against_a_manual_store(client, monkeypatch, free_refresh_slot):
+    """On Render with the manual store published, a ROS fetch would overwrite the
+    ROS the manual refresh computed standings and leverage from."""
+    from fantasy_baseball.web import season_routes
+
+    started = MagicMock()
+    monkeypatch.setattr(season_routes.threading, "Thread", MagicMock(return_value=started))
+    monkeypatch.setattr("fantasy_baseball.data.rosters.manual_store_active", lambda: True)
+
+    resp = client.post("/api/fetch-ros-projections")
+
+    assert resp.status_code == 409
+    assert "run_manual_refresh.py" in resp.get_json()["message"]
+    started.start.assert_not_called()
+
+
+def test_a_manual_store_replaces_the_refresh_button_with_its_dates(client, kv_isolation):
+    """What Render shows once publish_manual.py has stamped prod."""
+    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
+
+    kv_store.get_kv().set(
+        MANUAL_PROVENANCE_KEY,
+        json.dumps(
+            {
+                "seeded": True,
+                "roster_snapshot_date": "2026-09-14",
+                "standings_effective_date": "2026-09-13",
+            }
+        ),
+    )
+
+    html = client.get("/standings").data.decode()
+
+    assert "Hand-entered data" in html
+    assert "Rosters 2026-09-14" in html and "Standings 2026-09-13" in html
+    assert 'id="refresh-btn"' not in html
+
+
+def test_a_yahoo_store_keeps_the_refresh_button(client, kv_isolation):
+    html = client.get("/standings").data.decode()
+
+    assert 'id="refresh-btn"' in html
+    assert "Hand-entered data" not in html
+
+
+def test_a_failed_provenance_read_hides_the_banner_not_the_page(client, monkeypatch):
+    """The banner is display-only; an Upstash blip must not 500 every page."""
+    from fantasy_baseball.web import season_routes
+
+    def _boom():
+        raise ConnectionError("upstash down")
+
+    monkeypatch.setattr(kv_store, "get_kv", _boom)
+    assert season_routes.manual_data_banner() is None
+
+
 def test_refresh_route_still_runs_against_the_yahoo_baseline(
     client, monkeypatch, free_refresh_slot
 ):

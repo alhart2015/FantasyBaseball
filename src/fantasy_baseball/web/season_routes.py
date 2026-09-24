@@ -2,6 +2,7 @@
 
 import dataclasses
 import hmac
+import json
 import logging
 import math
 import os
@@ -596,9 +597,47 @@ def _optimize_one_side(
     return out
 
 
+def manual_data_banner() -> dict[str, str] | None:
+    """What the sidebar says about hand-transcribed data, or None for Yahoo data.
+
+    Reads the store's manual provenance stamp -- on Render, the one
+    ``scripts/publish_manual.py`` sent up -- and returns its two as-of dates. The
+    template shows them in place of the Refresh button, which ``/api/refresh``
+    refuses on a manual store anyway.
+
+    DISPLAY ONLY, so a failed read degrades to "no banner" rather than a 500 on every
+    page. The decision that matters -- whether Refresh may run -- is made again,
+    un-caught, by ``manual_store_active`` inside the route.
+    """
+    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
+    from fantasy_baseball.data.kv_store import get_kv
+
+    try:
+        raw = get_kv().get(MANUAL_PROVENANCE_KEY)
+    except Exception:
+        logger.warning("manual data banner: provenance read failed", exc_info=True)
+        return None
+    if raw is None:
+        return None
+    try:
+        stamp = json.loads(raw)
+    except json.JSONDecodeError:
+        stamp = {}
+    if not isinstance(stamp, dict):
+        stamp = {}
+    return {
+        "rosters": str(stamp.get("roster_snapshot_date") or "?"),
+        "standings": str(stamp.get("standings_effective_date") or "?"),
+    }
+
+
 def register_routes(app: Flask) -> None:
 
     app.before_request(_global_auth_gate)
+
+    @app.context_processor
+    def _inject_manual_data() -> dict[str, Any]:
+        return {"manual_data": manual_data_banner()}
 
     @app.route("/")
     def index():
@@ -2378,5 +2417,26 @@ def register_routes(app: Flask) -> None:
         Gates on the shared refresh slot: this fetch and a full refresh both
         sync game logs and write the same cache keys, so they must not run
         concurrently. The worker releases the slot when it finishes.
+
+        Refused on a manual store, like ``/api/refresh``: the blend lands in
+        ``cache:ros_projections``, replacing the ROS the published manual refresh
+        computed everything else from, and the next publish would put it back.
+        ``scripts/ingest_ros_export.py`` stages ROS for ``run_manual_refresh.py``.
         """
+        from fantasy_baseball.data.rosters import manual_store_active
+
+        if manual_store_active():
+            return jsonify(
+                {
+                    "error": "manual store",
+                    "message": (
+                        "ROS fetch is disabled against the hand-transcribed store: it "
+                        "would overwrite the ROS the manual refresh used. Stage ROS with "
+                        "'python scripts/ingest_ros_export.py', then run "
+                        "'python scripts/run_manual_refresh.py' and "
+                        "'python scripts/publish_manual.py'."
+                    ),
+                }
+            ), 409
+
         return _job_status_response(_spawn_guarded_refresh_job(_run_rest_of_season_fetch))

@@ -77,7 +77,7 @@
                         No data yet
                     {% endif %}
                 </div>
-                <button class="btn-refresh" id="refresh-btn" onclick="startRefresh()">Refresh Data</button>
+                {% if manual_data %}<div class="manual-data-note" title="Published from the hand-transcribed store. Update it with run_manual_refresh.py, then publish_manual.py.">Hand-entered data<br>Rosters {{ manual_data.rosters }} &middot; Standings {{ manual_data.standings }}</div>{% else %}<button class="btn-refresh" id="refresh-btn" onclick="startRefresh()">Refresh Data</button>{% endif %}
                 <div id="refresh-progress" style="display: none; font-size: 11px; color: var(--accent); margin-top: 6px;"></div>
                 <a href="{{ url_for('logout') }}" style="display: block; margin-top: 8px; font-size: 11px; color: var(--text-secondary); text-decoration: none;">Logout</a>
             </div>

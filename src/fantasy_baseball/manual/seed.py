@@ -237,7 +237,8 @@ def stamp_provenance(client: KVStore, kv_path: str, **extra: object) -> None:
         "note": (
             "weekly_rosters_history, standings_history and cache:standings in this "
             "store come from hand-transcribed YAML under data/manual/, NOT from the "
-            "Yahoo API. Do not sync this store anywhere."
+            "Yahoo API. Publish it to production only with scripts/publish_manual.py; "
+            "never run a remote->local sync into it."
         ),
     }
     blob.update(extra)

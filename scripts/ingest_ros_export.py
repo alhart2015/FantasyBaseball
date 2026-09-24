@@ -74,6 +74,14 @@ def _push_to_prod(season_year: int, systems: list[str]) -> None:
         )
 
 
+def _prod_is_manual() -> bool:
+    """True when prod Upstash carries the manual store's provenance stamp."""
+    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
+    from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
+
+    return build_explicit_upstash_kv().get(MANUAL_PROVENANCE_KEY) is not None
+
+
 def main() -> int:
     from fantasy_baseball.config import load_config
     from fantasy_baseball.data.ros_export_ingest import run_guided_ingest
@@ -125,6 +133,17 @@ def main() -> int:
         print(f"Skipped: {', '.join(sorted(result.skipped_systems))}")
     if args.no_push:
         print("--no-push set; staged only, prod unchanged.")
+        return 0
+    if _prod_is_manual():
+        # Prod holds the published manual store. Pushing a blend there, then running
+        # refresh_remote (which refuses on the same stamp), would leave prod's ROS at
+        # a different vintage from everything around it -- and the next publish would
+        # overwrite it anyway. The manual refresh is what blends the staged export.
+        print(
+            "Prod holds the published manual store, so this is staged only (as with "
+            "--no-push).\nNext: python scripts/run_manual_refresh.py, then "
+            "python scripts/publish_manual.py."
+        )
         return 0
 
     _push_to_prod(season, complete)
