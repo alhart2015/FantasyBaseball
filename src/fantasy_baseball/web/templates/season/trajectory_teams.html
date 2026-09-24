@@ -25,17 +25,6 @@
 {% set team_names = board.blocks | map(attribute='team') | list %}
 {{ ctl.controls(cur, board.end_years, team_names, true) }}
 
-{#- THE SAME VINTAGE DISCLOSURE THE LEAGUE BOARD PRINTS, and needed harder here: this
-    is a bookmarkable, shareable URL that a trade conversation starts from, so a page
-    with no staleness signal invites acting on numbers that may be weeks old. -#}
-<p class="muted trajectory-vintage">
-  Start year is locked at {{ board.base_season + 1 }}.
-  {{ ctl.vintage_note(board) }}
-  Every row is counted in its block's total, so a block can be ordered above its
-  neighbour on thinly-supported estimates -- <a href="{{ ctl.board_url(cur, detail='1') }}">the
-  <strong>supp</strong> column</a> is what says which those are.
-</p>
-
 {% if board.mine_missing %}
 <p class="muted"><strong>None of these blocks is marked as yours</strong> -- the page could
 not match your team name to any roster it read, so no block is highlighted. That is a
