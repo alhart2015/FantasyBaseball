@@ -106,3 +106,36 @@ def test_the_guard_does_not_create_the_store_it_is_asking_about(monkeypatch, tmp
     assert refresh_remote._sync_destination_refusal() is not None
     assert not manual.exists()
     assert not manual.parent.exists()
+
+
+# ---------------------------------------------------------------------------
+# Prod holding the published manual store
+# ---------------------------------------------------------------------------
+
+
+def test_refuses_over_published_manual_data():
+    msg = refresh_remote.prod_manual_refusal('{"seeded": true}', end_manual=False, skip_yahoo=False)
+
+    assert msg is not None
+    assert "publish_manual.py" in msg
+    assert "--end-manual" in msg
+    assert "Nothing has run yet" in msg
+
+
+def test_skip_yahoo_is_refused_over_manual_data_too():
+    """Stale-data mode recomputes on top of the transcription -- the 409's reason."""
+    assert refresh_remote.prod_manual_refusal("{}", end_manual=False, skip_yahoo=True) is not None
+
+
+def test_end_manual_lets_a_real_refresh_through():
+    assert refresh_remote.prod_manual_refusal("{}", end_manual=True, skip_yahoo=False) is None
+
+
+def test_end_manual_needs_yahoo():
+    msg = refresh_remote.prod_manual_refusal("{}", end_manual=True, skip_yahoo=True)
+    assert msg is not None and "--skip-yahoo" in msg
+
+
+def test_a_yahoo_mode_prod_is_unaffected():
+    assert refresh_remote.prod_manual_refusal(None, end_manual=False, skip_yahoo=False) is None
+    assert refresh_remote.prod_manual_refusal(None, end_manual=False, skip_yahoo=True) is None

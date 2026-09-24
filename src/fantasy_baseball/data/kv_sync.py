@@ -1,9 +1,12 @@
-"""Copy the remote Upstash KV down to the local SQLite KV.
+"""Copy KV state across the local <-> remote boundary.
 
-Use this to pull a fresh snapshot of production state for offline work
-(dashboards, scripts, debugging). It is the ONLY path (besides
-``scripts/refresh_remote.py``) that crosses the local↔remote boundary,
-and it only does so in the safe direction: remote → local.
+``sync_remote_to_local`` pulls a fresh snapshot of production state down for
+offline work (dashboards, scripts, debugging). It wipes its destination.
+
+``publish_local_to_remote`` goes the other way, for the manual pipeline: while
+Yahoo access is gone the hand-transcribed store (``data/manual.db``) IS the
+league state, and publishing it is how Render shows it. It never deletes a
+remote key and it writes only what differs -- see its docstring.
 
 Design:
 
@@ -23,9 +26,11 @@ from __future__ import annotations
 
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY, CacheKey, redis_key
 from fantasy_baseball.data.kv_store import (
     _DEFAULT_LOCAL_DB,
     LOCAL_KV_PATH_ENV,
@@ -37,6 +42,7 @@ from fantasy_baseball.data.kv_store import (
 )
 from fantasy_baseball.data.redis_store import (
     PROJECTED_STANDINGS_HISTORY_KEY,
+    REFRESH_LOCK_KEY,
     ROS_PROJECTION_HISTORY_KEY,
     STANDINGS_HISTORY_KEY,
     WEEKLY_ROSTERS_HISTORY_KEY,
@@ -264,3 +270,165 @@ def _wipe_sqlite(store: SqliteKVStore) -> None:
     """
     with store._lock:
         store._conn.executescript("DELETE FROM kv; DELETE FROM hash_kv;")
+
+
+#: String keys a publish never sends. Each is owned by something other than the
+#: store being published:
+#:
+#: - ``refresh:lock`` is a live mutex. Copying one up would block every refresh
+#:   until its TTL ran out -- and the copy would carry no TTL at all.
+#: - The two trajectory blobs are written straight to prod by
+#:   ``scripts/push_trajectory_board.py``, on their own schedule. The local copy is
+#:   whatever that script last wrote with ``--local``, so publishing it could
+#:   replace a newer prod board with an older one.
+_PUBLISH_EXCLUDED_KEYS: frozenset[str] = frozenset(
+    {
+        REFRESH_LOCK_KEY,
+        redis_key(CacheKey.TRAJECTORY_BOARD),
+        redis_key(CacheKey.TRAJECTORY_CHART_DATA),
+    }
+)
+
+#: Key prefixes a publish never sends. Job logs are written with a TTL, which
+#: ``KVStore.set`` cannot read back, so a copy would live forever on the remote.
+#: Each environment keeps its own run history.
+_PUBLISH_EXCLUDED_PREFIXES: tuple[str, ...] = ("job_log:",)
+
+#: Written LAST, so a publish that dies part-way leaves the page's "Last refresh"
+#: on the previous publish rather than claiming a vintage it only half-delivered.
+_PUBLISH_LAST: str = redis_key(CacheKey.META)
+
+
+@dataclass(frozen=True)
+class PublishStats:
+    """What a publish sent, and what it would have overwritten.
+
+    ``previous`` holds the remote's value for every key and hash field the
+    publish CHANGED (None where the remote had nothing), so the caller can save
+    it before writing -- the remote carries no history of its own.
+    """
+
+    strings_changed: int
+    strings_unchanged: int
+    strings_excluded: int
+    hash_fields_changed: int
+    hash_fields_unchanged: int
+    remote_only_keys: int
+    bytes_sent: int
+    previous: dict[str, str | None]
+    previous_hash_fields: dict[str, dict[str, str | None]]
+
+    def summary(self) -> str:
+        return (
+            f"{self.strings_changed} keys changed ({self.strings_unchanged} unchanged, "
+            f"{self.strings_excluded} excluded), {self.hash_fields_changed} hash fields "
+            f"changed ({self.hash_fields_unchanged} unchanged), "
+            f"{self.bytes_sent / 1e6:.1f} MB; {self.remote_only_keys} remote-only keys left alone"
+        )
+
+
+def _publishable(key: str) -> bool:
+    return key not in _PUBLISH_EXCLUDED_KEYS and not key.startswith(_PUBLISH_EXCLUDED_PREFIXES)
+
+
+def publish_local_to_remote(
+    *,
+    local: KVStore,
+    remote: KVStore,
+    dry_run: bool = False,
+    before_write: Callable[[PublishStats], None] | None = None,
+) -> PublishStats:
+    """Make ``remote`` match ``local`` for every key ``local`` holds.
+
+    For the manual pipeline, whose store is the only league state there is while
+    Yahoo access is gone. Three rules, each for a reason:
+
+    - **Upsert, never delete.** A key only the remote holds stays. Nothing about
+      the local store's silence on a key is evidence the remote copy is wrong, and
+      a delete is the one write the saved ``previous`` values could not undo.
+    - **Only what differs is written.** Values are compared with the remote's
+      first, so a publish after a small manual refresh sends a few MB, not the
+      whole store -- and the stats say how much actually moved.
+    - **The provenance stamp goes first and ``cache:meta`` last.** The stamp is
+      what disables the Render refresh button (see ``manual_store_active``), so it
+      must be in place before any hand-typed value lands; ``cache:meta`` is what
+      the page prints as "Last refresh", so it moves only once everything else has.
+
+    ``dry_run`` does every read and the whole comparison, then writes nothing.
+    ``before_write`` is called with the finished comparison after the reads and
+    before the first write -- the one moment ``previous`` is both known and still
+    true of the remote. An exception from it aborts the publish with nothing sent.
+    """
+    local_keys = sorted(k for k in local.keys("*") if k not in _HASH_KEYS)
+    wanted = [k for k in local_keys if _publishable(k)]
+    excluded = len(local_keys) - len(wanted)
+
+    local_values: dict[str, str | None] = {}
+    remote_values: dict[str, str | None] = {}
+    for start in range(0, len(wanted), _MGET_CHUNK):
+        chunk = wanted[start : start + _MGET_CHUNK]
+        local_values.update(zip(chunk, _mget_chunked(local, chunk), strict=True))
+        remote_values.update(zip(chunk, _mget_chunked(remote, chunk), strict=True))
+
+    changed = [
+        k for k in wanted if local_values[k] is not None and local_values[k] != remote_values[k]
+    ]
+    # Stamp first, meta last; everything else in between, in key order.
+    changed.sort(key=lambda k: (k != MANUAL_PROVENANCE_KEY, k == _PUBLISH_LAST, k))
+
+    hash_changes: dict[str, dict[str, str]] = {}
+    previous_hash_fields: dict[str, dict[str, str | None]] = {}
+    hash_unchanged = 0
+    for hash_name in sorted(_HASH_KEYS):
+        mine = local.hgetall(hash_name)
+        if not mine:
+            continue
+        theirs = remote.hgetall(hash_name)
+        diff = {f: v for f, v in mine.items() if theirs.get(f) != v}
+        hash_unchanged += len(mine) - len(diff)
+        if diff:
+            hash_changes[hash_name] = diff
+            previous_hash_fields[hash_name] = {f: theirs.get(f) for f in diff}
+
+    wanted_set = set(wanted)
+    remote_only = sum(
+        1
+        for k in remote.keys("*")
+        if k not in _HASH_KEYS and _publishable(k) and k not in wanted_set
+    )
+    bytes_sent = sum(len(local_values[k] or "") for k in changed) + sum(
+        len(v) for diff in hash_changes.values() for v in diff.values()
+    )
+    stats = PublishStats(
+        strings_changed=len(changed),
+        strings_unchanged=len(wanted) - len(changed),
+        strings_excluded=excluded,
+        hash_fields_changed=sum(len(d) for d in hash_changes.values()),
+        hash_fields_unchanged=hash_unchanged,
+        remote_only_keys=remote_only,
+        bytes_sent=bytes_sent,
+        previous={k: remote_values[k] for k in changed},
+        previous_hash_fields=previous_hash_fields,
+    )
+    if dry_run:
+        return stats
+    if before_write is not None:
+        before_write(stats)
+
+    # Strings before hashes, except that the meta write is held until the very end.
+    for key in changed:
+        if key == _PUBLISH_LAST:
+            continue
+        value = local_values[key]
+        assert value is not None  # filtered above; narrows for the type checker
+        remote.set(key, value)
+    for hash_name, diff in hash_changes.items():
+        for field, value in diff.items():
+            remote.hset(hash_name, field, value)
+    if _PUBLISH_LAST in changed:
+        meta = local_values[_PUBLISH_LAST]
+        assert meta is not None
+        remote.set(_PUBLISH_LAST, meta)
+
+    logger.info("publish_local_to_remote complete: %s", stats.summary())
+    return stats

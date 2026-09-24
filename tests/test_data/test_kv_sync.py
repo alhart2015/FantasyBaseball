@@ -11,12 +11,15 @@ from __future__ import annotations
 import pytest
 
 from fantasy_baseball.data import kv_store
+from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY, CacheKey, redis_key
 from fantasy_baseball.data.kv_store import SqliteKVStore
 from fantasy_baseball.data.kv_sync import (
     SyncStats,
+    publish_local_to_remote,
     sync_remote_to_local,
 )
 from fantasy_baseball.data.redis_store import (
+    REFRESH_LOCK_KEY,
     STANDINGS_HISTORY_KEY,
     WEEKLY_ROSTERS_HISTORY_KEY,
 )
@@ -230,3 +233,145 @@ def test_sync_replicates_projected_standings_history(monkeypatch, tmp_path):
         local.hget(redis_store.PROJECTED_STANDINGS_HISTORY_KEY, "2026-04-15")
         == '{"effective_date": "2026-04-15", "teams": []}'
     )
+
+
+# ---------------------------------------------------------------------------
+# publish_local_to_remote -- the manual store going UP to prod
+# ---------------------------------------------------------------------------
+
+META = redis_key(CacheKey.META)
+
+
+class _RecordingKV(_CountingKV):
+    """Records every write, in order, so the write ORDER can be pinned."""
+
+    def __init__(self, inner):
+        super().__init__(inner)
+        self.writes: list[str] = []
+
+    def set(self, key, value, *, ex=None):
+        self.writes.append(key)
+        return super().set(key, value, ex=ex)
+
+    def hset(self, hash_name, field, value):
+        self.writes.append(f"{hash_name}#{field}")
+        return super().hset(hash_name, field, value)
+
+
+def test_publish_copies_what_differs_and_skips_what_matches(local_kv, remote_kv):
+    local_kv.set("cache:standings", "new")
+    local_kv.set("positions", "same")
+    remote_kv.set("cache:standings", "old")
+    remote_kv.set("positions", "same")
+
+    spy = _RecordingKV(remote_kv)
+    stats = publish_local_to_remote(local=local_kv, remote=spy)
+
+    assert remote_kv.get("cache:standings") == "new"
+    assert spy.writes == ["cache:standings"], "an unchanged value must not be re-sent"
+    assert (stats.strings_changed, stats.strings_unchanged) == (1, 1)
+    assert stats.previous == {"cache:standings": "old"}
+
+
+def test_publish_never_deletes_a_remote_only_key(local_kv, remote_kv):
+    local_kv.set("cache:standings", "new")
+    remote_kv.set("cache:only_on_prod", "keep me")
+
+    stats = publish_local_to_remote(local=local_kv, remote=remote_kv)
+
+    assert remote_kv.get("cache:only_on_prod") == "keep me"
+    assert stats.remote_only_keys == 1
+
+
+def test_publish_excludes_the_lock_job_logs_and_trajectory_blobs(local_kv, remote_kv):
+    """Each excluded key is owned elsewhere: a live mutex, TTL'd logs, an offline push."""
+    for key in (
+        REFRESH_LOCK_KEY,
+        "job_log:manual:2026-09-14:1",
+        redis_key(CacheKey.TRAJECTORY_BOARD),
+        redis_key(CacheKey.TRAJECTORY_CHART_DATA),
+    ):
+        local_kv.set(key, "local")
+    remote_kv.set(redis_key(CacheKey.TRAJECTORY_BOARD), "newer prod board")
+
+    stats = publish_local_to_remote(local=local_kv, remote=remote_kv)
+
+    assert remote_kv.get(REFRESH_LOCK_KEY) is None
+    assert remote_kv.get("job_log:manual:2026-09-14:1") is None
+    assert remote_kv.get(redis_key(CacheKey.TRAJECTORY_BOARD)) == "newer prod board"
+    assert remote_kv.get(redis_key(CacheKey.TRAJECTORY_CHART_DATA)) is None
+    assert stats.strings_excluded == 4
+    assert stats.strings_changed == 0
+
+
+def test_publish_sends_the_stamp_first_and_meta_last(local_kv, remote_kv):
+    """The stamp disables Render's Refresh before any hand-typed value lands; meta
+    (the page's "Last refresh") moves only once everything else has."""
+    local_kv.set("cache:aaa", "1")
+    local_kv.set(META, "meta")
+    local_kv.set("cache:zzz", "2")
+    local_kv.set(MANUAL_PROVENANCE_KEY, '{"seeded": true}')
+    local_kv.hset(WEEKLY_ROSTERS_HISTORY_KEY, "2026-09-14", "[]")
+
+    spy = _RecordingKV(remote_kv)
+    publish_local_to_remote(local=local_kv, remote=spy)
+
+    assert spy.writes[0] == MANUAL_PROVENANCE_KEY
+    assert spy.writes[-1] == META
+    assert f"{WEEKLY_ROSTERS_HISTORY_KEY}#2026-09-14" in spy.writes
+
+
+def test_publish_diffs_hashes_field_by_field(local_kv, remote_kv):
+    local_kv.hset(STANDINGS_HISTORY_KEY, "2026-09-07", "same")
+    local_kv.hset(STANDINGS_HISTORY_KEY, "2026-09-14", "new")
+    remote_kv.hset(STANDINGS_HISTORY_KEY, "2026-09-07", "same")
+    remote_kv.hset(STANDINGS_HISTORY_KEY, "2026-08-01", "prod only")
+
+    spy = _RecordingKV(remote_kv)
+    stats = publish_local_to_remote(local=local_kv, remote=spy)
+
+    assert spy.writes == [f"{STANDINGS_HISTORY_KEY}#2026-09-14"]
+    assert remote_kv.hget(STANDINGS_HISTORY_KEY, "2026-08-01") == "prod only"
+    assert (stats.hash_fields_changed, stats.hash_fields_unchanged) == (1, 1)
+    assert stats.previous_hash_fields == {STANDINGS_HISTORY_KEY: {"2026-09-14": None}}
+
+
+def test_publish_dry_run_writes_nothing(local_kv, remote_kv):
+    local_kv.set("cache:standings", "new")
+    local_kv.hset(STANDINGS_HISTORY_KEY, "2026-09-14", "new")
+    spy = _RecordingKV(remote_kv)
+
+    stats = publish_local_to_remote(local=local_kv, remote=spy, dry_run=True)
+
+    assert spy.writes == []
+    assert stats.strings_changed == 1 and stats.hash_fields_changed == 1
+
+
+def test_publish_hook_runs_before_the_first_write_and_can_abort(local_kv, remote_kv):
+    """The backup hook is the last moment `previous` is still true of the remote."""
+    local_kv.set("cache:standings", "new")
+    remote_kv.set("cache:standings", "old")
+    spy = _RecordingKV(remote_kv)
+    seen: list[dict] = []
+
+    def _hook(stats):
+        seen.append(dict(stats.previous))
+        assert spy.writes == []
+        raise OSError("disk full")
+
+    with pytest.raises(OSError):
+        publish_local_to_remote(local=local_kv, remote=spy, before_write=_hook)
+
+    assert seen == [{"cache:standings": "old"}]
+    assert remote_kv.get("cache:standings") == "old", "a failed backup must send nothing"
+
+
+def test_publish_reads_in_batches(local_kv, remote_kv):
+    for i in range(120):
+        local_kv.set(f"cache:k{i}", str(i))
+    spy = _CountingKV(remote_kv)
+
+    publish_local_to_remote(local=local_kv, remote=spy)
+
+    assert spy.get_calls == 0
+    assert spy.mget_calls <= 5

@@ -17,6 +17,14 @@ Steps:
 
 Upstash credentials must be in the environment or ``.env`` -- the
 dotenv loader in ``kv_store`` picks them up automatically.
+
+MANUAL MODE. While Yahoo access is gone, prod holds the hand-transcribed store
+that ``scripts/publish_manual.py`` sends up, marked by its provenance stamp. This
+script refuses to run over it: a Yahoo refresh cannot reach Yahoo, and
+``--skip-yahoo`` would recompute stale-data mode on top of the transcription.
+Update prod with ``run_manual_refresh.py`` + ``publish_manual.py`` instead. When
+Yahoo is back, ``--end-manual`` runs a real refresh and, only once it completes,
+removes the stamp -- the sync-back then carries that down to ``data/local.db``.
 """
 
 import argparse
@@ -66,6 +74,35 @@ def _sync_destination_refusal() -> str | None:
     )
 
 
+def prod_manual_refusal(stamp_raw: str | None, *, end_manual: bool, skip_yahoo: bool) -> str | None:
+    """Refusal text when prod's manual stamp rules this run out, else None.
+
+    ``stamp_raw`` is prod's ``MANUAL_PROVENANCE_KEY`` value, None when prod is not
+    manual. Pure, so the decision is testable without Upstash.
+    """
+    if end_manual and skip_yahoo:
+        return (
+            "--end-manual needs a REAL Yahoo refresh to replace the transcription; "
+            "--skip-yahoo would only recompute on top of it. Drop --skip-yahoo."
+        )
+    if stamp_raw is None or end_manual:
+        return None
+    return "\n".join(
+        [
+            "",
+            "REFUSING: production Upstash holds the hand-transcribed manual store",
+            "(published by scripts/publish_manual.py). A refresh here would run over it:",
+            "the Yahoo path cannot reach Yahoo, and --skip-yahoo recomputes stale-data",
+            "mode on top of the transcription.",
+            "",
+            "To update prod:        python scripts/run_manual_refresh.py",
+            "                       python scripts/publish_manual.py",
+            "When Yahoo is back:    python scripts/refresh_remote.py --end-manual",
+            "Nothing has run yet.",
+        ]
+    )
+
+
 def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument(
@@ -79,6 +116,14 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "auth is broken. Equivalent to FB_SKIP_YAHOO=1."
         ),
     )
+    parser.add_argument(
+        "--end-manual",
+        action="store_true",
+        help=(
+            "Yahoo is back: run a real refresh over the published manual data and, "
+            "once it completes, remove prod's manual stamp so Render leaves manual mode."
+        ),
+    )
     return parser.parse_args(argv)
 
 
@@ -90,14 +135,23 @@ def main(argv: list[str] | None = None) -> int:
         print(refusal)
         return RC_REFUSED
 
+    from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY
+    from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
+
+    prod = build_explicit_upstash_kv()
+    stamp = prod.get(MANUAL_PROVENANCE_KEY)
+    refusal = prod_manual_refusal(stamp, end_manual=args.end_manual, skip_yahoo=args.skip_yahoo)
+    if refusal is not None:
+        print(refusal)
+        return RC_REFUSED
+
     # Must flip the gate BEFORE importing the pipeline: import-time
     # module state (e.g. cached singletons) reads RENDER once.
     os.environ["RENDER"] = "true"
 
     from fantasy_baseball.data import kv_store
-    from fantasy_baseball.data.kv_store import build_explicit_upstash_kv
     from fantasy_baseball.data.kv_sync import sync_remote_to_local
-    from fantasy_baseball.web.refresh_pipeline import run_full_refresh
+    from fantasy_baseball.web.refresh_pipeline import RefreshRun
 
     # In case anything has already cached a local singleton during
     # import, clear it so the first post-flip get_kv() rebuilds as
@@ -109,8 +163,19 @@ def main(argv: list[str] | None = None) -> int:
     else:
         print("Running refresh against remote Upstash...")
     # Pass None when the flag is absent so FB_SKIP_YAHOO still applies.
-    run_full_refresh(skip_yahoo=True if args.skip_yahoo else None)
+    run = RefreshRun(skip_yahoo=True if args.skip_yahoo else None)
+    run.run()
+    if not run.completed:
+        # `run()` returns without running anything when another refresh holds the
+        # lock, so "it returned" is not "it ran".
+        print("Refresh did not run: another refresh holds the lock. Nothing changed.")
+        return 1
     print("Refresh complete.")
+    if args.end_manual and stamp is not None:
+        # Only after a COMPLETED Yahoo refresh: a failure above raises past this
+        # line and prod stays in manual mode, which is the safe side.
+        prod.delete(MANUAL_PROVENANCE_KEY)
+        print("Removed prod's manual stamp: Render is back in Yahoo mode.")
 
     # Archive a trimmed snapshot of the ROS projection vintage this refresh
     # used, so the in-season playing-time residual can be calibrated later

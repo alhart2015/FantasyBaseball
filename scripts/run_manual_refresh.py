@@ -1348,6 +1348,9 @@ def main(argv: list[str] | None = None) -> int:
         return rc
 
     report_rc = _render_report(args, config, standings, rosters, kv_path)
+    if report_rc == RC_OK:
+        print("")
+        print("  Next, to show this on Render: python scripts/publish_manual.py")
     if report_rc != RC_OK or not args.with_keeper_board:
         return report_rc
 
