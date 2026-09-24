@@ -3559,6 +3559,21 @@ def test_trajectory_chart_js_filters_the_internal_p10_series_from_tooltips_too()
     assert 'item.dataset.label !== "_p10"' in src
 
 
+def test_trajectory_chart_js_joins_the_forward_series_to_the_current_point():
+    """No empty year between now and the projection: the dashed mean and both band
+    edges are led from the career line's last point, each comp from his own value at
+    the match age, and the lead point stays out of the tooltip."""
+    src = _trajectory_chart_js_source()
+    for series in (
+        'lead(at(data.projection, "mean"))',
+        'lead(at(data.projection, "p90"))',
+        'lead(at(data.projection, "p10"))',
+    ):
+        assert series in src, f"{series} must start at the current point"
+    assert "compLead(c, " in src, "comps are led from their own match-age value"
+    assert "!isLead(item)" in src, "the join point is not a second tooltip row"
+
+
 def test_the_player_page_gives_every_comp_its_own_canvas(client):
     """A comp stacked on the subject's chart shows a forward path and nothing else.
     Each one gets its own card so his whole arc is readable, with the match age marked."""
