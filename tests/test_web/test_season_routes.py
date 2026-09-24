@@ -2322,8 +2322,6 @@ def test_trajectory_page_renders_a_board(client):
         detailed = client.get("/trajectory?end=2028&detail=1").data
     assert resp.status_code == 200
     assert b"Testy McTestface" in resp.data
-    # The vintage is load-bearing: this board does not move with a dashboard refresh.
-    assert b"2026-08-04T09:00:00" in resp.data
     # Per-year columns appear once the range spans more than one season.
     # PROBABILITIES ARE THE DEFAULT COLUMNS now; the per-year projection is behind
     # ?detail=1. Both halves asserted, because "the year columns are gone" and "the
@@ -3626,13 +3624,15 @@ def test_the_trajectory_pages_do_not_explain_how_to_read_themselves(client):
 
     # The kept half. These are facts about the build and the roster join, not
     # instructions for reading a chart.
-    for page in (player, league, teams):
+    for page in (player, teams):
         assert "2026-08-07T09:00:00" in page, "the vintage disclosure survives"
     assert "Of everyone you could hold" in league
     assert "strongest team first" in teams
-    # Each page's own header sentence survives the deletion of the explainer that
-    # followed it -- the clause went, the paragraph did not.
-    assert "Start year is locked" in league and "Start year is locked" in teams
+    assert "Start year is locked" in teams
+    # The league board's vintage paragraph (counts, exclusions, start year, build
+    # stamp) was removed at the user's request; the teams and player views keep theirs.
+    assert "2026-08-07T09:00:00" not in league
+    assert "Start year is locked" not in league
 
 
 def test_the_player_page_ships_the_anchor_point_to_the_chart(client):
