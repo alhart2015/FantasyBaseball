@@ -2669,16 +2669,11 @@ def test_trajectory_teams_view_renders_a_block_for_every_team_including_empty_on
     assert "0 of 0 scored" not in body, "no summary clause for a team with nothing scored"
 
 
-def test_trajectory_teams_view_discloses_its_vintage(client):
-    """`?view=teams` is a bookmarkable, shareable URL that a trade conversation starts
-    from, and the board does NOT move with a dashboard refresh -- it is as fresh as the
-    last offline push. The league board says so; this view rendered none of the three
-    vintage fields `meta` carries, so it gave no signal the numbers may be weeks old.
-
-    FOUR fields since #348: the base season is anchored on a rest-of-season projection,
-    so which snapshot supplied it dates the board as surely as the panel does -- the two
-    move independently and a re-push can refresh either one alone.
-    """
+def test_trajectory_teams_view_prints_no_vintage_paragraph(client):
+    """The teams view's vintage paragraph (start year, build stamp, panels, snapshot,
+    staleness note, supp pointer) was removed at the user's request, as the league
+    board's was. The player view keeps the disclosure behind its collapsed "Built"
+    line -- see `test_trajectory_player_view_discloses_its_vintage`."""
     payload = dict(
         _trajectory_payload(),
         generated_at="2026-08-07T09:00:00",
@@ -2697,11 +2692,10 @@ def test_trajectory_teams_view_discloses_its_vintage(client):
     assert resp.status_code == 200
     body = resp.data.decode()
 
-    assert "2026-08-07T09:00:00" in body, "the build timestamp"
-    assert "h.csv / p.csv" in body, "the panels it was fitted on"
-    assert "2026-07-21 rest-of-season projection" in body, "the snapshot it is anchored on"
-    assert "70% played" in body, "how much of the base season is record rather than forecast"
-    assert "does not refresh with the dashboard" in body
+    assert "strongest team first" in body, "the teams view itself rendered"
+    assert "Start year is locked" not in body
+    assert "does not refresh with the dashboard" not in body
+    assert "h.csv / p.csv" not in body
 
 
 def test_a_board_with_no_ros_snapshot_does_not_claim_it_was_anchored(client):
@@ -2716,23 +2710,18 @@ def test_a_board_with_no_ros_snapshot_does_not_claim_it_was_anchored(client):
     The anchoring sentence was gated on `season_elapsed`, which both of those carry.
     It has to be gated on the snapshot that actually supplied the remainder.
     """
-    payload = dict(
-        _trajectory_payload(),
-        generated_at="2026-08-07T09:00:00",
-        season_elapsed=0.7,
-        panel_vintage={"hitter": "h.csv", "pitcher": "p.csv"},
-    )
-    payload.pop("ros_snapshot")
-    with (
-        patch("fantasy_baseball.web.season_routes.read_cache_dict", return_value=payload),
-        patch(
-            "fantasy_baseball.data.rosters.live_rosters",
-            return_value=_trajectory_spots(),
-        ),
-    ):
-        resp = client.get("/trajectory?view=teams")
+    # The PLAYER view: it is the one page still printing `vintage_note` since the league
+    # and teams paragraphs were removed (user request).
+    board, chart = _trajectory_board_and_chart()
+    board["season_elapsed"] = 0.7
+    board.pop("ros_snapshot", None)
+    board["generated_at"] = "2026-08-07T09:00:00-no-snapshot"  # do not share the parse cache
+    chart["generated_at"] = board["generated_at"]
+    with _trajectory_cache(board, chart):
+        resp = client.get("/trajectory?view=player&player=Testy+McTestface")
     body = resp.data.decode()
 
+    assert "Built 2026-08-07T09:00:00-no-snapshot" in body, "the note actually rendered"
     assert "70%" in body, "the elapsed fraction is still a fact about this board"
     assert "rest-of-season projection" not in body, "no snapshot supplied a remainder"
     assert "what each player has done plus what the projection gives him" not in body, (
@@ -2771,8 +2760,11 @@ def test_trajectory_teams_view_shows_per_row_support_not_a_glyph(client):
             return_value=_trajectory_spots(),
         ),
     ):
-        teams = client.get("/trajectory?view=teams").data.decode()
-        board = client.get("/trajectory?view=board").data.decode()
+        # `detail=1` on both: the support column lives in the detail view. The teams
+        # view's default render used to satisfy "supp" only through a prose link to
+        # that column, which went with the vintage paragraph (user request).
+        teams = client.get("/trajectory?view=teams&detail=1").data.decode()
+        board = client.get("/trajectory?view=board&detail=1").data.decode()
 
     # BARE SUBSTRINGS ARE RIGHT HERE, where they were wrong before. The old assertion had
     # to match `>(!)</span>` because the prose beside the glyph contained `(!)` too, so a
@@ -3255,8 +3247,9 @@ def test_trajectory_player_view_sgp_scale_keeps_a_plain_label(client):
 
 
 def test_trajectory_player_view_discloses_its_vintage(client):
-    """Sibling templates (trajectory.html, trajectory_teams.html) both print the build
-    vintage; this one printed none (#324 F3).
+    """This view printed no build vintage while its siblings did (#324 F3). The league
+    and teams paragraphs have since been removed at the user's request, so this collapsed
+    note is now the one place the vintage is disclosed.
 
     It also used to print a sentence explaining why the solid line stopped a year
     before the dashed one started. #346 closed that gap by drawing the base season
@@ -3639,15 +3632,14 @@ def test_the_trajectory_pages_do_not_explain_how_to_read_themselves(client):
 
     # The kept half. These are facts about the build and the roster join, not
     # instructions for reading a chart.
-    for page in (player, teams):
-        assert "2026-08-07T09:00:00" in page, "the vintage disclosure survives"
+    assert "2026-08-07T09:00:00" in player, "the player view's vintage disclosure survives"
     assert "Of everyone you could hold" in league
     assert "strongest team first" in teams
-    assert "Start year is locked" in teams
-    # The league board's vintage paragraph (counts, exclusions, start year, build
-    # stamp) was removed at the user's request; the teams and player views keep theirs.
-    assert "2026-08-07T09:00:00" not in league
-    assert "Start year is locked" not in league
+    # The league and teams vintage paragraphs (counts, exclusions, start year, build
+    # stamp) were removed at the user's request; the player view keeps its note.
+    for page in (league, teams):
+        assert "2026-08-07T09:00:00" not in page
+        assert "Start year is locked" not in page
 
 
 def test_the_player_page_ships_the_anchor_point_to_the_chart(client):
