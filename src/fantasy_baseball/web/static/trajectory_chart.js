@@ -43,6 +43,25 @@
   ];
   // ...and where it is going. This is what a comp card compares its arc against.
   const subject = [...career, ...at(data.projection, "mean")];
+
+  // NO GAP BETWEEN NOW AND NEXT YEAR. Every forward series starts one age past the
+  // career line's last point, so drawn as-is the chart had an empty year between what
+  // happened and what is projected. The projection and both band edges are led from
+  // that last point (the anchored base season when there is one), so the dashed line
+  // and the band fan out of the player's current value. The lead point is a join, not
+  // a projection: it gets no marker of its own and is kept out of the tooltip.
+  const join = career.length ? career[career.length - 1] : null;
+  const lead = (pts) => (join ? [{ x: join.x, y: join.y }, ...pts] : pts);
+  const isLead = (item) =>
+    join !== null && item.dataIndex === 0 && item.dataset.leadsFromCareer === true;
+  // A comp's line is led from HIS OWN value at the match age, off his stored career --
+  // not from the subject's point, which would draw every comp as though he had been
+  // exactly this player at this age.
+  const compLead = (comp, pts) => {
+    const first = pts.length ? pts[0].x : null;
+    const here = (comp.career || []).find(([age]) => age === data.age);
+    return here && first !== null && first > data.age ? [{ x: here[0], y: here[1] }, ...pts] : pts;
+  };
   // Per-point styling for the career line: everything plain except the anchored base
   // season, which gets an open marker -- it is part record and part rest-of-season
   // projection, not a finished season, and it must not read as one.
@@ -91,7 +110,7 @@
     // its hidden p10 partner have to stay adjacent and in that order.
     ...data.comps.map((c) => ({
       label: `${c.name} (${c.season})`,
-      data: c.path.map((p) => ({ x: p.age, y: p.value })),
+      data: compLead(c, c.path.map((p) => ({ x: p.age, y: p.value }))),
       borderColor: "rgba(120,120,120,0.7)",
       borderWidth: 1.5,
       pointRadius: 0,
@@ -100,22 +119,25 @@
     })),
     {
       label: "p10-p90",
-      data: at(data.projection, "p90"),
+      data: lead(at(data.projection, "p90")),
+      leadsFromCareer: true,
       borderColor: "transparent",
       backgroundColor: "rgba(78,121,167,0.18)",
       fill: "+1",
       pointRadius: 0,
       order: 4,
     },
-    { label: "_p10", data: at(data.projection, "p10"), borderColor: "transparent",
-      pointRadius: 0, fill: false, order: 4 },
+    { label: "_p10", data: lead(at(data.projection, "p10")), borderColor: "transparent",
+      pointRadius: 0, fill: false, order: 4, leadsFromCareer: true },
     {
       label: "projected",
-      data: at(data.projection, "mean"),
+      data: lead(at(data.projection, "mean")),
+      leadsFromCareer: true,
       borderColor: "#4e79a7",
       borderDash: [6, 4],
       borderWidth: 2,
-      pointRadius: 2,
+      // No marker on the lead point: the career line already draws one there.
+      pointRadius: lead(at(data.projection, "mean")).map((_, i) => (join && i === 0 ? 0 : 2)),
       order: 1,
     },
     {
@@ -167,7 +189,7 @@
           // the lower band edge would otherwise show a series literally called
           // "_p10". Same rule, both surfaces.
           tooltip: {
-            filter: (item) => item.dataset.label !== "_p10",
+            filter: (item) => item.dataset.label !== "_p10" && !isLead(item),
             callbacks: {
               // The anchor point is the LAST point of the career line and looks like
               // any other on hover. Say which it is: a part-projected full-season line
