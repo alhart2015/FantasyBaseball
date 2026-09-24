@@ -1,22 +1,35 @@
-# Manual roster snapshot, 2026-09-14 -- DERIVED, not a fresh Roster-tab capture.
+# Manual roster snapshot, 2026-09-22 -- DERIVED, not a fresh Roster-tab capture.
 #
-# HOW THIS ONE WAS BUILT. It is the 2026-09-08 file (itself the 2026-08-31
-# Roster-tab capture with two transaction replays on top) with a THIRD replay
-# of the Yahoo League Transactions feed: 3 drops and 2 adds across three teams
-# between Tue Sep 08 04:09 AM, exclusive, and Sat Sep 12 09:23 PM.
+# HOW THIS ONE WAS BUILT. It is the 2026-09-14 file (the 2026-08-31 Roster-tab
+# capture with three transaction replays on top) with a FOURTH replay of the
+# Yahoo League Transactions feed, from user screenshots supplied 2026-09-24:
+# 12 drops and 12 adds (one of them, Cal Quantrill, both added and dropped)
+# across four teams between Sat Sep 12 09:23 PM, exclusive, and Mon Sep 22
+# 06:16 AM, inclusive.
 #
-#   Thu Sep 10 04:10 AM  Hart of the Order  + Wyatt Langford, - Cole Carrigg
-#   Thu Sep 10 09:21 PM  Hello Peanuts!     - Braxton Ashcraft (drop only)
-#   Sat Sep 12 09:23 PM  Jon's Underdogs    + TJ Rumfield, - Brady House
+#   Sun Sep 14 09:06 AM  Hart of the Order     + Ian Seymour, - Yoendrys Gomez
+#   Mon Sep 15 05:08 PM  Hart of the Order     - Byron Buxton (IL)
+#   Mon Sep 15 05:09 PM  Hart of the Order     + Nathan Eovaldi
+#   Fri Sep 19 07:32 AM  Springfield Isotopes  - Michael Soroka (IL)
+#   Fri Sep 19 07:33 AM  Springfield Isotopes  + Isaac Paredes
+#   Fri Sep 19 08:10 AM  Jon's Underdogs       - Edwin Diaz (IL), - Jacob Lopez
+#   Fri Sep 19 08:11 AM  Jon's Underdogs       + Tyler Mahle
+#   Fri Sep 19 08:41 AM  Hart of the Order     + Cal Quantrill (IL), - Logan Webb
+#   Fri Sep 19 08:50 PM  Hello Peanuts!        + Carter Jensen, - Jeff McNeil
+#   Fri Sep 19 08:52 PM  Hello Peanuts!        + Walbert Urena, - Chase Burns
+#   Sun Sep 21 08:58 PM  Jon's Underdogs       + Nolan Arenado, - TJ Rumfield
+#   Sun Sep 21 09:01 PM  Jon's Underdogs       - Kenley Jansen, + Garrett Crochet (IL)
+#   Sun Sep 21 09:02 PM  Jon's Underdogs       + Andrew Alvarez
+#   Mon Sep 22 06:16 AM  Hart of the Order     + Cristian Javier (IL), - Cal Quantrill
 #
-# The window is closed on both ends -- the feed page still shows the Sep 08
-# 04:09 AM Edman-for-Cam-Smith move that the previous replay already applied,
-# so nothing fell between the two snapshots. Hello Peanuts! is one player light
-# because that drop had no matching add in the feed; that is the feed's answer,
-# not a transcription gap.
+# The window is closed on both ends: the feed's second page still shows the
+# Sep 12 Rumfield-for-House move the previous replay applied, and the first
+# page's newest row is Sep 22 06:16 AM. Each same-minute swap was applied drop
+# first, so an IL-badged add takes the IL slot its partner vacated. Every team
+# ends inside the 23-active / 2-IL cap.
 #
-# THIS FILE IS NOW THREE REPLAYS DEEP on a Roster-tab capture that is fourteen
-# days old. A fresh Roster-tab transcription is the fix, not a fourth replay.
+# THIS FILE IS NOW FOUR REPLAYS DEEP on a Roster-tab capture that is over three
+# weeks old. A fresh Roster-tab transcription is the fix, not a fifth replay.
 # Consequences, field by field:
 #
 #   name       TRUSTWORTHY. Every drop was matched against the canonical name
@@ -27,8 +40,8 @@
 #              file was also a hard error. This feed printed full first names
 #              rather than initials, so no ambiguity had to be settled.
 #
-#   slot       PLACEHOLDER for the 8 players added here, which all sit on BN,
-#              stacked on the placeholder BN entries the previous replay left.
+#   slot       PLACEHOLDER for every player added by a replay: BN, or IL for an
+#              add carrying the IL badge when an IL slot is free.
 #              The feed says who joined a roster, never where the manager
 #              slotted them. Boston Estrellas (BN=10) and Jon's Underdogs
 #              (BN=7) are the worst of it and are nowhere near that bench-heavy
@@ -41,9 +54,13 @@
 #              red badge and is load-bearing: managers routinely park an IL'd
 #              player in an ACTIVE or BN slot, which is detectable ONLY from
 #              this field -- the slot alone says "active". Treat every badge
-#              below as at least eight days old.
+#              below as stale; an added player's badge is the feed's bare "IL".
 #
-# HART OF THE ORDER. The user's own team was untouched in the previous replay;
+# HART OF THE ORDER, 2026-09-22 replay: Seymour and Eovaldi land on BN as
+# placeholders (Webb's P slot is left empty), and Javier takes the IL slot
+# Quantrill held. Rafaela is still the other IL slot.
+#
+# HART OF THE ORDER, earlier. The user's own team was untouched in the replay before that;
 # here it dropped Willy Adames off the IL (Sep 07 08:50 AM) and added Cole
 # Carrigg (Sep 07 08:55 AM). That alone left the file at 24 active + 1 IL, one
 # OVER the 23-active cap, because a Hart player had moved to the IL with no
@@ -73,7 +90,7 @@
 # (3B) and Aroldis Chapman (P) on the same team, which the differing initials do
 # separate. The Cade Smith / Cam Smith pair called out in the previous snapshot
 # is gone: Boston Estrellas dropped Cam Smith on Sep 08.
-snapshot_date: '2026-09-14'
+snapshot_date: '2026-09-22'
 teams:
 - name: Hart of the Order
   players:
@@ -116,17 +133,10 @@ teams:
   - name: Austin Riley
     slot: BN
     positions: 3B
-  - name: Byron Buxton
-    slot: IL
-    positions: OF
-    status: IL10
   - name: Mason Miller
     slot: P
     positions: P
   - name: Jesús Luzardo
-    slot: P
-    positions: P
-  - name: Logan Webb
     slot: P
     positions: P
   - name: Josh Hader
@@ -147,12 +157,19 @@ teams:
   - name: Bryan Woo
     slot: P
     positions: P
-  - name: Yoendrys Gómez
-    slot: BN
-    positions: P
   - name: Wyatt Langford
     slot: BN
     positions: OF
+  - name: Ian Seymour
+    slot: BN
+    positions: P
+  - name: Nathan Eovaldi
+    slot: BN
+    positions: P
+  - name: Cristian Javier
+    slot: IL
+    positions: P
+    status: IL
 - name: Hello Peanuts!
   players:
   - name: Jonathan Aranda
@@ -182,9 +199,6 @@ teams:
     positions: OF
     status: IL10
   - name: Nolan McLean
-    slot: P
-    positions: P
-  - name: Chase Burns
     slot: P
     positions: P
   - name: Bryan Baker
@@ -217,12 +231,15 @@ teams:
   - name: Mookie Betts
     slot: BN
     positions: SS
-  - name: Jeff McNeil
-    slot: BN
-    positions: 1B,2B,OF
   - name: Alejandro Kirk
     slot: BN
     positions: C
+  - name: Carter Jensen
+    slot: BN
+    positions: C
+  - name: Walbert Ureña
+    slot: BN
+    positions: P
 - name: Jon's Underdogs
   players:
   - name: Drake Baldwin
@@ -277,31 +294,31 @@ teams:
   - name: Tanner Scott
     slot: P
     positions: P
-  - name: Kenley Jansen
-    slot: BN
-    positions: P
-  - name: Edwin Díaz
-    slot: IL
-    positions: P
-    status: IL15
   - name: Aaron Nola
     slot: BN
     positions: P
-  - name: TJ Rumfield
-    slot: BN
-    positions: 1B
   - name: Henry Bolte
     slot: BN
     positions: OF
   - name: Zack Gelof
     slot: BN
     positions: 2B,3B,OF
-  - name: Jacob Lopez
-    slot: BN
-    positions: P
   - name: Spencer Jones
     slot: BN
     positions: OF
+  - name: Tyler Mahle
+    slot: BN
+    positions: P
+  - name: Nolan Arenado
+    slot: BN
+    positions: 3B
+  - name: Garrett Crochet
+    slot: IL
+    positions: P
+    status: IL
+  - name: Andrew Alvarez
+    slot: BN
+    positions: P
 - name: Springfield Isotopes
   players:
   - name: Gabriel Moreno
@@ -371,13 +388,12 @@ teams:
   - name: Taj Bradley
     slot: P
     positions: P
-  - name: Michael Soroka
-    slot: IL
-    positions: P
-    status: IL15
   - name: Nick Pivetta
     slot: BN
     positions: P
+  - name: Isaac Paredes
+    slot: BN
+    positions: 1B,3B
 - name: SkeleThor
   players:
   - name: Liam Hicks

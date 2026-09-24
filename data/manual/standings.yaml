@@ -1,9 +1,9 @@
 # Manual standings transcription -- Yahoo web UI, ROTO > Stats + Points tabs.
 #
-# Source: user screenshots supplied 2026-09-14 at 7:21 PM ET, showing both the
-# Points and the Stats tab. Monday's slate had not started (the scoreboard
-# strip shows LAD/CIN, CWS/CLE, DET/TOR, BAL/NYM all 0-0 with 6:40-7:10 PM
-# start times), so the totals are complete through Sunday 2026-09-13.
+# Source: user screenshots supplied 2026-09-24, showing both the Points and the
+# Stats tab. The capture time is not visible in the screenshot, so the totals
+# are recorded as of the supply date; they are at least as new as the
+# transactions screenshot supplied with them (newest move Mon Sep 22 06:16 AM).
 # League "Phantoms of the Outfield" (config/league.yaml id 5652).
 #
 # Yahoo's roto Stats tab exposes R HR RBI SB AVG IP W SV K ERA WHIP.
@@ -36,83 +36,79 @@
 # to its own Points column, every category sums to 55 across ten teams, and the
 # league grand total is 550. All three pass exactly.
 #
-# Re-deriving points from the counting stats below with the repo's own
-# `score_roto` reproduces Yahoo for 94 of the 100 cells. The six that differ
-# are three DISPLAY ties in the rate categories, where average-rank scoring has
-# to split evenly and Yahoo ranks the unrounded value:
-#   AVG  .252  Jon's Underdogs / Spacemen             avg-rank 5.5/5.5, Yahoo 5/6
-#   AVG  .242  Boston Estrellas / Send in the Cavalli avg-rank 1.5/1.5, Yahoo 2/1
-#   WHIP 1.11  Hart of the Order / Jon's Underdogs    avg-rank 9.5/9.5, Yahoo 9/10
-# THIS IS WHY THE POINTS TAB IS TRANSCRIBED RATHER THAN DERIVED. Note that the
-# AVG .252 pair flipped direction versus the 2026-09-08 snapshot (Yahoo had
-# 6/5 then, 5/6 now), which no rounding-blind derivation could have caught.
+# Three DISPLAY ties in the rate categories, where Yahoo ranks the unrounded
+# value and average-rank scoring would have to split evenly:
+#   AVG  .256  Hello Peanuts! / SkeleThor                 Yahoo 8/7
+#   WHIP 1.12  Hart of the Order / Springfield Isotopes   Yahoo 9/8
+#   WHIP 1.30  Work in Progress / Send in the Cavalli     Yahoo 2/1
+# THIS IS WHY THE POINTS TAB IS TRANSCRIBED RATHER THAN DERIVED.
 #
-# The two remaining ties are TRUE integer ties -- HR 283 (Hart of the Order /
-# Work in Progress) and RBI 889 (Hart of the Order / Springfield Isotopes) --
-# and Yahoo scores them 9.5/9.5 and 8.5/8.5, exactly as average-rank does.
+# The two remaining ties are TRUE integer ties -- W 98 (Hart of the Order /
+# SkeleThor) and RBI 936 (Hello Peanuts! / Springfield Isotopes) -- and Yahoo
+# scores them 9.5/9.5 and 8.5/8.5, exactly as average-rank does.
 # See the checker in tests/test_manual/ -- it is a regression guard on future
 # transcriptions.
 
-effective_date: "2026-09-14"
+effective_date: "2026-09-24"
 
 teams:
   - name: "Hart of the Order"
     rank: 1
-    stats: {R: 942, HR: 283, RBI: 889, SB: 190, AVG: 0.263, W: 96, SV: 95, K: 1372, ERA: 3.34, WHIP: 1.11}
-    extras: {IP: 1239.0}
-    points_for: 94
-    category_points: {R: 9, HR: 9.5, RBI: 8.5, SB: 10, AVG: 10, W: 10, SV: 10, K: 9, ERA: 9, WHIP: 9}
+    stats: {R: 1009, HR: 301, RBI: 937, SB: 208, AVG: 0.264, W: 98, SV: 98, K: 1421, ERA: 3.34, WHIP: 1.12}
+    extras: {IP: 1287.1}
+    points_for: 95.5
+    category_points: {R: 9, HR: 10, RBI: 10, SB: 10, AVG: 10, W: 9.5, SV: 10, K: 9, ERA: 9, WHIP: 9}
   - name: "Hello Peanuts!"
     rank: 2
-    stats: {R: 979, HR: 277, RBI: 893, SB: 163, AVG: 0.255, W: 79, SV: 92, K: 1260, ERA: 3.41, WHIP: 1.18}
-    extras: {IP: 1135.1}
-    points_for: 80
-    category_points: {R: 10, HR: 8, RBI: 10, SB: 8, AVG: 7, W: 6, SV: 9, K: 7, ERA: 8, WHIP: 7}
+    stats: {R: 1020, HR: 287, RBI: 936, SB: 170, AVG: 0.256, W: 86, SV: 96, K: 1338, ERA: 3.37, WHIP: 1.18}
+    extras: {IP: 1204.2}
+    points_for: 79.5
+    category_points: {R: 10, HR: 8, RBI: 8.5, SB: 8, AVG: 8, W: 6, SV: 9, K: 7, ERA: 8, WHIP: 7}
   - name: "Jon's Underdogs"
     rank: 3
-    stats: {R: 905, HR: 230, RBI: 807, SB: 167, AVG: 0.252, W: 87, SV: 71, K: 1326, ERA: 3.30, WHIP: 1.11}
-    extras: {IP: 1174.0}
-    points_for: 71
-    category_points: {R: 6, HR: 5, RBI: 4, SB: 9, AVG: 5, W: 8, SV: 6, K: 8, ERA: 10, WHIP: 10}
+    stats: {R: 962, HR: 248, RBI: 861, SB: 178, AVG: 0.254, W: 92, SV: 74, K: 1394, ERA: 3.27, WHIP: 1.11}
+    extras: {IP: 1236.1}
+    points_for: 74
+    category_points: {R: 7, HR: 5, RBI: 5, SB: 9, AVG: 6, W: 8, SV: 6, K: 8, ERA: 10, WHIP: 10}
   - name: "Springfield Isotopes"
     rank: 4
-    stats: {R: 865, HR: 242, RBI: 889, SB: 139, AVG: 0.247, W: 82, SV: 58, K: 1386, ERA: 3.59, WHIP: 1.12}
-    extras: {IP: 1259.2}
+    stats: {R: 912, HR: 253, RBI: 936, SB: 148, AVG: 0.247, W: 87, SV: 62, K: 1476, ERA: 3.54, WHIP: 1.12}
+    extras: {IP: 1338.1}
     points_for: 65.5
     category_points: {R: 5, HR: 6, RBI: 8.5, SB: 7, AVG: 4, W: 7, SV: 4, K: 10, ERA: 6, WHIP: 8}
   - name: "SkeleThor"
     rank: 5
-    stats: {R: 933, HR: 227, RBI: 828, SB: 115, AVG: 0.257, W: 90, SV: 66, K: 1184, ERA: 3.50, WHIP: 1.19}
-    extras: {IP: 1192.1}
-    points_for: 61
-    category_points: {R: 8, HR: 4, RBI: 6, SB: 3, AVG: 8, W: 9, SV: 5, K: 5, ERA: 7, WHIP: 6}
+    stats: {R: 966, HR: 234, RBI: 863, SB: 124, AVG: 0.256, W: 98, SV: 71, K: 1279, ERA: 3.47, WHIP: 1.19}
+    extras: {IP: 1275.0}
+    points_for: 61.5
+    category_points: {R: 8, HR: 4, RBI: 6, SB: 3, AVG: 7, W: 9.5, SV: 5, K: 6, ERA: 7, WHIP: 6}
   - name: "Work in Progress"
     rank: 6
-    stats: {R: 914, HR: 283, RBI: 857, SB: 124, AVG: 0.259, W: 52, SV: 4, K: 1005, ERA: 4.32, WHIP: 1.29}
-    extras: {IP: 1098.0}
-    points_for: 45.5
-    category_points: {R: 7, HR: 9.5, RBI: 7, SB: 5, AVG: 9, W: 1, SV: 1, K: 2, ERA: 2, WHIP: 2}
+    stats: {R: 945, HR: 296, RBI: 895, SB: 127, AVG: 0.259, W: 54, SV: 4, K: 1042, ERA: 4.33, WHIP: 1.30}
+    extras: {IP: 1153.0}
+    points_for: 43
+    category_points: {R: 6, HR: 9, RBI: 7, SB: 5, AVG: 9, W: 1, SV: 1, K: 2, ERA: 1, WHIP: 2}
   - name: "Spacemen"
     rank: 7
-    stats: {R: 841, HR: 220, RBI: 811, SB: 118, AVG: 0.252, W: 58, SV: 82, K: 1049, ERA: 3.99, WHIP: 1.27}
-    extras: {IP: 1135.2}
-    points_for: 42
-    category_points: {R: 4, HR: 3, RBI: 5, SB: 4, AVG: 6, W: 3, SV: 8, K: 3, ERA: 3, WHIP: 3}
+    stats: {R: 878, HR: 227, RBI: 853, SB: 126, AVG: 0.252, W: 61, SV: 86, K: 1106, ERA: 4.01, WHIP: 1.27}
+    extras: {IP: 1198.1}
+    points_for: 40
+    category_points: {R: 4, HR: 3, RBI: 4, SB: 4, AVG: 5, W: 3, SV: 8, K: 3, ERA: 3, WHIP: 3}
   - name: "Boston Estrellas"
     rank: 8
-    stats: {R: 820, HR: 212, RBI: 697, SB: 125, AVG: 0.242, W: 69, SV: 36, K: 1205, ERA: 3.69, WHIP: 1.20}
-    extras: {IP: 1199.0}
-    points_for: 35
-    category_points: {R: 2, HR: 1, RBI: 1, SB: 6, AVG: 2, W: 4, SV: 3, K: 6, ERA: 5, WHIP: 5}
+    stats: {R: 862, HR: 226, RBI: 736, SB: 138, AVG: 0.243, W: 72, SV: 38, K: 1272, ERA: 3.77, WHIP: 1.20}
+    extras: {IP: 1259.0}
+    points_for: 34
+    category_points: {R: 2, HR: 2, RBI: 1, SB: 6, AVG: 2, W: 4, SV: 3, K: 5, ERA: 4, WHIP: 5}
   - name: "Tortured Baseball Department"
     rank: 9
-    stats: {R: 834, HR: 217, RBI: 768, SB: 106, AVG: 0.246, W: 72, SV: 34, K: 1084, ERA: 3.71, WHIP: 1.21}
-    extras: {IP: 1143.2}
+    stats: {R: 875, HR: 224, RBI: 795, SB: 113, AVG: 0.246, W: 75, SV: 37, K: 1144, ERA: 3.69, WHIP: 1.21}
+    extras: {IP: 1204.0}
     points_for: 32
-    category_points: {R: 3, HR: 2, RBI: 3, SB: 2, AVG: 3, W: 5, SV: 2, K: 4, ERA: 4, WHIP: 4}
+    category_points: {R: 3, HR: 1, RBI: 3, SB: 2, AVG: 3, W: 5, SV: 2, K: 4, ERA: 5, WHIP: 4}
   - name: "Send in the Cavalli"
     rank: 10
-    stats: {R: 714, HR: 268, RBI: 765, SB: 77, AVG: 0.242, W: 54, SV: 76, K: 845, ERA: 4.33, WHIP: 1.31}
-    extras: {IP: 859.0}
-    points_for: 24
-    category_points: {R: 1, HR: 7, RBI: 2, SB: 1, AVG: 1, W: 2, SV: 7, K: 1, ERA: 1, WHIP: 1}
+    stats: {R: 743, HR: 279, RBI: 792, SB: 78, AVG: 0.242, W: 58, SV: 80, K: 900, ERA: 4.25, WHIP: 1.30}
+    extras: {IP: 911.1}
+    points_for: 25
+    category_points: {R: 1, HR: 7, RBI: 2, SB: 1, AVG: 1, W: 2, SV: 7, K: 1, ERA: 2, WHIP: 1}
