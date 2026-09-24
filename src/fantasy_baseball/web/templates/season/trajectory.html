@@ -28,28 +28,14 @@
     group by, and the route falls back to this view anyway. -#}
 {{ ctl.controls(cur, board.end_years, board.teams, board.teams) }}
 
-<p class="muted trajectory-vintage">
-  Showing {{ board.rows|length }} of {{ board.scored }}{% if board.pool != 'both' %} {{ board.pool }}s{% endif %} scored{% if board.ranked != board.scored %}, ranked against all {{ board.ranked }} -- the # column is a league-wide position, so it runs past this count{% endif %}.
-  {%- if board.meta.excluded and board.meta.excluded.total %}
-  <strong>{{ board.meta.excluded.total }} players league-wide{% if board.pool != 'both' %} (hitters and pitchers together, not just {{ board.pool }}s){% endif %} are not on this board at all</strong> --
-  {{ board.meta.excluded.no_current_line }} with no {{ board.base_season }} line
-  (injured, released, or not yet up), {{ board.meta.excluded.low_sgp }} scoring below
-  {{ '%.1f'|format(board.meta.min_sgp) }} SGP{% if board.meta.excluded.no_ros_projection %},
-  and {{ board.meta.excluded.no_ros_projection }} with a {{ board.base_season }} line that
-  no rest-of-season projection covers -- the anchor needs both halves, so a player
-  FanGraphs no longer projects cannot be given a full-year figure{% endif %}. They were
-  never scored, so an absent player means the model could not price him, not that it
-  ranked him last.
-  {%- endif %}
-  Start year is locked at {{ board.base_season + 1 }}.
-  {{ ctl.vintage_note(board) }}
-  {%- if not board.has_rosters %}
+{%- if not board.has_rosters %}
+<p class="muted">
   <strong>Your players are not highlighted</strong> -- no row on this board joined to
   your roster. That is all this page knows: the live read may have returned nothing, or
   it may have returned your roster and none of your players matched a scored row. So
   nothing here claims to know what you own.
-  {%- endif %}
 </p>
+{%- endif %}
 
 {% if not board.rows %}
   <p>Nothing scored at this timeframe.</p>
