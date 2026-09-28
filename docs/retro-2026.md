@@ -98,28 +98,27 @@ totals include each owner's later moves, which the model does not try to predict
 
 ## Part 3: waiver moves (#384)
 
-Scored as **swap value**: SGP of the added player while we owned him, minus SGP of the
-player dropped for him over the same days. "Expected" is the same swap priced with the
-latest ROS projection on the add date.
+Scored as **swap value**: SGP the added player actually produced while the team owned
+him, minus SGP the dropped player actually produced over the same days. No projections
+are involved. A swap within +/-0.05 SGP counts as even.
 
-**Us: +21.6 realized vs +5.5 expected, over 41 adds. 3rd in the league.**
+**Us: +21.6 SGP over 41 adds (16 won, 11 lost, 14 even). 3rd in the league.**
 
-| Team | Adds | Realized swap SGP | Expected | Final points |
-|---|---|---|---|---|
-| Hello Peanuts! | 49 | +36.5 | +2.0 | 79.5 |
-| Jon's Underdogs | 81 | +26.1 | -7.7 | 74.0 |
-| **Hart of the Order** | **41** | **+21.6** | **+5.5** | **92.5** |
-| SkeleThor | 23 | +20.3 | +1.2 | 59.5 |
-| Springfield Isotopes | 25 | +19.8 | -5.7 | 69.0 |
-| Work in Progress | 15 | +15.0 | +6.3 | 43.0 |
-| Boston Estrellas | 75 | +11.5 | +5.6 | 33.5 |
-| Tortured Baseball Department | 6 | +10.8 | +4.6 | 31.5 |
-| Send in the Cavalli | 5 | +7.5 | -3.8 | 26.0 |
-| Spacemen | 43 | +2.8 | +10.0 | 41.5 |
+| Team | Adds | Net swap SGP | Won | Lost | Even | Final points |
+|---|---|---|---|---|---|---|
+| Hello Peanuts! | 48 | +36.5 | 29 | 12 | 7 | 79.5 |
+| Jon's Underdogs | 81 | +26.1 | 38 | 25 | 18 | 74.0 |
+| **Hart of the Order** | **41** | **+21.6** | **16** | **11** | **14** | **92.5** |
+| SkeleThor | 23 | +20.3 | 12 | 4 | 7 | 59.5 |
+| Springfield Isotopes | 25 | +19.8 | 13 | 10 | 2 | 69.0 |
+| Work in Progress | 14 | +15.0 | 9 | 3 | 2 | 43.0 |
+| Boston Estrellas | 75 | +11.5 | 28 | 22 | 25 | 33.5 |
+| Tortured Baseball Department | 6 | +10.8 | 4 | 0 | 2 | 31.5 |
+| Send in the Cavalli | 5 | +7.5 | 4 | 1 | 0 | 26.0 |
+| Spacemen | 41 | +2.8 | 17 | 9 | 15 | 41.5 |
 
-Every team beat its "expected" number. That points at the projections lagging role
-changes (new closers, call-ups, lineup promotions) that every owner reacts to -- so rank
-teams against each other, not against "expected".
+Three adds are left out because the name could not be tied to one MLB player (a "Y. Diaz"
+and a "Max Muncy") or the player never appeared in a game (Jordan Westburg).
 
 Our best moves: Ceddanne Rafaela for Trevor Story (+7.0), Jose Soriano (+6.0, no drop),
 Otto Lopez for Matt McLain (+5.9), Dominic Canzone (+2.5), Emilio Pagan for Yoendrys
@@ -131,8 +130,8 @@ out about even on 2026 stats (+0.3).
 **The title came from the roster we started with more than from waivers.** We were
 projected 1st from March on; waivers added a solid but third-best +21.6.
 
-Caveats: "while owned" counts bench days (an upper bound on real value); April-May
-expectations use the 03-30 vintage because no vintage exists between 03-30 and 06-04.
+Caveat: "while owned" counts bench days on both sides, so it is an upper bound on what
+the swap added to the standings.
 
 ## Part 4: missed opportunities (#385)
 
@@ -168,5 +167,5 @@ the next 4 weeks, to our worst active player of the same type.
    clearly says a free agent beats your worst player, it was right 87% of the time.
 4. **Keep equal blend weights for now.** No system was best across the board; recheck
    the RBI, SB and K gaps next year before down-weighting anyone.
-5. **Save the ROS projection every week, all season.** The April-May gap forced stale
-   expectations in Parts 3 and 4.
+5. **Save the ROS projection every week, all season.** The April-May gap forced Part 4
+   to judge spring free agents with the 03-30 projection.
