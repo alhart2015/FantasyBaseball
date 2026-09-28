@@ -316,20 +316,22 @@ def _swap_category_variance(
     """Variance of the swap's change in the user's category-``cat`` total.
 
     Counting categories (R, HR, RBI, SB, W, K, SV): variances add across
-    players, so ``sigma2 = fraction_remaining * sum over IN and OUT
-    players of player_category_variance(p)[cat]``. Both the entering and
-    leaving players' uncertainties contribute. Scaled by
-    ``fraction_remaining`` because variance is proportional to the
-    remaining season (matches ``build_team_sds`` using
-    ``sd_scale = sqrt(fraction_remaining)``).
+    players, so ``sigma2 = sum over IN and OUT players of
+    player_category_variance(p)[cat]``. Both the entering and leaving
+    players' uncertainties contribute. No ``fraction_remaining`` factor:
+    the players carry ROS means, so their variance is already sized to the
+    remaining season (scaling again shrank it twice -- #388).
 
     Rate categories (AVG, ERA, WHIP): not additive per player (shared
     denominator), so the marginal variance is the change in the team's
     rate variance between the after- and before-rosters. We take the
     absolute difference of the two team-level rate variances from
     ``project_team_sds`` (a defensible marginal-variance estimate: the
-    rate-variance change attributable to the swap), scaled by
-    ``fraction_remaining``.
+    rate-variance change attributable to the swap). Those are ROS-rate
+    variances; the end-of-season rate divides the same numerator by YTD +
+    ROS volume, i.e. the SD shrinks by ROS volume / total volume. YTD
+    volume is not available here, so ``fraction_remaining`` stands in for
+    that share and the variance is scaled by its square.
 
     Caveat: a swap that shifts the team's rate MEAN but leaves its rate
     VARIANCE roughly unchanged (e.g. swapping a high-volume arm for an
@@ -346,12 +348,12 @@ def _swap_category_variance(
         total = 0.0
         for p in (*in_players, *out_players):
             total += player_category_variance(p).get(cat, 0.0)
-        return fraction_remaining * total
+        return total
 
     # Rate category: derive from before/after team-level rate SDs.
     sd_before = project_team_sds(before_players, displacement=False).get(cat, 0.0)
     sd_after = project_team_sds(after_players, displacement=False).get(cat, 0.0)
-    return fraction_remaining * abs(sd_after * sd_after - sd_before * sd_before)
+    return fraction_remaining**2 * abs(sd_after * sd_after - sd_before * sd_before)
 
 
 def _category_points(
@@ -496,13 +498,14 @@ def compute_delta_roto_band(
         field_stats: the other teams' fixed point :class:`CategoryStats`,
             keyed by team name (``projected_standings.field_stats(team)``).
         team_name: the user's team name (the key the swap is scored under).
-        fraction_remaining: portion of the season left -- scales variance.
+        fraction_remaining: portion of the season left -- stands in for the
+            ROS share of volume when scaling the rate-category variance.
         projected_standings: full projected standings, used to anchor the
             EV mean on the user's projected row.
-        team_sds: ``{team: {Category: sd}}``, already scaled by
-            ``sqrt(fraction_remaining)`` -- the same combined-SD softness
-            ``score_roto`` uses for the points curve. ``None`` falls back
-            to the rank step function (no curve softness).
+        team_sds: ``{team: {Category: sd}}`` from ``build_team_sds`` -- the
+            same combined-SD softness ``score_roto`` uses for the points
+            curve. ``None`` falls back to the rank step function (no curve
+            softness).
         reference_players: the lineup the ``projected_standings`` user row
             reflects. REQUIRED whenever ``before_players`` is itself a
             hypothetical lineup rather than that roster (see the anchor

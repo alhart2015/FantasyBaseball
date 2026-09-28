@@ -17,9 +17,10 @@ STAT_DISPERSION['sv']:
 so within + between == negbin_perf_variance(s) + between*(1 + 1/r) (the between/r
 cross-term the naive single-mean form omits).
 
-In-season scaling is applied EXTERNALLY and uniformly -- ERoto via build_team_sds
-(sd_scale = sqrt(frac)), the MC via the copula (within) plus role_multiplier_draw's
-X' shrink (between) -- so sv_role_variance is FULL-SEASON and takes no frac param.
+sv_role_variance takes no frac param. ERoto prices it on the ROS mean with no
+further in-season scaling (build_team_sds, #388). The MC still applies its own
+in-season shrink via the copula (within) plus role_multiplier_draw's X' shrink
+(between); whether that double-counts the ROS horizon is tracked separately.
 
 Known limitations (second-order, do not touch the marginal SV variance target):
 SV pulled out of the shared MC ``scales`` loses its playing-time co-movement with

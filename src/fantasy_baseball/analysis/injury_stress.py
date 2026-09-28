@@ -10,7 +10,6 @@ from __future__ import annotations
 import dataclasses
 import itertools
 import json
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -184,7 +183,9 @@ def load_mc_inputs_from_upstash(config_path: Path | None = None) -> McInputs:
 
     ytd_by_team = {e.team_name: e.ytd_components() for e in standings.entries}
     eos_baseline = build_eos_baseline(team_rosters, ytd_by_team)
-    team_sds = build_team_sds(team_rosters, math.sqrt(fr))
+    team_sds = build_team_sds(
+        team_rosters, ytd_by_team=ytd_by_team
+    )  # ROS-priced: no sqrt(fr) (#388)
 
     non_hitter = {str(s) for s in BENCH_SLOTS} | {"P"}
     h_slots = sum(v for k, v in cfg.roster_slots.items() if k not in non_hitter)
