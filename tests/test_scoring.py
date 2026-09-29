@@ -16,6 +16,7 @@ from fantasy_baseball.models.standings import (
     CategoryStats,
     ProjectedStandings,
     ProjectedStandingsEntry,
+    TeamYtdComponents,
 )
 from fantasy_baseball.scoring import (
     ALL_CATS,
@@ -2247,17 +2248,19 @@ class TestScoreRotoEV:
 # ── ProjectedStandings.from_rosters / build_team_sds ────────────────
 
 
-def _spy_sd_scale(monkeypatch) -> dict[str, float]:
-    """Capture the ``sd_scale`` passed to ``build_team_sds`` so a test can
-    assert how ``ProjectedStandings.from_rosters`` damps its picker SDs."""
+def _spy_sd_scale(monkeypatch) -> dict:
+    """Capture the ``sd_scale`` and ``ytd_by_team`` passed to ``build_team_sds``
+    so a test can assert how ``ProjectedStandings.from_rosters`` sizes its
+    picker SDs."""
     from fantasy_baseball import scoring
 
-    captured: dict[str, float] = {}
+    captured: dict = {}
     real = scoring.build_team_sds
 
-    def spy(team_rosters, sd_scale):
+    def spy(team_rosters, sd_scale=1.0, *, ytd_by_team=None):
         captured["sd_scale"] = sd_scale
-        return real(team_rosters, sd_scale)
+        captured["ytd_by_team"] = ytd_by_team
+        return real(team_rosters, sd_scale, ytd_by_team=ytd_by_team)
 
     monkeypatch.setattr(scoring, "build_team_sds", spy)
     return captured
@@ -2273,17 +2276,17 @@ class TestProjectedStandingsFromRosters:
         assert result.effective_date == date(2026, 4, 15)
         assert {e.team_name for e in result.entries} == {"Alpha", "Beta"}
 
-    def test_scales_picker_sds_by_sqrt_fraction_remaining(self, monkeypatch):
-        """The displacement picker's SDs must damp by sqrt(fraction_remaining),
-        matching the canonical team_sds the optimizer/deltaRoto use -- not the
-        full-season sd_scale=1.0 the standings build previously hardcoded
-        (which over-softened mid-season lineup decisions vs every other
-        consumer)."""
+    def test_picker_sds_not_shrunk_again_in_season(self, monkeypatch):
+        """#388: rosters carry ROS means, so the picker SDs are already sized to
+        the remaining season. A sqrt(fraction_remaining) on top shrank them twice
+        (measured ~2x too narrow in-season, docs/retro-2026.md). The standings
+        build passes its YTD map instead, for the rate denominators."""
         captured = _spy_sd_scale(monkeypatch)
         ProjectedStandings.from_rosters(
             {"A": [], "B": []}, effective_date=date(2026, 5, 5), fraction_remaining=0.25
         )
-        assert captured["sd_scale"] == pytest.approx(0.5)  # sqrt(0.25)
+        assert captured["sd_scale"] == pytest.approx(1.0)
+        assert captured["ytd_by_team"] == {}
 
     def test_picker_sds_default_to_full_season_when_fraction_unset(self, monkeypatch):
         """Default (no fraction_remaining) keeps sd_scale=1.0 -- correct for
@@ -2354,6 +2357,40 @@ class TestBuildTeamSDs:
         result = build_team_sds(rosters, sd_scale=0.0)
         for sd in result["Team A"].values():
             assert sd == 0.0
+
+    def test_default_scale_is_unscaled_ros_variance(self):
+        """#388: rosters carry ROS means, so the SD is already horizon-sized.
+        The default must not shrink it again by sqrt(fraction_remaining)."""
+        rosters = {
+            "Team A": [_make_hitter("P1", r=80, hr=20, rbi=70, sb=10, h=140, ab=500, pa=500)],
+        }
+        default = build_team_sds(rosters)
+        direct = project_team_sds(rosters["Team A"], displacement=True)
+        for cat, sd in direct.items():
+            assert default["Team A"][cat] == pytest.approx(sd)
+
+    def test_ytd_volume_widens_rate_denominators_only(self):
+        """The end-of-season rate divides the ROS numerator variance by YTD +
+        ROS volume, so rate SDs shrink by ROS/(YTD+ROS); counting SDs (a banked
+        YTD constant adds no variance) are unchanged."""
+        roster = [
+            _make_hitter("H1", r=40, hr=10, rbi=35, sb=5, h=70, ab=250, pa=275),
+            _make_pitcher("P1", w=5, k=90, sv=0, ip=90, er=35, bb=28, h_allowed=78),
+        ]
+        ytd = TeamYtdComponents(ab=750.0, ip=270.0)
+        ros_only = build_team_sds({"A": roster})["A"]
+        eos = build_team_sds({"A": roster}, ytd_by_team={"A": ytd})["A"]
+        assert eos[Category.AVG] == pytest.approx(ros_only[Category.AVG] * 250 / 1000)
+        assert eos[Category.ERA] == pytest.approx(ros_only[Category.ERA] * 90 / 360)
+        assert eos[Category.WHIP] == pytest.approx(ros_only[Category.WHIP] * 90 / 360)
+        for cat in (Category.R, Category.HR, Category.RBI, Category.SB, Category.W, Category.K):
+            assert eos[cat] == pytest.approx(ros_only[cat])
+
+    def test_team_missing_from_ytd_map_keeps_ros_denominators(self):
+        roster = [_make_hitter("H1", r=40, hr=10, rbi=35, sb=5, h=70, ab=250, pa=275)]
+        ros_only = build_team_sds({"A": roster})["A"]
+        other = build_team_sds({"A": roster}, ytd_by_team={"B": TeamYtdComponents(ab=750.0)})["A"]
+        assert other[Category.AVG] == pytest.approx(ros_only[Category.AVG])
 
 
 class TestComputeRosterBreakdown:

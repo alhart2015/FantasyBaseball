@@ -17,7 +17,6 @@ state. See ``docs/stale-data-refresh-runbook.md``.
 
 import json
 import logging
-import math
 import os
 import threading
 from collections.abc import Iterator
@@ -348,10 +347,10 @@ def build_standings_breakdown_payload(
     # per-player breakdown choose different displacement targets than the
     # standings widget and stop summing to the headline.
     baseline_stats = build_eos_baseline(team_rosters, ytd_by_team)
-    # Match ProjectedStandings.from_rosters: damp the picker's SDs by
-    # sqrt(fraction_remaining) so the breakdown's displacement decisions
-    # agree with the standings widget and the canonical team_sds.
-    team_sds = build_team_sds(team_rosters, sd_scale=fraction_remaining**0.5)
+    # Match ProjectedStandings.from_rosters so the breakdown's displacement
+    # decisions agree with the standings widget and the canonical team_sds.
+    # ROS-priced rosters need no sqrt(fraction_remaining) on top (#388).
+    team_sds = build_team_sds(team_rosters, ytd_by_team=ytd_by_team)
 
     teams_payload: dict[str, dict] = {}
     for team_name, roster in team_rosters.items():
@@ -491,7 +490,6 @@ class RefreshRun:
         self.team_sds: dict[str, dict[Category, float]] | None = None
         self.preseason_team_sds: dict[str, dict[Category, float]] | None = None
         self.fraction_remaining: float | None = None
-        self.sd_scale: float | None = None
         self.effective_date: date | None = None
         self.start_date: str | None = None
         self.end_date: str | None = None
@@ -1118,15 +1116,14 @@ class RefreshRun:
         all_team_rosters = {self.config.team_name: self.matched}
         all_team_rosters.update(self.opp_rosters)
 
-        # Compute fraction_remaining first so the standings build can damp its
-        # displacement-picker SDs by sqrt(fraction_remaining) -- matching the
-        # canonical team_sds below and every other ERoto consumer.
+        # fraction_remaining sizes the IL-swap innings window in the standings
+        # build and scales the ROS Monte Carlo. It does NOT scale team_sds: the
+        # rosters carry ROS means, so the SDs are already horizon-sized (#388).
         self.fraction_remaining = compute_fraction_remaining(
             date.fromisoformat(self.config.season_start),
             date.fromisoformat(self.config.season_end),
             local_today(),
         )
-        self.sd_scale = math.sqrt(self.fraction_remaining)
 
         # Yahoo's team-standings response does not expose AB for this league,
         # so derive team-YTD AB from Team.ownership_periods() intersected with
@@ -1177,7 +1174,7 @@ class RefreshRun:
             baseline_stats=self.eos_baseline,
         )
 
-        self.team_sds = build_team_sds(all_team_rosters, self.sd_scale)
+        self.team_sds = build_team_sds(all_team_rosters, ytd_by_team=ytd_by_team)
 
         # Build preseason projected standings for the ERoto "Preseason" view.
         # When ROS projections are active, all_team_rosters are matched against

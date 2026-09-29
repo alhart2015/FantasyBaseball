@@ -638,3 +638,20 @@ def test_compute_delta_roto_resolves_two_way_drop_by_key() -> None:
         assert drop_bat.categories[cat].roto_delta == pytest.approx(0.0, abs=1e-9)
     # Dropping the arm instead does move the pitching line.
     assert any(abs(drop_arm.categories[cat].roto_delta) > 1e-6 for cat in ("W", "K", "ERA", "WHIP"))
+
+
+def test_counting_swap_variance_is_not_shrunk_by_fraction_remaining() -> None:
+    """#388: players carry ROS means, so their variance is already sized to the
+    remaining season. The counting-category swap variance is the plain sum over
+    the swapped players -- the same at any fraction_remaining."""
+    from fantasy_baseball.scoring import player_category_variance
+
+    keep = _hitter("Keep", r=40, hr=10, rbi=35, sb=5, h=70, ab=250, pa=275)
+    out = _hitter("Out", r=30, hr=6, rbi=28, sb=2, h=60, ab=240, pa=260)
+    new = _hitter("In", r=35, hr=12, rbi=33, sb=8, h=62, ab=245, pa=265)
+    expected = (
+        player_category_variance(new)[Category.HR] + player_category_variance(out)[Category.HR]
+    )
+    for frac in (1.0, 0.6, 0.1):
+        got = _swap_category_variance(Category.HR, [new], [out], [keep, out], [keep, new], frac)
+        assert got == pytest.approx(expected)

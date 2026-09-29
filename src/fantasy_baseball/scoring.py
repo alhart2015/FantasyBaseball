@@ -1293,8 +1293,8 @@ def player_category_variance(player) -> dict[Category | str, float]:
         # SV: the bimodal closer role-switch mixture replaces the cv_pt term (which
         # cannot represent hold-the-job vs lose-it). The role curve is keyed on the
         # FULL-SEASON projected SV it was calibrated on (as W/K's cv_pt uses
-        # _full_season_volume); the variance is priced on the ROS mean. In-season SD
-        # scaling rides the same external build_team_sds sqrt(frac) as every category.
+        # _full_season_volume); the variance is priced on the ROS mean, which is
+        # already horizon-sized, so build_team_sds adds no sqrt(frac) (#388).
         result[Category.SV] = float(
             sv_role_variance(_stat(player, "sv"), _stat(player, "sv", "full_season_projection"))
         )
@@ -1310,6 +1310,7 @@ def project_team_sds(
     roster,
     *,
     displacement: bool = True,
+    ytd: TeamYtdComponents | None = None,
 ) -> dict[Category, float]:
     """Aggregate per-player projection variance into team-level SDs.
 
@@ -1334,6 +1335,13 @@ def project_team_sds(
 
     ``displacement`` matches :func:`project_team_stats` — bench excluded,
     IL players displace their worst active positional match.
+
+    ``ytd`` makes the rate SDs describe the END-OF-SEASON rate. The banked
+    YTD hits/ER/BB+H are known, so only the projected components vary, but
+    the end-of-season rate divides by YTD + projected volume. Passing the
+    team's YTD components adds ``ytd.ab`` / ``ytd.ip`` to the denominators;
+    counting SDs are unaffected (a banked constant adds no variance).
+    ``None`` (preseason, or a ROS-only view) divides by projected volume only.
 
     Returns ``{Category: sd}`` keyed by :class:`Category` enum for every
     category in ``ALL_CATS``. Use :func:`team_sds_to_json` at the cache
@@ -1377,33 +1385,51 @@ def project_team_sds(
         sds[cat] = sqrt(h_var[cat])
     for cat in (Category.W, Category.K, Category.SV):
         sds[cat] = sqrt(p_var[cat])
-    if total_ab > 0:
-        sds[Category.AVG] = sqrt(h_sum_var) / total_ab
-    if total_ip > 0:
-        sds[Category.ERA] = 9.0 * sqrt(p_sum_var["er"]) / total_ip
+    eos_ab = total_ab + (ytd.ab if ytd is not None else 0.0)
+    eos_ip = total_ip + (ytd.ip if ytd is not None else 0.0)
+    if eos_ab > 0:
+        sds[Category.AVG] = sqrt(h_sum_var) / eos_ab
+    if eos_ip > 0:
+        sds[Category.ERA] = 9.0 * sqrt(p_sum_var["er"]) / eos_ip
         whip_var = p_sum_var["bb"] + p_sum_var["h_allowed"]
-        sds[Category.WHIP] = sqrt(whip_var) / total_ip
+        sds[Category.WHIP] = sqrt(whip_var) / eos_ip
     return sds
 
 
 def build_team_sds(
     team_rosters: dict[str, list],
-    sd_scale: float,
+    sd_scale: float = 1.0,
+    *,
+    ytd_by_team: Mapping[str, TeamYtdComponents] | None = None,
 ) -> dict[str, dict[Category, float]]:
     """Build the typed ``team_sds`` table for a set of team rosters.
 
-    Each team's per-category SDs from :func:`project_team_sds` are
-    scaled by ``sd_scale`` — typically ``sqrt(fraction_remaining)`` so
-    variance damps as the season progresses and less of the roto total
-    is still up for grabs.
+    In-season rosters carry REST-OF-SEASON projections, and
+    :func:`project_team_sds` prices each player's variance on that ROS
+    mean -- which already shrinks as the season goes on. So the horizon is
+    built in: leave ``sd_scale`` at 1.0. Multiplying by
+    ``sqrt(fraction_remaining)`` on top shrinks the SDs twice; the 2026
+    retrospective measured that as ranges ~2x too narrow in-season (#388,
+    ``docs/retro-2026.md``).
+
+    ``sd_scale`` is only for rosters priced on FULL-SEASON means (e.g. the
+    no-ROS fallback), where ``sqrt(fraction_remaining)`` is the right damping.
+
+    ``ytd_by_team`` supplies each team's banked YTD volume so the rate SDs
+    describe the end-of-season rate (see :func:`project_team_sds`). Teams
+    missing from it get ROS-only rate denominators.
 
     Returns ``{team_name: {Category: sd}}``. Use
     :func:`team_sds_to_json` / :func:`team_sds_from_json` at the cache
     I/O boundary; in-memory consumers index by :class:`Category` enum.
     """
+    ytd_map = ytd_by_team if ytd_by_team is not None else {}
     return {
         tname: {
-            cat: sd * sd_scale for cat, sd in project_team_sds(roster, displacement=True).items()
+            cat: sd * sd_scale
+            for cat, sd in project_team_sds(
+                roster, displacement=True, ytd=ytd_map.get(tname)
+            ).items()
         }
         for tname, roster in team_rosters.items()
     }

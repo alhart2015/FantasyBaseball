@@ -477,9 +477,11 @@ class ProjectedStandings:
         if baseline_stats is None:
             baseline_stats = build_eos_baseline(team_rosters, ytd_by_team)
 
+        # Rosters carry ROS means, so the SDs are already horizon-sized; no
+        # sqrt(fraction_remaining) on top (#388).
         team_sds = build_team_sds(
             {tname: list(roster) for tname, roster in team_rosters.items()},
-            sd_scale=fraction_remaining**0.5,
+            ytd_by_team=ytd_by_team,
         )
 
         entries: list[ProjectedStandingsEntry] = []
