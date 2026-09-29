@@ -18,9 +18,10 @@ so within + between == negbin_perf_variance(s) + between*(1 + 1/r) (the between/
 cross-term the naive single-mean form omits).
 
 sv_role_variance takes no frac param. ERoto prices it on the ROS mean with no
-further in-season scaling (build_team_sds, #388). The MC still applies its own
-in-season shrink via the copula (within) plus role_multiplier_draw's X' shrink
-(between); whether that double-counts the ROS horizon is tracked separately.
+further in-season scaling (build_team_sds, #388). The MC's ROS-direct path does the
+same: it passes variance_fraction=1.0, so neither the copula (within) nor
+role_multiplier_draw's X' shrink (between) is applied on top of a ROS mean (#391).
+Only the legacy full-season sampling path still shrinks by fraction_remaining.
 
 Known limitations (second-order, do not touch the marginal SV variance target):
 SV pulled out of the shared MC ``scales`` loses its playing-time co-movement with
