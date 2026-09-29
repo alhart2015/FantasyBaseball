@@ -779,6 +779,7 @@ def _apply_variance_batch(
     n_iter: int,
     *,
     pt_mean_fraction: float | None = None,
+    variance_fraction: float | None = None,
     suppress_repl: bool = False,
     pt_volumes: np.ndarray | None = None,
     sv_curve: np.ndarray | None = None,
@@ -801,10 +802,19 @@ def _apply_variance_batch(
     - ``pt_mean_fraction``: the MEAN-horizon term for the playing-time haircut.
       When ``None`` it equals ``fraction_remaining`` (today's behavior). When set
       (e.g. 1.0 for ROS-direct), it drives ONLY the mean haircut; ``eff_sd`` and
-      the ``_negbin_copula_counts`` dispersion KEEP ``fraction_remaining`` (the
-      variance horizon). ``playing_time_moments`` is closed-form (consumes no
+      the ``_negbin_copula_counts`` dispersion follow ``variance_fraction``
+      instead. ``playing_time_moments`` is closed-form (consumes no
       rng), so splitting its single call into a mean call and an sd call does NOT
       perturb the rng stream.
+    - ``variance_fraction``: the VARIANCE-horizon term -- drives the playing-time
+      ``eff_sd``, the ``_negbin_copula_counts`` dispersion and the SV role shrink.
+      ``None`` equals ``fraction_remaining`` (right for FULL-SEASON means, where
+      only that share of the variance is still ahead). The ROS-direct paths pass
+      1.0: their means are ROS lines, already sized to the remaining season, so
+      shrinking the variance by ``fraction_remaining`` again counts the horizon
+      twice. Measured on 2026 actuals (#391): SD(z) 1.35 -> 1.02 hitting, 1.30 ->
+      0.95 pitching, 1.35 -> 1.10 SV. Closed-form knobs only: the rng stream is
+      unchanged.
     - ``suppress_repl``: when True the built-in ``repl_contrib`` is identically
       zero (the new fill engine owns the backfill); default False folds the
       replacement line in exactly as before.
@@ -843,6 +853,7 @@ def _apply_variance_batch(
     # Mean horizon vs variance horizon. When pt_mean_fraction is None the two
     # coincide (== fraction_remaining), reproducing today's single-call moments.
     fr_mean = pt_mean_fraction if pt_mean_fraction is not None else fraction_remaining
+    fr_var = variance_fraction if variance_fraction is not None else fraction_remaining
 
     # Static per-player playing-time moments and z-ladders (iteration-independent),
     # so the only per-iteration playing-time work is the uniform->z interpolation.
@@ -856,7 +867,7 @@ def _apply_variance_batch(
         # and sd calls keeps the default path's rng stream byte-stable while
         # letting pt_mean_fraction lift ONLY the mean haircut.
         eff_mean[j], _ = playing_time_moments(mean_scale, cv_pt, fr_mean)
-        _, eff_sd[j] = playing_time_moments(mean_scale, cv_pt, fraction_remaining)
+        _, eff_sd[j] = playing_time_moments(mean_scale, cv_pt, fr_var)
         ladders.append(np.asarray(playing_time_shape(player_type, vol), dtype=float))
 
     # Playing-time scale per (iteration, player): the vectorized scale_from_uniform.
@@ -897,7 +908,7 @@ def _apply_variance_batch(
             sv_curve_arr,
             eff_mean,
             rng,
-            fraction_remaining,
+            fr_var,
             n_iter=n_iter,
             pin_role=availability_variance_off,
         )
@@ -905,9 +916,9 @@ def _apply_variance_batch(
     # One flattened copula draw over every (iter, player, stat) cell. C-order
     # ravel keeps mu/r/z aligned, same as the scalar path's per-team draw.
     all_z = rng.multivariate_normal(np.zeros(n_corr), corr_matrix, size=(n_iter, n_players))
-    counts = _negbin_copula_counts(
-        mu_mat.ravel(), r_mat.ravel(), all_z.ravel(), fraction_remaining
-    ).reshape(n_iter, n_players, n_corr)
+    counts = _negbin_copula_counts(mu_mat.ravel(), r_mat.ravel(), all_z.ravel(), fr_var).reshape(
+        n_iter, n_players, n_corr
+    )
 
     frac_missed = np.maximum(0.0, 1.0 - scales)
     repl_lines = [_replacement_line(p, is_hitter) for p in players]
@@ -938,6 +949,7 @@ def _sample_hitter_bodies(
 ) -> VarianceBatch:
     """Sample HITTER bodies' rest-of-season lines with the ROS-direct hitter
     settings: ``pt_mean_fraction=1.0`` (full mean haircut over the ROS window),
+    ``variance_fraction=1.0`` (the ROS line is already horizon-sized; #391),
     ``suppress_repl=True`` (the bench fill replaces the built-in backfill), and
     each body's FULL-SEASON pt volume (``_full_season_pt_volume``) so it samples
     at its full-volume CV band. Used for BOTH the active draw and the bench
@@ -953,6 +965,7 @@ def _sample_hitter_bodies(
         fraction_remaining,
         n_iter,
         pt_mean_fraction=1.0,
+        variance_fraction=1.0,
         suppress_repl=True,
         pt_volumes=pt_volumes,
         availability_variance_off=availability_variance_off,
@@ -988,7 +1001,8 @@ def _simulate_team_hitters_ros_direct(
       ``pt_mean_fraction=1.0`` (the projection IS the remaining mean -- apply the
       FULL mean haircut over the ROS window, NOT a re-haircut) and
       ``suppress_repl=True`` (the bench fill replaces the built-in backfill);
-      ``fraction_remaining`` keeps the SD + dispersion (the variance horizon).
+      ``variance_fraction=1.0``: the ROS line already carries the remaining-season
+      horizon, so the SD + dispersion are not shrunk again (#391).
     - Each body's displacement ``factor`` multiplies its SAMPLED ROS counts. This
       scales BOTH the mean AND the SD of that body's counts by ``factor`` (its
       variance by ``factor^2``), which is INTENDED: the curve lookup inside
@@ -1115,9 +1129,9 @@ def _simulate_team_pitchers_ros_direct(
     bench injury-fill (pitcher rich-fill is deferred). Samples the active PITCHER
     bodies' ``rest_of_season`` lines with ``pt_mean_fraction=0`` (so
     ``eff_mean = 1 - (1 - mean_scale) * 0 = 1`` -- NO playing-time mean haircut ->
-    mean == projection == ERoto, which applies no haircut to pitcher means; the
-    SD term keeps ``cv_pt * sqrt(fraction_remaining)`` so the variance horizon is
-    intact) and ``suppress_repl=True`` (no built-in backfill). Each body's
+    mean == projection == ERoto, which applies no haircut to pitcher means),
+    ``variance_fraction=1.0`` (the ROS line is already horizon-sized, so no
+    second shrink; #391) and ``suppress_repl=True`` (no built-in backfill). Each body's
     displacement ``factor`` multiplies its sampled ROS counts, then sums.
 
     Why no haircut here vs the hitter helper's ``pt_mean_fraction=1.0`` full
@@ -1154,6 +1168,7 @@ def _simulate_team_pitchers_ros_direct(
         fraction_remaining,
         n_iter,
         pt_mean_fraction=0,  # eff_mean=1: NO haircut -> mean == projection == ERoto
+        variance_fraction=1.0,  # ROS line is already horizon-sized (#391)
         suppress_repl=True,
         pt_volumes=pt_volumes,
         sv_curve=sv_curve,
@@ -1205,8 +1220,11 @@ def simulate_remaining_season_batch(
     ``team_total = YTD + ROS`` (ROS >= 0 makes the YTD floor structural, so NO
     ``max(actual, sim)`` clamp for those hitter cats). When ``None`` or a team is
     absent, that team's hitters fall back to the flat-dict top-k path UNCHANGED
-    (the byte-identical anchor). PITCHERS ALWAYS use the existing full-season
-    path + its ``max(actual, sim)`` clamp, regardless of ``effective_rosters``.
+    (the byte-identical anchor). PITCHERS take the same route: with an
+    effective roster they go through ``_simulate_team_pitchers_ros_direct``
+    (no playing-time haircut and no bench fill -- pitcher fill is not built);
+    without one they fall back to the full-season top-k path + its
+    ``max(actual, sim)`` clamp.
     """
     cats = [c.value for c in ALL_CATS]
     out: dict[str, dict[str, np.ndarray]] = {}
@@ -1537,7 +1555,8 @@ def run_ros_monte_carlo(
     ``effective_rosters`` (optional) routes each present team's HITTERS through
     the ROS-direct body engine (fixed active set + IL displacement + bench
     injury-fill); when ``None`` the batch falls entirely to the top-k path
-    (byte-identical to pre-Phase-4b). Pitchers are unaffected either way.
+    (byte-identical to pre-Phase-4b). Pitchers follow the same switch through
+    ``_simulate_team_pitchers_ros_direct``.
 
     Args:
         team_rosters: {team_name: [player dicts]} with ROS projections.

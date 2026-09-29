@@ -680,6 +680,7 @@ def test_repl_not_double_counted_on_new_path():
         0.4,
         256,
         pt_mean_fraction=1.0,
+        variance_fraction=1.0,
         suppress_repl=True,
     )
     healthy = vb.frac_missed[:, 0] == 0.0
@@ -812,6 +813,7 @@ def test_ros_direct_uses_full_season_volume_for_cv_pt():
         0.49,
         8000,
         pt_mean_fraction=1.0,
+        variance_fraction=1.0,
         suppress_repl=True,
         pt_volumes=np.array([620.0]),
     )
@@ -822,6 +824,7 @@ def test_ros_direct_uses_full_season_volume_for_cv_pt():
         0.49,
         8000,
         pt_mean_fraction=1.0,
+        variance_fraction=1.0,
         suppress_repl=True,
         pt_volumes=np.array([305.0]),
     )
@@ -837,9 +840,10 @@ def test_ros_direct_uses_full_season_volume_for_cv_pt():
     np.testing.assert_allclose(out["R"][healthy], full_vol.counts["r"][healthy, 0])
     assert not np.allclose(out["R"][healthy], ros_vol.counts["r"][healthy, 0])
 
-    # Engineering band: well under the ~2x-wide ROS-volume PT scale.
+    # Engineering band: well under the ~2x-wide ROS-volume PT scale. No
+    # sqrt(fraction_remaining): the ROS line is already horizon-sized (#391).
     cv_ros = playing_time_params(PlayerType.HITTER, 305.0)[1]
-    assert helper_sd < 45.0 * cv_ros * (0.49**0.5) * 0.9, helper_sd
+    assert helper_sd < 45.0 * cv_ros * 0.9, helper_sd
 
 
 def _mixed_rosters():
@@ -1116,3 +1120,32 @@ def test_sv_role_mixture_widens_variance_mean_stable(monkeypatch):
     assert mix.var(axis=0).mean() > 1.5 * base.var(axis=0).mean()
     # mean-neutral: per-pitcher SV mean unchanged within tolerance
     assert abs(mix.mean() - base.mean()) / base.mean() < 0.03
+
+
+def test_ros_direct_variance_not_shrunk_by_fraction_remaining():
+    """#391: ROS-direct bodies carry ROS lines, already sized to the remaining
+    season, so the sampled spread must not shrink again with fraction_remaining.
+    Same seed, same bodies: the hitter and pitcher helpers return identical draws
+    whether a quarter or three quarters of the season is left."""
+    hitter = _hitter("Solo", Position.OF, "1", r=60)
+    pitcher = _pitcher_custom("Arm", Position.P, "2", w=8, k=120, sv=10, ip=110)
+    for helper, eff in (
+        (_simulate_team_hitters_ros_direct, _solo_eff(hitter)),
+        (_simulate_team_pitchers_ros_direct, _solo_eff_pitcher(pitcher)),
+    ):
+        late = helper(eff, 0.25, np.random.default_rng(3), 400)
+        early = helper(eff, 0.75, np.random.default_rng(3), 400)
+        for cat in late:
+            np.testing.assert_allclose(late[cat], early[cat])
+
+
+def test_full_season_path_still_shrinks_variance_with_fraction_remaining():
+    """The legacy full-season sampler (variance_fraction unset) prices variance
+    on full-season means, so only the remaining share is still ahead: its spread
+    must stay narrower than the same draw with no horizon shrink."""
+    flat = [_hitter("Solo", Position.OF, "1", r=80).to_flat_dict()]
+    legacy = _apply_variance_batch(flat, PlayerType.HITTER, np.random.default_rng(5), 0.25, 4000)
+    unshrunk = _apply_variance_batch(
+        flat, PlayerType.HITTER, np.random.default_rng(5), 0.25, 4000, variance_fraction=1.0
+    )
+    assert legacy.counts["r"][:, 0].std() < 0.8 * unshrunk.counts["r"][:, 0].std()
