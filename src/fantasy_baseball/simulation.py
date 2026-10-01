@@ -13,8 +13,20 @@ from scipy.special import _ufuncs as _scu  # Boost-backed nbinom ppf (see _nbino
 from scipy.special import ndtr, pdtr, pdtrik
 
 from fantasy_baseball.distributions import build_distributions
-from fantasy_baseball.mc_fill import ActiveSample, BenchSample, allocate_bench_fill
-from fantasy_baseball.mc_roster import ActiveBody, BenchBody, EffectiveRoster
+from fantasy_baseball.mc_fill import (
+    PITCHER_FILL_COLS,
+    ActiveSample,
+    BenchSample,
+    allocate_bench_fill,
+    allocate_pitcher_fill,
+)
+from fantasy_baseball.mc_roster import (
+    ActiveBody,
+    BenchBody,
+    BenchPitcherBody,
+    EffectiveRoster,
+    pitcher_role,
+)
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.sgp import closer_mixture
@@ -22,16 +34,21 @@ from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.utils.constants import (
     AB_PER_PA,
     CLOSER_SV_THRESHOLD,
+    COVER_RP_WITH_SP,
+    COVER_SP_WITH_RP,
     DEFAULT_TEAM_AB,
     DEFAULT_TEAM_IP,
     HITTER_CORR_STATS,
     HITTER_CORRELATION,
     HITTING_COUNTING,
+    LINEUP_LOCK_DAYS,
     PITCHER_CORR_STATS,
     PITCHER_CORRELATION,
     PITCHING_COUNTING,
     QUANTILE_LEVELS,
+    REGULAR_SEASON_DAYS,
     REPLACEMENT_BY_POSITION,
+    ROS_PT_LEVELS,
     STAT_DISPERSION,
     ZERO_IP_RATE_SENTINEL,
     role_from_ip,
@@ -45,6 +62,7 @@ from fantasy_baseball.utils.playing_time import (
     playing_time_moments,
     playing_time_params,
     playing_time_shape,
+    ros_playing_time_quantiles,
     scale_from_uniform,
 )
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -780,6 +798,7 @@ def _apply_variance_batch(
     *,
     pt_mean_fraction: float | None = None,
     variance_fraction: float | None = None,
+    ros_horizon: float | None = None,
     suppress_repl: bool = False,
     pt_volumes: np.ndarray | None = None,
     sv_curve: np.ndarray | None = None,
@@ -815,6 +834,14 @@ def _apply_variance_batch(
       twice. Measured on 2026 actuals (#391): SD(z) 1.35 -> 1.02 hitting, 1.30 ->
       0.95 pitching, 1.35 -> 1.10 SV. Closed-form knobs only: the rng stream is
       unchanged.
+    - ``ros_horizon``: when set (the share of season left), each player's
+      playing-time scale is drawn from the IN-SEASON curve
+      (``ros_playing_time_quantiles``) instead of the full-season mean/cv/shape,
+      and ``pt_mean_fraction``/``eff_sd`` are not used for it. Over a short window
+      real outcomes pile up near 0 and 1; the full-season shape put too much mass in
+      between (#393). SV gets no playing-time haircut on this path (its mean rides
+      1.0): the closer role mixture already prices losing saves. ``None`` keeps the
+      full-season curve -> byte-identical. Consumes the same uniforms either way.
     - ``suppress_repl``: when True the built-in ``repl_contrib`` is identically
       zero (the new fill engine owns the backfill); default False folds the
       replacement line in exactly as before.
@@ -885,6 +912,32 @@ def _apply_variance_batch(
     # frac_missed[it, idx]) then reads out of bounds for it >= 1.
     pt_spread = np.zeros_like(z_pt) if availability_variance_off else z_pt * eff_sd[None, :]
     scales = np.maximum(0.0, eff_mean[None, :] + pt_spread)
+    sv_eff_mean = eff_mean
+    if ros_horizon is not None:
+        # In-season curve (#393): draw the realized/projected ratio directly from the
+        # same uniforms `us`, so the rng stream is unchanged.
+        ros_q = np.array(
+            [
+                ros_playing_time_quantiles(
+                    player_type,
+                    float(pt_volumes[j])
+                    if pt_volumes is not None
+                    else _projected_volume(p, is_hitter),
+                    ros_horizon,
+                )
+                for j, p in enumerate(players)
+            ]
+        )
+        if availability_variance_off:
+            grid = np.linspace(0.0, 1.0, 1001)
+            means = np.array([np.interp(grid, ROS_PT_LEVELS, q).mean() for q in ros_q])
+            scales = np.broadcast_to(means[None, :], us.shape).copy()
+        else:
+            scales = np.empty_like(us)
+            for j in range(n_players):
+                scales[:, j] = np.interp(us[:, j], ROS_PT_LEVELS, ros_q[j])
+        scales = np.maximum(0.0, scales)
+        sv_eff_mean = np.ones(n_players)
 
     base = {col: np.array([safe_float(p.get(col)) for p in players]) for col in counting_cols}
 
@@ -906,7 +959,7 @@ def _apply_variance_batch(
         mu_mat[:, :, idx_map["sv"]] = _sv_role_mu(
             base["sv"],
             sv_curve_arr,
-            eff_mean,
+            sv_eff_mean,
             rng,
             fr_var,
             n_iter=n_iter,
@@ -966,10 +1019,31 @@ def _sample_hitter_bodies(
         n_iter,
         pt_mean_fraction=1.0,
         variance_fraction=1.0,
+        ros_horizon=fraction_remaining,
         suppress_repl=True,
         pt_volumes=pt_volumes,
         availability_variance_off=availability_variance_off,
     )
+
+
+def _fillable_frac_missed(
+    frac_missed: np.ndarray, rng: np.random.Generator, fraction_remaining: float
+) -> np.ndarray:
+    """Missed time the bench or a pickup can actually cover, after the weekly lock.
+
+    Lineups lock for the scoring week, so an injured starter keeps his slot, putting
+    up nothing, until the next lock (#393). The dead time is uniform on 0..7 days
+    (injuries land on any day of the week; mean 3.5). Each body's missed time is
+    treated as one spell with one lock delay. Expressed as a share of the remaining
+    season, the same unit ``frac_missed`` uses, so it serves hitters (games) and
+    pitchers (season share) alike. Draws from ``rng`` AFTER every other draw, so the
+    existing streams are unchanged.
+    """
+    if frac_missed.size == 0:
+        return frac_missed
+    remaining_days = max(fraction_remaining * REGULAR_SEASON_DAYS, 1e-9)
+    lag_share = rng.uniform(0.0, LINEUP_LOCK_DAYS, size=frac_missed.shape) / remaining_days
+    return np.maximum(0.0, frac_missed - lag_share)
 
 
 def _simulate_team_hitters_ros_direct(
@@ -1082,6 +1156,9 @@ def _simulate_team_hitters_ros_direct(
     def _repl_for(ab: ActiveBody) -> dict[str, float]:
         return _replacement_line(ab.player.to_flat_dict(), is_hitter=True)
 
+    # Weekly lineup lock: only missed time after the next lock can be covered.
+    frac_missed = _fillable_frac_missed(frac_missed, rng, fraction_remaining)
+
     # Per-iteration fill allocation (the sanctioned small Python loop: <=12 active,
     # <=2 bench). All sampling + rate/capacity math is vectorized above; the loop
     # only assembles per-iteration samples and runs the greedy allocation.
@@ -1113,6 +1190,40 @@ def _simulate_team_hitters_ros_direct(
     return out
 
 
+def _sample_pitcher_bodies(
+    bodies: list[ActiveBody] | list[BenchPitcherBody],
+    rng: np.random.Generator,
+    fraction_remaining: float,
+    n_iter: int,
+    *,
+    availability_variance_off: bool = False,
+) -> VarianceBatch:
+    """Sample PITCHER bodies' rest-of-season lines with the ROS-direct settings,
+    mirroring ``_sample_hitter_bodies``: ``pt_mean_fraction=1.0`` (the injury
+    haircut over the ROS window, restored by the pitcher fill), ``variance_fraction
+    =1.0`` (#391), ``suppress_repl=True`` (the fill owns the backfill), and each
+    body's FULL-SEASON IP and SV for the playing-time curve and closer-role lookups.
+    Used for BOTH the active draw and the bench draw, so the two are sampled
+    identically by construction."""
+    flats = [b.player.to_flat_dict() for b in bodies]
+    pt_volumes = np.array([_full_season_pt_volume(b.player, is_hitter=False) for b in bodies])
+    sv_curve = np.array([_full_season_sv(b.player) for b in bodies])
+    return _apply_variance_batch(
+        flats,
+        PlayerType.PITCHER,
+        rng,
+        fraction_remaining,
+        n_iter,
+        pt_mean_fraction=1.0,
+        variance_fraction=1.0,
+        ros_horizon=fraction_remaining,
+        suppress_repl=True,
+        pt_volumes=pt_volumes,
+        sv_curve=sv_curve,
+        availability_variance_off=availability_variance_off,
+    )
+
+
 def _simulate_team_pitchers_ros_direct(
     effective_roster: EffectiveRoster,
     fraction_remaining: float,
@@ -1125,29 +1236,29 @@ def _simulate_team_pitchers_ros_direct(
     ``{W, K, SV}`` + ``ros_ip``/``ros_er``/``ros_bb``/``ros_ha`` (for the
     ERA/WHIP recombine).
 
-    Mirrors ``_simulate_team_hitters_ros_direct`` but with NO mean haircut and NO
-    bench injury-fill (pitcher rich-fill is deferred). Samples the active PITCHER
-    bodies' ``rest_of_season`` lines with ``pt_mean_fraction=0`` (so
-    ``eff_mean = 1 - (1 - mean_scale) * 0 = 1`` -- NO playing-time mean haircut ->
-    mean == projection == ERoto, which applies no haircut to pitcher means),
-    ``variance_fraction=1.0`` (the ROS line is already horizon-sized, so no
-    second shrink; #391) and ``suppress_repl=True`` (no built-in backfill). Each body's
-    displacement ``factor`` multiplies its sampled ROS counts, then sums.
+    Same model as ``_simulate_team_hitters_ros_direct`` (#393): active bodies are
+    sampled with the injury haircut (``_sample_pitcher_bodies``), each body's
+    displacement ``factor`` multiplies its sampled ROS counts, and an injured
+    arm's missed time is covered by the bench (``allocate_pitcher_fill``).
 
-    Why no haircut here vs the hitter helper's ``pt_mean_fraction=1.0`` full
-    haircut: apply the haircut ONLY when there is a fill to restore it. Hitters
-    apply it and ``allocate_bench_fill`` restores it; pitchers have NO fill, so a
-    haircut would stay UNRESTORED and deflate the pitcher mean ~15-24% below
-    ERoto -- a standings-corrupting bug. With ``pt_mean_fraction=0`` the pitcher
-    mean matches ERoto by construction (no haircut, no fill, no premium).
+    Pitcher-specific choices:
 
-    Healthy bench pitchers are absent from ``EffectiveRoster.active`` (dropped by
-    ``build_effective_roster``) so they never contribute. The CALLER owns the YTD
-    blend (``team_total = YTD + ROS``, no clamp; ERA/WHIP recombine).
+    - Missed time is a SHARE of the remaining season, not games or innings: a
+      covering arm pitches his own normal workload for the stretch he covers, so a
+      reliever covering a starter adds reliever innings (no IP cap or minimum in
+      this league, so lost innings are simply lost).
+    - Starters cover starters, relievers cover relievers (``pitcher_role``). The
+      residual goes to a replacement-level streamer of the injured arm's role.
+    - SV is not filled; the closer role mixture owns the save downside.
+
+    Bench bodies are sampled with their OWN variance, appended after the active
+    draw, so an empty bench pool consumes no rng. The CALLER owns the YTD blend
+    (``team_total = YTD + ROS``, no clamp; ERA/WHIP recombine).
     """
     active_p_bodies = [
         b for b in effective_roster.active if b.player.player_type == PlayerType.PITCHER
     ]
+    bench_p_bodies = effective_roster.bench_pitchers
     cats = {"W": "w", "K": "k", "SV": "sv"}
     zeros = np.zeros(n_iter)
     if not active_p_bodies:
@@ -1156,32 +1267,90 @@ def _simulate_team_pitchers_ros_direct(
             out[ros_key] = zeros.copy()
         return out
 
-    active_flats = [b.player.to_flat_dict() for b in active_p_bodies]
-    pt_volumes = np.array(
-        [_full_season_pt_volume(b.player, is_hitter=False) for b in active_p_bodies]
-    )
-    sv_curve = np.array([_full_season_sv(b.player) for b in active_p_bodies])
-    vb = _apply_variance_batch(
-        active_flats,
-        PlayerType.PITCHER,
+    vb = _sample_pitcher_bodies(
+        active_p_bodies,
         rng,
         fraction_remaining,
         n_iter,
-        pt_mean_fraction=0,  # eff_mean=1: NO haircut -> mean == projection == ERoto
-        variance_fraction=1.0,  # ROS line is already horizon-sized (#391)
-        suppress_repl=True,
-        pt_volumes=pt_volumes,
-        sv_curve=sv_curve,
         availability_variance_off=availability_variance_off,
     )
     factors = np.array([b.factor for b in active_p_bodies])  # (n_active,)
     realized = {col: vb.counts[col] * factors[None, :] for col in PITCHING_COUNTING}
 
-    out = {cat: realized[col].sum(axis=1) for cat, col in cats.items()}
-    out["ros_ip"] = realized["ip"].sum(axis=1)
-    out["ros_er"] = realized["er"].sum(axis=1)
-    out["ros_bb"] = realized["bb"].sum(axis=1)
-    out["ros_ha"] = realized["h_allowed"].sum(axis=1)
+    bench_vb = _sample_pitcher_bodies(
+        bench_p_bodies,
+        rng,
+        fraction_remaining,
+        n_iter,
+        availability_variance_off=availability_variance_off,
+    )
+    # Capacity = the bench arm's sampled availability (share of the remaining
+    # season he can pitch); per-share rate = realized / scale (mean-neutral).
+    eps = 1e-9
+    bench_valid = bench_vb.scales > eps
+    safe_scales = np.where(bench_valid, bench_vb.scales, 1.0)
+    bench_capacity = np.where(bench_valid, bench_vb.scales, 0.0)
+    bench_per_share = {
+        col: np.where(bench_valid, bench_vb.counts[col] / safe_scales, 0.0)
+        for col in PITCHER_FILL_COLS
+    }
+
+    # Who covers whom: an injured arm is covered by an arm of his own role most of
+    # the time, but owners often cross over -- in 2026's pitcher-for-pitcher swaps a
+    # starter was replaced by a reliever 32% of the time and a reliever by a starter
+    # 45% (#393). Draw the covering role per (iteration, body); the bench arm and the
+    # replacement streamer then come from that role.
+    own_role = np.array([pitcher_role(ab.player) for ab in active_p_bodies])
+    repl_by_role = {
+        role: {
+            col: float(v) * fraction_remaining for col, v in REPLACEMENT_BY_POSITION[role].items()
+        }
+        for role in ("SP", "RP")
+    }
+
+    fill_totals: dict[str, np.ndarray] = {col: np.zeros(n_iter) for col in PITCHER_FILL_COLS}
+    # Weekly lineup lock: only missed time after the next lock can be covered.
+    frac_missed = _fillable_frac_missed(vb.frac_missed, rng, fraction_remaining)
+    flip_p = np.where(own_role == "SP", COVER_SP_WITH_RP, COVER_RP_WITH_SP)
+    flips = rng.random(frac_missed.shape) < flip_p[None, :]
+    cover_role = np.where(flips, np.where(own_role == "SP", "RP", "SP")[None, :], own_role[None, :])
+    index_of = {id(ab): j for j, ab in enumerate(active_p_bodies)}
+    for it in range(n_iter):
+        actives = [
+            ActiveSample(body=body, frac_missed=float(frac_missed[it, idx]))
+            for idx, body in enumerate(active_p_bodies)
+        ]
+        benches = [
+            BenchSample(
+                body=bb,
+                per_game_counts={
+                    col: float(bench_per_share[col][it, b_idx]) for col in PITCHER_FILL_COLS
+                },
+                capacity=float(bench_capacity[it, b_idx]),
+            )
+            for b_idx, bb in enumerate(bench_p_bodies)
+        ]
+        roles_it = [str(r) for r in cover_role[it]]
+
+        def _cover_role(ab: ActiveBody, roles: list[str] = roles_it) -> str:
+            return roles[index_of[id(ab)]]
+
+        def _cover_repl(ab: ActiveBody, roles: list[str] = roles_it) -> dict[str, float]:
+            return repl_by_role[roles[index_of[id(ab)]]]
+
+        fill = allocate_pitcher_fill(actives, benches, _cover_role, _cover_repl).fill_counts
+        for col in PITCHER_FILL_COLS:
+            fill_totals[col][it] = fill[col]
+
+    def _total(col: str) -> np.ndarray:
+        own = np.asarray(realized[col].sum(axis=1), dtype=float)
+        return own + fill_totals[col] if col in fill_totals else own
+
+    out = {cat: _total(col) for cat, col in cats.items()}
+    out["ros_ip"] = _total("ip")
+    out["ros_er"] = _total("er")
+    out["ros_bb"] = _total("bb")
+    out["ros_ha"] = _total("h_allowed")
     return out
 
 

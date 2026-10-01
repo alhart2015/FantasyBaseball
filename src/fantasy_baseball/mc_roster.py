@@ -8,7 +8,7 @@ team at MC setup on the ROS means. Consumed by the per-iteration fill engine
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from fantasy_baseball.models.player import Player, PlayerType
 from fantasy_baseball.models.positions import Position
@@ -19,7 +19,7 @@ from fantasy_baseball.scoring import (
     _real_positions,
 )
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.utils.constants import Category
+from fantasy_baseball.utils.constants import Category, role_from_ip, safe_float
 
 PA_PER_GAME: float = 4.3  # shared per-game constant (Phase 3 reuses; do not duplicate)
 
@@ -40,9 +40,43 @@ class BenchBody:
 
 
 @dataclass(frozen=True)
+class BenchPitcherBody:
+    """A healthy bench pitcher available to cover an injured active pitcher.
+
+    Pitcher fill is measured in TIME (share of the remaining season), not games or
+    innings: a covering arm pitches his own normal workload for the weeks he covers,
+    so a reliever covering a starter adds reliever innings. ``role`` ("SP"/"RP")
+    gates who may cover whom -- starters cover starters, relievers cover relievers.
+    """
+
+    player: Player
+    role: str
+    per_share_value: float  # ROS SGP -- value of covering the whole remaining season
+
+
+@dataclass(frozen=True)
 class EffectiveRoster:
     active: list[ActiveBody]  # active-slot + IL bodies, with factors
     bench: list[BenchBody]  # healthy-bench HITTER fill pool
+    bench_pitchers: list[BenchPitcherBody] = field(default_factory=list)  # pitcher fill pool
+
+
+def pitcher_role(p: Player) -> str:
+    """'SP' or 'RP' for the pitcher fill's who-covers-whom rule.
+
+    Same precedence as ``simulation._replacement_line``: an explicit SP/RP
+    eligibility wins (SP for swingmen eligible at both); otherwise
+    ``role_from_ip`` on FULL-SEASON IP (the threshold is a full-season bar --
+    issue #251), falling back to the ROS line before any games are played.
+    """
+    positions = set(p.positions)
+    if Position.SP in positions:
+        return "SP"
+    if Position.RP in positions:
+        return "RP"
+    line = p.full_season_projection if p.full_season_projection is not None else p.rest_of_season
+    ip = safe_float(getattr(line, "ip", 0.0)) if line is not None else 0.0
+    return role_from_ip(ip)
 
 
 def _g_ros_full(p: Player) -> float:
@@ -50,7 +84,8 @@ def _g_ros_full(p: Player) -> float:
 
     Never trusts a literal g==0 as 'plays zero games' (the falsy-zero footgun):
     derives from ROS PA via PA_PER_GAME. Pitchers fall back to their own g (now
-    plumbed) or, absent that, are left at 0 -- pitcher bench-fill is deferred.
+    plumbed) or, absent that, are left at 0 -- the pitcher fill is measured in
+    season share, not games, so it never reads this.
     """
     ros = p.rest_of_season
     if ros is None:
@@ -76,7 +111,8 @@ def build_effective_roster(
     ``active`` carries active-slot bodies + IL bodies, each with its displacement
     factor (from ERoto's ``_compute_displacement_factors``) and ``g_ros_adj``
     (= factor * g_ros_full). ``bench`` is the healthy-bench HITTER fill pool;
-    healthy bench pitchers are dropped (pitcher bench-fill is deferred to Phase 5).
+    ``bench_pitchers`` is the healthy-bench PITCHER fill pool (#393), each tagged
+    with its SP/RP role.
 
     ``denoms`` are the resolved league SGP denominators used to score each
     bench body's ``per_game_value`` (the fill engine's ordering key); ``None``
@@ -107,9 +143,20 @@ def build_effective_roster(
         active_bodies.append(ActiveBody(player=b, factor=factor, g_ros_adj=factor * _g_ros_full(b)))
 
     bench_bodies: list[BenchBody] = []
+    bench_pitchers: list[BenchPitcherBody] = []
     for b in bench:
+        if b.player_type == PlayerType.PITCHER:
+            value = (
+                calculate_player_sgp(b.rest_of_season, denoms)
+                if b.rest_of_season is not None
+                else 0.0
+            )
+            bench_pitchers.append(
+                BenchPitcherBody(player=b, role=pitcher_role(b), per_share_value=value)
+            )
+            continue
         if b.player_type != PlayerType.HITTER:
-            continue  # pitcher bench-fill deferred (Phase 5); healthy bench pitchers excluded
+            continue
         gf = _g_ros_full(b)
         sgp = (
             calculate_player_sgp(b.rest_of_season, denoms) if b.rest_of_season is not None else 0.0
@@ -124,7 +171,7 @@ def build_effective_roster(
             )
         )
 
-    return EffectiveRoster(active=active_bodies, bench=bench_bodies)
+    return EffectiveRoster(active=active_bodies, bench=bench_bodies, bench_pitchers=bench_pitchers)
 
 
 def build_effective_rosters(

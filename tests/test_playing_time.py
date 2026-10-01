@@ -157,3 +157,55 @@ class TestScaleFromUniform:
         z = PLAYING_TIME_SHAPE["RP"][0]["z"]
         s = scale_from_uniform(crv["mean_scale"], crv["cv_pt"], z, 0.999, 1.0)
         assert s > 1.5
+
+
+# ---- In-season curve (#393) ----
+
+
+def _mean_of_quantiles(q):
+    import numpy as np
+
+    from fantasy_baseball.utils.constants import ROS_PT_LEVELS
+
+    return float(np.interp(np.linspace(0.0, 1.0, 1001), ROS_PT_LEVELS, q).mean())
+
+
+def test_ros_curve_level_matches_full_season_mean_scale():
+    """Shape from the in-season windows, level from the full-season curve (fitted
+    against real projections, so it carries their innings optimism)."""
+    from fantasy_baseball.models.player import PlayerType
+    from fantasy_baseball.utils.playing_time import playing_time_params, ros_playing_time_quantiles
+
+    for ptype, vol in (
+        (PlayerType.HITTER, 600.0),
+        (PlayerType.PITCHER, 170.0),
+        (PlayerType.PITCHER, 65.0),
+    ):
+        for f in (0.7, 0.4, 0.15):
+            target, _ = playing_time_params(ptype, vol)
+            assert (
+                abs(_mean_of_quantiles(ros_playing_time_quantiles(ptype, vol, f)) - target) < 1e-3
+            )
+
+
+def test_ros_curve_short_window_has_more_lost_time_at_the_bottom():
+    """Over a short window a player is mostly healthy or out for the rest of it:
+    the low quantiles sit closer to zero with 15% of the season left than 75%."""
+    from fantasy_baseball.models.player import PlayerType
+    from fantasy_baseball.utils.playing_time import ros_playing_time_quantiles
+
+    late = ros_playing_time_quantiles(PlayerType.PITCHER, 170.0, 0.15)
+    early = ros_playing_time_quantiles(PlayerType.PITCHER, 170.0, 0.75)
+    assert late[3] < early[3]  # 5th percentile
+
+
+def test_ros_curve_clamps_outside_the_fitted_horizons():
+    from fantasy_baseball.models.player import PlayerType
+    from fantasy_baseball.utils.playing_time import ros_playing_time_quantiles
+
+    assert ros_playing_time_quantiles(PlayerType.HITTER, 600.0, 0.02) == ros_playing_time_quantiles(
+        PlayerType.HITTER, 600.0, 0.15
+    )
+    assert ros_playing_time_quantiles(PlayerType.HITTER, 600.0, 0.95) == ros_playing_time_quantiles(
+        PlayerType.HITTER, 600.0, 0.75
+    )

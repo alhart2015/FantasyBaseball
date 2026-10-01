@@ -207,3 +207,96 @@ def test_tie_break_by_player_id_ascending():
         _no_replacement,
     )
     assert abs(res.fill_counts["r"] - 7.0) < 1e-6  # id "2" (LowId) chosen, gives 7
+
+
+# ---- Pitcher fill (#393): season-share units, starters cover starters ----
+
+
+def _arm(name, pid):
+    return Player(
+        name=name,
+        player_type=PlayerType.PITCHER,
+        positions=[Position.P],
+        selected_position=Position.P,
+        yahoo_id=pid,
+    )
+
+
+def _p_active(name, pid, factor=1.0):
+    return ActiveBody(player=_arm(name, pid), factor=factor, g_ros_adj=0.0)
+
+
+def _p_bench(name, pid, role, value=1.0):
+    from fantasy_baseball.mc_roster import BenchPitcherBody
+
+    return BenchPitcherBody(player=_arm(name, pid), role=role, per_share_value=value)
+
+
+def _p_line(**kw):
+    from fantasy_baseball.mc_fill import PITCHER_FILL_COLS
+
+    return {c: float(kw.get(c, 0.0)) for c in PITCHER_FILL_COLS}
+
+
+def test_pitcher_fill_same_role_bench_covers_missed_share():
+    from fantasy_baseball.mc_fill import allocate_pitcher_fill
+
+    ace = _p_active("Ace", "1")
+    spot = _p_bench("Spot", "2", "SP")
+    out = allocate_pitcher_fill(
+        [ActiveSample(body=ace, frac_missed=0.25)],
+        [BenchSample(body=spot, per_game_counts=_p_line(ip=80.0, k=70.0), capacity=1.0)],
+        role_of=lambda _ab: "SP",
+        replacement_per_share=lambda _ab: _p_line(ip=999.0),
+    ).fill_counts
+    # A quarter of the remaining season, at the bench arm's own per-share line.
+    assert out["ip"] == 20.0 and out["k"] == 17.5
+
+
+def test_pitcher_fill_other_role_bench_is_skipped_for_replacement():
+    """Role gate: an injured starter is not covered by a bench reliever when the
+    covering role is 'SP'; the residual goes to the replacement streamer."""
+    from fantasy_baseball.mc_fill import allocate_pitcher_fill
+
+    ace = _p_active("Ace", "1")
+    setup = _p_bench("Setup", "2", "RP")
+    out = allocate_pitcher_fill(
+        [ActiveSample(body=ace, frac_missed=0.5)],
+        [BenchSample(body=setup, per_game_counts=_p_line(ip=60.0, k=80.0), capacity=1.0)],
+        role_of=lambda _ab: "SP",
+        replacement_per_share=lambda _ab: _p_line(ip=100.0, k=90.0),
+    ).fill_counts
+    assert out["ip"] == 50.0 and out["k"] == 45.0
+
+
+def test_pitcher_fill_capacity_is_the_bench_arms_own_availability():
+    from fantasy_baseball.mc_fill import allocate_pitcher_fill
+
+    out = allocate_pitcher_fill(
+        [
+            ActiveSample(body=_p_active("A", "1"), frac_missed=0.5),
+            ActiveSample(body=_p_active("B", "2"), frac_missed=0.5),
+        ],
+        [
+            BenchSample(
+                body=_p_bench("Spot", "3", "SP"), per_game_counts=_p_line(ip=80.0), capacity=0.6
+            )
+        ],
+        role_of=lambda _ab: "SP",
+        replacement_per_share=lambda _ab: _p_line(ip=40.0),
+    ).fill_counts
+    # 1.0 share missed in total; the bench arm covers 0.6 of it, replacement the other 0.4.
+    assert abs(out["ip"] - (0.6 * 80.0 + 0.4 * 40.0)) < 1e-9
+
+
+def test_pitcher_fill_never_fills_saves():
+    from fantasy_baseball.mc_fill import PITCHER_FILL_COLS, allocate_pitcher_fill
+
+    assert "sv" not in PITCHER_FILL_COLS
+    out = allocate_pitcher_fill(
+        [ActiveSample(body=_p_active("Closer", "1"), frac_missed=1.0)],
+        [],
+        role_of=lambda _ab: "RP",
+        replacement_per_share=lambda _ab: {"sv": 30.0, "ip": 60.0},
+    ).fill_counts
+    assert "sv" not in out and out["ip"] == 60.0
