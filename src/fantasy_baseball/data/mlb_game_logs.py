@@ -136,19 +136,30 @@ def _fetch_boxscore(game_pk: int) -> dict[str, Any]:
     return data
 
 
+# The /people endpoint rejects long personIds lists (HTTP 400 at ~800 ids, fine at
+# 100). A full-season backfill asks about every pitcher at once, so request in chunks.
+_POSITIONS_CHUNK = 100
+
+
 def _fetch_positions(mlbam_ids: list[int]) -> dict[str, str | None]:
-    """Batch primaryPosition.code lookup. {str(id): code}; code may be None."""
-    if not mlbam_ids:
-        return {}
-    resp = requests.get(
-        f"{_MLB_API}/people",
-        params={"personIds": ",".join(str(i) for i in mlbam_ids)},
-        timeout=20,
-    )
-    resp.raise_for_status()
+    """Batch primaryPosition.code lookup. {str(id): code}; code may be None.
+
+    Requests ``_POSITIONS_CHUNK`` ids at a time: one request for a whole season's
+    pitchers fails with HTTP 400, which ``_resolve_positions`` swallows -- every
+    pitcher stays unresolved, no pitching is recorded, and the watermark never
+    advances, so the sync retries and fails on every run.
+    """
     out: dict[str, str | None] = {}
-    for person in resp.json().get("people", []):
-        out[str(person["id"])] = person.get("primaryPosition", {}).get("code")
+    for i in range(0, len(mlbam_ids), _POSITIONS_CHUNK):
+        chunk = mlbam_ids[i : i + _POSITIONS_CHUNK]
+        resp = requests.get(
+            f"{_MLB_API}/people",
+            params={"personIds": ",".join(str(pid) for pid in chunk)},
+            timeout=20,
+        )
+        resp.raise_for_status()
+        for person in resp.json().get("people", []):
+            out[str(person["id"])] = person.get("primaryPosition", {}).get("code")
     return out
 
 
