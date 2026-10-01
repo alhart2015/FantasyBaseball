@@ -452,6 +452,11 @@ LINEUP_LOCK_DAYS: float = 7.0
 # reliever dropped -> starter added 23 of 51.
 COVER_SP_WITH_RP: float = 0.32
 COVER_RP_WITH_SP: float = 0.45
+# Spread of K rate among the arms owners actually pick up (#396): IP-weighted
+# log-SD of projected K/IP over 2026's 143 in-season pitcher adds (0.126; starters
+# 0.125, relievers 0.120). The replacement line is the pool's average; this is the
+# talent spread around it. Projection error on top is already in STAT_DISPERSION.
+STREAMER_K_RATE_LOG_SD: float = 0.125
 # Regular-season length in days, to turn a share of the season into days.
 REGULAR_SEASON_DAYS: float = 185.0
 

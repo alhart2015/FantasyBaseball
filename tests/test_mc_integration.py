@@ -872,7 +872,7 @@ def test_pitchers_ros_direct_track_eroto_projection():
     proj_k = sum(p.rest_of_season.k for p in rosters["Me"] if p.player_type == PlayerType.PITCHER)
     proj_ip = sum(p.rest_of_season.ip for p in rosters["Me"] if p.player_type == PlayerType.PITCHER)
     # #393: the injury cut applies and the bench / replacement fill restores most
-    # of it, so K lands a little under the projection (measured 0.93x).
+    # of it, so K lands a little under the projection (measured 0.91x).
     assert 0.80 * proj_k < with_eff["Me"]["K"].mean() < proj_k, with_eff["Me"]["K"].mean()
     assert abs(with_eff["Me"]["ERA"].mean()) > 0  # ERA recombines from ROS-direct volume
     assert with_eff["Me"]["W"].mean() > 0 and proj_ip > 0
@@ -999,7 +999,7 @@ def test_pitcher_mean_cut_then_partly_restored():
     With one active SP and no bench, the missed time goes to a replacement-level
     streamer (fewer strikeouts and innings than the starter), so the K and IP
     means land below the projection but well above the bare cut. Measured: K
-    0.94x, IP 0.92x at half a season left.
+    0.93x, IP 0.91x at half a season left (the streamer can get hurt too, #396).
     """
     p = _pitcher_custom("Ace", Position.P, "1", k=150, ip=180)
     eff = _solo_eff_pitcher(p, factor=1.0)
@@ -1223,3 +1223,34 @@ def test_bench_closer_never_adds_saves_through_the_fill(monkeypatch):
         _cover_roster(dict(w=4, k=70, sv=0, ip=65, g=65)), 0.5, np.random.default_rng(4), 2000
     )
     np.testing.assert_allclose(with_closer["SV"], no_saves["SV"])
+
+
+def test_streamer_line_is_sampled_not_fixed(monkeypatch):
+    """#396: the replacement streamer is a pitcher too, with his own performance
+    draw. An active arm projected for nothing contributes only the fill, so a
+    fixed replacement line would make K/IP identical in every iteration."""
+    from fantasy_baseball import simulation
+
+    monkeypatch.setattr(simulation, "STREAMER_K_RATE_LOG_SD", 0.0)
+    ghost = _pitcher_custom("Ghost", Position.P, "1", w=0, k=0, ip=0, er=0, bb=0, ha=0, g=0)
+    out = _simulate_team_pitchers_ros_direct(
+        _solo_eff_pitcher(ghost), 0.5, np.random.default_rng(5), 2000
+    )
+    filled = out["ros_ip"] > 1.0
+    assert filled.sum() > 100
+    k_per_ip = out["K"][filled] / out["ros_ip"][filled]
+    assert k_per_ip.std() > 0.05, k_per_ip.std()
+
+
+def test_streamer_k_rate_spread_widens_k_and_keeps_mean(monkeypatch):
+    """#396: which streamer you get varies in K rate (STREAMER_K_RATE_LOG_SD).
+    A wider spread widens team K and leaves its mean alone (mean-1 multiplier)."""
+    from fantasy_baseball import simulation
+
+    eff = _solo_eff_pitcher(_pitcher_custom("Ace", Position.P, "1", k=150, ip=180))
+    monkeypatch.setattr(simulation, "STREAMER_K_RATE_LOG_SD", 0.0)
+    narrow = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(3), 6000)
+    monkeypatch.setattr(simulation, "STREAMER_K_RATE_LOG_SD", 0.6)
+    wide = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(3), 6000)
+    assert wide["K"].std() > narrow["K"].std()
+    assert abs(wide["K"].mean() / narrow["K"].mean() - 1.0) < 0.02

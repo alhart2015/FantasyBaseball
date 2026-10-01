@@ -50,6 +50,7 @@ from fantasy_baseball.utils.constants import (
     REPLACEMENT_BY_POSITION,
     ROS_PT_LEVELS,
     STAT_DISPERSION,
+    STREAMER_K_RATE_LOG_SD,
     ZERO_IP_RATE_SENTINEL,
     role_from_ip,
     safe_float,
@@ -1315,6 +1316,41 @@ def _simulate_team_pitchers_ros_direct(
     flips = rng.random(frac_missed.shape) < flip_p[None, :]
     cover_role = np.where(flips, np.where(own_role == "SP", "RP", "SP")[None, :], own_role[None, :])
     index_of = {id(ab): j for j, ab in enumerate(active_p_bodies)}
+
+    # The streamer is a pitcher too: one replacement-level arm per (active body,
+    # role), sampled with the same in-season playing-time curve and NegBin
+    # performance draw as every rostered arm. He covers his share of the season at
+    # his own sampled ROS line, so he can get hurt, get skipped, or have a bad
+    # month. A fixed replacement line made the fill give back lost innings almost
+    # exactly, cancelling the injury variance (team K ~1.6x too confident; #396).
+    roles = ("SP", "RP")
+    repl_flats = [
+        {**repl_by_role[role], "positions": [role]} for _ in active_p_bodies for role in roles
+    ]
+    repl_vb = _apply_variance_batch(
+        repl_flats,
+        PlayerType.PITCHER,
+        rng,
+        fraction_remaining,
+        n_iter,
+        pt_mean_fraction=1.0,
+        variance_fraction=1.0,
+        ros_horizon=fraction_remaining,
+        suppress_repl=True,
+        pt_volumes=np.array(
+            [float(REPLACEMENT_BY_POSITION[role]["ip"]) for _ in active_p_bodies for role in roles]
+        ),
+        sv_curve=np.zeros(len(repl_flats)),
+        availability_variance_off=availability_variance_off,
+    )
+    # WHICH streamer you get is random too: the replacement line is the pool's
+    # average, and the arms owners really picked up spread around it in K rate
+    # (mean-1 lognormal multiplier on K).
+    sigma = STREAMER_K_RATE_LOG_SD
+    repl_vb.counts["k"] = repl_vb.counts["k"] * np.exp(
+        sigma * rng.standard_normal(repl_vb.counts["k"].shape) - 0.5 * sigma**2
+    )
+    repl_col = {role: k for k, role in enumerate(roles)}
     for it in range(n_iter):
         actives = [
             ActiveSample(body=body, frac_missed=float(frac_missed[it, idx]))
@@ -1335,8 +1371,12 @@ def _simulate_team_pitchers_ros_direct(
         def _cover_role(ab: ActiveBody, roles: list[str] = roles_it) -> str:
             return roles[index_of[id(ab)]]
 
-        def _cover_repl(ab: ActiveBody, roles: list[str] = roles_it) -> dict[str, float]:
-            return repl_by_role[roles[index_of[id(ab)]]]
+        def _cover_repl(
+            ab: ActiveBody, roles: list[str] = roles_it, it: int = it
+        ) -> dict[str, float]:
+            j = index_of[id(ab)]
+            k = j * len(repl_col) + repl_col[roles[j]]
+            return {col: float(repl_vb.counts[col][it, k]) for col in PITCHER_FILL_COLS}
 
         fill = allocate_pitcher_fill(actives, benches, _cover_role, _cover_repl).fill_counts
         for col in PITCHER_FILL_COLS:
