@@ -109,3 +109,14 @@ def test_pitcher_stats_from_statblock_partial_innings():
     out = pitcher_stats_from_statblock(stat)
     assert abs(out["ip"] - 6.3333) < 0.01
     assert out["k"] == 7 and out["er"] == 3 and out["h_allowed"] == 5
+
+
+def test_full_hitter_line_treats_missing_and_null_as_zero():
+    from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS, full_hitter_line
+
+    line = full_hitter_line({"homeRuns": 2, "strikeOuts": 1, "catchersInterference": None})
+    assert line["hr"] == 2
+    assert line["k"] == 1
+    assert line["ci"] == 0
+    assert line["sb"] == 0
+    assert set(line) == set(FULL_HITTER_FIELDS.values())

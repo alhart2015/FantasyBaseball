@@ -61,6 +61,43 @@ class PitcherGameLog(PitcherStatBlock):
 GameLog = HitterGameLog | PitcherGameLog
 
 
+# MLB stat-block field -> column, for a hitter's full batting line. One mapping shared by
+# the streaks game-log parser and the pitch_data box-score store, so the column names
+# (e.g. ``k`` for strikeouts) stay the same everywhere.
+FULL_HITTER_FIELDS: dict[str, str] = {
+    "plateAppearances": "pa",
+    "atBats": "ab",
+    "hits": "h",
+    "homeRuns": "hr",
+    "runs": "r",
+    "rbi": "rbi",
+    "stolenBases": "sb",
+    "baseOnBalls": "bb",
+    "strikeOuts": "k",
+    "doubles": "b2",
+    "triples": "b3",
+    "sacFlies": "sf",
+    "hitByPitch": "hbp",
+    "intentionalWalks": "ibb",
+    "caughtStealing": "cs",
+    "groundIntoDoublePlay": "gidp",
+    "sacBunts": "sh",
+    "catchersInterference": "ci",
+}
+
+
+def full_hitter_line(stat: dict[str, Any]) -> dict[str, int]:
+    """Every ``FULL_HITTER_FIELDS`` stat from an MLB stat block; missing or null is 0.
+
+    Works on a gameLog split's ``stat`` and a box score's ``stats.batting`` alike.
+    """
+    out: dict[str, int] = {}
+    for field, col in FULL_HITTER_FIELDS.items():
+        value = stat.get(field)
+        out[col] = int(value) if value is not None else 0
+    return out
+
+
 def hitter_stats_from_statblock(stat: dict[str, Any]) -> HitterStatBlock:
     """Extract hitter counting stats from an MLB stat block.
 

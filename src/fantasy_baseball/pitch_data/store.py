@@ -7,13 +7,16 @@ decide what to use. Query it through :func:`connect`, which exposes DuckDB views
 Layout::
 
     pitches/season=YYYY/<start>_<end>.parquet   one file per weekly chunk
-    lineups/YYYY.parquet                         one row per player per game batted
+    lineups/YYYY.parquet                         one row per player per lineup slot per
+                                                 game: batting order + box-score batting line
     sprint_speed/YYYY.parquet                    Savant sprint-speed leaderboard
 
 Resumability: a file is final -- never fetched again -- only if it was *written* more
 than ``SETTLE_DAYS`` after the end of the dates it covers. A file written earlier (a
 mid-season or next-day run) is re-fetched on every run until a settled copy replaces it,
-so late Savant corrections and the rest of a season are never frozen out.
+so late Savant corrections and the rest of a season are never frozen out. A lineup file
+missing a current column (e.g. one written before the batting line was stored) is not
+final either.
 
 Pitch chunks are fixed weeks counted from opening day and capped at the last scheduled
 regular-season date, never at today, so a chunk's file name does not change while its
@@ -41,7 +44,9 @@ from typing import Any
 
 import duckdb
 import pandas as pd
+import pyarrow.parquet as pq
 
+from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS, full_hitter_line
 from fantasy_baseball.data.mlb_game_logs import (
     _fetch_boxscore,
     _fetch_season_games,
@@ -65,12 +70,16 @@ def is_settled(end: date, today: date) -> bool:
     return end < today - timedelta(days=SETTLE_DAYS)
 
 
-def is_final(path: Path, end: date) -> bool:
-    """True if ``path`` exists and was written after data ending on ``end`` had settled."""
+def is_final(path: Path, end: date, required_columns: Iterable[str] = ()) -> bool:
+    """True if ``path`` exists, was written after data ending on ``end`` had settled, and
+    has every ``required_columns`` column -- a file from before a column was added is
+    not final, so it gets re-fetched."""
     if not path.exists():
         return False
     written = date.fromtimestamp(path.stat().st_mtime)
-    return is_settled(end, written)
+    if not is_settled(end, written):
+        return False
+    return set(required_columns) <= set(pq.read_schema(path).names)
 
 
 def _write_parquet(df: pd.DataFrame, path: Path) -> None:
@@ -233,6 +242,10 @@ def fetch_pitches_season(
 # --- lineups --------------------------------------------------------------------
 
 
+# A lineup file without these is from before #402 and gets re-fetched.
+LINEUP_STAT_COLUMNS = tuple(FULL_HITTER_FIELDS.values())
+
+
 def lineup_path(root: Path, season: int) -> Path:
     return root / "lineups" / f"{season}.parquet"
 
@@ -242,6 +255,8 @@ def lineup_rows(boxscore: dict[str, Any], game_pk: int, game_date: str) -> list[
 
     ``battingOrder`` is a 3-digit string: hundreds digit = lineup spot (1-9), the rest =
     substitution index (0 = the starter, 1 = first player in that spot after him).
+    The player's batting line for the game rides along (``FULL_HITTER_FIELDS`` columns);
+    a missing field is 0, e.g. a pinch runner who never batted.
     """
     rows: list[dict[str, Any]] = []
     for side in ("home", "away"):
@@ -253,6 +268,7 @@ def lineup_rows(boxscore: dict[str, Any], game_pk: int, game_date: str) -> list[
             if order is None or person_id is None:
                 continue
             order_int = int(order)
+            batting = entry.get("stats", {}).get("batting") or {}
             rows.append(
                 {
                     "game_pk": game_pk,
@@ -264,6 +280,7 @@ def lineup_rows(boxscore: dict[str, Any], game_pk: int, game_date: str) -> list[
                     "lineup_spot": order_int // 100,
                     "sub_index": order_int % 100,
                     "position": entry.get("position", {}).get("abbreviation"),
+                    **full_hitter_line(batting),
                 }
             )
     return rows
@@ -278,13 +295,13 @@ def fetch_lineups_season(
 ) -> int | None:
     """Fetch batting order for every played regular-season game. Returns rows written.
 
-    Skips (returns None) when the season's file is already final. Any box-score failure
+    Skips (returns None) when the season's file is already final (see :func:`is_final`). Any box-score failure
     raises without writing, so the next run retries the season whole.
     """
     games = games if games is not None else _fetch_season_games(season)
     path = lineup_path(root, season)
     _, season_end = season_window(games)
-    if is_final(path, season_end):
+    if is_final(path, season_end, LINEUP_STAT_COLUMNS):
         return None
     finals = [_game_context(g) for g in games if was_played(g)]
     # A suspended game is listed under both its start and resume dates with one gamePk;
