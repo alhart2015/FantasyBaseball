@@ -68,7 +68,7 @@ def _window_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
         "oppo_rate": _div(c("oppo"), c("spray_n")),
         "pulled_air_rate": _div(c("pulled_air"), bip),
         "xwoba_con": _div(c("xwoba_sum"), c("xwoba_n")),
-        "xba_con": _div(c("xba_sum"), c("xwoba_n")),
+        "xba_con": _div(c("xba_sum"), c("xba_n")),
         "bat_speed": _div(c("bat_speed_sum"), c("bat_speed_n")),
     }
     return {f"{w}_{k}": v for k, v in out.items()}
@@ -99,40 +99,48 @@ def input_frame(t: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(cols, index=t.index)
 
 
+def rates_from_counts(df: pd.DataFrame) -> pd.DataFrame:
+    """The five answer rates from counts ``pa, ab, h, r, hr, rbi, sb``: R/HR/RBI/SB per PA
+    and AVG = H/AB, NaN with no PA/AB. The one definition used to train and to score."""
+    pa, ab = df["pa"].astype(float), df["ab"].astype(float)
+    out = pd.DataFrame({s: _div(df[s].astype(float), pa) for s in ("r", "hr", "rbi", "sb")})
+    out["avg"] = _div(df["h"].astype(float), ab)
+    return out[list(TARGETS)]
+
+
 def target_frame(t: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(rest-of-season rates, loss weights). A rate with no PA/AB is NaN with weight 0."""
-    rates = pd.DataFrame(
-        {
-            "r": _div(t["ros_r"].astype(float), t["ros_pa"].astype(float)),
-            "hr": _div(t["ros_hr"].astype(float), t["ros_pa"].astype(float)),
-            "rbi": _div(t["ros_rbi"].astype(float), t["ros_pa"].astype(float)),
-            "sb": _div(t["ros_sb"].astype(float), t["ros_pa"].astype(float)),
-            "avg": _div(t["ros_h"].astype(float), t["ros_ab"].astype(float)),
-        },
-        index=t.index,
-    )
+    ros = t[[f"ros_{c}" for c in ("pa", "ab", "h", "r", "hr", "rbi", "sb")]]
+    rates = rates_from_counts(ros.rename(columns=lambda c: c.removeprefix("ros_")))
     weights = pd.DataFrame({k: t[v].astype(float) for k, v in TARGET_WEIGHT.items()}, index=t.index)
     return rates, weights
 
 
 class Standardizer:
-    """Mean/std scaling fit on training rows; unknown (NaN) inputs become 0 = the mean,
-    and each input with any NaN gets a 0/1 ``<name>_missing`` column."""
+    """Mean/std scaling fit on training rows; unknown (NaN) inputs become 0 = the mean.
+
+    An input never seen in training (e.g. bat speed, which starts in 2023, when training
+    on earlier seasons) is dropped: the net has no weight to give it. An input that is
+    sometimes known and sometimes not gets a 0/1 ``<name>_missing`` column; one that is
+    always known gets none, so no flag can take a value training never showed."""
 
     def __init__(self) -> None:
         self.mean: pd.Series | None = None
         self.std: pd.Series | None = None
+        self.columns: list[str] = []
         self.missing_cols: list[str] = []
 
     def fit(self, x: pd.DataFrame) -> Standardizer:
-        self.mean = x.mean()
-        self.std = x.std().replace(0, 1).fillna(1)
-        self.missing_cols = [c for c in x.columns if x[c].isna().any()]
+        known = x.notna()
+        self.columns = [c for c in x.columns if known[c].any()]
+        self.missing_cols = [c for c in self.columns if not known[c].all()]
+        self.mean = x[self.columns].mean()
+        self.std = x[self.columns].std().replace(0, 1).fillna(1)
         return self
 
     def transform(self, x: pd.DataFrame) -> np.ndarray:
         assert self.mean is not None and self.std is not None, "fit first"
-        z = ((x - self.mean) / self.std).fillna(0.0)
+        z = ((x[self.columns] - self.mean) / self.std).fillna(0.0)
         flags = x[self.missing_cols].isna().astype(float).add_suffix("_missing")
         return np.asarray(pd.concat([z, flags], axis=1), dtype=np.float32)
 

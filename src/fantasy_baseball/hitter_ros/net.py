@@ -123,6 +123,11 @@ def train(
         with torch.no_grad():
             val = weighted_mse(model(xv), yv, wv).item()
         val_hist.append(val)
+        if not np.isfinite(val):
+            raise FloatingPointError(
+                f"validation loss is {val} at epoch {epoch}: training diverged or an input "
+                "is not finite; try a lower --lr"
+            )
         if val < best[0]:
             best = (val, epoch, copy.deepcopy(model.state_dict()))
         elif epoch - best[1] >= config.patience:

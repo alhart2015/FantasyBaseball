@@ -17,25 +17,21 @@ from pathlib import Path
 
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.features import TARGETS
+from fantasy_baseball.hitter_ros.features import TARGETS, rates_from_counts
 
 logger = logging.getLogger(__name__)
 
 SCALE = {"r": 600.0, "hr": 600.0, "rbi": 600.0, "sb": 600.0, "avg": 1000.0}
 
-
-def rates_from_counts(df: pd.DataFrame) -> pd.DataFrame:
-    """R/HR/RBI/SB per PA and AVG = H/AB from columns pa, ab, h, r, hr, rbi, sb."""
-    pa = df["pa"].astype(float).where(df["pa"] > 0)
-    ab = df["ab"].astype(float).where(df["ab"] > 0)
-    out = pd.DataFrame({s: df[s].astype(float) / pa for s in ("r", "hr", "rbi", "sb")})
-    out["avg"] = df["h"].astype(float) / ab
-    return out
+# A full-season (preseason) projection has everyday players near 600+ PA. A file whose
+# biggest projection is under this is a rest-of-season export saved in the wrong place.
+PRESEASON_MIN_TOP_PA = 450
 
 
 def load_fangraphs_hitters(path: Path) -> pd.DataFrame:
     """One FanGraphs hitter CSV -> rates (+ pa) indexed by MLBAM id."""
     raw = pd.read_csv(path, encoding="utf-8-sig")
+    raw = raw.assign(MLBAMID=pd.to_numeric(raw["MLBAMID"], errors="coerce"))
     raw = raw[raw["MLBAMID"].notna()]
     raw = raw.assign(MLBAMID=raw["MLBAMID"].astype(int))
     dupes = raw["MLBAMID"].duplicated(keep="first")
@@ -49,11 +45,23 @@ def load_fangraphs_hitters(path: Path) -> pd.DataFrame:
     return rates
 
 
-def load_systems(directory: Path) -> dict[str, pd.DataFrame]:
-    """Every ``<system>-hitters*.csv`` in ``directory`` (not its subfolders), by system."""
+def load_systems(directory: Path, *, preseason: bool = False) -> dict[str, pd.DataFrame]:
+    """Every ``<system>-hitters*.csv`` in ``directory`` (not its subfolders), by system.
+
+    With ``preseason``, refuse a file that looks like a rest-of-season export (no
+    projection reaches ``PRESEASON_MIN_TOP_PA``): scoring one against our week-0 rows
+    would hand FanGraphs part of the season in hindsight.
+    """
     systems = {}
     for path in sorted(directory.glob("*-hitters*.csv")):
-        systems[path.name.split("-hitters")[0]] = load_fangraphs_hitters(path)
+        rates = load_fangraphs_hitters(path)
+        top_pa = rates["pa"].max()
+        if preseason and top_pa < PRESEASON_MIN_TOP_PA:
+            raise ValueError(
+                f"{path}: top projected PA is {top_pa:.0f}, so this looks like a "
+                "rest-of-season export, not a preseason projection"
+            )
+        systems[path.name.split("-hitters")[0]] = rates
     return systems
 
 
@@ -65,9 +73,11 @@ def blend(systems: dict[str, pd.DataFrame]) -> pd.DataFrame:
 
 
 def _common_index(frames: Iterable[pd.DataFrame]) -> pd.Index:
+    """Players every frame has a value for, on every stat."""
     common: pd.Index | None = None
     for f in frames:
-        common = f.index if common is None else common.intersection(f.index)
+        have = f.dropna(subset=list(TARGETS)).index
+        common = have if common is None else common.intersection(have)
     assert common is not None, "no projections"
     return common
 
@@ -81,7 +91,7 @@ def score(
     ``pa >= min_pa`` that every projection covers are scored.
     """
     players = actual.index[actual["pa"] >= min_pa]
-    players = players.intersection(_common_index(projections.values()))
+    players = players.intersection(_common_index([*projections.values(), actual]))
     rows = {}
     for name, proj in projections.items():
         errors = (proj.loc[players, list(TARGETS)] - actual.loc[players, list(TARGETS)]).abs()

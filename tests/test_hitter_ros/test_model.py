@@ -138,3 +138,70 @@ def test_net_learns_a_simple_rule_and_is_repeatable():
     again = train(x, y, w, val, config)
     if not torch.cuda.is_available():  # GPU kernels are not bit-for-bit deterministic
         np.testing.assert_allclose(predict(first.model, x), predict(again.model, x))
+
+
+def test_standardizer_drops_inputs_never_seen_in_training():
+    # Bat speed starts in 2023: training on earlier seasons never sees it.
+    train = pd.DataFrame({"a": [1.0, 2.0, 3.0], "bat_speed": [np.nan] * 3})
+    s = Standardizer().fit(train)
+    z = s.transform(pd.DataFrame({"a": [2.0], "bat_speed": [72.0]}))
+    assert s.columns == ["a"] and s.missing_cols == []
+    assert z.shape == (1, 1) and s.n_features == 1
+
+
+def test_score_drops_players_any_projection_cannot_rate():
+    actual = _rates(
+        player_id=[1, 2],
+        r=[0.1, 0.1],
+        hr=[0.05] * 2,
+        rbi=[0.1] * 2,
+        sb=[0.0] * 2,
+        avg=[0.3] * 2,
+        pa=[500, 500],
+    )
+    ours = _rates(
+        player_id=[1, 2], r=[0.11, 0.2], hr=[0.05] * 2, rbi=[0.1] * 2, sb=[0.0] * 2, avg=[0.3] * 2
+    )
+    # A 0-PA projection loads as NaN rates: that player leaves the shared sample.
+    theirs = _rates(
+        player_id=[1, 2],
+        r=[0.1, np.nan],
+        hr=[0.05, np.nan],
+        rbi=[0.1, np.nan],
+        sb=[0.0, np.nan],
+        avg=[0.3, np.nan],
+    )
+    t = score({"ours": ours, "theirs": theirs}, actual, min_pa=300)
+    assert t.loc["ours", "n"] == 1
+    assert t.loc["ours", "r"] == pytest.approx(0.01 * 600)
+
+
+def test_preseason_loader_refuses_a_rest_of_season_file(tmp_path):
+    from fantasy_baseball.hitter_ros.evaluate import load_systems
+
+    pd.DataFrame(
+        {
+            "PA": [120],
+            "AB": [100],
+            "H": [25],
+            "R": [15],
+            "HR": [4],
+            "RBI": [14],
+            "SB": [2],
+            "MLBAMID": [1],
+        }
+    ).to_csv(tmp_path / "steamer-hitters.csv", index=False)
+    assert set(load_systems(tmp_path)) == {"steamer"}
+    with pytest.raises(ValueError, match="rest-of-season"):
+        load_systems(tmp_path, preseason=True)
+
+
+def test_net_fails_loudly_on_a_nan_loss():
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.net import NetConfig, train
+
+    x = np.full((50, 2), np.nan, dtype=np.float32)
+    y = np.zeros((50, 1), dtype=np.float32)
+    val = np.arange(50) < 10
+    with pytest.raises(FloatingPointError, match="validation loss"):
+        train(x, y, np.ones_like(y), val, NetConfig(hidden=[4], max_epochs=3))

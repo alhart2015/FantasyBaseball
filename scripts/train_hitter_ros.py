@@ -7,8 +7,10 @@ a random slice of those players), then predicts every row of T. Scores:
 * Mid-season vs. each dated ROS snapshot in data/projections/T/rest_of_season/<date>/,
   using our row from the latest as-of date on or before the snapshot.
 
-Each run is saved under data/hitter_ros/runs/<name>/: config.json, scores.csv,
-summary.md (paste into #404), predictions.parquet, loss curves.
+Each run is saved under data/hitter_ros/runs/<name>/: config.json (settings, plus each
+test season's train/val loss per epoch), scores_preseason.csv, scores_snapshots.csv,
+summary.md (paste into #404) and predictions.parquet. A name that already has a run is
+refused unless --overwrite.
 
 Setup (once): pip install torch --index-url https://download.pytorch.org/whl/cu128
 Usage:
@@ -22,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shutil
 import sys
 from datetime import date
 from pathlib import Path
@@ -32,11 +35,12 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.evaluate import blend, load_systems, rates_from_counts, score
+from fantasy_baseball.hitter_ros.evaluate import blend, load_systems, score
 from fantasy_baseball.hitter_ros.features import (
     TARGETS,
     Standardizer,
     input_frame,
+    rates_from_counts,
     target_frame,
 )
 from fantasy_baseball.hitter_ros.net import NetConfig, predict, train
@@ -54,10 +58,14 @@ logger = logging.getLogger("train_hitter_ros")
 
 
 def fit_season(
-    table: pd.DataFrame, x_all: pd.DataFrame, test_season: int, config: NetConfig
+    table: pd.DataFrame,
+    x_all: pd.DataFrame,
+    y_all: pd.DataFrame,
+    w_all: pd.DataFrame,
+    test_season: int,
+    config: NetConfig,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     """Train on complete seasons before ``test_season``; predict that season's rows."""
-    y_all, w_all = target_frame(table)
     train_rows = (
         table["season_complete"] & (table["season"] < test_season) & (w_all.sum(axis=1) > 0)
     )
@@ -109,7 +117,7 @@ def fit_season(
 
 
 def preseason_scores(table: pd.DataFrame, preds: pd.DataFrame, season: int) -> pd.DataFrame | None:
-    systems = load_systems(PROJECTIONS / str(season))
+    systems = load_systems(PROJECTIONS / str(season), preseason=True)
     if not systems:
         return None
     week0 = table[(table["season"] == season) & (table["week"] == 0)].set_index("player_id")
@@ -126,27 +134,25 @@ def snapshot_scores(preds: pd.DataFrame, season: int) -> pd.DataFrame | None:
     root = PROJECTIONS / str(season) / "rest_of_season"
     if not root.is_dir():
         return None
+    # The season's games, once; each snapshot sums the games on or after its date.
     conn = connect(STORE)
+    games = conn.execute(
+        """
+        SELECT player_id, CAST(game_date AS DATE) AS game_date, pa, ab, h, r, hr, rbi, sb
+        FROM lineups WHERE year(CAST(game_date AS DATE)) = ?
+        """,
+        [season],
+    ).df()
+    conn.close()
+    games["game_date"] = pd.to_datetime(games["game_date"]).dt.date
+    count_cols = ["pa", "ab", "h", "r", "hr", "rbi", "sb"]
     tables = []
     for snap_dir in sorted(p for p in root.iterdir() if p.is_dir()):
         snap = date.fromisoformat(snap_dir.name)
         systems = load_systems(snap_dir)
         if not systems:
             continue
-        actual_counts = (
-            conn.execute(
-                """
-            SELECT player_id, sum(pa) AS pa, sum(ab) AS ab, sum(h) AS h, sum(r) AS r,
-                   sum(hr) AS hr, sum(rbi) AS rbi, sum(sb) AS sb
-            FROM lineups
-            WHERE year(CAST(game_date AS DATE)) = ? AND CAST(game_date AS DATE) >= ?
-            GROUP BY player_id
-            """,
-                [season, snap],
-            )
-            .df()
-            .set_index("player_id")
-        )
+        actual_counts = games[games["game_date"] >= snap].groupby("player_id")[count_cols].sum()
         actual = rates_from_counts(actual_counts)
         actual["pa"] = actual_counts["pa"]
         if (actual["pa"] >= SNAPSHOT_MIN_PA).sum() == 0:
@@ -161,7 +167,6 @@ def snapshot_scores(preds: pd.DataFrame, season: int) -> pd.DataFrame | None:
         t = score(projections, actual, SNAPSHOT_MIN_PA)
         t.insert(0, "snapshot", snap.isoformat())
         tables.append(t)
-    conn.close()
     return pd.concat(tables) if tables else None
 
 
@@ -193,6 +198,7 @@ def main() -> int:
     parser.add_argument("--patience", type=int, default=defaults.patience)
     parser.add_argument("--seed", type=int, default=defaults.seed)
     parser.add_argument("--note", default="", help="what this run changes and why")
+    parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
@@ -207,15 +213,20 @@ def main() -> int:
         seed=args.seed,
     )
     out = RUNS / args.name
+    if out.exists() and any(out.iterdir()):
+        if not args.overwrite:
+            parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
+        shutil.rmtree(out)
     out.mkdir(parents=True, exist_ok=True)
 
     table = pd.read_parquet(TABLE)
     x_all = input_frame(table)
+    y_all, w_all = target_frame(table)
 
     all_preds, infos, pre_tables, snap_tables = [], [], [], []
     for season in args.test_seasons:
         logger.info("test season %s: training on complete seasons before it", season)
-        preds, info = fit_season(table, x_all, season, config)
+        preds, info = fit_season(table, x_all, y_all, w_all, season, config)
         all_preds.append(preds)
         infos.append(info)
         pre = preseason_scores(table, preds, season)
