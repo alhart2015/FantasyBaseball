@@ -26,6 +26,7 @@ opening series) are kept; filter on ``game_type = 'R'`` when reading.
 from __future__ import annotations
 
 import logging
+import time
 from collections.abc import Callable, Iterable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
@@ -46,6 +47,8 @@ from fantasy_baseball.streaks.data.statcast import chunk_date_range
 logger = logging.getLogger(__name__)
 
 SETTLE_DAYS = 2
+FETCH_ATTEMPTS = 3
+RETRY_SLEEP_SECONDS = 30
 _BOXSCORE_WORKERS = 8
 
 Games = list[dict[str, Any]]
@@ -79,8 +82,17 @@ def season_window(games: Games) -> tuple[date, date]:
     return min(dates), max(dates)
 
 
+def was_played(game: dict[str, Any]) -> bool:
+    """A regular-season game that was actually played.
+
+    The schedule marks cancelled and postponed entries ``abstractGameState == "Final"``
+    too; only ``codedGameState == "F"`` (Final, or Completed Early) has pitches.
+    """
+    return _is_regular_final(game) and game.get("status", {}).get("codedGameState") == "F"
+
+
 def final_game_pks_by_date(games: Games) -> dict[date, set[int]]:
-    """Completed regular-season gamePks, keyed by official date.
+    """Played regular-season gamePks, keyed by official date.
 
     A suspended-and-resumed game is listed under both dates with one gamePk, and which
     date Savant files its pitches under is not pinned down, so such games are left out
@@ -88,7 +100,7 @@ def final_game_pks_by_date(games: Games) -> dict[date, set[int]]:
     """
     dates_by_pk: dict[int, set[date]] = {}
     for g in games:
-        if _is_regular_final(g):
+        if was_played(g):
             game_pk, _, d = _game_context(g)
             dates_by_pk.setdefault(game_pk, set()).add(date.fromisoformat(d))
     out: dict[date, set[int]] = {}
@@ -118,6 +130,30 @@ def _statcast_range(start: date, end: date) -> pd.DataFrame:
     return df
 
 
+def _fetch_with_retries(
+    fetch: Callable[[date, date], pd.DataFrame], start: date, end: date
+) -> pd.DataFrame | None:
+    """Savant now and then answers with a malformed CSV that pybaseball cannot parse.
+
+    Retry a few times; None means every attempt failed.
+    """
+    for attempt in range(1, FETCH_ATTEMPTS + 1):
+        try:
+            return fetch(start, end)
+        except Exception:
+            logger.warning(
+                "pitches %s..%s: fetch attempt %d/%d failed",
+                start,
+                end,
+                attempt,
+                FETCH_ATTEMPTS,
+                exc_info=True,
+            )
+            if attempt < FETCH_ATTEMPTS:
+                time.sleep(RETRY_SLEEP_SECONDS)
+    return None
+
+
 def fetch_pitches_season(
     root: Path,
     season: int,
@@ -128,8 +164,9 @@ def fetch_pitches_season(
 ) -> dict[str, int]:
     """Fetch every weekly pitch chunk of ``season`` that is not already final on disk.
 
-    Returns counts of chunks written / skipped / incomplete. An incomplete chunk is
-    logged and left unwritten so the next run retries it.
+    Returns counts of chunks written / skipped / incomplete. An incomplete chunk (games
+    missing, or every fetch attempt failed) is logged and left unwritten so the next run
+    retries it.
     """
     games = games if games is not None else _fetch_season_games(season)
     start, end = season_window(games)
@@ -147,7 +184,10 @@ def fetch_pitches_season(
         expected = {
             pk for d, pks in expected_by_date.items() if chunk_start <= d <= chunk_end for pk in pks
         }
-        df = fetch(chunk_start, chunk_end)
+        df = _fetch_with_retries(fetch, chunk_start, chunk_end)
+        if df is None:
+            summary["incomplete"] += 1
+            continue
         missing = missing_game_pks(df, expected)
         if missing:
             logger.warning(
@@ -216,7 +256,7 @@ def fetch_lineups_season(
     games: Games | None = None,
     fetch_boxscore: Callable[[int], dict[str, Any]] = _fetch_boxscore,
 ) -> int | None:
-    """Fetch batting order for every completed regular-season game. Returns rows written.
+    """Fetch batting order for every played regular-season game. Returns rows written.
 
     Skips (returns None) when the season's file is already final. Any box-score failure
     aborts the season without writing, so the next run retries it whole.
@@ -226,7 +266,7 @@ def fetch_lineups_season(
     _, season_end = season_window(games)
     if path.exists() and is_settled(season_end, today):
         return None
-    finals = [_game_context(g) for g in games if _is_regular_final(g)]
+    finals = [_game_context(g) for g in games if was_played(g)]
     # A suspended game is listed under both its start and resume dates with one gamePk;
     # fetch it once, dated to the later (completion) date.
     by_pk: dict[int, str] = {}

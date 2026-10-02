@@ -3,6 +3,7 @@ from datetime import date
 import pandas as pd
 import pytest
 
+from fantasy_baseball.pitch_data import store
 from fantasy_baseball.pitch_data.store import (
     connect,
     fetch_lineups_season,
@@ -18,12 +19,12 @@ from fantasy_baseball.pitch_data.store import (
 )
 
 
-def _game(pk, d, game_type="R", state="Final"):
+def _game(pk, d, game_type="R", state="Final", coded="F"):
     return {
         "gamePk": pk,
         "officialDate": d,
         "gameType": game_type,
-        "status": {"abstractGameState": state},
+        "status": {"abstractGameState": state, "codedGameState": coded},
     }
 
 
@@ -68,6 +69,47 @@ def test_final_game_pks_drops_unfinished_and_suspended_games():
         date(2025, 4, 1): {1},
         date(2025, 4, 2): {4},
     }
+
+
+def test_cancelled_and_postponed_games_are_not_expected():
+    # The schedule marks both "Final" at the abstract level; neither has pitches.
+    games = [
+        _game(1, "2025-04-01"),
+        _game(2, "2025-04-01", coded="C"),  # cancelled
+        _game(3, "2025-04-01", coded="D"),  # postponed ...
+        _game(3, "2025-04-03"),  # ... and made up
+    ]
+    assert final_game_pks_by_date(games) == {
+        date(2025, 4, 1): {1},
+        date(2025, 4, 3): {3},
+    }
+
+
+def test_pitches_retry_a_failed_fetch(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "RETRY_SLEEP_SECONDS", 0)
+    games = [_game(10, "2025-04-01")]
+    attempts = []
+
+    def flaky(start, end):
+        attempts.append(start)
+        if len(attempts) == 1:
+            raise ValueError("Error tokenizing data")
+        return _pitches([10])
+
+    result = fetch_pitches_season(tmp_path, 2025, date(2025, 6, 1), games=games, fetch=flaky)
+    assert result["written"] == 1
+    assert len(attempts) == 2
+
+
+def test_pitches_that_always_fail_count_as_incomplete(tmp_path, monkeypatch):
+    monkeypatch.setattr(store, "RETRY_SLEEP_SECONDS", 0)
+    games = [_game(10, "2025-04-01")]
+
+    def broken(start, end):
+        raise ValueError("Error tokenizing data")
+
+    result = fetch_pitches_season(tmp_path, 2025, date(2025, 6, 1), games=games, fetch=broken)
+    assert result == {"written": 0, "skipped": 0, "incomplete": 1, "rows": 0}
 
 
 def test_pitches_writes_complete_chunks_and_skips_settled_ones(tmp_path):
@@ -173,6 +215,7 @@ def test_lineups_fetch_each_game_once_and_skip_when_final(tmp_path):
         _game(5, "2025-04-02"),  # suspended game listed twice
         _game(6, "2025-09-28"),
         _game(7, "2025-09-28", state="Preview"),
+        _game(8, "2025-09-28", coded="C"),  # cancelled: no box score to fetch
     ]
     fetched = []
 
