@@ -41,6 +41,7 @@ from typing import Any
 
 import duckdb
 import pandas as pd
+import pyarrow.parquet as pq
 
 from fantasy_baseball.data.mlb_game_logs import (
     _fetch_boxscore,
@@ -63,6 +64,10 @@ Games = list[dict[str, Any]]
 def is_settled(end: date, today: date) -> bool:
     """True once data ending on ``end`` can no longer change."""
     return end < today - timedelta(days=SETTLE_DAYS)
+
+
+def _has_columns(path: Path, columns: Iterable[str]) -> bool:
+    return set(columns) <= set(pq.read_schema(path).names)
 
 
 def is_final(path: Path, end: date) -> bool:
@@ -237,11 +242,37 @@ def lineup_path(root: Path, season: int) -> Path:
     return root / "lineups" / f"{season}.parquet"
 
 
+# Box-score batting block field -> stored column. The answer key for R/RBI/SB, which
+# pitch data cannot give per player (#402).
+BATTING_FIELDS = {
+    "plateAppearances": "pa",
+    "atBats": "ab",
+    "hits": "h",
+    "doubles": "b2",
+    "triples": "b3",
+    "homeRuns": "hr",
+    "runs": "r",
+    "rbi": "rbi",
+    "baseOnBalls": "bb",
+    "intentionalWalks": "ibb",
+    "strikeOuts": "so",
+    "hitByPitch": "hbp",
+    "sacFlies": "sf",
+    "sacBunts": "sh",
+    "stolenBases": "sb",
+    "caughtStealing": "cs",
+    "groundIntoDoublePlay": "gidp",
+    "catchersInterference": "ci",
+}
+
+
 def lineup_rows(boxscore: dict[str, Any], game_pk: int, game_date: str) -> list[dict[str, Any]]:
     """One row per player who holds a batting-order slot in this box score.
 
     ``battingOrder`` is a 3-digit string: hundreds digit = lineup spot (1-9), the rest =
     substitution index (0 = the starter, 1 = first player in that spot after him).
+    The player's batting line for the game rides along (``BATTING_FIELDS``); a missing
+    field is 0, e.g. a pinch runner who never batted.
     """
     rows: list[dict[str, Any]] = []
     for side in ("home", "away"):
@@ -253,6 +284,7 @@ def lineup_rows(boxscore: dict[str, Any], game_pk: int, game_date: str) -> list[
             if order is None or person_id is None:
                 continue
             order_int = int(order)
+            batting = entry.get("stats", {}).get("batting") or {}
             rows.append(
                 {
                     "game_pk": game_pk,
@@ -264,6 +296,7 @@ def lineup_rows(boxscore: dict[str, Any], game_pk: int, game_date: str) -> list[
                     "lineup_spot": order_int // 100,
                     "sub_index": order_int % 100,
                     "position": entry.get("position", {}).get("abbreviation"),
+                    **{col: int(batting.get(f, 0)) for f, col in BATTING_FIELDS.items()},
                 }
             )
     return rows
@@ -278,13 +311,14 @@ def fetch_lineups_season(
 ) -> int | None:
     """Fetch batting order for every played regular-season game. Returns rows written.
 
-    Skips (returns None) when the season's file is already final. Any box-score failure
+    Skips (returns None) when the season's file is already final and has every current
+    column; a file from before a column was added is re-fetched. Any box-score failure
     raises without writing, so the next run retries the season whole.
     """
     games = games if games is not None else _fetch_season_games(season)
     path = lineup_path(root, season)
     _, season_end = season_window(games)
-    if is_final(path, season_end):
+    if is_final(path, season_end) and _has_columns(path, BATTING_FIELDS.values()):
         return None
     finals = [_game_context(g) for g in games if was_played(g)]
     # A suspended game is listed under both its start and resume dates with one gamePk;

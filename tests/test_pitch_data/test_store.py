@@ -6,6 +6,7 @@ import pytest
 
 from fantasy_baseball.pitch_data import store
 from fantasy_baseball.pitch_data.store import (
+    BATTING_FIELDS,
     connect,
     fetch_lineups_season,
     fetch_pitches_season,
@@ -223,11 +224,24 @@ def test_lineup_rows_parses_batting_order():
                         "person": {"id": 1},
                         "battingOrder": "300",
                         "position": {"abbreviation": "2B"},
+                        "stats": {
+                            "batting": {
+                                "plateAppearances": 4,
+                                "atBats": 3,
+                                "hits": 2,
+                                "homeRuns": 1,
+                                "runs": 2,
+                                "rbi": 3,
+                                "stolenBases": 1,
+                                "baseOnBalls": 1,
+                            }
+                        },
                     },
                     "ID2": {
                         "person": {"id": 2},
                         "battingOrder": "301",
-                        "position": {"abbreviation": "PH"},
+                        "position": {"abbreviation": "PR"},
+                        "stats": {"batting": {"runs": 1}},
                     },
                     "ID3": {"person": {"id": 3}, "position": {"abbreviation": "P"}},
                 },
@@ -241,6 +255,30 @@ def test_lineup_rows_parses_batting_order():
         (2, 3, 1),
     ]
     assert all(r["team_id"] == 144 and r["is_home"] for r in rows)
+    starter, runner = rows
+    assert (starter["pa"], starter["ab"], starter["h"], starter["hr"]) == (4, 3, 2, 1)
+    assert (starter["r"], starter["rbi"], starter["sb"], starter["bb"]) == (2, 3, 1, 1)
+    assert starter["cs"] == 0
+    # A pinch runner who scored: R counts, every missing field is 0.
+    assert (runner["pa"], runner["r"]) == (0, 1)
+    assert set(BATTING_FIELDS.values()) <= set(runner)
+
+
+def test_lineups_file_missing_new_columns_is_refetched(tmp_path):
+    # A settled file written before the batting columns existed must not count as final.
+    games = [_game(5, "2025-04-01")]
+    path = lineup_path(tmp_path, 2025)
+    path.parent.mkdir(parents=True)
+    pd.DataFrame({"game_pk": [5], "player_id": [1], "batting_order": [100]}).to_parquet(path)
+    calls = []
+
+    def fetch_boxscore(pk):
+        calls.append(pk)
+        return _box(1)
+
+    assert fetch_lineups_season(tmp_path, 2025, games=games, fetch_boxscore=fetch_boxscore) == 1
+    assert calls == [5]
+    assert "rbi" in pd.read_parquet(path).columns
 
 
 def _box(player_id):
