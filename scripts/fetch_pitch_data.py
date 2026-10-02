@@ -28,6 +28,7 @@ from fantasy_baseball.pitch_data.store import (
     fetch_lineups_season,
     fetch_pitches_season,
     fetch_sprint_speed_season,
+    write_season_schedule,
 )
 from fantasy_baseball.utils.time_utils import local_today
 
@@ -108,6 +109,7 @@ def main() -> int:
             logging.exception("schedule %s: fetch failed", season)
             failures.append(f"{season} schedule")
             continue
+        write_season_schedule(args.root, season, games)
         if "lineups" in args.only:
             try:
                 fetch_lineups_season(args.root, season, games=games)

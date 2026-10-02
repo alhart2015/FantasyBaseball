@@ -383,3 +383,28 @@ def test_connect_stacks_seasons_with_drifting_columns(tmp_path):
     assert rows == [(2016, None), (2024, 72.5)]
     views = {r[0] for r in conn.execute("SELECT view_name FROM duckdb_views()").fetchall()}
     assert "lineups" not in views
+
+
+def test_schedule_bounds_skip_cancelled_and_postponed_entries(tmp_path):
+    from fantasy_baseball.pitch_data.store import schedule_path, write_season_schedule
+
+    games = [
+        _game(1, "2025-02-25", game_type="S"),
+        _game(2, "2025-03-27"),
+        _game(3, "2025-09-27"),
+        _game(4, "2025-09-28", coded="C"),  # rained out on the final day, never made up
+        _game(5, "2025-09-28", state="Preview", coded="D"),  # postponed
+    ]
+    assert write_season_schedule(tmp_path, 2025, games) == (date(2025, 3, 27), date(2025, 9, 27))
+    stored = pd.read_parquet(schedule_path(tmp_path, 2025))
+    assert stored.season.tolist() == [2025]
+    assert "schedule" in {
+        r[0] for r in connect(tmp_path).execute("SELECT view_name FROM duckdb_views()").fetchall()
+    }
+
+
+def test_schedule_bounds_include_games_still_to_come(tmp_path):
+    from fantasy_baseball.pitch_data.store import write_season_schedule
+
+    games = [_game(1, "2027-03-26"), _game(2, "2027-09-26", state="Preview", coded="S")]
+    assert write_season_schedule(tmp_path, 2027, games)[1] == date(2027, 9, 26)

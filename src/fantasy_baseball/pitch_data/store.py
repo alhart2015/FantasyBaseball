@@ -10,6 +10,7 @@ Layout::
     lineups/YYYY.parquet                         one row per player per lineup slot per
                                                  game: batting order + box-score batting line
     sprint_speed/YYYY.parquet                    Savant sprint-speed leaderboard
+    schedule/YYYY.parquet                        first/last scheduled regular-season date
 
 Resumability: a file is final -- never fetched again -- only if it was *written* more
 than ``SETTLE_DAYS`` after the end of the dates it covers. A file written earlier (a
@@ -360,11 +361,44 @@ def fetch_sprint_speed_season(
     return len(df)
 
 
+# --- schedule bounds --------------------------------------------------------------
+
+
+def schedule_path(root: Path, season: int) -> Path:
+    return root / "schedule" / f"{season}.parquet"
+
+
+# codedGameState for cancelled and postponed entries: listed on the schedule, never played
+# on that date.
+_NOT_PLAYED_ON_DATE = frozenset({"C", "D"})
+
+
+def write_season_schedule(root: Path, season: int, games: Games) -> tuple[date, date]:
+    """Store the first and last scheduled regular-season dates, played or still to come.
+
+    Readers use this, not the last game on disk, to tell a finished season from one in
+    progress. Cancelled and postponed entries are left out so a rained-out final day
+    does not push the end past the last game actually played.
+    """
+    dates = [
+        date.fromisoformat(_game_context(g)[2])
+        for g in games
+        if g.get("gameType") == "R"
+        and g.get("status", {}).get("codedGameState") not in _NOT_PLAYED_ON_DATE
+    ]
+    if not dates:
+        raise ValueError(f"schedule {season}: no regular-season games")
+    first, last = min(dates), max(dates)
+    df = pd.DataFrame({"season": [season], "first_date": [first], "last_date": [last]})
+    _write_parquet(df, schedule_path(root, season))
+    return first, last
+
+
 # --- reading --------------------------------------------------------------------
 
 
 def connect(root: Path) -> duckdb.DuckDBPyConnection:
-    """In-memory DuckDB with ``pitches``, ``lineups`` and ``sprint_speed`` views over ``root``.
+    """In-memory DuckDB with ``pitches``, ``lineups``, ``sprint_speed`` and ``schedule`` views.
 
     A view is only created when its files exist. ``pitches`` carries a ``season`` column
     from the directory name; columns Savant added in later years are NULL in earlier ones.
@@ -374,6 +408,7 @@ def connect(root: Path) -> duckdb.DuckDBPyConnection:
         "pitches": "pitches/*/*.parquet",
         "lineups": "lineups/*.parquet",
         "sprint_speed": "sprint_speed/*.parquet",
+        "schedule": "schedule/*.parquet",
     }
     for name, pattern in patterns.items():
         if not any(root.glob(pattern)):
