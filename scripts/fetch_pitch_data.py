@@ -57,15 +57,19 @@ def print_summary(root: Path) -> None:
             pct = ev / bip if bip else 0.0
             print(f"{season}  {n:>8}  {games:>8}  {bip:>6}  {pct:>10.1%}  {mb:>8.1f}")
     if "lineups" in views:
-        print("\nseason  lineup_rows  games  starters_per_game")
-        for season, n, games, starters in conn.execute(
+        print("\nseason  lineup_rows  games  starters_per_game      pa     hr      r    rbi    sb")
+        for season, n, games, starters, pa, hr, r, rbi, sb in conn.execute(
             """
             SELECT year(CAST(game_date AS DATE)), count(*), count(DISTINCT game_pk),
-                   count(*) FILTER (WHERE sub_index = 0)
+                   count(*) FILTER (WHERE sub_index = 0),
+                   sum(pa), sum(hr), sum(r), sum(rbi), sum(sb)
             FROM lineups GROUP BY 1 ORDER BY 1
             """
         ).fetchall():
-            print(f"{season}  {n:>11}  {games:>5}  {starters / games:>17.2f}")
+            print(
+                f"{season}  {n:>11}  {games:>5}  {starters / games:>17.2f}"
+                f"  {pa:>6}  {hr:>5}  {r:>5}  {rbi:>5}  {sb:>4}"
+            )
     if "sprint_speed" in views:
         print("\nseason  sprint_rows")
         for season, n in conn.execute(
