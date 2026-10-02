@@ -84,3 +84,7 @@ data/backups/
 # Raw pitch-level store for the batted-ball model (#400): every Statcast pitch,
 # sprint speed, batting order. ~1.5 GB, re-fetchable via scripts/fetch_pitch_data.py.
 data/pitch_data/
+
+# Hitter ROS training table (#403), rebuilt from data/pitch_data/ by
+# scripts/build_hitter_ros_table.py.
+data/hitter_ros/

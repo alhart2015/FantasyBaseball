@@ -37,8 +37,8 @@ _SAVANT_HR_URL = (
 # consolidated to `hit_into_play` after; all three are listed because this
 # function is year-parameterized and dropping the old two would silently gut the
 # swing denominator for an earlier season.
-_WHIFF = frozenset({"swinging_strike", "swinging_strike_blocked", "missed_bunt"})
-_CONTACT = frozenset(
+WHIFF_DESCRIPTIONS = frozenset({"swinging_strike", "swinging_strike_blocked", "missed_bunt"})
+CONTACT_DESCRIPTIONS = frozenset(
     {
         "foul",
         "foul_tip",
@@ -49,7 +49,7 @@ _CONTACT = frozenset(
         "hit_into_play_no_out",
     }
 )
-_SWING = _WHIFF | _CONTACT
+SWING_DESCRIPTIONS = WHIFF_DESCRIPTIONS | CONTACT_DESCRIPTIONS
 
 # Every pull here is season-to-date, so all of them go stale daily.
 _MAX_AGE = timedelta(days=1)
@@ -101,8 +101,8 @@ def _tally_pitch_outcomes(raw: pd.DataFrame) -> pd.DataFrame:
             "player_id": pitches["pitcher"].astype(int),
             "pitches": 1,
             "called_strikes": description.eq("called_strike").astype(int),
-            "whiffs": description.isin(_WHIFF).astype(int),
-            "swings": description.isin(_SWING).astype(int),
+            "whiffs": description.isin(WHIFF_DESCRIPTIONS).astype(int),
+            "swings": description.isin(SWING_DESCRIPTIONS).astype(int),
         }
     )
     result: pd.DataFrame = tallies.groupby("player_id", as_index=False).sum()
