@@ -6,7 +6,7 @@ import pytest
 from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS
 from fantasy_baseball.hitter_ros.table import TARGET_COUNTS, build_table
 
-HITTER, OTHER, PITCHER = 1, 2, 3
+HITTER, OTHER, PITCHER, BENCH = 1, 2, 3, 4
 TEAM_A, TEAM_B = 10, 20
 
 
@@ -32,6 +32,7 @@ def _lineup_row(pk, d, player, team, spot=1, sub=0, position="CF", **stats):
 def _pitch(d, batter, **kw):
     row = {
         "batter": batter,
+        "pitcher": 999,
         "game_date": d.isoformat(),
         "game_type": "R",
         "description": "ball",
@@ -66,6 +67,13 @@ def _season(year, start, games, hr_per_game=1, ev=100.0, runs=1):
         lineups.append(_lineup_row(pk, d, OTHER, TEAM_A, spot=2, pa=4, ab=3, h=1, bb=1, rbi=2))
         if i == 0:
             lineups.append(_lineup_row(pk, d, PITCHER, TEAM_B, spot=9, position="P", pa=2))
+        if i == 1:
+            # The same pitcher pinch-runs once: still not a hitter, because he pitched.
+            lineups.append(_lineup_row(pk, d, PITCHER, TEAM_B, spot=9, sub=1, position="PR"))
+        if i == 2:
+            # A bench player who only pinch-hits and never pitches is a hitter.
+            lineups.append(_lineup_row(pk, d, BENCH, TEAM_B, spot=9, sub=1, position="PH", pa=1))
+        pitches.append(_pitch(d, OTHER, pitcher=PITCHER))
         for batter in (HITTER, OTHER):
             pitches.append(_pitch(d, batter))
             pitches.append(_pitch(d, batter, description="swinging_strike", zone=5, type="S"))
@@ -90,17 +98,24 @@ def _season(year, start, games, hr_per_game=1, ev=100.0, runs=1):
     return lineups, pitches
 
 
-def _write(root, seasons):
-    lineups_by_year = {}
+def _write(root, seasons, scheduled_last=None):
+    """Write a store. The schedule spans each season's games unless ``scheduled_last``
+    (year -> date) says the season runs longer than what has been played."""
+    scheduled_last = scheduled_last or {}
     for year, (lineups, pitches) in seasons.items():
-        lineups_by_year[year] = lineups
         path = root / "pitches" / f"season={year}" / "chunk.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(pitches).to_parquet(path, index=False)
-    for year, lineups in lineups_by_year.items():
         path = root / "lineups" / f"{year}.parquet"
         path.parent.mkdir(parents=True, exist_ok=True)
         pd.DataFrame(lineups).to_parquet(path, index=False)
+        dates = [date.fromisoformat(r["game_date"]) for r in lineups]
+        path = root / "schedule" / f"{year}.parquet"
+        path.parent.mkdir(parents=True, exist_ok=True)
+        last = scheduled_last.get(year, max(dates))
+        pd.DataFrame(
+            {"season": [year], "first_date": [min(dates)], "last_date": [last]}
+        ).to_parquet(path, index=False)
 
 
 @pytest.fixture
@@ -130,8 +145,9 @@ def test_grid_and_population(store):
         date(2025, 4, 8),
         date(2025, 4, 15),
     ]
-    # Someone who only ever batted as a pitcher is not a hitter row.
+    # A pitcher (even one who pinch-ran) is not a hitter row; a pinch-hitter is.
     assert PITCHER not in set(df.player_id)
+    assert BENCH in set(df.player_id)
 
 
 def test_windows_add_up(store):
@@ -200,3 +216,69 @@ def test_no_input_uses_data_on_or_after_the_as_of_date(tmp_path):
 def test_targets_are_all_present(store):
     df = build_table(store)
     assert {f"ros_{c}" for c in TARGET_COUNTS} <= set(df.columns)
+
+
+def test_history_coverage_flags_and_career_window(store):
+    df = build_table(store)
+    first = _row(df, HITTER, 2024, 0)
+    assert (first.p1_in_store, first.p3_seasons_in_store, first.car_seasons_in_store) == (
+        False,
+        0,
+        0,
+    )
+    second = _row(df, HITTER, 2025, 0)
+    assert (second.p1_in_store, second.p3_seasons_in_store, second.car_seasons_in_store) == (
+        True,
+        1,
+        1,
+    )
+    assert second.car_pa == 10 * 4 and second.car_barrels == 10
+
+
+def test_season_in_progress_is_flagged_and_uses_the_scheduled_end(tmp_path):
+    # 21 games played, but the schedule runs to Apr 30: the season is not over.
+    _write(
+        tmp_path,
+        {2025: _season(2025, date(2025, 4, 1), 21)},
+        scheduled_last={2025: date(2025, 4, 30)},
+    )
+    df = build_table(tmp_path)
+    assert not df.season_complete.any()
+    w1 = _row(df, HITTER, 2025, 1)
+    assert w1.frac_season_left == pytest.approx(23 / 30)
+
+
+def test_complete_season_is_flagged(store):
+    assert build_table(store).season_complete.all()
+
+
+def test_sprint_columns_exist_without_sprint_files(store):
+    df = build_table(store)
+    assert df.p1_sprint_speed.isna().all() and df.p2_sprint_runs.isna().all()
+
+
+def test_sprint_speed_joins_the_previous_season(store):
+    path = store / "sprint_speed" / "2024.parquet"
+    path.parent.mkdir()
+    pd.DataFrame(
+        {"player_id": [HITTER], "season": [2024], "sprint_speed": [28.5], "competitive_runs": [40]}
+    ).to_parquet(path, index=False)
+    df = build_table(store)
+    assert _row(df, HITTER, 2025, 0).p1_sprint_speed == 28.5
+    assert pd.isna(_row(df, OTHER, 2025, 0).p1_sprint_speed)
+
+
+def test_spray_uses_atan2_behind_home():
+    import duckdb
+
+    from fantasy_baseball.hitter_ros.table import _OPPO, _PULLED
+
+    # A right-handed hitter's dribbler to the left side, fielded behind home's y origin.
+    row = "SELECT 'R' AS stand, 100.0 AS hc_x, 210.0 AS hc_y"
+    pulled, oppo = duckdb.sql(f"SELECT {_PULLED}, {_OPPO} FROM ({row})").fetchone()
+    assert (pulled, oppo) == (True, False)
+
+
+def test_missing_store_says_how_to_fill_it(tmp_path):
+    with pytest.raises(FileNotFoundError, match="fetch_pitch_data"):
+        build_table(tmp_path)
