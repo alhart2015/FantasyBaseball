@@ -1286,9 +1286,21 @@ def _simulate_team_pitchers_ros_direct(
         availability_variance_off=availability_variance_off,
     )
     # Capacity = the bench arm's sampled availability (share of the remaining
-    # season he can pitch); per-share rate = realized / scale (mean-neutral).
+    # season he can pitch); per-share rate = realized / scale (mean-neutral). An arm
+    # with no rest-of-season innings (unprojected, or a stash projected for nothing)
+    # gets zero capacity: otherwise his sampled scale would let him soak up the
+    # missed time at a zero line and starve the streamer (the hitter fill guards the
+    # same case through g_ros_full == 0).
     eps = 1e-9
-    bench_valid = bench_vb.scales > eps
+    bench_ros_ip = np.array(
+        [
+            safe_float(getattr(bb.player.rest_of_season, "ip", 0.0))
+            if bb.player.rest_of_season is not None
+            else 0.0
+            for bb in bench_p_bodies
+        ]
+    )
+    bench_valid = (bench_vb.scales > eps) & (bench_ros_ip[None, :] > 0.0)
     safe_scales = np.where(bench_valid, bench_vb.scales, 1.0)
     bench_capacity = np.where(bench_valid, bench_vb.scales, 0.0)
     bench_per_share = {
@@ -1312,6 +1324,25 @@ def _simulate_team_pitchers_ros_direct(
     fill_totals: dict[str, np.ndarray] = {col: np.zeros(n_iter) for col in PITCHER_FILL_COLS}
     # Weekly lineup lock: only missed time after the next lock can be covered.
     frac_missed = _fillable_frac_missed(vb.frac_missed, rng, fraction_remaining)
+    # frac_missed is a share of the arm's OWN projected innings; the fill counts in
+    # shares of a full workload for his role. An arm projected for 20 of a possible
+    # ~85 ROS innings who misses half of them loses 10 innings, not half a season
+    # of a slot. Scale by projected ROS IP over a full role workload (the
+    # replacement line's), capped at 1 so a workhorse never costs more than the
+    # slot's whole remaining season.
+    full_ip = np.array(
+        [float(REPLACEMENT_BY_POSITION[str(r)]["ip"]) * fraction_remaining for r in own_role]
+    )
+    own_ros_ip = np.array(
+        [
+            safe_float(getattr(ab.player.rest_of_season, "ip", 0.0))
+            if ab.player.rest_of_season is not None
+            else 0.0
+            for ab in active_p_bodies
+        ]
+    )
+    workload = np.minimum(1.0, own_ros_ip / np.maximum(full_ip, 1e-9))
+    frac_missed = frac_missed * workload[None, :]
     flip_p = np.where(own_role == "SP", COVER_SP_WITH_RP, COVER_RP_WITH_SP)
     flips = rng.random(frac_missed.shape) < flip_p[None, :]
     cover_role = np.where(flips, np.where(own_role == "SP", "RP", "SP")[None, :], own_role[None, :])

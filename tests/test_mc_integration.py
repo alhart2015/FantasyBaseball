@@ -1227,19 +1227,21 @@ def test_bench_closer_never_adds_saves_through_the_fill(monkeypatch):
 
 def test_streamer_line_is_sampled_not_fixed(monkeypatch):
     """#396: the replacement streamer is a pitcher too, with his own performance
-    draw. An active arm projected for nothing contributes only the fill, so a
-    fixed replacement line would make K/IP identical in every iteration."""
+    draw. The active arm pitches a full starter's innings but records no K or W,
+    so every K and W comes from the fill. A fixed replacement line would make
+    W/K identical in every iteration; a sampled streamer makes it vary."""
     from fantasy_baseball import simulation
 
     monkeypatch.setattr(simulation, "STREAMER_K_RATE_LOG_SD", 0.0)
-    ghost = _pitcher_custom("Ghost", Position.P, "1", w=0, k=0, ip=0, er=0, bb=0, ha=0, g=0)
+    # 82 ROS IP at half a season left == a full SP workload (164 * 0.5).
+    ghost = _pitcher_custom("Ghost", Position.P, "1", w=0, k=0, ip=82, er=0, bb=0, ha=0, g=0)
     out = _simulate_team_pitchers_ros_direct(
         _solo_eff_pitcher(ghost), 0.5, np.random.default_rng(5), 2000
     )
-    filled = out["ros_ip"] > 1.0
+    filled = out["K"] > 5.0
     assert filled.sum() > 100
-    k_per_ip = out["K"][filled] / out["ros_ip"][filled]
-    assert k_per_ip.std() > 0.05, k_per_ip.std()
+    w_per_k = out["W"][filled] / out["K"][filled]
+    assert w_per_k.std() > 0.01, w_per_k.std()
 
 
 def test_streamer_k_rate_spread_widens_k_and_keeps_mean(monkeypatch):
@@ -1254,3 +1256,40 @@ def test_streamer_k_rate_spread_widens_k_and_keeps_mean(monkeypatch):
     wide = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(3), 6000)
     assert wide["K"].std() > narrow["K"].std()
     assert abs(wide["K"].mean() / narrow["K"].mean() - 1.0) < 0.02
+
+
+def test_bench_pitcher_with_no_ros_innings_does_not_absorb_the_fill(monkeypatch):
+    """A bench arm projected for nothing (an unprojected stash) must not cover an
+    injured starter at a zero line: the missed time goes to the streamer, so team
+    K matches the no-bench run instead of losing the streamer's strikeouts."""
+    from fantasy_baseball import simulation
+    from fantasy_baseball.mc_roster import ActiveBody, BenchPitcherBody, EffectiveRoster
+
+    monkeypatch.setattr(simulation, "COVER_SP_WITH_RP", 0.0)
+    ace = _pitcher_custom("Ace", Position.P, "1", w=12, k=180, ip=180, g=30)
+    stash = _pitcher_custom("Stash", Position.BN, "2", w=0, k=0, ip=0, er=0, bb=0, ha=0, g=0)
+    active = [ActiveBody(player=ace, factor=1.0, g_ros_adj=30.0)]
+    no_bench = EffectiveRoster(active=active, bench=[])
+    with_stash = EffectiveRoster(
+        active=active,
+        bench=[],
+        bench_pitchers=[BenchPitcherBody(player=stash, role="SP", per_share_value=0.0)],
+    )
+    base = _simulate_team_pitchers_ros_direct(no_bench, 0.5, np.random.default_rng(6), 4000)
+    out = _simulate_team_pitchers_ros_direct(with_stash, 0.5, np.random.default_rng(6), 4000)
+    assert abs(out["K"].mean() / base["K"].mean() - 1.0) < 0.02, (
+        out["K"].mean(),
+        base["K"].mean(),
+    )
+
+
+def test_low_volume_arm_fill_replaces_only_his_own_innings():
+    """#396 review: missed time is a share of the arm's OWN projected innings. A
+    starter projected for 20 of a possible 82 ROS innings loses at most 20, so
+    the streamer must not hand back more than that (on average the team lands
+    under his projection, as it does for a full-workload arm)."""
+    part = _pitcher_custom("Part", Position.P, "1", w=1, k=20, ip=20, er=9, bb=7, ha=19, g=4)
+    out = _simulate_team_pitchers_ros_direct(
+        _solo_eff_pitcher(part), 0.5, np.random.default_rng(8), 4000
+    )
+    assert out["ros_ip"].mean() < 20.0, out["ros_ip"].mean()
