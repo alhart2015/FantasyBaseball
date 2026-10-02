@@ -80,3 +80,7 @@ data/manual/*.txt
 
 # Prod values saved by scripts/publish_manual.py before it overwrites them.
 data/backups/
+
+# Raw pitch-level store for the batted-ball model (#400): every Statcast pitch,
+# sprint speed, batting order. ~1.5 GB, re-fetchable via scripts/fetch_pitch_data.py.
+data/pitch_data/
