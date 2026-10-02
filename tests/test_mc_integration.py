@@ -398,6 +398,7 @@ def test_healthy_roster_hitter_totals_positive_no_bench_contrib():
         1.0,
         64,
         pt_mean_fraction=1.0,
+        ros_horizon=1.0,
         suppress_repl=True,
     )
     # Where the starter draws full (frac_missed == 0), team R == starter R alone:
@@ -488,7 +489,11 @@ def test_sampled_bench_fill_mean_drift_within_spec_gate():
     (it hard-fails only upward), so this gate intentionally does not flag them.
     """
     from fantasy_baseball.mc_fill import ActiveSample, BenchSample, allocate_bench_fill
-    from fantasy_baseball.simulation import _replacement_line, _sample_hitter_bodies
+    from fantasy_baseball.simulation import (
+        _fillable_frac_missed,
+        _replacement_line,
+        _sample_hitter_bodies,
+    )
     from fantasy_baseball.utils.constants import HITTING_COUNTING, safe_float
 
     seed, fr, n_iter = 11, 0.2, 6000
@@ -504,10 +509,14 @@ def test_sampled_bench_fill_mean_drift_within_spec_gate():
     # FIRST on the rng, so a fresh rng(seed) reproduces them bit-for-bit. The
     # deterministic fill is the pre-change behavior (per_game = base/g_ros_full,
     # capacity = g_ros_full), iteration-independent.
-    active_vb = _sample_hitter_bodies(active_bodies, np.random.default_rng(seed), fr, n_iter)
+    # Same rng order as production: active draw, bench draw, then the weekly
+    # lineup-lock draw (#393), so the baseline sees the same coverable time.
+    base_rng = np.random.default_rng(seed)
+    active_vb = _sample_hitter_bodies(active_bodies, base_rng, fr, n_iter)
     factors = np.array([b.factor for b in active_bodies])
     realized = {col: active_vb.counts[col] * factors[None, :] for col in HITTING_COUNTING}
-    frac_missed = active_vb.frac_missed
+    _sample_hitter_bodies(bench_bodies, base_rng, fr, n_iter)
+    frac_missed = _fillable_frac_missed(active_vb.frac_missed, base_rng, fr)
     bb = bench_bodies[0]
     base = bb.player.to_flat_dict()
     det_bs = BenchSample(
@@ -637,6 +646,7 @@ def test_churn_freeze_active_set_fixed():
         1.0,
         128,
         pt_mean_fraction=1.0,
+        ros_horizon=1.0,
         suppress_repl=True,
     )
     healthy = vb.frac_missed[:, 0] == 0.0
@@ -681,6 +691,7 @@ def test_repl_not_double_counted_on_new_path():
         256,
         pt_mean_fraction=1.0,
         variance_fraction=1.0,
+        ros_horizon=0.4,
         suppress_repl=True,
     )
     healthy = vb.frac_missed[:, 0] == 0.0
@@ -782,68 +793,41 @@ def _one_full_timer_hitter(*, full_pa=620.0, ros_pa=305.0, ros_r=45.0):
 
 
 def test_ros_direct_uses_full_season_volume_for_cv_pt():
-    """ROS-direct samples the PT curve at FULL-SEASON volume, not ROS volume.
+    """ROS-direct looks up the playing-time curve at FULL-SEASON volume, not ROS.
 
-    A full-timer (full-season PA 620, ROS PA 305) must be sampled with the
-    FULL-SEASON cv_pt band (~0.20), NOT the inflated ROS-volume band (~0.42 at
-    305 PA, where a full-timer is misclassified as a part-timer). Two checks:
-
-    1) Reconstruct the underlying sampler (same seed) with full-season volume
-       (620) vs ROS volume (305). The full-season lookup yields a STRICTLY
-       narrower R SD on the raw active draw -- that separation is the bug. Pin
-       that the helper actually uses the full-season (narrower) band: the helper's
-       realized R SD equals the full-season-volume draw's R SD, NOT the wider
-       ROS-volume draw's.
-    2) Sanity band: the helper R SD sits well below the ~2x-wide ROS-volume PT
-       band (engineering guard against a gross regression).
+    A full-timer (full-season PA 620, ROS PA 305) must be sampled as the 620-PA
+    player he is. On the in-season curve (#393) volume sets the role and the
+    average level (the full-season ``mean_scale``), so the two lookups give
+    different draws. Pin that the helper's healthy-iteration R equals the
+    full-season-volume rebuild (same seed) and NOT the ROS-volume rebuild.
     """
-    from fantasy_baseball.utils.playing_time import playing_time_params
-
     eff = _one_full_timer_hitter(full_pa=620.0, ros_pa=305.0, ros_r=45.0)
     out = _simulate_team_hitters_ros_direct(eff, 0.49, np.random.default_rng(0), 8000)
-    helper_sd = out["R"].std()
 
-    # Reconstruct the active sampler with the SAME seed, full-season vol vs ROS.
     body = eff.active[0]
     flat = [body.player.to_flat_dict()]
-    full_vol = _apply_variance_batch(
-        flat,
-        PlayerType.HITTER,
-        np.random.default_rng(0),
-        0.49,
-        8000,
-        pt_mean_fraction=1.0,
-        variance_fraction=1.0,
-        suppress_repl=True,
-        pt_volumes=np.array([620.0]),
-    )
-    ros_vol = _apply_variance_batch(
-        flat,
-        PlayerType.HITTER,
-        np.random.default_rng(0),
-        0.49,
-        8000,
-        pt_mean_fraction=1.0,
-        variance_fraction=1.0,
-        suppress_repl=True,
-        pt_volumes=np.array([305.0]),
-    )
-    sd_full = full_vol.counts["r"][:, 0].std()
-    sd_ros = ros_vol.counts["r"][:, 0].std()
-    # The bug signal: ROS-volume lookup is materially WIDER than full-season.
-    assert sd_ros > sd_full * 1.4, (sd_full, sd_ros)
-    # Empty bench + factor 1.0: on the healthy iters (no fill) the helper's
-    # realized R equals the full-season-volume draw exactly (the helper samples at
-    # full-season vol), and is NOT the ROS-volume draw.
+
+    def rebuild(vol):
+        return _apply_variance_batch(
+            flat,
+            PlayerType.HITTER,
+            np.random.default_rng(0),
+            0.49,
+            8000,
+            pt_mean_fraction=1.0,
+            variance_fraction=1.0,
+            ros_horizon=0.49,
+            suppress_repl=True,
+            pt_volumes=np.array([vol]),
+        )
+
+    full_vol, ros_vol = rebuild(620.0), rebuild(305.0)
+    # Empty bench + factor 1.0: on healthy iters (no fill) the helper's R is the
+    # full-season-volume draw exactly, and not the ROS-volume draw.
     healthy = full_vol.frac_missed[:, 0] == 0.0
     assert np.any(healthy)
     np.testing.assert_allclose(out["R"][healthy], full_vol.counts["r"][healthy, 0])
     assert not np.allclose(out["R"][healthy], ros_vol.counts["r"][healthy, 0])
-
-    # Engineering band: well under the ~2x-wide ROS-volume PT scale. No
-    # sqrt(fraction_remaining): the ROS line is already horizon-sized (#391).
-    cv_ros = playing_time_params(PlayerType.HITTER, 305.0)[1]
-    assert helper_sd < 45.0 * cv_ros * 0.9, helper_sd
 
 
 def _mixed_rosters():
@@ -887,7 +871,9 @@ def test_pitchers_ros_direct_track_eroto_projection():
     # Me has two active SP, each ROS K=100 / IP=90 -> summed projection 200 / 180.
     proj_k = sum(p.rest_of_season.k for p in rosters["Me"] if p.player_type == PlayerType.PITCHER)
     proj_ip = sum(p.rest_of_season.ip for p in rosters["Me"] if p.player_type == PlayerType.PITCHER)
-    assert abs(with_eff["Me"]["K"].mean() - proj_k) / proj_k < 0.06, with_eff["Me"]["K"].mean()
+    # #393: the injury cut applies and the bench / replacement fill restores most
+    # of it, so K lands a little under the projection (measured 0.91x).
+    assert 0.80 * proj_k < with_eff["Me"]["K"].mean() < proj_k, with_eff["Me"]["K"].mean()
     assert abs(with_eff["Me"]["ERA"].mean()) > 0  # ERA recombines from ROS-direct volume
     assert with_eff["Me"]["W"].mean() > 0 and proj_ip > 0
 
@@ -1007,21 +993,21 @@ def test_pitcher_helper_samples_active_only_applies_factor():
     assert disp["K"].mean() < out["K"].mean()
 
 
-def test_pitcher_mean_matches_projection_no_haircut():
-    """CRITICAL regression: pt_mean_fraction=0 => NO playing-time mean haircut.
+def test_pitcher_mean_cut_then_partly_restored():
+    """#393: pitchers now get the same injury cut as hitters, restored by the fill.
 
-    With one active SP at factor 1.0 the helper's K/IP means must track the
-    summed ROS projection (== ERoto), NOT mean_scale*projection (~0.8x, which a
-    pt_mean_fraction=1.0 haircut would wrongly produce). Pin to the body's actual
-    ROS projection (read off the constructed Player) and assert within ~6%.
+    With one active SP and no bench, the missed time goes to a replacement-level
+    streamer (fewer strikeouts and innings than the starter), so the K and IP
+    means land below the projection but well above the bare cut. Measured: K
+    0.93x, IP 0.91x at half a season left (the streamer can get hurt too, #396).
     """
     p = _pitcher_custom("Ace", Position.P, "1", k=150, ip=180)
     eff = _solo_eff_pitcher(p, factor=1.0)
     proj_k = float(p.rest_of_season.k)
     proj_ip = float(p.rest_of_season.ip)
     out = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(0), 4000)
-    assert abs(out["K"].mean() - proj_k) / proj_k < 0.06, out["K"].mean()
-    assert abs(out["ros_ip"].mean() - proj_ip) / proj_ip < 0.06, out["ros_ip"].mean()
+    assert 0.80 * proj_k < out["K"].mean() < proj_k, out["K"].mean()
+    assert 0.80 * proj_ip < out["ros_ip"].mean() < proj_ip, out["ros_ip"].mean()
 
 
 def test_pitcher_helper_empty_active_returns_zeros():
@@ -1123,20 +1109,37 @@ def test_sv_role_mixture_widens_variance_mean_stable(monkeypatch):
 
 
 def test_ros_direct_variance_not_shrunk_by_fraction_remaining():
-    """#391: ROS-direct bodies carry ROS lines, already sized to the remaining
-    season, so the sampled spread must not shrink again with fraction_remaining.
-    Same seed, same bodies: the hitter and pitcher helpers return identical draws
-    whether a quarter or three quarters of the season is left."""
-    hitter = _hitter("Solo", Position.OF, "1", r=60)
-    pitcher = _pitcher_custom("Arm", Position.P, "2", w=8, k=120, sv=10, ip=110)
-    for helper, eff in (
-        (_simulate_team_hitters_ros_direct, _solo_eff(hitter)),
-        (_simulate_team_pitchers_ros_direct, _solo_eff_pitcher(pitcher)),
+    """#391: ROS lines are already sized to the remaining season, so with
+    ``variance_fraction=1.0`` (and no in-season curve) the sampler's draws must
+    not shrink with fraction_remaining. Same seed, same players: identical draws
+    whether a quarter or three quarters of the season is left. (The helpers
+    themselves now depend on time left on purpose -- the in-season curve, the
+    weekly lock and the replacement horizon -- so this pins the sampler.)"""
+    for ptype, player in (
+        (PlayerType.HITTER, _hitter("Solo", Position.OF, "1", r=60)),
+        (PlayerType.PITCHER, _pitcher_custom("Arm", Position.P, "2", w=8, k=120, sv=10, ip=110)),
     ):
-        late = helper(eff, 0.25, np.random.default_rng(3), 400)
-        early = helper(eff, 0.75, np.random.default_rng(3), 400)
-        for cat in late:
-            np.testing.assert_allclose(late[cat], early[cat])
+        flat = [player.to_flat_dict()]
+        late = _apply_variance_batch(
+            flat,
+            ptype,
+            np.random.default_rng(3),
+            0.25,
+            400,
+            pt_mean_fraction=1.0,
+            variance_fraction=1.0,
+        )
+        early = _apply_variance_batch(
+            flat,
+            ptype,
+            np.random.default_rng(3),
+            0.75,
+            400,
+            pt_mean_fraction=1.0,
+            variance_fraction=1.0,
+        )
+        for col in late.counts:
+            np.testing.assert_allclose(late.counts[col], early.counts[col])
 
 
 def test_full_season_path_still_shrinks_variance_with_fraction_remaining():
@@ -1149,3 +1152,144 @@ def test_full_season_path_still_shrinks_variance_with_fraction_remaining():
         flat, PlayerType.HITTER, np.random.default_rng(5), 0.25, 4000, variance_fraction=1.0
     )
     assert legacy.counts["r"][:, 0].std() < 0.8 * unshrunk.counts["r"][:, 0].std()
+
+
+# ---- #393: weekly lineup lock and starter/reliever cover rule ----
+
+
+def test_lineup_lock_removes_up_to_a_week_of_coverable_time():
+    """Lineups lock weekly, so up to 7 days of an injury can't be covered. The
+    coverable share never goes negative or above the missed share, and the mean
+    dead time is ~3.5 days of the remaining season."""
+    from fantasy_baseball.simulation import _fillable_frac_missed
+    from fantasy_baseball.utils.constants import REGULAR_SEASON_DAYS
+
+    missed = np.full((20000, 1), 0.5)
+    frac = 0.5  # 92.5 days left
+    out = _fillable_frac_missed(missed, np.random.default_rng(0), frac)
+    assert np.all(out >= 0.0) and np.all(out <= missed)
+    mean_dead_days = (missed - out).mean() * frac * REGULAR_SEASON_DAYS
+    assert abs(mean_dead_days - 3.5) < 0.1, mean_dead_days
+
+
+def test_lineup_lock_late_season_injury_mostly_uncoverable():
+    """With 4 days left, most of a late injury falls inside the lock: nothing to
+    cover in most draws."""
+    from fantasy_baseball.simulation import _fillable_frac_missed
+    from fantasy_baseball.utils.constants import REGULAR_SEASON_DAYS
+
+    out = _fillable_frac_missed(
+        np.ones((5000, 1)), np.random.default_rng(1), 4.0 / REGULAR_SEASON_DAYS
+    )
+    assert (out == 0.0).mean() > 0.4
+
+
+def _cover_roster(bench_role_line):
+    from fantasy_baseball.mc_roster import ActiveBody, BenchPitcherBody, EffectiveRoster
+
+    ace = _pitcher_custom("Ace", Position.P, "1", w=12, k=180, ip=180, g=30)
+    pen = _pitcher_custom("Pen", Position.BN, "2", **bench_role_line)
+    return EffectiveRoster(
+        active=[ActiveBody(player=ace, factor=1.0, g_ros_adj=30.0)],
+        bench=[],
+        bench_pitchers=[BenchPitcherBody(player=pen, role="RP", per_share_value=5.0)],
+    )
+
+
+def test_cross_role_cover_rate_controls_whether_a_reliever_covers_a_starter(monkeypatch):
+    """COVER_SP_WITH_RP sets how often an injured starter is covered by a bench
+    reliever. At 0 the bench reliever never covers (replacement SP does); at 1 he
+    always does. A huge-strikeout reliever makes the difference visible."""
+    from fantasy_baseball import simulation
+
+    eff = _cover_roster(dict(w=4, k=400, sv=0, ip=70, g=60))
+    monkeypatch.setattr(simulation, "COVER_SP_WITH_RP", 0.0)
+    never = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(2), 3000)
+    monkeypatch.setattr(simulation, "COVER_SP_WITH_RP", 1.0)
+    always = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(2), 3000)
+    assert always["K"].mean() > never["K"].mean() + 5.0
+
+
+def test_bench_closer_never_adds_saves_through_the_fill(monkeypatch):
+    """SV is not filled: covering for an injured arm adds no saves even when the
+    covering reliever is a closer."""
+    from fantasy_baseball import simulation
+
+    monkeypatch.setattr(simulation, "COVER_SP_WITH_RP", 1.0)
+    with_closer = _simulate_team_pitchers_ros_direct(
+        _cover_roster(dict(w=4, k=70, sv=40, ip=65, g=65)), 0.5, np.random.default_rng(4), 2000
+    )
+    no_saves = _simulate_team_pitchers_ros_direct(
+        _cover_roster(dict(w=4, k=70, sv=0, ip=65, g=65)), 0.5, np.random.default_rng(4), 2000
+    )
+    np.testing.assert_allclose(with_closer["SV"], no_saves["SV"])
+
+
+def test_streamer_line_is_sampled_not_fixed(monkeypatch):
+    """#396: the replacement streamer is a pitcher too, with his own performance
+    draw. The active arm pitches a full starter's innings but records no K or W,
+    so every K and W comes from the fill. A fixed replacement line would make
+    W/K identical in every iteration; a sampled streamer makes it vary."""
+    from fantasy_baseball import simulation
+
+    monkeypatch.setattr(simulation, "STREAMER_K_RATE_LOG_SD", 0.0)
+    # 82 ROS IP at half a season left == a full SP workload (164 * 0.5).
+    ghost = _pitcher_custom("Ghost", Position.P, "1", w=0, k=0, ip=82, er=0, bb=0, ha=0, g=0)
+    out = _simulate_team_pitchers_ros_direct(
+        _solo_eff_pitcher(ghost), 0.5, np.random.default_rng(5), 2000
+    )
+    filled = out["K"] > 5.0
+    assert filled.sum() > 100
+    w_per_k = out["W"][filled] / out["K"][filled]
+    assert w_per_k.std() > 0.01, w_per_k.std()
+
+
+def test_streamer_k_rate_spread_widens_k_and_keeps_mean(monkeypatch):
+    """#396: which streamer you get varies in K rate (STREAMER_K_RATE_LOG_SD).
+    A wider spread widens team K and leaves its mean alone (mean-1 multiplier)."""
+    from fantasy_baseball import simulation
+
+    eff = _solo_eff_pitcher(_pitcher_custom("Ace", Position.P, "1", k=150, ip=180))
+    monkeypatch.setattr(simulation, "STREAMER_K_RATE_LOG_SD", 0.0)
+    narrow = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(3), 6000)
+    monkeypatch.setattr(simulation, "STREAMER_K_RATE_LOG_SD", 0.6)
+    wide = _simulate_team_pitchers_ros_direct(eff, 0.5, np.random.default_rng(3), 6000)
+    assert wide["K"].std() > narrow["K"].std()
+    assert abs(wide["K"].mean() / narrow["K"].mean() - 1.0) < 0.02
+
+
+def test_bench_pitcher_with_no_ros_innings_does_not_absorb_the_fill(monkeypatch):
+    """A bench arm projected for nothing (an unprojected stash) must not cover an
+    injured starter at a zero line: the missed time goes to the streamer, so team
+    K matches the no-bench run instead of losing the streamer's strikeouts."""
+    from fantasy_baseball import simulation
+    from fantasy_baseball.mc_roster import ActiveBody, BenchPitcherBody, EffectiveRoster
+
+    monkeypatch.setattr(simulation, "COVER_SP_WITH_RP", 0.0)
+    ace = _pitcher_custom("Ace", Position.P, "1", w=12, k=180, ip=180, g=30)
+    stash = _pitcher_custom("Stash", Position.BN, "2", w=0, k=0, ip=0, er=0, bb=0, ha=0, g=0)
+    active = [ActiveBody(player=ace, factor=1.0, g_ros_adj=30.0)]
+    no_bench = EffectiveRoster(active=active, bench=[])
+    with_stash = EffectiveRoster(
+        active=active,
+        bench=[],
+        bench_pitchers=[BenchPitcherBody(player=stash, role="SP", per_share_value=0.0)],
+    )
+    base = _simulate_team_pitchers_ros_direct(no_bench, 0.5, np.random.default_rng(6), 4000)
+    out = _simulate_team_pitchers_ros_direct(with_stash, 0.5, np.random.default_rng(6), 4000)
+    assert abs(out["K"].mean() / base["K"].mean() - 1.0) < 0.02, (
+        out["K"].mean(),
+        base["K"].mean(),
+    )
+
+
+def test_low_volume_arm_fill_replaces_only_his_own_innings():
+    """#396 review: missed time is a share of the arm's OWN projected innings. A
+    starter projected for 20 of a possible 82 ROS innings loses at most 20, so
+    the streamer must not hand back more than that (on average the team lands
+    under his projection, as it does for a full-workload arm)."""
+    part = _pitcher_custom("Part", Position.P, "1", w=1, k=20, ip=20, er=9, bb=7, ha=19, g=4)
+    out = _simulate_team_pitchers_ros_direct(
+        _solo_eff_pitcher(part), 0.5, np.random.default_rng(8), 4000
+    )
+    assert out["ros_ip"].mean() < 20.0, out["ros_ip"].mean()

@@ -156,6 +156,35 @@ def test_fetch_positions_maps_id_to_code(monkeypatch):
     assert mlb_game_logs._fetch_positions([660271, 543037]) == {"660271": "Y", "543037": "1"}
 
 
+def test_fetch_positions_requests_in_chunks(monkeypatch):
+    """A full-season backfill asks about ~800 pitchers; MLB's /people endpoint
+    rejects that many ids in one URL (HTTP 400), which silently dropped all
+    pitching. Ids must go out in chunks of at most _POSITIONS_CHUNK."""
+    calls: list[list[str]] = []
+
+    class _Resp:
+        def __init__(self, ids):
+            self._ids = ids
+
+        def raise_for_status(self):
+            if len(self._ids) > mlb_game_logs._POSITIONS_CHUNK:
+                raise RuntimeError("400 Bad Request")
+
+        def json(self):
+            return {"people": [{"id": int(i), "primaryPosition": {"code": "1"}} for i in self._ids]}
+
+    def fake_get(url, params, timeout):
+        ids = params["personIds"].split(",")
+        calls.append(ids)
+        return _Resp(ids)
+
+    monkeypatch.setattr(mlb_game_logs.requests, "get", fake_get)
+    ids = list(range(1, 251))
+    out = mlb_game_logs._fetch_positions(ids)
+    assert len(out) == 250 and set(out.values()) == {"1"}
+    assert [len(c) for c in calls] == [100, 100, 50]
+
+
 def test_fetch_positions_empty_short_circuits(monkeypatch):
     def boom(*a, **k):
         raise AssertionError("should not call the API for an empty id list")

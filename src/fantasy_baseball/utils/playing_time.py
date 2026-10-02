@@ -21,6 +21,8 @@ from fantasy_baseball.utils.constants import (
     PLAYING_TIME_CURVES,
     PLAYING_TIME_SHAPE,
     QUANTILE_LEVELS,
+    ROS_PLAYING_TIME_QUANTILES,
+    ROS_PT_LEVELS,
     role_from_ip,
 )
 
@@ -68,6 +70,40 @@ def playing_time_params(player_type: PlayerType | str, volume: float) -> tuple[f
     """
     points = PLAYING_TIME_CURVES[_curve_key(player_type, volume)]
     return _interp(points, volume, "mean_scale"), _interp(points, volume, "cv_pt")
+
+
+def ros_playing_time_quantiles(
+    player_type: PlayerType | str, volume: float, fraction_remaining: float
+) -> list[float]:
+    """Quantiles (at ``ROS_PT_LEVELS``) of realized / projected REST-OF-SEASON volume.
+
+    The in-season counterpart of ``playing_time_params`` + ``playing_time_shape``
+    (issue #393): over a short window a player is mostly healthy or out for the rest
+    of it, so outcomes pile up near 0 and 1 in a way the full-season curve cannot
+    represent. ``volume`` is FULL-SEASON PA / IP (it picks the SP/RP role, like the
+    full-season curve). Interpolated linearly between the fitted horizons and
+    clamped at the ends.
+
+    SHAPE vs LEVEL: the table gives the shape (the near-0 / near-1 split over a
+    short window). It was fitted against a pace-based stand-in for the projection,
+    which runs ~10-25% less optimistic about innings than real projections, so its
+    level is rescaled to the full-season curve's ``mean_scale`` -- fitted against
+    real projections (2022-2025) and so carrying their optimism. Multiplying keeps
+    the mass at zero intact.
+    """
+    points = ROS_PLAYING_TIME_QUANTILES[_curve_key(player_type, volume)]
+    fs = [cast(float, p["f"]) for p in points]
+    qs = [cast("list[float]", p["q"]) for p in points]
+    q = [_interp_xy(fs, [qq[j] for qq in qs], fraction_remaining) for j in range(len(qs[0]))]
+    shape_mean = float(np.interp(_MEAN_GRID, ROS_PT_LEVELS, q).mean())
+    if shape_mean <= 0:
+        return q
+    target, _ = playing_time_params(player_type, volume)
+    return [v * target / shape_mean for v in q]
+
+
+# Fine grid on (0, 1) for the mean of a piecewise-linear quantile function.
+_MEAN_GRID = np.linspace(0.0, 1.0, 1001)
 
 
 def playing_time_shape(player_type: PlayerType | str, volume: float) -> list[float]:

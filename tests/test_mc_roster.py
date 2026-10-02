@@ -129,3 +129,54 @@ def test_duplicate_name_in_active_set_guarded():
     roster.append(_h("Same", Position.IL, "3"))
     with pytest.raises(ValueError):
         build_effective_roster(roster, _ctx())
+
+
+def _p(name, slot, pid, ip, *, positions=(Position.P,), full_ip=None, k=100):
+    from fantasy_baseball.models.player import PitcherStats
+
+    line = {"ip": ip, "k": k, "w": 6, "sv": 0, "er": 40, "bb": 30, "h_allowed": 90, "g": 20}
+    full = dict(line, ip=full_ip) if full_ip is not None else None
+    return Player(
+        name=name,
+        player_type=PlayerType.PITCHER,
+        positions=list(positions),
+        selected_position=slot,
+        yahoo_id=pid,
+        rest_of_season=PitcherStats.from_dict(line),
+        full_season_projection=PitcherStats.from_dict(full) if full is not None else None,
+    )
+
+
+def test_pitcher_role_prefers_explicit_sp_rp_eligibility():
+    from fantasy_baseball.mc_roster import pitcher_role
+
+    assert pitcher_role(_p("S", Position.P, "1", 40, positions=(Position.SP,))) == "SP"
+    assert pitcher_role(_p("R", Position.P, "2", 160, positions=(Position.RP,))) == "RP"
+    # Swingman eligible at both is a starter.
+    assert pitcher_role(_p("W", Position.P, "3", 60, positions=(Position.SP, Position.RP))) == "SP"
+
+
+def test_pitcher_role_uses_full_season_ip_not_ros():
+    """A starter with half a season left has ~80 ROS IP; the 100-IP starter bar is
+    a full-season bar (issue #251), so the role must come from full-season IP."""
+    from fantasy_baseball.mc_roster import pitcher_role
+
+    assert pitcher_role(_p("Ace", Position.P, "1", 80, full_ip=170)) == "SP"
+    assert pitcher_role(_p("Pen", Position.P, "2", 30, full_ip=65)) == "RP"
+    # No full-season line yet (preseason): fall back to the ROS line.
+    assert pitcher_role(_p("Pre", Position.P, "3", 175)) == "SP"
+
+
+def test_bench_pitchers_go_to_their_own_fill_pool():
+    roster = [
+        _h("Starter", Position.OF, "1"),
+        _p("Ace", Position.P, "2", 170),
+        _p("SpotSP", Position.BN, "3", 120),
+        _p("Setup", Position.BN, "4", 60),
+    ]
+    eff = build_effective_roster(roster, _ctx())
+    assert [b.player.name for b in eff.bench] == []  # hitter pool stays hitters-only
+    pool = {b.player.name: b for b in eff.bench_pitchers}
+    assert set(pool) == {"SpotSP", "Setup"}
+    assert pool["SpotSP"].role == "SP" and pool["Setup"].role == "RP"
+    assert pool["SpotSP"].per_share_value > 0

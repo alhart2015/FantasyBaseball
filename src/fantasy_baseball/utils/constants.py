@@ -286,6 +286,81 @@ PLAYING_TIME_SHAPE: dict[str, list[dict[str, object]]] = {
     ],
 }
 
+# In-season playing-time curves for the ROS Monte Carlo (issue #393), from
+# scripts/calibrate_ros_playing_time.py. Quantiles of actual / expected
+# rest-of-season PA or IP, by role and share of season left ("f"), at
+# ROS_PT_LEVELS. Unlike the full-season curves above, these pile up near 0 and 1
+# over short windows (a player is either healthy or out for the rest of it).
+ROS_PT_LEVELS: list[float] = [0.01, 0.02, 0.03, 0.05, 0.10, 0.25, 0.50, 0.75, 0.90, 0.95, 0.99]
+ROS_PLAYING_TIME_QUANTILES: dict[str, list[dict[str, object]]] = {
+    "hitters": [
+        {
+            "f": 0.15,
+            "q": [0.0, 0.01, 0.153, 0.318, 0.566, 0.896, 1.066, 1.183, 1.3, 1.377, 1.518],
+        },  # n=472
+        {
+            "f": 0.3,
+            "q": [0.0, 0.049, 0.173, 0.317, 0.563, 0.837, 1.038, 1.149, 1.251, 1.334, 1.457],
+        },  # n=484
+        {
+            "f": 0.45,
+            "q": [0.01, 0.143, 0.218, 0.325, 0.548, 0.803, 0.992, 1.09, 1.192, 1.262, 1.384],
+        },  # n=504
+        {
+            "f": 0.6,
+            "q": [0.086, 0.189, 0.234, 0.343, 0.522, 0.793, 0.969, 1.062, 1.157, 1.223, 1.335],
+        },  # n=536
+        {
+            "f": 0.75,
+            "q": [0.064, 0.161, 0.272, 0.355, 0.501, 0.789, 0.963, 1.056, 1.149, 1.207, 1.34],
+        },  # n=561
+    ],
+    "SP": [
+        {
+            "f": 0.15,
+            "q": [0.0, 0.0, 0.0, 0.0, 0.338, 0.757, 1.032, 1.202, 1.355, 1.441, 1.608],
+        },  # n=287
+        {
+            "f": 0.3,
+            "q": [0.0, 0.0, 0.0, 0.141, 0.362, 0.745, 1.004, 1.152, 1.311, 1.375, 1.571],
+        },  # n=294
+        {
+            "f": 0.45,
+            "q": [0.0, 0.0, 0.085, 0.17, 0.338, 0.71, 0.973, 1.109, 1.231, 1.325, 1.46],
+        },  # n=315
+        {
+            "f": 0.6,
+            "q": [0.0, 0.043, 0.093, 0.169, 0.328, 0.662, 0.952, 1.079, 1.199, 1.282, 1.453],
+        },  # n=340
+        {
+            "f": 0.75,
+            "q": [0.0, 0.023, 0.061, 0.167, 0.318, 0.639, 0.952, 1.073, 1.196, 1.258, 1.433],
+        },  # n=362
+    ],
+    "RP": [
+        {
+            "f": 0.15,
+            "q": [0.0, 0.0, 0.0, 0.097, 0.345, 0.802, 1.047, 1.296, 1.758, 2.245, 2.969],
+        },  # n=580
+        {
+            "f": 0.3,
+            "q": [0.0, 0.0, 0.027, 0.167, 0.351, 0.772, 1.014, 1.23, 1.679, 2.081, 2.824],
+        },  # n=603
+        {
+            "f": 0.45,
+            "q": [0.0, 0.007, 0.092, 0.181, 0.358, 0.713, 0.958, 1.142, 1.497, 1.896, 2.612],
+        },  # n=610
+        {
+            "f": 0.6,
+            "q": [0.0, 0.009, 0.082, 0.154, 0.344, 0.655, 0.927, 1.1, 1.339, 1.764, 2.456],
+        },  # n=617
+        {
+            "f": 0.75,
+            "q": [0.0, 0.014, 0.078, 0.149, 0.314, 0.64, 0.922, 1.084, 1.266, 1.596, 2.305],
+        },  # n=633
+    ],
+}
+
 # Empirical correlation matrices for correlated variance draws.
 # Calibrated from projection-vs-actual residuals, 2022-2024.
 # Column order must match the stat lists below.
@@ -367,6 +442,23 @@ REPLACEMENT_RP: dict[str, int] = {
 
 # IP threshold to distinguish starters from middle relievers
 STARTER_IP_THRESHOLD: float = 100.0
+
+# Weekly lineup lock (#393): this league sets lineups for the scoring week, so an
+# injured starter stays in the lineup, putting up nothing, until the next lock.
+# Only time after that can be covered by the bench or a pickup.
+LINEUP_LOCK_DAYS: float = 7.0
+# How often an injured pitcher is covered by an arm of the OTHER role, from 2026's
+# pitcher-for-pitcher swaps (#393): starter dropped -> reliever added 17 of 53,
+# reliever dropped -> starter added 23 of 51.
+COVER_SP_WITH_RP: float = 0.32
+COVER_RP_WITH_SP: float = 0.45
+# Spread of K rate among the arms owners actually pick up (#396): IP-weighted
+# log-SD of projected K/IP over 2026's 143 in-season pitcher adds (0.126; starters
+# 0.125, relievers 0.120). The replacement line is the pool's average; this is the
+# talent spread around it. Projection error on top is already in STAT_DISPERSION.
+STREAMER_K_RATE_LOG_SD: float = 0.125
+# Regular-season length in days, to turn a share of the season into days.
+REGULAR_SEASON_DAYS: float = 185.0
 
 
 def safe_float(value) -> float:
