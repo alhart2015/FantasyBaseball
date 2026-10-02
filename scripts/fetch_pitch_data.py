@@ -90,22 +90,38 @@ def main() -> int:
         return 0
 
     today = local_today()
-    incomplete = 0
+    failures: list[str] = []
     for season in range(args.start, args.end + 1):
-        games = _fetch_season_games(season)
+        # One season's failure must not stop the rest of a multi-season backfill;
+        # everything that failed is retried by the next run.
+        try:
+            games = _fetch_season_games(season)
+        except Exception:
+            logging.exception("schedule %s: fetch failed", season)
+            failures.append(f"{season} schedule")
+            continue
         if "lineups" in args.only:
-            fetch_lineups_season(args.root, season, today, games=games)
+            try:
+                fetch_lineups_season(args.root, season, games=games)
+            except Exception:
+                logging.exception("lineups %s: failed", season)
+                failures.append(f"{season} lineups")
         if "sprint" in args.only:
-            fetch_sprint_speed_season(args.root, season, today, games=games)
+            try:
+                fetch_sprint_speed_season(args.root, season, games=games)
+            except Exception:
+                logging.exception("sprint speed %s: failed", season)
+                failures.append(f"{season} sprint speed")
         if "pitches" in args.only:
             result = fetch_pitches_season(args.root, season, today, games=games)
             logging.info("pitches %s: %s", season, result)
-            incomplete += result["incomplete"]
+            if result["incomplete"]:
+                failures.append(f"{season} pitches ({result['incomplete']} chunks)")
 
-    if incomplete:
-        logging.warning("%d pitch chunks incomplete; re-run to retry them", incomplete)
+    if failures:
+        logging.warning("incomplete, re-run to retry: %s", "; ".join(failures))
     print_summary(args.root)
-    return 1 if incomplete else 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":

@@ -10,9 +10,15 @@ Layout::
     lineups/YYYY.parquet                         one row per player per game batted
     sprint_speed/YYYY.parquet                    Savant sprint-speed leaderboard
 
-Resumability: a file whose date range ended more than ``SETTLE_DAYS`` ago is final and
-is never fetched again. Anything newer is re-fetched and overwritten each run, so the
-in-flight season stays current.
+Resumability: a file is final -- never fetched again -- only if it was *written* more
+than ``SETTLE_DAYS`` after the end of the dates it covers. A file written earlier (a
+mid-season or next-day run) is re-fetched on every run until a settled copy replaces it,
+so late Savant corrections and the rest of a season are never frozen out.
+
+Pitch chunks are fixed weeks counted from opening day and capped at the last scheduled
+regular-season date, never at today, so a chunk's file name does not change while its
+week is still being played. Writing a chunk also deletes any other file in that season
+whose dates overlap it (e.g. after the schedule moves the season's last date).
 
 Completeness: a weekly pitch chunk is only written when every completed regular-season
 game the MLB schedule lists for those dates appears in it. Savant can return a short or
@@ -54,13 +60,17 @@ _BOXSCORE_WORKERS = 8
 Games = list[dict[str, Any]]
 
 
-class IncompleteChunkError(RuntimeError):
-    """A pitch chunk is missing games the schedule says were played."""
-
-
 def is_settled(end: date, today: date) -> bool:
     """True once data ending on ``end`` can no longer change."""
     return end < today - timedelta(days=SETTLE_DAYS)
+
+
+def is_final(path: Path, end: date) -> bool:
+    """True if ``path`` exists and was written after data ending on ``end`` had settled."""
+    if not path.exists():
+        return False
+    written = date.fromtimestamp(path.stat().st_mtime)
+    return is_settled(end, written)
 
 
 def _write_parquet(df: pd.DataFrame, path: Path) -> None:
@@ -117,6 +127,17 @@ def pitch_chunk_path(root: Path, season: int, start: date, end: date) -> Path:
     return root / "pitches" / f"season={season}" / f"{start.isoformat()}_{end.isoformat()}.parquet"
 
 
+def _remove_overlapping_chunks(path: Path, start: date, end: date) -> None:
+    """Delete other chunk files in ``path``'s season that cover any of start..end."""
+    for other in path.parent.glob("*.parquet"):
+        if other == path:
+            continue
+        o_start, o_end = (date.fromisoformat(x) for x in other.stem.split("_"))
+        if o_start <= end and start <= o_end:
+            logger.info("pitches: removing overlapping chunk %s", other.name)
+            other.unlink()
+
+
 def missing_game_pks(pitches: pd.DataFrame, expected: Iterable[int]) -> set[int]:
     """Scheduled final games with no pitch rows."""
     have = set(pitches["game_pk"].astype(int)) if "game_pk" in pitches.columns else set()
@@ -170,21 +191,20 @@ def fetch_pitches_season(
     """
     games = games if games is not None else _fetch_season_games(season)
     start, end = season_window(games)
-    end = min(end, today)
     expected_by_date = final_game_pks_by_date(games)
     summary = {"written": 0, "skipped": 0, "incomplete": 0, "rows": 0}
-    if start > end:
-        return summary
 
     for chunk_start, chunk_end in chunk_date_range(start, end):
+        if chunk_start > today:
+            break
         path = pitch_chunk_path(root, season, chunk_start, chunk_end)
-        if path.exists() and is_settled(chunk_end, today):
+        if is_final(path, chunk_end):
             summary["skipped"] += 1
             continue
         expected = {
             pk for d, pks in expected_by_date.items() if chunk_start <= d <= chunk_end for pk in pks
         }
-        df = _fetch_with_retries(fetch, chunk_start, chunk_end)
+        df = _fetch_with_retries(fetch, chunk_start, min(chunk_end, today))
         if df is None:
             summary["incomplete"] += 1
             continue
@@ -203,6 +223,7 @@ def fetch_pitches_season(
         if df.empty:
             continue
         _write_parquet(df, path)
+        _remove_overlapping_chunks(path, chunk_start, chunk_end)
         summary["written"] += 1
         summary["rows"] += len(df)
         logger.info("pitches %s..%s: %d rows", chunk_start, chunk_end, len(df))
@@ -251,7 +272,6 @@ def lineup_rows(boxscore: dict[str, Any], game_pk: int, game_date: str) -> list[
 def fetch_lineups_season(
     root: Path,
     season: int,
-    today: date,
     *,
     games: Games | None = None,
     fetch_boxscore: Callable[[int], dict[str, Any]] = _fetch_boxscore,
@@ -259,12 +279,12 @@ def fetch_lineups_season(
     """Fetch batting order for every played regular-season game. Returns rows written.
 
     Skips (returns None) when the season's file is already final. Any box-score failure
-    aborts the season without writing, so the next run retries it whole.
+    raises without writing, so the next run retries the season whole.
     """
     games = games if games is not None else _fetch_season_games(season)
     path = lineup_path(root, season)
     _, season_end = season_window(games)
-    if path.exists() and is_settled(season_end, today):
+    if is_final(path, season_end):
         return None
     finals = [_game_context(g) for g in games if was_played(g)]
     # A suspended game is listed under both its start and resume dates with one gamePk;
@@ -303,7 +323,6 @@ def _savant_sprint_speed(season: int) -> pd.DataFrame:
 def fetch_sprint_speed_season(
     root: Path,
     season: int,
-    today: date,
     *,
     games: Games | None = None,
     fetch: Callable[[int], pd.DataFrame] = _savant_sprint_speed,
@@ -312,7 +331,7 @@ def fetch_sprint_speed_season(
     path = sprint_speed_path(root, season)
     if path.exists():
         games = games if games is not None else _fetch_season_games(season)
-        if is_settled(season_window(games)[1], today):
+        if is_final(path, season_window(games)[1]):
             return None
     df = fetch(season)
     if df.empty:

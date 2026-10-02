@@ -1,4 +1,5 @@
-from datetime import date
+import os
+from datetime import date, datetime
 
 import pandas as pd
 import pytest
@@ -26,6 +27,12 @@ def _game(pk, d, game_type="R", state="Final", coded="F"):
         "gameType": game_type,
         "status": {"abstractGameState": state, "codedGameState": coded},
     }
+
+
+def _set_written(path, d):
+    """Back-date a file's mtime, as if a run on day ``d`` had written it."""
+    ts = datetime(d.year, d.month, d.day, 12).timestamp()
+    os.utime(path, (ts, ts))
 
 
 def _pitches(pks, d="2025-04-01"):
@@ -133,7 +140,9 @@ def test_pitches_writes_complete_chunks_and_skips_settled_ones(tmp_path):
     assert calls == []
 
 
-def test_pitches_refetches_a_chunk_that_is_not_settled(tmp_path):
+def test_pitches_refetch_a_chunk_written_before_it_settled(tmp_path):
+    # A next-day run writes the chunk before it settles. A later run must replace that
+    # copy, not treat it as final because the dates have since settled.
     games = [_game(10, "2025-04-01")]
     calls = []
 
@@ -141,10 +150,47 @@ def test_pitches_refetches_a_chunk_that_is_not_settled(tmp_path):
         calls.append((start, end))
         return _pitches([10])
 
-    today = date(2025, 4, 2)
-    fetch_pitches_season(tmp_path, 2025, today, games=games, fetch=fetch)
-    fetch_pitches_season(tmp_path, 2025, today, games=games, fetch=fetch)
+    fetch_pitches_season(tmp_path, 2025, date(2025, 4, 2), games=games, fetch=fetch)
+    path = pitch_chunk_path(tmp_path, 2025, date(2025, 4, 1), date(2025, 4, 1))
+    _set_written(path, date(2025, 4, 2))
+
+    fetch_pitches_season(tmp_path, 2025, date(2025, 6, 1), games=games, fetch=fetch)
     assert len(calls) == 2
+    # Rewritten after settling, so now it is final.
+    fetch_pitches_season(tmp_path, 2025, date(2025, 6, 1), games=games, fetch=fetch)
+    assert len(calls) == 2
+
+
+def test_pitch_chunk_name_does_not_move_with_today(tmp_path):
+    # Mid-week, the file is named for the whole week; only the fetch stops at today.
+    games = [_game(10, "2025-04-01"), _game(11, "2025-04-09", state="Preview", coded="S")]
+    calls = []
+
+    def fetch(start, end):
+        calls.append((start, end))
+        return _pitches([10])
+
+    path = pitch_chunk_path(tmp_path, 2025, date(2025, 4, 1), date(2025, 4, 7))
+    for today in (date(2025, 4, 2), date(2025, 4, 3)):
+        fetch_pitches_season(tmp_path, 2025, today, games=games, fetch=fetch)
+        _set_written(path, today)
+    assert calls == [(date(2025, 4, 1), date(2025, 4, 2)), (date(2025, 4, 1), date(2025, 4, 3))]
+    files = [p.name for p in tmp_path.rglob("*.parquet")]
+    assert files == ["2025-04-01_2025-04-07.parquet"]
+
+
+def test_writing_a_chunk_removes_overlapping_older_files(tmp_path):
+    games = [_game(10, "2025-04-01"), _game(11, "2025-04-08")]
+    stale = pitch_chunk_path(tmp_path, 2025, date(2025, 4, 1), date(2025, 4, 3))
+    stale.parent.mkdir(parents=True)
+    _pitches([10]).to_parquet(stale, index=False)
+    _set_written(stale, date(2025, 4, 3))
+
+    fetch_pitches_season(
+        tmp_path, 2025, date(2025, 6, 1), games=games, fetch=lambda s, e: _pitches([10, 11])
+    )
+    files = sorted(p.name for p in tmp_path.rglob("*.parquet"))
+    assert files == ["2025-04-01_2025-04-07.parquet", "2025-04-08_2025-04-08.parquet"]
 
 
 def test_pitches_short_chunk_is_not_written(tmp_path):
@@ -223,17 +269,37 @@ def test_lineups_fetch_each_game_once_and_skip_when_final(tmp_path):
         fetched.append(pk)
         return _box(pk * 10)
 
-    today = date(2025, 10, 15)
-    n = fetch_lineups_season(tmp_path, 2025, today, games=games, fetch_boxscore=fetch_boxscore)
+    n = fetch_lineups_season(tmp_path, 2025, games=games, fetch_boxscore=fetch_boxscore)
     assert n == 2
     assert sorted(fetched) == [5, 6]
     df = pd.read_parquet(lineup_path(tmp_path, 2025))
     assert df.set_index("game_pk").loc[5, "game_date"] == "2025-04-02"
 
-    assert (
-        fetch_lineups_season(tmp_path, 2025, today, games=games, fetch_boxscore=fetch_boxscore)
-        is None
-    )
+    assert fetch_lineups_season(tmp_path, 2025, games=games, fetch_boxscore=fetch_boxscore) is None
+
+
+def test_lineups_and_sprint_written_mid_season_are_refetched(tmp_path):
+    # A file from an August run must not pass as the final season once September is over.
+    games = [_game(5, "2025-04-01"), _game(6, "2025-09-28")]
+    box_calls, sprint_calls = [], []
+
+    def fetch_boxscore(pk):
+        box_calls.append(pk)
+        return _box(pk)
+
+    def fetch_sprint(season):
+        sprint_calls.append(season)
+        return pd.DataFrame({"player_id": [1]})
+
+    fetch_lineups_season(tmp_path, 2025, games=games, fetch_boxscore=fetch_boxscore)
+    fetch_sprint_speed_season(tmp_path, 2025, games=games, fetch=fetch_sprint)
+    _set_written(lineup_path(tmp_path, 2025), date(2025, 8, 1))
+    _set_written(sprint_speed_path(tmp_path, 2025), date(2025, 8, 1))
+
+    assert fetch_lineups_season(tmp_path, 2025, games=games, fetch_boxscore=fetch_boxscore) == 2
+    assert fetch_sprint_speed_season(tmp_path, 2025, games=games, fetch=fetch_sprint) == 1
+    assert len(box_calls) == 4
+    assert sprint_calls == [2025, 2025]
 
 
 def test_lineups_failure_writes_nothing(tmp_path):
@@ -243,7 +309,7 @@ def test_lineups_failure_writes_nothing(tmp_path):
         raise RuntimeError("api down")
 
     with pytest.raises(RuntimeError):
-        fetch_lineups_season(tmp_path, 2025, date(2025, 10, 15), games=games, fetch_boxscore=boom)
+        fetch_lineups_season(tmp_path, 2025, games=games, fetch_boxscore=boom)
     assert not lineup_path(tmp_path, 2025).exists()
 
 
@@ -255,18 +321,15 @@ def test_sprint_speed_adds_season_and_skips_when_final(tmp_path):
         calls.append(season)
         return pd.DataFrame({"player_id": [1, 2], "sprint_speed": [28.1, 30.2]})
 
-    today = date(2025, 11, 1)
-    assert fetch_sprint_speed_season(tmp_path, 2025, today, games=games, fetch=fetch) == 2
+    assert fetch_sprint_speed_season(tmp_path, 2025, games=games, fetch=fetch) == 2
     assert set(pd.read_parquet(sprint_speed_path(tmp_path, 2025))["season"]) == {2025}
-    assert fetch_sprint_speed_season(tmp_path, 2025, today, games=games, fetch=fetch) is None
+    assert fetch_sprint_speed_season(tmp_path, 2025, games=games, fetch=fetch) is None
     assert calls == [2025]
 
 
 def test_sprint_speed_empty_raises(tmp_path):
     with pytest.raises(ValueError):
-        fetch_sprint_speed_season(
-            tmp_path, 2025, date(2025, 11, 1), games=[], fetch=lambda s: pd.DataFrame()
-        )
+        fetch_sprint_speed_season(tmp_path, 2025, games=[], fetch=lambda s: pd.DataFrame())
 
 
 def test_connect_stacks_seasons_with_drifting_columns(tmp_path):
