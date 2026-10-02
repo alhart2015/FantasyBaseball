@@ -33,6 +33,7 @@ from fantasy_baseball.utils.time_utils import local_today
 
 DEFAULT_ROOT = PROJECT_ROOT / "data" / "pitch_data"
 KINDS = ("pitches", "lineups", "sprint")
+_LINEUP_TOTALS = ("pa", "hr", "r", "rbi", "sb")
 
 
 def _dir_mb(path: Path) -> float:
@@ -57,19 +58,22 @@ def print_summary(root: Path) -> None:
             pct = ev / bip if bip else 0.0
             print(f"{season}  {n:>8}  {games:>8}  {bip:>6}  {pct:>10.1%}  {mb:>8.1f}")
     if "lineups" in views:
-        print("\nseason  lineup_rows  games  starters_per_game      pa     hr      r    rbi    sb")
-        for season, n, games, starters, pa, hr, r, rbi, sb in conn.execute(
-            """
+        # Files from before #402 have no batting line: the totals print "-" for those
+        # seasons, or are left out when no file has them yet.
+        have = {r[0] for r in conn.execute("DESCRIBE lineups").fetchall()}
+        totals = [c for c in _LINEUP_TOTALS if c in have]
+        header = "".join(f"{c:>8}" for c in totals)
+        print(f"\nseason  lineup_rows  games  starters_per_game{header}")
+        sums = "".join(f", sum({c})" for c in totals)
+        for season, n, games, starters, *values in conn.execute(
+            f"""
             SELECT year(CAST(game_date AS DATE)), count(*), count(DISTINCT game_pk),
-                   count(*) FILTER (WHERE sub_index = 0),
-                   sum(pa), sum(hr), sum(r), sum(rbi), sum(sb)
+                   count(*) FILTER (WHERE sub_index = 0){sums}
             FROM lineups GROUP BY 1 ORDER BY 1
             """
         ).fetchall():
-            print(
-                f"{season}  {n:>11}  {games:>5}  {starters / games:>17.2f}"
-                f"  {pa:>6}  {hr:>5}  {r:>5}  {rbi:>5}  {sb:>4}"
-            )
+            cells = "".join(f"{v if v is not None else '-':>8}" for v in values)
+            print(f"{season}  {n:>11}  {games:>5}  {starters / games:>17.2f}{cells}")
     if "sprint_speed" in views:
         print("\nseason  sprint_rows")
         for season, n in conn.execute(

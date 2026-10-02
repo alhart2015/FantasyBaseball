@@ -14,6 +14,7 @@ from typing import Any
 
 import requests
 
+from fantasy_baseball.analysis.game_logs import full_hitter_line
 from fantasy_baseball.streaks.models import HitterGame
 
 MLB_API_BASE = "https://statsapi.mlb.com/api/v1"
@@ -41,24 +42,7 @@ def parse_hitter_game_log_full(
         team=team,
         season=season,
         date=date.fromisoformat(split["date"]),
-        pa=int(stat.get("plateAppearances", 0)),
-        ab=int(stat.get("atBats", 0)),
-        h=int(stat.get("hits", 0)),
-        hr=int(stat.get("homeRuns", 0)),
-        r=int(stat.get("runs", 0)),
-        rbi=int(stat.get("rbi", 0)),
-        sb=int(stat.get("stolenBases", 0)),
-        bb=int(stat.get("baseOnBalls", 0)),
-        k=int(stat.get("strikeOuts", 0)),
-        b2=int(stat.get("doubles", 0)),
-        b3=int(stat.get("triples", 0)),
-        sf=int(stat.get("sacFlies", 0)),
-        hbp=int(stat.get("hitByPitch", 0)),
-        ibb=int(stat.get("intentionalWalks", 0)),
-        cs=int(stat.get("caughtStealing", 0)),
-        gidp=int(stat.get("groundIntoDoublePlay", 0)),
-        sh=int(stat.get("sacBunts", 0)),
-        ci=int(stat.get("catchersInterference", 0)),
+        **full_hitter_line(stat),
         is_home=bool(split.get("isHome", True)),
     )
 

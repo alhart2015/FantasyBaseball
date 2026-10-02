@@ -6,7 +6,7 @@ import pytest
 
 from fantasy_baseball.pitch_data import store
 from fantasy_baseball.pitch_data.store import (
-    BATTING_FIELDS,
+    LINEUP_STAT_COLUMNS,
     connect,
     fetch_lineups_season,
     fetch_pitches_season,
@@ -261,7 +261,7 @@ def test_lineup_rows_parses_batting_order():
     assert starter["cs"] == 0
     # A pinch runner who scored: R counts, every missing field is 0.
     assert (runner["pa"], runner["r"]) == (0, 1)
-    assert set(BATTING_FIELDS.values()) <= set(runner)
+    assert set(LINEUP_STAT_COLUMNS) <= set(runner)
 
 
 def test_lineups_file_missing_new_columns_is_refetched(tmp_path):
