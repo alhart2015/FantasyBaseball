@@ -19,6 +19,8 @@ Usage:
     python scripts/build_hitter_ros_table.py      # if the table is stale
     python scripts/train_hitter_ros.py --name baseline-mlp
     python scripts/train_hitter_ros.py --name wider --hidden 256 128 --dropout 0.2
+    python scripts/build_hitter_ros_pa_tokens.py   # once, for sequence runs
+    python scripts/train_hitter_ros.py --name 003a-gru --seq gru
 """
 
 from __future__ import annotations
@@ -44,10 +46,12 @@ from fantasy_baseball.hitter_ros.features import (
     input_frame,
     target_frame,
 )
-from fantasy_baseball.hitter_ros.net import NetConfig, predict, train
+from fantasy_baseball.hitter_ros.net import EVAL_BATCH, NetConfig, device, predict, train
+from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
+TOKENS = PROJECT_ROOT / "data" / "hitter_ros" / "pa_tokens.parquet"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 
@@ -61,8 +65,15 @@ def fit_season(
     w_all: pd.DataFrame,
     test_season: int,
     config: NetConfig,
+    batcher: SequenceBatcher | None = None,
+    shuffle_test_order: bool = False,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
-    """Train on complete seasons before ``test_season``; predict that season's rows."""
+    """Train on complete seasons before ``test_season``; predict that season's rows.
+
+    With a sequence model, ``batcher`` was built on ``table`` and is handed each row's
+    table position to fetch its plate appearances.
+    """
+    positions = np.arange(len(table))
     train_rows = (
         table["season_complete"] & (table["season"] < test_season) & (w_all.sum(axis=1) > 0)
     )
@@ -91,9 +102,19 @@ def fit_season(
         w_train.to_numpy(dtype=np.float32),
         val_mask,
         config,
+        rows=positions[train_rows.to_numpy()] if batcher else None,
+        batcher=batcher,
     )
     test_rows = table["season"] == test_season
-    z = predict(result.model, scaler.transform(x_all[test_rows]))
+    z = predict(
+        result.model,
+        scaler.transform(x_all[test_rows]),
+        rows=positions[test_rows.to_numpy()] if batcher else None,
+        batcher=batcher,
+        shuffle_order=shuffle_test_order,
+        chunk=config.micro_batch or EVAL_BATCH,
+        amp=config.amp,
+    )
     preds = pd.DataFrame(
         {s: z[:, i] * sd[s] + mu[s] for i, s in enumerate(TARGETS)},
         index=table.index[test_rows],
@@ -113,6 +134,13 @@ def fit_season(
     return preds, info
 
 
+def _non_negative_int(text: str) -> int:
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {value}")
+    return value
+
+
 def main() -> int:
     defaults = NetConfig()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -128,43 +156,89 @@ def main() -> int:
     parser.add_argument("--max-epochs", type=int, default=defaults.max_epochs)
     parser.add_argument("--patience", type=int, default=defaults.patience)
     parser.add_argument("--seed", type=int, default=defaults.seed)
+    parser.add_argument(
+        "--seq",
+        choices=["none", "gru", "transformer"],
+        default=defaults.seq,
+        help="sequence encoder over recent plate appearances (#414)",
+    )
+    parser.add_argument("--seq-len", type=int, default=defaults.seq_len)
+    parser.add_argument("--seq-dim", type=int, default=defaults.seq_dim)
+    parser.add_argument("--seq-layers", type=int, default=defaults.seq_layers)
+    parser.add_argument(
+        "--micro-batch",
+        type=_non_negative_int,
+        default=defaults.micro_batch,
+        help="rows per forward pass inside a batch (saves GPU memory; same update)",
+    )
+    parser.add_argument(
+        "--amp", action="store_true", help="bfloat16 for the sequence model on the GPU"
+    )
+    parser.add_argument(
+        "--shuffle-test-order",
+        action="store_true",
+        help="predict with each hitter's PAs in random order (does the net use order?)",
+    )
     parser.add_argument("--note", default="", help="what this run changes and why")
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    config = NetConfig(
-        hidden=args.hidden,
-        dropout=args.dropout,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        batch_size=args.batch_size,
-        max_epochs=args.max_epochs,
-        patience=args.patience,
-        seed=args.seed,
-    )
+    try:
+        config = NetConfig(
+            hidden=args.hidden,
+            dropout=args.dropout,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            batch_size=args.batch_size,
+            max_epochs=args.max_epochs,
+            patience=args.patience,
+            seed=args.seed,
+            seq=args.seq,
+            seq_len=args.seq_len,
+            seq_dim=args.seq_dim,
+            seq_layers=args.seq_layers,
+            micro_batch=args.micro_batch,
+            amp=args.amp,
+        )
+    except ValueError as err:
+        parser.error(str(err))
+    if args.shuffle_test_order and args.seq == "none":
+        parser.error("--shuffle-test-order needs a sequence model (--seq gru/transformer)")
     out = RUNS / args.name
-    if out.exists() and any(out.iterdir()):
-        if not args.overwrite:
-            parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
-        shutil.rmtree(out)
-    out.mkdir(parents=True, exist_ok=True)
+    if out.exists() and any(out.iterdir()) and not args.overwrite:
+        parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
+    if config.seq != "none" and not TOKENS.exists():
+        parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
 
     table = pd.read_parquet(TABLE)
     x_all = input_frame(table)
     y_all, w_all = target_frame(table)
+    batcher = None
+    if config.seq != "none":
+        batcher = SequenceBatcher(pd.read_parquet(TOKENS), table, config.seq_len, device())
+    # Only now, with every input loaded, replace an old run of the same name.
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True, exist_ok=True)
 
     all_preds, infos = [], []
     for season in args.test_seasons:
         logger.info("test season %s: training on complete seasons before it", season)
-        preds, info = fit_season(table, x_all, y_all, w_all, season, config)
+        preds, info = fit_season(
+            table, x_all, y_all, w_all, season, config, batcher, args.shuffle_test_order
+        )
         all_preds.append(preds)
         infos.append(info)
     predictions = pd.concat(all_preds)
     predictions.to_parquet(out / "predictions.parquet")
-    (out / "config.json").write_text(
-        json.dumps({"note": args.note, "config": config.to_dict(), "seasons": infos}, indent=2)
-    )
+    meta = {
+        "note": args.note,
+        "config": config.to_dict(),
+        "shuffle_test_order": args.shuffle_test_order,
+        "seasons": infos,
+    }
+    (out / "config.json").write_text(json.dumps(meta, indent=2))
     pre, snap = backtest.score_predictions(table, predictions, PROJECTIONS, STORE)
     backtest.write_scores(out, pre, snap)
     md = [

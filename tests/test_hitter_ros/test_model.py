@@ -210,3 +210,27 @@ def test_net_fails_loudly_on_a_nan_loss():
     val = np.arange(50) < 10
     with pytest.raises(FloatingPointError, match="validation loss"):
         train(x, y, np.ones_like(y), val, NetConfig(hidden=[4], max_epochs=3))
+
+
+def test_micro_batches_give_the_full_batch_gradient():
+    torch = pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.net import MLP, accumulate_batch, weighted_mse
+
+    torch.manual_seed(0)
+    x = torch.randn(64, 5)
+    y = torch.randn(64, 2)
+    w = torch.rand(64, 2)
+    idx = torch.arange(64)
+    model = MLP(5, 2, [8], dropout=0.0)
+
+    model.zero_grad()
+    weighted_mse(model(x), y, w).backward()
+    full = [p.grad.clone() for p in model.parameters()]
+
+    model.zero_grad()
+    loss = accumulate_batch(model, idx, x, y, w, None, None, micro_batch=10)
+    sliced = [p.grad.clone() for p in model.parameters()]
+
+    assert loss == pytest.approx(weighted_mse(model(x), y, w).item(), rel=1e-5)
+    for a, b in zip(full, sliced, strict=True):
+        torch.testing.assert_close(a, b, rtol=1e-5, atol=1e-6)

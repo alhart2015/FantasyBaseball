@@ -100,3 +100,17 @@ def test_a_run_still_scoring_is_skipped(runs, capsys, monkeypatch):
     monkeypatch.setattr("sys.argv", ["compare", "done", "scoring"])
     assert cmp.main() == 0
     assert "skipping scoring" in capsys.readouterr().out
+
+
+def test_train_script_keeps_an_old_run_when_tokens_are_missing(tmp_path, monkeypatch):
+    from scripts import train_hitter_ros
+
+    old = tmp_path / "runs" / "keep-me"
+    old.mkdir(parents=True)
+    (old / "summary.md").write_text("old results\n")
+    monkeypatch.setattr(train_hitter_ros, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr(train_hitter_ros, "TOKENS", tmp_path / "missing.parquet")
+    monkeypatch.setattr("sys.argv", ["train", "--name", "keep-me", "--seq", "gru", "--overwrite"])
+    with pytest.raises(SystemExit):
+        train_hitter_ros.main()
+    assert (old / "summary.md").read_text() == "old results\n"
