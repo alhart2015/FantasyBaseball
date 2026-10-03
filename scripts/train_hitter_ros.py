@@ -46,7 +46,7 @@ from fantasy_baseball.hitter_ros.features import (
     input_frame,
     target_frame,
 )
-from fantasy_baseball.hitter_ros.net import NetConfig, device, predict, train
+from fantasy_baseball.hitter_ros.net import EVAL_BATCH, NetConfig, device, predict, train
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
@@ -112,6 +112,7 @@ def fit_season(
         rows=positions[test_rows.to_numpy()] if batcher else None,
         batcher=batcher,
         shuffle_order=shuffle_test_order,
+        chunk=config.micro_batch or EVAL_BATCH,
     )
     preds = pd.DataFrame(
         {s: z[:, i] * sd[s] + mu[s] for i, s in enumerate(TARGETS)},
@@ -157,6 +158,15 @@ def main() -> int:
     parser.add_argument("--seq-dim", type=int, default=defaults.seq_dim)
     parser.add_argument("--seq-layers", type=int, default=defaults.seq_layers)
     parser.add_argument(
+        "--micro-batch",
+        type=int,
+        default=defaults.micro_batch,
+        help="rows per forward pass inside a batch (saves GPU memory; same update)",
+    )
+    parser.add_argument(
+        "--amp", action="store_true", help="bfloat16 for the sequence model on the GPU"
+    )
+    parser.add_argument(
         "--shuffle-test-order",
         action="store_true",
         help="predict with each hitter's PAs in random order (does the net use order?)",
@@ -179,6 +189,8 @@ def main() -> int:
         seq_len=args.seq_len,
         seq_dim=args.seq_dim,
         seq_layers=args.seq_layers,
+        micro_batch=args.micro_batch,
+        amp=args.amp,
     )
     if args.shuffle_test_order and args.seq == "none":
         parser.error("--shuffle-test-order needs a sequence model (--seq gru/transformer)")

@@ -53,6 +53,14 @@ class NetConfig:
     seq_len: int = 600
     seq_dim: int = 64
     seq_layers: int = 1
+    # Rows per forward pass inside a batch (0 = the whole batch). Gradients from the
+    # slices are added up, so the update is the same as one full batch; this only saves
+    # GPU memory (a transformer over 600 PAs x 2048 rows does not fit in 12 GB). Also
+    # used as the evaluation chunk size.
+    micro_batch: int = 0
+    # Run the sequence encoder in bfloat16 on the GPU (about 2x faster for the
+    # transformer). Outputs and the loss stay float32.
+    amp: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -117,8 +125,10 @@ def _forward(
         return out
     assert rows is not None, "a sequence model needs table row positions"
     seq, lengths = batcher.batch(rows, shuffle_order=shuffle_order)
-    out = model(x, seq, lengths)
-    return out
+    amp = getattr(model, "amp", False) and x.is_cuda
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp):
+        out = model(x, seq, lengths)
+    return out.float()
 
 
 def _eval_loss(
@@ -128,17 +138,45 @@ def _eval_loss(
     w: torch.Tensor,
     rows: torch.Tensor | None,
     batcher: SequenceBatcher | None,
+    chunk: int = EVAL_BATCH,
 ) -> float:
     """weighted_mse over all rows, computed in chunks."""
     num = torch.zeros(y.shape[1], device=y.device)
     den = torch.zeros(y.shape[1], device=y.device)
     with torch.no_grad():
-        for start in range(0, len(x), EVAL_BATCH):
-            sl = slice(start, start + EVAL_BATCH)
+        for start in range(0, len(x), chunk):
+            sl = slice(start, start + chunk)
             pred = _forward(model, x[sl], None if rows is None else rows[sl], batcher)
             num += (w[sl] * (pred - y[sl]) ** 2).sum(dim=0)
             den += w[sl].sum(dim=0)
     return float((num / den.clamp(min=1e-9)).mean().item())
+
+
+def accumulate_batch(
+    model: nn.Module,
+    idx: torch.Tensor,
+    x: torch.Tensor,
+    y: torch.Tensor,
+    w: torch.Tensor,
+    rows: torch.Tensor | None,
+    batcher: SequenceBatcher | None,
+    micro_batch: int,
+) -> float:
+    """Backpropagate weighted_mse for batch ``idx``, in slices of ``micro_batch`` rows.
+
+    Each slice's loss is normalized by the whole batch's weight per target, so the
+    slices' gradients sum to exactly the full-batch gradient. Returns the batch loss.
+    """
+    w_total = w[idx].sum(dim=0).clamp(min=1e-9)
+    step = micro_batch or len(idx)
+    total = 0.0
+    for start in range(0, len(idx), step):
+        sub = idx[start : start + step]
+        pred = _forward(model, x[sub], None if rows is None else rows[sub], batcher)
+        part = ((w[sub] * (pred - y[sub]) ** 2).sum(dim=0) / w_total).mean()
+        part.backward()
+        total += part.item()
+    return total
 
 
 def train(
@@ -171,6 +209,7 @@ def train(
         rt = torch.as_tensor(rows[~val_mask], dtype=torch.long, device=dev)
         rv = torch.as_tensor(rows[val_mask], dtype=torch.long, device=dev)
     model = build_model(x.shape[1], y.shape[1], config).to(dev)
+    model.amp = config.amp
     opt = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     gen = torch.Generator(device=dev).manual_seed(config.seed)
 
@@ -184,16 +223,14 @@ def train(
         total = 0.0
         for start in range(0, n, config.batch_size):
             idx = order[start : start + config.batch_size]
-            pred = _forward(model, xt[idx], None if rt is None else rt[idx], batcher)
-            loss = weighted_mse(pred, yt[idx], wt[idx])
             opt.zero_grad()
-            loss.backward()
+            loss = accumulate_batch(model, idx, xt, yt, wt, rt, batcher, config.micro_batch)
             opt.step()
-            total += loss.item() * len(idx)
+            total += loss * len(idx)
         train_hist.append(total / n)
 
         model.eval()
-        val = _eval_loss(model, xv, yv, wv, rv, batcher)
+        val = _eval_loss(model, xv, yv, wv, rv, batcher, config.micro_batch or EVAL_BATCH)
         val_hist.append(val)
         if not np.isfinite(val):
             raise FloatingPointError(
@@ -218,6 +255,7 @@ def predict(
     rows: np.ndarray | None = None,
     batcher: SequenceBatcher | None = None,
     shuffle_order: bool = False,
+    chunk: int = EVAL_BATCH,
 ) -> np.ndarray:
     """Model outputs for ``x`` (and, for a sequence model, table positions ``rows``)."""
     model.eval()
@@ -226,8 +264,8 @@ def predict(
     rt = None if rows is None else torch.as_tensor(rows, dtype=torch.long, device=dev)
     parts = []
     with torch.no_grad():
-        for start in range(0, len(xt), EVAL_BATCH):
-            sl = slice(start, start + EVAL_BATCH)
+        for start in range(0, len(xt), chunk):
+            sl = slice(start, start + chunk)
             out = _forward(model, xt[sl], None if rt is None else rt[sl], batcher, shuffle_order)
             parts.append(out.cpu().numpy())
     return np.concatenate(parts)
