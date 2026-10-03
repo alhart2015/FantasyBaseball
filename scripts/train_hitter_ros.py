@@ -69,6 +69,7 @@ def fit_season(
     config: NetConfig,
     batcher: SequenceBatcher | None = None,
     shuffle_test_order: bool = False,
+    train_from: int | None = None,
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     """Train on complete seasons before ``test_season``; predict that season's rows.
 
@@ -79,6 +80,8 @@ def fit_season(
     train_rows = (
         table["season_complete"] & (table["season"] < test_season) & (w_all.sum(axis=1) > 0)
     )
+    if train_from is not None:  # learning-curve runs: train on fewer, more recent seasons
+        train_rows &= table["season"] >= train_from
     rng = np.random.default_rng(config.seed)
     players = table.loc[train_rows, "player_id"].unique()
     val_players = rng.choice(players, size=int(len(players) * config.val_frac), replace=False)
@@ -200,6 +203,11 @@ def main() -> int:
         help="predict with each hitter's PAs in random order (does the net use order?)",
     )
     parser.add_argument("--note", default="", help="what this run changes and why")
+    parser.add_argument(
+        "--train-seasons",
+        type=int,
+        help="train only on the N seasons right before each test season (learning curves)",
+    )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
@@ -249,7 +257,15 @@ def main() -> int:
         if args.pretrained:
             x_season = pd.concat([x_all, pretrained_inputs(args.pretrained, season, table)], axis=1)
         preds, info = fit_season(
-            table, x_season, y_all, w_all, season, config, batcher, args.shuffle_test_order
+            table,
+            x_season,
+            y_all,
+            w_all,
+            season,
+            config,
+            batcher,
+            args.shuffle_test_order,
+            train_from=None if args.train_seasons is None else season - args.train_seasons,
         )
         all_preds.append(preds)
         infos.append(info)
@@ -260,6 +276,7 @@ def main() -> int:
         "config": config.to_dict(),
         "shuffle_test_order": args.shuffle_test_order,
         "pretrained": args.pretrained,
+        "train_seasons": args.train_seasons,
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))
