@@ -174,6 +174,7 @@ def test_pitch_counts(store):
     assert w1.std_ev_sum == 700.0 and w1.std_ev_sq_sum == 70000.0
     assert w1.std_fb == 7 and w1.std_pulled_air == 7 and w1.std_oppo == 0
     assert w1.std_xwoba_sum == pytest.approx(8.4)
+    assert w1.std_xba_n == 7 and w1.std_xba_sum == pytest.approx(4.9)
     assert w1.age == 27
 
 

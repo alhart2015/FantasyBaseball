@@ -135,6 +135,7 @@ PITCH_AGGS: dict[str, str] = {
     "pulled_air": f"count(*) FILTER (WHERE {_BIP} AND {_AIR} AND {_PULLED})",
     "xwoba_n": f"count(estimated_woba_using_speedangle) FILTER (WHERE {_BIP})",
     "xwoba_sum": f"sum(estimated_woba_using_speedangle) FILTER (WHERE {_BIP})",
+    "xba_n": f"count(estimated_ba_using_speedangle) FILTER (WHERE {_BIP})",
     "xba_sum": f"sum(estimated_ba_using_speedangle) FILTER (WHERE {_BIP})",
     "bat_speed_n": "count(bat_speed)",
     "bat_speed_sum": "sum(bat_speed)",

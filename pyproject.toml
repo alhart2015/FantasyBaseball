@@ -40,6 +40,11 @@ dev = [
     "pybaseball>=2.2",
     "scikit-learn>=1.5",
 ]
+# The hitter ROS net (#404). Install the CUDA build first, e.g.
+#   pip install torch --index-url https://download.pytorch.org/whl/cu128
+nn = [
+    "torch>=2.4",
+]
 
 [tool.setuptools.packages.find]
 where = ["src"]
