@@ -4,7 +4,12 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from fantasy_baseball.hitter_ros.evaluate import blend, load_fangraphs_hitters, score
+from fantasy_baseball.hitter_ros.evaluate import (
+    blend,
+    load_fangraphs_hitters,
+    mae_table,
+    scored_players,
+)
 from fantasy_baseball.hitter_ros.features import Standardizer, input_frame, target_frame
 from fantasy_baseball.hitter_ros.table import build_table
 from tests.test_hitter_ros.test_table import _season, _write
@@ -88,7 +93,7 @@ def test_score_uses_only_shared_players_with_enough_pa():
         sb=[0.0] * 2,
         avg=[0.300, 0.300],
     )
-    t = score({"ours": ours, "theirs": theirs}, actual, min_pa=300)
+    t = mae_table(scored_players({"ours": ours, "theirs": theirs}, actual, min_pa=300))
     # Only player 1: covered by both, and player 3 is under the PA floor.
     assert t.loc["ours", "n"] == 1
     assert t.loc["ours", "r"] == pytest.approx(0.01 * 600)
@@ -171,7 +176,7 @@ def test_score_drops_players_any_projection_cannot_rate():
         sb=[0.0, np.nan],
         avg=[0.3, np.nan],
     )
-    t = score({"ours": ours, "theirs": theirs}, actual, min_pa=300)
+    t = mae_table(scored_players({"ours": ours, "theirs": theirs}, actual, min_pa=300))
     assert t.loc["ours", "n"] == 1
     assert t.loc["ours", "r"] == pytest.approx(0.01 * 600)
 

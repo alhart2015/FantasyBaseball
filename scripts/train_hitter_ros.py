@@ -3,14 +3,16 @@
 For each test season T, the net trains only on complete seasons before T (validation =
 a random slice of those players), then predicts every row of T. Scores:
 
-* Preseason (week 0) vs. each FanGraphs system in data/projections/T/ and their blend.
+* Preseason (week 0) vs. each FanGraphs system in data/projections/T/, their blend, and
+  two simple floors (league average, Marcel-style).
 * Mid-season vs. each dated ROS snapshot in data/projections/T/rest_of_season/<date>/,
   using our row from the latest as-of date on or before the snapshot.
 
 Each run is saved under data/hitter_ros/runs/<name>/: config.json (settings, plus each
-test season's train/val loss per epoch), scores_preseason.csv, scores_snapshots.csv,
-summary.md (paste into #404) and predictions.parquet. A name that already has a run is
-refused unless --overwrite.
+test season's train/val loss per epoch), predictions.parquet, scored_preseason.parquet
+and scored_snapshots.parquet (one row per player x system x stat), and summary.md (paste
+into #404). Scoring is hitter_ros/backtest.py, shared with score_hitter_ros_run.py.
+A name that already has a run is refused unless --overwrite.
 
 Setup (once): pip install torch --index-url https://download.pytorch.org/whl/cu128
 Usage:
@@ -35,24 +37,19 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.evaluate import blend, load_systems, score
+from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.features import (
     TARGETS,
     Standardizer,
     input_frame,
-    rates_from_counts,
     target_frame,
 )
 from fantasy_baseball.hitter_ros.net import NetConfig, predict, train
-from fantasy_baseball.pitch_data.store import connect
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
-PRESEASON_MIN_PA = 300
-SNAPSHOT_MIN_PA = 100
-OURS = "ours"
 
 logger = logging.getLogger("train_hitter_ros")
 
@@ -116,72 +113,6 @@ def fit_season(
     return preds, info
 
 
-def preseason_scores(table: pd.DataFrame, preds: pd.DataFrame, season: int) -> pd.DataFrame | None:
-    systems = load_systems(PROJECTIONS / str(season), preseason=True)
-    if not systems:
-        return None
-    week0 = table[(table["season"] == season) & (table["week"] == 0)].set_index("player_id")
-    actual = rates_from_counts(week0.rename(columns=lambda c: c.removeprefix("ros_")))
-    actual["pa"] = week0["ros_pa"]
-    ours = preds[preds["week"] == 0].set_index("player_id")[list(TARGETS)]
-    projections = {OURS: ours, **systems}
-    if len(systems) > 1:
-        projections["fg_blend"] = blend(systems)
-    return score(projections, actual, PRESEASON_MIN_PA)
-
-
-def snapshot_scores(preds: pd.DataFrame, season: int) -> pd.DataFrame | None:
-    root = PROJECTIONS / str(season) / "rest_of_season"
-    if not root.is_dir():
-        return None
-    # The season's games, once; each snapshot sums the games on or after its date.
-    conn = connect(STORE)
-    games = conn.execute(
-        """
-        SELECT player_id, CAST(game_date AS DATE) AS game_date, pa, ab, h, r, hr, rbi, sb
-        FROM lineups WHERE year(CAST(game_date AS DATE)) = ?
-        """,
-        [season],
-    ).df()
-    conn.close()
-    games["game_date"] = pd.to_datetime(games["game_date"]).dt.date
-    count_cols = ["pa", "ab", "h", "r", "hr", "rbi", "sb"]
-    tables = []
-    for snap_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        snap = date.fromisoformat(snap_dir.name)
-        systems = load_systems(snap_dir)
-        if not systems:
-            continue
-        actual_counts = games[games["game_date"] >= snap].groupby("player_id")[count_cols].sum()
-        actual = rates_from_counts(actual_counts)
-        actual["pa"] = actual_counts["pa"]
-        if (actual["pa"] >= SNAPSHOT_MIN_PA).sum() == 0:
-            continue
-        ours_rows = preds[preds["as_of"].dt.date <= snap]
-        ours = (ours_rows.sort_values("as_of").groupby("player_id").tail(1).set_index("player_id"))[
-            list(TARGETS)
-        ]
-        projections = {OURS: ours, **systems}
-        if len(systems) > 1:
-            projections["fg_blend"] = blend(systems)
-        t = score(projections, actual, SNAPSHOT_MIN_PA)
-        t.insert(0, "snapshot", snap.isoformat())
-        tables.append(t)
-    return pd.concat(tables) if tables else None
-
-
-def to_markdown(df: pd.DataFrame) -> str:
-    cols = list(df.columns)
-    lines = ["| system | " + " | ".join(cols) + " |", "|---" * (len(cols) + 1) + "|"]
-    for name, row in df.iterrows():
-        cells = [
-            f"{v:.2f}" if isinstance(v, float) and c != "n" else str(int(v)) if c == "n" else str(v)
-            for c, v in row.items()
-        ]
-        lines.append(f"| {name} | " + " | ".join(cells) + " |")
-    return "\n".join(lines)
-
-
 def main() -> int:
     defaults = NetConfig()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -223,25 +154,19 @@ def main() -> int:
     x_all = input_frame(table)
     y_all, w_all = target_frame(table)
 
-    all_preds, infos, pre_tables, snap_tables = [], [], [], []
+    all_preds, infos = [], []
     for season in args.test_seasons:
         logger.info("test season %s: training on complete seasons before it", season)
         preds, info = fit_season(table, x_all, y_all, w_all, season, config)
         all_preds.append(preds)
         infos.append(info)
-        pre = preseason_scores(table, preds, season)
-        if pre is not None:
-            pre.insert(0, "season", season)
-            pre_tables.append(pre)
-        snap = snapshot_scores(preds, season)
-        if snap is not None:
-            snap.insert(0, "season", season)
-            snap_tables.append(snap)
-
-    pd.concat(all_preds).to_parquet(out / "predictions.parquet")
+    predictions = pd.concat(all_preds)
+    predictions.to_parquet(out / "predictions.parquet")
     (out / "config.json").write_text(
         json.dumps({"note": args.note, "config": config.to_dict(), "seasons": infos}, indent=2)
     )
+    pre, snap = backtest.score_predictions(table, predictions, PROJECTIONS, STORE)
+    backtest.write_scores(out, pre, snap)
     md = [
         f"### Run `{args.name}`",
         "",
@@ -249,28 +174,8 @@ def main() -> int:
         "",
         f"Config: `{json.dumps(config.to_dict())}`",
         "",
+        *backtest.summarize(pre, snap),
     ]
-    md.append(
-        f"Raw error, lower is better: R/HR/RBI/SB = MAE per 600 PA, AVG = MAE in points. "
-        f"Preseason: players with >= {PRESEASON_MIN_PA} actual PA. "
-        f"Mid-season: >= {SNAPSHOT_MIN_PA} PA after the snapshot."
-    )
-    if pre_tables:
-        pre_all = pd.concat(pre_tables)
-        pre_all.to_csv(out / "scores_preseason.csv")
-        md += ["", "#### Preseason"]
-        for season, g in pre_all.groupby("season"):
-            md += ["", f"**{season}**", "", to_markdown(g.drop(columns="season"))]
-        mean = pre_all.drop(columns=["season"]).groupby(level=0).mean()
-        md += ["", "**Mean over seasons** (systems present every season only)", ""]
-        present = pre_all.groupby(level=0)["season"].nunique() == len(pre_tables)
-        md.append(to_markdown(mean[present.reindex(mean.index).fillna(False)]))
-    if snap_tables:
-        snap_all = pd.concat(snap_tables)
-        snap_all.to_csv(out / "scores_snapshots.csv")
-        md += ["", "#### Mid-season (ROS snapshots)"]
-        for (_season, snapshot), g in snap_all.groupby(["season", "snapshot"]):
-            md += ["", f"**{snapshot}**", "", to_markdown(g.drop(columns=["season", "snapshot"]))]
     epochs = ", ".join(f"{i['test_season']}: {i['best_epoch']}" for i in infos)
     md += ["", f"Best epoch per test season: {epochs}. Inputs: {infos[0]['n_features']}."]
     (out / "summary.md").write_text("\n".join(md) + "\n")
