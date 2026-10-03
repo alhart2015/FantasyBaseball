@@ -47,11 +47,13 @@ from fantasy_baseball.hitter_ros.features import (
     target_frame,
 )
 from fantasy_baseball.hitter_ros.net import EVAL_BATCH, NetConfig, device, predict, train
+from fantasy_baseball.hitter_ros.pretrain import table_fingerprint
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 TOKENS = PROJECT_ROOT / "data" / "hitter_ros" / "pa_tokens.parquet"
+PRETRAIN = PROJECT_ROOT / "data" / "hitter_ros" / "pretrain"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 
@@ -134,6 +136,20 @@ def fit_season(
     return preds, info
 
 
+def pretrained_inputs(name: str, season: int, table: pd.DataFrame) -> pd.DataFrame:
+    """The pitch-encoder summaries pretrained for test season ``season`` (only on earlier
+    seasons), one row per table row, as extra input columns ``pre_0 ...``."""
+    folder = PRETRAIN / name / str(season)
+    meta = json.loads((folder / "metrics.json").read_text())
+    if meta["table_fingerprint"] != table_fingerprint(table):
+        raise SystemExit(
+            f"{folder} was embedded from a different training table; re-run "
+            f"scripts/pretrain_hitter_ros.py --name {name} --overwrite"
+        )
+    emb = np.load(folder / "embeddings.npy").astype(np.float32)
+    return pd.DataFrame(emb, index=table.index, columns=[f"pre_{i}" for i in range(emb.shape[1])])
+
+
 def _non_negative_int(text: str) -> int:
     value = int(text)
     if value < 0:
@@ -173,6 +189,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--amp", action="store_true", help="bfloat16 for the sequence model on the GPU"
+    )
+    parser.add_argument(
+        "--pretrained",
+        help="add the pitch-encoder summaries from data/hitter_ros/pretrain/<name>/ (#415)",
     )
     parser.add_argument(
         "--shuffle-test-order",
@@ -225,8 +245,11 @@ def main() -> int:
     all_preds, infos = [], []
     for season in args.test_seasons:
         logger.info("test season %s: training on complete seasons before it", season)
+        x_season = x_all
+        if args.pretrained:
+            x_season = pd.concat([x_all, pretrained_inputs(args.pretrained, season, table)], axis=1)
         preds, info = fit_season(
-            table, x_all, y_all, w_all, season, config, batcher, args.shuffle_test_order
+            table, x_season, y_all, w_all, season, config, batcher, args.shuffle_test_order
         )
         all_preds.append(preds)
         infos.append(info)
@@ -236,6 +259,7 @@ def main() -> int:
         "note": args.note,
         "config": config.to_dict(),
         "shuffle_test_order": args.shuffle_test_order,
+        "pretrained": args.pretrained,
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))
