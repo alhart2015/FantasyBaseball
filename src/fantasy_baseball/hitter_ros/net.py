@@ -65,10 +65,16 @@ class NetConfig:
     # Run the sequence encoder in bfloat16 on the GPU (about 2x faster for the
     # transformer). Outputs and the loss stay float32.
     amp: bool = False
+    # "pa": each row's loss counts by its rest-of-season PA. "balanced": the same, then
+    # rescaled so each fifth of the season carries equal total weight (late-season rows
+    # otherwise get ~4% of it).
+    weighting: str = "pa"
 
     def __post_init__(self) -> None:
         if self.micro_batch < 0:
             raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
+        if self.weighting not in ("pa", "balanced"):
+            raise ValueError(f"unknown weighting {self.weighting!r}")
         if self.seq not in ("none", "gru", "transformer"):
             raise ValueError(f"unknown seq {self.seq!r}")
         if self.seq == "transformer" and self.seq_dim % TRANSFORMER_HEADS:

@@ -234,3 +234,17 @@ def test_micro_batches_give_the_full_batch_gradient():
     assert loss == pytest.approx(weighted_mse(model(x), y, w).item(), rel=1e-5)
     for a, b in zip(full, sliced, strict=True):
         torch.testing.assert_close(a, b, rtol=1e-5, atol=1e-6)
+
+
+def test_balanced_weighting_gives_each_part_of_the_season_equal_weight():
+    from fantasy_baseball.hitter_ros.features import SEASON_PARTS, balance_by_season_time
+
+    frac_left = pd.Series([1.0, 0.95, 0.5, 0.1, 0.05])  # early, early, middle, late, late
+    w = pd.DataFrame({"hr": [600.0, 500.0, 300.0, 40.0, 20.0], "avg": [5.0, 5.0, 5.0, 5.0, 5.0]})
+    out = balance_by_season_time(w, frac_left)
+    part = np.minimum(((1 - frac_left) * SEASON_PARTS).astype(int), SEASON_PARTS - 1)
+    totals = out["hr"].groupby(part).sum()
+    assert np.allclose(totals, totals.iloc[0])  # every season part present: same total
+    assert out["hr"].sum() == pytest.approx(w["hr"].sum())
+    # Within a part, PA still matters: the 40-PA row outweighs the 20-PA row 2:1.
+    assert out["hr"][3] == pytest.approx(2 * out["hr"][4])

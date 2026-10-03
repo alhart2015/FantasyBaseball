@@ -43,6 +43,7 @@ from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.features import (
     TARGETS,
     Standardizer,
+    balance_by_season_time,
     input_frame,
     target_frame,
 )
@@ -89,6 +90,8 @@ def fit_season(
 
     scaler = Standardizer().fit(x_all[train_rows & ~table["player_id"].isin(val_players)])
     y_train, w_train = y_all[train_rows], w_all[train_rows]
+    if config.weighting == "balanced":
+        w_train = balance_by_season_time(w_train, table.loc[train_rows, "frac_season_left"])
     fit_rows = ~val_mask
     mu = {
         s: np.average(y_train[s][fit_rows].fillna(0), weights=w_train[s][fit_rows]) for s in TARGETS
@@ -176,6 +179,12 @@ def main() -> int:
     parser.add_argument("--patience", type=int, default=defaults.patience)
     parser.add_argument("--seed", type=int, default=defaults.seed)
     parser.add_argument(
+        "--weighting",
+        choices=["pa", "balanced"],
+        default=defaults.weighting,
+        help="balanced: each fifth of the season gets equal total loss weight",
+    )
+    parser.add_argument(
         "--seq",
         choices=["none", "gru", "transformer"],
         default=defaults.seq,
@@ -228,6 +237,7 @@ def main() -> int:
             seq_layers=args.seq_layers,
             micro_batch=args.micro_batch,
             amp=args.amp,
+            weighting=args.weighting,
         )
     except ValueError as err:
         parser.error(str(err))
