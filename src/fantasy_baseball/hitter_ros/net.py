@@ -31,6 +31,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+# Attention heads in the transformer encoder; seq_dim must divide by it.
+TRANSFORMER_HEADS = 4
+
+
 @dataclass
 class NetConfig:
     """Everything that defines one training run. Saved next to every run's results."""
@@ -61,6 +65,17 @@ class NetConfig:
     # Run the sequence encoder in bfloat16 on the GPU (about 2x faster for the
     # transformer). Outputs and the loss stay float32.
     amp: bool = False
+
+    def __post_init__(self) -> None:
+        if self.micro_batch < 0:
+            raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
+        if self.seq not in ("none", "gru", "transformer"):
+            raise ValueError(f"unknown seq {self.seq!r}")
+        if self.seq == "transformer" and self.seq_dim % TRANSFORMER_HEADS:
+            raise ValueError(
+                f"seq_dim {self.seq_dim} must be divisible by the "
+                f"{TRANSFORMER_HEADS} attention heads"
+            )
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -109,7 +124,9 @@ def build_model(n_in: int, n_out: int, config: NetConfig) -> nn.Module:
         return MLP(n_in, n_out, config.hidden, config.dropout)
     from fantasy_baseball.hitter_ros.sequence import HybridNet, make_encoder
 
-    encoder = make_encoder(config.seq, config.seq_dim, config.seq_layers)
+    encoder = make_encoder(
+        config.seq, config.seq_dim, config.seq_layers, config.seq_len, config.dropout
+    )
     return HybridNet(n_in, n_out, config.hidden, config.dropout, encoder)
 
 
@@ -126,9 +143,8 @@ def _forward(
         return out
     assert rows is not None, "a sequence model needs table row positions"
     seq, lengths = batcher.batch(rows, shuffle_order=shuffle_order)
-    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp and x.is_cuda):
-        out = model(x, seq, lengths)
-    return out.float()
+    out = model(x, seq, lengths, amp=amp)
+    return out
 
 
 def _eval_loss(
@@ -171,14 +187,14 @@ def accumulate_batch(
     """
     w_total = w[idx].sum(dim=0).clamp(min=1e-9)
     step = micro_batch or len(idx)
-    total = 0.0
+    total = torch.zeros((), device=x.device)
     for start in range(0, len(idx), step):
         sub = idx[start : start + step]
         pred = _forward(model, x[sub], None if rows is None else rows[sub], batcher, amp=amp)
         part = ((w[sub] * (pred - y[sub]) ** 2).sum(dim=0) / w_total).mean()
         part.backward()
-        total += part.item()
-    return total
+        total += part.detach()
+    return float(total.item())  # one GPU->CPU sync per batch, not per slice
 
 
 def train(
@@ -276,4 +292,12 @@ def predict(
                 model, xt[sl], None if rt is None else rt[sl], batcher, shuffle_order, amp
             )
             parts.append(out.cpu().numpy())
+    if not parts:
+        return np.zeros((0, _n_outputs(model)), dtype=np.float32)
     return np.concatenate(parts)
+
+
+def _n_outputs(model: nn.Module) -> int:
+    """Width of the model's last Linear layer."""
+    linears = [m for m in model.modules() if isinstance(m, nn.Linear)]
+    return int(linears[-1].out_features)

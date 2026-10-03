@@ -192,3 +192,49 @@ def test_bf16_forward_stays_close_to_float32():
         half = _forward(model, x, r, batcher, amp=True)
     assert half.dtype == torch.float32
     torch.testing.assert_close(half, full, rtol=0.05, atol=0.05)
+
+
+def test_transformer_now_sees_order_within_the_same_day():
+    """All PAs on one day: days-ago is identical, so only position can tell them apart."""
+    from fantasy_baseball.hitter_ros.sequence import TransformerEncoder
+
+    torch.manual_seed(0)
+    enc = TransformerEncoder(N_TOKEN_FEATURES, 16, layers=2, max_len=8, dropout=0.0).eval()
+    x = torch.randn(1, 8, N_TOKEN_FEATURES)
+    x[..., -2:] = 0.0  # same day for every PA
+    lengths = torch.tensor([8])
+    with torch.no_grad():
+        a = enc(x, lengths)
+        b = enc(x.flip(1), lengths)
+    assert not torch.allclose(a, b, atol=1e-4)
+
+
+def test_hybrid_head_runs_in_float32_under_amp():
+    if not torch.cuda.is_available():
+        pytest.skip("bf16 autocast is GPU-only here")
+    from fantasy_baseball.hitter_ros.net import build_model
+
+    model = build_model(3, 2, NetConfig(hidden=[8], seq="gru", seq_len=4, seq_dim=8))
+    model = model.to(device())
+    seen = []
+    model.head.register_forward_hook(lambda m, inp, out: seen.append(out.dtype))
+    x = torch.randn(2, 3, device=device())
+    seq = torch.randn(2, 4, N_TOKEN_FEATURES, device=device())
+    out = model(x, seq, torch.tensor([4, 2], device=device()), amp=True)
+    assert seen == [torch.float32] and out.dtype == torch.float32
+
+
+def test_config_rejects_bad_sequence_settings():
+    with pytest.raises(ValueError, match="divisible"):
+        NetConfig(seq="transformer", seq_dim=30)
+    with pytest.raises(ValueError, match="micro_batch"):
+        NetConfig(micro_batch=-1)
+    with pytest.raises(ValueError, match="unknown seq"):
+        NetConfig(seq="lstm")
+
+
+def test_predict_on_no_rows_returns_an_empty_array():
+    from fantasy_baseball.hitter_ros.net import MLP
+
+    out = predict(MLP(3, 5, [4], 0.0).to(device()), np.zeros((0, 3), dtype=np.float32))
+    assert out.shape == (0, 5)

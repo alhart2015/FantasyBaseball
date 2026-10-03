@@ -32,7 +32,8 @@ import torch
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence
 
-from fantasy_baseball.keepers.savant import SWING_DESCRIPTIONS, WHIFF_DESCRIPTIONS
+from fantasy_baseball.hitter_ros.net import MLP, TRANSFORMER_HEADS
+from fantasy_baseball.hitter_ros.statcast_sql import SPRAY_SQL, SWING_SQL, WHIFF_SQL, sql_in
 from fantasy_baseball.pitch_data.store import connect
 
 # Statcast PA-ending events -> result class. truncated_pa (the inning ended on a runner
@@ -87,32 +88,32 @@ STORED_FEATURES = (
 BATCH_FEATURES = ("days_ago", "same_season")
 N_TOKEN_FEATURES = len(STORED_FEATURES) + len(BATCH_FEATURES)
 
-_SPRAY = "degrees(atan2(hc_x - 125.42, 198.27 - hc_y))"
-
-
-def _in(values: frozenset[str] | tuple[str, ...]) -> str:
-    return "(" + ", ".join(f"'{v}'" for v in sorted(values)) + ")"
-
 
 def build_pa_tokens(store: Path) -> pd.DataFrame:
-    """One row per regular-season PA, sorted by hitter then time."""
+    """One row per regular-season PA, sorted by hitter then time.
+
+    Within a day, PAs are ordered by game_pk then at_bat_number. The store has no game
+    start time or doubleheader game number, and game_pk order is not guaranteed to be
+    play order in a doubleheader (~3% of games), so a doubleheader's two games can come
+    out swapped. Only within-day order is affected; days-ago is the same for both.
+    """
     conn = connect(store)
     try:
-        events = _in(tuple(EVENT_TO_RESULT))
+        events = sql_in(EVENT_TO_RESULT)
         df = conn.execute(
             f"""
             WITH pa_pitches AS (
                 SELECT game_pk, at_bat_number, batter,
                        count(*) AS n_pitches,
-                       count(*) FILTER (WHERE description IN {_in(SWING_DESCRIPTIONS)}) AS swings,
-                       count(*) FILTER (WHERE description IN {_in(WHIFF_DESCRIPTIONS)}) AS whiffs
+                       count(*) FILTER (WHERE {SWING_SQL}) AS swings,
+                       count(*) FILTER (WHERE {WHIFF_SQL}) AS whiffs
                 FROM pitches WHERE game_type = 'R'
                 GROUP BY 1, 2, 3
             )
             SELECT p.batter AS player_id, CAST(p.game_date AS DATE) AS game_date,
                    CAST(p.season AS INTEGER) AS season, p.game_pk, p.at_bat_number, p.events,
                    p.type = 'X' AS contact, p.launch_speed, p.launch_angle,
-                   CASE WHEN p.hc_x IS NOT NULL AND p.hc_y IS NOT NULL THEN {_SPRAY} END AS spray,
+                   CASE WHEN p.hc_x IS NOT NULL AND p.hc_y IS NOT NULL THEN {SPRAY_SQL} END AS spray,
                    p.estimated_woba_using_speedangle AS xwoba_con, p.woba_value,
                    pp.n_pitches, pp.swings, pp.whiffs,
                    p.p_throws = 'L' AS vs_lhp, p.stand = 'L' AS bats_left,
@@ -249,21 +250,42 @@ class GRUEncoder(nn.Module):
 
 
 class TransformerEncoder(nn.Module):
-    """Self-attention over the PAs; a learned summary token reads them all."""
+    """Self-attention over the PAs; a learned summary token reads them all.
 
-    def __init__(self, n_in: int, dim: int, layers: int = 2, heads: int = 4) -> None:
+    Attention by itself ignores order, so each PA also gets a learned embedding of its
+    position counted back from the newest (0 = most recent PA). That lets the encoder
+    tell PAs apart even on the same day, where days-ago is identical.
+    """
+
+    def __init__(
+        self,
+        n_in: int,
+        dim: int,
+        layers: int,
+        max_len: int,
+        dropout: float,
+        heads: int = TRANSFORMER_HEADS,
+    ) -> None:
         super().__init__()
+        if dim % heads:
+            raise ValueError(f"seq_dim {dim} must be divisible by the {heads} attention heads")
         self.inp = nn.Linear(n_in, dim)
-        self.summary = nn.Parameter(torch.zeros(1, 1, dim))
+        self.position = nn.Embedding(max_len, dim)
+        # Small random start: an all-zero summary would attend to every PA equally (a
+        # plain average, blind to order) until training moved it.
+        self.summary = nn.Parameter(torch.randn(1, 1, dim) * 0.02)
         layer = nn.TransformerEncoderLayer(
-            dim, heads, dim_feedforward=2 * dim, dropout=0.1, batch_first=True
+            dim, heads, dim_feedforward=2 * dim, dropout=dropout, batch_first=True
         )
         self.body = nn.TransformerEncoder(layer, layers, enable_nested_tensor=False)
         self.out_dim = dim
 
     def forward(self, x: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
         b, steps, _ = x.shape
-        tokens = torch.cat([self.summary.expand(b, -1, -1), self.inp(x)], dim=1)
+        step = torch.arange(steps, device=x.device)[None, :]
+        back = (lengths[:, None] - 1 - step).clamp(min=0)  # 0 = newest PA
+        tokens = self.inp(x) + self.position(back)
+        tokens = torch.cat([self.summary.expand(b, -1, -1), tokens], dim=1)
         pad = torch.arange(steps, device=x.device)[None, :] >= lengths[:, None]
         pad = torch.cat([torch.zeros(b, 1, dtype=torch.bool, device=x.device), pad], dim=1)
         out: torch.Tensor = self.body(tokens, src_key_padding_mask=pad)[:, 0]
@@ -271,7 +293,11 @@ class TransformerEncoder(nn.Module):
 
 
 class HybridNet(nn.Module):
-    """The existing MLP, with a sequence summary joined to its inputs."""
+    """The plain MLP, with a sequence summary joined to its inputs.
+
+    With ``amp``, only the encoder runs in bfloat16; its summary is cast back to float32
+    before the MLP head, so predictions and the loss stay float32.
+    """
 
     def __init__(
         self,
@@ -283,22 +309,22 @@ class HybridNet(nn.Module):
     ) -> None:
         super().__init__()
         self.encoder = encoder
-        layers: list[nn.Module] = []
-        width = n_static + encoder.out_dim
-        for h in hidden:
-            layers += [nn.Linear(width, h), nn.GELU(), nn.Dropout(dropout)]
-            width = h
-        layers.append(nn.Linear(width, n_out))
-        self.body = nn.Sequential(*layers)
+        self.head = MLP(n_static + encoder.out_dim, n_out, hidden, dropout)
 
-    def forward(self, x: torch.Tensor, seq: torch.Tensor, lengths: torch.Tensor) -> torch.Tensor:
-        out: torch.Tensor = self.body(torch.cat([x, self.encoder(seq, lengths)], dim=1))
+    def forward(
+        self, x: torch.Tensor, seq: torch.Tensor, lengths: torch.Tensor, amp: bool = False
+    ) -> torch.Tensor:
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp and x.is_cuda):
+            summary = self.encoder(seq, lengths)
+        out: torch.Tensor = self.head(torch.cat([x, summary.float()], dim=1))
         return out
 
 
-def make_encoder(kind: str, dim: int, layers: int) -> GRUEncoder | TransformerEncoder:
+def make_encoder(
+    kind: str, dim: int, layers: int, max_len: int, dropout: float
+) -> GRUEncoder | TransformerEncoder:
     if kind == "gru":
         return GRUEncoder(N_TOKEN_FEATURES, dim, layers)
     if kind == "transformer":
-        return TransformerEncoder(N_TOKEN_FEATURES, dim, layers)
+        return TransformerEncoder(N_TOKEN_FEATURES, dim, layers, max_len, dropout)
     raise ValueError(f"unknown sequence encoder {kind!r}")

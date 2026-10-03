@@ -48,11 +48,7 @@ import duckdb
 import pandas as pd
 
 from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS
-from fantasy_baseball.keepers.savant import (
-    CONTACT_DESCRIPTIONS,
-    SWING_DESCRIPTIONS,
-    WHIFF_DESCRIPTIONS,
-)
+from fantasy_baseball.hitter_ros.statcast_sql import CONTACT_SQL, SPRAY_SQL, SWING_SQL, WHIFF_SQL
 from fantasy_baseball.pitch_data.store import connect
 
 AS_OF_STEP_DAYS = 7
@@ -76,39 +72,30 @@ TARGET_COUNTS = (
     "games",
 )
 
-# Spray angle in degrees from home plate; negative = toward left field. Savant's
-# hit-coordinate origin (125.42, 198.27) is home plate. atan2, not atan of the ratio:
-# a ball fielded behind home's y origin (hc_y > 198.27) would otherwise flip sides.
-_SPRAY = "degrees(atan2(hc_x - 125.42, 198.27 - hc_y))"
 _PULL_DEG = 15
-
-
-def _in(values: Iterable[str]) -> str:
-    return "(" + ", ".join(f"'{v}'" for v in sorted(values)) + ")"
-
-
-_SWING = f"description IN {_in(SWING_DESCRIPTIONS)}"
-_WHIFF = f"description IN {_in(WHIFF_DESCRIPTIONS)}"
-_CONTACT = f"description IN {_in(CONTACT_DESCRIPTIONS)}"
 _ZONE = "zone BETWEEN 1 AND 9"
 _CHASE = "zone BETWEEN 11 AND 14"
 _BIP = "type = 'X'"
 _AIR = "bb_type IN ('fly_ball', 'line_drive')"
-_PULLED = f"((stand = 'R' AND {_SPRAY} < -{_PULL_DEG}) OR (stand = 'L' AND {_SPRAY} > {_PULL_DEG}))"
-_OPPO = f"((stand = 'R' AND {_SPRAY} > {_PULL_DEG}) OR (stand = 'L' AND {_SPRAY} < -{_PULL_DEG}))"
+_PULLED = (
+    f"((stand = 'R' AND {SPRAY_SQL} < -{_PULL_DEG}) OR (stand = 'L' AND {SPRAY_SQL} > {_PULL_DEG}))"
+)
+_OPPO = (
+    f"((stand = 'R' AND {SPRAY_SQL} > {_PULL_DEG}) OR (stand = 'L' AND {SPRAY_SQL} < -{_PULL_DEG}))"
+)
 
 # name -> SQL aggregate over one batter's pitches
 PITCH_AGGS: dict[str, str] = {
     "pitches": "count(*)",
-    "swings": f"count(*) FILTER (WHERE {_SWING})",
-    "whiffs": f"count(*) FILTER (WHERE {_WHIFF})",
+    "swings": f"count(*) FILTER (WHERE {SWING_SQL})",
+    "whiffs": f"count(*) FILTER (WHERE {WHIFF_SQL})",
     "zone_pitches": f"count(*) FILTER (WHERE {_ZONE})",
-    "zone_swings": f"count(*) FILTER (WHERE {_ZONE} AND {_SWING})",
-    "zone_contacts": f"count(*) FILTER (WHERE {_ZONE} AND {_CONTACT})",
+    "zone_swings": f"count(*) FILTER (WHERE {_ZONE} AND {SWING_SQL})",
+    "zone_contacts": f"count(*) FILTER (WHERE {_ZONE} AND {CONTACT_SQL})",
     "chase_pitches": f"count(*) FILTER (WHERE {_CHASE})",
-    "chase_swings": f"count(*) FILTER (WHERE {_CHASE} AND {_SWING})",
-    "chase_contacts": f"count(*) FILTER (WHERE {_CHASE} AND {_CONTACT})",
-    "first_pitch_swings": f"count(*) FILTER (WHERE balls = 0 AND strikes = 0 AND {_SWING})",
+    "chase_swings": f"count(*) FILTER (WHERE {_CHASE} AND {SWING_SQL})",
+    "chase_contacts": f"count(*) FILTER (WHERE {_CHASE} AND {CONTACT_SQL})",
+    "first_pitch_swings": f"count(*) FILTER (WHERE balls = 0 AND strikes = 0 AND {SWING_SQL})",
     "first_pitches": "count(*) FILTER (WHERE balls = 0 AND strikes = 0)",
     "pitches_vs_lhp": "count(*) FILTER (WHERE p_throws = 'L')",
     "pitches_as_lhb": "count(*) FILTER (WHERE stand = 'L')",

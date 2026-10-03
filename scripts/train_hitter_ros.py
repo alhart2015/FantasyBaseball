@@ -134,6 +134,13 @@ def fit_season(
     return preds, info
 
 
+def _non_negative_int(text: str) -> int:
+    value = int(text)
+    if value < 0:
+        raise argparse.ArgumentTypeError(f"must be >= 0, got {value}")
+    return value
+
+
 def main() -> int:
     defaults = NetConfig()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -160,7 +167,7 @@ def main() -> int:
     parser.add_argument("--seq-layers", type=int, default=defaults.seq_layers)
     parser.add_argument(
         "--micro-batch",
-        type=int,
+        type=_non_negative_int,
         default=defaults.micro_batch,
         help="rows per forward pass inside a batch (saves GPU memory; same update)",
     )
@@ -177,39 +184,43 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    config = NetConfig(
-        hidden=args.hidden,
-        dropout=args.dropout,
-        lr=args.lr,
-        weight_decay=args.weight_decay,
-        batch_size=args.batch_size,
-        max_epochs=args.max_epochs,
-        patience=args.patience,
-        seed=args.seed,
-        seq=args.seq,
-        seq_len=args.seq_len,
-        seq_dim=args.seq_dim,
-        seq_layers=args.seq_layers,
-        micro_batch=args.micro_batch,
-        amp=args.amp,
-    )
+    try:
+        config = NetConfig(
+            hidden=args.hidden,
+            dropout=args.dropout,
+            lr=args.lr,
+            weight_decay=args.weight_decay,
+            batch_size=args.batch_size,
+            max_epochs=args.max_epochs,
+            patience=args.patience,
+            seed=args.seed,
+            seq=args.seq,
+            seq_len=args.seq_len,
+            seq_dim=args.seq_dim,
+            seq_layers=args.seq_layers,
+            micro_batch=args.micro_batch,
+            amp=args.amp,
+        )
+    except ValueError as err:
+        parser.error(str(err))
     if args.shuffle_test_order and args.seq == "none":
         parser.error("--shuffle-test-order needs a sequence model (--seq gru/transformer)")
     out = RUNS / args.name
-    if out.exists() and any(out.iterdir()):
-        if not args.overwrite:
-            parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
-        shutil.rmtree(out)
-    out.mkdir(parents=True, exist_ok=True)
+    if out.exists() and any(out.iterdir()) and not args.overwrite:
+        parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
+    if config.seq != "none" and not TOKENS.exists():
+        parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
 
     table = pd.read_parquet(TABLE)
     x_all = input_frame(table)
     y_all, w_all = target_frame(table)
     batcher = None
     if config.seq != "none":
-        if not TOKENS.exists():
-            parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
         batcher = SequenceBatcher(pd.read_parquet(TOKENS), table, config.seq_len, device())
+    # Only now, with every input loaded, replace an old run of the same name.
+    if out.exists():
+        shutil.rmtree(out)
+    out.mkdir(parents=True, exist_ok=True)
 
     all_preds, infos = [], []
     for season in args.test_seasons:
