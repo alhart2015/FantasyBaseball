@@ -15,6 +15,7 @@ import logging
 from collections.abc import Iterable
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.features import TARGETS, rates_from_counts
@@ -82,20 +83,88 @@ def _common_index(frames: Iterable[pd.DataFrame]) -> pd.Index:
     return common
 
 
-def score(
+def scored_players(
     projections: dict[str, pd.DataFrame], actual: pd.DataFrame, min_pa: float
 ) -> pd.DataFrame:
-    """MAE table: one row per projection, one column per stat, plus ``n`` players.
+    """One row per (player, system, stat): projected and actual rate, and the scaled error.
 
     ``actual`` has rates plus ``pa`` (actual PA in the window); only players with
-    ``pa >= min_pa`` that every projection covers are scored.
+    ``pa >= min_pa`` that every projection covers are kept.
     """
     players = actual.index[actual["pa"] >= min_pa]
     players = players.intersection(_common_index([*projections.values(), actual]))
-    rows = {}
+    parts = []
     for name, proj in projections.items():
-        errors = (proj.loc[players, list(TARGETS)] - actual.loc[players, list(TARGETS)]).abs()
-        row = {s: errors[s].mean() * SCALE[s] for s in TARGETS}
-        row["n"] = len(players)
-        rows[name] = row
-    return pd.DataFrame(rows).T[[*TARGETS, "n"]]
+        for s in TARGETS:
+            projected = proj.loc[players, s].to_numpy()
+            truth = actual.loc[players, s].to_numpy()
+            parts.append(
+                pd.DataFrame(
+                    {
+                        "player_id": players,
+                        "system": name,
+                        "stat": s,
+                        "projected": projected,
+                        "actual": truth,
+                        "abs_err": abs(projected - truth) * SCALE[s],
+                    }
+                )
+            )
+    return pd.concat(parts, ignore_index=True)
+
+
+def mae_table(scored: pd.DataFrame) -> pd.DataFrame:
+    """Rows = systems (in first-seen order), columns = stats, plus ``n`` players."""
+    order = list(dict.fromkeys(scored["system"]))
+    table = scored.pivot_table(index="system", columns="stat", values="abs_err", aggfunc="mean")
+    table["n"] = scored.groupby("system")["player_id"].nunique()
+    return table.loc[order, [*TARGETS, "n"]]
+
+
+def score(
+    projections: dict[str, pd.DataFrame], actual: pd.DataFrame, min_pa: float
+) -> pd.DataFrame:
+    """MAE table: one row per projection, one column per stat, plus ``n`` players."""
+    return mae_table(scored_players(projections, actual, min_pa))
+
+
+def paired_bootstrap(
+    scored: pd.DataFrame,
+    a: str,
+    b: str,
+    *,
+    n_boot: int = 2000,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """MAE(a) - MAE(b) per stat, with a 95% interval from resampling players.
+
+    Negative = ``a`` is better. Paired: each resample draws players, and both systems
+    are scored on the same draw, so player-to-player luck cancels. An interval that
+    crosses 0 means the data can't tell the two apart.
+    """
+    rng = np.random.default_rng(seed)
+    out = {}
+    for s in TARGETS:
+        rows = scored[scored["stat"] == s]
+        wide = rows.pivot_table(index="player_id", columns="system", values="abs_err")
+        diff = (wide[a] - wide[b]).to_numpy()
+        draws = rng.integers(0, len(diff), size=(n_boot, len(diff)))
+        boot = diff[draws].mean(axis=1)
+        out[s] = {
+            "diff": diff.mean(),
+            "lo": float(np.percentile(boot, 2.5)),
+            "hi": float(np.percentile(boot, 97.5)),
+        }
+    return pd.DataFrame(out).T
+
+
+def spread(scored: pd.DataFrame) -> pd.DataFrame:
+    """How spread out each system's projections are: SD across players, same scale as MAE."""
+    scale = scored["stat"].map(SCALE)
+    sd = (scored.assign(v=scored["projected"] * scale)).pivot_table(
+        index="system", columns="stat", values="v", aggfunc="std"
+    )
+    actual = (scored.assign(v=scored["actual"] * scale)).drop_duplicates(["player_id", "stat"])
+    sd.loc["(actual)"] = actual.groupby("stat")["v"].std()
+    order = [*dict.fromkeys(scored["system"]), "(actual)"]
+    return sd.loc[order, list(TARGETS)]
