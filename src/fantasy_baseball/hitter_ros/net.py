@@ -119,14 +119,14 @@ def _forward(
     rows: torch.Tensor | None,
     batcher: SequenceBatcher | None,
     shuffle_order: bool = False,
+    amp: bool = False,
 ) -> torch.Tensor:
     if batcher is None:
         out: torch.Tensor = model(x)
         return out
     assert rows is not None, "a sequence model needs table row positions"
     seq, lengths = batcher.batch(rows, shuffle_order=shuffle_order)
-    amp = getattr(model, "amp", False) and x.is_cuda
-    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp):
+    with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp and x.is_cuda):
         out = model(x, seq, lengths)
     return out.float()
 
@@ -139,6 +139,7 @@ def _eval_loss(
     rows: torch.Tensor | None,
     batcher: SequenceBatcher | None,
     chunk: int = EVAL_BATCH,
+    amp: bool = False,
 ) -> float:
     """weighted_mse over all rows, computed in chunks."""
     num = torch.zeros(y.shape[1], device=y.device)
@@ -146,7 +147,7 @@ def _eval_loss(
     with torch.no_grad():
         for start in range(0, len(x), chunk):
             sl = slice(start, start + chunk)
-            pred = _forward(model, x[sl], None if rows is None else rows[sl], batcher)
+            pred = _forward(model, x[sl], None if rows is None else rows[sl], batcher, amp=amp)
             num += (w[sl] * (pred - y[sl]) ** 2).sum(dim=0)
             den += w[sl].sum(dim=0)
     return float((num / den.clamp(min=1e-9)).mean().item())
@@ -161,6 +162,7 @@ def accumulate_batch(
     rows: torch.Tensor | None,
     batcher: SequenceBatcher | None,
     micro_batch: int,
+    amp: bool = False,
 ) -> float:
     """Backpropagate weighted_mse for batch ``idx``, in slices of ``micro_batch`` rows.
 
@@ -172,7 +174,7 @@ def accumulate_batch(
     total = 0.0
     for start in range(0, len(idx), step):
         sub = idx[start : start + step]
-        pred = _forward(model, x[sub], None if rows is None else rows[sub], batcher)
+        pred = _forward(model, x[sub], None if rows is None else rows[sub], batcher, amp=amp)
         part = ((w[sub] * (pred - y[sub]) ** 2).sum(dim=0) / w_total).mean()
         part.backward()
         total += part.item()
@@ -209,7 +211,6 @@ def train(
         rt = torch.as_tensor(rows[~val_mask], dtype=torch.long, device=dev)
         rv = torch.as_tensor(rows[val_mask], dtype=torch.long, device=dev)
     model = build_model(x.shape[1], y.shape[1], config).to(dev)
-    model.amp = config.amp
     opt = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     gen = torch.Generator(device=dev).manual_seed(config.seed)
 
@@ -224,13 +225,17 @@ def train(
         for start in range(0, n, config.batch_size):
             idx = order[start : start + config.batch_size]
             opt.zero_grad()
-            loss = accumulate_batch(model, idx, xt, yt, wt, rt, batcher, config.micro_batch)
+            loss = accumulate_batch(
+                model, idx, xt, yt, wt, rt, batcher, config.micro_batch, config.amp
+            )
             opt.step()
             total += loss * len(idx)
         train_hist.append(total / n)
 
         model.eval()
-        val = _eval_loss(model, xv, yv, wv, rv, batcher, config.micro_batch or EVAL_BATCH)
+        val = _eval_loss(
+            model, xv, yv, wv, rv, batcher, config.micro_batch or EVAL_BATCH, config.amp
+        )
         val_hist.append(val)
         if not np.isfinite(val):
             raise FloatingPointError(
@@ -256,6 +261,7 @@ def predict(
     batcher: SequenceBatcher | None = None,
     shuffle_order: bool = False,
     chunk: int = EVAL_BATCH,
+    amp: bool = False,
 ) -> np.ndarray:
     """Model outputs for ``x`` (and, for a sequence model, table positions ``rows``)."""
     model.eval()
@@ -266,6 +272,8 @@ def predict(
     with torch.no_grad():
         for start in range(0, len(xt), chunk):
             sl = slice(start, start + chunk)
-            out = _forward(model, xt[sl], None if rt is None else rt[sl], batcher, shuffle_order)
+            out = _forward(
+                model, xt[sl], None if rt is None else rt[sl], batcher, shuffle_order, amp
+            )
             parts.append(out.cpu().numpy())
     return np.concatenate(parts)

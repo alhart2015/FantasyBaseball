@@ -172,3 +172,23 @@ def test_hybrid_net_learns_from_the_sequence(kind):
     assert min(seq.val_loss) < 0.5 * min(plain.val_loss)
     out = predict(seq.model, x, rows=positions, batcher=batcher)
     assert out.shape == (n_players, 1)
+
+
+def test_bf16_forward_stays_close_to_float32():
+    if not torch.cuda.is_available():
+        pytest.skip("bf16 autocast is GPU-only here")
+    from fantasy_baseball.hitter_ros.net import _forward, build_model
+
+    tokens = _tokens({1: list(range(40)), 2: list(range(0, 40, 3))})
+    rows = _rows((1, 30), (2, 30))
+    batcher = SequenceBatcher(tokens, rows, max_len=32, device=device())
+    torch.manual_seed(0)
+    model = build_model(3, 2, NetConfig(hidden=[8], seq="transformer", seq_len=32, seq_dim=16))
+    model = model.to(device()).eval()
+    x = torch.randn(2, 3, device=device())
+    r = torch.arange(2, device=device())
+    with torch.no_grad():
+        full = _forward(model, x, r, batcher)
+        half = _forward(model, x, r, batcher, amp=True)
+    assert half.dtype == torch.float32
+    torch.testing.assert_close(half, full, rtol=0.05, atol=0.05)

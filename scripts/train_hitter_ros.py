@@ -113,6 +113,7 @@ def fit_season(
         batcher=batcher,
         shuffle_order=shuffle_test_order,
         chunk=config.micro_batch or EVAL_BATCH,
+        amp=config.amp,
     )
     preds = pd.DataFrame(
         {s: z[:, i] * sd[s] + mu[s] for i, s in enumerate(TARGETS)},
