@@ -8,7 +8,7 @@ from fantasy_baseball.hitter_ros.baselines import (
     league_rates,
     marcel,
 )
-from fantasy_baseball.hitter_ros.evaluate import paired_bootstrap, scored_players, spread
+from fantasy_baseball.hitter_ros.evaluate import mae_table, paired_bootstrap, scored_players, spread
 from fantasy_baseball.hitter_ros.features import TARGETS
 
 COUNTS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
@@ -122,3 +122,55 @@ def test_spread_reports_projection_and_outcome_sd():
     assert sd.loc["a", "hr"] == pytest.approx(np.std([0.0, 6.0], ddof=1) * 600 / 600)
     assert sd.loc["b", "hr"] == pytest.approx(0.0)
     assert "(actual)" in sd.index
+
+
+def _stacked_units():
+    """Two players scored in two seasons, with different outcomes each season."""
+    parts = []
+    for season, (a_hr, b_hr) in ((2024, (0.0, 0.1)), (2025, (0.2, 0.3))):
+        actual = pd.DataFrame({s: [0.1, 0.1] for s in TARGETS}, index=[1, 2])
+        actual["hr"] = [a_hr, b_hr]
+        actual["pa"] = 500
+        proj = pd.DataFrame({s: [0.1, 0.1] for s in TARGETS}, index=[1, 2])
+        parts.append(
+            scored_players({"x": proj, "y": proj + 0.01}, actual, min_pa=1).assign(season=season)
+        )
+    return pd.concat(parts, ignore_index=True)
+
+
+def test_spread_actual_row_uses_every_season():
+    sd = spread(_stacked_units())
+    expected = np.std(np.array([0.0, 0.1, 0.2, 0.3]) * 600, ddof=1)
+    assert sd.loc["(actual)", "hr"] == pytest.approx(expected)
+
+
+def test_scored_units_are_player_seasons():
+    scored = _stacked_units()
+    assert mae_table(scored).loc["x", "n"] == 4
+    b = paired_bootstrap(scored, "x", "y", n_boot=50)
+    assert b.loc["hr", "diff"] == pytest.approx(
+        scored[(scored.stat == "hr") & (scored.system == "x")].abs_err.mean()
+        - scored[(scored.stat == "hr") & (scored.system == "y")].abs_err.mean()
+    )
+
+
+def test_write_scores_removes_a_stale_file(tmp_path):
+    from fantasy_baseball.hitter_ros.backtest import write_scores
+
+    frame = _stacked_units()
+    write_scores(tmp_path, frame, frame)
+    assert (tmp_path / "scored_snapshots.parquet").exists()
+    write_scores(tmp_path, frame, None)
+    assert not (tmp_path / "scored_snapshots.parquet").exists()
+
+
+def test_mean_over_seasons_weights_each_season_once():
+    from fantasy_baseball.hitter_ros.backtest import mean_over_seasons
+
+    scored = _stacked_units()
+    # Drop one player from 2025 so the seasons have different sizes.
+    scored = scored[~((scored.season == 2025) & (scored.player_id == 2))]
+    per_season = (
+        scored[(scored.system == "x") & (scored.stat == "hr")].groupby("season").abs_err.mean()
+    )
+    assert mean_over_seasons(scored).loc["x", "hr"] == pytest.approx(per_season.mean())

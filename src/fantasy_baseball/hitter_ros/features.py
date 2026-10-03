@@ -99,6 +99,10 @@ def input_frame(t: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(cols, index=t.index)
 
 
+# The counts the five answer rates are built from.
+COUNTS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
+
+
 def rates_from_counts(df: pd.DataFrame) -> pd.DataFrame:
     """The five answer rates from counts ``pa, ab, h, r, hr, rbi, sb``: R/HR/RBI/SB per PA
     and AVG = H/AB, NaN with no PA/AB. The one definition used to train and to score."""
@@ -110,7 +114,7 @@ def rates_from_counts(df: pd.DataFrame) -> pd.DataFrame:
 
 def target_frame(t: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(rest-of-season rates, loss weights). A rate with no PA/AB is NaN with weight 0."""
-    ros = t[[f"ros_{c}" for c in ("pa", "ab", "h", "r", "hr", "rbi", "sb")]]
+    ros = t[[f"ros_{c}" for c in COUNTS]]
     rates = rates_from_counts(ros.rename(columns=lambda c: c.removeprefix("ros_")))
     weights = pd.DataFrame({k: t[v].astype(float) for k, v in TARGET_WEIGHT.items()}, index=t.index)
     return rates, weights

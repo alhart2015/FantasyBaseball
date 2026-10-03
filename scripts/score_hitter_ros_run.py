@@ -43,18 +43,20 @@ def score_run(table: pd.DataFrame, run: Path) -> tuple[pd.DataFrame | None, pd.D
 
 def seed_range(results: dict[str, tuple[pd.DataFrame | None, pd.DataFrame | None]]) -> None:
     """Min / max of our MAE across runs: preseason mean over seasons, and each snapshot."""
-    rows = {}
+    rows: dict[tuple[str, str], dict[str, float]] = {}
     for name, (pre, snap) in results.items():
         if pre is not None:
-            ours = pre[pre["system"] == backtest.OURS]
-            per_season = ours.groupby(["season", "stat"])["abs_err"].mean()
-            for s, v in per_season.groupby(level="stat").mean().items():
-                rows.setdefault(("preseason mean", s), {})[name] = v
+            means = backtest.mean_over_seasons(pre)
+            for s in TARGETS:
+                rows.setdefault(("preseason mean", s), {})[name] = means.loc[backtest.OURS, s]
         if snap is not None:
             for snapshot, g in snap.groupby("snapshot"):
                 t = mae_table(g)
                 for s in TARGETS:
                     rows.setdefault((snapshot, s), {})[name] = t.loc[backtest.OURS, s]
+    if not rows:
+        print("\nNo run produced scores; nothing to compare across runs.")
+        return
     df = pd.DataFrame(rows).T
     cells = df.min(axis=1).map("{:.2f}".format) + " - " + df.max(axis=1).map("{:.2f}".format)
     summary = cells.unstack()[list(TARGETS)]

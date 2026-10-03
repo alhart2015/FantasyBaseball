@@ -14,9 +14,8 @@ from __future__ import annotations
 
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.features import TARGETS, rates_from_counts
+from fantasy_baseball.hitter_ros.features import COUNTS, TARGETS, rates_from_counts
 
-COUNTS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
 MARCEL_WEIGHTS = {"std": 6.0, "p1": 5.0, "older": 3.5}
 REGRESS_PA = 1200.0
 LEAGUE_SEASONS = 3

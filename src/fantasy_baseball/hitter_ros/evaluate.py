@@ -113,19 +113,23 @@ def scored_players(
     return pd.concat(parts, ignore_index=True)
 
 
+# A scored frame may stack several seasons or snapshots; a player is scored once per
+# unit, so these columns (when present) are part of what identifies a scored row.
+UNIT_COLS = ("season", "snapshot")
+
+
+def unit_key(scored: pd.DataFrame) -> list[str]:
+    """Columns that identify one scored player-unit: player plus season/snapshot if present."""
+    return ["player_id", *(c for c in UNIT_COLS if c in scored.columns)]
+
+
 def mae_table(scored: pd.DataFrame) -> pd.DataFrame:
-    """Rows = systems (in first-seen order), columns = stats, plus ``n`` players."""
+    """Rows = systems (in first-seen order), columns = stats, plus ``n`` scored player-units."""
     order = list(dict.fromkeys(scored["system"]))
     table = scored.pivot_table(index="system", columns="stat", values="abs_err", aggfunc="mean")
-    table["n"] = scored.groupby("system")["player_id"].nunique()
+    units = scored.drop_duplicates([*unit_key(scored), "system"])
+    table["n"] = units.groupby("system").size()
     return table.loc[order, [*TARGETS, "n"]]
-
-
-def score(
-    projections: dict[str, pd.DataFrame], actual: pd.DataFrame, min_pa: float
-) -> pd.DataFrame:
-    """MAE table: one row per projection, one column per stat, plus ``n`` players."""
-    return mae_table(scored_players(projections, actual, min_pa))
 
 
 def paired_bootstrap(
@@ -136,17 +140,19 @@ def paired_bootstrap(
     n_boot: int = 2000,
     seed: int = 0,
 ) -> pd.DataFrame:
-    """MAE(a) - MAE(b) per stat, with a 95% interval from resampling players.
+    """MAE(a) - MAE(b) per stat, with a 95% interval from resampling scored player-units.
 
-    Negative = ``a`` is better. Paired: each resample draws players, and both systems
-    are scored on the same draw, so player-to-player luck cancels. An interval that
-    crosses 0 means the data can't tell the two apart.
+    Negative = ``a`` is better. Paired: each resample draws player-units (a player in a
+    given season or snapshot), and both systems are scored on the same draw, so
+    player-to-player luck cancels. An interval that crosses 0 means the data can't tell
+    the two apart.
     """
     rng = np.random.default_rng(seed)
+    key = unit_key(scored)
     out = {}
     for s in TARGETS:
         rows = scored[scored["stat"] == s]
-        wide = rows.pivot_table(index="player_id", columns="system", values="abs_err")
+        wide = rows.pivot_table(index=key, columns="system", values="abs_err")
         diff = (wide[a] - wide[b]).to_numpy()
         draws = rng.integers(0, len(diff), size=(n_boot, len(diff)))
         boot = diff[draws].mean(axis=1)
@@ -159,12 +165,14 @@ def paired_bootstrap(
 
 
 def spread(scored: pd.DataFrame) -> pd.DataFrame:
-    """How spread out each system's projections are: SD across players, same scale as MAE."""
-    scale = scored["stat"].map(SCALE)
-    sd = (scored.assign(v=scored["projected"] * scale)).pivot_table(
-        index="system", columns="stat", values="v", aggfunc="std"
+    """How spread out each system's projections are: SD across scored player-units, same
+    scale as MAE. The ``(actual)`` row is the SD of the outcomes over the same units."""
+    scaled = scored.assign(
+        projected=scored["projected"] * scored["stat"].map(SCALE),
+        actual=scored["actual"] * scored["stat"].map(SCALE),
     )
-    actual = (scored.assign(v=scored["actual"] * scale)).drop_duplicates(["player_id", "stat"])
-    sd.loc["(actual)"] = actual.groupby("stat")["v"].std()
+    sd = scaled.pivot_table(index="system", columns="stat", values="projected", aggfunc="std")
+    outcomes = scaled.drop_duplicates([*unit_key(scored), "stat"])
+    sd.loc["(actual)"] = outcomes.groupby("stat")["actual"].std()
     order = [*dict.fromkeys(scored["system"]), "(actual)"]
     return sd.loc[order, list(TARGETS)]
