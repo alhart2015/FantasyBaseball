@@ -32,9 +32,12 @@ logger = logging.getLogger(__name__)
 class NetConfig:
     """Everything that defines one training run. Saved next to every run's results."""
 
-    hidden: list[int] = field(default_factory=lambda: [256, 256, 128])
-    dropout: float = 0.1
-    lr: float = 1e-3
+    # Defaults from #408: over 4 seeds this beat run 001's 256-256-128 / dropout 0.1 /
+    # lr 1e-3 on every preseason stat (small margins) and halved seed-to-seed spread,
+    # and it trains ~18 epochs instead of stopping at epoch 0-1.
+    hidden: list[int] = field(default_factory=lambda: [128, 64])
+    dropout: float = 0.3
+    lr: float = 1e-4
     weight_decay: float = 1e-4
     batch_size: int = 2048
     max_epochs: int = 200

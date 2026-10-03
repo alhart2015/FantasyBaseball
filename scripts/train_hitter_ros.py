@@ -18,7 +18,7 @@ Setup (once): pip install torch --index-url https://download.pytorch.org/whl/cu1
 Usage:
     python scripts/build_hitter_ros_table.py      # if the table is stale
     python scripts/train_hitter_ros.py --name baseline-mlp
-    python scripts/train_hitter_ros.py --name wider --hidden 512 512 256 --dropout 0.2
+    python scripts/train_hitter_ros.py --name wider --hidden 256 128 --dropout 0.2
 """
 
 from __future__ import annotations
