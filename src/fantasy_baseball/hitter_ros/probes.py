@@ -15,7 +15,8 @@ families, counts and zone / chase locations.
 
 Each season is read by a different model with its own scale, so features are
 standardized per season against a **reference group known before the season**: every
-hitter with a pitch the season before, read on Opening Day (``reference_cohort``). Not
+hitter-season of the season before (no batting pitchers), read on Opening Day
+(``reference_cohort``). Not
 against the table's own rows: the table holds only hitters who go on to play after the
 as-of date, so that cohort would carry a little hindsight.
 
@@ -321,12 +322,11 @@ def probe_features(
     return feats
 
 
-def reference_cohort(store: PitchStore, season: int) -> np.ndarray:
-    """Hitters with a pitch in the season before ``season``: a group known before the
-    season starts, used to standardize that season's probe features."""
-    tl = store.timeline
-    owner = np.repeat(np.arange(len(tl.players)), tl.last - tl.first)
-    return np.asarray(tl.players[np.unique(owner[store.season == season - 1])])
+def reference_cohort(table: pd.DataFrame, season: int) -> np.ndarray:
+    """Last season's hitters (the training table's hitter-seasons, so pitchers who batted
+    before the universal DH are left out): a group known before ``season`` starts, used
+    to standardize that season's probe features."""
+    return np.asarray(table.loc[table["season"] == season - 1, "player_id"].unique())
 
 
 def standardize(feats: pd.DataFrame, reference: pd.DataFrame) -> pd.DataFrame:

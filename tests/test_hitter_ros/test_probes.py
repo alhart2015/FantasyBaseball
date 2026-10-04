@@ -182,8 +182,6 @@ def test_standardize_uses_the_reference_group_only():
     assert np.isnan(out.loc[0, "b"])  # no spread in the reference: blank, not infinite
 
 
-def test_reference_cohort_is_last_seasons_hitters():
-    tokens = _tokens(
-        {1: [(2024, 0, BALL), (2025, 0, BALL)], 2: [(2025, 1, BALL)], 3: [(2024, 2, BALL)]}
-    )
-    assert list(reference_cohort(_store(tokens), 2025)) == [1, 3]
+def test_reference_cohort_is_last_seasons_table_hitters():
+    table = pd.DataFrame({"player_id": [1, 1, 2, 3], "season": [2024, 2024, 2025, 2024]})
+    assert sorted(reference_cohort(table, 2025)) == [1, 3]

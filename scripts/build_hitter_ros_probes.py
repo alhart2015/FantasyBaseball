@@ -114,7 +114,7 @@ def main() -> int:
         feats = read(model, rows["player_id"].to_numpy(), rows["as_of"])
         # Reference group, known before the season: last season's hitters, on Opening Day.
         opening_day = rows.loc[rows["week"] == 0, "as_of"].min()
-        ref_players = reference_cohort(store, s)
+        ref_players = reference_cohort(table, s)
         reference = read(model, ref_players, pd.Series([opening_day] * len(ref_players)))
         if s <= first_contact:  # model pretrained before contact classes: reads 0
             feats[list(CONTACT_FEATURES)] = np.nan
