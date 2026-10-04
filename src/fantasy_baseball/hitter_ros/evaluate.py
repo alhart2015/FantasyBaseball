@@ -138,7 +138,8 @@ def level_free_error(projected: np.ndarray, actual: np.ndarray, pa: np.ndarray) 
         return np.zeros(0)
     proj_mean = np.average(projected, weights=pa)
     level = np.average(actual, weights=pa) / proj_mean if proj_mean else 1.0
-    return np.abs(projected * level - actual)
+    err: np.ndarray = np.abs(projected * level - actual)
+    return err
 
 
 def pairwise_accuracy(projected: np.ndarray, actual: np.ndarray, *, weighted: bool) -> float:
