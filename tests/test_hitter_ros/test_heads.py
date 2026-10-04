@@ -10,6 +10,7 @@ from fantasy_baseball.hitter_ros.features import balance_by_group  # noqa: E402
 from fantasy_baseball.hitter_ros.net import (  # noqa: E402
     MultiHeadMLP,
     NetConfig,
+    loss_weights,
     predict,
     train,
 )
@@ -73,15 +74,14 @@ def test_head_options_are_checked():
     with pytest.raises(ValueError):
         NetConfig(heads=3)
     with pytest.raises(ValueError):
-        NetConfig(head_balance=True)
-    with pytest.raises(ValueError):
         NetConfig(heads=2, split=True)
     with pytest.raises(ValueError):
         NetConfig(heads=2, seq="gru")
 
 
-def test_pre_mid_weighting_matches_the_balanced_heads_weights():
-    """The control must weight rows exactly as --heads 2 --head-balance does."""
+def test_pre_mid_weighting_balances_week_0_against_the_rest():
+    """pre_mid groups rows by season time exactly as the head index does (week 0 vs
+    1+), so --heads 2 under pre_mid is the balanced-heads run of #422."""
     from fantasy_baseball.hitter_ros.features import balance_by_group
 
     rng = np.random.default_rng(0)
@@ -90,6 +90,8 @@ def test_pre_mid_weighting_matches_the_balanced_heads_weights():
     by_time = balance_by_group(w, (season_time < 1).astype(int))
     by_head = balance_by_group(w, np.array([0, 0, 1, 1, 1, 1]))
     pd.testing.assert_frame_equal(by_time, by_head)
+    weights = loss_weights(w.to_numpy(), NetConfig(weighting="pre_mid"), season_time)
+    np.testing.assert_allclose(weights, by_head.to_numpy(), rtol=1e-6)
     with pytest.raises(ValueError):
         train(
             np.zeros((4, 2), np.float32),
@@ -97,4 +99,16 @@ def test_pre_mid_weighting_matches_the_balanced_heads_weights():
             np.ones((4, 1), np.float32),
             np.array([False, False, False, True]),
             NetConfig(weighting="pre_mid", max_epochs=1),
+        )
+
+
+def test_a_missing_head_column_is_refused():
+    x = np.random.default_rng(0).normal(size=(8, 3)).astype(np.float32)  # no head column
+    with pytest.raises(ValueError, match="head index"):
+        train(
+            x,
+            np.zeros((8, 1), np.float32),
+            np.ones((8, 1), np.float32),
+            np.arange(8) < 2,
+            NetConfig(heads=2, weighting="pa", max_epochs=1),
         )

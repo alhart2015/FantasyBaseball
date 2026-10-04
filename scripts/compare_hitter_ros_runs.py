@@ -5,8 +5,9 @@ train_hitter_ros.py writes last):
 
 * seed, seasons: what the run was trained and scored on.
 * best_epoch, val_loss: the early-stopping epoch and the best validation loss, averaged
-  over test seasons. Validation loss compares across runs with the same seed only (the
-  seed picks the validation players); the script warns when seeds are mixed.
+  over test seasons. Validation loss compares across runs with the same seed and
+  weighting only (the seed picks the validation players, the weighting weights their
+  rows); the script warns when either is mixed.
 * Main score first (#424): gap-weighted pairwise accuracy in % (higher is better), then
   plain pairwise accuracy, raw MAE and level-free MAE (lower is better). The pairwise
   scores need runs scored after #424 (re-score older ones with score_hitter_ros_run.py).
@@ -68,6 +69,12 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
         "seed": meta["config"]["seed"],
         # Runs from before #424 have no loss setting: they all used MSE.
         "loss": meta["config"].get("loss", "mse"),
+        # Runs from before the weighting setting all used PA weighting. A --split run's
+        # val_loss averages two models, each over its own rows.
+        "weighting": meta["config"].get("weighting", "pa")
+        # head_balance was an option in early #422 runs (015c); pre_mid replaced it.
+        + ("+head_balance" if meta["config"].get("head_balance") else "")
+        + ("+split" if meta["config"].get("split") else ""),
         # A --split run lists each season twice (a preseason and a mid-season model).
         "seasons": ",".join(dict.fromkeys(str(s["test_season"]) for s in seasons)),
         "best_epoch": float(np.mean([s["best_epoch"] for s in seasons])),
@@ -116,6 +123,11 @@ def warnings_for(df: pd.DataFrame) -> list[str]:
             "losses differ: val_loss is a squared error for mse and a pairwise logistic "
             "loss for rank, so it does not compare across them"
         )
+    if df["weighting"].nunique() > 1:
+        out.append(
+            "weightings differ: val_loss weights rows differently (and a split run "
+            "averages two models), so it does not compare across them"
+        )
     if df["seasons"].nunique() > 1:
         out.append("test seasons differ: preseason means average different years")
     if "mid_snapshots" in df.columns and df["mid_snapshots"].nunique() > 1:
@@ -129,7 +141,16 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
         return [(f"{prefix}{s}", s) for s in TARGETS]
 
     return [
-        ("Run", [("seed", "seed"), ("loss", "loss"), ("seasons", "test seasons")], 0),
+        (
+            "Run",
+            [
+                ("seed", "seed"),
+                ("loss", "loss"),
+                ("weighting", "weighting"),
+                ("seasons", "test seasons"),
+            ],
+            0,
+        ),
         ("Training", [("best_epoch", "best epoch"), ("val_loss", "val loss")], 3),
         ("MAIN: preseason gap-weighted pairwise % (ours)", cols("pre_pairw_"), 2),
         (

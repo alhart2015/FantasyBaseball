@@ -254,11 +254,6 @@ def main() -> int:
         help="2: shared body with a preseason head (week 0) and a mid-season head (#422)",
     )
     parser.add_argument(
-        "--head-balance",
-        action="store_true",
-        help="with --heads 2: both heads carry the same total loss weight",
-    )
-    parser.add_argument(
         "--split",
         action="store_true",
         help="two separate models: one trained on week-0 rows, one on week 1+ (#422)",
@@ -329,7 +324,6 @@ def main() -> int:
             relative_target=args.relative_target,
             probes=args.probes,
             heads=args.heads,
-            head_balance=args.head_balance,
             split=args.split,
         )
     except ValueError as err:
@@ -347,6 +341,10 @@ def main() -> int:
         ERA_TABLE_COLUMNS
     ) <= set(table.columns):
         parser.error(f"{TABLE} predates the era columns; run scripts/build_hitter_ros_table.py")
+    # pre_mid finds week 0 as the rows with the whole season left; --heads by week > 0.
+    # They must be the same rows, or pre_mid would quietly stop balancing.
+    if not ((table["week"] == 0) == (table["frac_season_left"] >= 1)).all():
+        parser.error(f"{TABLE}: week 0 is not exactly the rows with frac_season_left 1")
     x_all = input_frame(table, era=config.era)
     if config.probes != "none":
         probes_file = probe_path(TABLE.parent, config.probes)
@@ -409,7 +407,12 @@ def main() -> int:
         *backtest.summarize(pre, snap),
         *backtest.league_forecast_lines(table, args.test_seasons),
     ]
-    epochs = ", ".join(f"{i['test_season']}: {i['best_epoch']}" for i in infos)
+    # A --split run has two models per season: label them so the epochs aren't ambiguous.
+    epochs = ", ".join(
+        f"{i['test_season']}{'' if i['weeks'] == 'all' else ' ' + str(i['weeks'])}: "
+        f"{i['best_epoch']}"
+        for i in infos
+    )
     md += ["", f"Best epoch per test season: {epochs}. Inputs: {infos[0]['n_features']}."]
     (out / "summary.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))

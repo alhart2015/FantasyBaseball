@@ -71,8 +71,8 @@ class NetConfig:
     # "pa": each row's loss counts by its rest-of-season PA. "balanced": the same, then
     # rescaled so each fifth of the season carries equal total weight (late-season rows
     # otherwise get ~4% of it). "pre_mid": rescaled so week-0 rows and week 1+ rows carry
-    # equal totals -- the same weights as heads 2 + head_balance, with one output layer
-    # (the #422 control: is the gain from the heads or from the reweighting?).
+    # equal totals (#422: this, not separate heads, is what helps preseason; with PA
+    # weights week-0 rows carry ~5% of the loss).
     weighting: str = "pre_mid"
     # Era handling (#421): inputs from features.ERA_MODES.
     era: str = "none"
@@ -87,12 +87,11 @@ class NetConfig:
     probes: str = "p003"
     # Multiple heads (#422): 1 = one output layer for every row (the plain MLP). 2 = a
     # shared body with a preseason head (week 0) and a mid-season head (week 1+); the
-    # head index rides in the last input column (see MultiHeadMLP). head_balance:
-    # rescale loss weights so both heads carry the same total (mid-season rows otherwise
-    # carry ~95% of it). split: instead, two separate models, one trained only on
+    # head index rides in the last input column (see MultiHeadMLP). With the default
+    # pre_mid weighting both heads carry the same total loss; --weighting pa gives the
+    # unbalanced #422 run. split: instead, two separate models, one trained only on
     # week-0 rows and one only on week 1+ rows.
     heads: int = 1
-    head_balance: bool = False
     split: bool = False
 
     def __post_init__(self) -> None:
@@ -100,8 +99,6 @@ class NetConfig:
             raise ValueError(f"heads must be 1 or 2, got {self.heads}")
         if self.heads > 1 and self.seq != "none":
             raise ValueError("multiple heads are built on the plain MLP (seq none) only")
-        if self.head_balance and self.heads == 1:
-            raise ValueError("head_balance needs heads 2")
         if self.split and self.heads > 1:
             raise ValueError("split trains two separate models; it can't also have heads")
         if self.micro_batch < 0:
@@ -126,16 +123,21 @@ class NetConfig:
         return asdict(self)
 
 
+def _hidden_layers(n_in: int, hidden: list[int], dropout: float) -> tuple[list[nn.Module], int]:
+    """[Linear -> GELU -> Dropout] per hidden width, and the width they end on."""
+    layers: list[nn.Module] = []
+    width = n_in
+    for h in hidden:
+        layers += [nn.Linear(width, h), nn.GELU(), nn.Dropout(dropout)]
+        width = h
+    return layers, width
+
+
 class MLP(nn.Module):
     def __init__(self, n_in: int, n_out: int, hidden: list[int], dropout: float) -> None:
         super().__init__()
-        layers: list[nn.Module] = []
-        width = n_in
-        for h in hidden:
-            layers += [nn.Linear(width, h), nn.GELU(), nn.Dropout(dropout)]
-            width = h
-        layers.append(nn.Linear(width, n_out))
-        self.body = nn.Sequential(*layers)
+        layers, width = _hidden_layers(n_in, hidden, dropout)
+        self.body = nn.Sequential(*layers, nn.Linear(width, n_out))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         out: torch.Tensor = self.body(x)
@@ -155,11 +157,7 @@ class MultiHeadMLP(nn.Module):
         self, n_in: int, n_out: int, hidden: list[int], dropout: float, n_heads: int
     ) -> None:
         super().__init__()
-        layers: list[nn.Module] = []
-        width = n_in
-        for h in hidden:
-            layers += [nn.Linear(width, h), nn.GELU(), nn.Dropout(dropout)]
-            width = h
+        layers, width = _hidden_layers(n_in, hidden, dropout)
         self.body = nn.Sequential(*layers)
         self.heads = nn.ModuleList(nn.Linear(width, n_out) for _ in range(n_heads))
 
@@ -273,6 +271,22 @@ def accumulate_batch(
     return float(total.item())  # one GPU->CPU sync per batch, not per slice
 
 
+def loss_weights(w: np.ndarray, config: NetConfig, season_time: np.ndarray | None) -> np.ndarray:
+    """Each row's loss weight after ``config.weighting``. ``season_time`` (each row's
+    ``frac_season_left``) is required by the "balanced" and "pre_mid" weightings."""
+    from fantasy_baseball.hitter_ros.features import balance_by_group, balance_by_season_time
+
+    if config.weighting in ("balanced", "pre_mid") and season_time is None:
+        raise ValueError(f"{config.weighting} weighting needs each row's frac_season_left")
+    if config.weighting == "balanced":
+        w = balance_by_season_time(pd.DataFrame(w), pd.Series(season_time)).to_numpy(np.float32)
+    if config.weighting == "pre_mid":
+        # Week 0 (the season's first date) is the only row with the whole season left.
+        mid = (np.asarray(season_time) < 1).astype(int)
+        w = balance_by_group(pd.DataFrame(w), mid).to_numpy(np.float32)
+    return w
+
+
 def train(
     x: np.ndarray,
     y: np.ndarray,
@@ -288,29 +302,18 @@ def train(
 
     With a sequence model, ``rows`` gives each row's position in the table the
     ``batcher`` was built on, so it can fetch that row's plate appearances.
-    ``season_time`` (each row's ``frac_season_left``) is required by
-    ``config.weighting == "balanced"``, which rescales ``w`` here. With
-    ``config.heads > 1`` the last column of ``x`` is each row's head index, and
-    ``config.head_balance`` rescales ``w`` so every head carries the same total.
+    ``w`` is rescaled here by ``loss_weights`` (``season_time`` is each row's
+    ``frac_season_left``). With ``config.heads > 1`` the last column of ``x`` is each
+    row's head index.
     """
-    if config.weighting == "balanced":
-        if season_time is None:
-            raise ValueError("balanced weighting needs each row's frac_season_left")
-        from fantasy_baseball.hitter_ros.features import balance_by_season_time
-
-        w = balance_by_season_time(pd.DataFrame(w), pd.Series(season_time)).to_numpy(np.float32)
-    if config.weighting == "pre_mid":
-        if season_time is None:
-            raise ValueError("pre_mid weighting needs each row's frac_season_left")
-        from fantasy_baseball.hitter_ros.features import balance_by_group
-
-        # Week 0 (the season's first date) is the only row with the whole season left.
-        mid = (season_time < 1).astype(int)
-        w = balance_by_group(pd.DataFrame(w), mid).to_numpy(np.float32)
-    if config.head_balance:
-        from fantasy_baseball.hitter_ros.features import balance_by_group
-
-        w = balance_by_group(pd.DataFrame(w), x[:, -1].astype(int)).to_numpy(np.float32)
+    if config.heads > 1 and not np.isin(x[:, -1], np.arange(config.heads)).all():
+        # A missing head column would otherwise be read silently: .long() truncates the
+        # last standardized feature into a head index, and -1 picks the last head.
+        raise ValueError(
+            f"with heads {config.heads} the last column of x must be each row's head "
+            f"index (0..{config.heads - 1})"
+        )
+    w = loss_weights(w, config, season_time)
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
     dev = device()

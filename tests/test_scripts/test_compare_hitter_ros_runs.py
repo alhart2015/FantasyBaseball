@@ -100,6 +100,17 @@ def test_warns_when_losses_differ(runs):
     assert any("losses differ" in w for w in cmp.warnings_for(df))
 
 
+def test_warns_when_weightings_differ(runs):
+    _run(runs, "old")  # a run from before the weighting setting: PA weighting
+    _run(runs, "pre_mid", config={"weighting": "pre_mid"})
+    _run(runs, "split", config={"weighting": "pre_mid", "split": True})
+    df = cmp.compare(["old", "pre_mid", "split"], None, None)
+    assert list(df["weighting"]) == ["pa", "pre_mid", "pre_mid+split"]
+    assert any("weightings differ" in w for w in cmp.warnings_for(df))
+    same = cmp.compare(["pre_mid"], None, None)
+    assert not any("weightings differ" in w for w in cmp.warnings_for(same))
+
+
 def test_a_run_still_scoring_is_skipped(runs, capsys, monkeypatch):
     _run(runs, "done")
     scoring = runs / "scoring"
