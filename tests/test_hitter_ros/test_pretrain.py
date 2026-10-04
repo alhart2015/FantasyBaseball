@@ -136,3 +136,18 @@ def test_unknown_descriptions_fall_back_on_statcast_type(caplog):
     idx = outcome_index(desc, lsa, kind)
     assert [OUTCOMES[i] for i in idx] == ["ball", "called_strike", "ball", "bip_barrel"]
     assert "unrecognized descriptions" in caplog.text
+
+
+def test_season_ce_scores_each_season_pitch_once_with_history():
+    from fantasy_baseball.hitter_ros.pretrain import season_ce
+
+    spec = {
+        1: [(2023, d, BALL) for d in range(30)] + [(2024, d, WHIFF) for d in range(25)],
+        2: [(2024, d, BALL) for d in range(5)],  # rookie: first pitch has no history
+        3: [(2023, d, BALL) for d in range(5)],  # no 2024 pitches
+    }
+    store = PitchStore(_tokens(spec), torch.device("cpu"), torch.float32)
+    config = _small()
+    torch.manual_seed(0)
+    _, n = season_ce(PretrainModel(config), store, 2024, config)
+    assert n == 24 + 4  # each hitter's first 2024 pitch is skipped

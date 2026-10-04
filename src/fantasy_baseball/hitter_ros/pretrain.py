@@ -319,3 +319,63 @@ def pretrain(store: PitchStore, before_season: int, config: PretrainConfig) -> P
             break
     model.load_state_dict(best[2])
     return PretrainResult(model, best[1], train_hist, val_hist, baseline)
+
+
+def season_ce(
+    model: PretrainModel, store: PitchStore, season: int, config: PretrainConfig
+) -> tuple[float, int]:
+    """(cross-entropy, pitches scored) predicting every pitch of ``season``.
+
+    A fair yardstick across pretraining runs: model S never saw season S, and every run
+    is scored on exactly the same pitches. Each pitch is predicted once, from up to
+    ``window`` pitches of the hitter's own history before it (earlier seasons included,
+    when the store has them). Each hitter's first pitch of the season is skipped, so runs
+    on stores reaching back different distances score the same pitches. Windows advance by half a window; each scores only its
+    second half, so every scored pitch has at least half a window of history unless the
+    hitter's career is shorter.
+    """
+    dev = store.device
+    L = config.window
+    half = L // 2
+    amp = config.amp and dev.type == "cuda"
+    model.eval()
+    starts: list[int] = []
+    score_from: list[int] = []
+    score_to: list[int] = []
+    tl = store.timeline
+    for i in range(len(tl.players)):
+        a, b = int(tl.first[i]), int(tl.last[i])
+        seg = store.season[a:b]
+        s_lo = a + int(np.searchsorted(seg, season, "left"))
+        s_hi = a + int(np.searchsorted(seg, season, "right"))
+        if s_hi - s_lo < 2:
+            continue
+        # Skip his first pitch of the season: whether it has any history depends on how
+        # far back the store goes, and every run must be scored on the same pitches.
+        pos = s_lo + 1
+        while pos < s_hi:
+            start = max(a, pos - half)
+            starts.append(start)
+            score_from.append(pos)
+            score_to.append(min(start + L, s_hi))
+            pos = score_to[-1]
+    ce_sum, n_sum = 0.0, 0
+    with torch.no_grad():
+        for b0 in range(0, len(starts), config.batch_size):
+            st = np.array(starts[b0 : b0 + config.batch_size])
+            lo = np.array(score_from[b0 : b0 + config.batch_size])
+            hi = np.array(score_to[b0 : b0 + config.batch_size])
+            s_t = torch.as_tensor(st, device=dev)
+            n_t = torch.as_tensor(hi - st, device=dev)
+            x, y = store.gather(s_t, n_t, L)
+            at = torch.arange(L, device=dev)[None, :] + s_t[:, None]
+            keep = (at >= torch.as_tensor(lo, device=dev)[:, None]) & (
+                at < torch.as_tensor(hi, device=dev)[:, None]
+            )
+            y = torch.where(keep, y, torch.full_like(y, -1))
+            with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=amp):
+                logits = model(x.float())
+            ce, n = next_pitch_loss(logits, y)
+            ce_sum += float(ce.item())
+            n_sum += int(n.item())
+    return ce_sum / max(n_sum, 1), n_sum
