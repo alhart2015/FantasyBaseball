@@ -44,6 +44,7 @@ from fantasy_baseball.hitter_ros.features import (
     TARGETS,
     Standardizer,
     input_frame,
+    league_reference,
     target_frame,
 )
 from fantasy_baseball.hitter_ros.net import EVAL_BATCH, NetConfig, device, predict, train
@@ -86,7 +87,11 @@ def fit_season(
     val_mask = table.loc[train_rows, "player_id"].isin(val_players).to_numpy()
 
     scaler = Standardizer().fit(x_all[train_rows & ~table["player_id"].isin(val_players)])
-    y_train, w_train = y_all[train_rows], w_all[train_rows]
+    # relative_target: learn each player's rates divided by his league's (known on the
+    # date) and multiply back, so the era is handled by arithmetic (#421).
+    ref = league_reference(table) if config.relative_target else None
+    y_fit = y_all / ref if ref is not None else y_all
+    y_train, w_train = y_fit[train_rows], w_all[train_rows]
     fit_rows = ~val_mask
     mu = {
         s: np.average(y_train[s][fit_rows].fillna(0), weights=w_train[s][fit_rows]) for s in TARGETS
@@ -123,6 +128,8 @@ def fit_season(
         {s: z[:, i] * sd[s] + mu[s] for i, s in enumerate(TARGETS)},
         index=table.index[test_rows],
     )
+    if ref is not None:
+        preds = preds * ref.loc[test_rows, list(TARGETS)]
     preds = pd.concat(
         [table.loc[test_rows, ["player_id", "season", "week", "as_of"]], preds], axis=1
     )
@@ -176,6 +183,17 @@ def main() -> int:
     parser.add_argument("--max-epochs", type=int, default=defaults.max_epochs)
     parser.add_argument("--patience", type=int, default=defaults.patience)
     parser.add_argument("--seed", type=int, default=defaults.seed)
+    parser.add_argument(
+        "--era",
+        choices=["none", "relative", "full"],
+        default=defaults.era,
+        help="era inputs (#421): player-vs-league ratios; full adds league rates and rule flags",
+    )
+    parser.add_argument(
+        "--relative-target",
+        action="store_true",
+        help="predict rates relative to the league (last season + this season so far)",
+    )
     parser.add_argument(
         "--weighting",
         choices=["pa", "balanced"],
@@ -237,6 +255,8 @@ def main() -> int:
             micro_batch=args.micro_batch,
             amp=args.amp,
             weighting=args.weighting,
+            era=args.era,
+            relative_target=args.relative_target,
         )
     except ValueError as err:
         parser.error(str(err))
@@ -249,7 +269,7 @@ def main() -> int:
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
 
     table = pd.read_parquet(TABLE)
-    x_all = input_frame(table)
+    x_all = input_frame(table, era=config.era)
     y_all, w_all = target_frame(table)
     batcher = None
     if config.seq != "none":

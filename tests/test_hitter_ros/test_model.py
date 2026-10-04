@@ -272,9 +272,27 @@ def test_balanced_weighting_is_applied_by_train_itself():
 
 def test_era_inputs(table):
     row = table[(table.player_id == 1) & (table.season == 2025) & (table.week == 1)]
-    x = input_frame(row).iloc[0]
+    x = input_frame(row, era="full").iloc[0]
     assert x["lg_std_hr_pa"] == pytest.approx(7 / 59)
     assert x["std_hr_pa_vs_lg"] == pytest.approx((7 / 28) / (7 / 59))
     assert x["rules_universal_dh"] == 1 and x["rules_2023"] == 1
-    early = input_frame(table[(table.season == 2024) & (table.player_id == 1)]).iloc[0]
+    early = input_frame(table[(table.season == 2024) & (table.player_id == 1)], era="full").iloc[0]
     assert early["rules_universal_dh"] == 1 and early["rules_2023"] == 1
+
+
+def test_era_modes_and_league_reference(table):
+    from fantasy_baseball.hitter_ros.features import league_reference
+
+    none = input_frame(table)
+    rel = input_frame(table, era="relative")
+    full = input_frame(table, era="full")
+    assert not any(c.endswith("_vs_lg") for c in none.columns)
+    assert "std_hr_pa_vs_lg" in rel.columns and "lg_std_hr_pa" not in rel.columns
+    assert "lg_std_hr_pa" in full.columns and "rules_2023" in full.columns
+    with pytest.raises(ValueError):
+        input_frame(table, era="weird")
+
+    row = table[(table.player_id == 1) & (table.season == 2025) & (table.week == 1)]
+    ref = league_reference(row).iloc[0]
+    # 2024 league (83 PA, 10 HR) plus 2025 before Apr 8 (59 PA, 7 HR), pooled.
+    assert ref["hr"] == pytest.approx(17 / 142)
