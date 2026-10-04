@@ -138,6 +138,15 @@ def fit_season(
     return preds, info
 
 
+def _train_from(season: int, n_seasons: int | None, first: int | None) -> int | None:
+    """Earliest training season: the later of --first-train-season and the
+    --train-seasons window; None (no limit) when neither is given."""
+    limits = [
+        x for x in (first, None if n_seasons is None else season - n_seasons) if x is not None
+    ]
+    return max(limits) if limits else None
+
+
 def _positive_int(text: str) -> int:
     value = int(text)
     if value < 1:
@@ -198,6 +207,11 @@ def main() -> int:
     )
     parser.add_argument("--note", default="", help="what this run changes and why")
     parser.add_argument(
+        "--first-train-season",
+        type=int,
+        help="train only on seasons from this one on (e.g. 2015, the first Statcast year)",
+    )
+    parser.add_argument(
         "--train-seasons",
         type=_positive_int,
         help="train only on the N seasons right before each test season (learning curves)",
@@ -257,7 +271,7 @@ def main() -> int:
             config,
             batcher,
             args.shuffle_test_order,
-            train_from=None if args.train_seasons is None else season - args.train_seasons,
+            train_from=_train_from(season, args.train_seasons, args.first_train_season),
         )
         all_preds.append(preds)
         infos.append(info)
@@ -268,6 +282,7 @@ def main() -> int:
         "config": config.to_dict(),
         "shuffle_test_order": args.shuffle_test_order,
         "train_seasons": args.train_seasons,
+        "first_train_season": args.first_train_season,
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))

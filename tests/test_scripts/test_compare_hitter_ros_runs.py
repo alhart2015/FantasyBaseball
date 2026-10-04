@@ -136,3 +136,13 @@ def test_pretrain_script_keeps_an_old_run_when_tokens_are_missing(tmp_path, monk
     with pytest.raises(SystemExit):
         pretrain_hitter_ros.main()
     assert (old / "run.json").exists()
+
+
+def test_train_from_takes_the_later_limit():
+    from scripts.train_hitter_ros import _train_from
+
+    assert _train_from(2026, None, None) is None
+    assert _train_from(2026, 4, None) == 2022
+    assert _train_from(2026, None, 2015) == 2015
+    assert _train_from(2018, 11, 2015) == 2015
+    assert _train_from(2026, 4, 2015) == 2022
