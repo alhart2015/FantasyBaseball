@@ -299,3 +299,18 @@ def test_pitchers_batting_are_not_league_or_team_offense(store):
     w0 = _row(build_table(store), BENCH, 2025, 0)
     # BENCH plays for TEAM_B, whose only other batter is PITCHER (batting as P).
     assert w0.p1_team_pa == 1
+
+
+def test_a_position_player_who_mopped_up_still_counts_as_offense(tmp_path):
+    lineups, pitches = _season(2025, date(2025, 4, 1), 10)
+    # Apr 2: HITTER is listed as P (he finished the game on the mound) but batted 4 times.
+    for r in lineups:
+        if r["player_id"] == HITTER and r["game_date"] == "2025-04-02":
+            r["position"] = "P"
+    pitches.append(_pitch(date(2025, 4, 2), OTHER, pitcher=HITTER))
+    _write(tmp_path, {2025: (lineups, pitches)})
+    w1 = _row(build_table(tmp_path), HITTER, 2025, 1)
+    # Before Apr 8: 7 days x (HITTER 4 + OTHER 4) + BENCH 1 -- his P-listed day included.
+    # PITCHER's own PA (a pitcher's season) stay out.
+    assert w1.lg_std_pa == 7 * 8 + 1
+    assert w1.std_team_pa == 7 * 8

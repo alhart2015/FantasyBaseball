@@ -297,3 +297,23 @@ def test_era_modes_and_league_reference(table):
     # Last three seasons (only 2024 here: 81 PA, 10 HR) plus 2025 before Apr 8 (57 PA,
     # 7 HR), pooled.
     assert ref["hr"] == pytest.approx(17 / 138)
+
+
+def test_era_league_formulas_match_the_player_rates(table):
+    """The vs-league ratio must divide like by like: league formulas == player formulas."""
+    from fantasy_baseball.hitter_ros.features import _ERA_RATES, WINDOWS
+
+    x = input_frame(table)
+    for w in WINDOWS:
+        for name, rate in _ERA_RATES.items():
+            mine = rate(lambda c, w=w: table[f"{w}_{c}"].astype(float))
+            pd.testing.assert_series_equal(mine, x[f"{w}_{name}"], check_names=False)
+
+
+def test_league_reference_is_unknown_in_the_first_store_season(table):
+    from fantasy_baseball.hitter_ros.features import league_reference
+
+    ref = league_reference(table)
+    first = table["season"] == table["season"].min()
+    assert ref[first].isna().all().all()
+    assert ref[~first].notna().all().all()

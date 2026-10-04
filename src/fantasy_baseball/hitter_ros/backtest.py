@@ -53,14 +53,13 @@ def preseason(
     candidates: dict[str, pd.DataFrame],
     season: int,
     projections_dir: Path,
-) -> pd.DataFrame | None:
+) -> pd.DataFrame:
     """Score week-0 rows of ``season``. ``candidates``: our predictions and baselines.
 
     Seasons without FanGraphs files (before 2022) are still scored, on ours and the
     baselines only, so our own variants can be compared over many more seasons.
     """
-    folder = projections_dir / str(season)
-    systems = load_systems(folder, preseason=True) if folder.is_dir() else {}
+    systems = load_systems(projections_dir / str(season), preseason=True)
     week0 = table[(table["season"] == season) & (table["week"] == 0)].set_index("player_id")
     actual = rates_from_counts(week0.rename(columns=lambda c: c.removeprefix("ros_")))
     actual["pa"] = week0["ros_pa"]
@@ -127,9 +126,7 @@ def score_predictions(
     pre_parts, snap_parts = [], []
     for season in sorted(int(s) for s in preds["season"].unique()):
         candidates = {OURS: preds[preds["season"] == season], **baseline_predictions(table, season)}
-        pre = preseason(table, candidates, season, projections_dir)
-        if pre is not None:
-            pre_parts.append(pre)
+        pre_parts.append(preseason(table, candidates, season, projections_dir))
         snap = snapshots(candidates, season, projections_dir, store)
         if snap is not None:
             snap_parts.append(snap)
@@ -200,6 +197,13 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         pooled = systems_in_every_season(pre)
         md += ["", "**Mean over seasons** (systems present every season)", ""]
         md.append(to_markdown(mean_over_seasons(pooled)))
+        fg_seasons = pre.loc[pre["system"] == BLEND, "season"].unique()
+        if 0 < len(fg_seasons) < pre["season"].nunique():
+            # Older seasons have no FanGraphs files; keep the comparison with them visible.
+            fg = systems_in_every_season(pre[pre["season"].isin(fg_seasons)])
+            years = ", ".join(str(s) for s in sorted(fg_seasons))
+            md += ["", f"**Mean over the seasons with FanGraphs files** ({years})", ""]
+            md.append(to_markdown(mean_over_seasons(fg)))
         md += [
             "",
             "**Spread of projections** (SD across scored player-seasons; '(actual)' = outcomes)",

@@ -76,8 +76,10 @@ def _window_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
     return {f"{w}_{k}": v for k, v in out.items()}
 
 
-# Rates compared with the league in the same window (#421). Each takes a table-column
-# getter for one window and returns that window's rate.
+# League-side rates for the era inputs (#421). Each takes a table-column getter for one
+# window and returns that window's rate. They must match the same-named player rates in
+# _window_rates (a test checks they do), so the player-vs-league ratio compares like
+# with like.
 Column = Callable[[str], pd.Series]
 
 
@@ -99,9 +101,11 @@ _ERA_RATES: dict[str, Callable[[Column], pd.Series]] = {
 
 
 ERA_MODES = ("none", "relative", "full")
+# Table columns the era options read; a table built before #421 lacks them.
+ERA_TABLE_COLUMNS = ("lg_std_pa", "lg_p3_pa")
 
 
-def _era_inputs(t: pd.DataFrame, mode: str) -> dict[str, pd.Series]:
+def _era_inputs(t: pd.DataFrame, mode: str, player: dict[str, pd.Series]) -> dict[str, pd.Series]:
     """Era inputs (#421). ``relative``: the player's rate divided by the league's in the
     same window. ``full`` adds the league rates themselves and rule flags known before
     the season -- but those are identical for every row of a season, so with ~18
@@ -115,12 +119,9 @@ def _era_inputs(t: pd.DataFrame, mode: str) -> dict[str, pd.Series]:
         def lg(name: str, w: str = w) -> pd.Series:
             return t[f"lg_{w}_{name}"].astype(float)
 
-        def me(name: str, w: str = w) -> pd.Series:
-            return t[f"{w}_{name}"].astype(float)
-
         for name, rate in _ERA_RATES.items():
             league = rate(lg)
-            out[f"{w}_{name}_vs_lg"] = _div(rate(me), league)
+            out[f"{w}_{name}_vs_lg"] = _div(player[f"{w}_{name}"], league)
             if mode == "full":
                 out[f"lg_{w}_{name}"] = league
     if mode == "full":
@@ -135,12 +136,16 @@ def league_reference(t: pd.DataFrame) -> pd.DataFrame:
     three seasons plus this season before the date, pooled. Used to predict a player
     relative to his league and scale back (``relative_target``). Across 2011-2026 the
     3-season average missed next season's league R and HR rates by less than last
-    season alone did (#421)."""
+    season alone did (#421).
+
+    NaN for a row with no earlier season in the store (its first season): a reference
+    built from a few days of this season's games would be mostly noise."""
     counts = pd.DataFrame(
         {c: t[f"lg_p3_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in COUNTS},
         index=t.index,
     )
-    return rates_from_counts(counts)
+    ref = rates_from_counts(counts)
+    return ref.where(t["lg_p3_pa"].astype(float) > 0)
 
 
 def input_frame(t: pd.DataFrame, era: str = "none") -> pd.DataFrame:
@@ -168,7 +173,7 @@ def input_frame(t: pd.DataFrame, era: str = "none") -> pd.DataFrame:
             "std_team_log_pa": np.log1p(t["std_team_pa"].astype(float)),
         }
     )
-    cols.update(_era_inputs(t, era))
+    cols.update(_era_inputs(t, era, cols))
     return pd.DataFrame(cols, index=t.index)
 
 

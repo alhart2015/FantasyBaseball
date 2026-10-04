@@ -193,12 +193,15 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
     conn.execute(
         """
         CREATE TEMP TABLE team_daily AS
-        SELECT team_id, CAST(game_date AS DATE) AS game_date,
-               year(CAST(game_date AS DATE)) AS season,
-               sum(r) FILTER (WHERE position IS DISTINCT FROM 'P') AS team_r,
-               sum(pa) FILTER (WHERE position IS DISTINCT FROM 'P') AS team_pa,
-               count(DISTINCT game_pk) AS team_games
-        FROM lineups GROUP BY 1, 2
+        SELECT l.team_id, CAST(l.game_date AS DATE) AS game_date,
+               year(CAST(l.game_date AS DATE)) AS season,
+               coalesce(sum(l.r) FILTER (WHERE hs.player_id IS NOT NULL), 0) AS team_r,
+               coalesce(sum(l.pa) FILTER (WHERE hs.player_id IS NOT NULL), 0) AS team_pa,
+               count(DISTINCT l.game_pk) AS team_games
+        FROM lineups l
+        LEFT JOIN hitter_seasons hs
+          ON hs.player_id = l.player_id AND hs.season = year(CAST(l.game_date AS DATE))
+        GROUP BY 1, 2
         """
     )
     conn.execute(
@@ -239,15 +242,20 @@ def _league_context(conn: duckdb.DuckDBPyConnection) -> None:
     season, the last three seasons and every earlier season in the store. Counts only;
     ``features.py`` turns them into league rates and player-vs-league ratios."""
     sums = ", ".join(f"sum({c}) AS {c}" for c in LEAGUE_COUNTS)
-    # Position players only: before the universal DH, pitchers took ~3% of PA, which
-    # lowered league rates (about -1.3 R, -0.5 HR per 600 PA, -4 points of AVG) and made
-    # them jump in 2020 and 2022 when pitchers stopped batting.
+    # Hitter-seasons only (same rule as the table's population). Before the universal DH,
+    # pitchers took ~3% of PA, which lowered league rates (about -1.3 R, -0.5 HR per 600
+    # PA, -4 points of AVG) and made them jump in 2020 and 2022 when pitchers stopped
+    # batting. Filtering on the season rather than the game's position keeps a position
+    # player's at-bats on a day he also mopped up on the mound (listed as P).
+    by_row = ", ".join(f"sum(l.{c}) AS {c}" for c in LEAGUE_COUNTS)
     conn.execute(
         f"""
         CREATE TEMP TABLE league_daily AS
-        SELECT year(CAST(game_date AS DATE)) AS season, CAST(game_date AS DATE) AS game_date,
-               {sums}
-        FROM lineups WHERE position IS DISTINCT FROM 'P'
+        SELECT year(CAST(l.game_date AS DATE)) AS season, CAST(l.game_date AS DATE) AS game_date,
+               {by_row}
+        FROM lineups l
+        JOIN hitter_seasons hs
+          ON hs.player_id = l.player_id AND hs.season = year(CAST(l.game_date AS DATE))
         GROUP BY 1, 2
         """
     )

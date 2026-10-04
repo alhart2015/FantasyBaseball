@@ -41,6 +41,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.features import (
+    ERA_MODES,
+    ERA_TABLE_COLUMNS,
     TARGETS,
     Standardizer,
     input_frame,
@@ -91,7 +93,10 @@ def fit_season(
     # date) and multiply back, so the era is handled by arithmetic (#421).
     ref = league_reference(table) if config.relative_target else None
     y_fit = y_all / ref if ref is not None else y_all
-    y_train, w_train = y_fit[train_rows], w_all[train_rows]
+    # A row whose answer can't be computed (no PA, or no league reference) must not
+    # count: train() expects weight 0 wherever the target is NaN.
+    w_fit = w_all.where(y_fit.notna(), 0.0)
+    y_train, w_train = y_fit[train_rows], w_fit[train_rows]
     fit_rows = ~val_mask
     mu = {
         s: np.average(y_train[s][fit_rows].fillna(0), weights=w_train[s][fit_rows]) for s in TARGETS
@@ -185,14 +190,14 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=defaults.seed)
     parser.add_argument(
         "--era",
-        choices=["none", "relative", "full"],
+        choices=list(ERA_MODES),
         default=defaults.era,
         help="era inputs (#421): player-vs-league ratios; full adds league rates and rule flags",
     )
     parser.add_argument(
         "--relative-target",
         action="store_true",
-        help="predict rates relative to the league (last season + this season so far)",
+        help="predict rates relative to the league (last 3 seasons + this season so far)",
     )
     parser.add_argument(
         "--weighting",
@@ -269,6 +274,10 @@ def main() -> int:
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
 
     table = pd.read_parquet(TABLE)
+    if (config.era != "none" or config.relative_target) and not set(ERA_TABLE_COLUMNS) <= set(
+        table.columns
+    ):
+        parser.error(f"{TABLE} predates the era columns; run scripts/build_hitter_ros_table.py")
     x_all = input_frame(table, era=config.era)
     y_all, w_all = target_frame(table)
     batcher = None

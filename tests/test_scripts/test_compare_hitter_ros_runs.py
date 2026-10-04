@@ -146,3 +146,16 @@ def test_train_from_takes_the_later_limit():
     assert _train_from(2026, None, 2015) == 2015
     assert _train_from(2018, 11, 2015) == 2015
     assert _train_from(2026, 4, 2015) == 2022
+
+
+def test_train_script_asks_to_rebuild_a_table_without_era_columns(tmp_path, monkeypatch, capsys):
+    from scripts import train_hitter_ros
+
+    stale = tmp_path / "table.parquet"
+    pd.DataFrame({"player_id": [1], "season": [2025]}).to_parquet(stale)
+    monkeypatch.setattr(train_hitter_ros, "TABLE", stale)
+    monkeypatch.setattr(train_hitter_ros, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr("sys.argv", ["train", "--name", "x", "--era", "relative"])
+    with pytest.raises(SystemExit):
+        train_hitter_ros.main()
+    assert "build_hitter_ros_table" in capsys.readouterr().err

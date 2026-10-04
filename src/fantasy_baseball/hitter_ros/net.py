@@ -78,7 +78,9 @@ class NetConfig:
     def __post_init__(self) -> None:
         if self.micro_batch < 0:
             raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
-        if self.era not in ("none", "relative", "full"):
+        from fantasy_baseball.hitter_ros.features import ERA_MODES
+
+        if self.era not in ERA_MODES:
             raise ValueError(f"unknown era {self.era!r}")
         if self.weighting not in ("pa", "balanced"):
             raise ValueError(f"unknown weighting {self.weighting!r}")
