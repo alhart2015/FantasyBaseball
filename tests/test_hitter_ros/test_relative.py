@@ -1,4 +1,4 @@
-"""#424: scores that ignore the league's level, the relative target and the rank loss."""
+"""#424: scores that ignore the league's level, and the answer-relative target."""
 
 import numpy as np
 import pandas as pd
@@ -110,61 +110,7 @@ def test_net_config_checks_the_new_options():
     from fantasy_baseball.hitter_ros.net import NetConfig
 
     with pytest.raises(ValueError):
-        NetConfig(loss="huber")
-    with pytest.raises(ValueError):
         NetConfig(relative_target="yes")
-    with pytest.raises(ValueError):
-        NetConfig(loss="rank", micro_batch=64)
-
-
-def test_rank_terms_count_only_ordered_pairs_in_the_same_group():
-    torch = pytest.importorskip("torch")
-    from fantasy_baseball.hitter_ros.net import rank_terms
-
-    y = torch.tensor([[1.0], [2.0], [3.0], [3.0]])
-    w = torch.tensor([[1.0], [1.0], [1.0], [0.0]])
-    groups = torch.tensor([0, 0, 1, 1])
-    pred = torch.tensor([[0.0], [0.0], [5.0], [0.0]])
-    num, den = rank_terms(pred, y, w, groups)
-    # One pair counts: rows 0 and 1 (group 0). Rows 2-3 tie and row 3 has weight 0.
-    assert den.item() == pytest.approx(0.5)  # 1 * 1 / (1 + 1)
-    assert num.item() == pytest.approx(0.5 * np.log(2))  # equal predictions: -log(1/2)
-
-
-def test_rank_loss_learns_the_order_and_calibration_restores_the_scale():
-    pytest.importorskip("torch")
-    from fantasy_baseball.hitter_ros.net import NetConfig, linear_calibration, predict, train
-
-    rng = np.random.default_rng(0)
-    n = 1200
-    x = rng.normal(size=(n, 3)).astype(np.float32)
-    y = (2 * x[:, [0]] - x[:, [1]]).astype(np.float32)
-    w = np.ones_like(y)
-    groups = rng.integers(0, 6, size=n)
-    val = rng.random(n) < 0.2
-    config = NetConfig(
-        hidden=[16], dropout=0.0, lr=1e-2, batch_size=256, max_epochs=40, patience=10, loss="rank"
-    )
-    with pytest.raises(ValueError):
-        train(x, y, w, val, config)  # no groups
-    result = train(x, y, w, val, config, groups=groups)
-    assert result.val_loss[result.best_epoch] < 0.5 * result.val_loss[0]
-    z = predict(result.model, x)
-    assert spearman(z[val, 0], y[val, 0]) > 0.9
-    slope, intercept = linear_calibration(z[~val], y[~val], w[~val])
-    assert slope[0] > 0
-    calibrated = z * slope + intercept
-    assert np.average(calibrated[val]) == pytest.approx(y[val].mean(), abs=0.3)
-
-
-def test_linear_calibration_recovers_a_line_and_ignores_weight_zero_rows():
-    from fantasy_baseball.hitter_ros.net import linear_calibration
-
-    z = np.array([[0.0], [1.0], [2.0], [3.0]])
-    y = np.array([[1.0], [3.0], [5.0], [np.nan]])
-    w = np.array([[1.0], [1.0], [1.0], [0.0]])
-    slope, intercept = linear_calibration(z, y, w)
-    assert slope[0] == pytest.approx(2.0) and intercept[0] == pytest.approx(1.0)
 
 
 def test_pairwise_bootstrap_matches_resampling_players_one_draw_at_a_time():
@@ -200,22 +146,6 @@ def test_pairwise_bootstrap_matches_resampling_players_one_draw_at_a_time():
             assert fast.loc[s, "lo"] == pytest.approx(np.percentile(slow, 2.5))
             assert fast.loc[s, "hi"] == pytest.approx(np.percentile(slow, 97.5))
         assert (fast["diff"] > 0).all()  # the less noisy projection orders better
-
-
-def test_calibrate_by_group_fits_each_week_its_own_line():
-    from fantasy_baseball.hitter_ros.net import calibrate_by_group
-
-    # Same order in both weeks, but the rank outputs sit 5 higher in week 1: one line
-    # for both weeks would miss each by a constant.
-    z = np.array([[0.0], [1.0], [2.0], [5.0], [6.0], [7.0]])
-    y = np.array([[0.0], [1.0], [2.0], [0.0], [1.0], [2.0]])
-    w = np.ones_like(y)
-    weeks = np.array([0, 0, 0, 1, 1, 1])
-    out = calibrate_by_group(z, y, w, weeks, z, weeks)
-    np.testing.assert_allclose(out, y, atol=1e-12)
-    # A week with no training rows falls back to the line over all rows.
-    lone = calibrate_by_group(z, y, w, weeks, np.array([[3.5]]), np.array([9]))
-    assert np.isfinite(lone).all()
 
 
 def test_league_forecast_lines_skip_a_table_without_league_columns():

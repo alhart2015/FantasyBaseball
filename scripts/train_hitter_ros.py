@@ -45,7 +45,6 @@ from fantasy_baseball.hitter_ros.features import (
     ERA_TABLE_COLUMNS,
     TARGETS,
     Standardizer,
-    balance_by_season_time,
     input_frame,
     league_answer_rates,
     league_reference,
@@ -55,7 +54,6 @@ from fantasy_baseball.hitter_ros.net import (
     EVAL_BATCH,
     RELATIVE_TARGETS,
     NetConfig,
-    calibrate_by_group,
     device,
     predict,
     train,
@@ -122,56 +120,26 @@ def fit_season(
     }
     y_std = np.column_stack([(y_train[s] - mu[s]) / sd[s] for s in TARGETS])
 
-    x_train = scaler.transform(x_all[train_rows])
-    w_np = w_train.to_numpy(dtype=np.float32)
-    train_pos = positions[train_rows.to_numpy()] if batcher else None
     result = train(
-        x_train,
+        scaler.transform(x_all[train_rows]),
         y_std,
-        w_np,
+        w_train.to_numpy(dtype=np.float32),
         val_mask,
         config,
-        rows=train_pos,
+        rows=positions[train_rows.to_numpy()] if batcher else None,
         batcher=batcher,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
-        groups=(table.loc[train_rows, "season"] * 1000 + table.loc[train_rows, "week"]).to_numpy(),
     )
-
-    def outputs(x: np.ndarray, pos: np.ndarray | None, shuffle: bool = False) -> np.ndarray:
-        return predict(
-            result.model,
-            x,
-            rows=pos,
-            batcher=batcher,
-            shuffle_order=shuffle,
-            chunk=config.micro_batch or EVAL_BATCH,
-            amp=config.amp,
-        )
-
     test_rows = table["season"] == test_season
-    z = outputs(
+    z = predict(
+        result.model,
         scaler.transform(x_all[test_rows]),
-        positions[test_rows.to_numpy()] if batcher else None,
-        shuffle_test_order,
+        rows=positions[test_rows.to_numpy()] if batcher else None,
+        batcher=batcher,
+        shuffle_order=shuffle_test_order,
+        chunk=config.micro_batch or EVAL_BATCH,
+        amp=config.amp,
     )
-    if config.loss == "rank":
-        # The rank loss only orders players within a week; map its outputs onto the
-        # (standardized) target with one line per as-of week, fit on the training
-        # players with the weights the loss used. Lines keep the order within a week.
-        z_fit = outputs(x_train[fit_rows], None if train_pos is None else train_pos[fit_rows])
-        w_cal = w_np
-        if config.weighting == "balanced":
-            w_cal = balance_by_season_time(
-                w_train, table.loc[train_rows, "frac_season_left"]
-            ).to_numpy(np.float32)
-        z = calibrate_by_group(
-            z_fit,
-            y_std[fit_rows],
-            w_cal[fit_rows],
-            table.loc[train_rows, "week"].to_numpy()[fit_rows],
-            z,
-            table.loc[test_rows, "week"].to_numpy(),
-        )
     preds = pd.DataFrame(
         {s: z[:, i] * sd[s] + mu[s] for i, s in enumerate(TARGETS)},
         index=table.index[test_rows],
@@ -246,12 +214,6 @@ def main() -> int:
         "rate over the answer window (#424). Both multiply back by the forecast.",
     )
     parser.add_argument(
-        "--loss",
-        choices=["mse", "rank"],
-        default=defaults.loss,
-        help="rank: pairwise ranking loss within each season and week (#424)",
-    )
-    parser.add_argument(
         "--weighting",
         choices=["pa", "balanced"],
         default=defaults.weighting,
@@ -314,7 +276,6 @@ def main() -> int:
             weighting=args.weighting,
             era=args.era,
             relative_target=args.relative_target,
-            loss=args.loss,
         )
     except ValueError as err:
         parser.error(str(err))

@@ -7,8 +7,6 @@ Training in one picture:
 Each output is a standardized rest-of-season rate (R/PA, HR/PA, RBI/PA, SB/PA, AVG).
 The loss is mean squared error weighted by rest-of-season PA (AB for AVG), so a
 600-PA season counts 600 times as much as a 1-PA cameo -- the same as fitting counts.
-With ``loss="rank"`` (#424) the loss is instead a pairwise ranking loss over players of
-the same season and week, and the outputs are mapped to rates afterwards.
 Training stops when the loss on held-out validation players stops improving
 ("early stopping"), and the best epoch's weights are kept.
 
@@ -82,21 +80,12 @@ class NetConfig:
     # actual rate over the answer window (features.league_answer_rates, #424), so the
     # net learns only "how much better than the league", never the league's level.
     relative_target: str = "none"
-    # "mse": weighted MSE on the target. "rank" (#424): RankNet-style pairwise loss --
-    # for pairs of players in the same season and as-of week, a logistic loss on the
-    # predicted difference, so the net learns only to order them. Its outputs are then
-    # mapped to the target by a linear fit on the training rows.
-    loss: str = "mse"
 
     def __post_init__(self) -> None:
         if self.micro_batch < 0:
             raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
         if self.relative_target not in RELATIVE_TARGETS:
             raise ValueError(f"unknown relative_target {self.relative_target!r}")
-        if self.loss not in ("mse", "rank"):
-            raise ValueError(f"unknown loss {self.loss!r}")
-        if self.loss == "rank" and self.micro_batch:
-            raise ValueError("the rank loss needs whole batches (micro_batch 0): pairs span it")
         from fantasy_baseball.hitter_ros.features import ERA_MODES
 
         if self.era not in ERA_MODES:
@@ -139,32 +128,6 @@ def weighted_mse(pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.
     """Per-target weighted MSE, averaged over targets so each counts the same."""
     per_target = (w * (pred - y) ** 2).sum(dim=0) / w.sum(dim=0).clamp(min=1e-9)
     return per_target.mean()
-
-
-def rank_terms(
-    pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor, groups: torch.Tensor
-) -> tuple[torch.Tensor, torch.Tensor]:
-    """Per-target (summed pair loss, summed pair weight) of the RankNet loss.
-
-    A pair is two rows of the same group (season and as-of week) whose answers differ;
-    its loss is ``softplus(-(pred_hi - pred_lo))`` = -log P(the net orders them right).
-    Each pair counts ``w_i * w_j / (w_i + w_j)`` (about the smaller weight), so a pair
-    with a cameo, whose answer is mostly noise, barely counts; weight-0 rows not at all.
-    """
-    same = (groups[:, None] == groups[None, :]).unsqueeze(-1)
-    higher = (y[:, None, :] > y[None, :, :]) & same
-    pair_w = w[:, None, :] * w[None, :, :] / (w[:, None, :] + w[None, :, :]).clamp(min=1e-9)
-    pair_w = pair_w * higher
-    loss = nn.functional.softplus(pred[None, :, :] - pred[:, None, :])
-    return (pair_w * loss).sum(dim=(0, 1)), pair_w.sum(dim=(0, 1))
-
-
-def pairwise_rank_loss(
-    pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor, groups: torch.Tensor
-) -> torch.Tensor:
-    """RankNet loss (see :func:`rank_terms`), averaged over targets so each counts the same."""
-    num, den = rank_terms(pred, y, w, groups)
-    return (num / den.clamp(min=1e-9)).mean()
 
 
 @dataclass
@@ -216,23 +179,16 @@ def _eval_loss(
     batcher: SequenceBatcher | None,
     chunk: int = EVAL_BATCH,
     amp: bool = False,
-    groups: torch.Tensor | None = None,
 ) -> float:
-    """weighted_mse over all rows, computed in chunks -- or, given ``groups``, the rank
-    loss over the pairs inside each chunk (rows should be sorted by group)."""
+    """weighted_mse over all rows, computed in chunks."""
     num = torch.zeros(y.shape[1], device=y.device)
     den = torch.zeros(y.shape[1], device=y.device)
     with torch.no_grad():
         for start in range(0, len(x), chunk):
             sl = slice(start, start + chunk)
             pred = _forward(model, x[sl], None if rows is None else rows[sl], batcher, amp=amp)
-            if groups is not None:
-                n, d = rank_terms(pred, y[sl], w[sl], groups[sl])
-                num += n
-                den += d
-            else:
-                num += (w[sl] * (pred - y[sl]) ** 2).sum(dim=0)
-                den += w[sl].sum(dim=0)
+            num += (w[sl] * (pred - y[sl]) ** 2).sum(dim=0)
+            den += w[sl].sum(dim=0)
     return float((num / den.clamp(min=1e-9)).mean().item())
 
 
@@ -246,19 +202,12 @@ def accumulate_batch(
     batcher: SequenceBatcher | None,
     micro_batch: int,
     amp: bool = False,
-    groups: torch.Tensor | None = None,
 ) -> float:
     """Backpropagate weighted_mse for batch ``idx``, in slices of ``micro_batch`` rows.
 
     Each slice's loss is normalized by the whole batch's weight per target, so the
     slices' gradients sum to exactly the full-batch gradient. Returns the batch loss.
-    Given ``groups``, backpropagate the rank loss over the whole batch instead.
     """
-    if groups is not None:
-        pred = _forward(model, x[idx], None if rows is None else rows[idx], batcher, amp=amp)
-        loss = pairwise_rank_loss(pred, y[idx], w[idx], groups[idx])
-        loss.backward()
-        return float(loss.item())
     w_total = w[idx].sum(dim=0).clamp(min=1e-9)
     step = micro_batch or len(idx)
     total = torch.zeros((), device=x.device)
@@ -281,19 +230,14 @@ def train(
     rows: np.ndarray | None = None,
     batcher: SequenceBatcher | None = None,
     season_time: np.ndarray | None = None,
-    groups: np.ndarray | None = None,
 ) -> TrainResult:
     """Fit the net. ``y`` is standardized targets (NaN allowed where ``w`` is 0).
 
     With a sequence model, ``rows`` gives each row's position in the table the
     ``batcher`` was built on, so it can fetch that row's plate appearances.
     ``season_time`` (each row's ``frac_season_left``) is required by
-    ``config.weighting == "balanced"``, which rescales ``w`` here. ``groups`` (any
-    label per row, e.g. season and week) is required by ``config.loss == "rank"``:
-    pairs are formed only within a group, so batches are made of whole groups.
+    ``config.weighting == "balanced"``, which rescales ``w`` here.
     """
-    if config.loss == "rank" and groups is None:
-        raise ValueError("the rank loss needs each row's group (season and as-of week)")
     if config.weighting == "balanced":
         if season_time is None:
             raise ValueError("balanced weighting needs each row's frac_season_left")
@@ -314,19 +258,6 @@ def train(
     if rows is not None:
         rt = torch.as_tensor(rows[~val_mask], dtype=torch.long, device=dev)
         rv = torch.as_tensor(rows[val_mask], dtype=torch.long, device=dev)
-    gt = gv = None
-    if config.loss == "rank":
-        assert groups is not None
-        group_ids = np.unique(groups, return_inverse=True)[1]
-        gt, gv = (
-            torch.as_tensor(group_ids[m], dtype=torch.long, device=dev)
-            for m in (~val_mask, val_mask)
-        )
-        # Validation sorted by group, so each eval chunk holds whole groups.
-        by_group = torch.argsort(gv, stable=True)
-        xv, yv, wv, gv = xv[by_group], yv[by_group], wv[by_group], gv[by_group]
-        if rv is not None:
-            rv = rv[by_group]
     model = build_model(x.shape[1], y.shape[1], config).to(dev)
     opt = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     gen = torch.Generator(device=dev).manual_seed(config.seed)
@@ -338,26 +269,21 @@ def train(
     for epoch in range(config.max_epochs):
         model.train()
         order = torch.randperm(n, device=dev, generator=gen)
-        if gt is not None:
-            # Groups in random order, each kept together, so a batch holds whole groups
-            # (except where a batch boundary splits one) and forms many pairs.
-            shuffled = torch.randperm(int(gt.max()) + 1, device=dev, generator=gen)
-            order = order[torch.argsort(shuffled[gt[order]], stable=True)]
         total = 0.0
         for start in range(0, n, config.batch_size):
             idx = order[start : start + config.batch_size]
             opt.zero_grad()
             loss = accumulate_batch(
-                model, idx, xt, yt, wt, rt, batcher, config.micro_batch, config.amp, gt
+                model, idx, xt, yt, wt, rt, batcher, config.micro_batch, config.amp
             )
             opt.step()
             total += loss * len(idx)
         train_hist.append(total / n)
 
         model.eval()
-        # The rank loss compares every pair in a chunk, so its chunks match the batch.
-        chunk = config.batch_size if gv is not None else config.micro_batch or EVAL_BATCH
-        val = _eval_loss(model, xv, yv, wv, rv, batcher, chunk, config.amp, gv)
+        val = _eval_loss(
+            model, xv, yv, wv, rv, batcher, config.micro_batch or EVAL_BATCH, config.amp
+        )
         val_hist.append(val)
         if not np.isfinite(val):
             raise FloatingPointError(
@@ -373,55 +299,6 @@ def train(
     model.load_state_dict(best[2])
     logger.info("best epoch %d of %d, val loss %.4f", best[1], len(val_hist), best[0])
     return TrainResult(model=model, best_epoch=best[1], train_loss=train_hist, val_loss=val_hist)
-
-
-def linear_calibration(
-    z: np.ndarray, y: np.ndarray, w: np.ndarray
-) -> tuple[np.ndarray, np.ndarray]:
-    """Per column, the weighted least-squares line ``y ~ slope * z + intercept``.
-
-    A rank-loss net's outputs only order players; this maps them onto the target's
-    scale. The line is increasing whenever the outputs order players at all sensibly,
-    so the order (all the rank loss learned) is kept. NaN targets must have weight 0.
-    """
-    y = np.nan_to_num(y, nan=0.0)
-    slope, intercept = np.empty(z.shape[1]), np.empty(z.shape[1])
-    for k in range(z.shape[1]):
-        zk, yk, wk = z[:, k], y[:, k], w[:, k]
-        zm, ym = np.average(zk, weights=wk), np.average(yk, weights=wk)
-        var = np.average((zk - zm) ** 2, weights=wk)
-        slope[k] = np.average((zk - zm) * (yk - ym), weights=wk) / var if var > 0 else 0.0
-        intercept[k] = ym - slope[k] * zm
-    return slope, intercept
-
-
-def calibrate_by_group(
-    z_fit: np.ndarray,
-    y_fit: np.ndarray,
-    w_fit: np.ndarray,
-    groups_fit: np.ndarray,
-    z: np.ndarray,
-    groups: np.ndarray,
-) -> np.ndarray:
-    """Map rank-loss outputs ``z`` onto the target with one :func:`linear_calibration`
-    line per group (as-of week), fit on the training rows of that group.
-
-    The rank loss only compares players within a season and week, so nothing pins the
-    output's level from one week to the next: a single line for all weeks could leave
-    every week off by its own constant. A group with no training weight on some target
-    falls back to the line fit on all rows.
-    """
-    overall = linear_calibration(z_fit, y_fit, w_fit)
-    out = np.empty_like(z, dtype=float)
-    for g in np.unique(groups):
-        fit = groups_fit == g
-        enough = fit.any() and (w_fit[fit].sum(axis=0) > 0).all()
-        slope, intercept = (
-            linear_calibration(z_fit[fit], y_fit[fit], w_fit[fit]) if enough else overall
-        )
-        rows = groups == g
-        out[rows] = z[rows] * slope + intercept
-    return out
 
 
 def predict(
