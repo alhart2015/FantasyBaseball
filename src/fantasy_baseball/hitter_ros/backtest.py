@@ -27,6 +27,7 @@ from fantasy_baseball.hitter_ros.evaluate import (
     blend,
     load_systems,
     mae_table,
+    order_scores,
     order_table,
     paired_bootstrap,
     pairwise_bootstrap,
@@ -35,6 +36,7 @@ from fantasy_baseball.hitter_ros.evaluate import (
 )
 from fantasy_baseball.hitter_ros.features import (
     COUNTS,
+    ERA_TABLE_COLUMNS,
     TARGETS,
     league_answer_rates,
     league_reference,
@@ -155,11 +157,12 @@ def write_scores(run_dir: Path, pre: pd.DataFrame | None, snap: pd.DataFrame | N
             path.unlink(missing_ok=True)
 
 
-def systems_in_every_season(pre: pd.DataFrame) -> pd.DataFrame:
-    """The preseason rows of systems scored in every season (so their means compare)."""
-    n_seasons = pre["season"].nunique()
-    counts = pre.groupby("system")["season"].nunique()
-    return pre[pre["system"].isin(counts.index[counts == n_seasons])]
+def systems_in_every_season(scored: pd.DataFrame, unit: str = "season") -> pd.DataFrame:
+    """The rows of systems scored in every season (or snapshot, with ``unit``), so their
+    means are over the same units and compare down a column."""
+    n_units = scored[unit].nunique()
+    counts = scored.groupby("system")[unit].nunique()
+    return scored[scored["system"].isin(counts.index[counts == n_units])]
 
 
 def mean_over_seasons(
@@ -186,65 +189,70 @@ def to_markdown(df: pd.DataFrame, digits: int = 2) -> str:
     return "\n".join(lines)
 
 
-def _bootstrap_line(scored: pd.DataFrame, value: str = "abs_err") -> str:
-    if BLEND not in set(scored["system"]):
+def _interval_line(b: pd.DataFrame | None, better: str) -> str:
+    """One line of ours-minus-blend intervals per stat; ``better`` names the good sign."""
+    if b is None:
         return ""
-    b = paired_bootstrap(scored, OURS, BLEND, value=value)
     cells = [f"{s} {r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}]" for s, r in b.iterrows()]
-    return "ours - fg_blend, 95% interval: " + "; ".join(cells)
-
-
-def _pairwise_line(scored: pd.DataFrame, weighted: bool) -> str:
-    if BLEND not in set(scored["system"]):
-        return ""
-    b = pairwise_bootstrap(scored, OURS, BLEND, weighted=weighted)
-    cells = [f"{s} {r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}]" for s, r in b.iterrows()]
-    return "ours - fg_blend (positive = ours better), 95% interval: " + "; ".join(cells)
+    return f"ours - fg_blend ({better} = ours better), 95% interval: " + "; ".join(cells)
 
 
 def _unit_block(g: pd.DataFrame) -> list[str]:
     """One season's or snapshot's tables: gap-weighted pairwise accuracy (the main
     score), plain pairwise accuracy, raw MAE and level-free MAE, each vs. the blend."""
+    per_unit = order_scores(g)
+    blend = BLEND in set(g["system"])
+
+    def pairwise_line(weighted: bool) -> str:
+        b = pairwise_bootstrap(g, OURS, BLEND, weighted=weighted) if blend else None
+        return _interval_line(b, "positive")
+
+    def mae_line(value: str) -> str:
+        return _interval_line(
+            paired_bootstrap(g, OURS, BLEND, value=value) if blend else None, "negative"
+        )
+
     return [
         "",
         "Gap-weighted pairwise accuracy (%) -- main score:",
         "",
-        to_markdown(order_table(g, "pairwise_w"), digits=1),
+        to_markdown(order_table(g, "pairwise_w", per_unit), digits=1),
         "",
-        _pairwise_line(g, weighted=True),
+        pairwise_line(weighted=True),
         "",
         "Pairwise accuracy (%):",
         "",
-        to_markdown(order_table(g, "pairwise"), digits=1),
+        to_markdown(order_table(g, "pairwise", per_unit), digits=1),
         "",
-        _pairwise_line(g, weighted=False),
+        pairwise_line(weighted=False),
         "",
         "Raw MAE:",
         "",
         to_markdown(mae_table(g)),
         "",
-        _bootstrap_line(g),
+        mae_line("abs_err"),
         "",
         "Level-free MAE:",
         "",
         to_markdown(mae_table(g, "lf_err")),
         "",
-        _bootstrap_line(g, "lf_err"),
+        mae_line("lf_err"),
     ]
 
 
 def _mean_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     """Every score averaged over the seasons or snapshots (``unit``) in ``frame``."""
     over = f"{unit}s"
+    per_unit = order_scores(frame)
     return [
         "",
         f"Gap-weighted pairwise accuracy (%) -- main score, mean over {over}:",
         "",
-        to_markdown(order_table(frame, "pairwise_w"), digits=1),
+        to_markdown(order_table(frame, "pairwise_w", per_unit), digits=1),
         "",
         f"Pairwise accuracy (%), mean over {over}:",
         "",
-        to_markdown(order_table(frame, "pairwise"), digits=1),
+        to_markdown(order_table(frame, "pairwise", per_unit), digits=1),
         "",
         f"Raw MAE, mean over {over}:",
         "",
@@ -256,14 +264,17 @@ def _mean_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
         "",
         f"Rank correlation (Spearman), mean over {over}:",
         "",
-        to_markdown(order_table(frame, "spearman"), digits=3),
+        to_markdown(order_table(frame, "spearman", per_unit), digits=3),
     ]
 
 
 def league_forecast_lines(table: pd.DataFrame, seasons: list[int]) -> list[str]:
     """Markdown: the preseason league-rate forecast (the last three seasons, the
     multiplier that turns a relative projection back into rates) vs. the league's
-    actual rates that season, so its error shows on its own (#424)."""
+    actual rates that season, so its error shows on its own (#424). Empty for a table
+    built before the league columns (#421): the forecast can't be computed there."""
+    if not set(ERA_TABLE_COLUMNS) <= set(table.columns):
+        return []
     week0 = table[table["season"].isin(seasons) & (table["week"] == 0)]
     # Both are the same for every week-0 row of a season.
     forecast = league_reference(week0).groupby(week0["season"]).first()
@@ -297,7 +308,8 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         f"Preseason: players with >= {PRESEASON_MIN_PA} actual PA. "
         f"Mid-season: >= {SNAPSHOT_MIN_PA} PA after the snapshot. "
         "`league_avg` and `marcel` are simple floors (see hitter_ros/baselines.py). "
-        "Intervals resample players; an interval crossing 0 = can't tell apart."
+        "Intervals resample players; each line says which sign means ours is better; "
+        "an interval crossing 0 = can't tell apart."
     ]
     if pre is not None:
         md += ["", "#### Preseason"]
@@ -323,6 +335,6 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         md += ["", "#### Mid-season (ROS snapshots)"]
         for snapshot, g in snap.groupby("snapshot"):
             md += ["", f"**{snapshot}**", *_unit_block(g)]
-        md += ["", "**Mean over snapshots**"]
-        md += _mean_blocks(snap, "snapshot")
+        md += ["", "**Mean over snapshots** (systems present in every snapshot)"]
+        md += _mean_blocks(systems_in_every_season(snap, "snapshot"), "snapshot")
     return md

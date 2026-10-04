@@ -395,6 +395,35 @@ def linear_calibration(
     return slope, intercept
 
 
+def calibrate_by_group(
+    z_fit: np.ndarray,
+    y_fit: np.ndarray,
+    w_fit: np.ndarray,
+    groups_fit: np.ndarray,
+    z: np.ndarray,
+    groups: np.ndarray,
+) -> np.ndarray:
+    """Map rank-loss outputs ``z`` onto the target with one :func:`linear_calibration`
+    line per group (as-of week), fit on the training rows of that group.
+
+    The rank loss only compares players within a season and week, so nothing pins the
+    output's level from one week to the next: a single line for all weeks could leave
+    every week off by its own constant. A group with no training weight on some target
+    falls back to the line fit on all rows.
+    """
+    overall = linear_calibration(z_fit, y_fit, w_fit)
+    out = np.empty_like(z, dtype=float)
+    for g in np.unique(groups):
+        fit = groups_fit == g
+        enough = fit.any() and (w_fit[fit].sum(axis=0) > 0).all()
+        slope, intercept = (
+            linear_calibration(z_fit[fit], y_fit[fit], w_fit[fit]) if enough else overall
+        )
+        rows = groups == g
+        out[rows] = z[rows] * slope + intercept
+    return out
+
+
 def predict(
     model: nn.Module,
     x: np.ndarray,

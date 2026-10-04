@@ -35,7 +35,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import BLEND, OURS, mean_over_seasons, to_markdown
-from fantasy_baseball.hitter_ros.evaluate import mae_table, order_table
+from fantasy_baseball.hitter_ros.evaluate import order_scores, order_table
 from fantasy_baseball.hitter_ros.features import TARGETS
 
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
@@ -55,8 +55,9 @@ def _scores(scored: pd.DataFrame, unit: str) -> dict[str, pd.DataFrame]:
     out = {"": mean_over_seasons(scored, unit=unit)}
     if "lf_err" in scored.columns:
         out["lf_"] = mean_over_seasons(scored, "lf_err", unit)
-        out["pairw_"] = order_table(scored, "pairwise_w")
-        out["pair_"] = order_table(scored, "pairwise")
+        per_unit = order_scores(scored)
+        out["pairw_"] = order_table(scored, "pairwise_w", per_unit)
+        out["pair_"] = order_table(scored, "pairwise", per_unit)
     return out
 
 
@@ -65,6 +66,8 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
     seasons = meta["seasons"]
     row: dict[str, object] = {
         "seed": meta["config"]["seed"],
+        # Runs from before #424 have no loss setting: they all used MSE.
+        "loss": meta["config"].get("loss", "mse"),
         "seasons": ",".join(str(s["test_season"]) for s in seasons),
         "best_epoch": float(np.mean([s["best_epoch"] for s in seasons])),
         "val_loss": float(np.mean([min(s["val_loss"]) for s in seasons])),
@@ -107,6 +110,11 @@ def warnings_for(df: pd.DataFrame) -> list[str]:
             "seeds differ: val_loss is on different validation players, so compare it "
             "only between runs with the same seed"
         )
+    if df["loss"].nunique() > 1:
+        out.append(
+            "losses differ: val_loss is a squared error for mse and a pairwise logistic "
+            "loss for rank, so it does not compare across them"
+        )
     if df["seasons"].nunique() > 1:
         out.append("test seasons differ: preseason means average different years")
     if "mid_snapshots" in df.columns and df["mid_snapshots"].nunique() > 1:
@@ -120,7 +128,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
         return [(f"{prefix}{s}", s) for s in TARGETS]
 
     return [
-        ("Run", [("seed", "seed"), ("seasons", "test seasons")], 0),
+        ("Run", [("seed", "seed"), ("loss", "loss"), ("seasons", "test seasons")], 0),
         ("Training", [("best_epoch", "best epoch"), ("val_loss", "val loss")], 3),
         ("MAIN: preseason gap-weighted pairwise % (ours)", cols("pre_pairw_"), 2),
         (

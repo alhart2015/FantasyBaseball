@@ -274,12 +274,16 @@ def order_scores(scored: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows)
 
 
-def order_table(scored: pd.DataFrame, metric: str) -> pd.DataFrame:
+def order_table(
+    scored: pd.DataFrame, metric: str, per_unit: pd.DataFrame | None = None
+) -> pd.DataFrame:
     """Systems x stats: ``metric`` (one of ``ORDER_METRICS``) averaged over the seasons or
-    snapshots in ``scored``, each counting once. Pairwise accuracy is in percent."""
+    snapshots in ``scored``, each counting once. Pairwise accuracy is in percent.
+    ``per_unit``: ``order_scores(scored)`` if already computed (it is O(players^2))."""
     if metric not in ORDER_METRICS:
         raise ValueError(f"unknown order metric {metric!r}")
-    per_unit = order_scores(scored)
+    if per_unit is None:
+        per_unit = order_scores(scored)
     table = per_unit.pivot_table(index="system", columns="stat", values=metric, aggfunc="mean")
     if metric != "spearman":
         table = table * 100

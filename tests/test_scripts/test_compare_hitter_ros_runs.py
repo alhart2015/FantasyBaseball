@@ -17,13 +17,13 @@ def _scored(errors, **unit):
     return pd.DataFrame(rows)
 
 
-def _run(root, name, seed=0, pre=None, snap=None):
+def _run(root, name, seed=0, pre=None, snap=None, config=None):
     run = root / name
     run.mkdir()
     (run / "config.json").write_text(
         json.dumps(
             {
-                "config": {"seed": seed},
+                "config": {"seed": seed, **(config or {})},
                 "seasons": [
                     {"test_season": 2024, "best_epoch": 2, "val_loss": [0.9, 0.8, 0.85]},
                     {"test_season": 2025, "best_epoch": 4, "val_loss": [0.7, 0.6]},
@@ -90,6 +90,14 @@ def test_warns_when_seeds_or_seasons_differ(runs):
     _run(runs, "b", seed=1)
     warnings = cmp.warnings_for(cmp.compare(["a", "b"], None, None))
     assert any("seeds differ" in w for w in warnings)
+
+
+def test_warns_when_losses_differ(runs):
+    _run(runs, "mse")  # a run from before #424: no loss setting, so MSE
+    _run(runs, "rank", config={"loss": "rank"})
+    df = cmp.compare(["mse", "rank"], None, None)
+    assert list(df["loss"]) == ["mse", "rank"]
+    assert any("losses differ" in w for w in cmp.warnings_for(df))
 
 
 def test_a_run_still_scoring_is_skipped(runs, capsys, monkeypatch):

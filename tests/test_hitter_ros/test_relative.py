@@ -200,3 +200,40 @@ def test_pairwise_bootstrap_matches_resampling_players_one_draw_at_a_time():
             assert fast.loc[s, "lo"] == pytest.approx(np.percentile(slow, 2.5))
             assert fast.loc[s, "hi"] == pytest.approx(np.percentile(slow, 97.5))
         assert (fast["diff"] > 0).all()  # the less noisy projection orders better
+
+
+def test_calibrate_by_group_fits_each_week_its_own_line():
+    from fantasy_baseball.hitter_ros.net import calibrate_by_group
+
+    # Same order in both weeks, but the rank outputs sit 5 higher in week 1: one line
+    # for both weeks would miss each by a constant.
+    z = np.array([[0.0], [1.0], [2.0], [5.0], [6.0], [7.0]])
+    y = np.array([[0.0], [1.0], [2.0], [0.0], [1.0], [2.0]])
+    w = np.ones_like(y)
+    weeks = np.array([0, 0, 0, 1, 1, 1])
+    out = calibrate_by_group(z, y, w, weeks, z, weeks)
+    np.testing.assert_allclose(out, y, atol=1e-12)
+    # A week with no training rows falls back to the line over all rows.
+    lone = calibrate_by_group(z, y, w, weeks, np.array([[3.5]]), np.array([9]))
+    assert np.isfinite(lone).all()
+
+
+def test_league_forecast_lines_skip_a_table_without_league_columns():
+    from fantasy_baseball.hitter_ros.backtest import league_forecast_lines
+
+    old = pd.DataFrame({"season": [2025], "week": [0], "ros_pa": [500]})
+    assert league_forecast_lines(old, [2025]) == []
+
+
+def test_snapshot_mean_uses_only_systems_in_every_snapshot():
+    from fantasy_baseball.hitter_ros.backtest import summarize
+
+    parts = []
+    for snapshot, systems in (("2026-06-01", ("ours", "fg_blend")), ("2026-07-01", ("ours",))):
+        actual = pd.DataFrame({s: [0.1, 0.2, 0.3] for s in TARGETS}, index=[1, 2, 3])
+        actual["pa"] = 200
+        proj = {name: actual[list(TARGETS)] * 0.9 for name in systems}
+        parts.append(scored_players(proj, actual, 1).assign(season=2026, snapshot=snapshot))
+    md = "\n".join(summarize(None, pd.concat(parts, ignore_index=True)))
+    mean = md.split("**Mean over snapshots**")[1]
+    assert "| ours |" in mean and "| fg_blend |" not in mean

@@ -45,6 +45,7 @@ from fantasy_baseball.hitter_ros.features import (
     ERA_TABLE_COLUMNS,
     TARGETS,
     Standardizer,
+    balance_by_season_time,
     input_frame,
     league_answer_rates,
     league_reference,
@@ -54,8 +55,8 @@ from fantasy_baseball.hitter_ros.net import (
     EVAL_BATCH,
     RELATIVE_TARGETS,
     NetConfig,
+    calibrate_by_group,
     device,
-    linear_calibration,
     predict,
     train,
 )
@@ -154,11 +155,23 @@ def fit_season(
         shuffle_test_order,
     )
     if config.loss == "rank":
-        # The rank loss only orders players; map its outputs onto the (standardized)
-        # target with a line fit on the training players, which keeps the order.
+        # The rank loss only orders players within a week; map its outputs onto the
+        # (standardized) target with one line per as-of week, fit on the training
+        # players with the weights the loss used. Lines keep the order within a week.
         z_fit = outputs(x_train[fit_rows], None if train_pos is None else train_pos[fit_rows])
-        slope, intercept = linear_calibration(z_fit, y_std[fit_rows], w_np[fit_rows])
-        z = z * slope + intercept
+        w_cal = w_np
+        if config.weighting == "balanced":
+            w_cal = balance_by_season_time(
+                w_train, table.loc[train_rows, "frac_season_left"]
+            ).to_numpy(np.float32)
+        z = calibrate_by_group(
+            z_fit,
+            y_std[fit_rows],
+            w_cal[fit_rows],
+            table.loc[train_rows, "week"].to_numpy()[fit_rows],
+            z,
+            table.loc[test_rows, "week"].to_numpy(),
+        )
     preds = pd.DataFrame(
         {s: z[:, i] * sd[s] + mu[s] for i, s in enumerate(TARGETS)},
         index=table.index[test_rows],
