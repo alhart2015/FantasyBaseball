@@ -1,5 +1,8 @@
-"""Score projections against what happened: per-stat raw error (#399's bar), plus
-scores that ignore the league's level (#424).
+"""Score projections against what happened.
+
+The **main score is gap-weighted pairwise accuracy** (user call, #424): "does X beat
+Y", with pairs that ended up far apart counting more. Plain pairwise accuracy and raw
+error (#399's original bar) are always reported next to it.
 
 Raw error is the mean absolute error (MAE) of the projected rate vs. the actual rate,
 over a fixed set of players that every compared projection covers:
@@ -15,8 +18,9 @@ together. So three more scores ask "is X better than Y", not "25 or 30 HR":
   that is right about every player except for one league-wide factor scores 0.
 * **Pairwise order accuracy**: over every pair of scored players, the share the
   projection orders the same way as what happened (a projected tie gets half credit;
-  pairs that tied in reality are skipped). The weighted version counts each pair by
-  the actual gap, so near-ties matter less.
+  pairs that tied in reality are skipped). The gap-weighted version (the main score)
+  counts each pair by the actual gap, so near-ties matter less. Neither cares how far
+  off the projected numbers were, only whether the order was right.
 * **Rank correlation** (Spearman) between projected and actual rates.
 
 Every system is scored on the same players, so the numbers are comparable down a column.
@@ -149,9 +153,76 @@ def pairwise_accuracy(projected: np.ndarray, actual: np.ndarray, *, weighted: bo
     keep = gap != 0
     if not keep.any():
         return float("nan")
-    agree = np.sign(projected[i] - projected[j])[keep] * np.sign(gap[keep])
-    credit = np.where(agree == 0, 0.5, (agree > 0).astype(float))
+    credit = _pair_credit(projected, np.sign(gap[keep]), i[keep], j[keep])
     return float(np.average(credit, weights=np.abs(gap[keep]) if weighted else None))
+
+
+def _pair_credit(
+    projected: np.ndarray, gap_sign: np.ndarray, i: np.ndarray, j: np.ndarray
+) -> np.ndarray:
+    """1 where the projection orders pair (i, j) like the actuals, 0.5 on a projected
+    tie, 0 where it is backwards."""
+    agree = np.sign(projected[i] - projected[j]) * gap_sign
+    credit: np.ndarray = np.where(agree == 0, 0.5, (agree > 0).astype(float))
+    return credit
+
+
+# Bootstrap draws handled per matrix product (memory: draws x player pairs floats).
+_BOOT_CHUNK = 25
+
+
+def pairwise_bootstrap(
+    scored: pd.DataFrame,
+    a: str,
+    b: str,
+    *,
+    weighted: bool = True,
+    n_boot: int = 300,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Pairwise accuracy (%) of ``a`` minus ``b`` per stat, with a 95% interval from
+    resampling players. Positive = ``a`` orders better. ``scored`` must be one season or
+    snapshot (pairs never cross them). Paired: both systems are scored on each draw.
+
+    A draw that picks player i ``c_i`` times and j ``c_j`` times holds their pair
+    ``c_i * c_j`` times (a player paired with his own copy tied in reality, so it is
+    skipped). So each draw's accuracy is a count-weighted average over the distinct
+    pairs, which is computed for many draws at once as a matrix product."""
+    rng = np.random.default_rng(seed)
+    out = {}
+    for s in TARGETS:
+        rows = scored[scored["stat"] == s]
+        wide = rows.pivot_table(index="player_id", columns="system", values="projected")
+        actual = rows.drop_duplicates("player_id").set_index("player_id")["actual"]
+        actual = actual.loc[wide.index].to_numpy()
+        n = len(actual)
+        i, j = np.triu_indices(n, k=1)
+        gap = actual[i] - actual[j]
+        keep = gap != 0
+        i, j, gap = i[keep], j[keep], gap[keep]
+        weight = np.abs(gap) if weighted else np.ones_like(gap)
+        # Per pair: weight x (credit of a - credit of b).
+        edge = weight * (
+            _pair_credit(wide[a].to_numpy(), np.sign(gap), i, j)
+            - _pair_credit(wide[b].to_numpy(), np.sign(gap), i, j)
+        )
+        counts = np.vstack(
+            [np.ones(n), *(np.bincount(rng.integers(0, n, n), minlength=n) for _ in range(n_boot))]
+        )
+        diffs = []
+        for start in range(0, len(counts), _BOOT_CHUNK):
+            c = counts[start : start + _BOOT_CHUNK]
+            mult = c[:, i] * c[:, j]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                diffs.append(100 * (mult @ edge) / (mult @ weight))
+        d = np.concatenate(diffs)
+        boot = d[1:][~np.isnan(d[1:])]  # NaN: a draw where every pair tied
+        out[s] = {
+            "diff": float(d[0]),
+            "lo": float(np.percentile(boot, 2.5)) if len(boot) else float("nan"),
+            "hi": float(np.percentile(boot, 97.5)) if len(boot) else float("nan"),
+        }
+    return pd.DataFrame(out).T
 
 
 def spearman(projected: np.ndarray, actual: np.ndarray) -> float:

@@ -29,6 +29,7 @@ from fantasy_baseball.hitter_ros.evaluate import (
     mae_table,
     order_table,
     paired_bootstrap,
+    pairwise_bootstrap,
     scored_players,
     spread,
 )
@@ -193,9 +194,32 @@ def _bootstrap_line(scored: pd.DataFrame, value: str = "abs_err") -> str:
     return "ours - fg_blend, 95% interval: " + "; ".join(cells)
 
 
+def _pairwise_line(scored: pd.DataFrame, weighted: bool) -> str:
+    if BLEND not in set(scored["system"]):
+        return ""
+    b = pairwise_bootstrap(scored, OURS, BLEND, weighted=weighted)
+    cells = [f"{s} {r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}]" for s, r in b.iterrows()]
+    return "ours - fg_blend (positive = ours better), 95% interval: " + "; ".join(cells)
+
+
 def _unit_block(g: pd.DataFrame) -> list[str]:
-    """One season's or snapshot's tables: raw MAE, level-free MAE, pairwise accuracy."""
+    """One season's or snapshot's tables: gap-weighted pairwise accuracy (the main
+    score), plain pairwise accuracy, raw MAE and level-free MAE, each vs. the blend."""
     return [
+        "",
+        "Gap-weighted pairwise accuracy (%) -- main score:",
+        "",
+        to_markdown(order_table(g, "pairwise_w"), digits=1),
+        "",
+        _pairwise_line(g, weighted=True),
+        "",
+        "Pairwise accuracy (%):",
+        "",
+        to_markdown(order_table(g, "pairwise"), digits=1),
+        "",
+        _pairwise_line(g, weighted=False),
+        "",
+        "Raw MAE:",
         "",
         to_markdown(mae_table(g)),
         "",
@@ -206,10 +230,6 @@ def _unit_block(g: pd.DataFrame) -> list[str]:
         to_markdown(mae_table(g, "lf_err")),
         "",
         _bootstrap_line(g, "lf_err"),
-        "",
-        "Pairwise order accuracy (%):",
-        "",
-        to_markdown(order_table(g, "pairwise"), digits=1),
     ]
 
 
@@ -218,6 +238,14 @@ def _mean_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     over = f"{unit}s"
     return [
         "",
+        f"Gap-weighted pairwise accuracy (%) -- main score, mean over {over}:",
+        "",
+        to_markdown(order_table(frame, "pairwise_w"), digits=1),
+        "",
+        f"Pairwise accuracy (%), mean over {over}:",
+        "",
+        to_markdown(order_table(frame, "pairwise"), digits=1),
+        "",
         f"Raw MAE, mean over {over}:",
         "",
         to_markdown(mean_over_seasons(frame, unit=unit)),
@@ -225,14 +253,6 @@ def _mean_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
         f"Level-free MAE, mean over {over}:",
         "",
         to_markdown(mean_over_seasons(frame, "lf_err", unit)),
-        "",
-        f"Pairwise order accuracy (%), mean over {over}:",
-        "",
-        to_markdown(order_table(frame, "pairwise"), digits=1),
-        "",
-        f"Gap-weighted pairwise accuracy (%), mean over {over}:",
-        "",
-        to_markdown(order_table(frame, "pairwise_w"), digits=1),
         "",
         f"Rank correlation (Spearman), mean over {over}:",
         "",
@@ -264,17 +284,20 @@ def league_forecast_lines(table: pd.DataFrame, seasons: list[int]) -> list[str]:
 
 
 def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
-    """Markdown lines: per-season and per-snapshot tables (raw MAE with bootstrap,
-    level-free MAE, pairwise accuracy), means over seasons and snapshots, and spread."""
+    """Markdown lines: per-season and per-snapshot tables (gap-weighted and plain
+    pairwise accuracy, raw and level-free MAE, each with a bootstrap vs. the blend),
+    means over seasons and snapshots, and spread."""
     md = [
+        "**Main score: gap-weighted pairwise accuracy** -- % of player pairs ordered as "
+        "they turned out, each pair counted by how far apart they really finished; higher "
+        "is better (50 = coin flip). Plain pairwise counts every pair the same. "
         "Raw error, lower is better: R/HR/RBI/SB = MAE per 600 PA, AVG = MAE in points. "
         "Level-free MAE: the same after scaling each projection so its PA-weighted mean "
-        "matches the actuals' (a league-wide miss costs nothing). Pairwise accuracy: % of "
-        "player pairs ordered as they turned out, higher is better (50 = coin flip). "
+        "matches the actuals' (a league-wide miss costs nothing). "
         f"Preseason: players with >= {PRESEASON_MIN_PA} actual PA. "
         f"Mid-season: >= {SNAPSHOT_MIN_PA} PA after the snapshot. "
         "`league_avg` and `marcel` are simple floors (see hitter_ros/baselines.py). "
-        "Bootstrap: negative = ours better; an interval crossing 0 = can't tell apart."
+        "Intervals resample players; an interval crossing 0 = can't tell apart."
     ]
     if pre is not None:
         md += ["", "#### Preseason"]

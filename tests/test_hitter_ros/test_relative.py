@@ -165,3 +165,38 @@ def test_linear_calibration_recovers_a_line_and_ignores_weight_zero_rows():
     w = np.array([[1.0], [1.0], [1.0], [0.0]])
     slope, intercept = linear_calibration(z, y, w)
     assert slope[0] == pytest.approx(2.0) and intercept[0] == pytest.approx(1.0)
+
+
+def test_pairwise_bootstrap_matches_resampling_players_one_draw_at_a_time():
+    from fantasy_baseball.hitter_ros.evaluate import pairwise_bootstrap
+
+    rng = np.random.default_rng(3)
+    n = 40
+    actual = pd.DataFrame({s: rng.random(n) for s in TARGETS})
+    actual["pa"] = 500
+    good = actual[list(TARGETS)] + rng.normal(0, 0.2, (n, len(TARGETS)))
+    bad = actual[list(TARGETS)] + rng.normal(0, 0.6, (n, len(TARGETS)))
+    scored = scored_players({"a": good, "b": bad}, actual, 1)
+    for weighted in (True, False):
+        fast = pairwise_bootstrap(scored, "a", "b", weighted=weighted, n_boot=50, seed=7)
+        draws = np.random.default_rng(7)
+        for s in TARGETS:
+            act, pa, pb = (actual[s].to_numpy(), good[s].to_numpy(), bad[s].to_numpy())
+            slow = []
+            for _ in range(50):
+                idx = draws.integers(0, n, n)
+                slow.append(
+                    100
+                    * (
+                        pairwise_accuracy(pa[idx], act[idx], weighted=weighted)
+                        - pairwise_accuracy(pb[idx], act[idx], weighted=weighted)
+                    )
+                )
+            full = 100 * (
+                pairwise_accuracy(pa, act, weighted=weighted)
+                - pairwise_accuracy(pb, act, weighted=weighted)
+            )
+            assert fast.loc[s, "diff"] == pytest.approx(full)
+            assert fast.loc[s, "lo"] == pytest.approx(np.percentile(slow, 2.5))
+            assert fast.loc[s, "hi"] == pytest.approx(np.percentile(slow, 97.5))
+        assert (fast["diff"] > 0).all()  # the less noisy projection orders better

@@ -7,12 +7,13 @@ train_hitter_ros.py writes last):
 * best_epoch, val_loss: the early-stopping epoch and the best validation loss, averaged
   over test seasons. Validation loss compares across runs with the same seed only (the
   seed picks the validation players); the script warns when seeds are mixed.
-* Preseason: our MAE per stat (mean over test seasons), and the gap to the FanGraphs
-  blend (negative = ours better), over the seasons where both were scored.
+* Main score first (#424): gap-weighted pairwise accuracy in % (higher is better), then
+  plain pairwise accuracy, raw MAE and level-free MAE (lower is better). The pairwise
+  scores need runs scored after #424 (re-score older ones with score_hitter_ros_run.py).
+* Preseason: our score per stat (mean over test seasons), and the gap to the FanGraphs
+  blend, over the seasons where both were scored.
 * Mid-season: our gap to the blend, averaged over the snapshots where both were scored
   (all of them, or those between --from and --to), with how many snapshots that was.
-* The same for the league-level-free scores (#424): level-free MAE (lower is better)
-  and pairwise order accuracy in % (higher is better), for runs scored after #424.
 
 Usage:
     python scripts/compare_hitter_ros_runs.py 001-baseline-mlp 002a-lr3e-4 002b-lr1e-4
@@ -50,10 +51,11 @@ def _both_scored(scored: pd.DataFrame, unit: str) -> pd.DataFrame:
 
 def _scores(scored: pd.DataFrame, unit: str) -> dict[str, pd.DataFrame]:
     """Systems x stats, averaged over seasons or snapshots: raw MAE, and (in frames
-    scored after #424) level-free MAE and pairwise accuracy."""
+    scored after #424) level-free MAE and gap-weighted and plain pairwise accuracy."""
     out = {"": mean_over_seasons(scored, unit=unit)}
     if "lf_err" in scored.columns:
         out["lf_"] = mean_over_seasons(scored, "lf_err", unit)
+        out["pairw_"] = order_table(scored, "pairwise_w")
         out["pair_"] = order_table(scored, "pairwise")
     return out
 
@@ -114,42 +116,36 @@ def warnings_for(df: pd.DataFrame) -> list[str]:
 
 # (title, [(column, label)], digits)
 def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
+    def cols(prefix: str) -> list[tuple[str, str]]:
+        return [(f"{prefix}{s}", s) for s in TARGETS]
+
     return [
         ("Run", [("seed", "seed"), ("seasons", "test seasons")], 0),
         ("Training", [("best_epoch", "best epoch"), ("val_loss", "val loss")], 3),
-        ("Preseason MAE (ours)", [(f"pre_{s}", s) for s in TARGETS], 2),
+        ("MAIN: preseason gap-weighted pairwise % (ours)", cols("pre_pairw_"), 2),
         (
-            "Preseason gap to FanGraphs blend (negative = ours better)",
-            [(f"pre_gap_{s}", s) for s in TARGETS],
+            "MAIN: preseason gap-weighted pairwise gap to blend (positive = ours better)",
+            cols("pre_pairw_gap_"),
             2,
         ),
         (
-            f"Mid-season gap to blend, {window}",
-            [("mid_snapshots", "snapshots"), *((f"mid_gap_{s}", s) for s in TARGETS)],
+            f"MAIN: mid-season gap-weighted pairwise gap to blend, {window}",
+            [("mid_snapshots", "snapshots"), *cols("mid_pairw_gap_")],
             2,
         ),
-        ("Preseason level-free MAE (ours)", [(f"pre_lf_{s}", s) for s in TARGETS], 2),
+        ("Preseason pairwise % (ours)", cols("pre_pair_"), 2),
+        ("Preseason pairwise gap to blend (positive = ours better)", cols("pre_pair_gap_"), 2),
+        (f"Mid-season pairwise gap to blend, {window}", cols("mid_pair_gap_"), 2),
+        ("Preseason raw MAE (ours)", cols("pre_"), 2),
+        ("Preseason raw MAE gap to blend (negative = ours better)", cols("pre_gap_"), 2),
         (
-            "Preseason level-free gap to blend (negative = ours better)",
-            [(f"pre_lf_gap_{s}", s) for s in TARGETS],
+            f"Mid-season raw MAE gap to blend, {window}",
+            [("mid_snapshots", "snapshots"), *cols("mid_gap_")],
             2,
         ),
-        ("Preseason pairwise accuracy % (ours)", [(f"pre_pair_{s}", s) for s in TARGETS], 2),
-        (
-            "Preseason pairwise accuracy gap to blend (positive = ours better)",
-            [(f"pre_pair_gap_{s}", s) for s in TARGETS],
-            2,
-        ),
-        (
-            f"Mid-season level-free gap to blend, {window}",
-            [(f"mid_lf_gap_{s}", s) for s in TARGETS],
-            2,
-        ),
-        (
-            f"Mid-season pairwise accuracy gap to blend, {window} (positive = ours better)",
-            [(f"mid_pair_gap_{s}", s) for s in TARGETS],
-            2,
-        ),
+        ("Preseason level-free MAE (ours)", cols("pre_lf_"), 2),
+        ("Preseason level-free gap to blend (negative = ours better)", cols("pre_lf_gap_"), 2),
+        (f"Mid-season level-free gap to blend, {window}", cols("mid_lf_gap_"), 2),
     ]
 
 

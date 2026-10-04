@@ -174,6 +174,8 @@ def test_run_row_reports_the_league_free_scores(runs):
     assert row["pre_lf_hr"] == pytest.approx(0.0, abs=1e-9)
     assert row["pre_pair_hr"] == pytest.approx(100.0)
     assert row["pre_pair_gap_hr"] == pytest.approx(100.0)
+    assert row["pre_pairw_hr"] == pytest.approx(100.0)  # the main score
+    assert row["pre_pairw_gap_hr"] == pytest.approx(100.0)
     assert row["pre_lf_gap_hr"] < 0  # ours ordered right, the blend backwards
     # Old runs (scored before #424) have no level-free column: their rows just lack it.
     _run(runs, "old", pre=_scored({"ours": 1.0, "fg_blend": 2.0}, season=2025))
