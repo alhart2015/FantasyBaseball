@@ -46,10 +46,18 @@ from fantasy_baseball.hitter_ros.features import (
     TARGETS,
     Standardizer,
     input_frame,
+    league_answer_rates,
     league_reference,
     target_frame,
 )
-from fantasy_baseball.hitter_ros.net import EVAL_BATCH, NetConfig, device, predict, train
+from fantasy_baseball.hitter_ros.net import (
+    EVAL_BATCH,
+    RELATIVE_TARGETS,
+    NetConfig,
+    device,
+    predict,
+    train,
+)
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
@@ -89,10 +97,13 @@ def fit_season(
     val_mask = table.loc[train_rows, "player_id"].isin(val_players).to_numpy()
 
     scaler = Standardizer().fit(x_all[train_rows & ~table["player_id"].isin(val_players)])
-    # relative_target: learn each player's rates divided by his league's (known on the
-    # date) and multiply back, so the era is handled by arithmetic (#421).
-    ref = league_reference(table) if config.relative_target else None
-    y_fit = y_all / ref if ref is not None else y_all
+    # relative_target: learn each player's rates divided by a league rate -- the forecast
+    # known on the date (#421) or the league's actual rate over the answer window (#424)
+    # -- and multiply back by the forecast. The forecast's own error then shows up only in
+    # raw MAE, never in the relative scores.
+    ref = league_reference(table) if config.relative_target != "none" else None
+    denominator = league_answer_rates(table) if config.relative_target == "answer" else ref
+    y_fit = y_all / denominator if denominator is not None else y_all
     # A row whose answer can't be computed (no PA, or no league reference) must not
     # count: train() expects weight 0 wherever the target is NaN.
     w_fit = w_all.where(y_fit.notna(), 0.0)
@@ -196,8 +207,11 @@ def main() -> int:
     )
     parser.add_argument(
         "--relative-target",
-        action="store_true",
-        help="predict rates relative to the league (last 3 seasons + this season so far)",
+        choices=list(RELATIVE_TARGETS),
+        default=defaults.relative_target,
+        help="predict rates relative to the league: 'known' = the forecast known on the "
+        "date (last 3 seasons + this season so far, #421); 'answer' = the league's actual "
+        "rate over the answer window (#424). Both multiply back by the forecast.",
     )
     parser.add_argument(
         "--weighting",
@@ -274,9 +288,9 @@ def main() -> int:
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
 
     table = pd.read_parquet(TABLE)
-    if (config.era != "none" or config.relative_target) and not set(ERA_TABLE_COLUMNS) <= set(
-        table.columns
-    ):
+    if (config.era != "none" or config.relative_target != "none") and not set(
+        ERA_TABLE_COLUMNS
+    ) <= set(table.columns):
         parser.error(f"{TABLE} predates the era columns; run scripts/build_hitter_ros_table.py")
     x_all = input_frame(table, era=config.era)
     y_all, w_all = target_frame(table)
@@ -325,6 +339,7 @@ def main() -> int:
         f"Config: `{json.dumps(config.to_dict())}`",
         "",
         *backtest.summarize(pre, snap),
+        *backtest.league_forecast_lines(table, args.test_seasons),
     ]
     epochs = ", ".join(f"{i['test_season']}: {i['best_epoch']}" for i in infos)
     md += ["", f"Best epoch per test season: {epochs}. Inputs: {infos[0]['n_features']}."]

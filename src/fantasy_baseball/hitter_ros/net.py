@@ -35,6 +35,8 @@ logger = logging.getLogger(__name__)
 # Attention heads in the transformer encoder; seq_dim must divide by it.
 TRANSFORMER_HEADS = 4
 
+RELATIVE_TARGETS = ("none", "known", "answer")
+
 
 @dataclass
 class NetConfig:
@@ -70,14 +72,20 @@ class NetConfig:
     # rescaled so each fifth of the season carries equal total weight (late-season rows
     # otherwise get ~4% of it).
     weighting: str = "pa"
-    # Era handling (#421): inputs from features.ERA_MODES, and whether to predict each
-    # player's rates relative to his league (features.league_reference) and scale back.
+    # Era handling (#421): inputs from features.ERA_MODES.
     era: str = "none"
-    relative_target: bool = False
+    # Predict each player's rates relative to a league rate, then multiply back by the
+    # league forecast (features.league_reference) for rates. "none": absolute rates.
+    # "known": divide by that same forecast (#421). "answer": divide by the league's
+    # actual rate over the answer window (features.league_answer_rates, #424), so the
+    # net learns only "how much better than the league", never the league's level.
+    relative_target: str = "none"
 
     def __post_init__(self) -> None:
         if self.micro_batch < 0:
             raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
+        if self.relative_target not in RELATIVE_TARGETS:
+            raise ValueError(f"unknown relative_target {self.relative_target!r}")
         from fantasy_baseball.hitter_ros.features import ERA_MODES
 
         if self.era not in ERA_MODES:

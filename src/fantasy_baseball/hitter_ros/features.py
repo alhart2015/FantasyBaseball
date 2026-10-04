@@ -148,6 +148,24 @@ def league_reference(t: pd.DataFrame) -> pd.DataFrame:
     return ref.where(t["lg_p3_pa"].astype(float) > 0)
 
 
+def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
+    """Each row's league rates over its answer window: every table row of the same
+    season and as-of week, ``ros_*`` counts pooled. The table has a row for every
+    hitter-season who plays on or after the date, so this is the league's rest of the
+    season (same population as the ``lg_*`` columns).
+
+    Uses the answers, so it is a **training target denominator only** (#424): dividing
+    by it asks "how much better than the league will he be", which needs no forecast of
+    the league's level. Never an input, and never used to turn a prediction into rates.
+    """
+    keys = [t["season"], t["week"]]
+    counts = pd.DataFrame(
+        {c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum") for c in COUNTS},
+        index=t.index,
+    )
+    return rates_from_counts(counts)
+
+
 def input_frame(t: pd.DataFrame, era: str = "none") -> pd.DataFrame:
     """Model inputs for every table row: rates per window plus context. NaN = unknown.
     ``era``: see :func:`_era_inputs`."""

@@ -17,13 +17,13 @@ def _scored(errors, **unit):
     return pd.DataFrame(rows)
 
 
-def _run(root, name, seed=0, pre=None, snap=None):
+def _run(root, name, seed=0, pre=None, snap=None, config=None):
     run = root / name
     run.mkdir()
     (run / "config.json").write_text(
         json.dumps(
             {
-                "config": {"seed": seed},
+                "config": {"seed": seed, **(config or {})},
                 "seasons": [
                     {"test_season": 2024, "best_epoch": 2, "val_loss": [0.9, 0.8, 0.85]},
                     {"test_season": 2025, "best_epoch": 4, "val_loss": [0.7, 0.6]},
@@ -90,6 +90,14 @@ def test_warns_when_seeds_or_seasons_differ(runs):
     _run(runs, "b", seed=1)
     warnings = cmp.warnings_for(cmp.compare(["a", "b"], None, None))
     assert any("seeds differ" in w for w in warnings)
+
+
+def test_warns_when_losses_differ(runs):
+    _run(runs, "mse")  # a run from before #424: no loss setting, so MSE
+    _run(runs, "rank", config={"loss": "rank"})
+    df = cmp.compare(["mse", "rank"], None, None)
+    assert list(df["loss"]) == ["mse", "rank"]
+    assert any("losses differ" in w for w in cmp.warnings_for(df))
 
 
 def test_a_run_still_scoring_is_skipped(runs, capsys, monkeypatch):
@@ -159,3 +167,24 @@ def test_train_script_asks_to_rebuild_a_table_without_era_columns(tmp_path, monk
     with pytest.raises(SystemExit):
         train_hitter_ros.main()
     assert "build_hitter_ros_table" in capsys.readouterr().err
+
+
+def test_run_row_reports_the_league_free_scores(runs):
+    from fantasy_baseball.hitter_ros.evaluate import scored_players
+
+    actual = pd.DataFrame({s: [0.1, 0.2, 0.3] for s in TARGETS}, index=[1, 2, 3])
+    actual["pa"] = 500
+    right_order = actual[list(TARGETS)] * 0.5  # a pure league-level miss
+    wrong_order = actual[list(TARGETS)].iloc[::-1].set_axis(actual.index)
+    pre = scored_players({"ours": right_order, "fg_blend": wrong_order}, actual, 1)
+    _run(runs, "r1", pre=pre.assign(season=2025))
+    row = cmp.compare(["r1"], None, None).loc["r1"]
+    assert row["pre_lf_hr"] == pytest.approx(0.0, abs=1e-9)
+    assert row["pre_pair_hr"] == pytest.approx(100.0)
+    assert row["pre_pair_gap_hr"] == pytest.approx(100.0)
+    assert row["pre_pairw_hr"] == pytest.approx(100.0)  # the main score
+    assert row["pre_pairw_gap_hr"] == pytest.approx(100.0)
+    assert row["pre_lf_gap_hr"] < 0  # ours ordered right, the blend backwards
+    # Old runs (scored before #424) have no level-free column: their rows just lack it.
+    _run(runs, "old", pre=_scored({"ours": 1.0, "fg_blend": 2.0}, season=2025))
+    assert pd.isna(cmp.compare(["r1", "old"], None, None).loc["old", "pre_lf_hr"])
