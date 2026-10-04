@@ -58,6 +58,7 @@ from fantasy_baseball.hitter_ros.net import (
     predict,
     train,
 )
+from fantasy_baseball.hitter_ros.probes import PROBE_FEATURES, probe_inputs
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
@@ -65,6 +66,7 @@ STORE = PROJECT_ROOT / "data" / "pitch_data"
 TOKENS = PROJECT_ROOT / "data" / "hitter_ros" / "pa_tokens.parquet"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
+PROBES = PROJECT_ROOT / "data" / "hitter_ros" / "probes_{}.parquet"
 
 logger = logging.getLogger("train_hitter_ros")
 
@@ -214,6 +216,12 @@ def main() -> int:
         "rate over the answer window (#424). Both multiply back by the forecast.",
     )
     parser.add_argument(
+        "--probes",
+        default=defaults.probes,
+        help="add probe features (#417) from this pretraining run, e.g. p003 "
+        "(build them first with scripts/build_hitter_ros_probes.py)",
+    )
+    parser.add_argument(
         "--weighting",
         choices=["pa", "balanced"],
         default=defaults.weighting,
@@ -276,6 +284,7 @@ def main() -> int:
             weighting=args.weighting,
             era=args.era,
             relative_target=args.relative_target,
+            probes=args.probes,
         )
     except ValueError as err:
         parser.error(str(err))
@@ -293,6 +302,21 @@ def main() -> int:
     ) <= set(table.columns):
         parser.error(f"{TABLE} predates the era columns; run scripts/build_hitter_ros_table.py")
     x_all = input_frame(table, era=config.era)
+    if config.probes != "none":
+        probe_path = Path(str(PROBES).format(config.probes))
+        if not probe_path.exists():
+            parser.error(f"{probe_path} is missing; run scripts/build_hitter_ros_probes.py")
+        probes = pd.read_parquet(probe_path)
+        keys = ["player_id", "season", "week"]
+        missing = len(
+            table.merge(probes[keys], on=keys, how="left", indicator=True).query(
+                "_merge == 'left_only'"
+            )
+        )
+        if missing:
+            parser.error(f"{probe_path} lacks {missing} table rows; rebuild it for this table")
+        x_all = pd.concat([x_all, probe_inputs(table, probes)], axis=1)
+        logger.info("added %d probe features from %s", len(PROBE_FEATURES), probe_path.name)
     y_all, w_all = target_frame(table)
     batcher = None
     if config.seq != "none":
