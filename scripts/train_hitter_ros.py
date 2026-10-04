@@ -43,6 +43,7 @@ from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.features import (
     ERA_MODES,
     ERA_TABLE_COLUMNS,
+    STEAL_TABLE_COLUMNS,
     TARGETS,
     Standardizer,
     input_frame,
@@ -254,6 +255,11 @@ def main() -> int:
         help="2: shared body with a preseason head (week 0) and a mid-season head (#422)",
     )
     parser.add_argument(
+        "--steal-inputs",
+        action="store_true",
+        help="add steal opportunity, position and team green-light inputs (#413)",
+    )
+    parser.add_argument(
         "--split",
         action="store_true",
         help="two separate models: one trained on week-0 rows, one on week 1+ (#422)",
@@ -325,6 +331,7 @@ def main() -> int:
             probes=args.probes,
             heads=args.heads,
             split=args.split,
+            steal_inputs=args.steal_inputs,
         )
     except ValueError as err:
         parser.error(str(err))
@@ -345,7 +352,9 @@ def main() -> int:
     # They must be the same rows, or pre_mid would quietly stop balancing.
     if not ((table["week"] == 0) == (table["frac_season_left"] >= 1)).all():
         parser.error(f"{TABLE}: week 0 is not exactly the rows with frac_season_left 1")
-    x_all = input_frame(table, era=config.era)
+    if config.steal_inputs and not set(STEAL_TABLE_COLUMNS) <= set(table.columns):
+        parser.error(f"{TABLE} predates the steal columns; run scripts/build_hitter_ros_table.py")
+    x_all = input_frame(table, era=config.era, steal=config.steal_inputs)
     if config.probes != "none":
         probes_file = probe_path(TABLE.parent, config.probes)
         if not probes_file.exists():

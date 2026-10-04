@@ -93,6 +93,9 @@ class NetConfig:
     # week-0 rows and one only on week 1+ rows.
     heads: int = 1
     split: bool = False
+    # Steal inputs (#413): steal opportunities and attempts per opportunity, success
+    # rate, starts by position, and the team's green light (features._steal_inputs).
+    steal_inputs: bool = False
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):

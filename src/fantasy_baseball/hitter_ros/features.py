@@ -166,9 +166,37 @@ def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
     return rates_from_counts(counts)
 
 
-def input_frame(t: pd.DataFrame, era: str = "none") -> pd.DataFrame:
+# Table columns the steal inputs read (#413); a table built before #413 lacks them.
+STEAL_TABLE_COLUMNS = ("std_steal_opp2", "std_starts_c", "std_team_sb")
+
+
+def _steal_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
+    """Steal inputs (#413), per window: how often he is on base with the next base open,
+    how often he runs when he is, how often he's safe, and his share of starts at C /
+    SS / CF / DH. Plus his team's steal attempts per PA (the manager's green light),
+    this season so far and last season."""
+    out: dict[str, pd.Series] = {}
+    for w in WINDOWS:
+
+        def c(name: str, w: str = w) -> pd.Series:
+            return t[f"{w}_{name}"].astype(float)
+
+        opp = c("steal_opp2") + c("steal_opp3")
+        attempts = c("sb") + c("cs")
+        out[f"{w}_steal_opp_pa"] = _div(opp, c("pa"))
+        out[f"{w}_attempts_per_opp"] = _div(attempts, opp)
+        out[f"{w}_sb_success"] = _div(c("sb"), attempts)
+        for pos in ("c", "ss", "cf", "dh"):
+            out[f"{w}_start_share_{pos}"] = _div(c(f"starts_{pos}"), c("starts"))
+    for w in ("std", "p1"):
+        team = t[f"{w}_team_sb"].astype(float) + t[f"{w}_team_cs"].astype(float)
+        out[f"{w}_team_steal_pa"] = _div(team, t[f"{w}_team_pa"].astype(float))
+    return out
+
+
+def input_frame(t: pd.DataFrame, era: str = "none", steal: bool = False) -> pd.DataFrame:
     """Model inputs for every table row: rates per window plus context. NaN = unknown.
-    ``era``: see :func:`_era_inputs`."""
+    ``era``: see :func:`_era_inputs`. ``steal``: add :func:`_steal_inputs`."""
     if era not in ERA_MODES:
         raise ValueError(f"unknown era mode {era!r}")
     cols: dict[str, pd.Series] = {}
@@ -192,6 +220,8 @@ def input_frame(t: pd.DataFrame, era: str = "none") -> pd.DataFrame:
         }
     )
     cols.update(_era_inputs(t, era, cols))
+    if steal:
+        cols.update(_steal_inputs(t))
     return pd.DataFrame(cols, index=t.index)
 
 

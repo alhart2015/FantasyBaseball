@@ -342,3 +342,16 @@ def test_league_answer_rates_are_the_league_rest_of_season(table):
     assert (week1.nunique() == 1).all()
     week0 = answer[(table.season == 2025) & (table.week == 0)]
     assert not np.allclose(week0.iloc[0], week1.iloc[0])
+
+
+def test_steal_inputs(table):
+    plain = input_frame(table)
+    x = input_frame(table, steal=True)
+    assert set(plain.columns) < set(x.columns)
+    assert "std_steal_opp_pa" not in plain.columns and "p1_team_steal_pa" in x.columns
+    row = table[(table.player_id == 1) & (table.season == 2025) & (table.week == 1)]
+    r = input_frame(row, steal=True).iloc[0]
+    # 7 games, on first with second open once a game, 4 PA a game, starts in CF.
+    assert r["std_steal_opp_pa"] == pytest.approx(7 / 28)
+    assert r["std_start_share_cf"] == 1.0 and r["std_start_share_c"] == 0.0
+    assert r["std_attempts_per_opp"] == 0.0 and np.isnan(r["std_sb_success"])  # never ran

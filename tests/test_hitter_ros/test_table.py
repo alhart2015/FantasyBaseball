@@ -52,6 +52,10 @@ def _pitch(d, batter, **kw):
         "estimated_ba_using_speedangle": None,
         "bat_speed": None,
         "age_bat": 27,
+        "pitch_number": 1,
+        "on_1b": None,
+        "on_2b": None,
+        "on_3b": None,
     }
     row.update(kw)
     return row
@@ -75,7 +79,8 @@ def _season(year, start, games, hr_per_game=1, ev=100.0, runs=1):
             lineups.append(_lineup_row(pk, d, BENCH, TEAM_B, spot=9, sub=1, position="PH", pa=1))
         pitches.append(_pitch(d, OTHER, pitcher=PITCHER))
         for batter in (HITTER, OTHER):
-            pitches.append(_pitch(d, batter))
+            # HITTER is on first with second open when OTHER's PA starts: a steal chance.
+            pitches.append(_pitch(d, batter, on_1b=HITTER if batter == OTHER else None))
             pitches.append(_pitch(d, batter, description="swinging_strike", zone=5, type="S"))
             # A pulled fly ball for a right-handed hitter: spray toward left field.
             pitches.append(
@@ -314,3 +319,14 @@ def test_a_position_player_who_mopped_up_still_counts_as_offense(tmp_path):
     # PITCHER's own PA (a pitcher's season) stay out.
     assert w1.lg_std_pa == 7 * 8 + 1
     assert w1.std_team_pa == 7 * 8
+
+
+def test_steal_opportunities_positions_and_team_steals(store):
+    df = build_table(store)
+    row = _row(df, HITTER, 2025, 1)  # as of 2025-04-08: 7 games played this season
+    assert row["std_steal_opp2"] == 7 and row["std_steal_opp3"] == 0
+    assert row["p1_steal_opp2"] == 10  # all of 2024
+    assert row["ros_pa"] > 0 and "ros_steal_opp2" not in df.columns  # never an answer
+    assert row["std_starts_cf"] == 7 and row["std_starts_c"] == 0
+    assert row["std_team_sb"] == 0 and row["p1_team_cs"] == 0
+    assert _row(df, OTHER, 2025, 1)["std_steal_opp2"] == 0  # he hit; he wasn't on base
