@@ -134,8 +134,15 @@ def test_net_learns_a_simple_rule_and_is_repeatable():
     y = np.column_stack([x[:, 0] * 2, x[:, 1] - x[:, 2]]).astype(np.float32)
     w = np.ones_like(y)
     val = rng.random(2000) < 0.2
+    # Synthetic rows have no season time; pin plain PA weighting (not the pre_mid default).
     config = NetConfig(
-        hidden=[32], dropout=0.0, lr=1e-2, batch_size=256, max_epochs=60, patience=10
+        hidden=[32],
+        dropout=0.0,
+        lr=1e-2,
+        batch_size=256,
+        max_epochs=60,
+        patience=10,
+        weighting="pa",
     )
 
     first = train(x, y, w, val, config)
@@ -209,7 +216,7 @@ def test_net_fails_loudly_on_a_nan_loss():
     y = np.zeros((50, 1), dtype=np.float32)
     val = np.arange(50) < 10
     with pytest.raises(FloatingPointError, match="validation loss"):
-        train(x, y, np.ones_like(y), val, NetConfig(hidden=[4], max_epochs=3))
+        train(x, y, np.ones_like(y), val, NetConfig(hidden=[4], max_epochs=3, weighting="pa"))
 
 
 def test_micro_batches_give_the_full_batch_gradient():

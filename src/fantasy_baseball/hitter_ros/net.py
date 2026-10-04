@@ -73,7 +73,7 @@ class NetConfig:
     # otherwise get ~4% of it). "pre_mid": rescaled so week-0 rows and week 1+ rows carry
     # equal totals -- the same weights as heads 2 + head_balance, with one output layer
     # (the #422 control: is the gain from the heads or from the reweighting?).
-    weighting: str = "pa"
+    weighting: str = "pre_mid"
     # Era handling (#421): inputs from features.ERA_MODES.
     era: str = "none"
     # Predict each player's rates relative to a league rate, then multiply back by the
@@ -81,10 +81,10 @@ class NetConfig:
     # "known": divide by that same forecast (#421). "answer": divide by the league's
     # actual rate over the answer window (features.league_answer_rates, #424), so the
     # net learns only "how much better than the league", never the league's level.
-    relative_target: str = "none"
+    relative_target: str = "answer"
     # Probe features (#417) from this pretraining run (e.g. "p003"), read from
     # data/hitter_ros/probes_<run>.parquet and added to the inputs. "none": no probes.
-    probes: str = "none"
+    probes: str = "p003"
     # Multiple heads (#422): 1 = one output layer for every row (the plain MLP). 2 = a
     # shared body with a preseason head (week 0) and a mid-season head (week 1+); the
     # head index rides in the last input column (see MultiHeadMLP). head_balance:
