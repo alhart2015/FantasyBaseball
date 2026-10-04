@@ -174,3 +174,53 @@ def test_mean_over_seasons_weights_each_season_once():
         scored[(scored.system == "x") & (scored.stat == "hr")].groupby("season").abs_err.mean()
     )
     assert mean_over_seasons(scored).loc["x", "hr"] == pytest.approx(per_season.mean())
+
+
+def test_preseason_scores_a_season_without_fangraphs_files(tmp_path):
+    from fantasy_baseball.hitter_ros.backtest import preseason
+
+    table = pd.concat(
+        [
+            _league_table(),
+            pd.DataFrame(
+                [
+                    _row(
+                        9,
+                        2025,
+                        0,
+                        ros_pa=500,
+                        ros_ab=450,
+                        ros_h=135,
+                        ros_r=70,
+                        ros_hr=20,
+                        ros_rbi=70,
+                        ros_sb=5,
+                    ),
+                ]
+            ),
+        ]
+    ).reset_index(drop=True)
+    preds = table[table.season == 2025][["player_id", "season", "week", "as_of"]].assign(
+        **{s: 0.1 for s in TARGETS}
+    )
+    from fantasy_baseball.hitter_ros.baselines import baseline_predictions
+
+    candidates = {"ours": preds, **baseline_predictions(table, 2025)}
+    scored = preseason(table, candidates, 2025, tmp_path)  # tmp_path has no projections
+    assert scored is not None
+    assert set(scored.system) == {"ours", "league_avg", "marcel"}
+
+
+def test_summary_keeps_fangraphs_when_older_seasons_have_no_files():
+    from fantasy_baseball.hitter_ros.backtest import summarize
+
+    old = _stacked_units()
+    old = old[old.season == 2024].assign(
+        system=lambda d: d.system.map({"x": "ours", "y": "marcel"})
+    )
+    new = _stacked_units()
+    new = new[new.season == 2025].assign(
+        system=lambda d: d.system.map({"x": "ours", "y": "fg_blend"})
+    )
+    md = "\n".join(summarize(pd.concat([old, new], ignore_index=True), None))
+    assert "seasons with FanGraphs files** (2025)" in md

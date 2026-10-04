@@ -11,6 +11,8 @@ changing every ``ros_*`` value leaves the inputs unchanged.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 
@@ -74,8 +76,83 @@ def _window_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
     return {f"{w}_{k}": v for k, v in out.items()}
 
 
-def input_frame(t: pd.DataFrame) -> pd.DataFrame:
-    """Model inputs for every table row: rates per window plus context. NaN = unknown."""
+# League-side rates for the era inputs (#421). Each takes a table-column getter for one
+# window and returns that window's rate. They must match the same-named player rates in
+# _window_rates (a test checks they do), so the player-vs-league ratio compares like
+# with like.
+Column = Callable[[str], pd.Series]
+
+
+def _per_pa(stat: str) -> Callable[[Column], pd.Series]:
+    def rate(c: Column) -> pd.Series:
+        return _div(c(stat), c("pa"))
+
+    return rate
+
+
+_ERA_RATES: dict[str, Callable[[Column], pd.Series]] = {
+    **{f"{s}_pa": _per_pa(s) for s in ("r", "hr", "rbi", "sb", "bb", "k")},
+    "avg": lambda c: _div(c("h"), c("ab")),
+    "iso": lambda c: _div(c("b2") + 2 * c("b3") + 3 * c("hr"), c("ab")),
+    "steal_attempt_rate": lambda c: _div(
+        c("sb") + c("cs"), c("h") - c("hr") - c("b2") - c("b3") + c("bb") + c("hbp")
+    ),
+}
+
+
+ERA_MODES = ("none", "relative", "full")
+# Table columns the era options read; a table built before #421 lacks them.
+ERA_TABLE_COLUMNS = ("lg_std_pa", "lg_p3_pa")
+
+
+def _era_inputs(t: pd.DataFrame, mode: str, player: dict[str, pd.Series]) -> dict[str, pd.Series]:
+    """Era inputs (#421). ``relative``: the player's rate divided by the league's in the
+    same window. ``full`` adds the league rates themselves and rule flags known before
+    the season -- but those are identical for every row of a season, so with ~18
+    seasons the net uses them as a season label, memorizes each season's quirks, and
+    extrapolates badly to a new one (seen in #421: single test seasons blew up)."""
+    out: dict[str, pd.Series] = {}
+    if mode == "none":
+        return out
+    for w in WINDOWS:
+
+        def lg(name: str, w: str = w) -> pd.Series:
+            return t[f"lg_{w}_{name}"].astype(float)
+
+        for name, rate in _ERA_RATES.items():
+            league = rate(lg)
+            out[f"{w}_{name}_vs_lg"] = _div(player[f"{w}_{name}"], league)
+            if mode == "full":
+                out[f"lg_{w}_{name}"] = league
+    if mode == "full":
+        season = t["season"]
+        out["rules_universal_dh"] = ((season == 2020) | (season >= 2022)).astype(float)
+        out["rules_2023"] = (season >= 2023).astype(float)  # pitch clock, bigger bases
+    return out
+
+
+def league_reference(t: pd.DataFrame) -> pd.DataFrame:
+    """Each row's league rates for the five answers, known on its as-of date: the last
+    three seasons plus this season before the date, pooled. Used to predict a player
+    relative to his league and scale back (``relative_target``). Across 2011-2026 the
+    3-season average missed next season's league R and HR rates by less than last
+    season alone did (#421).
+
+    NaN for a row with no earlier season in the store (its first season): a reference
+    built from a few days of this season's games would be mostly noise."""
+    counts = pd.DataFrame(
+        {c: t[f"lg_p3_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in COUNTS},
+        index=t.index,
+    )
+    ref = rates_from_counts(counts)
+    return ref.where(t["lg_p3_pa"].astype(float) > 0)
+
+
+def input_frame(t: pd.DataFrame, era: str = "none") -> pd.DataFrame:
+    """Model inputs for every table row: rates per window plus context. NaN = unknown.
+    ``era``: see :func:`_era_inputs`."""
+    if era not in ERA_MODES:
+        raise ValueError(f"unknown era mode {era!r}")
     cols: dict[str, pd.Series] = {}
     for w in WINDOWS:
         cols.update(_window_rates(t, w))
@@ -96,6 +173,7 @@ def input_frame(t: pd.DataFrame) -> pd.DataFrame:
             "std_team_log_pa": np.log1p(t["std_team_pa"].astype(float)),
         }
     )
+    cols.update(_era_inputs(t, era, cols))
     return pd.DataFrame(cols, index=t.index)
 
 

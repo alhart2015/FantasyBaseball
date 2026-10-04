@@ -70,10 +70,18 @@ class NetConfig:
     # rescaled so each fifth of the season carries equal total weight (late-season rows
     # otherwise get ~4% of it).
     weighting: str = "pa"
+    # Era handling (#421): inputs from features.ERA_MODES, and whether to predict each
+    # player's rates relative to his league (features.league_reference) and scale back.
+    era: str = "none"
+    relative_target: bool = False
 
     def __post_init__(self) -> None:
         if self.micro_batch < 0:
             raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
+        from fantasy_baseball.hitter_ros.features import ERA_MODES
+
+        if self.era not in ERA_MODES:
+            raise ValueError(f"unknown era {self.era!r}")
         if self.weighting not in ("pa", "balanced"):
             raise ValueError(f"unknown weighting {self.weighting!r}")
         if self.seq not in ("none", "gru", "transformer"):
