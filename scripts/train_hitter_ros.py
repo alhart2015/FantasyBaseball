@@ -85,15 +85,21 @@ def fit_season(
     batcher: SequenceBatcher | None = None,
     shuffle_test_order: bool = False,
     train_from: int | None = None,
+    weeks: str = "all",
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     """Train on complete seasons before ``test_season``; predict that season's rows.
 
     With a sequence model, ``batcher`` was built on ``table`` and is handed each row's
-    table position to fetch its plate appearances.
+    table position to fetch its plate appearances. ``weeks`` ("all", "pre" = week 0,
+    "mid" = week 1+) limits both the training and the predicted rows (``--split``).
     """
     positions = np.arange(len(table))
+    in_weeks = WEEKS[weeks](table["week"])
     train_rows = (
-        table["season_complete"] & (table["season"] < test_season) & (w_all.sum(axis=1) > 0)
+        table["season_complete"]
+        & (table["season"] < test_season)
+        & (w_all.sum(axis=1) > 0)
+        & in_weeks
     )
     if train_from is not None:  # learning-curve runs: train on fewer, more recent seasons
         train_rows &= table["season"] >= train_from
@@ -126,8 +132,15 @@ def fit_season(
     }
     y_std = np.column_stack([(y_train[s] - mu[s]) / sd[s] for s in TARGETS])
 
+    def inputs(rows: pd.Series) -> np.ndarray:
+        x = scaler.transform(x_all[rows])
+        if config.heads > 1:  # last column: the head index, 0 = preseason, 1 = mid-season
+            mid = (table.loc[rows, "week"] > 0).to_numpy(np.float32)
+            x = np.column_stack([x, mid])
+        return x
+
     result = train(
-        scaler.transform(x_all[train_rows]),
+        inputs(train_rows),
         y_std,
         w_train.to_numpy(dtype=np.float32),
         val_mask,
@@ -136,10 +149,10 @@ def fit_season(
         batcher=batcher,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
     )
-    test_rows = table["season"] == test_season
+    test_rows = (table["season"] == test_season) & in_weeks
     z = predict(
         result.model,
-        scaler.transform(x_all[test_rows]),
+        inputs(test_rows),
         rows=positions[test_rows.to_numpy()] if batcher else None,
         batcher=batcher,
         shuffle_order=shuffle_test_order,
@@ -157,6 +170,7 @@ def fit_season(
     )
     info = {
         "test_season": test_season,
+        "weeks": weeks,
         "train_rows": int(train_rows.sum() - val_mask.sum()),
         "val_rows": int(val_mask.sum()),
         "n_features": scaler.n_features,
@@ -165,6 +179,13 @@ def fit_season(
         "val_loss": result.val_loss,
     }
     return preds, info
+
+
+WEEKS = {
+    "all": lambda week: week >= 0,
+    "pre": lambda week: week == 0,
+    "mid": lambda week: week >= 1,
+}
 
 
 def _train_from(season: int, n_seasons: int | None, first: int | None) -> int | None:
@@ -226,10 +247,23 @@ def main() -> int:
         "(build them first with scripts/build_hitter_ros_probes.py)",
     )
     parser.add_argument(
+        "--heads",
+        type=int,
+        choices=[1, 2],
+        default=defaults.heads,
+        help="2: shared body with a preseason head (week 0) and a mid-season head (#422)",
+    )
+    parser.add_argument(
+        "--split",
+        action="store_true",
+        help="two separate models: one trained on week-0 rows, one on week 1+ (#422)",
+    )
+    parser.add_argument(
         "--weighting",
-        choices=["pa", "balanced"],
+        choices=["pa", "balanced", "pre_mid"],
         default=defaults.weighting,
-        help="balanced: each fifth of the season gets equal total loss weight",
+        help="balanced: each fifth of the season gets equal total loss weight; "
+        "pre_mid: week 0 and week 1+ get equal totals (#422 control)",
     )
     parser.add_argument(
         "--seq",
@@ -289,6 +323,8 @@ def main() -> int:
             era=args.era,
             relative_target=args.relative_target,
             probes=args.probes,
+            heads=args.heads,
+            split=args.split,
         )
     except ValueError as err:
         parser.error(str(err))
@@ -305,6 +341,10 @@ def main() -> int:
         ERA_TABLE_COLUMNS
     ) <= set(table.columns):
         parser.error(f"{TABLE} predates the era columns; run scripts/build_hitter_ros_table.py")
+    # pre_mid finds week 0 as the rows with the whole season left; --heads by week > 0.
+    # They must be the same rows, or pre_mid would quietly stop balancing.
+    if not ((table["week"] == 0) == (table["frac_season_left"] >= 1)).all():
+        parser.error(f"{TABLE}: week 0 is not exactly the rows with frac_season_left 1")
     x_all = input_frame(table, era=config.era)
     if config.probes != "none":
         probes_file = probe_path(TABLE.parent, config.probes)
@@ -328,19 +368,22 @@ def main() -> int:
     all_preds, infos = [], []
     for season in args.test_seasons:
         logger.info("test season %s: training on complete seasons before it", season)
-        preds, info = fit_season(
-            table,
-            x_all,
-            y_all,
-            w_all,
-            season,
-            config,
-            batcher,
-            args.shuffle_test_order,
-            train_from=_train_from(season, args.train_seasons, args.first_train_season),
-        )
-        all_preds.append(preds)
-        infos.append(info)
+        # --split: a preseason-only model and a mid-season-only model (#422).
+        for weeks in ("pre", "mid") if config.split else ("all",):
+            preds, info = fit_season(
+                table,
+                x_all,
+                y_all,
+                w_all,
+                season,
+                config,
+                batcher,
+                args.shuffle_test_order,
+                train_from=_train_from(season, args.train_seasons, args.first_train_season),
+                weeks=weeks,
+            )
+            all_preds.append(preds)
+            infos.append(info)
     predictions = pd.concat(all_preds)
     predictions.to_parquet(out / "predictions.parquet")
     meta = {
@@ -364,7 +407,12 @@ def main() -> int:
         *backtest.summarize(pre, snap),
         *backtest.league_forecast_lines(table, args.test_seasons),
     ]
-    epochs = ", ".join(f"{i['test_season']}: {i['best_epoch']}" for i in infos)
+    # A --split run has two models per season: label them so the epochs aren't ambiguous.
+    epochs = ", ".join(
+        f"{i['test_season']}{'' if i['weeks'] == 'all' else ' ' + str(i['weeks'])}: "
+        f"{i['best_epoch']}"
+        for i in infos
+    )
     md += ["", f"Best epoch per test season: {epochs}. Inputs: {infos[0]['n_features']}."]
     (out / "summary.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
