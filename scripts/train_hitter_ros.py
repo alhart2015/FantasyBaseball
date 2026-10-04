@@ -58,6 +58,12 @@ from fantasy_baseball.hitter_ros.net import (
     predict,
     train,
 )
+from fantasy_baseball.hitter_ros.probes import (
+    PROBE_FEATURES,
+    check_probes,
+    probe_inputs,
+    probe_path,
+)
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
@@ -214,6 +220,12 @@ def main() -> int:
         "rate over the answer window (#424). Both multiply back by the forecast.",
     )
     parser.add_argument(
+        "--probes",
+        default=defaults.probes,
+        help="add probe features (#417) from this pretraining run, e.g. p003 "
+        "(build them first with scripts/build_hitter_ros_probes.py)",
+    )
+    parser.add_argument(
         "--weighting",
         choices=["pa", "balanced"],
         default=defaults.weighting,
@@ -276,6 +288,7 @@ def main() -> int:
             weighting=args.weighting,
             era=args.era,
             relative_target=args.relative_target,
+            probes=args.probes,
         )
     except ValueError as err:
         parser.error(str(err))
@@ -293,6 +306,16 @@ def main() -> int:
     ) <= set(table.columns):
         parser.error(f"{TABLE} predates the era columns; run scripts/build_hitter_ros_table.py")
     x_all = input_frame(table, era=config.era)
+    if config.probes != "none":
+        probes_file = probe_path(TABLE.parent, config.probes)
+        if not probes_file.exists():
+            parser.error(f"{probes_file} is missing; run scripts/build_hitter_ros_probes.py")
+        probes = pd.read_parquet(probes_file)
+        problem = check_probes(table, probes)
+        if problem:
+            parser.error(f"{probes_file}: {problem}; rebuild it for this table")
+        x_all = pd.concat([x_all, probe_inputs(table, probes)], axis=1)
+        logger.info("added %d probe features from %s", len(PROBE_FEATURES), probes_file.name)
     y_all, w_all = target_frame(table)
     batcher = None
     if config.seq != "none":

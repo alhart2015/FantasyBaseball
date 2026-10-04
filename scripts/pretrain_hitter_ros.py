@@ -36,7 +36,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.net import device
-from fantasy_baseball.hitter_ros.pretrain import PitchStore, PretrainConfig, pretrain
+from fantasy_baseball.hitter_ros.pretrain import (
+    PitchStore,
+    PretrainConfig,
+    pretrain,
+    tokens_fingerprint,
+)
 
 TOKENS = PROJECT_ROOT / "data" / "hitter_ros" / "pitch_tokens.parquet"
 PRETRAIN = PROJECT_ROOT / "data" / "hitter_ros" / "pretrain"
@@ -94,13 +99,19 @@ def main() -> int:
     if too_early:
         parser.error(f"no earlier season to pretrain on for {too_early}")
     store = PitchStore(tokens, device(), torch.bfloat16 if config.amp else torch.float32)
+    fingerprint = tokens_fingerprint(tokens)
     del tokens
 
     # Every input is loaded and checked; only now replace an old run of this name.
     if out_root.exists():
         shutil.rmtree(out_root)
     out_root.mkdir(parents=True)
-    run_meta = {"config": config.to_dict(), "seasons": [], "complete": False}
+    run_meta = {
+        "config": config.to_dict(),
+        "tokens": fingerprint,
+        "seasons": [],
+        "complete": False,
+    }
     for season in seasons:
         t0 = time.time()
         result = pretrain(store, before_season=season, config=config)

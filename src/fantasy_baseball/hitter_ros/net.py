@@ -80,6 +80,9 @@ class NetConfig:
     # actual rate over the answer window (features.league_answer_rates, #424), so the
     # net learns only "how much better than the league", never the league's level.
     relative_target: str = "none"
+    # Probe features (#417) from this pretraining run (e.g. "p003"), read from
+    # data/hitter_ros/probes_<run>.parquet and added to the inputs. "none": no probes.
+    probes: str = "none"
 
     def __post_init__(self) -> None:
         if self.micro_batch < 0:
