@@ -70,7 +70,9 @@ class NetConfig:
     amp: bool = False
     # "pa": each row's loss counts by its rest-of-season PA. "balanced": the same, then
     # rescaled so each fifth of the season carries equal total weight (late-season rows
-    # otherwise get ~4% of it).
+    # otherwise get ~4% of it). "pre_mid": rescaled so week-0 rows and week 1+ rows carry
+    # equal totals -- the same weights as heads 2 + head_balance, with one output layer
+    # (the #422 control: is the gain from the heads or from the reweighting?).
     weighting: str = "pa"
     # Era handling (#421): inputs from features.ERA_MODES.
     era: str = "none"
@@ -110,7 +112,7 @@ class NetConfig:
 
         if self.era not in ERA_MODES:
             raise ValueError(f"unknown era {self.era!r}")
-        if self.weighting not in ("pa", "balanced"):
+        if self.weighting not in ("pa", "balanced", "pre_mid"):
             raise ValueError(f"unknown weighting {self.weighting!r}")
         if self.seq not in ("none", "gru", "transformer"):
             raise ValueError(f"unknown seq {self.seq!r}")
@@ -297,6 +299,14 @@ def train(
         from fantasy_baseball.hitter_ros.features import balance_by_season_time
 
         w = balance_by_season_time(pd.DataFrame(w), pd.Series(season_time)).to_numpy(np.float32)
+    if config.weighting == "pre_mid":
+        if season_time is None:
+            raise ValueError("pre_mid weighting needs each row's frac_season_left")
+        from fantasy_baseball.hitter_ros.features import balance_by_group
+
+        # Week 0 (the season's first date) is the only row with the whole season left.
+        mid = (season_time < 1).astype(int)
+        w = balance_by_group(pd.DataFrame(w), mid).to_numpy(np.float32)
     if config.head_balance:
         from fantasy_baseball.hitter_ros.features import balance_by_group
 

@@ -69,3 +69,23 @@ def test_head_options_are_checked():
         NetConfig(heads=2, split=True)
     with pytest.raises(ValueError):
         NetConfig(heads=2, seq="gru")
+
+
+def test_pre_mid_weighting_matches_the_balanced_heads_weights():
+    """The control must weight rows exactly as --heads 2 --head-balance does."""
+    from fantasy_baseball.hitter_ros.features import balance_by_group
+
+    rng = np.random.default_rng(0)
+    w = pd.DataFrame(rng.random((6, 2)))
+    season_time = np.array([1.0, 1.0, 0.9, 0.5, 0.2, 0.01])
+    by_time = balance_by_group(w, (season_time < 1).astype(int))
+    by_head = balance_by_group(w, np.array([0, 0, 1, 1, 1, 1]))
+    pd.testing.assert_frame_equal(by_time, by_head)
+    with pytest.raises(ValueError):
+        train(
+            np.zeros((4, 2), np.float32),
+            np.zeros((4, 1), np.float32),
+            np.ones((4, 1), np.float32),
+            np.array([False, False, False, True]),
+            NetConfig(weighting="pre_mid", max_epochs=1),
+        )

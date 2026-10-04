@@ -265,9 +265,10 @@ def main() -> int:
     )
     parser.add_argument(
         "--weighting",
-        choices=["pa", "balanced"],
+        choices=["pa", "balanced", "pre_mid"],
         default=defaults.weighting,
-        help="balanced: each fifth of the season gets equal total loss weight",
+        help="balanced: each fifth of the season gets equal total loss weight; "
+        "pre_mid: week 0 and week 1+ get equal totals (#422 control)",
     )
     parser.add_argument(
         "--seq",
