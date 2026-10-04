@@ -54,10 +54,13 @@ def preseason(
     season: int,
     projections_dir: Path,
 ) -> pd.DataFrame | None:
-    """Score week-0 rows of ``season``. ``candidates``: our predictions and baselines."""
-    systems = load_systems(projections_dir / str(season), preseason=True)
-    if not systems:
-        return None
+    """Score week-0 rows of ``season``. ``candidates``: our predictions and baselines.
+
+    Seasons without FanGraphs files (before 2022) are still scored, on ours and the
+    baselines only, so our own variants can be compared over many more seasons.
+    """
+    folder = projections_dir / str(season)
+    systems = load_systems(folder, preseason=True) if folder.is_dir() else {}
     week0 = table[(table["season"] == season) & (table["week"] == 0)].set_index("player_id")
     actual = rates_from_counts(week0.rename(columns=lambda c: c.removeprefix("ros_")))
     actual["pa"] = week0["ros_pa"]
