@@ -19,9 +19,13 @@ from fantasy_baseball.hitter_ros.probes import (  # noqa: E402
     PROBES,
     _bats_left,
     _probs_to_features,
+    check_probes,
     probe_contexts,
     probe_features,
     probe_inputs,
+    reference_cohort,
+    side_prefix,
+    standardize,
 )
 from tests.test_hitter_ros.test_pretrain import _small, _tokens  # noqa: E402
 
@@ -101,10 +105,10 @@ def test_a_switch_hitter_bats_from_the_side_he_used_against_each_hand():
     tokens["vs_lhp"] = [0, 0, 0, 1, 1, 1]
     tokens["bats_left"] = [1, 1, 1, 0, 0, 0]  # left vs RHP, right vs LHP
     store = _store(tokens)
-    sides = _bats_left(store, np.array([0]), np.array([6]))
+    sides = _bats_left(side_prefix(store), np.array([0]), np.array([6]))
     assert sides[0][0] == 1.0 and sides[1][0] == 0.0
     # Never faced a lefty: fall back on his overall side.
-    only_rhp = _bats_left(store, np.array([0]), np.array([3]))
+    only_rhp = _bats_left(side_prefix(store), np.array([0]), np.array([3]))
     assert only_rhp[1][0] == 1.0
 
 
@@ -132,44 +136,54 @@ def test_probe_inputs_align_to_the_table_and_leave_gaps_blank():
         probes[c] = 0.5
     x = probe_inputs(table, probes)
     assert list(x.index) == [10, 11, 12]
-    # Row 12 is alone in its week, so it can't be standardized: blank, like the gaps.
-    assert x.isna().all().all()
-    probes = pd.concat([probes, probes.assign(player_id=3)], ignore_index=True)
-    probes.loc[1, list(PROBE_FEATURES)] = 1.5
-    table.loc[13] = [3, 2025, 1]
-    x = probe_inputs(table, probes)
-    assert x.loc[[10, 11]].isna().all().all() and x.loc[[12, 13]].notna().all().all()
+    assert x.loc[12].eq(0.5).all() and x.loc[[10, 11]].isna().all().all()
 
 
-def test_contact_features_are_blank_where_the_model_never_saw_contact():
-    from fantasy_baseball.hitter_ros.probes import (
-        CONTACT_FEATURES,
-        blank_unseen_contact,
-        first_contact_season,
+def _table_and_probes():
+    table = pd.DataFrame(
+        {
+            "player_id": [1, 2],
+            "season": [2025, 2025],
+            "week": [0, 0],
+            "as_of": pd.to_datetime(["2025-03-27", "2025-03-27"]),
+        }
     )
+    probes = table.copy()
+    for c in PROBE_FEATURES:
+        probes[c] = 0.0
+    return table, probes
+
+
+def test_check_probes_catches_gaps_duplicates_and_moved_dates():
+    table, probes = _table_and_probes()
+    assert check_probes(table, probes) is None
+    assert "lacks 1" in check_probes(table, probes.iloc[:1])
+    assert "duplicate" in check_probes(table, pd.concat([probes, probes.iloc[:1]]))
+    moved = probes.assign(as_of=pd.Timestamp("2025-03-28"))
+    assert "different as-of" in check_probes(table, moved)
+
+
+def test_first_contact_season():
+    from fantasy_baseball.hitter_ros.probes import CONTACT_FEATURES, first_contact_season
 
     tokens = pd.DataFrame(
         {"season": [2014, 2015, 2016], "out_bip_solid": [0, 1, 0], "out_bip_barrel": [0, 0, 1]}
     )
     assert first_contact_season(tokens) == 2015
-    probes = pd.DataFrame({"season": [2015, 2016]})
-    for c in PROBE_FEATURES:
-        probes[c] = 0.5
-    out = blank_unseen_contact(probes, 2015)
-    # Model 2015 trained on seasons before 2015: no contact classes; model 2016 saw 2015.
-    assert out.loc[0, list(CONTACT_FEATURES)].isna().all()
-    assert out.loc[1, list(CONTACT_FEATURES)].notna().all()
-    others = [c for c in PROBE_FEATURES if c not in CONTACT_FEATURES]
-    assert out[others].notna().all().all() and "probe_zone_whiff_fb" in others
+    assert "probe_zone_hard_fb" in CONTACT_FEATURES
+    assert "probe_zone_whiff_fb" not in CONTACT_FEATURES
 
 
-def test_probe_inputs_standardize_within_each_season_and_week():
-    table = pd.DataFrame(
-        {"player_id": [1, 2, 3, 1, 2], "season": [2024] * 3 + [2025] * 2, "week": 0}
+def test_standardize_uses_the_reference_group_only():
+    reference = pd.DataFrame({"a": [1.0, 3.0], "b": [2.0, 2.0]})
+    feats = pd.DataFrame({"a": [5.0], "b": [7.0]})
+    out = standardize(feats, reference)
+    assert out.loc[0, "a"] == pytest.approx((5 - 2) / np.std([1, 3], ddof=1))
+    assert np.isnan(out.loc[0, "b"])  # no spread in the reference: blank, not infinite
+
+
+def test_reference_cohort_is_last_seasons_hitters():
+    tokens = _tokens(
+        {1: [(2024, 0, BALL), (2025, 0, BALL)], 2: [(2025, 1, BALL)], 3: [(2024, 2, BALL)]}
     )
-    probes = table.copy()
-    for c in PROBE_FEATURES:
-        probes[c] = [0.1, 0.2, 0.3, 5.0, 7.0]  # a different scale each season
-    x = probe_inputs(table, probes)["probe_zone_whiff_fb"]
-    np.testing.assert_allclose(x[:3], [-1.0, 0.0, 1.0], atol=1e-12)
-    np.testing.assert_allclose(x[3:], [-1 / np.sqrt(2), 1 / np.sqrt(2)])
+    assert list(reference_cohort(_store(tokens), 2025)) == [1, 3]

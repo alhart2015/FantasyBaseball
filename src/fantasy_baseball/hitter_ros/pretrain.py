@@ -190,6 +190,17 @@ class PretrainModel(nn.Module):
         return out
 
 
+def tokens_fingerprint(tokens: pd.DataFrame) -> dict[str, Any]:
+    """What identifies a token file's layout: rows, feature columns, seasons. Recorded
+    with a pretraining run, so anything that later feeds the run's models histories can
+    check it uses the same file."""
+    return {
+        "rows": len(tokens),
+        "features": list(TOKEN_FEATURES),
+        "seasons": [int(tokens["season"].min()), int(tokens["season"].max())],
+    }
+
+
 def next_pitch_loss(logits: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     """(sum of cross-entropy, number of predicted pitches); padding (-1) is skipped."""
     target = y[:, 1:]

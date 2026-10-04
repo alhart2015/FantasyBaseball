@@ -10,8 +10,14 @@ good slider low and away", "how hard does he hit a fastball down the middle".
 The probes (``PROBE_PITCHES`` x ``PROBE_COUNTS`` x both pitcher hands) are fixed in
 code: typical pitch shapes (median speed, movement and spin per pitch type and pitcher
 hand, from tracked 2015+ pitches) at standard locations. The ~100 probabilities per row
-are then compressed to ``PROBE_FEATURES`` (about 25 numbers) by averaging over pitch
+are then compressed to ``PROBE_FEATURES`` (23 numbers) by averaging over pitch
 families, counts and zone / chase locations.
+
+Each season is read by a different model with its own scale, so features are
+standardized per season against a **reference group known before the season**: every
+hitter with a pitch the season before, read on Opening Day (``reference_cohort``). Not
+against the table's own rows: the table holds only hitters who go on to play after the
+as-of date, so that cohort would carry a little hindsight.
 
 Walk-forward: a row from season S is read by the model pretrained on seasons before S
 only (one model per season, ``scripts/pretrain_hitter_ros.py``), so every row's
@@ -26,6 +32,7 @@ with no model, gets NaN (the Standardizer's missing flags handle it).
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -95,8 +102,10 @@ PROBE_PITCHES: tuple[tuple[str, str], ...] = (
 )
 FAMILIES = {"fb": ("ff", "si", "fc"), "brk": ("sl", "sweep", "cu"), "off": ("ch", "fs")}
 PROBE_COUNTS = {"even": (1, 1), "two_strike": (1, 2), "ahead": (2, 0)}
-# Probes read as if the next day, nobody on, nobody out.
-PROBE_GAP = float(np.log1p(1) / 5)
+# Probes read as a pitch in the middle of a game (gap 0), nobody on, nobody out. In the
+# tokens a gap > 0 only ever comes on a hitter's first pitch of a day, which is always
+# at 0-0, so a 1-2 or 2-0 probe with a gap would be a combination never seen.
+PROBE_GAP = 0.0
 
 _SWING = ("whiff", "foul", "bip_weak", "bip_flare", "bip_solid", "bip_barrel", "bip_other")
 _BIP = ("bip_weak", "bip_flare", "bip_solid", "bip_barrel", "bip_other")
@@ -203,8 +212,8 @@ PROBE_FEATURES: tuple[str, ...] = tuple(
 )
 # Features that read contact quality (solid / barrel classes). A model pretrained only
 # on pitches before Statcast's contact classes (2015) has never seen one, so these come
-# out exactly 0 for every hitter: they must be blanked, not used (see
-# ``blank_unseen_contact``).
+# out exactly 0 for every hitter: the build blanks them for those seasons
+# (``first_contact_season``).
 CONTACT_FEATURES: tuple[str, ...] = tuple(
     f for f in PROBE_FEATURES if "_hard" in f or "_barrel" in f
 )
@@ -218,30 +227,43 @@ def first_contact_season(tokens: pd.DataFrame) -> int:
     return int(tokens.loc[quality, "season"].min())
 
 
-def blank_unseen_contact(probes: pd.DataFrame, first_contact: int) -> pd.DataFrame:
-    """Blank ``CONTACT_FEATURES`` on rows read by a model that never saw a contact class:
-    model S is pretrained on seasons before S, so S <= ``first_contact`` saw none."""
-    out = probes.copy()
-    out.loc[out["season"] <= first_contact, list(CONTACT_FEATURES)] = np.nan
-    return out
+@dataclass(frozen=True)
+class SidePrefix:
+    """Running sums over the store's pitches, so any history window's batting-side
+    counts are two lookups. Build once per store with :func:`side_prefix`."""
+
+    left: np.ndarray  # bats_left
+    left_vs: dict[int, np.ndarray]  # bats_left on pitches vs that hand
+    vs: dict[int, np.ndarray]  # pitches vs that hand
 
 
-def _bats_left(store: PitchStore, start: np.ndarray, n: np.ndarray) -> dict[int, np.ndarray]:
-    """Per pitcher hand (0 = RHP, 1 = LHP), per row: which side he bats from (1 = left)
-    -- the majority side over his history pitches vs that hand, else over all of them
-    (a switch hitter's side depends on the hand)."""
+def side_prefix(store: PitchStore) -> SidePrefix:
     bl = store.feats[:, TOKEN_FEATURES.index("bats_left")].float().cpu().numpy()
     vs = store.feats[:, TOKEN_FEATURES.index("vs_lhp")].float().cpu().numpy()
 
-    def window_sum(values: np.ndarray) -> np.ndarray:
-        prefix = np.concatenate([[0.0], np.cumsum(values, dtype=np.float64)])
-        return np.asarray(prefix[start + n] - prefix[start])
+    def running(values: np.ndarray) -> np.ndarray:
+        return np.concatenate([[0.0], np.cumsum(values, dtype=np.float64)])
 
-    left_all, total = window_sum(bl), n.astype(np.float64)
+    hands = {lhp: (vs == lhp).astype(np.float64) for lhp in (0, 1)}
+    return SidePrefix(
+        left=running(bl),
+        left_vs={lhp: running(bl * h) for lhp, h in hands.items()},
+        vs={lhp: running(h) for lhp, h in hands.items()},
+    )
+
+
+def _bats_left(prefix: SidePrefix, start: np.ndarray, n: np.ndarray) -> dict[int, np.ndarray]:
+    """Per pitcher hand (0 = RHP, 1 = LHP), per row: which side he bats from (1 = left)
+    -- the majority side over his history pitches vs that hand, else over all of them
+    (a switch hitter's side depends on the hand)."""
+
+    def window(run: np.ndarray) -> np.ndarray:
+        return np.asarray(run[start + n] - run[start])
+
+    left_all, total = window(prefix.left), n.astype(np.float64)
     out = {}
     for lhp in (0, 1):
-        hand = (vs == lhp).astype(np.float64)
-        left, seen = window_sum(bl * hand), window_sum(hand)
+        left, seen = window(prefix.left_vs[lhp]), window(prefix.vs[lhp])
         share = np.where(seen > 0, left / np.maximum(seen, 1), left_all / np.maximum(total, 1))
         out[lhp] = (share >= 0.5).astype(np.float32)
     return out
@@ -256,25 +278,32 @@ def probe_features(
     window: int,
     batch_size: int = 64,
     amp: bool = True,
+    prefix: SidePrefix | None = None,
 ) -> pd.DataFrame:
-    """``PROBE_FEATURES`` for each (player, as-of date), read off ``model``.
+    """``PROBE_FEATURES`` (raw probabilities, not standardized) for each (player, as-of
+    date), read off ``model``.
 
     History = his last ``window - 1`` pitches strictly before the as-of date. NaN for a
     row with no history. ``model`` must not have seen the rows' season (walk-forward).
+    ``prefix``: :func:`side_prefix` of ``store``, if already built.
     """
     dev = store.device
     model.eval()
     use_amp = amp and dev.type == "cuda"
     start, n = store.history(np.asarray(player_ids), to_days(pd.Series(as_of)), window - 1)
     has = n > 0
-    sides = _bats_left(store, start, n)
-    # Per probe, which side he bats from depends on the probe's pitcher hand.
+    sides = _bats_left(prefix or side_prefix(store), start, n)
+    # Per row and probe: 1 if he bats left against that probe's pitcher hand.
     hand = np.array([p.lhp for p in PROBES])
-    ctx_r = torch.as_tensor(probe_contexts(0.0), device=dev)
-    ctx_l = torch.as_tensor(probe_contexts(1.0), device=dev)
+    left_all = np.stack([sides[lhp] for lhp in hand], axis=1)
     probs = np.full((len(start), len(PROBES), len(OUTCOMES)), np.nan, dtype=np.float32)
     rows = np.flatnonzero(has)
     with torch.no_grad():
+        with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
+            # The context layer is affine, so a row's context embedding is the blend of
+            # the two sides' embeddings: compute each side's once.
+            nxt_l = model.context(torch.as_tensor(probe_contexts(1.0), device=dev))
+            nxt_r = model.context(torch.as_tensor(probe_contexts(0.0), device=dev))
         for b in range(0, len(rows), batch_size):
             idx = rows[b : b + batch_size]
             s_t = torch.as_tensor(start[idx], device=dev)
@@ -283,12 +312,8 @@ def probe_features(
             with torch.autocast(device_type="cuda", dtype=torch.bfloat16, enabled=use_amp):
                 h = model.encoder(x.float())
                 h = h[torch.arange(len(idx), device=dev), n_t - 1]  # after his last pitch
-                # Context per row and probe: the side he bats from vs that probe's hand.
-                left = torch.as_tensor(
-                    np.stack([sides[lhp][idx] for lhp in hand], axis=1), device=dev
-                )[..., None]
-                ctx = left * ctx_l[None] + (1 - left) * ctx_r[None]
-                nxt = model.context(ctx)
+                left = torch.as_tensor(left_all[idx], device=dev)[..., None]
+                nxt = left * nxt_l[None] + (1 - left) * nxt_r[None]
                 logits = model.head(torch.cat([h[:, None].expand_as(nxt), nxt], dim=-1))
             probs[idx] = torch.softmax(logits.float(), dim=-1).cpu().numpy()
     feats = _probs_to_features(np.nan_to_num(probs, nan=0.1))
@@ -296,19 +321,53 @@ def probe_features(
     return feats
 
 
-def probe_inputs(table: pd.DataFrame, probes: pd.DataFrame) -> pd.DataFrame:
-    """``PROBE_FEATURES`` aligned to ``table``'s rows by (player, season, week), each
-    standardized within its season and week; NaN for a row the probe file doesn't cover.
+def reference_cohort(store: PitchStore, season: int) -> np.ndarray:
+    """Hitters with a pitch in the season before ``season``: a group known before the
+    season starts, used to standardize that season's probe features."""
+    tl = store.timeline
+    owner = np.repeat(np.arange(len(tl.players)), tl.last - tl.first)
+    return np.asarray(tl.players[np.unique(owner[store.season == season - 1])])
 
-    Every season is read by a different pretrained model, and their scales drift (e.g.
-    fastball whiff 0.07 from the 2012 model vs 0.09 from 2016's). Standardizing within
-    the season and week compares a hitter only with the hitters read by the same model
-    on the same date: "how much more than the others does he whiff".
-    """
-    keys = ["player_id", "season", "week"]
-    merged = table[keys].merge(probes[[*keys, *PROBE_FEATURES]], on=keys, how="left")
+
+def standardize(feats: pd.DataFrame, reference: pd.DataFrame) -> pd.DataFrame:
+    """Each feature as standard deviations from the reference group's mean (blank where
+    the reference has no spread, e.g. a blanked feature)."""
+    sd = reference.std()
+    return (feats - reference.mean()) / sd.where(sd > 0)
+
+
+PROBE_KEYS = ["player_id", "season", "week"]
+
+
+def probe_path(root: Path, run: str) -> Path:
+    """Where ``scripts/build_hitter_ros_probes.py`` writes a run's probe features."""
+    return root / f"probes_{run}.parquet"
+
+
+def check_probes(table: pd.DataFrame, probes: pd.DataFrame) -> str | None:
+    """Why ``probes`` can't be used with ``table`` (None if it can): duplicate keys, a
+    table row it lacks, or an as-of date that differs (a probe file built for another
+    table would read history cut at the wrong date)."""
+    if probes.duplicated(PROBE_KEYS).any():
+        return "it has duplicate (player, season, week) rows"
+    merged = table[[*PROBE_KEYS, "as_of"]].merge(
+        probes[[*PROBE_KEYS, "as_of"]], on=PROBE_KEYS, how="left", suffixes=("", "_probe")
+    )
+    missing = int(merged["as_of_probe"].isna().sum())
+    if missing:
+        return f"it lacks {missing} table rows"
+    moved = int((pd.to_datetime(merged["as_of"]) != pd.to_datetime(merged["as_of_probe"])).sum())
+    if moved:
+        return f"{moved} rows have a different as-of date than the table"
+    return None
+
+
+def probe_inputs(table: pd.DataFrame, probes: pd.DataFrame) -> pd.DataFrame:
+    """``PROBE_FEATURES`` aligned to ``table``'s rows by (player, season, week); NaN for
+    a row the probe file doesn't cover. The file's features are already standardized
+    (see ``scripts/build_hitter_ros_probes.py``)."""
+    merged = table[PROBE_KEYS].merge(
+        probes[[*PROBE_KEYS, *PROBE_FEATURES]], on=PROBE_KEYS, how="left", validate="one_to_one"
+    )
     merged.index = table.index
-    feats = merged[list(PROBE_FEATURES)]
-    group = feats.groupby([merged["season"], merged["week"]])
-    sd = group.transform("std")
-    return (feats - group.transform("mean")) / sd.where(sd > 0)
+    return merged[list(PROBE_FEATURES)]
