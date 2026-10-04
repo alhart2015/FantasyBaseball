@@ -35,7 +35,13 @@ def score_run(table: pd.DataFrame, run: Path) -> tuple[pd.DataFrame | None, pd.D
     preds = pd.read_parquet(run / "predictions.parquet")
     pre_all, snap_all = backtest.score_predictions(table, preds, PROJECTIONS, STORE)
     backtest.write_scores(run, pre_all, snap_all)
-    md = [f"### Scores for run `{run.name}`", "", *backtest.summarize(pre_all, snap_all)]
+    seasons = sorted(int(x) for x in preds["season"].unique())
+    md = [
+        f"### Scores for run `{run.name}`",
+        "",
+        *backtest.summarize(pre_all, snap_all),
+        *backtest.league_forecast_lines(table, seasons),
+    ]
     (run / "scores.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return pre_all, snap_all

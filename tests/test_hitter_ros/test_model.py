@@ -317,3 +317,21 @@ def test_league_reference_is_unknown_in_the_first_store_season(table):
     first = table["season"] == table["season"].min()
     assert ref[first].isna().all().all()
     assert ref[~first].notna().all().all()
+
+
+def test_league_answer_rates_are_the_league_rest_of_season(table):
+    from fantasy_baseball.hitter_ros.features import COUNTS, league_answer_rates, rates_from_counts
+
+    answer = league_answer_rates(table)
+    # Week 0's answer window is the whole season, which next season's rows also hold
+    # (computed independently by the table build) as the league's previous season.
+    wk0_2024 = answer[(table.season == 2024) & (table.week == 0)]
+    p1 = table[table.season == 2025].iloc[0]
+    expected = rates_from_counts(pd.DataFrame([{c: p1[f"lg_p1_{c}"] for c in COUNTS}])).iloc[0]
+    for _, row in wk0_2024.iterrows():
+        pd.testing.assert_series_equal(row, expected, check_names=False)
+    # Same for every row of a season and week; changes with the week.
+    week1 = answer[(table.season == 2025) & (table.week == 1)]
+    assert (week1.nunique() == 1).all()
+    week0 = answer[(table.season == 2025) & (table.week == 0)]
+    assert not np.allclose(week0.iloc[0], week1.iloc[0])

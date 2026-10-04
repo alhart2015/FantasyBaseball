@@ -46,10 +46,19 @@ from fantasy_baseball.hitter_ros.features import (
     TARGETS,
     Standardizer,
     input_frame,
+    league_answer_rates,
     league_reference,
     target_frame,
 )
-from fantasy_baseball.hitter_ros.net import EVAL_BATCH, NetConfig, device, predict, train
+from fantasy_baseball.hitter_ros.net import (
+    EVAL_BATCH,
+    RELATIVE_TARGETS,
+    NetConfig,
+    device,
+    linear_calibration,
+    predict,
+    train,
+)
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
@@ -89,10 +98,13 @@ def fit_season(
     val_mask = table.loc[train_rows, "player_id"].isin(val_players).to_numpy()
 
     scaler = Standardizer().fit(x_all[train_rows & ~table["player_id"].isin(val_players)])
-    # relative_target: learn each player's rates divided by his league's (known on the
-    # date) and multiply back, so the era is handled by arithmetic (#421).
-    ref = league_reference(table) if config.relative_target else None
-    y_fit = y_all / ref if ref is not None else y_all
+    # relative_target: learn each player's rates divided by a league rate -- the forecast
+    # known on the date (#421) or the league's actual rate over the answer window (#424)
+    # -- and multiply back by the forecast. The forecast's own error then shows up only in
+    # raw MAE, never in the relative scores.
+    ref = league_reference(table) if config.relative_target != "none" else None
+    denominator = league_answer_rates(table) if config.relative_target == "answer" else ref
+    y_fit = y_all / denominator if denominator is not None else y_all
     # A row whose answer can't be computed (no PA, or no league reference) must not
     # count: train() expects weight 0 wherever the target is NaN.
     w_fit = w_all.where(y_fit.notna(), 0.0)
@@ -109,26 +121,44 @@ def fit_season(
     }
     y_std = np.column_stack([(y_train[s] - mu[s]) / sd[s] for s in TARGETS])
 
+    x_train = scaler.transform(x_all[train_rows])
+    w_np = w_train.to_numpy(dtype=np.float32)
+    train_pos = positions[train_rows.to_numpy()] if batcher else None
     result = train(
-        scaler.transform(x_all[train_rows]),
+        x_train,
         y_std,
-        w_train.to_numpy(dtype=np.float32),
+        w_np,
         val_mask,
         config,
-        rows=positions[train_rows.to_numpy()] if batcher else None,
+        rows=train_pos,
         batcher=batcher,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
+        groups=(table.loc[train_rows, "season"] * 1000 + table.loc[train_rows, "week"]).to_numpy(),
     )
+
+    def outputs(x: np.ndarray, pos: np.ndarray | None, shuffle: bool = False) -> np.ndarray:
+        return predict(
+            result.model,
+            x,
+            rows=pos,
+            batcher=batcher,
+            shuffle_order=shuffle,
+            chunk=config.micro_batch or EVAL_BATCH,
+            amp=config.amp,
+        )
+
     test_rows = table["season"] == test_season
-    z = predict(
-        result.model,
+    z = outputs(
         scaler.transform(x_all[test_rows]),
-        rows=positions[test_rows.to_numpy()] if batcher else None,
-        batcher=batcher,
-        shuffle_order=shuffle_test_order,
-        chunk=config.micro_batch or EVAL_BATCH,
-        amp=config.amp,
+        positions[test_rows.to_numpy()] if batcher else None,
+        shuffle_test_order,
     )
+    if config.loss == "rank":
+        # The rank loss only orders players; map its outputs onto the (standardized)
+        # target with a line fit on the training players, which keeps the order.
+        z_fit = outputs(x_train[fit_rows], None if train_pos is None else train_pos[fit_rows])
+        slope, intercept = linear_calibration(z_fit, y_std[fit_rows], w_np[fit_rows])
+        z = z * slope + intercept
     preds = pd.DataFrame(
         {s: z[:, i] * sd[s] + mu[s] for i, s in enumerate(TARGETS)},
         index=table.index[test_rows],
@@ -196,8 +226,17 @@ def main() -> int:
     )
     parser.add_argument(
         "--relative-target",
-        action="store_true",
-        help="predict rates relative to the league (last 3 seasons + this season so far)",
+        choices=list(RELATIVE_TARGETS),
+        default=defaults.relative_target,
+        help="predict rates relative to the league: 'known' = the forecast known on the "
+        "date (last 3 seasons + this season so far, #421); 'answer' = the league's actual "
+        "rate over the answer window (#424). Both multiply back by the forecast.",
+    )
+    parser.add_argument(
+        "--loss",
+        choices=["mse", "rank"],
+        default=defaults.loss,
+        help="rank: pairwise ranking loss within each season and week (#424)",
     )
     parser.add_argument(
         "--weighting",
@@ -262,6 +301,7 @@ def main() -> int:
             weighting=args.weighting,
             era=args.era,
             relative_target=args.relative_target,
+            loss=args.loss,
         )
     except ValueError as err:
         parser.error(str(err))
@@ -274,9 +314,9 @@ def main() -> int:
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
 
     table = pd.read_parquet(TABLE)
-    if (config.era != "none" or config.relative_target) and not set(ERA_TABLE_COLUMNS) <= set(
-        table.columns
-    ):
+    if (config.era != "none" or config.relative_target != "none") and not set(
+        ERA_TABLE_COLUMNS
+    ) <= set(table.columns):
         parser.error(f"{TABLE} predates the era columns; run scripts/build_hitter_ros_table.py")
     x_all = input_frame(table, era=config.era)
     y_all, w_all = target_frame(table)
@@ -325,6 +365,7 @@ def main() -> int:
         f"Config: `{json.dumps(config.to_dict())}`",
         "",
         *backtest.summarize(pre, snap),
+        *backtest.league_forecast_lines(table, args.test_seasons),
     ]
     epochs = ", ".join(f"{i['test_season']}: {i['best_epoch']}" for i in infos)
     md += ["", f"Best epoch per test season: {epochs}. Inputs: {infos[0]['n_features']}."]

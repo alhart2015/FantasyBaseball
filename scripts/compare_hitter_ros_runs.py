@@ -11,6 +11,8 @@ train_hitter_ros.py writes last):
   blend (negative = ours better), over the seasons where both were scored.
 * Mid-season: our gap to the blend, averaged over the snapshots where both were scored
   (all of them, or those between --from and --to), with how many snapshots that was.
+* The same for the league-level-free scores (#424): level-free MAE (lower is better)
+  and pairwise order accuracy in % (higher is better), for runs scored after #424.
 
 Usage:
     python scripts/compare_hitter_ros_runs.py 001-baseline-mlp 002a-lr3e-4 002b-lr1e-4
@@ -32,7 +34,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import BLEND, OURS, mean_over_seasons, to_markdown
-from fantasy_baseball.hitter_ros.evaluate import mae_table
+from fantasy_baseball.hitter_ros.evaluate import mae_table, order_table
 from fantasy_baseball.hitter_ros.features import TARGETS
 
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
@@ -44,6 +46,16 @@ def _both_scored(scored: pd.DataFrame, unit: str) -> pd.DataFrame:
     were scored, so the two are always averaged over the same set."""
     has = scored.groupby(unit)["system"].agg(lambda s: {OURS, BLEND} <= set(s))
     return scored[scored[unit].isin(has.index[has])]
+
+
+def _scores(scored: pd.DataFrame, unit: str) -> dict[str, pd.DataFrame]:
+    """Systems x stats, averaged over seasons or snapshots: raw MAE, and (in frames
+    scored after #424) level-free MAE and pairwise accuracy."""
+    out = {"": mean_over_seasons(scored, unit=unit)}
+    if "lf_err" in scored.columns:
+        out["lf_"] = mean_over_seasons(scored, "lf_err", unit)
+        out["pair_"] = order_table(scored, "pairwise")
+    return out
 
 
 def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, object]:
@@ -58,14 +70,14 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
     pre_path = run / "scored_preseason.parquet"
     if pre_path.exists():
         pre = pd.read_parquet(pre_path)
-        means = mean_over_seasons(pre[pre["system"] == OURS])
-        for s in TARGETS:
-            row[f"pre_{s}"] = means.loc[OURS, s]
+        for kind, means in _scores(pre[pre["system"] == OURS], "season").items():
+            for s in TARGETS:
+                row[f"pre_{kind}{s}"] = means.loc[OURS, s]
         both = _both_scored(pre, "season")
         if not both.empty:
-            paired = mean_over_seasons(both)
-            for s in TARGETS:
-                row[f"pre_gap_{s}"] = paired.loc[OURS, s] - paired.loc[BLEND, s]
+            for kind, paired in _scores(both, "season").items():
+                for s in TARGETS:
+                    row[f"pre_{kind}gap_{s}"] = paired.loc[OURS, s] - paired.loc[BLEND, s]
     snap_path = run / "scored_snapshots.parquet"
     if snap_path.exists():
         snap = pd.read_parquet(snap_path)
@@ -74,15 +86,11 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
         if snap_to:
             snap = snap[snap["snapshot"] <= snap_to]
         snap = _both_scored(snap, "snapshot") if not snap.empty else snap
-        gaps = [
-            mae_table(g).loc[OURS, list(TARGETS)] - mae_table(g).loc[BLEND, list(TARGETS)]
-            for _, g in snap.groupby("snapshot")
-        ]
-        row["mid_snapshots"] = len(gaps)
-        if gaps:
-            mean_gap = pd.concat(gaps, axis=1).mean(axis=1)
-            for s in TARGETS:
-                row[f"mid_gap_{s}"] = mean_gap[s]
+        row["mid_snapshots"] = snap["snapshot"].nunique()
+        if not snap.empty:
+            for kind, means in _scores(snap, "snapshot").items():
+                for s in TARGETS:
+                    row[f"mid_{kind}gap_{s}"] = means.loc[OURS, s] - means.loc[BLEND, s]
     return row
 
 
@@ -118,6 +126,28 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
         (
             f"Mid-season gap to blend, {window}",
             [("mid_snapshots", "snapshots"), *((f"mid_gap_{s}", s) for s in TARGETS)],
+            2,
+        ),
+        ("Preseason level-free MAE (ours)", [(f"pre_lf_{s}", s) for s in TARGETS], 2),
+        (
+            "Preseason level-free gap to blend (negative = ours better)",
+            [(f"pre_lf_gap_{s}", s) for s in TARGETS],
+            2,
+        ),
+        ("Preseason pairwise accuracy % (ours)", [(f"pre_pair_{s}", s) for s in TARGETS], 2),
+        (
+            "Preseason pairwise accuracy gap to blend (positive = ours better)",
+            [(f"pre_pair_gap_{s}", s) for s in TARGETS],
+            2,
+        ),
+        (
+            f"Mid-season level-free gap to blend, {window}",
+            [(f"mid_lf_gap_{s}", s) for s in TARGETS],
+            2,
+        ),
+        (
+            f"Mid-season pairwise accuracy gap to blend, {window} (positive = ours better)",
+            [(f"mid_pair_gap_{s}", s) for s in TARGETS],
             2,
         ),
     ]

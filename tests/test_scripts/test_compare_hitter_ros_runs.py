@@ -159,3 +159,22 @@ def test_train_script_asks_to_rebuild_a_table_without_era_columns(tmp_path, monk
     with pytest.raises(SystemExit):
         train_hitter_ros.main()
     assert "build_hitter_ros_table" in capsys.readouterr().err
+
+
+def test_run_row_reports_the_league_free_scores(runs):
+    from fantasy_baseball.hitter_ros.evaluate import scored_players
+
+    actual = pd.DataFrame({s: [0.1, 0.2, 0.3] for s in TARGETS}, index=[1, 2, 3])
+    actual["pa"] = 500
+    right_order = actual[list(TARGETS)] * 0.5  # a pure league-level miss
+    wrong_order = actual[list(TARGETS)].iloc[::-1].set_axis(actual.index)
+    pre = scored_players({"ours": right_order, "fg_blend": wrong_order}, actual, 1)
+    _run(runs, "r1", pre=pre.assign(season=2025))
+    row = cmp.compare(["r1"], None, None).loc["r1"]
+    assert row["pre_lf_hr"] == pytest.approx(0.0, abs=1e-9)
+    assert row["pre_pair_hr"] == pytest.approx(100.0)
+    assert row["pre_pair_gap_hr"] == pytest.approx(100.0)
+    assert row["pre_lf_gap_hr"] < 0  # ours ordered right, the blend backwards
+    # Old runs (scored before #424) have no level-free column: their rows just lack it.
+    _run(runs, "old", pre=_scored({"ours": 1.0, "fg_blend": 2.0}, season=2025))
+    assert pd.isna(cmp.compare(["r1", "old"], None, None).loc["old", "pre_lf_hr"])

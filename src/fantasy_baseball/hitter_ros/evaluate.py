@@ -1,10 +1,23 @@
-"""Score projections against what happened: per-stat raw error (#399's bar).
+"""Score projections against what happened: per-stat raw error (#399's bar), plus
+scores that ignore the league's level (#424).
 
-Error is the mean absolute error (MAE) of the projected rate vs. the actual rate, over a
-fixed set of players that every compared projection covers:
+Raw error is the mean absolute error (MAE) of the projected rate vs. the actual rate,
+over a fixed set of players that every compared projection covers:
 
 * R, HR, RBI, SB: per-PA rate error x 600 -- "how many R/HR/RBI/SB off over 600 PA".
 * AVG: batting-average error x 1000 -- in points (e.g. 25 = .025).
+
+A roto league is relative: if the whole league's offense drops, every team drops
+together. So three more scores ask "is X better than Y", not "25 or 30 HR":
+
+* **Level-free MAE** (``lf_err``): each projection is rescaled so its PA-weighted mean
+  over the scored players equals the actuals' mean, then MAE as above. A projection
+  that is right about every player except for one league-wide factor scores 0.
+* **Pairwise order accuracy**: over every pair of scored players, the share the
+  projection orders the same way as what happened (a projected tie gets half credit;
+  pairs that tied in reality are skipped). The weighted version counts each pair by
+  the actual gap, so near-ties matter less.
+* **Rank correlation** (Spearman) between projected and actual rates.
 
 Every system is scored on the same players, so the numbers are comparable down a column.
 """
@@ -86,13 +99,16 @@ def _common_index(frames: Iterable[pd.DataFrame]) -> pd.Index:
 def scored_players(
     projections: dict[str, pd.DataFrame], actual: pd.DataFrame, min_pa: float
 ) -> pd.DataFrame:
-    """One row per (player, system, stat): projected and actual rate, and the scaled error.
+    """One row per (player, system, stat): projected and actual rate, actual PA, and the
+    scaled raw and level-free errors.
 
     ``actual`` has rates plus ``pa`` (actual PA in the window); only players with
-    ``pa >= min_pa`` that every projection covers are kept.
+    ``pa >= min_pa`` that every projection covers are kept. Call it once per season or
+    snapshot: the level-free error rescales over exactly these players.
     """
     players = actual.index[actual["pa"] >= min_pa]
     players = players.intersection(_common_index([*projections.values(), actual]))
+    pa = actual.loc[players, "pa"].to_numpy(dtype=float)
     parts = []
     for name, proj in projections.items():
         for s in TARGETS:
@@ -106,11 +122,43 @@ def scored_players(
                         "stat": s,
                         "projected": projected,
                         "actual": truth,
+                        "pa": pa,
                         "abs_err": abs(projected - truth) * SCALE[s],
+                        "lf_err": level_free_error(projected, truth, pa) * SCALE[s],
                     }
                 )
             )
     return pd.concat(parts, ignore_index=True)
+
+
+def level_free_error(projected: np.ndarray, actual: np.ndarray, pa: np.ndarray) -> np.ndarray:
+    """|projected - actual| after scaling ``projected`` so its PA-weighted mean equals the
+    actuals': both divided by their own mean, then put back in the actuals' units."""
+    if len(projected) == 0:
+        return np.zeros(0)
+    proj_mean = np.average(projected, weights=pa)
+    level = np.average(actual, weights=pa) / proj_mean if proj_mean else 1.0
+    return np.abs(projected * level - actual)
+
+
+def pairwise_accuracy(projected: np.ndarray, actual: np.ndarray, *, weighted: bool) -> float:
+    """Share of player pairs the projection orders as the actuals did (see module doc)."""
+    i, j = np.triu_indices(len(projected), k=1)
+    gap = actual[i] - actual[j]
+    keep = gap != 0
+    if not keep.any():
+        return float("nan")
+    agree = np.sign(projected[i] - projected[j])[keep] * np.sign(gap[keep])
+    credit = np.where(agree == 0, 0.5, (agree > 0).astype(float))
+    return float(np.average(credit, weights=np.abs(gap[keep]) if weighted else None))
+
+
+def spearman(projected: np.ndarray, actual: np.ndarray) -> float:
+    """Rank correlation; NaN when either side is constant (e.g. ``league_avg``)."""
+    p, a = pd.Series(projected).rank(), pd.Series(actual).rank()
+    if p.nunique() < 2 or a.nunique() < 2:
+        return float("nan")
+    return float(np.corrcoef(p, a)[0, 1])
 
 
 # A scored frame may stack several seasons or snapshots; a player is scored once per
@@ -123,13 +171,48 @@ def unit_key(scored: pd.DataFrame) -> list[str]:
     return ["player_id", *(c for c in UNIT_COLS if c in scored.columns)]
 
 
-def mae_table(scored: pd.DataFrame) -> pd.DataFrame:
-    """Rows = systems (in first-seen order), columns = stats, plus ``n`` scored player-units."""
+def mae_table(scored: pd.DataFrame, value: str = "abs_err") -> pd.DataFrame:
+    """Rows = systems (in first-seen order), columns = stats, plus ``n`` scored player-units.
+    ``value``: ``abs_err`` (raw MAE) or ``lf_err`` (level-free MAE)."""
     order = list(dict.fromkeys(scored["system"]))
-    table = scored.pivot_table(index="system", columns="stat", values="abs_err", aggfunc="mean")
+    table = scored.pivot_table(index="system", columns="stat", values=value, aggfunc="mean")
     units = scored.drop_duplicates([*unit_key(scored), "system"])
     table["n"] = units.groupby("system").size()
     return table.loc[order, [*TARGETS, "n"]]
+
+
+ORDER_METRICS = ("pairwise", "pairwise_w", "spearman")
+
+
+def order_scores(scored: pd.DataFrame) -> pd.DataFrame:
+    """Pairwise accuracy (plain and gap-weighted) and Spearman, one row per season or
+    snapshot x system x stat. Pairs are only formed within one season or snapshot."""
+    keys = [*(c for c in UNIT_COLS if c in scored.columns), "system", "stat"]
+    rows = []
+    for key, g in scored.groupby(keys, sort=False):
+        p, a = g["projected"].to_numpy(), g["actual"].to_numpy()
+        rows.append(
+            {
+                **dict(zip(keys, key, strict=True)),
+                "pairwise": pairwise_accuracy(p, a, weighted=False),
+                "pairwise_w": pairwise_accuracy(p, a, weighted=True),
+                "spearman": spearman(p, a),
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def order_table(scored: pd.DataFrame, metric: str) -> pd.DataFrame:
+    """Systems x stats: ``metric`` (one of ``ORDER_METRICS``) averaged over the seasons or
+    snapshots in ``scored``, each counting once. Pairwise accuracy is in percent."""
+    if metric not in ORDER_METRICS:
+        raise ValueError(f"unknown order metric {metric!r}")
+    per_unit = order_scores(scored)
+    table = per_unit.pivot_table(index="system", columns="stat", values=metric, aggfunc="mean")
+    if metric != "spearman":
+        table = table * 100
+    order = list(dict.fromkeys(scored["system"]))
+    return table.reindex(index=order, columns=list(TARGETS))
 
 
 def paired_bootstrap(
@@ -139,8 +222,10 @@ def paired_bootstrap(
     *,
     n_boot: int = 2000,
     seed: int = 0,
+    value: str = "abs_err",
 ) -> pd.DataFrame:
     """MAE(a) - MAE(b) per stat, with a 95% interval from resampling scored player-units.
+    ``value``: ``abs_err`` (raw MAE) or ``lf_err`` (level-free MAE).
 
     Negative = ``a`` is better. Paired: each resample draws player-units (a player in a
     given season or snapshot), and both systems are scored on the same draw, so
@@ -152,7 +237,7 @@ def paired_bootstrap(
     out = {}
     for s in TARGETS:
         rows = scored[scored["stat"] == s]
-        wide = rows.pivot_table(index=key, columns="system", values="abs_err")
+        wide = rows.pivot_table(index=key, columns="system", values=value)
         diff = (wide[a] - wide[b]).to_numpy()
         draws = rng.integers(0, len(diff), size=(n_boot, len(diff)))
         boot = diff[draws].mean(axis=1)
