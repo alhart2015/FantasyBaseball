@@ -283,3 +283,13 @@ def test_spray_uses_atan2_behind_home():
 def test_missing_store_says_how_to_fill_it(tmp_path):
     with pytest.raises(FileNotFoundError, match="fetch_pitch_data"):
         build_table(tmp_path)
+
+
+def test_league_context_uses_only_games_before_the_date(store):
+    w1 = _row(build_table(store), HITTER, 2025, 1)
+    # Before Apr 8, 2025: 7 days x (HITTER 4 + OTHER 4 PA), PITCHER 2 PA on day 0, BENCH 1
+    # PA on day 2.
+    assert w1.lg_std_pa == 7 * 8 + 2 + 1
+    assert w1.lg_std_hr == 7  # HITTER 1 HR a day
+    # 2024: 10 days x 8 PA + PITCHER 2 + BENCH 1.
+    assert w1.lg_p1_pa == 10 * 8 + 2 + 1 and w1.lg_p3_pa == w1.lg_p1_pa == w1.lg_car_pa

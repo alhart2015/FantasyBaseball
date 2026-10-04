@@ -129,6 +129,8 @@ PITCH_AGGS: dict[str, str] = {
 }
 PITCH_COUNTS = tuple(PITCH_AGGS)
 TEAM_COUNTS = ("team_r", "team_pa", "team_games")
+# League totals per window (#421), for league rates and player-vs-league ratios.
+LEAGUE_COUNTS = ("pa", "ab", "h", "b2", "b3", "hr", "r", "rbi", "sb", "cs", "bb", "k", "hbp")
 
 _REQUIRED_VIEWS = ("pitches", "lineups", "schedule")
 
@@ -228,6 +230,56 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
                        CAST(NULL AS BIGINT) AS competitive_runs WHERE false"""
     )
     conn.execute(f"CREATE TEMP TABLE sprint AS {sprint_src}")
+
+
+def _league_context(conn: duckdb.DuckDBPyConnection) -> None:
+    """League totals for each row's windows (#421): this season before the date, last
+    season, the last three seasons and every earlier season in the store. Counts only;
+    ``features.py`` turns them into league rates and player-vs-league ratios."""
+    sums = ", ".join(f"sum({c}) AS {c}" for c in LEAGUE_COUNTS)
+    conn.execute(
+        f"CREATE TEMP TABLE league_daily AS SELECT season, game_date, {sums} "
+        "FROM box_daily GROUP BY 1, 2"
+    )
+    running = ", ".join(
+        f"sum({c}) OVER (PARTITION BY season ORDER BY game_date) AS {c}" for c in LEAGUE_COUNTS
+    )
+    conn.execute(
+        f"CREATE TEMP TABLE league_cum AS SELECT season, game_date, {running} FROM league_daily"
+    )
+    conn.execute(
+        f"CREATE TEMP TABLE league_season AS SELECT season, {sums} FROM league_daily GROUP BY 1"
+    )
+
+    def window(prefix: str, cond: str) -> str:
+        cols = ", ".join(f"coalesce(sum(l.{c}), 0) AS lg_{prefix}_{c}" for c in LEAGUE_COUNTS)
+        return f"""
+            SELECT s.season, {cols}
+            FROM (SELECT DISTINCT season FROM pop) s
+            LEFT JOIN league_season l ON {cond}
+            GROUP BY 1
+        """
+
+    conn.execute(f"CREATE TEMP TABLE league_p1 AS {window('p1', 'l.season = s.season - 1')}")
+    conn.execute(
+        "CREATE TEMP TABLE league_p3 AS "
+        + window("p3", "l.season BETWEEN s.season - 3 AND s.season - 1")
+    )
+    conn.execute(f"CREATE TEMP TABLE league_car AS {window('car', 'l.season < s.season')}")
+    std_cols = ", ".join(f"coalesce(c.{c}, 0) AS lg_std_{c}" for c in LEAGUE_COUNTS)
+    # League running totals through the latest game day strictly before the date.
+    conn.execute(
+        f"""
+        CREATE TEMP TABLE league_ctx AS
+        SELECT pop.player_id, pop.season, pop.week, {std_cols},
+               p1.* EXCLUDE (season), p3.* EXCLUDE (season), car.* EXCLUDE (season)
+        FROM pop
+        ASOF LEFT JOIN league_cum c ON c.season = pop.season AND pop.as_of > c.game_date
+        JOIN league_p1 p1 ON p1.season = pop.season
+        JOIN league_p3 p3 ON p3.season = pop.season
+        JOIN league_car car ON car.season = pop.season
+        """
+    )
 
 
 def _season_totals(conn: duckdb.DuckDBPyConnection, daily: str, cols: Iterable[str]) -> str:
@@ -330,6 +382,8 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
         """
     )
 
+    _league_context(conn)
+
     first_store_season = "(SELECT min(season) FROM box_daily)"
     joined = ", ".join(f"{p}.* EXCLUDE (player_id, season, week)" for p in parts)
     df = conn.execute(
@@ -345,11 +399,13 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
                s2.sprint_speed AS p2_sprint_speed, s2.competitive_runs AS p2_sprint_runs,
                tc.team_id, tc.std_team_r, tc.std_team_pa, tc.std_team_games,
                tp.p1_team_r, tp.p1_team_pa, tp.p1_team_games,
-               {joined}
+               {joined},
+               lg.* EXCLUDE (player_id, season, week)
         FROM pop
         {" ".join(f"JOIN {p} USING (player_id, season, week)" for p in parts)}
         JOIN team_ctx tc USING (player_id, season, week)
         JOIN team_ctx_p1 tp USING (player_id, season, week)
+        JOIN league_ctx lg USING (player_id, season, week)
         LEFT JOIN season_age a ON a.player_id = pop.player_id AND a.season = pop.season
         LEFT JOIN sprint s1 ON s1.player_id = pop.player_id AND s1.season = pop.season - 1
         LEFT JOIN sprint s2 ON s2.player_id = pop.player_id AND s2.season = pop.season - 2

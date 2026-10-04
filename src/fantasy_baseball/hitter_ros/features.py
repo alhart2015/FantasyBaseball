@@ -11,6 +11,8 @@ changing every ``ros_*`` value leaves the inputs unchanged.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+
 import numpy as np
 import pandas as pd
 
@@ -74,6 +76,50 @@ def _window_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
     return {f"{w}_{k}": v for k, v in out.items()}
 
 
+# Rates compared with the league in the same window (#421). Each takes a table-column
+# getter for one window and returns that window's rate.
+Column = Callable[[str], pd.Series]
+
+
+def _per_pa(stat: str) -> Callable[[Column], pd.Series]:
+    def rate(c: Column) -> pd.Series:
+        return _div(c(stat), c("pa"))
+
+    return rate
+
+
+_ERA_RATES: dict[str, Callable[[Column], pd.Series]] = {
+    **{f"{s}_pa": _per_pa(s) for s in ("r", "hr", "rbi", "sb", "bb", "k")},
+    "avg": lambda c: _div(c("h"), c("ab")),
+    "iso": lambda c: _div(c("b2") + 2 * c("b3") + 3 * c("hr"), c("ab")),
+    "steal_attempt_rate": lambda c: _div(
+        c("sb") + c("cs"), c("h") - c("hr") - c("b2") - c("b3") + c("bb") + c("hbp")
+    ),
+}
+
+
+def _era_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
+    """League rates per window, the player's rate relative to the league in the same
+    window, and rule flags known before the season (#421)."""
+    out: dict[str, pd.Series] = {}
+    for w in WINDOWS:
+
+        def lg(name: str, w: str = w) -> pd.Series:
+            return t[f"lg_{w}_{name}"].astype(float)
+
+        def me(name: str, w: str = w) -> pd.Series:
+            return t[f"{w}_{name}"].astype(float)
+
+        for name, rate in _ERA_RATES.items():
+            league = rate(lg)
+            out[f"lg_{w}_{name}"] = league
+            out[f"{w}_{name}_vs_lg"] = _div(rate(me), league)
+    season = t["season"]
+    out["rules_universal_dh"] = ((season == 2020) | (season >= 2022)).astype(float)
+    out["rules_2023"] = (season >= 2023).astype(float)  # pitch clock, bigger bases
+    return out
+
+
 def input_frame(t: pd.DataFrame) -> pd.DataFrame:
     """Model inputs for every table row: rates per window plus context. NaN = unknown."""
     cols: dict[str, pd.Series] = {}
@@ -96,6 +142,7 @@ def input_frame(t: pd.DataFrame) -> pd.DataFrame:
             "std_team_log_pa": np.log1p(t["std_team_pa"].astype(float)),
         }
     )
+    cols.update(_era_inputs(t))
     return pd.DataFrame(cols, index=t.index)
 
 

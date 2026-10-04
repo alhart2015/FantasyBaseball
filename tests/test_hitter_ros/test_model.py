@@ -268,3 +268,13 @@ def test_balanced_weighting_is_applied_by_train_itself():
         NetConfig(hidden=[4], weighting="balanced", max_epochs=1),
         season_time=np.linspace(0, 1, 20),
     )
+
+
+def test_era_inputs(table):
+    row = table[(table.player_id == 1) & (table.season == 2025) & (table.week == 1)]
+    x = input_frame(row).iloc[0]
+    assert x["lg_std_hr_pa"] == pytest.approx(7 / 59)
+    assert x["std_hr_pa_vs_lg"] == pytest.approx((7 / 28) / (7 / 59))
+    assert x["rules_universal_dh"] == 1 and x["rules_2023"] == 1
+    early = input_frame(table[(table.season == 2024) & (table.player_id == 1)]).iloc[0]
+    assert early["rules_universal_dh"] == 1 and early["rules_2023"] == 1
