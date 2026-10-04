@@ -114,3 +114,35 @@ def test_train_script_keeps_an_old_run_when_tokens_are_missing(tmp_path, monkeyp
     with pytest.raises(SystemExit):
         train_hitter_ros.main()
     assert (old / "summary.md").read_text() == "old results\n"
+
+
+def test_train_script_rejects_zero_training_seasons(monkeypatch):
+    from scripts import train_hitter_ros
+
+    monkeypatch.setattr("sys.argv", ["train", "--name", "x", "--train-seasons", "0"])
+    with pytest.raises(SystemExit):
+        train_hitter_ros.main()
+
+
+def test_pretrain_script_keeps_an_old_run_when_tokens_are_missing(tmp_path, monkeypatch):
+    from scripts import pretrain_hitter_ros
+
+    old = tmp_path / "p" / "keep"
+    old.mkdir(parents=True)
+    (old / "run.json").write_text("{}")
+    monkeypatch.setattr(pretrain_hitter_ros, "PRETRAIN", tmp_path / "p")
+    monkeypatch.setattr(pretrain_hitter_ros, "TOKENS", tmp_path / "missing.parquet")
+    monkeypatch.setattr("sys.argv", ["pretrain", "--name", "keep", "--overwrite"])
+    with pytest.raises(SystemExit):
+        pretrain_hitter_ros.main()
+    assert (old / "run.json").exists()
+
+
+def test_train_from_takes_the_later_limit():
+    from scripts.train_hitter_ros import _train_from
+
+    assert _train_from(2026, None, None) is None
+    assert _train_from(2026, 4, None) == 2022
+    assert _train_from(2026, None, 2015) == 2015
+    assert _train_from(2018, 11, 2015) == 2015
+    assert _train_from(2026, 4, 2015) == 2022

@@ -238,3 +238,12 @@ def test_predict_on_no_rows_returns_an_empty_array():
 
     out = predict(MLP(3, 5, [4], 0.0).to(device()), np.zeros((0, 3), dtype=np.float32))
     assert out.shape == (0, 5)
+
+
+def test_timeline_refuses_unsorted_events():
+    from fantasy_baseball.hitter_ros.history import HitterTimeline
+
+    with pytest.raises(ValueError, match="sorted by hitter"):
+        HitterTimeline(np.array([2, 1]), np.array([0, 0]))
+    with pytest.raises(ValueError, match="sorted by time"):
+        HitterTimeline(np.array([1, 1]), np.array([5, 3]))

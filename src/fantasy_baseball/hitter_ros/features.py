@@ -152,3 +152,27 @@ class Standardizer:
     def n_features(self) -> int:
         assert self.mean is not None, "fit first"
         return len(self.mean) + len(self.missing_cols)
+
+
+SEASON_PARTS = 5
+
+
+def balance_by_season_time(weights: pd.DataFrame, frac_season_left: pd.Series) -> pd.DataFrame:
+    """Rescale loss weights so each fifth of the season carries the same total weight.
+
+    PA-weighting alone gives late-season rows (few PA left) ~4% of the weight though
+    they are ~16% of the rows, so the net barely learns late-season projections. Within
+    each fifth, rows still count in proportion to their PA. Each target column is
+    balanced on its own, and the overall total is unchanged.
+    """
+    part = np.minimum((1 - frac_season_left.to_numpy()) * SEASON_PARTS, SEASON_PARTS - 1)
+    part = part.astype(int)
+    out = weights.copy()
+    for col in weights.columns:
+        w = weights[col].to_numpy(dtype=float)
+        totals = np.bincount(part, weights=w, minlength=SEASON_PARTS)
+        present = totals > 0
+        target = w.sum() / present.sum()
+        scale = np.where(present, target / np.where(present, totals, 1), 0.0)
+        out[col] = w * scale[part]
+    return out
