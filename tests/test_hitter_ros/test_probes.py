@@ -132,4 +132,44 @@ def test_probe_inputs_align_to_the_table_and_leave_gaps_blank():
         probes[c] = 0.5
     x = probe_inputs(table, probes)
     assert list(x.index) == [10, 11, 12]
-    assert x.loc[12].eq(0.5).all() and x.loc[[10, 11]].isna().all().all()
+    # Row 12 is alone in its week, so it can't be standardized: blank, like the gaps.
+    assert x.isna().all().all()
+    probes = pd.concat([probes, probes.assign(player_id=3)], ignore_index=True)
+    probes.loc[1, list(PROBE_FEATURES)] = 1.5
+    table.loc[13] = [3, 2025, 1]
+    x = probe_inputs(table, probes)
+    assert x.loc[[10, 11]].isna().all().all() and x.loc[[12, 13]].notna().all().all()
+
+
+def test_contact_features_are_blank_where_the_model_never_saw_contact():
+    from fantasy_baseball.hitter_ros.probes import (
+        CONTACT_FEATURES,
+        blank_unseen_contact,
+        first_contact_season,
+    )
+
+    tokens = pd.DataFrame(
+        {"season": [2014, 2015, 2016], "out_bip_solid": [0, 1, 0], "out_bip_barrel": [0, 0, 1]}
+    )
+    assert first_contact_season(tokens) == 2015
+    probes = pd.DataFrame({"season": [2015, 2016]})
+    for c in PROBE_FEATURES:
+        probes[c] = 0.5
+    out = blank_unseen_contact(probes, 2015)
+    # Model 2015 trained on seasons before 2015: no contact classes; model 2016 saw 2015.
+    assert out.loc[0, list(CONTACT_FEATURES)].isna().all()
+    assert out.loc[1, list(CONTACT_FEATURES)].notna().all()
+    others = [c for c in PROBE_FEATURES if c not in CONTACT_FEATURES]
+    assert out[others].notna().all().all() and "probe_zone_whiff_fb" in others
+
+
+def test_probe_inputs_standardize_within_each_season_and_week():
+    table = pd.DataFrame(
+        {"player_id": [1, 2, 3, 1, 2], "season": [2024] * 3 + [2025] * 2, "week": 0}
+    )
+    probes = table.copy()
+    for c in PROBE_FEATURES:
+        probes[c] = [0.1, 0.2, 0.3, 5.0, 7.0]  # a different scale each season
+    x = probe_inputs(table, probes)["probe_zone_whiff_fb"]
+    np.testing.assert_allclose(x[:3], [-1.0, 0.0, 1.0], atol=1e-12)
+    np.testing.assert_allclose(x[3:], [-1 / np.sqrt(2), 1 / np.sqrt(2)])

@@ -201,6 +201,29 @@ def _probs_to_features(probs: np.ndarray) -> pd.DataFrame:
 PROBE_FEATURES: tuple[str, ...] = tuple(
     _probs_to_features(np.full((1, len(PROBES), len(OUTCOMES)), 0.1)).columns
 )
+# Features that read contact quality (solid / barrel classes). A model pretrained only
+# on pitches before Statcast's contact classes (2015) has never seen one, so these come
+# out exactly 0 for every hitter: they must be blanked, not used (see
+# ``blank_unseen_contact``).
+CONTACT_FEATURES: tuple[str, ...] = tuple(
+    f for f in PROBE_FEATURES if "_hard" in f or "_barrel" in f
+)
+
+
+def first_contact_season(tokens: pd.DataFrame) -> int:
+    """The first season whose balls in play carry Statcast contact classes."""
+    quality = (tokens["out_bip_solid"] > 0) | (tokens["out_bip_barrel"] > 0)
+    if not quality.any():
+        raise ValueError("no pitch has a contact class")
+    return int(tokens.loc[quality, "season"].min())
+
+
+def blank_unseen_contact(probes: pd.DataFrame, first_contact: int) -> pd.DataFrame:
+    """Blank ``CONTACT_FEATURES`` on rows read by a model that never saw a contact class:
+    model S is pretrained on seasons before S, so S <= ``first_contact`` saw none."""
+    out = probes.copy()
+    out.loc[out["season"] <= first_contact, list(CONTACT_FEATURES)] = np.nan
+    return out
 
 
 def _bats_left(store: PitchStore, start: np.ndarray, n: np.ndarray) -> dict[int, np.ndarray]:
@@ -274,9 +297,18 @@ def probe_features(
 
 
 def probe_inputs(table: pd.DataFrame, probes: pd.DataFrame) -> pd.DataFrame:
-    """``PROBE_FEATURES`` aligned to ``table``'s rows by (player, season, week); NaN for
-    a row the probe file doesn't cover."""
+    """``PROBE_FEATURES`` aligned to ``table``'s rows by (player, season, week), each
+    standardized within its season and week; NaN for a row the probe file doesn't cover.
+
+    Every season is read by a different pretrained model, and their scales drift (e.g.
+    fastball whiff 0.07 from the 2012 model vs 0.09 from 2016's). Standardizing within
+    the season and week compares a hitter only with the hitters read by the same model
+    on the same date: "how much more than the others does he whiff".
+    """
     keys = ["player_id", "season", "week"]
     merged = table[keys].merge(probes[[*keys, *PROBE_FEATURES]], on=keys, how="left")
     merged.index = table.index
-    return merged[list(PROBE_FEATURES)]
+    feats = merged[list(PROBE_FEATURES)]
+    group = feats.groupby([merged["season"], merged["week"]])
+    sd = group.transform("std")
+    return (feats - group.transform("mean")) / sd.where(sd > 0)

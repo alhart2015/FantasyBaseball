@@ -2,7 +2,8 @@
 
 For each season S in the table, load model S of the pretraining run (trained on
 seasons before S only) and read probe features for every row of season S (see
-hitter_ros/probes.py). Seasons without a model (the store's first season) get NaN.
+hitter_ros/probes.py). Seasons without a model (the store's first season) get NaN, and so do the contact-
+quality features of models pretrained only before Statcast's contact classes.
 Writes data/hitter_ros/probes_<run>.parquet: player_id, season, week + the features.
 Then train with:  python scripts/train_hitter_ros.py --probes <run> ...
 
@@ -30,7 +31,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.net import device
 from fantasy_baseball.hitter_ros.pretrain import PitchStore, PretrainConfig, PretrainModel
-from fantasy_baseball.hitter_ros.probes import PROBE_FEATURES, probe_features
+from fantasy_baseball.hitter_ros.probes import (
+    PROBE_FEATURES,
+    blank_unseen_contact,
+    first_contact_season,
+    probe_features,
+)
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 TOKENS = PROJECT_ROOT / "data" / "hitter_ros" / "pitch_tokens.parquet"
@@ -55,9 +61,10 @@ def main() -> int:
     config = PretrainConfig(**json.loads((run_dir / "run.json").read_text())["config"])
     table = pd.read_parquet(TABLE, columns=["player_id", "season", "week", "as_of"])
     seasons = sorted(args.seasons or table["season"].unique())
-    store = PitchStore(
-        pd.read_parquet(args.tokens), device(), torch.bfloat16 if config.amp else torch.float32
-    )
+    tokens = pd.read_parquet(args.tokens)
+    first_contact = first_contact_season(tokens)
+    store = PitchStore(tokens, device(), torch.bfloat16 if config.amp else torch.float32)
+    del tokens
 
     parts = []
     for s in seasons:
@@ -92,6 +99,11 @@ def main() -> int:
     # Every table row of the seasons asked for; blank where a season had no model.
     out = rows.merge(found, on=keys, how="left") if found is not None else rows
     out = out.reindex(columns=[*keys, *PROBE_FEATURES])
+    # Models pretrained only before contact classes existed read contact as exactly 0.
+    out = blank_unseen_contact(out, first_contact)
+    logger.info(
+        "contact-quality features blank through %s (model trained before it)", first_contact
+    )
     suffix = "" if args.seasons is None else "_partial"
     path = OUT_DIR / f"probes_{args.run}{suffix}.parquet"
     out.to_parquet(path)
