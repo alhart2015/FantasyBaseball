@@ -195,7 +195,9 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
         CREATE TEMP TABLE team_daily AS
         SELECT team_id, CAST(game_date AS DATE) AS game_date,
                year(CAST(game_date AS DATE)) AS season,
-               sum(r) AS team_r, sum(pa) AS team_pa, count(DISTINCT game_pk) AS team_games
+               sum(r) FILTER (WHERE position IS DISTINCT FROM 'P') AS team_r,
+               sum(pa) FILTER (WHERE position IS DISTINCT FROM 'P') AS team_pa,
+               count(DISTINCT game_pk) AS team_games
         FROM lineups GROUP BY 1, 2
         """
     )
@@ -237,9 +239,17 @@ def _league_context(conn: duckdb.DuckDBPyConnection) -> None:
     season, the last three seasons and every earlier season in the store. Counts only;
     ``features.py`` turns them into league rates and player-vs-league ratios."""
     sums = ", ".join(f"sum({c}) AS {c}" for c in LEAGUE_COUNTS)
+    # Position players only: before the universal DH, pitchers took ~3% of PA, which
+    # lowered league rates (about -1.3 R, -0.5 HR per 600 PA, -4 points of AVG) and made
+    # them jump in 2020 and 2022 when pitchers stopped batting.
     conn.execute(
-        f"CREATE TEMP TABLE league_daily AS SELECT season, game_date, {sums} "
-        "FROM box_daily GROUP BY 1, 2"
+        f"""
+        CREATE TEMP TABLE league_daily AS
+        SELECT year(CAST(game_date AS DATE)) AS season, CAST(game_date AS DATE) AS game_date,
+               {sums}
+        FROM lineups WHERE position IS DISTINCT FROM 'P'
+        GROUP BY 1, 2
+        """
     )
     running = ", ".join(
         f"sum({c}) OVER (PARTITION BY season ORDER BY game_date) AS {c}" for c in LEAGUE_COUNTS

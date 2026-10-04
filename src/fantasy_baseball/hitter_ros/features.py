@@ -131,12 +131,13 @@ def _era_inputs(t: pd.DataFrame, mode: str) -> dict[str, pd.Series]:
 
 
 def league_reference(t: pd.DataFrame) -> pd.DataFrame:
-    """Each row's league rates for the five answers, known on its as-of date: last
-    season plus this season before the date, pooled. Used to predict a player relative
-    to his league and scale back (``relative_target``), so the era is handled by
-    arithmetic rather than learned from a handful of seasons."""
+    """Each row's league rates for the five answers, known on its as-of date: the last
+    three seasons plus this season before the date, pooled. Used to predict a player
+    relative to his league and scale back (``relative_target``). Across 2011-2026 the
+    3-season average missed next season's league R and HR rates by less than last
+    season alone did (#421)."""
     counts = pd.DataFrame(
-        {c: t[f"lg_p1_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in COUNTS},
+        {c: t[f"lg_p3_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in COUNTS},
         index=t.index,
     )
     return rates_from_counts(counts)
