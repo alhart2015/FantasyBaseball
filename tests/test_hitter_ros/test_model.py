@@ -248,3 +248,23 @@ def test_balanced_weighting_gives_each_part_of_the_season_equal_weight():
     assert out["hr"].sum() == pytest.approx(w["hr"].sum())
     # Within a part, PA still matters: the 40-PA row outweighs the 20-PA row 2:1.
     assert out["hr"][3] == pytest.approx(2 * out["hr"][4])
+
+
+def test_balanced_weighting_is_applied_by_train_itself():
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.net import NetConfig, train
+
+    x = np.zeros((20, 2), dtype=np.float32)
+    y = np.zeros((20, 1), dtype=np.float32)
+    w = np.ones((20, 1), dtype=np.float32)
+    val = np.arange(20) < 4
+    with pytest.raises(ValueError, match="frac_season_left"):
+        train(x, y, w, val, NetConfig(hidden=[4], weighting="balanced", max_epochs=1))
+    train(
+        x,
+        y,
+        w,
+        val,
+        NetConfig(hidden=[4], weighting="balanced", max_epochs=1),
+        season_time=np.linspace(0, 1, 20),
+    )

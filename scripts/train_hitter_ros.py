@@ -43,18 +43,15 @@ from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.features import (
     TARGETS,
     Standardizer,
-    balance_by_season_time,
     input_frame,
     target_frame,
 )
 from fantasy_baseball.hitter_ros.net import EVAL_BATCH, NetConfig, device, predict, train
-from fantasy_baseball.hitter_ros.pretrain import table_fingerprint
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 TOKENS = PROJECT_ROOT / "data" / "hitter_ros" / "pa_tokens.parquet"
-PRETRAIN = PROJECT_ROOT / "data" / "hitter_ros" / "pretrain"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 
@@ -90,8 +87,6 @@ def fit_season(
 
     scaler = Standardizer().fit(x_all[train_rows & ~table["player_id"].isin(val_players)])
     y_train, w_train = y_all[train_rows], w_all[train_rows]
-    if config.weighting == "balanced":
-        w_train = balance_by_season_time(w_train, table.loc[train_rows, "frac_season_left"])
     fit_rows = ~val_mask
     mu = {
         s: np.average(y_train[s][fit_rows].fillna(0), weights=w_train[s][fit_rows]) for s in TARGETS
@@ -112,6 +107,7 @@ def fit_season(
         config,
         rows=positions[train_rows.to_numpy()] if batcher else None,
         batcher=batcher,
+        season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
     )
     test_rows = table["season"] == test_season
     z = predict(
@@ -142,18 +138,11 @@ def fit_season(
     return preds, info
 
 
-def pretrained_inputs(name: str, season: int, table: pd.DataFrame) -> pd.DataFrame:
-    """The pitch-encoder summaries pretrained for test season ``season`` (only on earlier
-    seasons), one row per table row, as extra input columns ``pre_0 ...``."""
-    folder = PRETRAIN / name / str(season)
-    meta = json.loads((folder / "metrics.json").read_text())
-    if meta["table_fingerprint"] != table_fingerprint(table):
-        raise SystemExit(
-            f"{folder} was embedded from a different training table; re-run "
-            f"scripts/pretrain_hitter_ros.py --name {name} --overwrite"
-        )
-    emb = np.load(folder / "embeddings.npy").astype(np.float32)
-    return pd.DataFrame(emb, index=table.index, columns=[f"pre_{i}" for i in range(emb.shape[1])])
+def _positive_int(text: str) -> int:
+    value = int(text)
+    if value < 1:
+        raise argparse.ArgumentTypeError(f"must be >= 1, got {value}")
+    return value
 
 
 def _non_negative_int(text: str) -> int:
@@ -203,10 +192,6 @@ def main() -> int:
         "--amp", action="store_true", help="bfloat16 for the sequence model on the GPU"
     )
     parser.add_argument(
-        "--pretrained",
-        help="add the pitch-encoder summaries from data/hitter_ros/pretrain/<name>/ (#415)",
-    )
-    parser.add_argument(
         "--shuffle-test-order",
         action="store_true",
         help="predict with each hitter's PAs in random order (does the net use order?)",
@@ -214,7 +199,7 @@ def main() -> int:
     parser.add_argument("--note", default="", help="what this run changes and why")
     parser.add_argument(
         "--train-seasons",
-        type=int,
+        type=_positive_int,
         help="train only on the N seasons right before each test season (learning curves)",
     )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
@@ -263,12 +248,9 @@ def main() -> int:
     all_preds, infos = [], []
     for season in args.test_seasons:
         logger.info("test season %s: training on complete seasons before it", season)
-        x_season = x_all
-        if args.pretrained:
-            x_season = pd.concat([x_all, pretrained_inputs(args.pretrained, season, table)], axis=1)
         preds, info = fit_season(
             table,
-            x_season,
+            x_all,
             y_all,
             w_all,
             season,
@@ -285,7 +267,6 @@ def main() -> int:
         "note": args.note,
         "config": config.to_dict(),
         "shuffle_test_order": args.shuffle_test_order,
-        "pretrained": args.pretrained,
         "train_seasons": args.train_seasons,
         "seasons": infos,
     }

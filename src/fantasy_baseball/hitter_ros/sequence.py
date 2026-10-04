@@ -32,6 +32,7 @@ import torch
 from torch import nn
 from torch.nn.utils.rnn import pack_padded_sequence
 
+from fantasy_baseball.hitter_ros.history import HitterTimeline, to_days
 from fantasy_baseball.hitter_ros.net import MLP, TRANSFORMER_HEADS
 from fantasy_baseball.hitter_ros.statcast_sql import SPRAY_SQL, SWING_SQL, WHIFF_SQL, sql_in
 from fantasy_baseball.pitch_data.store import connect
@@ -148,16 +149,6 @@ def build_pa_tokens(store: Path) -> pd.DataFrame:
     return out
 
 
-def _days(dates: pd.Series) -> np.ndarray:
-    """Dates as whole days since 1970."""
-    days: np.ndarray = pd.to_datetime(dates).to_numpy().astype("datetime64[D]").astype(np.int64)
-    return days
-
-
-# Sort key that orders tokens by hitter, then day: player rank * _DAY_SPAN + day.
-_DAY_SPAN = 1_000_000
-
-
 class SequenceBatcher:
     """Every PA token on one device, plus per-table-row slice bounds.
 
@@ -175,18 +166,10 @@ class SequenceBatcher:
         tokens = tokens.sort_values(["player_id", "game_date", "game_pk", "at_bat_number"])
         self.max_len = max_len
         self.device = device
-        tok_player = tokens["player_id"].to_numpy()
-        tok_days = _days(tokens["game_date"])
-        players, first = np.unique(tok_player, return_index=True)
-        tok_key = np.searchsorted(players, tok_player) * _DAY_SPAN + tok_days
-
-        row_player = rows["player_id"].to_numpy()
-        row_days = _days(rows["as_of"])
-        rank = np.searchsorted(players, row_player)
-        known = (rank < len(players)) & (players[np.minimum(rank, len(players) - 1)] == row_player)
-        start = np.where(known, first[np.minimum(rank, len(players) - 1)], 0)
-        # First token of this hitter on or after the as-of date = end of the "before" slice.
-        end = np.where(known, np.searchsorted(tok_key, rank * _DAY_SPAN + row_days, "left"), 0)
+        tok_days = to_days(tokens["game_date"])
+        row_days = to_days(rows["as_of"])
+        timeline = HitterTimeline(tokens["player_id"].to_numpy(), tok_days)
+        start, end = timeline.before(rows["player_id"].to_numpy(), row_days)
 
         def as_t(a: np.ndarray) -> torch.Tensor:
             return torch.as_tensor(a, dtype=torch.long, device=device)

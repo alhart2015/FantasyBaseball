@@ -22,6 +22,7 @@ from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
 import numpy as np
+import pandas as pd
 import torch
 from torch import nn
 
@@ -212,12 +213,21 @@ def train(
     *,
     rows: np.ndarray | None = None,
     batcher: SequenceBatcher | None = None,
+    season_time: np.ndarray | None = None,
 ) -> TrainResult:
     """Fit the net. ``y`` is standardized targets (NaN allowed where ``w`` is 0).
 
     With a sequence model, ``rows`` gives each row's position in the table the
     ``batcher`` was built on, so it can fetch that row's plate appearances.
+    ``season_time`` (each row's ``frac_season_left``) is required by
+    ``config.weighting == "balanced"``, which rescales ``w`` here.
     """
+    if config.weighting == "balanced":
+        if season_time is None:
+            raise ValueError("balanced weighting needs each row's frac_season_left")
+        from fantasy_baseball.hitter_ros.features import balance_by_season_time
+
+        w = balance_by_season_time(pd.DataFrame(w), pd.Series(season_time)).to_numpy(np.float32)
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
     dev = device()

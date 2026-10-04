@@ -1,20 +1,22 @@
-"""Pretrain the pitch encoder for the hitter ROS net, walk-forward (#415).
+"""Pretrain the pitch models for the hitter ROS net: one per season, walk-forward (#415).
 
-For each test season T: pretrain on every pitch from seasons before T (predict the next
-pitch's outcome), then embed every training-table row from seasons <= T (the hitter's
-last --window pitches before its as-of date). Saves under
-data/hitter_ros/pretrain/<name>/<T>/:
+For each season S: pretrain on every pitch from seasons before S (predict the next
+pitch's outcome). Anything read off model S about a row from season S is then out of
+sample for that row -- training rows as well as test rows. Saves under
+data/hitter_ros/pretrain/<name>/<S>/:
 
-    encoder.pt        encoder weights
-    embeddings.npy    float16 [table rows, 2*dim + 1]; zeros for seasons after T
-    metrics.json      config, epochs, train/val CE per epoch, count-only baseline CE
+    model.pt       PretrainModel weights (encoder + prediction head)
+    metrics.json   config, train/val CE per epoch, count-only baseline CE, minutes
 
-Then train the ROS net on top: train_hitter_ros.py --pretrained <name>.
+and <name>/run.json listing the seasons and config. With --overwrite the whole <name>
+folder is replaced, but only after the inputs are found; each season is written to a
+temporary folder and moved into place when it finishes, so a crash never leaves a
+half-written season behind.
 
 Setup (once): python scripts/build_hitter_ros_pitch_tokens.py
 Usage:
-    python scripts/pretrain_hitter_ros.py --name p001
-    python scripts/pretrain_hitter_ros.py --name p001 --test-seasons 2026 --max-epochs 5
+    python scripts/pretrain_hitter_ros.py --name p002
+    python scripts/pretrain_hitter_ros.py --name smoke --seasons 2026 --max-epochs 1
 """
 
 from __future__ import annotations
@@ -22,11 +24,11 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shutil
 import sys
 import time
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 import torch
 
@@ -34,19 +36,25 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.net import device
-from fantasy_baseball.hitter_ros.pretrain import (
-    PitchStore,
-    PretrainConfig,
-    embed_rows,
-    pretrain,
-    table_fingerprint,
-)
+from fantasy_baseball.hitter_ros.pretrain import PitchStore, PretrainConfig, pretrain
 
-TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 TOKENS = PROJECT_ROOT / "data" / "hitter_ros" / "pitch_tokens.parquet"
 PRETRAIN = PROJECT_ROOT / "data" / "hitter_ros" / "pretrain"
 
 logger = logging.getLogger("pretrain_hitter_ros")
+
+_INT_FIELDS = (
+    "dim",
+    "layers",
+    "heads",
+    "window",
+    "batch_size",
+    "warmup_steps",
+    "max_epochs",
+    "patience",
+    "seed",
+)
+_FLOAT_FIELDS = ("lr", "weight_decay", "val_frac", "dropout")
 
 
 def main() -> int:
@@ -54,21 +62,14 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--name", required=True)
     parser.add_argument(
-        "--test-seasons", type=int, nargs="+", default=[2022, 2023, 2024, 2025, 2026]
+        "--seasons",
+        type=int,
+        nargs="+",
+        help="seasons to pretrain a model for (default: every season with an earlier one)",
     )
-    for field in (
-        "dim",
-        "layers",
-        "heads",
-        "window",
-        "batch_size",
-        "warmup_steps",
-        "max_epochs",
-        "patience",
-        "seed",
-    ):
+    for field in _INT_FIELDS:
         parser.add_argument(f"--{field.replace('_', '-')}", type=int, default=getattr(d, field))
-    for field in ("lr", "weight_decay", "val_frac", "dropout"):
+    for field in _FLOAT_FIELDS:
         parser.add_argument(f"--{field.replace('_', '-')}", type=float, default=getattr(d, field))
     parser.add_argument("--no-amp", action="store_true", help="float32 instead of bfloat16")
     parser.add_argument("--overwrite", action="store_true")
@@ -76,9 +77,8 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
     try:
-        config = PretrainConfig(
-            **{k: getattr(args, k) for k in d.to_dict() if k != "amp"}, amp=not args.no_amp
-        )
+        values = {f: getattr(args, f) for f in (*_INT_FIELDS, *_FLOAT_FIELDS)}
+        config = PretrainConfig(**values, amp=not args.no_amp)
     except ValueError as err:
         parser.error(str(err))
     if not TOKENS.exists():
@@ -87,36 +87,47 @@ def main() -> int:
     if out_root.exists() and not args.overwrite:
         parser.error(f"{out_root} exists; pick another --name or pass --overwrite")
 
-    table = pd.read_parquet(TABLE)
-    store = PitchStore(pd.read_parquet(TOKENS), device())
-    for season in args.test_seasons:
-        out = out_root / str(season)
-        out.mkdir(parents=True, exist_ok=True)
+    tokens = pd.read_parquet(TOKENS)
+    all_seasons = sorted(int(s) for s in tokens["season"].unique())
+    seasons = args.seasons or all_seasons[1:]
+    too_early = [s for s in seasons if s <= all_seasons[0]]
+    if too_early:
+        parser.error(f"no earlier season to pretrain on for {too_early}")
+    store = PitchStore(tokens, device(), torch.bfloat16 if config.amp else torch.float32)
+    del tokens
+
+    # Every input is loaded and checked; only now replace an old run of this name.
+    if out_root.exists():
+        shutil.rmtree(out_root)
+    out_root.mkdir(parents=True)
+    run_meta = {"config": config.to_dict(), "seasons": [], "complete": False}
+    for season in seasons:
         t0 = time.time()
         result = pretrain(store, before_season=season, config=config)
         minutes = (time.time() - t0) / 60
-        rows = table["season"] <= season
-        emb = np.zeros((len(table), 2 * config.dim + 1), dtype=np.float16)
-        emb[rows.to_numpy()] = embed_rows(
-            result.model.encoder, store, table.loc[rows, ["player_id", "as_of"]], config
-        ).astype(np.float16)
-        np.save(out / "embeddings.npy", emb)
-        torch.save(result.model.encoder.state_dict(), out / "encoder.pt")
+        tmp = out_root / f".{season}.tmp"
+        tmp.mkdir()
+        torch.save(result.model.state_dict(), tmp / "model.pt")
         meta = {
             "config": config.to_dict(),
-            "test_season": season,
-            "table_fingerprint": table_fingerprint(table),
+            "season": season,
+            "trained_on": f"seasons before {season}",
             "best_epoch": result.best_epoch,
             "train_ce": result.train_ce,
             "val_ce": result.val_ce,
             "baseline_ce": result.baseline_ce,
             "minutes": round(minutes, 1),
         }
-        (out / "metrics.json").write_text(json.dumps(meta, indent=2))
+        (tmp / "metrics.json").write_text(json.dumps(meta, indent=2))
+        tmp.rename(out_root / str(season))
+        run_meta["seasons"].append(season)  # type: ignore[union-attr]
+        (out_root / "run.json").write_text(json.dumps(run_meta, indent=2))
         print(
-            f"{season}: best val CE {min(result.val_ce):.4f} vs count-only {result.baseline_ce:.4f} "
-            f"(epoch {result.best_epoch}, {minutes:.0f} min)"
+            f"{season}: best val CE {min(result.val_ce):.4f} vs count-only "
+            f"{result.baseline_ce:.4f} (epoch {result.best_epoch}, {minutes:.0f} min)"
         )
+    run_meta["complete"] = True
+    (out_root / "run.json").write_text(json.dumps(run_meta, indent=2))
     return 0
 
 

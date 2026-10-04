@@ -21,6 +21,7 @@ encoder later reads a hitter's history before an as-of date.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import duckdb
@@ -28,6 +29,8 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.pitch_data.store import connect
+
+logger = logging.getLogger(__name__)
 
 PITCH_GROUPS = {
     "ff": ("FF", "FA"),
@@ -104,9 +107,25 @@ OUTCOME_FEATURES = (*(f"out_{o}" for o in OUTCOMES), "ev", "la")  # ev / 100, la
 TOKEN_FEATURES = (*CONTEXT_FEATURES, *OUTCOME_FEATURES)
 
 
-def outcome_index(description: pd.Series, bb_class: pd.Series, in_play: pd.Series) -> np.ndarray:
-    """Outcome class index per pitch (see ``OUTCOMES``)."""
+def outcome_index(description: pd.Series, bb_class: pd.Series, pitch_type: pd.Series) -> np.ndarray:
+    """Outcome class index per pitch (see ``OUTCOMES``).
+
+    ``pitch_type`` is Statcast's ``type``: B (ball), S (strike), X (in play). A
+    description this module doesn't know falls back on it -- B -> ball, S -> called
+    strike -- with a warning, rather than silently becoming a ball. (The store has ~100
+    ``type = 'S'`` rows described ``hit_into_play``.) ``foul_tip`` stays a foul: the
+    repo counts it as contact, not a whiff (see ``keepers/savant.py``).
+    """
+    in_play = pitch_type == "X"
     by_desc = description.map(_DESCRIPTION_OUTCOME)
+    unknown = by_desc.isna() & ~in_play
+    if unknown.any():
+        logger.warning(
+            "%d pitches with unrecognized descriptions %s; labeled from Statcast type",
+            int(unknown.sum()),
+            sorted(description[unknown].astype(str).unique())[:10],
+        )
+        by_desc = by_desc.where(~unknown, pitch_type.map({"B": "ball", "S": "called_strike"}))
     by_bip = bb_class.map(_LSA_OUTCOME).fillna("bip_other")
     label = by_desc.where(~in_play, by_bip).fillna("ball")
     idx: np.ndarray = label.map({o: i for i, o in enumerate(OUTCOMES)}).to_numpy(np.int64)
@@ -201,7 +220,7 @@ def tokens_from_pitches(df: pd.DataFrame) -> pd.DataFrame:
     out["gap"] = _gap(df["player_id"].to_numpy(), out["game_date"])
 
     in_play = df["type"] == "X"
-    idx = outcome_index(df["description"], df["launch_speed_angle"], in_play)
+    idx = outcome_index(df["description"], df["launch_speed_angle"], df["type"])
     out["outcome"] = idx
     for i, o in enumerate(OUTCOMES):
         out[f"out_{o}"] = (idx == i).astype(f32)

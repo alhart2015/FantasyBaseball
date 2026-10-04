@@ -12,7 +12,6 @@ from fantasy_baseball.hitter_ros.pretrain import (  # noqa: E402
     PretrainConfig,
     PretrainModel,
     count_baseline_ce,
-    embed_rows,
     next_pitch_loss,
     pretrain,
 )
@@ -75,33 +74,37 @@ def test_windows_stop_before_the_cutoff_season():
         {1: [(2023, d, BALL) for d in range(10)] + [(2024, d, WHIFF) for d in range(10)]}
     )
     store = PitchStore(tokens, torch.device("cpu"))
-    starts = store.windows(np.array([1]), before_season=2024, length=4)
-    assert len(starts) and starts.max() + 4 <= 10  # nothing reaches a 2024 pitch
+    starts, lengths = store.windows(np.array([1]), before_season=2024, length=4)
+    assert len(starts) and (starts + lengths).max() <= 10  # nothing reaches a 2024 pitch
     assert 0 in starts and 6 in starts  # first and newest pitches covered
+    assert set(lengths) == {4}
 
 
-def test_embeddings_ignore_pitches_on_or_after_the_date():
-    spec = {1: [(2024, d, BALL) for d in range(10)], 2: [(2024, 5, WHIFF)]}
-    early = _tokens(spec)
-    late = early.copy()
-    late.loc[late["game_date"] >= pd.Timestamp("2024-04-06"), "outcome"] = WHIFF
-    late.loc[late["game_date"] >= pd.Timestamp("2024-04-06"), "speed"] = 5.0
-    rows = pd.DataFrame(
-        {
-            "player_id": [1, 2, 3],
-            "as_of": pd.to_datetime(["2024-04-06", "2024-04-06", "2024-04-06"]),
-        }
-    )
-    config = _small()
-    torch.manual_seed(0)
-    encoder = PretrainModel(config).encoder
-    a = embed_rows(encoder, PitchStore(early, torch.device("cpu")), rows, config)
-    b = embed_rows(encoder, PitchStore(late, torch.device("cpu")), rows, config)
-    np.testing.assert_allclose(a, b)
-    # Player 2's only pitch is on the date, and player 3 has none: no history.
-    assert np.all(a[1] == 0) and np.all(a[2] == 0)
-    assert np.any(a[0] != 0)
-    assert a[0, -1] == pytest.approx(np.log1p(1) / 5)  # newest pitch 1 day before
+def test_short_career_window_stops_at_the_cutoff():
+    tokens = _tokens({1: [(2023, d, BALL) for d in range(3)] + [(2024, 0, WHIFF)]})
+    store = PitchStore(tokens, torch.device("cpu"))
+    starts, lengths = store.windows(np.array([1, 99]), before_season=2024, length=8)
+    assert starts.tolist() == [0] and lengths.tolist() == [3]  # unknown hitter 99 skipped
+
+
+def test_history_is_strictly_before_the_date():
+    tokens = _tokens({1: [(2024, d, BALL) for d in range(10)], 2: [(2024, 5, WHIFF)]})
+    store = PitchStore(tokens, torch.device("cpu"))
+    as_of = np.array([pd.Timestamp("2024-04-06")] * 3, dtype="datetime64[D]").astype(np.int64)
+    start, n = store.history(np.array([1, 2, 3]), as_of, length=3)
+    # Player 1: days 0-4 are before Apr 6 -> last three = days 2, 3, 4. Player 2's only
+    # pitch is on the date; player 3 is unknown.
+    assert n.tolist() == [3, 0, 0] and start[0] == 2
+
+
+def test_pitch_store_keeps_float32_when_asked():
+    tokens = _tokens({1: [(2024, 0, BALL)]})
+    assert PitchStore(tokens, torch.device("cpu"), torch.float32).feats.dtype == torch.float32
+
+
+def test_config_rejects_no_validation_hitters():
+    with pytest.raises(ValueError, match="val_frac"):
+        PretrainConfig(val_frac=0.0)
 
 
 def test_count_baseline():
@@ -122,3 +125,14 @@ def test_pretraining_learns_a_hitter_pattern_the_count_cannot_see():
     result = pretrain(store, before_season=2024, config=config)
     assert result.baseline_ce == pytest.approx(np.log(2), abs=0.05)
     assert min(result.val_ce) < 0.5 * result.baseline_ce
+
+
+def test_unknown_descriptions_fall_back_on_statcast_type(caplog):
+    from fantasy_baseball.hitter_ros.pitch_tokens import outcome_index
+
+    desc = pd.Series(["ball", "hit_into_play", "new_thing", "hit_into_play"])
+    kind = pd.Series(["B", "S", "B", "X"])
+    lsa = pd.Series([None, None, None, 6.0])
+    idx = outcome_index(desc, lsa, kind)
+    assert [OUTCOMES[i] for i in idx] == ["ball", "called_strike", "ball", "bip_barrel"]
+    assert "unrecognized descriptions" in caplog.text
