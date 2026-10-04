@@ -262,13 +262,20 @@ def balance_by_season_time(weights: pd.DataFrame, frac_season_left: pd.Series) -
     balanced on its own, and the overall total is unchanged.
     """
     part = np.minimum((1 - frac_season_left.to_numpy()) * SEASON_PARTS, SEASON_PARTS - 1)
-    part = part.astype(int)
+    return balance_by_group(weights, part.astype(int))
+
+
+def balance_by_group(weights: pd.DataFrame, group: np.ndarray) -> pd.DataFrame:
+    """Rescale loss weights so every group (labels 0..k-1) carries the same total weight.
+    Within a group rows keep their relative weights; each target column is balanced on
+    its own; the overall total is unchanged."""
+    n_groups = int(group.max()) + 1 if len(group) else 0
     out = weights.copy()
     for col in weights.columns:
         w = weights[col].to_numpy(dtype=float)
-        totals = np.bincount(part, weights=w, minlength=SEASON_PARTS)
+        totals = np.bincount(group, weights=w, minlength=n_groups)
         present = totals > 0
         target = w.sum() / present.sum()
         scale = np.where(present, target / np.where(present, totals, 1), 0.0)
-        out[col] = w * scale[part]
+        out[col] = w * scale[group]
     return out

@@ -68,7 +68,8 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
         "seed": meta["config"]["seed"],
         # Runs from before #424 have no loss setting: they all used MSE.
         "loss": meta["config"].get("loss", "mse"),
-        "seasons": ",".join(str(s["test_season"]) for s in seasons),
+        # A --split run lists each season twice (a preseason and a mid-season model).
+        "seasons": ",".join(dict.fromkeys(str(s["test_season"]) for s in seasons)),
         "best_epoch": float(np.mean([s["best_epoch"] for s in seasons])),
         "val_loss": float(np.mean([min(s["val_loss"]) for s in seasons])),
     }

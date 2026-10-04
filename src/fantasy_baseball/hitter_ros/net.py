@@ -83,8 +83,25 @@ class NetConfig:
     # Probe features (#417) from this pretraining run (e.g. "p003"), read from
     # data/hitter_ros/probes_<run>.parquet and added to the inputs. "none": no probes.
     probes: str = "none"
+    # Multiple heads (#422): 1 = one output layer for every row (the plain MLP). 2 = a
+    # shared body with a preseason head (week 0) and a mid-season head (week 1+); the
+    # head index rides in the last input column (see MultiHeadMLP). head_balance:
+    # rescale loss weights so both heads carry the same total (mid-season rows otherwise
+    # carry ~95% of it). split: instead, two separate models, one trained only on
+    # week-0 rows and one only on week 1+ rows.
+    heads: int = 1
+    head_balance: bool = False
+    split: bool = False
 
     def __post_init__(self) -> None:
+        if self.heads not in (1, 2):
+            raise ValueError(f"heads must be 1 or 2, got {self.heads}")
+        if self.heads > 1 and self.seq != "none":
+            raise ValueError("multiple heads are built on the plain MLP (seq none) only")
+        if self.head_balance and self.heads == 1:
+            raise ValueError("head_balance needs heads 2")
+        if self.split and self.heads > 1:
+            raise ValueError("split trains two separate models; it can't also have heads")
         if self.micro_batch < 0:
             raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
         if self.relative_target not in RELATIVE_TARGETS:
@@ -123,6 +140,35 @@ class MLP(nn.Module):
         return out
 
 
+class MultiHeadMLP(nn.Module):
+    """A shared body (the MLP's hidden layers) and one output layer ("head") per job.
+
+    The **last input column is the head index** (0, 1, ...), not a feature: the body
+    reads the other columns, and each row's output comes from its own head. Every head
+    is computed for every row and the row's own is picked, so a row's loss trains only
+    its head (and the shared body).
+    """
+
+    def __init__(
+        self, n_in: int, n_out: int, hidden: list[int], dropout: float, n_heads: int
+    ) -> None:
+        super().__init__()
+        layers: list[nn.Module] = []
+        width = n_in
+        for h in hidden:
+            layers += [nn.Linear(width, h), nn.GELU(), nn.Dropout(dropout)]
+            width = h
+        self.body = nn.Sequential(*layers)
+        self.heads = nn.ModuleList(nn.Linear(width, n_out) for _ in range(n_heads))
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        head = x[:, -1].long()
+        z = self.body(x[:, :-1])
+        every = torch.stack([h(z) for h in self.heads], dim=1)  # [rows, heads, outputs]
+        out: torch.Tensor = every[torch.arange(len(x), device=x.device), head]
+        return out
+
+
 def device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -146,6 +192,8 @@ EVAL_BATCH = 4096
 
 
 def build_model(n_in: int, n_out: int, config: NetConfig) -> nn.Module:
+    if config.heads > 1:  # the last input column is the head index, not a feature
+        return MultiHeadMLP(n_in - 1, n_out, config.hidden, config.dropout, config.heads)
     if config.seq == "none":
         return MLP(n_in, n_out, config.hidden, config.dropout)
     from fantasy_baseball.hitter_ros.sequence import HybridNet, make_encoder
@@ -239,7 +287,9 @@ def train(
     With a sequence model, ``rows`` gives each row's position in the table the
     ``batcher`` was built on, so it can fetch that row's plate appearances.
     ``season_time`` (each row's ``frac_season_left``) is required by
-    ``config.weighting == "balanced"``, which rescales ``w`` here.
+    ``config.weighting == "balanced"``, which rescales ``w`` here. With
+    ``config.heads > 1`` the last column of ``x`` is each row's head index, and
+    ``config.head_balance`` rescales ``w`` so every head carries the same total.
     """
     if config.weighting == "balanced":
         if season_time is None:
@@ -247,6 +297,10 @@ def train(
         from fantasy_baseball.hitter_ros.features import balance_by_season_time
 
         w = balance_by_season_time(pd.DataFrame(w), pd.Series(season_time)).to_numpy(np.float32)
+    if config.head_balance:
+        from fantasy_baseball.hitter_ros.features import balance_by_group
+
+        w = balance_by_group(pd.DataFrame(w), x[:, -1].astype(int)).to_numpy(np.float32)
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
     dev = device()
