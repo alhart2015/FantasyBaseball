@@ -7,9 +7,10 @@ torch = pytest.importorskip("torch")
 
 from fantasy_baseball.hitter_ros.features import TARGETS  # noqa: E402
 from fantasy_baseball.hitter_ros.net import (  # noqa: E402
+    CountLoss,
     NetConfig,
+    count_loss,
     device,
-    poisson_mask,
     predict,
     row_losses,
     train,
@@ -19,7 +20,7 @@ from fantasy_baseball.hitter_ros.net import (  # noqa: E402
 def test_poisson_deviance_is_zero_when_right_and_handles_zero_counts():
     y = torch.tensor([[0.0, 0.02, 0.5]])
     w = torch.tensor([[100.0, 100.0, 10.0]])
-    poisson = torch.tensor([True, True, False])
+    poisson = CountLoss(torch.tensor([True, True, False]), torch.ones(3))
     right = torch.tensor([[np.log(1e-9), np.log(0.02), 0.5]], dtype=torch.float32)
     loss = row_losses(right, y, w, poisson)
     assert loss[0, 0].item() == pytest.approx(0.0, abs=1e-4)  # no steals, rate ~0
@@ -37,9 +38,38 @@ def test_poisson_deviance_is_zero_when_right_and_handles_zero_counts():
 def test_count_loss_options():
     with pytest.raises(ValueError):
         NetConfig(count_loss="gamma")
-    mask = poisson_mask(NetConfig(count_loss="sb"), len(TARGETS), device())
-    assert mask.tolist() == [t == "sb" for t in TARGETS]
-    assert poisson_mask(NetConfig(), len(TARGETS), device()) is None
+    y = np.ones((4, len(TARGETS)))
+    w = np.ones_like(y)
+    spec = count_loss(NetConfig(count_loss="sb"), y, w, device())
+    assert spec.mask.tolist() == [t == "sb" for t in TARGETS]
+    assert count_loss(NetConfig(), y, w, device()) is None
+
+
+def test_poisson_targets_are_scaled_to_a_standardized_squared_error():
+    """Predicting the average costs 1 per unit weight for every target, Poisson or not,
+    so the per-target average weighs them equally (the PR #429 review's finding)."""
+    rng = np.random.default_rng(0)
+    n = 5000
+    exposure = rng.integers(50, 600, size=n).astype(float)
+    y = np.zeros((n, len(TARGETS)))
+    w = np.tile(exposure[:, None], (1, len(TARGETS)))
+    y[:, TARGETS.index("r")] = rng.poisson(0.12 * exposure) / exposure  # R: not rare
+    y[:, TARGETS.index("sb")] = rng.poisson(0.01 * exposure) / exposure  # SB: rare
+    spec = count_loss(NetConfig(count_loss="counts"), y, w, device())
+    for name in ("r", "sb"):
+        k = TARGETS.index(name)
+        mean = np.average(y[:, k], weights=w[:, k])
+        dev = spec.mask.device
+        f = torch.full((n, len(TARGETS)), float(np.log(mean)), device=dev)
+        losses = row_losses(
+            f,
+            torch.as_tensor(y, dtype=torch.float32, device=dev),
+            torch.as_tensor(w, dtype=torch.float32, device=dev),
+            spec,
+        )
+        assert float(losses[:, k].sum().cpu()) / w[:, k].sum() == pytest.approx(1.0, rel=1e-3)
+    # Unscaled, R's deviance per unit weight is far smaller than SB's, so R scales up more.
+    assert spec.scale[TARGETS.index("r")] > spec.scale[TARGETS.index("sb")]
 
 
 def test_a_poisson_target_learns_a_skewed_rate():

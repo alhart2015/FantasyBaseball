@@ -187,19 +187,38 @@ def device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+@dataclass
+class CountLoss:
+    """Which targets get the Poisson loss (``mask``), and a per-target ``scale`` that
+    puts each Poisson target's loss on the same footing as a standardized squared error.
+
+    Squared error on a standardized target is ~1 when predicting the average. A Poisson
+    deviance is not: on the real table it is ~0.04 for R and ~0.7 for SB. Without the
+    scale, the per-target average would weight AVG ~27x more than R (PR #429 review).
+    """
+
+    mask: torch.Tensor  # bool, one per target
+    scale: torch.Tensor  # float, one per target (1 for squared-error targets)
+
+
+def poisson_deviance(f: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+    """Weighted Poisson deviance of log rate ``f`` against rate ``y`` with exposure ``w``:
+    ``w * exp(f)`` is the expected count and ``w * y`` the actual one; 0 when they match
+    and never negative."""
+    f = f.clamp(*LOG_RATE_CLAMP)
+    return w * (torch.exp(f) - y * f - y + torch.xlogy(y, y))
+
+
 def row_losses(
-    pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor, poisson: torch.Tensor | None = None
+    pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor, count: CountLoss | None = None
 ) -> torch.Tensor:
-    """Each row's weighted loss per target: ``w * (pred - y)^2``, or for the ``poisson``
-    targets the Poisson deviance of the count with exposure ``w``. There ``pred`` is the
-    log rate and ``y`` the rate, so ``w * exp(pred)`` is the expected count and ``w * y``
-    the actual one; the deviance is 0 when they match and never negative."""
+    """Each row's weighted loss per target: ``w * (pred - y)^2``, or for ``count``'s
+    Poisson targets the scaled Poisson deviance (``pred`` is then the log rate and ``y``
+    the rate)."""
     loss = w * (pred - y) ** 2
-    if poisson is None:  # poisson_mask gives None, never an all-False mask
+    if count is None:
         return loss
-    f = pred.clamp(*LOG_RATE_CLAMP)
-    dev = w * (torch.exp(f) - y * f - y + torch.xlogy(y, y))
-    return torch.where(poisson, dev, loss)
+    return torch.where(count.mask, poisson_deviance(pred, y, w) * count.scale, loss)
 
 
 def weighted_mse(pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
@@ -259,7 +278,7 @@ def _eval_loss(
     batcher: SequenceBatcher | None,
     chunk: int = EVAL_BATCH,
     amp: bool = False,
-    poisson: torch.Tensor | None = None,
+    count: CountLoss | None = None,
 ) -> float:
     """The training loss (``row_losses``) over all rows, computed in chunks."""
     num = torch.zeros(y.shape[1], device=y.device)
@@ -268,7 +287,7 @@ def _eval_loss(
         for start in range(0, len(x), chunk):
             sl = slice(start, start + chunk)
             pred = _forward(model, x[sl], None if rows is None else rows[sl], batcher, amp=amp)
-            num += row_losses(pred, y[sl], w[sl], poisson).sum(dim=0)
+            num += row_losses(pred, y[sl], w[sl], count).sum(dim=0)
             den += w[sl].sum(dim=0)
     return float((num / den.clamp(min=1e-9)).mean().item())
 
@@ -283,9 +302,9 @@ def accumulate_batch(
     batcher: SequenceBatcher | None,
     micro_batch: int,
     amp: bool = False,
-    poisson: torch.Tensor | None = None,
+    count: CountLoss | None = None,
 ) -> float:
-    """Backpropagate the loss (``row_losses``; plain weighted MSE without ``poisson``)
+    """Backpropagate the loss (``row_losses``; plain weighted MSE without ``count``)
     for batch ``idx``, in slices of ``micro_batch`` rows.
 
     Each slice's loss is normalized by the whole batch's weight per target, so the
@@ -297,7 +316,7 @@ def accumulate_batch(
     for start in range(0, len(idx), step):
         sub = idx[start : start + step]
         pred = _forward(model, x[sub], None if rows is None else rows[sub], batcher, amp=amp)
-        part = (row_losses(pred, y[sub], w[sub], poisson).sum(dim=0) / w_total).mean()
+        part = (row_losses(pred, y[sub], w[sub], count).sum(dim=0) / w_total).mean()
         part.backward()
         total += part.detach()
     return float(total.item())  # one GPU->CPU sync per batch, not per slice
@@ -319,17 +338,33 @@ def loss_weights(w: np.ndarray, config: NetConfig, season_time: np.ndarray | Non
     return w
 
 
-def poisson_mask(config: NetConfig, n_targets: int, dev: torch.device) -> torch.Tensor | None:
-    """Which output columns get the Poisson loss (targets in ``features.TARGETS`` order),
-    or None when none do."""
+def count_loss(
+    config: NetConfig, y: np.ndarray, w: np.ndarray, dev: torch.device
+) -> CountLoss | None:
+    """The Poisson targets of ``config.count_loss`` (``features.TARGETS`` order) and their
+    scales, or None when there are none. Each Poisson target's scale is 1 / its deviance
+    when predicting the weighted average rate on these rows (``y`` rates, ``w`` PA)."""
     from fantasy_baseball.hitter_ros.features import TARGETS
 
     names = COUNT_LOSS_TARGETS[config.count_loss]
     if not names:
         return None
-    if n_targets != len(TARGETS):
-        raise ValueError(f"count_loss needs the {len(TARGETS)} ROS targets, got {n_targets}")
-    return torch.tensor([t in names for t in TARGETS], device=dev)
+    if y.shape[1] != len(TARGETS):
+        raise ValueError(f"count_loss needs the {len(TARGETS)} ROS targets, got {y.shape[1]}")
+    mask = [t in names for t in TARGETS]
+    scale = np.ones(len(TARGETS))
+    for k, poisson in enumerate(mask):
+        if not poisson:
+            continue
+        yk = torch.as_tensor(np.nan_to_num(y[:, k]), dtype=torch.float64)
+        wk = torch.as_tensor(w[:, k], dtype=torch.float64)
+        mean = float((wk * yk).sum() / wk.sum())
+        base = poisson_deviance(torch.full_like(yk, np.log(mean)), yk, wk).sum() / wk.sum()
+        scale[k] = 1.0 / float(base) if float(base) > 0 else 1.0  # no spread: leave as is
+    return CountLoss(
+        mask=torch.tensor(mask, device=dev),
+        scale=torch.tensor(scale, dtype=torch.float32, device=dev),
+    )
 
 
 def train(
@@ -375,7 +410,7 @@ def train(
         rt = torch.as_tensor(rows[~val_mask], dtype=torch.long, device=dev)
         rv = torch.as_tensor(rows[val_mask], dtype=torch.long, device=dev)
     model = build_model(x.shape[1], y.shape[1], config).to(dev)
-    poisson = poisson_mask(config, y.shape[1], dev)
+    count = count_loss(config, y[~val_mask], w[~val_mask], dev)
     opt = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     gen = torch.Generator(device=dev).manual_seed(config.seed)
 
@@ -391,7 +426,7 @@ def train(
             idx = order[start : start + config.batch_size]
             opt.zero_grad()
             loss = accumulate_batch(
-                model, idx, xt, yt, wt, rt, batcher, config.micro_batch, config.amp, poisson
+                model, idx, xt, yt, wt, rt, batcher, config.micro_batch, config.amp, count
             )
             opt.step()
             total += loss * len(idx)
@@ -399,7 +434,7 @@ def train(
 
         model.eval()
         val = _eval_loss(
-            model, xv, yv, wv, rv, batcher, config.micro_batch or EVAL_BATCH, config.amp, poisson
+            model, xv, yv, wv, rv, batcher, config.micro_batch or EVAL_BATCH, config.amp, count
         )
         val_hist.append(val)
         if not np.isfinite(val):
