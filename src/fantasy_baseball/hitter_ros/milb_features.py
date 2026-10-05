@@ -40,7 +40,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.features import ROW_KEYS
+from fantasy_baseball.hitter_ros.features import ROW_KEYS, aligned_inputs, check_aligned
 from fantasy_baseball.hitter_ros.milb_grade import (
     COUNTS,
     MLB,
@@ -63,6 +63,20 @@ _LEAGUE = ["season", "sport_id", "league_id"]
 def milb_path(root: Path, name: str) -> Path:
     """Where ``scripts/build_hitter_ros_milb.py --name <name>`` writes the features."""
     return root / f"milb_{name}.parquet"
+
+
+def load_milb_inputs(table: pd.DataFrame, root: Path, name: str) -> pd.DataFrame:
+    """``MILB_FEATURES`` from ``milb_<name>.parquet`` under ``root``, aligned to
+    ``table``'s rows. ValueError, saying how to fix it, when the file is missing or was
+    built for another table."""
+    path = milb_path(root, name)
+    if not path.exists():
+        raise ValueError(f"{path} is missing; run scripts/build_hitter_ros_milb.py --name {name}")
+    frame = pd.read_parquet(path)
+    problem = check_aligned(table, frame)
+    if problem:
+        raise ValueError(f"{path}: {problem}; rebuild it for this table")
+    return aligned_inputs(table, frame, MILB_FEATURES)
 
 
 def _level_ages(levels: pd.DataFrame) -> pd.Series:

@@ -19,6 +19,7 @@ Usage:
     python scripts/build_hitter_ros_table.py      # if the table is stale
     python scripts/train_hitter_ros.py --name baseline-mlp
     python scripts/train_hitter_ros.py --name wider --hidden 256 128 --dropout 0.2
+    python scripts/build_hitter_ros_milb.py --name rookies-s100 --vets-blank-from 300         --shrink-pa 100                            # the default minor-league inputs
     python scripts/build_hitter_ros_pa_tokens.py   # once, for sequence runs
     python scripts/train_hitter_ros.py --name 003a-gru --seq gru
 """
@@ -46,8 +47,6 @@ from fantasy_baseball.hitter_ros.features import (
     STEAL_TABLE_COLUMNS,
     TARGETS,
     Standardizer,
-    aligned_inputs,
-    check_aligned,
     column_horizon,
     input_frame,
     league_answer_rates,
@@ -61,7 +60,7 @@ from fantasy_baseball.hitter_ros.horizons import (
     score_horizons,
     write_horizon_scores,
 )
-from fantasy_baseball.hitter_ros.milb_features import MILB_FEATURES, milb_path
+from fantasy_baseball.hitter_ros.milb_features import MILB_FEATURES, load_milb_inputs
 from fantasy_baseball.hitter_ros.net import (
     COUNT_LOSS_TARGETS,
     EVAL_BATCH,
@@ -420,9 +419,6 @@ def main() -> int:
         parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
     if config.seq != "none" and not TOKENS.exists():
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
-    milb_file = milb_path(TABLE.parent, config.milb)
-    if config.milb != "none" and not milb_file.exists():
-        parser.error(f"{milb_file} is missing; run scripts/build_hitter_ros_milb.py")
 
     table = pd.read_parquet(TABLE)
     if (config.era != "none" or config.relative_target != "none") and not set(
@@ -456,12 +452,12 @@ def main() -> int:
         x_all = pd.concat([x_all, probe_inputs(table, probes)], axis=1)
         logger.info("added %d probe features from %s", len(PROBE_FEATURES), probes_file.name)
     if config.milb != "none":
-        milb = pd.read_parquet(milb_file)
-        problem = check_aligned(table, milb)
-        if problem:
-            parser.error(f"{milb_file}: {problem}; rebuild it for this table")
-        x_all = pd.concat([x_all, aligned_inputs(table, milb, MILB_FEATURES)], axis=1)
-        logger.info("added %d minor-league features from %s", len(MILB_FEATURES), milb_file.name)
+        try:
+            milb = load_milb_inputs(table, TABLE.parent, config.milb)
+        except ValueError as err:
+            parser.error(str(err))
+        x_all = pd.concat([x_all, milb], axis=1)
+        logger.info("added %d minor-league features (%s)", len(MILB_FEATURES), config.milb)
     y_all, w_all = target_frame(table, HORIZONS if config.horizons else ())
     batcher = None
     if config.seq != "none":

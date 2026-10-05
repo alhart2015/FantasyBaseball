@@ -162,3 +162,24 @@ def test_vets_can_get_no_minor_league_inputs(factors):
     )
     # Opening day he was still under 300: his inputs are there.
     assert keyed.loc[(1, 0), "milb_p1_avg"] == pytest.approx(0.6, abs=0.01)
+
+
+def test_load_milb_inputs_says_how_to_fix_a_missing_or_stale_file(factors, tmp_path):
+    from fantasy_baseball.hitter_ros.milb_features import load_milb_inputs
+
+    table, season_lines, window_lines, mlb = _inputs()
+    with pytest.raises(ValueError, match=r"build_hitter_ros_milb.py --name x"):
+        load_milb_inputs(table, tmp_path, "x")
+    built = build_milb_features(table, season_lines, window_lines, mlb)
+    built.to_parquet(milb_features.milb_path(tmp_path, "x"), index=False)
+    x = load_milb_inputs(table, tmp_path, "x")
+    assert list(x.columns) == MILB_FEATURES and x.index.equals(table.index)
+    built.iloc[:1].to_parquet(milb_features.milb_path(tmp_path, "x"), index=False)
+    with pytest.raises(ValueError, match="lacks 2 table rows"):
+        load_milb_inputs(table, tmp_path, "x")
+
+
+def test_the_default_is_rookies_only_and_shrunk():
+    from fantasy_baseball.hitter_ros.net import NetConfig
+
+    assert NetConfig().milb == "rookies-s100"
