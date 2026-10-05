@@ -224,3 +224,117 @@ def test_summary_keeps_fangraphs_when_older_seasons_have_no_files():
     )
     md = "\n".join(summarize(pd.concat([old, new], ignore_index=True), None))
     assert "seasons with FanGraphs files** (2025)" in md
+
+
+def _career_table(seasons_in_store=10, std_pa_by_week5=200, **career_pa):
+    """Season 2025 rows per player: week 0 (as of 2025-03-25) with the given career PA,
+    and week 5 (as of 2025-04-29) with ``std_pa_by_week5`` PA this season so far."""
+    rows = []
+    for player, pa in career_pa.items():
+        pid = int(player.removeprefix("p"))
+        for week, as_of, std_pa in ((0, "2025-03-25", 0), (5, "2025-04-29", std_pa_by_week5)):
+            rows.append(
+                {
+                    "player_id": pid,
+                    "season": 2025,
+                    "week": week,
+                    "as_of": pd.Timestamp(as_of),
+                    "car_pa": float(pa),
+                    "std_pa": float(std_pa),
+                    "car_seasons_in_store": seasons_in_store,
+                }
+            )
+    # The real table stores season as int32; the scored frames use int64.
+    return pd.DataFrame(rows).astype({"season": "int32"})
+
+
+def test_tag_experience_splits_at_300_career_pa_before_the_season():
+    from fantasy_baseball.hitter_ros.backtest import VET_MIN_CAREER_PA, tag_experience
+
+    assert VET_MIN_CAREER_PA == 300
+    table = _career_table(p1=0, p2=299, p3=300, p4=4000)
+    scored = pd.DataFrame(
+        {"player_id": [1, 2, 3, 4, 1], "season": 2025, "system": ["ours"] * 4 + ["fg_blend"]}
+    )
+    tagged = tag_experience(scored, table)
+    # Preseason reads the week-0 row, not the week-5 one with 200 more PA.
+    assert list(tagged["group"]) == ["rookie", "rookie", "vet", "vet", "rookie"]
+    assert list(tagged["career_pa"]) == [0, 299, 300, 4000, 0]
+    # Re-tagging replaces the old columns instead of duplicating them.
+    again = tag_experience(tagged, table)
+    assert list(again.columns) == list(tagged.columns)
+
+
+def test_tag_experience_counts_pa_up_to_the_snapshot():
+    from fantasy_baseball.hitter_ros.backtest import tag_experience
+
+    table = _career_table(p1=150, p2=50)
+    scored = pd.DataFrame(
+        {
+            "player_id": [1, 1, 2],
+            "season": 2025,
+            "system": "ours",
+            # Before week 5: still the week-0 row. On or after it: 200 more PA.
+            "snapshot": ["2025-04-28", "2025-04-29", "2025-06-01"],
+        }
+    )
+    tagged = tag_experience(scored, table)
+    assert list(tagged["career_pa"]) == [150, 350, 250]
+    assert list(tagged["group"]) == ["rookie", "vet", "rookie"]
+
+
+def test_tag_experience_calls_short_history_unknown_not_rookie():
+    from fantasy_baseball.hitter_ros.backtest import MIN_HISTORY_SEASONS, tag_experience
+
+    scored = pd.DataFrame({"player_id": [1, 2], "season": 2025, "system": "ours"})
+    short = _career_table(seasons_in_store=MIN_HISTORY_SEASONS - 1, p1=100, p2=500)
+    assert list(tag_experience(scored, short)["group"]) == ["unknown", "vet"]
+    enough = _career_table(seasons_in_store=MIN_HISTORY_SEASONS, p1=100, p2=500)
+    assert list(tag_experience(scored, enough)["group"]) == ["rookie", "vet"]
+
+
+def test_tag_experience_refuses_a_player_without_a_table_row():
+    from fantasy_baseball.hitter_ros.backtest import tag_experience
+
+    scored = pd.DataFrame({"player_id": [1, 7], "season": 2025, "system": "ours"})
+    with pytest.raises(ValueError, match="no table row"):
+        tag_experience(scored, _career_table(p1=500))
+    early = scored.assign(player_id=1, snapshot="2025-03-01")  # before any as-of date
+    with pytest.raises(ValueError, match="no table row"):
+        tag_experience(early, _career_table(p1=500))
+
+
+def _grouped_units():
+    """One season: vets 1-3 and rookies 4-6. Ours orders the vets right and the rookies
+    backwards; the blend does the opposite."""
+    actual = pd.DataFrame({s: [0.1, 0.2, 0.3] * 2 for s in TARGETS}, index=range(1, 7))
+    actual["pa"] = 500
+    right = actual[list(TARGETS)]
+    flipped = right.copy()
+    flipped.loc[[1, 2, 3]] = right.loc[[3, 2, 1]].to_numpy()
+    flipped.loc[[4, 5, 6]] = right.loc[[6, 5, 4]].to_numpy()
+    ours = pd.concat([right.loc[[1, 2, 3]], flipped.loc[[4, 5, 6]]])
+    blend = pd.concat([flipped.loc[[1, 2, 3]], right.loc[[4, 5, 6]]])
+    scored = scored_players({"ours": ours, "fg_blend": blend}, actual, 1)
+    return scored.assign(
+        season=2025, group=scored.player_id.map(lambda p: "vet" if p <= 3 else "rookie")
+    )
+
+
+def test_summary_scores_vets_and_rookies_separately():
+    from fantasy_baseball.hitter_ros.backtest import summarize
+
+    md = "\n".join(summarize(_grouped_units(), None))
+    assert "**Vets vs rookies**" in md
+    vets = md.split("Vets, 3 players per season -- gap-weighted pairwise (%):")[1]
+    rookies = md.split("Rookies, 3 players per season -- gap-weighted pairwise (%):")[1]
+    # Pairs only inside a group: ours is perfect on vets and backwards on rookies.
+    assert "| ours | 100.0 |" in vets.split("raw MAE")[0]
+    assert "| ours | 0.0 |" in rookies.split("raw MAE")[0]
+    # Unknown players are in neither group, and the summary says how many.
+    unknown = _grouped_units().assign(group="unknown")
+    assert "6 player-seasons are in neither group" in "\n".join(summarize(unknown, None))
+    # A frame scored before the tag existed just has no group section.
+    assert "Vets vs rookies" not in "\n".join(
+        summarize(_grouped_units().drop(columns="group"), None)
+    )

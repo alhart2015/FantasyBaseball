@@ -199,3 +199,28 @@ def test_run_row_reports_the_league_free_scores(runs):
     # Old runs (scored before #424) have no level-free column: their rows just lack it.
     _run(runs, "old", pre=_scored({"ours": 1.0, "fg_blend": 2.0}, season=2025))
     assert pd.isna(cmp.compare(["r1", "old"], None, None).loc["old", "pre_lf_hr"])
+
+
+def test_run_row_reports_vets_and_rookies_separately(runs):
+    from fantasy_baseball.hitter_ros.evaluate import scored_players
+
+    actual = pd.DataFrame({s: [0.1, 0.2, 0.3] * 2 for s in TARGETS}, index=range(1, 7))
+    actual["pa"] = 500
+    right = actual[list(TARGETS)]
+    backwards = right.copy()
+    backwards.loc[[1, 2, 3]] = right.loc[[3, 2, 1]].to_numpy()
+    backwards.loc[[4, 5, 6]] = right.loc[[6, 5, 4]].to_numpy()
+    # Ours orders the vets (1-3) right and the rookies (4-6) backwards; the blend the opposite.
+    ours = pd.concat([right.loc[[1, 2, 3]], backwards.loc[[4, 5, 6]]])
+    blend = pd.concat([backwards.loc[[1, 2, 3]], right.loc[[4, 5, 6]]])
+    pre = scored_players({"ours": ours, "fg_blend": blend}, actual, 1)
+    pre = pre.assign(season=2025, group=pre.player_id.map(lambda p: "vet" if p <= 3 else "rookie"))
+    _run(runs, "r1", pre=pre, snap=pre.assign(snapshot="2026-06-04"))
+    row = cmp.compare(["r1"], None, None).loc["r1"]
+    assert row["pre_vet_pairw_gap_hr"] == pytest.approx(100.0)
+    assert row["pre_rookie_pairw_gap_hr"] == pytest.approx(-100.0)
+    assert row["mid_vet_pairw_gap_hr"] == pytest.approx(100.0)
+    assert row["mid_rookie_pairw_gap_hr"] == pytest.approx(-100.0)
+    # A run scored before the tag has no group rows.
+    _run(runs, "old", pre=pre.drop(columns="group"))
+    assert "pre_vet_pairw_gap_hr" not in cmp.compare(["old"], None, None).columns
