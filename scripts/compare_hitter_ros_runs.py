@@ -15,6 +15,9 @@ train_hitter_ros.py writes last):
   blend, over the seasons where both were scored.
 * Mid-season: our gap to the blend, averaged over the snapshots where both were scored
   (all of them, or those between --from and --to), with how many snapshots that was.
+* Vets and rookies (#433): the main-score gap to the blend for each group on its own
+  (pairs only inside a group). Runs scored before the vet/rookie tag lack these rows;
+  re-score them with score_hitter_ros_run.py.
 
 Usage:
     python scripts/compare_hitter_ros_runs.py 001-baseline-mlp 002a-lr3e-4 002b-lr1e-4
@@ -35,7 +38,13 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.backtest import BLEND, OURS, mean_over_seasons, to_markdown
+from fantasy_baseball.hitter_ros.backtest import (
+    BLEND,
+    GROUPS,
+    OURS,
+    mean_over_seasons,
+    to_markdown,
+)
 from fantasy_baseball.hitter_ros.evaluate import order_scores, order_table
 from fantasy_baseball.hitter_ros.features import TARGETS
 
@@ -60,6 +69,20 @@ def _scores(scored: pd.DataFrame, unit: str) -> dict[str, pd.DataFrame]:
         out["pairw_"] = order_table(scored, "pairwise_w", per_unit)
         out["pair_"] = order_table(scored, "pairwise", per_unit)
     return out
+
+
+def _group_gaps(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None:
+    """Main-score gap to the blend for vets and rookies separately (#433), into ``row``
+    as ``{prefix}_{group}_pairw_gap_{stat}``. Nothing for frames without the tag."""
+    if "group" not in both.columns or "lf_err" not in both.columns:
+        return
+    for group in GROUPS:
+        sub = both[both["group"] == group]
+        if sub.empty:
+            continue
+        pairw = order_table(sub, "pairwise_w")
+        for s in TARGETS:
+            row[f"{prefix}_{group}_pairw_gap_{s}"] = pairw.loc[OURS, s] - pairw.loc[BLEND, s]
 
 
 def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, object]:
@@ -94,6 +117,7 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
             for kind, paired in _scores(both, "season").items():
                 for s in TARGETS:
                     row[f"pre_{kind}gap_{s}"] = paired.loc[OURS, s] - paired.loc[BLEND, s]
+            _group_gaps(row, both, "pre")
     snap_path = run / "scored_snapshots.parquet"
     if snap_path.exists():
         snap = pd.read_parquet(snap_path)
@@ -107,6 +131,7 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
             for kind, means in _scores(snap, "snapshot").items():
                 for s in TARGETS:
                     row[f"mid_{kind}gap_{s}"] = means.loc[OURS, s] - means.loc[BLEND, s]
+            _group_gaps(row, snap, "mid")
     return row
 
 
@@ -166,6 +191,16 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             f"MAIN: mid-season gap-weighted pairwise gap to blend, {window}",
             [("mid_snapshots", "snapshots"), *cols("mid_pairw_gap_")],
             2,
+        ),
+        *(
+            (
+                f"MAIN, {group}s only: {when} gap-weighted pairwise gap to blend"
+                + (f", {window}" if prefix == "mid" else ""),
+                cols(f"{prefix}_{group}_pairw_gap_"),
+                2,
+            )
+            for prefix, when in (("pre", "preseason"), ("mid", "mid-season"))
+            for group in GROUPS
         ),
         ("Preseason pairwise % (ours)", cols("pre_pair_"), 2),
         ("Preseason pairwise gap to blend (positive = ours better)", cols("pre_pair_gap_"), 2),

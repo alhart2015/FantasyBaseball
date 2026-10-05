@@ -12,6 +12,12 @@ Given the net's predictions for some test seasons, this builds the long "scored"
 
 and renders a markdown summary with MAE tables, a paired bootstrap of ours vs. the
 FanGraphs blend, and how spread out each system's projections are.
+
+Every scored row is also tagged vet or rookie (#433): a rookie had fewer than
+``ROOKIE_MAX_CAREER_PA`` MLB plate appearances before the season. Projecting the two is
+a different problem (a vet has MLB history; a rookie needs minor-league stats and
+pedigree we don't have yet), so the summary scores each group on its own, with pairs
+formed only inside a group.
 """
 
 from __future__ import annotations
@@ -48,6 +54,9 @@ PRESEASON_MIN_PA = 300
 SNAPSHOT_MIN_PA = 100
 OURS = "ours"
 BLEND = "fg_blend"
+# Fewer MLB PA than this before the season = rookie (#433).
+ROOKIE_MAX_CAREER_PA = 300
+GROUPS = ("vet", "rookie")
 
 
 def _with_fangraphs(
@@ -130,10 +139,37 @@ def snapshots(
     return pd.concat(parts, ignore_index=True) if parts else None
 
 
+def tag_experience(scored: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
+    """``scored`` plus ``career_pa`` (MLB PA before the season) and ``group`` ("vet" or
+    "rookie", see ``ROOKIE_MAX_CAREER_PA``).
+
+    Career PA is the table's ``car_pa`` on the player's week-0 row: every earlier season
+    in the box-score store (2008 on, so complete for every test season from 2012). A
+    scored player with no week-0 row is an error, not a silent rookie.
+    """
+    week0 = table.loc[table["week"] == 0, ["season", "player_id", "car_pa"]]
+    tagged = scored.drop(columns=["career_pa", "group"], errors="ignore").merge(
+        week0.rename(columns={"car_pa": "career_pa"}),
+        on=["season", "player_id"],
+        how="left",
+        validate="many_to_one",
+    )
+    missing = tagged["career_pa"].isna()
+    if missing.any():
+        examples = tagged.loc[missing, ["season", "player_id"]].drop_duplicates().head()
+        raise ValueError(
+            f"{missing.sum()} scored rows have no week-0 table row to take career PA "
+            f"from, e.g. {examples.to_dict('records')}"
+        )
+    rookie = tagged["career_pa"] < ROOKIE_MAX_CAREER_PA
+    return tagged.assign(group=rookie.map({True: "rookie", False: "vet"}))
+
+
 def score_predictions(
     table: pd.DataFrame, preds: pd.DataFrame, projections_dir: Path, store: Path
 ) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
-    """(preseason, snapshots) scored frames for every season in ``preds``."""
+    """(preseason, snapshots) scored frames for every season in ``preds``, each row
+    tagged vet or rookie (``tag_experience``)."""
     pre_parts, snap_parts = [], []
     for season in sorted(int(s) for s in preds["season"].unique()):
         candidates = {OURS: preds[preds["season"] == season], **baseline_predictions(table, season)}
@@ -142,8 +178,8 @@ def score_predictions(
         if snap is not None:
             snap_parts.append(snap)
     return (
-        pd.concat(pre_parts, ignore_index=True) if pre_parts else None,
-        pd.concat(snap_parts, ignore_index=True) if snap_parts else None,
+        tag_experience(pd.concat(pre_parts, ignore_index=True), table) if pre_parts else None,
+        tag_experience(pd.concat(snap_parts, ignore_index=True), table) if snap_parts else None,
     )
 
 
@@ -268,6 +304,36 @@ def _mean_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     ]
 
 
+def _group_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
+    """Main score and raw MAE for vets and rookies separately, averaged over the
+    seasons or snapshots (``unit``) in ``frame``. Pairs form only inside a group, so
+    each group's pairwise score asks "did we order these players right among
+    themselves". Empty for a frame scored before the tag existed."""
+    if "group" not in frame.columns:
+        return []
+    md = [
+        "",
+        f"**Vets vs rookies** (rookie = under {ROOKIE_MAX_CAREER_PA} MLB PA before the "
+        f"season; pairs only inside a group; mean over {unit}s)",
+    ]
+    for group in GROUPS:
+        g = frame[frame["group"] == group]
+        if g.empty:
+            continue
+        n = g.drop_duplicates([unit, "player_id"]).groupby(unit).size().mean()
+        md += [
+            "",
+            f"{group.capitalize()}s, {n:.0f} players per {unit} -- gap-weighted pairwise (%):",
+            "",
+            to_markdown(order_table(g, "pairwise_w"), digits=1),
+            "",
+            f"{group.capitalize()}s -- raw MAE:",
+            "",
+            to_markdown(mean_over_seasons(g, unit=unit)),
+        ]
+    return md
+
+
 def league_forecast_lines(table: pd.DataFrame, seasons: list[int]) -> list[str]:
     """Markdown: the preseason league-rate forecast (the last three seasons, the
     multiplier that turns a relative projection back into rates) vs. the league's
@@ -318,6 +384,7 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         pooled = systems_in_every_season(pre)
         md += ["", "**Mean over seasons** (systems present every season)"]
         md += _mean_blocks(pooled, "season")
+        md += _group_blocks(pooled, "season")
         fg_seasons = pre.loc[pre["system"] == BLEND, "season"].unique()
         if 0 < len(fg_seasons) < pre["season"].nunique():
             # Older seasons have no FanGraphs files; keep the comparison with them visible.
@@ -325,6 +392,7 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
             years = ", ".join(str(s) for s in sorted(fg_seasons))
             md += ["", f"**Mean over the seasons with FanGraphs files** ({years})"]
             md += _mean_blocks(fg, "season")
+            md += _group_blocks(fg, "season")
         md += [
             "",
             "**Spread of projections** (SD across scored player-seasons; '(actual)' = outcomes)",
@@ -336,5 +404,7 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         for snapshot, g in snap.groupby("snapshot"):
             md += ["", f"**{snapshot}**", *_unit_block(g)]
         md += ["", "**Mean over snapshots** (systems present in every snapshot)"]
-        md += _mean_blocks(systems_in_every_season(snap, "snapshot"), "snapshot")
+        every = systems_in_every_season(snap, "snapshot")
+        md += _mean_blocks(every, "snapshot")
+        md += _group_blocks(every, "snapshot")
     return md
