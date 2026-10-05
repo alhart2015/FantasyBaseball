@@ -52,7 +52,9 @@ from fantasy_baseball.hitter_ros.features import (
     target_frame,
 )
 from fantasy_baseball.hitter_ros.net import (
+    COUNT_LOSS_TARGETS,
     EVAL_BATCH,
+    LOG_RATE_CLAMP,
     RELATIVE_TARGETS,
     NetConfig,
     device,
@@ -131,7 +133,11 @@ def fit_season(
         )
         for s in TARGETS
     }
-    y_std = np.column_stack([(y_train[s] - mu[s]) / sd[s] for s in TARGETS])
+    # Poisson targets (count_loss) stay as rates: the net predicts their log.
+    poisson = set(COUNT_LOSS_TARGETS[config.count_loss])
+    y_std = np.column_stack(
+        [y_train[s] if s in poisson else (y_train[s] - mu[s]) / sd[s] for s in TARGETS]
+    )
 
     def inputs(rows: pd.Series) -> np.ndarray:
         x = scaler.transform(x_all[rows])
@@ -161,7 +167,12 @@ def fit_season(
         amp=config.amp,
     )
     preds = pd.DataFrame(
-        {s: z[:, i] * sd[s] + mu[s] for i, s in enumerate(TARGETS)},
+        {
+            s: np.exp(np.clip(z[:, i], *LOG_RATE_CLAMP))
+            if s in poisson
+            else z[:, i] * sd[s] + mu[s]
+            for i, s in enumerate(TARGETS)
+        },
         index=table.index[test_rows],
     )
     if ref is not None:
@@ -255,6 +266,12 @@ def main() -> int:
         help="2: shared body with a preseason head (week 0) and a mid-season head (#422)",
     )
     parser.add_argument(
+        "--count-loss",
+        choices=list(COUNT_LOSS_TARGETS),
+        default=defaults.count_loss,
+        help="Poisson loss on counts for SB only, or for R/HR/RBI/SB (#413)",
+    )
+    parser.add_argument(
         "--steal-inputs",
         action=argparse.BooleanOptionalAction,
         default=defaults.steal_inputs,
@@ -333,6 +350,7 @@ def main() -> int:
             heads=args.heads,
             split=args.split,
             steal_inputs=args.steal_inputs,
+            count_loss=args.count_loss,
         )
     except ValueError as err:
         parser.error(str(err))
