@@ -88,7 +88,7 @@ class NetConfig:
     relative_target: str = "answer"
     # Probe features (#417) from this pretraining run (e.g. "p003"), read from
     # data/hitter_ros/probes_<run>.parquet and added to the inputs. "none": no probes.
-    probes: str = "p003"
+    probes: str = "p004"
     # Multiple heads (#422): 1 = one output layer for every row (the plain MLP). 2 = a
     # shared body with a preseason head (week 0) and a mid-season head (week 1+); the
     # head index rides in the last input column (see MultiHeadMLP). With the default

@@ -255,7 +255,7 @@ def main() -> int:
     parser.add_argument(
         "--probes",
         default=defaults.probes,
-        help="add probe features (#417) from this pretraining run, e.g. p003 "
+        help="add probe features (#417) from this pretraining run (default p004; none = off) "
         "(build them first with scripts/build_hitter_ros_probes.py)",
     )
     parser.add_argument(
