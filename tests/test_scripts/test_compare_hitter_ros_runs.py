@@ -224,3 +224,14 @@ def test_run_row_reports_vets_and_rookies_separately(runs):
     # A run scored before the tag has no group rows.
     _run(runs, "old", pre=pre.drop(columns="group"))
     assert "pre_vet_pairw_gap_hr" not in cmp.compare(["old"], None, None).columns
+
+
+def test_train_script_asks_to_build_missing_milb_inputs(tmp_path, monkeypatch, capsys):
+    from scripts import train_hitter_ros
+
+    monkeypatch.setattr(train_hitter_ros, "TABLE", tmp_path / "table.parquet")
+    monkeypatch.setattr(train_hitter_ros, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr("sys.argv", ["train", "--name", "x", "--milb", "raw"])
+    with pytest.raises(SystemExit):
+        train_hitter_ros.main()
+    assert "build_hitter_ros_milb" in capsys.readouterr().err

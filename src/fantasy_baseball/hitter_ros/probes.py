@@ -39,6 +39,7 @@ import numpy as np
 import pandas as pd
 import torch
 
+from fantasy_baseball.hitter_ros.features import ROW_KEYS, aligned_inputs, check_aligned
 from fantasy_baseball.hitter_ros.history import to_days
 from fantasy_baseball.hitter_ros.pitch_tokens import CONTEXT_FEATURES, OUTCOMES, TOKEN_FEATURES
 from fantasy_baseball.hitter_ros.pretrain import N_CONTEXT, PitchStore, PretrainModel
@@ -336,7 +337,7 @@ def standardize(feats: pd.DataFrame, reference: pd.DataFrame) -> pd.DataFrame:
     return (feats - reference.mean()) / sd.where(sd > 0)
 
 
-PROBE_KEYS = ["player_id", "season", "week"]
+PROBE_KEYS = ROW_KEYS
 
 
 def probe_path(root: Path, run: str) -> Path:
@@ -345,29 +346,13 @@ def probe_path(root: Path, run: str) -> Path:
 
 
 def check_probes(table: pd.DataFrame, probes: pd.DataFrame) -> str | None:
-    """Why ``probes`` can't be used with ``table`` (None if it can): duplicate keys, a
-    table row it lacks, or an as-of date that differs (a probe file built for another
-    table would read history cut at the wrong date)."""
-    if probes.duplicated(PROBE_KEYS).any():
-        return "it has duplicate (player, season, week) rows"
-    merged = table[[*PROBE_KEYS, "as_of"]].merge(
-        probes[[*PROBE_KEYS, "as_of"]], on=PROBE_KEYS, how="left", suffixes=("", "_probe")
-    )
-    missing = int(merged["as_of_probe"].isna().sum())
-    if missing:
-        return f"it lacks {missing} table rows"
-    moved = int((pd.to_datetime(merged["as_of"]) != pd.to_datetime(merged["as_of_probe"])).sum())
-    if moved:
-        return f"{moved} rows have a different as-of date than the table"
-    return None
+    """Why ``probes`` can't be used with ``table`` (None if it can); see
+    ``features.check_aligned``."""
+    return check_aligned(table, probes)
 
 
 def probe_inputs(table: pd.DataFrame, probes: pd.DataFrame) -> pd.DataFrame:
     """``PROBE_FEATURES`` aligned to ``table``'s rows by (player, season, week); NaN for
     a row the probe file doesn't cover. The file's features are already standardized
     (see ``scripts/build_hitter_ros_probes.py``)."""
-    merged = table[PROBE_KEYS].merge(
-        probes[[*PROBE_KEYS, *PROBE_FEATURES]], on=PROBE_KEYS, how="left", validate="one_to_one"
-    )
-    merged.index = table.index
-    return merged[list(PROBE_FEATURES)]
+    return aligned_inputs(table, probes, list(PROBE_FEATURES))

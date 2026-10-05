@@ -114,6 +114,9 @@ class NetConfig:
     horizon_weights: list[float] = field(default_factory=lambda: [0.25, 0.5, 0.75, 1.0])
     recent_inputs: bool = False
     head_layers: int = 0
+    # Minor-league inputs (#435): a graded minor-league line per window, from
+    # data/hitter_ros/milb_<name>.parquet (hitter_ros.milb_features). "none": none.
+    milb: str = "none"
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):
