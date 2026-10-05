@@ -339,3 +339,18 @@ def test_steal_opportunities_positions_and_team_steals(store):
     assert row["std_starts_cf"] == 7 and row["std_starts_c"] == 0
     assert row["std_team_sb"] == 0 and row["p1_team_cs"] == 0
     assert _row(df, OTHER, 2025, 1)["std_steal_opp2"] == 0  # he hit; he wasn't on base
+
+
+def test_next_n_pa_answers(store):
+    """HITTER bats 4 times a game with 1 HR; 2025 has 21 games (84 PA)."""
+    df = build_table(store)
+    w0 = _row(df, HITTER, 2025, 0)
+    # Next 25 PA: reached after 7 games (28 PA); every count is over those 7 games.
+    assert w0.ros_n25_pa == 28 and w0.ros_n25_hr == 7 and w0.ros_n25_ab == 28
+    # Next 100 PA: the season ends at 84, so there's no answer.
+    assert pd.isna(w0.ros_n100_pa) and pd.isna(w0.ros_n100_hr)
+    w1 = _row(df, HITTER, 2025, 1)  # 7 games (28 PA) before the date
+    assert w1.ros_n25_pa == 28 and w1.ros_n25_hr == 7
+    # Counts start on the as-of date: never more than the rest of the season.
+    assert w1.ros_n25_pa <= w1.ros_pa
+    assert pd.isna(_row(df, HITTER, 2025, 2).ros_n250_pa)

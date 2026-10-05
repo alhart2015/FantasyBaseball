@@ -63,6 +63,9 @@ BOX_COUNTS = (
     "spot_sum",
     *(f"starts_{p.lower()}" for p in START_POSITIONS),
 )
+# Short-horizon answers (#419): his next N PA from the as-of date, same season only.
+HORIZONS = (25, 100, 250)
+HORIZON_COUNTS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
 # Steal opportunities (#413), from the runners on base at the first pitch of each PA:
 # on 1B with 2B open, and on 2B with 3B open.
 STEAL_COUNTS = ("steal_opp2", "steal_opp3")
@@ -340,6 +343,50 @@ def _league_context(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _horizon_answers(conn: duckdb.DuckDBPyConnection) -> list[str]:
+    """Answers for the next N PA (#419): ``ros_n{N}_*`` counts over his games from the
+    as-of date until his PA reach N, within the same season. NULL when he doesn't reach
+    N before the season ends (no answer for that horizon). Games end mid-horizon, so a
+    window holds N to N + a few PA; rates use its actual PA. Same-day games are one step,
+    as in ``box_daily``. Answers only: the ``ros_`` prefix keeps the leakage tests on them.
+
+    Built from running totals per player-season: the window ends on the first date whose
+    running PA reaches (PA before the as-of date) + N, and its counts are the running
+    totals there minus those before the date (``std_*``).
+    """
+    running = ", ".join(
+        f"sum({c}) OVER (PARTITION BY player_id, season ORDER BY game_date) AS cum_{c}"
+        for c in HORIZON_COUNTS
+    )
+    conn.execute(
+        f"CREATE TEMP TABLE box_cum AS SELECT player_id, season, game_date, {running} "
+        "FROM box_daily"
+    )
+    names = []
+    for n in HORIZONS:
+        name = f"horizon_{n}"
+        counts = ", ".join(
+            f"CASE WHEN b.cum_pa IS NULL THEN NULL ELSE b.cum_{c} - s.std_{c} END AS ros_n{n}_{c}"
+            for c in HORIZON_COUNTS
+        )
+        conn.execute(
+            f"""
+            CREATE TEMP TABLE {name} AS
+            WITH goal AS (
+                SELECT pop.player_id, pop.season, pop.week, s.std_pa + {n} AS goal_pa
+                FROM pop JOIN std_box s USING (player_id, season, week)
+            )
+            SELECT g.player_id, g.season, g.week, {counts}
+            FROM goal g
+            JOIN std_box s USING (player_id, season, week)
+            ASOF LEFT JOIN box_cum b
+              ON b.player_id = g.player_id AND b.season = g.season AND g.goal_pa <= b.cum_pa
+            """
+        )
+        names.append(name)
+    return names
+
+
 def _season_totals(conn: duckdb.DuckDBPyConnection, daily: str, cols: Iterable[str]) -> str:
     name = f"{daily}_season"
     sums = ", ".join(f"sum({c}) AS {c}" for c in cols)
@@ -411,6 +458,7 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
     }
     for name, sql in parts.items():
         conn.execute(f"CREATE TEMP TABLE {name} AS {sql}")
+    horizon_tables = _horizon_answers(conn)
 
     # The hitter's team going forward: the team of his first game on or after the date.
     # That is the roster as known on the date (it catches offseason and deadline moves);
@@ -448,7 +496,8 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
     _league_context(conn)
 
     first_store_season = "(SELECT min(season) FROM box_daily)"
-    joined = ", ".join(f"{p}.* EXCLUDE (player_id, season, week)" for p in parts)
+    tables = [*parts, *horizon_tables]
+    joined = ", ".join(f"{p}.* EXCLUDE (player_id, season, week)" for p in tables)
     df = conn.execute(
         f"""
         SELECT pop.player_id, pop.season, pop.week, pop.as_of, pop.season_complete,
@@ -467,7 +516,7 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
                {joined},
                lg.* EXCLUDE (player_id, season, week)
         FROM pop
-        {" ".join(f"JOIN {p} USING (player_id, season, week)" for p in parts)}
+        {" ".join(f"JOIN {p} USING (player_id, season, week)" for p in tables)}
         JOIN team_ctx tc USING (player_id, season, week)
         JOIN team_ctx_p1 tp USING (player_id, season, week)
         JOIN league_ctx lg USING (player_id, season, week)
