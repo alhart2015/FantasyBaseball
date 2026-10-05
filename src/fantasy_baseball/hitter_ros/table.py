@@ -265,11 +265,14 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
     # Sprint speed: always the same columns, NULL when unknown or not fetched.
     sprint_src = (
         """SELECT CAST(player_id AS BIGINT) AS player_id, CAST(season AS INTEGER) AS season,
-                  sprint_speed, competitive_runs FROM sprint_speed"""
+                  sprint_speed, competitive_runs, CAST(hp_to_1b AS DOUBLE) AS hp_to_1b,
+                  CAST(bolts AS DOUBLE) AS bolts FROM sprint_speed"""
         if has_sprint
         else """SELECT CAST(NULL AS BIGINT) AS player_id, CAST(NULL AS INTEGER) AS season,
                        CAST(NULL AS DOUBLE) AS sprint_speed,
-                       CAST(NULL AS BIGINT) AS competitive_runs WHERE false"""
+                       CAST(NULL AS BIGINT) AS competitive_runs,
+                       CAST(NULL AS DOUBLE) AS hp_to_1b, CAST(NULL AS DOUBLE) AS bolts
+                WHERE false"""
     )
     conn.execute(f"CREATE TEMP TABLE sprint AS {sprint_src}")
 
@@ -457,6 +460,8 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
                a.age,
                s1.sprint_speed AS p1_sprint_speed, s1.competitive_runs AS p1_sprint_runs,
                s2.sprint_speed AS p2_sprint_speed, s2.competitive_runs AS p2_sprint_runs,
+               s1.hp_to_1b AS p1_hp_to_1b, s1.bolts AS p1_bolts,
+               s2.hp_to_1b AS p2_hp_to_1b, s2.bolts AS p2_bolts,
                tc.team_id, tc.* EXCLUDE (player_id, season, week, team_id),
                tp.* EXCLUDE (player_id, season, week),
                {joined},

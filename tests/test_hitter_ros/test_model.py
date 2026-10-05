@@ -355,3 +355,40 @@ def test_steal_inputs(table):
     assert r["std_steal_opp_pa"] == pytest.approx(7 / 28)
     assert r["std_start_share_cf"] == 1.0 and r["std_start_share_c"] == 0.0
     assert r["std_attempts_per_opp"] == 0.0 and np.isnan(r["std_sb_success"])  # never ran
+
+
+def test_bolt_rate_counts_a_blank_as_zero_only_when_runs_are_known():
+    from fantasy_baseball.hitter_ros.features import _steal_inputs
+
+    row = pd.DataFrame(
+        {
+            "p1_sprint_runs": [50.0, 50.0, np.nan],
+            "p1_bolts": [5.0, np.nan, np.nan],
+            "p1_hp_to_1b": [4.2, 4.5, np.nan],
+            "p2_sprint_runs": [np.nan] * 3,
+            "p2_bolts": [np.nan] * 3,
+            "p2_hp_to_1b": [np.nan] * 3,
+        }
+    )
+    windows = {
+        f"{w}_{c}": 1.0
+        for w in ("std", "p1", "p3", "car")
+        for c in (
+            "steal_opp2",
+            "steal_opp3",
+            "sb",
+            "cs",
+            "pa",
+            "starts",
+            "starts_c",
+            "starts_ss",
+            "starts_cf",
+            "starts_dh",
+        )
+    }
+    teams = {f"{w}_team_{c}": 1.0 for w in ("std", "p1") for c in ("sb", "cs", "pa")}
+    full = row.assign(**{k: v for k, v in {**windows, **teams}.items() if k not in row})
+    out = pd.DataFrame(_steal_inputs(full))
+    assert list(out["p1_bolt_rate"][:2]) == [0.1, 0.0]
+    assert np.isnan(out["p1_bolt_rate"][2])  # no sprint data at all: unknown, not 0
+    assert out["p1_hp_to_1b"][0] == 4.2

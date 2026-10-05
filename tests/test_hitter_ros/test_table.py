@@ -267,10 +267,19 @@ def test_sprint_speed_joins_the_previous_season(store):
     path = store / "sprint_speed" / "2024.parquet"
     path.parent.mkdir()
     pd.DataFrame(
-        {"player_id": [HITTER], "season": [2024], "sprint_speed": [28.5], "competitive_runs": [40]}
+        {
+            "player_id": [HITTER],
+            "season": [2024],
+            "sprint_speed": [28.5],
+            "competitive_runs": [40],
+            "hp_to_1b": [4.21],
+            "bolts": [3],
+        }
     ).to_parquet(path, index=False)
     df = build_table(store)
     assert _row(df, HITTER, 2025, 0).p1_sprint_speed == 28.5
+    assert _row(df, HITTER, 2025, 0).p1_hp_to_1b == pytest.approx(4.21)
+    assert _row(df, HITTER, 2025, 0).p1_bolts == 3
     assert pd.isna(_row(df, OTHER, 2025, 0).p1_sprint_speed)
 
 

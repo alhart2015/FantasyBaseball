@@ -167,14 +167,14 @@ def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
 
 
 # Table columns the steal inputs read (#413); a table built before #413 lacks them.
-STEAL_TABLE_COLUMNS = ("std_steal_opp2", "std_starts_c", "std_team_sb")
+STEAL_TABLE_COLUMNS = ("std_steal_opp2", "std_starts_c", "std_team_sb", "p1_hp_to_1b")
 
 
 def _steal_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
     """Steal inputs (#413), per window: how often he is on base with the next base open,
     how often he runs when he is, how often he's safe, and his share of starts at C /
     SS / CF / DH. Plus his team's steal attempts per PA (the manager's green light),
-    this season so far and last season."""
+    this season so far and last season, and his home-to-first time and bolt rate."""
     out: dict[str, pd.Series] = {}
     for w in WINDOWS:
 
@@ -191,6 +191,14 @@ def _steal_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
     for w in ("std", "p1"):
         team = t[f"{w}_team_sb"].astype(float) + t[f"{w}_team_cs"].astype(float)
         out[f"{w}_team_steal_pa"] = _div(team, t[f"{w}_team_pa"].astype(float))
+    # Savant's sprint leaderboard, the two previous seasons: home-to-first time, and
+    # "bolts" (runs at 30+ ft/s) per competitive run. The leaderboard leaves bolts
+    # blank for a runner with none, so blank counts as 0 where his runs are known.
+    for w in ("p1", "p2"):
+        runs = t[f"{w}_sprint_runs"].astype(float)
+        bolts = t[f"{w}_bolts"].astype(float).fillna(0.0).where(runs.notna())
+        out[f"{w}_hp_to_1b"] = t[f"{w}_hp_to_1b"].astype(float)
+        out[f"{w}_bolt_rate"] = _div(bolts, runs)
     return out
 
 
