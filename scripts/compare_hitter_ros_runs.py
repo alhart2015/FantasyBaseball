@@ -74,7 +74,7 @@ def _scores(scored: pd.DataFrame, unit: str) -> dict[str, pd.DataFrame]:
 def _group_gaps(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None:
     """Main-score gap to the blend for vets and rookies separately (#433), into ``row``
     as ``{prefix}_{group}_pairw_gap_{stat}``. Nothing for frames without the tag."""
-    if "group" not in both.columns or "lf_err" not in both.columns:
+    if "group" not in both.columns:
         return
     for group in GROUPS:
         sub = both[both["group"] == group]
