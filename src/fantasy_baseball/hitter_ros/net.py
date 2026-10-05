@@ -110,7 +110,7 @@ class NetConfig:
     # how much each horizon's loss counts, for next 25 / 100 / 250 PA and rest of season.
     # recent_inputs: add the last 7 / 14 days as input windows. head_layers: a hidden
     # layer of this width inside each horizon's head (0 = a plain linear head).
-    horizons: bool = False
+    horizons: bool = True
     horizon_weights: list[float] = field(default_factory=lambda: [0.25, 0.5, 0.75, 1.0])
     recent_inputs: bool = False
     head_layers: int = 0

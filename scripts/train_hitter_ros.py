@@ -299,8 +299,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--horizons",
-        action="store_true",
-        help="also predict the next 25 / 100 / 250 PA, one head each (#419)",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.horizons,
+        help="also predict the next 25 / 100 / 250 PA, one head each (#419); on by default",
     )
     parser.add_argument(
         "--horizon-weights",
