@@ -53,7 +53,19 @@ from fantasy_baseball.pitch_data.store import connect
 
 AS_OF_STEP_DAYS = 7
 
-BOX_COUNTS = (*FULL_HITTER_FIELDS.values(), "games", "starts", "spot_sum")
+# Starts at the positions that say most about running (#413): catchers almost never
+# run; shortstops and center fielders are usually fast; a DH is usually slow.
+START_POSITIONS = ("C", "SS", "CF", "DH")
+BOX_COUNTS = (
+    *FULL_HITTER_FIELDS.values(),
+    "games",
+    "starts",
+    "spot_sum",
+    *(f"starts_{p.lower()}" for p in START_POSITIONS),
+)
+# Steal opportunities (#413), from the runners on base at the first pitch of each PA:
+# on 1B with 2B open, and on 2B with 3B open.
+STEAL_COUNTS = ("steal_opp2", "steal_opp3")
 TARGET_COUNTS = (
     "pa",
     "ab",
@@ -128,7 +140,7 @@ PITCH_AGGS: dict[str, str] = {
     "bat_speed_sum": "sum(bat_speed)",
 }
 PITCH_COUNTS = tuple(PITCH_AGGS)
-TEAM_COUNTS = ("team_r", "team_pa", "team_games")
+TEAM_COUNTS = ("team_r", "team_pa", "team_games", "team_sb", "team_cs")
 # League totals per window (#421), for league rates and player-vs-league ratios.
 LEAGUE_COUNTS = ("pa", "ab", "h", "b2", "b3", "hr", "r", "rbi", "sb", "cs", "bb", "k", "hbp")
 
@@ -142,6 +154,10 @@ def _sums(cols: Iterable[str], src: str, prefix: str) -> str:
 def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
     """Daily per-player sums, hitter-seasons, season bounds and the as-of grid."""
     box_sums = ", ".join(f"sum({c}) AS {c}" for c in FULL_HITTER_FIELDS.values())
+    position_starts = ", ".join(
+        f"count(*) FILTER (WHERE sub_index = 0 AND position = '{p}') AS starts_{p.lower()}"
+        for p in START_POSITIONS
+    )
     conn.execute(
         f"""
         CREATE TEMP TABLE box_daily AS
@@ -151,6 +167,7 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
                count(DISTINCT game_pk) AS games,
                count(*) FILTER (WHERE sub_index = 0) AS starts,
                coalesce(sum(lineup_spot) FILTER (WHERE sub_index = 0), 0) AS spot_sum,
+               {position_starts},
                arg_max(team_id, game_pk) AS team_id,
                bool_or(sub_index = 0 AND position IS DISTINCT FROM 'P') AS started_off_mound,
                bool_or(position IS DISTINCT FROM 'P') AS non_pitcher_role
@@ -165,6 +182,24 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
                CAST(season AS INTEGER) AS season, {pitch_sums}, max(age_bat) AS age_bat
         FROM pitches WHERE game_type = 'R'
         GROUP BY batter, CAST(game_date AS DATE), season
+        """
+    )
+    conn.execute(
+        """
+        CREATE TEMP TABLE steal_daily AS
+        SELECT runner AS player_id, game_date, season,
+               sum(opp2) AS steal_opp2, sum(opp3) AS steal_opp3
+        FROM (
+            SELECT on_1b AS runner, CAST(game_date AS DATE) AS game_date,
+                   CAST(season AS INTEGER) AS season, 1 AS opp2, 0 AS opp3
+            FROM pitches
+            WHERE game_type = 'R' AND pitch_number = 1 AND on_1b IS NOT NULL AND on_2b IS NULL
+            UNION ALL
+            SELECT on_2b, CAST(game_date AS DATE), CAST(season AS INTEGER), 0, 1
+            FROM pitches
+            WHERE game_type = 'R' AND pitch_number = 1 AND on_2b IS NOT NULL AND on_3b IS NULL
+        )
+        GROUP BY 1, 2, 3
         """
     )
     conn.execute(
@@ -197,6 +232,8 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
                year(CAST(l.game_date AS DATE)) AS season,
                coalesce(sum(l.r) FILTER (WHERE hs.player_id IS NOT NULL), 0) AS team_r,
                coalesce(sum(l.pa) FILTER (WHERE hs.player_id IS NOT NULL), 0) AS team_pa,
+               coalesce(sum(l.sb) FILTER (WHERE hs.player_id IS NOT NULL), 0) AS team_sb,
+               coalesce(sum(l.cs) FILTER (WHERE hs.player_id IS NOT NULL), 0) AS team_cs,
                count(DISTINCT l.game_pk) AS team_games
         FROM lineups l
         LEFT JOIN hitter_seasons hs
@@ -228,11 +265,14 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
     # Sprint speed: always the same columns, NULL when unknown or not fetched.
     sprint_src = (
         """SELECT CAST(player_id AS BIGINT) AS player_id, CAST(season AS INTEGER) AS season,
-                  sprint_speed, competitive_runs FROM sprint_speed"""
+                  sprint_speed, competitive_runs, CAST(hp_to_1b AS DOUBLE) AS hp_to_1b,
+                  CAST(bolts AS DOUBLE) AS bolts FROM sprint_speed"""
         if has_sprint
         else """SELECT CAST(NULL AS BIGINT) AS player_id, CAST(NULL AS INTEGER) AS season,
                        CAST(NULL AS DOUBLE) AS sprint_speed,
-                       CAST(NULL AS BIGINT) AS competitive_runs WHERE false"""
+                       CAST(NULL AS BIGINT) AS competitive_runs,
+                       CAST(NULL AS DOUBLE) AS hp_to_1b, CAST(NULL AS DOUBLE) AS bolts
+                WHERE false"""
     )
     conn.execute(f"CREATE TEMP TABLE sprint AS {sprint_src}")
 
@@ -329,6 +369,7 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
     _stage(conn, has_sprint=has_sprint)
     box_season = _season_totals(conn, "box_daily", BOX_COUNTS)
     pitch_season = _season_totals(conn, "pitch_daily", PITCH_COUNTS)
+    steal_season = _season_totals(conn, "steal_daily", STEAL_COUNTS)
 
     conn.execute(
         """
@@ -362,6 +403,10 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
         "p3_pitch": window(pitch_season, PITCH_COUNTS, "p3_", p3),
         "car_box": window(box_season, BOX_COUNTS, "car_", car),
         "car_pitch": window(pitch_season, PITCH_COUNTS, "car_", car),
+        "std_steal": window("steal_daily", STEAL_COUNTS, "std_", std),
+        "p1_steal": window(steal_season, STEAL_COUNTS, "p1_", p1),
+        "p3_steal": window(steal_season, STEAL_COUNTS, "p3_", p3),
+        "car_steal": window(steal_season, STEAL_COUNTS, "car_", car),
         "ros": window("box_daily", TARGET_COUNTS, "ros_", ros),
     }
     for name, sql in parts.items():
@@ -415,8 +460,10 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
                a.age,
                s1.sprint_speed AS p1_sprint_speed, s1.competitive_runs AS p1_sprint_runs,
                s2.sprint_speed AS p2_sprint_speed, s2.competitive_runs AS p2_sprint_runs,
-               tc.team_id, tc.std_team_r, tc.std_team_pa, tc.std_team_games,
-               tp.p1_team_r, tp.p1_team_pa, tp.p1_team_games,
+               s1.hp_to_1b AS p1_hp_to_1b, s1.bolts AS p1_bolts,
+               s2.hp_to_1b AS p2_hp_to_1b, s2.bolts AS p2_bolts,
+               tc.team_id, tc.* EXCLUDE (player_id, season, week, team_id),
+               tp.* EXCLUDE (player_id, season, week),
                {joined},
                lg.* EXCLUDE (player_id, season, week)
         FROM pop

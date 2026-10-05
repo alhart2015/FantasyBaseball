@@ -36,6 +36,10 @@ logger = logging.getLogger(__name__)
 TRANSFORMER_HEADS = 4
 
 RELATIVE_TARGETS = ("none", "known", "answer")
+# count_loss (#413): which targets get a Poisson loss instead of squared error.
+COUNT_LOSS_TARGETS = {"none": (), "sb": ("sb",), "counts": ("r", "hr", "rbi", "sb")}
+# Poisson outputs are log rates; clamp before exp so a wild output can't overflow.
+LOG_RATE_CLAMP = (-15.0, 8.0)
 
 
 @dataclass
@@ -84,7 +88,7 @@ class NetConfig:
     relative_target: str = "answer"
     # Probe features (#417) from this pretraining run (e.g. "p003"), read from
     # data/hitter_ros/probes_<run>.parquet and added to the inputs. "none": no probes.
-    probes: str = "p003"
+    probes: str = "p004"
     # Multiple heads (#422): 1 = one output layer for every row (the plain MLP). 2 = a
     # shared body with a preseason head (week 0) and a mid-season head (week 1+); the
     # head index rides in the last input column (see MultiHeadMLP). With the default
@@ -93,6 +97,14 @@ class NetConfig:
     # week-0 rows and one only on week 1+ rows.
     heads: int = 1
     split: bool = False
+    # Steal inputs (#413): steal opportunities and attempts per opportunity, success
+    # rate, starts by position, and the team's green light (features._steal_inputs).
+    steal_inputs: bool = True
+    # Loss shape (#413). SB per PA is mostly zeros with a long tail, which squared error
+    # on a standardized rate fits poorly. "sb" / "counts": those targets (SB, or R, HR,
+    # RBI and SB) get a Poisson loss on the count, with the row's PA as exposure. Their
+    # outputs are then the log of the (league-relative) rate, so 0 = league average.
+    count_loss: str = "counts"
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):
@@ -103,6 +115,8 @@ class NetConfig:
             raise ValueError("split trains two separate models; it can't also have heads")
         if self.micro_batch < 0:
             raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
+        if self.count_loss not in COUNT_LOSS_TARGETS:
+            raise ValueError(f"unknown count_loss {self.count_loss!r}")
         if self.relative_target not in RELATIVE_TARGETS:
             raise ValueError(f"unknown relative_target {self.relative_target!r}")
         from fantasy_baseball.hitter_ros.features import ERA_MODES
@@ -173,6 +187,40 @@ def device() -> torch.device:
     return torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 
+@dataclass
+class CountLoss:
+    """Which targets get the Poisson loss (``mask``), and a per-target ``scale`` that
+    puts each Poisson target's loss on the same footing as a standardized squared error.
+
+    Squared error on a standardized target is ~1 when predicting the average. A Poisson
+    deviance is not: on the real table it is ~0.04 for R and ~0.7 for SB. Without the
+    scale, the per-target average would weight AVG ~27x more than R (PR #429 review).
+    """
+
+    mask: torch.Tensor  # bool, one per target
+    scale: torch.Tensor  # float, one per target (1 for squared-error targets)
+
+
+def poisson_deviance(f: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+    """Weighted Poisson deviance of log rate ``f`` against rate ``y`` with exposure ``w``:
+    ``w * exp(f)`` is the expected count and ``w * y`` the actual one; 0 when they match
+    and never negative."""
+    f = f.clamp(*LOG_RATE_CLAMP)
+    return w * (torch.exp(f) - y * f - y + torch.xlogy(y, y))
+
+
+def row_losses(
+    pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor, count: CountLoss | None = None
+) -> torch.Tensor:
+    """Each row's weighted loss per target: ``w * (pred - y)^2``, or for ``count``'s
+    Poisson targets the scaled Poisson deviance (``pred`` is then the log rate and ``y``
+    the rate)."""
+    loss = w * (pred - y) ** 2
+    if count is None:
+        return loss
+    return torch.where(count.mask, poisson_deviance(pred, y, w) * count.scale, loss)
+
+
 def weighted_mse(pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
     """Per-target weighted MSE, averaged over targets so each counts the same."""
     per_target = (w * (pred - y) ** 2).sum(dim=0) / w.sum(dim=0).clamp(min=1e-9)
@@ -230,15 +278,16 @@ def _eval_loss(
     batcher: SequenceBatcher | None,
     chunk: int = EVAL_BATCH,
     amp: bool = False,
+    count: CountLoss | None = None,
 ) -> float:
-    """weighted_mse over all rows, computed in chunks."""
+    """The training loss (``row_losses``) over all rows, computed in chunks."""
     num = torch.zeros(y.shape[1], device=y.device)
     den = torch.zeros(y.shape[1], device=y.device)
     with torch.no_grad():
         for start in range(0, len(x), chunk):
             sl = slice(start, start + chunk)
             pred = _forward(model, x[sl], None if rows is None else rows[sl], batcher, amp=amp)
-            num += (w[sl] * (pred - y[sl]) ** 2).sum(dim=0)
+            num += row_losses(pred, y[sl], w[sl], count).sum(dim=0)
             den += w[sl].sum(dim=0)
     return float((num / den.clamp(min=1e-9)).mean().item())
 
@@ -253,8 +302,10 @@ def accumulate_batch(
     batcher: SequenceBatcher | None,
     micro_batch: int,
     amp: bool = False,
+    count: CountLoss | None = None,
 ) -> float:
-    """Backpropagate weighted_mse for batch ``idx``, in slices of ``micro_batch`` rows.
+    """Backpropagate the loss (``row_losses``; plain weighted MSE without ``count``)
+    for batch ``idx``, in slices of ``micro_batch`` rows.
 
     Each slice's loss is normalized by the whole batch's weight per target, so the
     slices' gradients sum to exactly the full-batch gradient. Returns the batch loss.
@@ -265,7 +316,7 @@ def accumulate_batch(
     for start in range(0, len(idx), step):
         sub = idx[start : start + step]
         pred = _forward(model, x[sub], None if rows is None else rows[sub], batcher, amp=amp)
-        part = ((w[sub] * (pred - y[sub]) ** 2).sum(dim=0) / w_total).mean()
+        part = (row_losses(pred, y[sub], w[sub], count).sum(dim=0) / w_total).mean()
         part.backward()
         total += part.detach()
     return float(total.item())  # one GPU->CPU sync per batch, not per slice
@@ -287,6 +338,35 @@ def loss_weights(w: np.ndarray, config: NetConfig, season_time: np.ndarray | Non
     return w
 
 
+def count_loss(
+    config: NetConfig, y: np.ndarray, w: np.ndarray, dev: torch.device
+) -> CountLoss | None:
+    """The Poisson targets of ``config.count_loss`` (``features.TARGETS`` order) and their
+    scales, or None when there are none. Each Poisson target's scale is 1 / its deviance
+    when predicting the weighted average rate on these rows (``y`` rates, ``w`` PA)."""
+    from fantasy_baseball.hitter_ros.features import TARGETS
+
+    names = COUNT_LOSS_TARGETS[config.count_loss]
+    if not names:
+        return None
+    if y.shape[1] != len(TARGETS):
+        raise ValueError(f"count_loss needs the {len(TARGETS)} ROS targets, got {y.shape[1]}")
+    mask = [t in names for t in TARGETS]
+    scale = np.ones(len(TARGETS))
+    for k, poisson in enumerate(mask):
+        if not poisson:
+            continue
+        yk = torch.as_tensor(np.nan_to_num(y[:, k]), dtype=torch.float64)
+        wk = torch.as_tensor(w[:, k], dtype=torch.float64)
+        mean = float((wk * yk).sum() / wk.sum())
+        base = poisson_deviance(torch.full_like(yk, np.log(mean)), yk, wk).sum() / wk.sum()
+        scale[k] = 1.0 / float(base) if float(base) > 0 else 1.0  # no spread: leave as is
+    return CountLoss(
+        mask=torch.tensor(mask, device=dev),
+        scale=torch.tensor(scale, dtype=torch.float32, device=dev),
+    )
+
+
 def train(
     x: np.ndarray,
     y: np.ndarray,
@@ -298,7 +378,8 @@ def train(
     batcher: SequenceBatcher | None = None,
     season_time: np.ndarray | None = None,
 ) -> TrainResult:
-    """Fit the net. ``y`` is standardized targets (NaN allowed where ``w`` is 0).
+    """Fit the net. ``y`` is standardized targets, except the ``count_loss`` targets,
+    which are rates (the net predicts their log). NaN allowed where ``w`` is 0.
 
     With a sequence model, ``rows`` gives each row's position in the table the
     ``batcher`` was built on, so it can fetch that row's plate appearances.
@@ -329,6 +410,7 @@ def train(
         rt = torch.as_tensor(rows[~val_mask], dtype=torch.long, device=dev)
         rv = torch.as_tensor(rows[val_mask], dtype=torch.long, device=dev)
     model = build_model(x.shape[1], y.shape[1], config).to(dev)
+    count = count_loss(config, y[~val_mask], w[~val_mask], dev)
     opt = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     gen = torch.Generator(device=dev).manual_seed(config.seed)
 
@@ -344,7 +426,7 @@ def train(
             idx = order[start : start + config.batch_size]
             opt.zero_grad()
             loss = accumulate_batch(
-                model, idx, xt, yt, wt, rt, batcher, config.micro_batch, config.amp
+                model, idx, xt, yt, wt, rt, batcher, config.micro_batch, config.amp, count
             )
             opt.step()
             total += loss * len(idx)
@@ -352,7 +434,7 @@ def train(
 
         model.eval()
         val = _eval_loss(
-            model, xv, yv, wv, rv, batcher, config.micro_batch or EVAL_BATCH, config.amp
+            model, xv, yv, wv, rv, batcher, config.micro_batch or EVAL_BATCH, config.amp, count
         )
         val_hist.append(val)
         if not np.isfinite(val):

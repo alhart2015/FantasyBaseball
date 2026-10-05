@@ -43,6 +43,7 @@ from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.features import (
     ERA_MODES,
     ERA_TABLE_COLUMNS,
+    STEAL_TABLE_COLUMNS,
     TARGETS,
     Standardizer,
     input_frame,
@@ -51,7 +52,9 @@ from fantasy_baseball.hitter_ros.features import (
     target_frame,
 )
 from fantasy_baseball.hitter_ros.net import (
+    COUNT_LOSS_TARGETS,
     EVAL_BATCH,
+    LOG_RATE_CLAMP,
     RELATIVE_TARGETS,
     NetConfig,
     device,
@@ -130,7 +133,11 @@ def fit_season(
         )
         for s in TARGETS
     }
-    y_std = np.column_stack([(y_train[s] - mu[s]) / sd[s] for s in TARGETS])
+    # Poisson targets (count_loss) stay as rates: the net predicts their log.
+    poisson = set(COUNT_LOSS_TARGETS[config.count_loss])
+    y_std = np.column_stack(
+        [y_train[s] if s in poisson else (y_train[s] - mu[s]) / sd[s] for s in TARGETS]
+    )
 
     def inputs(rows: pd.Series) -> np.ndarray:
         x = scaler.transform(x_all[rows])
@@ -160,7 +167,12 @@ def fit_season(
         amp=config.amp,
     )
     preds = pd.DataFrame(
-        {s: z[:, i] * sd[s] + mu[s] for i, s in enumerate(TARGETS)},
+        {
+            s: np.exp(np.clip(z[:, i], *LOG_RATE_CLAMP))
+            if s in poisson
+            else z[:, i] * sd[s] + mu[s]
+            for i, s in enumerate(TARGETS)
+        },
         index=table.index[test_rows],
     )
     if ref is not None:
@@ -243,7 +255,7 @@ def main() -> int:
     parser.add_argument(
         "--probes",
         default=defaults.probes,
-        help="add probe features (#417) from this pretraining run, e.g. p003 "
+        help="add probe features (#417) from this pretraining run (default p004; none = off) "
         "(build them first with scripts/build_hitter_ros_probes.py)",
     )
     parser.add_argument(
@@ -252,6 +264,18 @@ def main() -> int:
         choices=[1, 2],
         default=defaults.heads,
         help="2: shared body with a preseason head (week 0) and a mid-season head (#422)",
+    )
+    parser.add_argument(
+        "--count-loss",
+        choices=list(COUNT_LOSS_TARGETS),
+        default=defaults.count_loss,
+        help="Poisson loss on counts for SB only, or for R/HR/RBI/SB (#413)",
+    )
+    parser.add_argument(
+        "--steal-inputs",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.steal_inputs,
+        help="steal opportunity, position and team green-light inputs (#413); on by default",
     )
     parser.add_argument(
         "--split",
@@ -325,6 +349,8 @@ def main() -> int:
             probes=args.probes,
             heads=args.heads,
             split=args.split,
+            steal_inputs=args.steal_inputs,
+            count_loss=args.count_loss,
         )
     except ValueError as err:
         parser.error(str(err))
@@ -345,7 +371,9 @@ def main() -> int:
     # They must be the same rows, or pre_mid would quietly stop balancing.
     if not ((table["week"] == 0) == (table["frac_season_left"] >= 1)).all():
         parser.error(f"{TABLE}: week 0 is not exactly the rows with frac_season_left 1")
-    x_all = input_frame(table, era=config.era)
+    if config.steal_inputs and not set(STEAL_TABLE_COLUMNS) <= set(table.columns):
+        parser.error(f"{TABLE} predates the steal columns; run scripts/build_hitter_ros_table.py")
+    x_all = input_frame(table, era=config.era, steal=config.steal_inputs)
     if config.probes != "none":
         probes_file = probe_path(TABLE.parent, config.probes)
         if not probes_file.exists():

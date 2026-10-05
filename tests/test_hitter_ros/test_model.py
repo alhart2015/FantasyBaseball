@@ -134,7 +134,8 @@ def test_net_learns_a_simple_rule_and_is_repeatable():
     y = np.column_stack([x[:, 0] * 2, x[:, 1] - x[:, 2]]).astype(np.float32)
     w = np.ones_like(y)
     val = rng.random(2000) < 0.2
-    # Synthetic rows have no season time; pin plain PA weighting (not the pre_mid default).
+    # Synthetic rows have no season time and aren't the 5 ROS targets: pin plain PA
+    # weighting and squared error (not the pre_mid / Poisson defaults).
     config = NetConfig(
         hidden=[32],
         dropout=0.0,
@@ -143,6 +144,7 @@ def test_net_learns_a_simple_rule_and_is_repeatable():
         max_epochs=60,
         patience=10,
         weighting="pa",
+        count_loss="none",
     )
 
     first = train(x, y, w, val, config)
@@ -216,7 +218,13 @@ def test_net_fails_loudly_on_a_nan_loss():
     y = np.zeros((50, 1), dtype=np.float32)
     val = np.arange(50) < 10
     with pytest.raises(FloatingPointError, match="validation loss"):
-        train(x, y, np.ones_like(y), val, NetConfig(hidden=[4], max_epochs=3, weighting="pa"))
+        train(
+            x,
+            y,
+            np.ones_like(y),
+            val,
+            NetConfig(hidden=[4], max_epochs=3, weighting="pa", count_loss="none"),
+        )
 
 
 def test_micro_batches_give_the_full_batch_gradient():
@@ -266,13 +274,19 @@ def test_balanced_weighting_is_applied_by_train_itself():
     w = np.ones((20, 1), dtype=np.float32)
     val = np.arange(20) < 4
     with pytest.raises(ValueError, match="frac_season_left"):
-        train(x, y, w, val, NetConfig(hidden=[4], weighting="balanced", max_epochs=1))
+        train(
+            x,
+            y,
+            w,
+            val,
+            NetConfig(hidden=[4], weighting="balanced", max_epochs=1, count_loss="none"),
+        )
     train(
         x,
         y,
         w,
         val,
-        NetConfig(hidden=[4], weighting="balanced", max_epochs=1),
+        NetConfig(hidden=[4], weighting="balanced", max_epochs=1, count_loss="none"),
         season_time=np.linspace(0, 1, 20),
     )
 
@@ -342,3 +356,53 @@ def test_league_answer_rates_are_the_league_rest_of_season(table):
     assert (week1.nunique() == 1).all()
     week0 = answer[(table.season == 2025) & (table.week == 0)]
     assert not np.allclose(week0.iloc[0], week1.iloc[0])
+
+
+def test_steal_inputs(table):
+    plain = input_frame(table)
+    x = input_frame(table, steal=True)
+    assert set(plain.columns) < set(x.columns)
+    assert "std_steal_opp_pa" not in plain.columns and "p1_team_steal_pa" in x.columns
+    row = table[(table.player_id == 1) & (table.season == 2025) & (table.week == 1)]
+    r = input_frame(row, steal=True).iloc[0]
+    # 7 games, on first with second open once a game, 4 PA a game, starts in CF.
+    assert r["std_steal_opp_pa"] == pytest.approx(7 / 28)
+    assert r["std_start_share_cf"] == 1.0 and r["std_start_share_c"] == 0.0
+    assert r["std_attempts_per_opp"] == 0.0 and np.isnan(r["std_sb_success"])  # never ran
+
+
+def test_bolt_rate_counts_a_blank_as_zero_only_when_runs_are_known():
+    from fantasy_baseball.hitter_ros.features import _steal_inputs
+
+    row = pd.DataFrame(
+        {
+            "p1_sprint_runs": [50.0, 50.0, np.nan],
+            "p1_bolts": [5.0, np.nan, np.nan],
+            "p1_hp_to_1b": [4.2, 4.5, np.nan],
+            "p2_sprint_runs": [np.nan] * 3,
+            "p2_bolts": [np.nan] * 3,
+            "p2_hp_to_1b": [np.nan] * 3,
+        }
+    )
+    windows = {
+        f"{w}_{c}": 1.0
+        for w in ("std", "p1", "p3", "car")
+        for c in (
+            "steal_opp2",
+            "steal_opp3",
+            "sb",
+            "cs",
+            "pa",
+            "starts",
+            "starts_c",
+            "starts_ss",
+            "starts_cf",
+            "starts_dh",
+        )
+    }
+    teams = {f"{w}_team_{c}": 1.0 for w in ("std", "p1") for c in ("sb", "cs", "pa")}
+    full = row.assign(**{k: v for k, v in {**windows, **teams}.items() if k not in row})
+    out = pd.DataFrame(_steal_inputs(full))
+    assert list(out["p1_bolt_rate"][:2]) == [0.1, 0.0]
+    assert np.isnan(out["p1_bolt_rate"][2])  # no sprint data at all: unknown, not 0
+    assert out["p1_hp_to_1b"][0] == 4.2
