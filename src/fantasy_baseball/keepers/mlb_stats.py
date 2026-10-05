@@ -23,13 +23,12 @@ _MLB_PAGE = 1000
 _PEOPLE_BATCH = 500
 
 
-def _fetch_mlb_season(
-    group: str, year: int, *, get: Callable[..., Any] | None = None
-) -> pd.DataFrame:
-    """Paginated season leaderboard for `group` ('hitting'|'pitching'). Accumulates
-    the raw splits across every page, then json_normalizes ONCE (consistent columns).
-    `get` defaults to `requests.get` (local import keeps the module network-free at
-    import time); tests inject a fake."""
+def fetch_stats_splits(
+    params: dict[str, str | int], *, get: Callable[..., Any] | None = None
+) -> list[dict[str, Any]]:
+    """Every split of a ``/stats`` query, across all pages, raw. ``params`` is the query
+    minus ``limit`` / ``offset``, which this sets. `get` defaults to `requests.get`
+    (local import keeps the module network-free at import time); tests inject a fake."""
     if get is None:
         import requests
 
@@ -37,16 +36,9 @@ def _fetch_mlb_season(
     splits: list[dict[str, Any]] = []
     offset = 0
     while True:
-        params: dict[str, str | int] = {
-            "stats": "season",
-            "group": group,
-            "season": year,
-            "sportId": 1,
-            "playerPool": "all",
-            "limit": _MLB_PAGE,
-            "offset": offset,
-        }
-        resp = get(_MLB_STATS_URL, params=params, timeout=60)
+        resp = get(
+            _MLB_STATS_URL, params={**params, "limit": _MLB_PAGE, "offset": offset}, timeout=60
+        )
         resp.raise_for_status()
         stats = resp.json().get("stats", [])
         page_splits = stats[0]["splits"] if stats else []
@@ -56,7 +48,22 @@ def _fetch_mlb_season(
         if len(page_splits) < _MLB_PAGE:
             break
         offset += _MLB_PAGE
-    result: pd.DataFrame = pd.json_normalize(splits)
+    return splits
+
+
+def _fetch_mlb_season(
+    group: str, year: int, *, get: Callable[..., Any] | None = None
+) -> pd.DataFrame:
+    """Paginated season leaderboard for `group` ('hitting'|'pitching'). Accumulates
+    the raw splits across every page, then json_normalizes ONCE (consistent columns)."""
+    params: dict[str, str | int] = {
+        "stats": "season",
+        "group": group,
+        "season": year,
+        "sportId": 1,
+        "playerPool": "all",
+    }
+    result: pd.DataFrame = pd.json_normalize(fetch_stats_splits(params, get=get))
     return result
 
 
