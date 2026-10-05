@@ -25,12 +25,15 @@ Resumability follows the store: a file is final once it was written after the da
 covers had settled (``store.is_final``). A season file counts as covering the MLB season
 (the minor-league regular season ends by then). Once the season has settled and its file
 and every window are on disk, the window lines must add up to the season line for every
-player and level, or the fetch fails: the API can return a short page without raising. The date-range
-query does drop the odd game (2008 AAA: 19 of thousands of player-levels a few PA
-short, the games present in the player's game log). A player-level that doesn't add up
+player and level, or the fetch fails: the API can return a short page without raising.
+When they don't add up and the season file is from an earlier run, the season lines are
+fetched once more first, so a short season page can't get stuck as final. The
+date-range query does drop the odd game (5 seasons, about 20 player-levels each, a few
+PA; the games are in the player's game log). A player-level that still doesn't add up
 gets its weekly lines rebuilt from his game log, which carries each game's date; those
-rows have ``from_game_log`` set, count stats only (summed), and the rest of their
-columns copied from his season line. Only if they still don't add up does it fail.
+rows have ``from_game_log`` set, count stats summed, ``team`` / ``league`` from his
+last game in the window (he may have been traded since), and the rest of their columns
+from his season line. Only if they still don't add up does it fail.
 """
 
 from __future__ import annotations
@@ -44,7 +47,7 @@ from typing import Any
 
 import pandas as pd
 
-from fantasy_baseball.keepers.mlb_stats import fetch_stats_splits
+from fantasy_baseball.keepers.mlb_stats import _MLB_PEOPLE_URL, fetch_stats_splits
 from fantasy_baseball.pitch_data.store import _write_parquet, is_final, is_settled
 
 logger = logging.getLogger(__name__)
@@ -60,7 +63,6 @@ Window = tuple[date, date]
 Fetch = Callable[[dict[str, str | int]], list[dict[str, Any]]]
 # (player, season, sportId) -> that player's game-by-game splits at the level
 GameLog = Callable[[int, int, int], list[dict[str, Any]]]
-_PEOPLE_URL = "https://statsapi.mlb.com/api/v1/people"
 # Numeric stat fields that are not counts, so summing games would be wrong.
 _NOT_COUNTS = frozenset({"stat.age"})
 
@@ -74,7 +76,7 @@ def fetch_game_log(player: int, season: int, sport_id: int) -> list[dict[str, An
         "season": season,
         "sportId": sport_id,
     }
-    resp = requests.get(f"{_PEOPLE_URL}/{player}/stats", params=params, timeout=60)
+    resp = requests.get(f"{_MLB_PEOPLE_URL}/{player}/stats", params=params, timeout=60)
     resp.raise_for_status()
     stats = resp.json().get("stats", [])
     splits: list[dict[str, Any]] = stats[0]["splits"] if stats else []
@@ -156,15 +158,13 @@ def fetch_milb_season(
     if season in NO_MILB_SEASONS:
         return result
     season_path = milb_season_path(root, season)
+    season_fetched = False
     if is_final(season_path, last):
         result["final"] += 1
     elif first <= today:
-        df = _lines(season, fetch)
-        if df.empty:
-            raise ValueError(f"milb {season}: the API returned no lines at any level")
-        _write_parquet(df, season_path)
+        _write_season_lines(season, fetch, season_path)
         result["written"] += 1
-        logger.info("milb %s season: %d lines", season, len(df))
+        season_fetched = True
 
     todo = []
     for window in week_windows(first, last, step_days):
@@ -191,8 +191,26 @@ def fetch_milb_season(
     # Once the season has settled and every window is on disk (final, or fetched just
     # now), the windows must add up to the season line.
     if is_settled(last, today) and not result["failed"]:
-        check_season(root, season, week_windows(first, last, step_days), game_log)
+        windows = week_windows(first, last, step_days)
+        if not season_fetched and len(
+            weekly_mismatches(pd.read_parquet(season_path), _read_weekly(root, season, windows))
+        ):
+            # A short season page from an earlier run would otherwise stay final for good.
+            logger.info(
+                "milb %s: weekly lines don't add up; fetching the season lines again", season
+            )
+            _write_season_lines(season, fetch, season_path)
+            result["written"] += 1
+        check_season(root, season, windows, game_log)
     return result
+
+
+def _write_season_lines(season: int, fetch: Fetch, path: Path) -> None:
+    df = _lines(season, fetch)
+    if df.empty:
+        raise ValueError(f"milb {season}: the API returned no lines at any level")
+    _write_parquet(df, path)
+    logger.info("milb %s season: %d lines", season, len(df))
 
 
 def _read_weekly(root: Path, season: int, windows: list[Window]) -> pd.DataFrame:
@@ -225,16 +243,32 @@ def _rebuild_from_game_logs(
     bad: pd.DataFrame,
     game_log: GameLog,
 ) -> None:
-    """Replace each ``bad`` player-level's weekly rows with sums of his game log."""
+    """Replace each ``bad`` player-level's weekly rows with sums of his game log.
+
+    A player-level is only replaced when he has exactly one season line and his game
+    log adds up to it. Otherwise his API rows stay as they are, so the check that
+    follows still fails on him: deleting them would either lose real lines for good
+    (the rewritten files are final) or, with no season line to compare against, make
+    the check pass on nothing."""
     keys = ["player.id", "sport_id"]
-    rebuilt = []
+    rebuilt: list[pd.DataFrame] = []
+    fixed_keys: list[tuple[int, int]] = []
     for player, sport_id in bad[keys].itertuples(index=False):
-        games = pd.json_normalize(game_log(int(player), season, int(sport_id)))
-        if games.empty:
-            continue
         line = season_lines[
             (season_lines["player.id"] == player) & (season_lines["sport_id"] == sport_id)
         ]
+        if len(line) != 1:
+            logger.warning(
+                "milb %s: player %s sport %s has %d season lines; not rebuilt",
+                season,
+                player,
+                sport_id,
+                len(line),
+            )
+            continue
+        games = pd.json_normalize(game_log(int(player), season, int(sport_id)))
+        if games.empty:
+            continue
         counts = [
             c
             for c in games.columns
@@ -242,24 +276,39 @@ def _rebuild_from_game_logs(
             and c not in _NOT_COUNTS
             and pd.api.types.is_numeric_dtype(games[c])
         ]
-        day = pd.to_datetime(games["date"]).dt.date
+        games = games.assign(_day=pd.to_datetime(games["date"]).dt.date).sort_values("_day")
+        base = line.drop(columns=[c for c in line.columns if c.startswith("stat.")])
+        # His club in a window is his club in its games, not his last club of the season.
+        club = [c for c in games.columns if c.startswith(("team.", "league.")) and c in base]
+        rows = []
         for start, end in windows:
-            in_window = games[(day >= start) & (day <= end)]
+            in_window = games[(games["_day"] >= start) & (games["_day"] <= end)]
             if in_window.empty:
                 continue
-            row = line.drop(columns=[c for c in line.columns if c.startswith("stat.")])
-            row = row.assign(
-                **{c: in_window[c].sum() for c in counts},
-                window_start=start,
-                window_end=end,
-                from_game_log=True,
+            last_game = in_window.iloc[-1]
+            rows.append(
+                base.assign(
+                    **{c: last_game[c] for c in club},
+                    **{c: in_window[c].sum() for c in counts},
+                    window_start=start,
+                    window_end=end,
+                    from_game_log=True,
+                )
             )
-            rebuilt.append(row)
-    fixed = bad[keys].assign(_drop=True)
-    new = pd.concat(rebuilt, ignore_index=True) if rebuilt else pd.DataFrame()
+        rebuilt_pa = sum(r[PA].sum() for r in rows if PA in r.columns)
+        if rebuilt_pa != line[PA].iloc[0]:
+            continue
+        rebuilt.extend(rows)
+        fixed_keys.append((player, sport_id))
+    if not fixed_keys:
+        return
+    fixed = pd.DataFrame(fixed_keys, columns=keys).assign(_drop=True)
+    new = pd.concat(rebuilt, ignore_index=True)
     for window in windows:
         path = milb_week_path(root, season, window)
         old = pd.read_parquet(path).merge(fixed, on=keys, how="left")
-        old = old[old["_drop"].isna()].drop(columns="_drop")
-        add = new[new["window_start"] == window[0]] if len(new) else new
-        _write_parquet(pd.concat([old, add], ignore_index=True), path)
+        keep = old["_drop"].isna()
+        add = new[new["window_start"] == window[0]]
+        if keep.all() and add.empty:
+            continue  # nothing of a rebuilt player-level in this window
+        _write_parquet(pd.concat([old[keep].drop(columns="_drop"), add], ignore_index=True), path)

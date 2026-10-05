@@ -22,6 +22,7 @@ def _split(player, pa, sport):
         "season": "2025",
         "player": {"id": player, "fullName": f"P{player}"},
         "stat": {"plateAppearances": pa, "hits": pa // 4},
+        "team": {"id": 500 + sport},
         "league": {"id": 100 + sport},
         "sport": {"id": sport},
     }
@@ -173,3 +174,109 @@ def test_no_minor_league_season_in_2020(tmp_path):
 def test_a_season_with_no_lines_at_all_is_an_error(tmp_path):
     with pytest.raises(ValueError, match="no lines"):
         fetch_milb_season(tmp_path, 2025, FIRST, LAST, step_days=7, today=DONE, fetch=lambda p: [])
+
+
+def _weekly_pa(root):
+    rows = connect(root).execute(
+        'SELECT "player.id", sum("stat.plateAppearances") FROM milb_weekly GROUP BY 1'
+    )
+    return dict(rows.fetchall())
+
+
+def test_a_player_the_game_log_cannot_rebuild_keeps_his_api_rows(tmp_path):
+    short = week_windows(FIRST, LAST, 7)[2]
+    with pytest.raises(ValueError, match="don't add up"):
+        fetch_milb_season(
+            tmp_path,
+            2025,
+            FIRST,
+            LAST,
+            step_days=7,
+            today=DONE,
+            fetch=FakeApi(short=short),
+            game_log=lambda player, season, sport_id: [],
+        )
+    # 250 PA less the 70 the short window dropped: nothing the API did return is lost.
+    assert _weekly_pa(tmp_path) == {1: 180, 2: 50}
+
+
+class _NoAASeasonLine(FakeApi):
+    """The season query's AA page comes back empty; the weekly ones don't."""
+
+    def __call__(self, params):
+        out = super().__call__(params)
+        return [] if params["stats"] == "season" and params["sportId"] == 12 else out
+
+
+def test_a_weekly_player_missing_from_the_season_lines_fails_the_fetch(tmp_path):
+    def game_log(player, season, sport_id):
+        return [
+            {
+                "date": (date(2025, 4, 1) + timedelta(days=k)).isoformat(),
+                "stat": {"plateAppearances": 5},
+            }
+            for k in range(10)
+        ]
+
+    with pytest.raises(ValueError, match="don't add up"):
+        fetch_milb_season(
+            tmp_path,
+            2025,
+            FIRST,
+            LAST,
+            step_days=7,
+            today=DONE,
+            fetch=_NoAASeasonLine(),
+            game_log=game_log,
+        )
+    assert _weekly_pa(tmp_path) == {1: 250, 2: 50}
+
+
+def test_a_rebuilt_window_takes_the_club_he_played_for_then(tmp_path):
+    """Traded on April 10: a rebuilt window is in the league of its own games, not of his
+    last club (the season line's)."""
+
+    def game_log(player, season, sport_id):
+        days = [FIRST + timedelta(days=k) for k in range((LAST - FIRST).days + 1)]
+        return [
+            {
+                "date": d.isoformat(),
+                "team": {"id": 1 if d < date(2025, 4, 10) else 2},
+                "league": {"id": 201 if d < date(2025, 4, 10) else 202},
+                "stat": {"plateAppearances": 10},
+            }
+            for d in days
+        ]
+
+    windows = week_windows(FIRST, LAST, 7)
+    fetch_milb_season(
+        tmp_path,
+        2025,
+        FIRST,
+        LAST,
+        step_days=7,
+        today=DONE,
+        fetch=FakeApi(short=windows[2]),
+        game_log=game_log,
+    )
+    weekly = connect(tmp_path).execute("SELECT * FROM milb_weekly").df()
+    mine = weekly[weekly["player.id"] == 1].set_index("window_start").sort_index()
+    assert mine["league.id"].tolist() == [201, 201, 202, 202]
+    assert mine["team.id"].tolist() == [1, 1, 2, 2]
+
+
+def test_a_short_season_file_from_an_earlier_run_is_fetched_again(tmp_path):
+    # Run 1: the season query drops the AA page. Nothing can rebuild a player with no
+    # season line, so the fetch fails, and the short season file is now final.
+    with pytest.raises(ValueError, match="don't add up"):
+        fetch_milb_season(
+            tmp_path, 2025, FIRST, LAST, step_days=7, today=DONE, fetch=_NoAASeasonLine()
+        )
+    # Run 2: the API is fine again. The stale season file is fetched once more instead of
+    # failing forever.
+    api = FakeApi()
+    result = fetch_milb_season(tmp_path, 2025, FIRST, LAST, step_days=7, today=DONE, fetch=api)
+    assert result["written"] == 1
+    assert {c["stats"] for c in api.calls} == {"season"}  # the windows were all final
+    season = pd.read_parquet(milb_season_path(tmp_path, 2025))
+    assert season.set_index("player.id")["stat.plateAppearances"].to_dict() == {1: 250, 2: 50}
