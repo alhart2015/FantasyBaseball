@@ -354,3 +354,12 @@ def test_next_n_pa_answers(store):
     # Counts start on the as-of date: never more than the rest of the season.
     assert w1.ros_n25_pa <= w1.ros_pa
     assert pd.isna(_row(df, HITTER, 2025, 2).ros_n250_pa)
+
+
+def test_recent_form_windows(store):
+    df = build_table(store)
+    w2 = _row(df, HITTER, 2025, 2)  # as of 2025-04-15: games on 04-01 .. 04-14
+    assert w2.l7_pa == 7 * 4 and w2.l14_pa == 14 * 4
+    assert w2.l7_hr == 7 and w2.l7_swings == 7 * 2  # pitch counts too: 2 swings a game
+    w0 = _row(df, HITTER, 2025, 0)  # Opening Day: nothing this season yet
+    assert w0.l7_pa == 0 and w0.l14_pa == 0

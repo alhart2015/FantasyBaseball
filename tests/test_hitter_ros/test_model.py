@@ -406,3 +406,32 @@ def test_bolt_rate_counts_a_blank_as_zero_only_when_runs_are_known():
     assert list(out["p1_bolt_rate"][:2]) == [0.1, 0.0]
     assert np.isnan(out["p1_bolt_rate"][2])  # no sprint data at all: unknown, not 0
     assert out["p1_hp_to_1b"][0] == 4.2
+
+
+def test_targets_for_every_horizon(table):
+    from fantasy_baseball.hitter_ros.features import (
+        column_horizon,
+        horizon_columns,
+        target_frame,
+        target_stat,
+    )
+
+    rates, weights = target_frame(table, (25, 100))
+    assert list(rates.columns) == horizon_columns((25, 100)) == list(weights.columns)
+    assert target_stat("n25_hr") == "hr" and target_stat("rbi") == "rbi"
+    assert column_horizon("n100_avg") == "n100" and column_horizon("sb") == "ros"
+    row = (table.player_id == 1) & (table.season == 2025) & (table.week == 0)
+    assert rates.loc[row, "n25_hr"].iloc[0] == pytest.approx(7 / 28)
+    assert weights.loc[row, "n25_hr"].iloc[0] == 28
+    # Never reached 100 PA: no answer, no weight.
+    assert np.isnan(rates.loc[row, "n100_hr"].iloc[0]) and weights.loc[row, "n100_hr"].iloc[0] == 0
+    # Without horizons it's the rest-of-season frame, unchanged.
+    plain, _ = target_frame(table)
+    pd.testing.assert_frame_equal(plain, rates[list(plain.columns)])
+
+
+def test_recent_inputs_are_optional(table):
+    plain = input_frame(table)
+    recent = input_frame(table, recent=True)
+    added = set(recent.columns) - set(plain.columns)
+    assert added and all(c.startswith(("l7_", "l14_")) for c in added)

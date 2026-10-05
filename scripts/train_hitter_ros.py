@@ -46,10 +46,12 @@ from fantasy_baseball.hitter_ros.features import (
     STEAL_TABLE_COLUMNS,
     TARGETS,
     Standardizer,
+    column_horizon,
     input_frame,
     league_answer_rates,
     league_reference,
     target_frame,
+    target_stat,
 )
 from fantasy_baseball.hitter_ros.net import (
     COUNT_LOSS_TARGETS,
@@ -68,6 +70,7 @@ from fantasy_baseball.hitter_ros.probes import (
     probe_path,
 )
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
+from fantasy_baseball.hitter_ros.table import HORIZONS
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
@@ -118,25 +121,24 @@ def fit_season(
     # raw MAE, never in the relative scores.
     ref = league_reference(table) if config.relative_target != "none" else None
     denominator = league_answer_rates(table) if config.relative_target == "answer" else ref
-    y_fit = y_all / denominator if denominator is not None else y_all
+    y_fit = y_all / by_stat(denominator, list(y_all.columns)) if denominator is not None else y_all
     # A row whose answer can't be computed (no PA, or no league reference) must not
     # count: train() expects weight 0 wherever the target is NaN.
     w_fit = w_all.where(y_fit.notna(), 0.0)
     y_train, w_train = y_fit[train_rows], w_fit[train_rows]
     fit_rows = ~val_mask
-    mu = {
-        s: np.average(y_train[s][fit_rows].fillna(0), weights=w_train[s][fit_rows]) for s in TARGETS
-    }
+    cols = list(y_all.columns)  # rest of season, then each short horizon (#419)
+    mu = {c: np.average(y_train[c][fit_rows].fillna(0), weights=w_train[c][fit_rows]) for c in cols}
     sd = {
-        s: np.sqrt(
-            np.average((y_train[s][fit_rows].fillna(0) - mu[s]) ** 2, weights=w_train[s][fit_rows])
+        c: np.sqrt(
+            np.average((y_train[c][fit_rows].fillna(0) - mu[c]) ** 2, weights=w_train[c][fit_rows])
         )
-        for s in TARGETS
+        for c in cols
     }
     # Poisson targets (count_loss) stay as rates: the net predicts their log.
-    poisson = set(COUNT_LOSS_TARGETS[config.count_loss])
+    poisson = {c for c in cols if target_stat(c) in COUNT_LOSS_TARGETS[config.count_loss]}
     y_std = np.column_stack(
-        [y_train[s] if s in poisson else (y_train[s] - mu[s]) / sd[s] for s in TARGETS]
+        [y_train[c] if c in poisson else (y_train[c] - mu[c]) / sd[c] for c in cols]
     )
 
     def inputs(rows: pd.Series) -> np.ndarray:
@@ -155,6 +157,8 @@ def fit_season(
         rows=positions[train_rows.to_numpy()] if batcher else None,
         batcher=batcher,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
+        target_stats=[target_stat(c) for c in cols],
+        target_weights=np.array([HORIZON_WEIGHT[column_horizon(c)](config) for c in cols]),
     )
     test_rows = (table["season"] == test_season) & in_weeks
     z = predict(
@@ -168,15 +172,17 @@ def fit_season(
     )
     preds = pd.DataFrame(
         {
-            s: np.exp(np.clip(z[:, i], *LOG_RATE_CLAMP))
-            if s in poisson
-            else z[:, i] * sd[s] + mu[s]
-            for i, s in enumerate(TARGETS)
+            c: np.exp(np.clip(z[:, i], *LOG_RATE_CLAMP))
+            if c in poisson
+            else z[:, i] * sd[c] + mu[c]
+            for i, c in enumerate(cols)
         },
         index=table.index[test_rows],
     )
     if ref is not None:
-        preds = preds * ref.loc[test_rows, list(TARGETS)]
+        # Every horizon of a stat uses the same league rate (the forecast for the rest of
+        # the season): the league's rate over one hitter's next N PA isn't computable.
+        preds = preds * by_stat(ref.loc[test_rows], cols)
     preds = pd.concat(
         [table.loc[test_rows, ["player_id", "season", "week", "as_of"]], preds], axis=1
     )
@@ -191,6 +197,21 @@ def fit_season(
         "val_loss": result.val_loss,
     }
     return preds, info
+
+
+# Loss weight per horizon (#419), from NetConfig.horizon_weights (25, 100, 250, ROS).
+HORIZON_WEIGHT = {
+    "n25": lambda c: c.horizon_weights[0],
+    "n100": lambda c: c.horizon_weights[1],
+    "n250": lambda c: c.horizon_weights[2],
+    "ros": lambda c: c.horizon_weights[3],
+}
+
+
+def by_stat(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
+    """``frame`` (one column per stat) spread to the output ``cols``: each column gets its
+    stat's values, so a rate per stat applies to every horizon of that stat."""
+    return pd.DataFrame({c: frame[target_stat(c)] for c in cols}, index=frame.index)
 
 
 WEEKS = {
@@ -272,6 +293,30 @@ def main() -> int:
         help="Poisson loss on counts for SB only, or for R/HR/RBI/SB (#413)",
     )
     parser.add_argument(
+        "--horizons",
+        action="store_true",
+        help="also predict the next 25 / 100 / 250 PA, one head each (#419)",
+    )
+    parser.add_argument(
+        "--horizon-weights",
+        type=float,
+        nargs=4,
+        default=defaults.horizon_weights,
+        metavar=("N25", "N100", "N250", "ROS"),
+        help="loss weight of each horizon (default: 0.25 0.5 0.75 1)",
+    )
+    parser.add_argument(
+        "--recent-inputs",
+        action="store_true",
+        help="add the last 7 and 14 days as input windows (#419)",
+    )
+    parser.add_argument(
+        "--head-layers",
+        type=_non_negative_int,
+        default=defaults.head_layers,
+        help="width of a hidden layer inside each horizon's head (0 = linear head)",
+    )
+    parser.add_argument(
         "--steal-inputs",
         action=argparse.BooleanOptionalAction,
         default=defaults.steal_inputs,
@@ -350,6 +395,10 @@ def main() -> int:
             heads=args.heads,
             split=args.split,
             steal_inputs=args.steal_inputs,
+            horizons=args.horizons,
+            horizon_weights=args.horizon_weights,
+            recent_inputs=args.recent_inputs,
+            head_layers=args.head_layers,
             count_loss=args.count_loss,
         )
     except ValueError as err:
@@ -373,7 +422,16 @@ def main() -> int:
         parser.error(f"{TABLE}: week 0 is not exactly the rows with frac_season_left 1")
     if config.steal_inputs and not set(STEAL_TABLE_COLUMNS) <= set(table.columns):
         parser.error(f"{TABLE} predates the steal columns; run scripts/build_hitter_ros_table.py")
-    x_all = input_frame(table, era=config.era, steal=config.steal_inputs)
+    needed = {
+        "ros_n25_pa": config.horizons,
+        "l7_pa": config.recent_inputs,
+    }
+    stale = [col for col, used in needed.items() if used and col not in table.columns]
+    if stale:
+        parser.error(f"{TABLE} predates {stale}; run scripts/build_hitter_ros_table.py")
+    x_all = input_frame(
+        table, era=config.era, steal=config.steal_inputs, recent=config.recent_inputs
+    )
     if config.probes != "none":
         probes_file = probe_path(TABLE.parent, config.probes)
         if not probes_file.exists():
@@ -384,7 +442,7 @@ def main() -> int:
             parser.error(f"{probes_file}: {problem}; rebuild it for this table")
         x_all = pd.concat([x_all, probe_inputs(table, probes)], axis=1)
         logger.info("added %d probe features from %s", len(PROBE_FEATURES), probes_file.name)
-    y_all, w_all = target_frame(table)
+    y_all, w_all = target_frame(table, HORIZONS if config.horizons else ())
     batcher = None
     if config.seq != "none":
         batcher = SequenceBatcher(pd.read_parquet(TOKENS), table, config.seq_len, device())

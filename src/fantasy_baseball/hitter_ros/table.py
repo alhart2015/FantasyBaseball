@@ -63,6 +63,8 @@ BOX_COUNTS = (
     "spot_sum",
     *(f"starts_{p.lower()}" for p in START_POSITIONS),
 )
+# Recent-form windows (#419): days before the as-of date, same season.
+RECENT_WINDOWS = {"l7": 7, "l14": 14}
 # Short-horizon answers (#419): his next N PA from the as-of date, same season only.
 HORIZONS = (25, 100, 250)
 HORIZON_COUNTS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
@@ -455,6 +457,17 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
         "p3_steal": window(steal_season, STEAL_COUNTS, "p3_", p3),
         "car_steal": window(steal_season, STEAL_COUNTS, "car_", car),
         "ros": window("box_daily", TARGET_COUNTS, "ros_", ros),
+        # Recent form (#419): the last 7 and 14 days before the date, this season only.
+        **{
+            f"{w}_{kind}": window(
+                src, cols, f"{w}_", f"{std} AND d.game_date >= pop.as_of - {days}"
+            )
+            for w, days in RECENT_WINDOWS.items()
+            for kind, src, cols in (
+                ("box", "box_daily", BOX_COUNTS),
+                ("pitch", "pitch_daily", PITCH_COUNTS),
+            )
+        },
     }
     for name, sql in parts.items():
         conn.execute(f"CREATE TEMP TABLE {name} AS {sql}")

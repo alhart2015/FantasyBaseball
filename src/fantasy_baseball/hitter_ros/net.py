@@ -105,6 +105,15 @@ class NetConfig:
     # RBI and SB) get a Poisson loss on the count, with the row's PA as exposure. Their
     # outputs are then the log of the (league-relative) rate, so 0 = league average.
     count_loss: str = "counts"
+    # Short horizons (#419): also predict the next 25 / 100 / 250 PA, each with its own
+    # 5 outputs on the shared body (so one more "head" per horizon). horizon_weights:
+    # how much each horizon's loss counts, for next 25 / 100 / 250 PA and rest of season.
+    # recent_inputs: add the last 7 / 14 days as input windows. head_layers: a hidden
+    # layer of this width inside each horizon's head (0 = a plain linear head).
+    horizons: bool = False
+    horizon_weights: list[float] = field(default_factory=lambda: [0.25, 0.5, 0.75, 1.0])
+    recent_inputs: bool = False
+    head_layers: int = 0
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):
@@ -115,6 +124,12 @@ class NetConfig:
             raise ValueError("split trains two separate models; it can't also have heads")
         if self.micro_batch < 0:
             raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
+        if len(self.horizon_weights) != 4 or min(self.horizon_weights) < 0:
+            raise ValueError("horizon_weights: 4 non-negative weights (25, 100, 250 PA, ROS)")
+        if self.head_layers < 0:
+            raise ValueError(f"head_layers must be >= 0, got {self.head_layers}")
+        if self.head_layers and (self.heads > 1 or self.seq != "none"):
+            raise ValueError("head_layers is built on the plain MLP (heads 1, seq none)")
         if self.count_loss not in COUNT_LOSS_TARGETS:
             raise ValueError(f"unknown count_loss {self.count_loss!r}")
         if self.relative_target not in RELATIVE_TARGETS:
@@ -198,7 +213,9 @@ class CountLoss:
     """
 
     mask: torch.Tensor  # bool, one per target
-    scale: torch.Tensor  # float, one per target (1 for squared-error targets)
+    # float, one per target: the Poisson normalization (1 for squared-error targets)
+    # times the target's weight (e.g. its horizon's weight, #419).
+    scale: torch.Tensor
 
 
 def poisson_deviance(f: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
@@ -218,7 +235,7 @@ def row_losses(
     loss = w * (pred - y) ** 2
     if count is None:
         return loss
-    return torch.where(count.mask, poisson_deviance(pred, y, w) * count.scale, loss)
+    return torch.where(count.mask, poisson_deviance(pred, y, w), loss) * count.scale
 
 
 def weighted_mse(pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
@@ -239,7 +256,42 @@ class TrainResult:
 EVAL_BATCH = 4096
 
 
+class HorizonHeadsMLP(nn.Module):
+    """The MLP body, then one small head per group of 5 outputs (one per horizon,
+    #419): [Linear -> GELU -> Dropout -> Linear] of width ``head_width`` each."""
+
+    def __init__(
+        self,
+        n_in: int,
+        n_out: int,
+        hidden: list[int],
+        dropout: float,
+        head_width: int,
+        group: int = 5,
+    ) -> None:
+        super().__init__()
+        if n_out % group:
+            raise ValueError(f"{n_out} outputs don't split into heads of {group}")
+        layers, width = _hidden_layers(n_in, hidden, dropout)
+        self.body = nn.Sequential(*layers)
+        self.heads = nn.ModuleList(
+            nn.Sequential(
+                nn.Linear(width, head_width),
+                nn.GELU(),
+                nn.Dropout(dropout),
+                nn.Linear(head_width, group),
+            )
+            for _ in range(n_out // group)
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        z = self.body(x)
+        return torch.cat([h(z) for h in self.heads], dim=1)
+
+
 def build_model(n_in: int, n_out: int, config: NetConfig) -> nn.Module:
+    if config.head_layers:
+        return HorizonHeadsMLP(n_in, n_out, config.hidden, config.dropout, config.head_layers)
     if config.heads > 1:  # the last input column is the head index, not a feature
         return MultiHeadMLP(n_in - 1, n_out, config.hidden, config.dropout, config.heads)
     if config.seq == "none":
@@ -339,20 +391,29 @@ def loss_weights(w: np.ndarray, config: NetConfig, season_time: np.ndarray | Non
 
 
 def count_loss(
-    config: NetConfig, y: np.ndarray, w: np.ndarray, dev: torch.device
+    config: NetConfig,
+    y: np.ndarray,
+    w: np.ndarray,
+    dev: torch.device,
+    stats: list[str] | None = None,
+    target_weights: np.ndarray | None = None,
 ) -> CountLoss | None:
-    """The Poisson targets of ``config.count_loss`` (``features.TARGETS`` order) and their
-    scales, or None when there are none. Each Poisson target's scale is 1 / its deviance
-    when predicting the weighted average rate on these rows (``y`` rates, ``w`` PA)."""
+    """The Poisson targets of ``config.count_loss`` and every target's scale, or None when
+    no target is Poisson and every weight is 1. ``stats``: each column's stat (default
+    ``features.TARGETS``, the rest-of-season columns). A Poisson target's scale is 1 / its
+    deviance when predicting the weighted average rate on these rows (``y`` rates, ``w``
+    PA), times its ``target_weights`` entry (default 1)."""
     from fantasy_baseball.hitter_ros.features import TARGETS
 
     names = COUNT_LOSS_TARGETS[config.count_loss]
-    if not names:
+    if not names and (target_weights is None or np.all(np.asarray(target_weights) == 1)):
         return None
-    if y.shape[1] != len(TARGETS):
-        raise ValueError(f"count_loss needs the {len(TARGETS)} ROS targets, got {y.shape[1]}")
-    mask = [t in names for t in TARGETS]
-    scale = np.ones(len(TARGETS))
+    stats = list(TARGETS) if stats is None else stats
+    if y.shape[1] != len(stats):
+        raise ValueError(f"{len(stats)} target stats for {y.shape[1]} target columns")
+    weights = np.ones(len(stats)) if target_weights is None else np.asarray(target_weights)
+    mask = [t in names for t in stats]
+    scale = np.ones(len(stats))
     for k, poisson in enumerate(mask):
         if not poisson:
             continue
@@ -363,7 +424,7 @@ def count_loss(
         scale[k] = 1.0 / float(base) if float(base) > 0 else 1.0  # no spread: leave as is
     return CountLoss(
         mask=torch.tensor(mask, device=dev),
-        scale=torch.tensor(scale, dtype=torch.float32, device=dev),
+        scale=torch.tensor(scale * weights, dtype=torch.float32, device=dev),
     )
 
 
@@ -377,6 +438,8 @@ def train(
     rows: np.ndarray | None = None,
     batcher: SequenceBatcher | None = None,
     season_time: np.ndarray | None = None,
+    target_stats: list[str] | None = None,
+    target_weights: np.ndarray | None = None,
 ) -> TrainResult:
     """Fit the net. ``y`` is standardized targets, except the ``count_loss`` targets,
     which are rates (the net predicts their log). NaN allowed where ``w`` is 0.
@@ -410,7 +473,7 @@ def train(
         rt = torch.as_tensor(rows[~val_mask], dtype=torch.long, device=dev)
         rv = torch.as_tensor(rows[val_mask], dtype=torch.long, device=dev)
     model = build_model(x.shape[1], y.shape[1], config).to(dev)
-    count = count_loss(config, y[~val_mask], w[~val_mask], dev)
+    count = count_loss(config, y[~val_mask], w[~val_mask], dev, target_stats, target_weights)
     opt = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     gen = torch.Generator(device=dev).manual_seed(config.seed)
 
