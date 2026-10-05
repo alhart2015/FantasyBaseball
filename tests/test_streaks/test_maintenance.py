@@ -18,7 +18,14 @@ from fantasy_baseball.streaks.data import maintenance
 from fantasy_baseball.streaks.data.maintenance import compact_database
 
 _ROWS = 2000
-_SCRATCH_ROWS = 2_000_000
+# hash() output is effectively incompressible, so 200k rows x 2 UBIGINT
+# columns occupy ~14 storage blocks (~3.5 MiB). Sequential integers would
+# compress (bitpacking/delta) into a single block and leave almost nothing
+# for compaction to reclaim.
+_SCRATCH_ROWS = 200_000
+# Minimum free blocks the fixture must leave for the compaction assertions
+# to be meaningful; fail loudly here if a DuckDB upgrade changes that.
+_MIN_FREE_BLOCKS = 8
 
 
 def _build_bloated_db(db_path: Path) -> int:
@@ -41,8 +48,7 @@ def _build_bloated_db(db_path: Path) -> int:
         conn.execute("CREATE TABLE meta(k VARCHAR PRIMARY KEY, v INTEGER)")
         conn.execute("INSERT INTO meta VALUES ('schema_version', 5)")
         conn.execute(
-            "CREATE TABLE scratch AS SELECT i::BIGINT AS a, (i * 7)::BIGINT AS b "
-            "FROM range(?) tbl(i)",
+            "CREATE TABLE scratch AS SELECT hash(i) AS a, hash(i * 7) AS b FROM range(?) tbl(i)",
             [_SCRATCH_ROWS],
         )
         conn.execute("CHECKPOINT")
@@ -55,8 +61,14 @@ def _build_bloated_db(db_path: Path) -> int:
         conn.execute("CHECKPOINT")
         conn.execute("DROP TABLE scratch")
         conn.execute("CHECKPOINT")
+        row = conn.execute("SELECT free_blocks FROM pragma_database_size()").fetchone()
+        free_blocks = int(row[0]) if row is not None else 0
     finally:
         conn.close()
+    assert free_blocks >= _MIN_FREE_BLOCKS, (
+        f"fixture left only {free_blocks} free blocks (need >= {_MIN_FREE_BLOCKS}); "
+        f"DuckDB {duckdb.__version__} no longer bloats this way -- fix the fixture"
+    )
     return db_path.stat().st_size
 
 
