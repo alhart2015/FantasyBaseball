@@ -42,7 +42,10 @@ def test_count_loss_options():
     w = np.ones_like(y)
     spec = count_loss(NetConfig(count_loss="sb"), y, w, device())
     assert spec.mask.tolist() == [t == "sb" for t in TARGETS]
-    assert count_loss(NetConfig(), y, w, device()) is None
+    assert count_loss(NetConfig(count_loss="none"), y, w, device()) is None
+    # The default (since #413) is Poisson on the four counts, squared error on AVG.
+    default = count_loss(NetConfig(), y, w, device())
+    assert default.mask.tolist() == [t != "avg" for t in TARGETS]
 
 
 def test_poisson_targets_are_scaled_to_a_standardized_squared_error():

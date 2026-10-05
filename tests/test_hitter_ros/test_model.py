@@ -134,7 +134,8 @@ def test_net_learns_a_simple_rule_and_is_repeatable():
     y = np.column_stack([x[:, 0] * 2, x[:, 1] - x[:, 2]]).astype(np.float32)
     w = np.ones_like(y)
     val = rng.random(2000) < 0.2
-    # Synthetic rows have no season time; pin plain PA weighting (not the pre_mid default).
+    # Synthetic rows have no season time and aren't the 5 ROS targets: pin plain PA
+    # weighting and squared error (not the pre_mid / Poisson defaults).
     config = NetConfig(
         hidden=[32],
         dropout=0.0,
@@ -143,6 +144,7 @@ def test_net_learns_a_simple_rule_and_is_repeatable():
         max_epochs=60,
         patience=10,
         weighting="pa",
+        count_loss="none",
     )
 
     first = train(x, y, w, val, config)
@@ -216,7 +218,13 @@ def test_net_fails_loudly_on_a_nan_loss():
     y = np.zeros((50, 1), dtype=np.float32)
     val = np.arange(50) < 10
     with pytest.raises(FloatingPointError, match="validation loss"):
-        train(x, y, np.ones_like(y), val, NetConfig(hidden=[4], max_epochs=3, weighting="pa"))
+        train(
+            x,
+            y,
+            np.ones_like(y),
+            val,
+            NetConfig(hidden=[4], max_epochs=3, weighting="pa", count_loss="none"),
+        )
 
 
 def test_micro_batches_give_the_full_batch_gradient():
@@ -266,13 +274,19 @@ def test_balanced_weighting_is_applied_by_train_itself():
     w = np.ones((20, 1), dtype=np.float32)
     val = np.arange(20) < 4
     with pytest.raises(ValueError, match="frac_season_left"):
-        train(x, y, w, val, NetConfig(hidden=[4], weighting="balanced", max_epochs=1))
+        train(
+            x,
+            y,
+            w,
+            val,
+            NetConfig(hidden=[4], weighting="balanced", max_epochs=1, count_loss="none"),
+        )
     train(
         x,
         y,
         w,
         val,
-        NetConfig(hidden=[4], weighting="balanced", max_epochs=1),
+        NetConfig(hidden=[4], weighting="balanced", max_epochs=1, count_loss="none"),
         season_time=np.linspace(0, 1, 20),
     )
 

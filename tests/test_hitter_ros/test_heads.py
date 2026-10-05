@@ -44,7 +44,8 @@ def test_two_heads_learn_opposite_rules_one_head_cannot():
     y = np.where(head[:, None] == 1, -x[:, [0]], x[:, [0]]).astype(np.float32)
     w = np.ones_like(y)
     val = rng.random(n) < 0.2
-    # Synthetic rows have no season time; pin plain PA weighting (not the pre_mid default).
+    # Synthetic rows have no season time and aren't the 5 ROS targets: pin plain PA
+    # weighting and squared error (not the pre_mid / Poisson defaults).
     base = dict(
         hidden=[16],
         dropout=0.0,
@@ -53,6 +54,7 @@ def test_two_heads_learn_opposite_rules_one_head_cannot():
         max_epochs=60,
         patience=10,
         weighting="pa",
+        count_loss="none",
     )
     two = train(np.column_stack([x, head]), y, w, val, NetConfig(**base, heads=2))
     one = train(x, y, w, val, NetConfig(**base))  # no head flag: can't tell rows apart

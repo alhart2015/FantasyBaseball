@@ -104,7 +104,7 @@ class NetConfig:
     # on a standardized rate fits poorly. "sb" / "counts": those targets (SB, or R, HR,
     # RBI and SB) get a Poisson loss on the count, with the row's PA as exposure. Their
     # outputs are then the log of the (league-relative) rate, so 0 = league average.
-    count_loss: str = "none"
+    count_loss: str = "counts"
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):

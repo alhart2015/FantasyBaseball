@@ -157,9 +157,17 @@ def test_hybrid_net_learns_from_the_sequence(kind):
     w = np.ones_like(y)
     val = np.arange(n_players) < 60
     positions = np.arange(n_players)
-    # Synthetic rows have no season time; pin plain PA weighting (not the pre_mid default).
+    # Synthetic rows have no season time and aren't the 5 ROS targets: pin plain PA
+    # weighting and squared error (not the pre_mid / Poisson defaults).
     base = dict(
-        hidden=[16], dropout=0.0, lr=3e-3, batch_size=64, max_epochs=40, patience=8, weighting="pa"
+        hidden=[16],
+        dropout=0.0,
+        lr=3e-3,
+        batch_size=64,
+        max_epochs=40,
+        patience=8,
+        weighting="pa",
+        count_loss="none",
     )
 
     seq = train(
