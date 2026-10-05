@@ -95,7 +95,7 @@ class NetConfig:
     split: bool = False
     # Steal inputs (#413): steal opportunities and attempts per opportunity, success
     # rate, starts by position, and the team's green light (features._steal_inputs).
-    steal_inputs: bool = False
+    steal_inputs: bool = True
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):

@@ -256,8 +256,9 @@ def main() -> int:
     )
     parser.add_argument(
         "--steal-inputs",
-        action="store_true",
-        help="add steal opportunity, position and team green-light inputs (#413)",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.steal_inputs,
+        help="steal opportunity, position and team green-light inputs (#413); on by default",
     )
     parser.add_argument(
         "--split",
