@@ -24,6 +24,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.evaluate import mae_table
 from fantasy_baseball.hitter_ros.features import TARGETS
+from fantasy_baseball.hitter_ros.horizons import (
+    horizon_summary,
+    score_horizons,
+    write_horizon_scores,
+)
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
@@ -42,6 +47,10 @@ def score_run(table: pd.DataFrame, run: Path) -> tuple[pd.DataFrame | None, pd.D
         *backtest.summarize(pre_all, snap_all),
         *backtest.league_forecast_lines(table, seasons),
     ]
+    horizon_scores = score_horizons(table, preds)
+    write_horizon_scores(run, horizon_scores)
+    if horizon_scores is not None:
+        md += ["", *horizon_summary(horizon_scores)]
     (run / "scores.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return pre_all, snap_all

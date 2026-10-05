@@ -435,3 +435,25 @@ def test_recent_inputs_are_optional(table):
     recent = input_frame(table, recent=True)
     added = set(recent.columns) - set(plain.columns)
     assert added and all(c.startswith(("l7_", "l14_")) for c in added)
+
+
+def test_horizon_scores_grade_each_horizon_against_its_own_answer(table):
+    from fantasy_baseball.hitter_ros.features import TARGETS, horizon_columns, target_frame
+    from fantasy_baseball.hitter_ros.horizons import horizon_summary, score_horizons
+
+    rows = table[table.season == 2025]
+    rates, _ = target_frame(rows, (25,))
+    cols = horizon_columns((25,))
+    # A perfect next-25 head; a flat rest-of-season head that can't order anyone.
+    preds = pd.concat([rows[["player_id", "season", "week", "as_of"]], rates[cols]], axis=1)
+    preds[list(TARGETS)] = 0.1
+    for n in (100, 250):
+        preds[[f"n{n}_{s}" for s in TARGETS]] = 0.1
+    scored = score_horizons(table, preds)
+    n25 = scored[(scored.horizon == "n25") & (scored.system == "head")]
+    assert not n25.empty and n25.abs_err.max() == pytest.approx(0.0)
+    flat = scored[(scored.horizon == "n25") & (scored.system == "ros_rate")]
+    assert flat.abs_err.max() > 0
+    assert set(scored.system) == {"head", "ros_rate", "marcel", "hot_hand"}
+    assert any("n25" in line for line in horizon_summary(scored))
+    assert score_horizons(table, preds[["player_id", "season", "week", *TARGETS]]) is None

@@ -53,6 +53,11 @@ from fantasy_baseball.hitter_ros.features import (
     target_frame,
     target_stat,
 )
+from fantasy_baseball.hitter_ros.horizons import (
+    horizon_summary,
+    score_horizons,
+    write_horizon_scores,
+)
 from fantasy_baseball.hitter_ros.net import (
     COUNT_LOSS_TARGETS,
     EVAL_BATCH,
@@ -493,6 +498,10 @@ def main() -> int:
         *backtest.summarize(pre, snap),
         *backtest.league_forecast_lines(table, args.test_seasons),
     ]
+    horizon_scores = score_horizons(table, predictions)
+    write_horizon_scores(out, horizon_scores)
+    if horizon_scores is not None:
+        md += ["", *horizon_summary(horizon_scores)]
     # A --split run has two models per season: label them so the epochs aren't ambiguous.
     epochs = ", ".join(
         f"{i['test_season']}{'' if i['weeks'] == 'all' else ' ' + str(i['weeks'])}: "
