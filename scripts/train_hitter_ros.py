@@ -499,7 +499,7 @@ def main() -> int:
         *backtest.summarize(pre, snap),
         *backtest.league_forecast_lines(table, args.test_seasons),
     ]
-    horizon_scores = score_horizons(table, predictions)
+    horizon_scores = score_horizons(table, predictions, PROJECTIONS)
     write_horizon_scores(out, horizon_scores)
     if horizon_scores is not None:
         md += ["", *horizon_summary(horizon_scores)]

@@ -457,3 +457,35 @@ def test_horizon_scores_grade_each_horizon_against_its_own_answer(table):
     assert set(scored.system) == {"head", "ros_rate", "marcel", "hot_hand"}
     assert any("n25" in line for line in horizon_summary(scored))
     assert score_horizons(table, preds[["player_id", "season", "week", *TARGETS]]) is None
+
+
+def test_horizon_scores_against_a_fresh_fangraphs_snapshot(table, tmp_path):
+    from fantasy_baseball.hitter_ros.features import TARGETS, horizon_columns, target_frame
+    from fantasy_baseball.hitter_ros.horizons import score_horizons
+
+    rows = table[table.season == 2025]
+    rates, _ = target_frame(rows, (25,))
+    preds = pd.concat(
+        [rows[["player_id", "season", "week", "as_of"]], rates[horizon_columns((25,))]], axis=1
+    )
+    for n in (100, 250):
+        preds[[f"n{n}_{s}" for s in TARGETS]] = 0.1
+    snap = tmp_path / "2025" / "rest_of_season" / "2025-04-08"  # week 1's as-of date
+    snap.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "MLBAMID": [1, 2],
+            "PA": [500, 500],
+            "AB": [450, 450],
+            "H": [120, 110],
+            "R": [70, 60],
+            "HR": [20, 10],
+            "RBI": [70, 60],
+            "SB": [5, 5],
+        }
+    ).to_csv(snap / "steamer-hitters.csv", index=False)
+    scored = score_horizons(table, preds, tmp_path)
+    fg = scored[scored.comparison == "fangraphs"]
+    assert set(fg.system) == {"head", "ros_rate", "fg_ros"}
+    assert set(fg.snapshot) == {"2025-w01", "2025-w02"}  # within 7 days of the snapshot
+    assert len(scored[scored.comparison == "all"]) > len(fg)

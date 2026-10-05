@@ -47,7 +47,7 @@ def score_run(table: pd.DataFrame, run: Path) -> tuple[pd.DataFrame | None, pd.D
         *backtest.summarize(pre_all, snap_all),
         *backtest.league_forecast_lines(table, seasons),
     ]
-    horizon_scores = score_horizons(table, preds)
+    horizon_scores = score_horizons(table, preds, PROJECTIONS)
     write_horizon_scores(run, horizon_scores)
     if horizon_scores is not None:
         md += ["", *horizon_summary(horizon_scores)]
