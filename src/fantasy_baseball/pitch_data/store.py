@@ -11,6 +11,7 @@ Layout::
                                                  game: batting order + box-score batting line
     sprint_speed/YYYY.parquet                    Savant sprint-speed leaderboard
     schedule/YYYY.parquet                        first/last scheduled regular-season date
+    milb_season/, milb_weekly/                   minor-league hitting lines (see milb.py)
 
 Resumability: a file is final -- never fetched again -- only if it was *written* more
 than ``SETTLE_DAYS`` after the end of the dates it covers. A file written earlier (a
@@ -398,7 +399,8 @@ def write_season_schedule(root: Path, season: int, games: Games) -> tuple[date, 
 
 
 def connect(root: Path) -> duckdb.DuckDBPyConnection:
-    """In-memory DuckDB with ``pitches``, ``lineups``, ``sprint_speed`` and ``schedule`` views.
+    """In-memory DuckDB with ``pitches``, ``lineups``, ``sprint_speed``, ``schedule``,
+    ``milb_season`` and ``milb_weekly`` views.
 
     A view is only created when its files exist. ``pitches`` carries a ``season`` column
     from the directory name; columns Savant added in later years are NULL in earlier ones.
@@ -409,6 +411,8 @@ def connect(root: Path) -> duckdb.DuckDBPyConnection:
         "lineups": "lineups/*.parquet",
         "sprint_speed": "sprint_speed/*.parquet",
         "schedule": "schedule/*.parquet",
+        "milb_season": "milb_season/*.parquet",
+        "milb_weekly": "milb_weekly/*/*.parquet",
     }
     for name, pattern in patterns.items():
         if not any(root.glob(pattern)):

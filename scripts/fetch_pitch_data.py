@@ -1,7 +1,7 @@
 """Backfill / refresh the raw pitch-level store for the batted-ball model (#399, #400).
 
-Pulls every Statcast pitch, the Savant sprint-speed leaderboard, and MLB box-score
-batting order into parquet under data/pitch_data/. Safe to stop and re-run: finished
+Pulls every Statcast pitch, the Savant sprint-speed leaderboard, MLB box-score
+batting order, and minor-league hitting lines (#435) into parquet under data/pitch_data/. Safe to stop and re-run: finished
 weekly chunks and finished seasons are skipped, so a re-run only fetches what is
 missing or still changing. A full 2015-2026 backfill takes several hours, almost all
 of it the pitch pull.
@@ -9,6 +9,7 @@ of it the pitch pull.
 Usage:
     python scripts/fetch_pitch_data.py --start 2015 --end 2026
     python scripts/fetch_pitch_data.py --start 2026 --end 2026 --only lineups sprint
+    python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only milb
     python scripts/fetch_pitch_data.py --summary
 """
 
@@ -19,10 +20,14 @@ import logging
 import sys
 from pathlib import Path
 
+import duckdb
+
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.data.mlb_game_logs import _fetch_season_games
+from fantasy_baseball.hitter_ros.table import AS_OF_STEP_DAYS
+from fantasy_baseball.pitch_data.milb import MILB_LEVELS, fetch_milb_season
 from fantasy_baseball.pitch_data.store import (
     connect,
     fetch_lineups_season,
@@ -33,7 +38,7 @@ from fantasy_baseball.pitch_data.store import (
 from fantasy_baseball.utils.time_utils import local_today
 
 DEFAULT_ROOT = PROJECT_ROOT / "data" / "pitch_data"
-KINDS = ("pitches", "lineups", "sprint")
+KINDS = ("pitches", "lineups", "sprint", "milb")
 _LINEUP_TOTALS = ("pa", "hr", "r", "rbi", "sb")
 
 
@@ -81,7 +86,32 @@ def print_summary(root: Path) -> None:
             "SELECT season, count(*) FROM sprint_speed GROUP BY 1 ORDER BY 1"
         ).fetchall():
             print(f"{season}  {n:>11}")
+    if "milb_season" in views:
+        print_milb_summary(conn, "milb_weekly" in views)
     print(f"\ntotal on disk: {_dir_mb(root):.1f} MB")
+
+
+def print_milb_summary(conn: duckdb.DuckDBPyConnection, has_weekly: bool) -> None:
+    """Players per level and season, and total PA in the season lines vs. the weekly
+    lines (equal once a season is complete)."""
+    pa = '"stat.plateAppearances"'
+    weekly = (
+        dict(conn.execute(f"SELECT season, sum({pa}) FROM milb_weekly GROUP BY 1").fetchall())
+        if has_weekly
+        else {}
+    )
+    counts: dict[int, dict[int, int]] = {}
+    season_pa: dict[int, float] = {}
+    for season, sport, n, total in conn.execute(
+        f"SELECT season, sport_id, count(*), sum({pa}) FROM milb_season GROUP BY 1, 2"
+    ).fetchall():
+        counts.setdefault(season, {})[sport] = n
+        season_pa[season] = season_pa.get(season, 0) + total
+    header = "".join(f"{level:>7}" for level in MILB_LEVELS.values())
+    print(f"\nseason  {header}  season_PA  weekly_PA")
+    for season in sorted(counts):
+        cells = "".join(f"{counts[season].get(s, 0):>7}" for s in MILB_LEVELS)
+        print(f"{season}  {cells}  {season_pa[season]:>9.0f}  {weekly.get(season, 0):>9.0f}")
 
 
 def main() -> int:
@@ -109,7 +139,7 @@ def main() -> int:
             logging.exception("schedule %s: fetch failed", season)
             failures.append(f"{season} schedule")
             continue
-        write_season_schedule(args.root, season, games)
+        first, last = write_season_schedule(args.root, season, games)
         if "lineups" in args.only:
             try:
                 fetch_lineups_season(args.root, season, games=games)
@@ -122,6 +152,16 @@ def main() -> int:
             except Exception:
                 logging.exception("sprint speed %s: failed", season)
                 failures.append(f"{season} sprint speed")
+        if "milb" in args.only:
+            try:
+                result = fetch_milb_season(
+                    args.root, season, first, last, step_days=AS_OF_STEP_DAYS, today=today
+                )
+                if result["failed"]:
+                    failures.append(f"{season} milb ({result['failed']} windows)")
+            except Exception:
+                logging.exception("milb %s: failed", season)
+                failures.append(f"{season} milb")
         if "pitches" in args.only:
             result = fetch_pitches_season(args.root, season, today, games=games)
             logging.info("pitches %s: %s", season, result)
