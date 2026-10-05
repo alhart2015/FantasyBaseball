@@ -124,8 +124,14 @@ class NetConfig:
             raise ValueError("split trains two separate models; it can't also have heads")
         if self.micro_batch < 0:
             raise ValueError(f"micro_batch must be >= 0 (0 = whole batch), got {self.micro_batch}")
-        if len(self.horizon_weights) != 4 or min(self.horizon_weights) < 0:
+        if len(self.horizon_weights) != 4 or not all(
+            np.isfinite(w) and w >= 0 for w in self.horizon_weights
+        ):
             raise ValueError("horizon_weights: 4 non-negative weights (25, 100, 250 PA, ROS)")
+        # Without horizons only the ROS weight is used; a zero there zeroes the whole loss.
+        trained = self.horizon_weights if self.horizons else self.horizon_weights[3:]
+        if not any(w > 0 for w in trained):
+            raise ValueError("horizon_weights: every trained output would have weight 0")
         if self.head_layers < 0:
             raise ValueError(f"head_layers must be >= 0, got {self.head_layers}")
         if self.head_layers and (self.heads > 1 or self.seq != "none"):
@@ -272,6 +278,7 @@ class HorizonHeadsMLP(nn.Module):
         super().__init__()
         if n_out % group:
             raise ValueError(f"{n_out} outputs don't split into heads of {group}")
+        self.n_out = n_out
         layers, width = _hidden_layers(n_in, hidden, dropout)
         self.body = nn.Sequential(*layers)
         self.heads = nn.ModuleList(
@@ -545,6 +552,8 @@ def predict(
 
 
 def _n_outputs(model: nn.Module) -> int:
-    """Width of the model's last Linear layer."""
+    """Width of the model's output: its last Linear layer, or every head's together."""
+    if isinstance(model, HorizonHeadsMLP):  # the last Linear is only the last head's
+        return model.n_out
     linears = [m for m in model.modules() if isinstance(m, nn.Linear)]
     return int(linears[-1].out_features)

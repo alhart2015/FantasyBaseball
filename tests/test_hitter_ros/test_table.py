@@ -363,3 +363,28 @@ def test_recent_form_windows(store):
     assert w2.l7_hr == 7 and w2.l7_swings == 7 * 2  # pitch counts too: 2 swings a game
     w0 = _row(df, HITTER, 2025, 0)  # Opening Day: nothing this season yet
     assert w0.l7_pa == 0 and w0.l14_pa == 0
+
+
+def test_next_n_pa_window_ends_on_a_date_with_pa(tmp_path):
+    """A 0-PA day (pinch-running) right after he reaches N ties his running PA; its run
+    and steal must not leak into the window."""
+    lineups, pitches = _season(2025, date(2025, 4, 1), 21)
+    day7 = (date(2025, 4, 1) + timedelta(days=7)).isoformat()
+    lineups = [r for r in lineups if not (r["player_id"] == HITTER and r["game_date"] == day7)]
+    lineups.append(
+        _lineup_row(
+            2025 * 1000 + 7,
+            date(2025, 4, 8),
+            HITTER,
+            TEAM_A,
+            spot=9,
+            sub=1,
+            position="PR",
+            r=1,
+            sb=1,
+        )
+    )
+    _write(tmp_path, {2024: _season(2024, date(2024, 4, 1), 10), 2025: (lineups, pitches)})
+    w0 = _row(build_table(tmp_path), HITTER, 2025, 0)
+    # Games on days 0-6: 28 PA, 7 R (1 a game), 0 SB. Day 7's pinch-run is after the window.
+    assert w0.ros_n25_pa == 28 and w0.ros_n25_r == 7 and w0.ros_n25_sb == 0

@@ -74,7 +74,10 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
         "weighting": meta["config"].get("weighting", "pa")
         # head_balance was an option in early #422 runs (015c); pre_mid replaced it.
         + ("+head_balance" if meta["config"].get("head_balance") else "")
-        + ("+split" if meta["config"].get("split") else ""),
+        + ("+split" if meta["config"].get("split") else "")
+        # A horizons run's val_loss averages every horizon's outputs (weighted), not
+        # just the rest-of-season ones, so it doesn't compare with other runs' (#419).
+        + ("+horizons" if meta["config"].get("horizons") else ""),
         # A --split run lists each season twice (a preseason and a mid-season model).
         "seasons": ",".join(dict.fromkeys(str(s["test_season"]) for s in seasons)),
         "best_epoch": float(np.mean([s["best_epoch"] for s in seasons])),
@@ -126,7 +129,8 @@ def warnings_for(df: pd.DataFrame) -> list[str]:
     if df["weighting"].nunique() > 1:
         out.append(
             "weightings differ: val_loss weights rows differently (and a split run "
-            "averages two models), so it does not compare across them"
+            "averages two models, a horizons run its short-horizon outputs too), so it "
+            "does not compare across them"
         )
     if df["seasons"].nunique() > 1:
         out.append("test seasons differ: preseason means average different years")

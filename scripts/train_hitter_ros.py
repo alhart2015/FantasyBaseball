@@ -54,6 +54,7 @@ from fantasy_baseball.hitter_ros.features import (
     target_stat,
 )
 from fantasy_baseball.hitter_ros.horizons import (
+    HORIZON_NAMES,
     horizon_summary,
     score_horizons,
     write_horizon_scores,
@@ -140,6 +141,8 @@ def fit_season(
         )
         for c in cols
     }
+    # Loss weight per horizon (#419): NetConfig.horizon_weights, in HORIZON_NAMES order.
+    horizon_weight = dict(zip(HORIZON_NAMES, config.horizon_weights, strict=True))
     # Poisson targets (count_loss) stay as rates: the net predicts their log.
     poisson = {c for c in cols if target_stat(c) in COUNT_LOSS_TARGETS[config.count_loss]}
     y_std = np.column_stack(
@@ -163,7 +166,7 @@ def fit_season(
         batcher=batcher,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
         target_stats=[target_stat(c) for c in cols],
-        target_weights=np.array([HORIZON_WEIGHT[column_horizon(c)](config) for c in cols]),
+        target_weights=np.array([horizon_weight[column_horizon(c)] for c in cols]),
     )
     test_rows = (table["season"] == test_season) & in_weeks
     z = predict(
@@ -202,15 +205,6 @@ def fit_season(
         "val_loss": result.val_loss,
     }
     return preds, info
-
-
-# Loss weight per horizon (#419), from NetConfig.horizon_weights (25, 100, 250, ROS).
-HORIZON_WEIGHT = {
-    "n25": lambda c: c.horizon_weights[0],
-    "n100": lambda c: c.horizon_weights[1],
-    "n250": lambda c: c.horizon_weights[2],
-    "ros": lambda c: c.horizon_weights[3],
-}
 
 
 def by_stat(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:

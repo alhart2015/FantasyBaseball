@@ -75,6 +75,12 @@ def score_horizons(
     ``preds`` has no horizon heads."""
     if f"n{HORIZONS[0]}_{TARGETS[0]}" not in preds.columns:
         return None
+    missing = [f"ros_n{n}_pa" for n in HORIZONS if f"ros_n{n}_pa" not in table.columns]
+    if missing:
+        raise ValueError(
+            f"the table predates the horizon answers {missing}; "
+            "run scripts/build_hitter_ros_table.py"
+        )
     keys = ["player_id", "season", "week"]
     parts = []
     for season in sorted(int(s) for s in preds["season"].unique()):
@@ -97,17 +103,21 @@ def score_horizons(
                 f = frame[frame["week"] == week].set_index("player_id")[cols]
                 return f.set_axis(list(TARGETS), axis=1).reindex(index)
 
+            # The same for every horizon: the rest-of-season rate, and the baselines.
+            ros_rate = by_player(mine, list(TARGETS))
+            baselines = {
+                "marcel": by_player(marcel, list(TARGETS)),
+                "hot_hand": by_player(hot, list(TARGETS)),
+            }
             for horizon in HORIZON_NAMES:
-                head_cols = (
-                    list(TARGETS) if horizon == "ros" else [f"{horizon}_{s}" for s in TARGETS]
+                head = (
+                    ros_rate
+                    if horizon == "ros"
+                    else by_player(mine, [f"{horizon}_{s}" for s in TARGETS])
                 )
-                systems = {
-                    "head": by_player(mine, head_cols),
-                    "marcel": by_player(marcel, list(TARGETS)),
-                    "hot_hand": by_player(hot, list(TARGETS)),
-                }
+                systems = {"head": head, **baselines}
                 if horizon != "ros":
-                    systems["ros_rate"] = by_player(mine, list(TARGETS))
+                    systems["ros_rate"] = ros_rate
                 actual = _actual(wrows, horizon).set_axis(index).dropna(subset=["pa"])
                 min_pa = ROS_MIN_PA if horizon == "ros" else int(horizon[1:])
                 tags = {

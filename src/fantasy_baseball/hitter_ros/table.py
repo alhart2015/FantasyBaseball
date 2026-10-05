@@ -48,6 +48,7 @@ import duckdb
 import pandas as pd
 
 from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS
+from fantasy_baseball.hitter_ros.features import COUNTS
 from fantasy_baseball.hitter_ros.statcast_sql import CONTACT_SQL, SPRAY_SQL, SWING_SQL, WHIFF_SQL
 from fantasy_baseball.pitch_data.store import connect
 
@@ -67,7 +68,6 @@ BOX_COUNTS = (
 RECENT_WINDOWS = {"l7": 7, "l14": 14}
 # Short-horizon answers (#419): his next N PA from the as-of date, same season only.
 HORIZONS = (25, 100, 250)
-HORIZON_COUNTS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
 # Steal opportunities (#413), from the runners on base at the first pitch of each PA:
 # on 1B with 2B open, and on 2B with 3B open.
 STEAL_COUNTS = ("steal_opp2", "steal_opp3")
@@ -358,18 +358,24 @@ def _horizon_answers(conn: duckdb.DuckDBPyConnection) -> list[str]:
     """
     running = ", ".join(
         f"sum({c}) OVER (PARTITION BY player_id, season ORDER BY game_date) AS cum_{c}"
-        for c in HORIZON_COUNTS
+        for c in COUNTS
     )
+    # Only dates with a PA: there the running PA strictly increases, so the ASOF match
+    # below is the one first date reaching the goal. A 0-PA date (pinch-running, a
+    # defensive sub) ties the date before it, and could otherwise be matched instead,
+    # adding its runs and steals from after the window. Its counts still land in the
+    # running totals of the next date with a PA.
     conn.execute(
-        f"CREATE TEMP TABLE box_cum AS SELECT player_id, season, game_date, {running} "
-        "FROM box_daily"
+        f"CREATE TEMP TABLE box_cum AS SELECT * FROM ("
+        f"SELECT player_id, season, game_date, pa, {running} FROM box_daily"
+        ") WHERE coalesce(pa, 0) > 0"
     )
     names = []
     for n in HORIZONS:
         name = f"horizon_{n}"
         counts = ", ".join(
             f"CASE WHEN b.cum_pa IS NULL THEN NULL ELSE b.cum_{c} - s.std_{c} END AS ros_n{n}_{c}"
-            for c in HORIZON_COUNTS
+            for c in COUNTS
         )
         conn.execute(
             f"""
