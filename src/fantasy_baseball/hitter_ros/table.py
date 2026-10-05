@@ -48,6 +48,7 @@ import duckdb
 import pandas as pd
 
 from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS
+from fantasy_baseball.hitter_ros.features import COUNTS
 from fantasy_baseball.hitter_ros.statcast_sql import CONTACT_SQL, SPRAY_SQL, SWING_SQL, WHIFF_SQL
 from fantasy_baseball.pitch_data.store import connect
 
@@ -63,6 +64,10 @@ BOX_COUNTS = (
     "spot_sum",
     *(f"starts_{p.lower()}" for p in START_POSITIONS),
 )
+# Recent-form windows (#419): days before the as-of date, same season.
+RECENT_WINDOWS = {"l7": 7, "l14": 14}
+# Short-horizon answers (#419): his next N PA from the as-of date, same season only.
+HORIZONS = (25, 100, 250)
 # Steal opportunities (#413), from the runners on base at the first pitch of each PA:
 # on 1B with 2B open, and on 2B with 3B open.
 STEAL_COUNTS = ("steal_opp2", "steal_opp3")
@@ -340,6 +345,56 @@ def _league_context(conn: duckdb.DuckDBPyConnection) -> None:
     )
 
 
+def _horizon_answers(conn: duckdb.DuckDBPyConnection) -> list[str]:
+    """Answers for the next N PA (#419): ``ros_n{N}_*`` counts over his games from the
+    as-of date until his PA reach N, within the same season. NULL when he doesn't reach
+    N before the season ends (no answer for that horizon). Games end mid-horizon, so a
+    window holds N to N + a few PA; rates use its actual PA. Same-day games are one step,
+    as in ``box_daily``. Answers only: the ``ros_`` prefix keeps the leakage tests on them.
+
+    Built from running totals per player-season: the window ends on the first date whose
+    running PA reaches (PA before the as-of date) + N, and its counts are the running
+    totals there minus those before the date (``std_*``).
+    """
+    running = ", ".join(
+        f"sum({c}) OVER (PARTITION BY player_id, season ORDER BY game_date) AS cum_{c}"
+        for c in COUNTS
+    )
+    # Only dates with a PA: there the running PA strictly increases, so the ASOF match
+    # below is the one first date reaching the goal. A 0-PA date (pinch-running, a
+    # defensive sub) ties the date before it, and could otherwise be matched instead,
+    # adding its runs and steals from after the window. Its counts still land in the
+    # running totals of the next date with a PA.
+    conn.execute(
+        f"CREATE TEMP TABLE box_cum AS SELECT * FROM ("
+        f"SELECT player_id, season, game_date, pa, {running} FROM box_daily"
+        ") WHERE coalesce(pa, 0) > 0"
+    )
+    names = []
+    for n in HORIZONS:
+        name = f"horizon_{n}"
+        counts = ", ".join(
+            f"CASE WHEN b.cum_pa IS NULL THEN NULL ELSE b.cum_{c} - s.std_{c} END AS ros_n{n}_{c}"
+            for c in COUNTS
+        )
+        conn.execute(
+            f"""
+            CREATE TEMP TABLE {name} AS
+            WITH goal AS (
+                SELECT pop.player_id, pop.season, pop.week, s.std_pa + {n} AS goal_pa
+                FROM pop JOIN std_box s USING (player_id, season, week)
+            )
+            SELECT g.player_id, g.season, g.week, {counts}
+            FROM goal g
+            JOIN std_box s USING (player_id, season, week)
+            ASOF LEFT JOIN box_cum b
+              ON b.player_id = g.player_id AND b.season = g.season AND g.goal_pa <= b.cum_pa
+            """
+        )
+        names.append(name)
+    return names
+
+
 def _season_totals(conn: duckdb.DuckDBPyConnection, daily: str, cols: Iterable[str]) -> str:
     name = f"{daily}_season"
     sums = ", ".join(f"sum({c}) AS {c}" for c in cols)
@@ -408,9 +463,21 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
         "p3_steal": window(steal_season, STEAL_COUNTS, "p3_", p3),
         "car_steal": window(steal_season, STEAL_COUNTS, "car_", car),
         "ros": window("box_daily", TARGET_COUNTS, "ros_", ros),
+        # Recent form (#419): the last 7 and 14 days before the date, this season only.
+        **{
+            f"{w}_{kind}": window(
+                src, cols, f"{w}_", f"{std} AND d.game_date >= pop.as_of - {days}"
+            )
+            for w, days in RECENT_WINDOWS.items()
+            for kind, src, cols in (
+                ("box", "box_daily", BOX_COUNTS),
+                ("pitch", "pitch_daily", PITCH_COUNTS),
+            )
+        },
     }
     for name, sql in parts.items():
         conn.execute(f"CREATE TEMP TABLE {name} AS {sql}")
+    horizon_tables = _horizon_answers(conn)
 
     # The hitter's team going forward: the team of his first game on or after the date.
     # That is the roster as known on the date (it catches offseason and deadline moves);
@@ -448,7 +515,8 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
     _league_context(conn)
 
     first_store_season = "(SELECT min(season) FROM box_daily)"
-    joined = ", ".join(f"{p}.* EXCLUDE (player_id, season, week)" for p in parts)
+    tables = [*parts, *horizon_tables]
+    joined = ", ".join(f"{p}.* EXCLUDE (player_id, season, week)" for p in tables)
     df = conn.execute(
         f"""
         SELECT pop.player_id, pop.season, pop.week, pop.as_of, pop.season_complete,
@@ -467,7 +535,7 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
                {joined},
                lg.* EXCLUDE (player_id, season, week)
         FROM pop
-        {" ".join(f"JOIN {p} USING (player_id, season, week)" for p in parts)}
+        {" ".join(f"JOIN {p} USING (player_id, season, week)" for p in tables)}
         JOIN team_ctx tc USING (player_id, season, week)
         JOIN team_ctx_p1 tp USING (player_id, season, week)
         JOIN league_ctx lg USING (player_id, season, week)

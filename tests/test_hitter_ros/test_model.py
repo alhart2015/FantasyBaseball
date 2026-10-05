@@ -406,3 +406,86 @@ def test_bolt_rate_counts_a_blank_as_zero_only_when_runs_are_known():
     assert list(out["p1_bolt_rate"][:2]) == [0.1, 0.0]
     assert np.isnan(out["p1_bolt_rate"][2])  # no sprint data at all: unknown, not 0
     assert out["p1_hp_to_1b"][0] == 4.2
+
+
+def test_targets_for_every_horizon(table):
+    from fantasy_baseball.hitter_ros.features import (
+        column_horizon,
+        horizon_columns,
+        target_frame,
+        target_stat,
+    )
+
+    rates, weights = target_frame(table, (25, 100))
+    assert list(rates.columns) == horizon_columns((25, 100)) == list(weights.columns)
+    assert target_stat("n25_hr") == "hr" and target_stat("rbi") == "rbi"
+    assert column_horizon("n100_avg") == "n100" and column_horizon("sb") == "ros"
+    row = (table.player_id == 1) & (table.season == 2025) & (table.week == 0)
+    assert rates.loc[row, "n25_hr"].iloc[0] == pytest.approx(7 / 28)
+    assert weights.loc[row, "n25_hr"].iloc[0] == 28
+    # Never reached 100 PA: no answer, no weight.
+    assert np.isnan(rates.loc[row, "n100_hr"].iloc[0]) and weights.loc[row, "n100_hr"].iloc[0] == 0
+    # Without horizons it's the rest-of-season frame, unchanged.
+    plain, _ = target_frame(table)
+    pd.testing.assert_frame_equal(plain, rates[list(plain.columns)])
+
+
+def test_recent_inputs_are_optional(table):
+    plain = input_frame(table)
+    recent = input_frame(table, recent=True)
+    added = set(recent.columns) - set(plain.columns)
+    assert added and all(c.startswith(("l7_", "l14_")) for c in added)
+
+
+def test_horizon_scores_grade_each_horizon_against_its_own_answer(table):
+    from fantasy_baseball.hitter_ros.features import TARGETS, horizon_columns, target_frame
+    from fantasy_baseball.hitter_ros.horizons import horizon_summary, score_horizons
+
+    rows = table[table.season == 2025]
+    rates, _ = target_frame(rows, (25,))
+    cols = horizon_columns((25,))
+    # A perfect next-25 head; a flat rest-of-season head that can't order anyone.
+    preds = pd.concat([rows[["player_id", "season", "week", "as_of"]], rates[cols]], axis=1)
+    preds[list(TARGETS)] = 0.1
+    for n in (100, 250):
+        preds[[f"n{n}_{s}" for s in TARGETS]] = 0.1
+    scored = score_horizons(table, preds)
+    n25 = scored[(scored.horizon == "n25") & (scored.system == "head")]
+    assert not n25.empty and n25.abs_err.max() == pytest.approx(0.0)
+    flat = scored[(scored.horizon == "n25") & (scored.system == "ros_rate")]
+    assert flat.abs_err.max() > 0
+    assert set(scored.system) == {"head", "ros_rate", "marcel", "hot_hand"}
+    assert any("n25" in line for line in horizon_summary(scored))
+    assert score_horizons(table, preds[["player_id", "season", "week", *TARGETS]]) is None
+
+
+def test_horizon_scores_against_a_fresh_fangraphs_snapshot(table, tmp_path):
+    from fantasy_baseball.hitter_ros.features import TARGETS, horizon_columns, target_frame
+    from fantasy_baseball.hitter_ros.horizons import score_horizons
+
+    rows = table[table.season == 2025]
+    rates, _ = target_frame(rows, (25,))
+    preds = pd.concat(
+        [rows[["player_id", "season", "week", "as_of"]], rates[horizon_columns((25,))]], axis=1
+    )
+    for n in (100, 250):
+        preds[[f"n{n}_{s}" for s in TARGETS]] = 0.1
+    snap = tmp_path / "2025" / "rest_of_season" / "2025-04-08"  # week 1's as-of date
+    snap.mkdir(parents=True)
+    pd.DataFrame(
+        {
+            "MLBAMID": [1, 2],
+            "PA": [500, 500],
+            "AB": [450, 450],
+            "H": [120, 110],
+            "R": [70, 60],
+            "HR": [20, 10],
+            "RBI": [70, 60],
+            "SB": [5, 5],
+        }
+    ).to_csv(snap / "steamer-hitters.csv", index=False)
+    scored = score_horizons(table, preds, tmp_path)
+    fg = scored[scored.comparison == "fangraphs"]
+    assert set(fg.system) == {"head", "ros_rate", "fg_ros"}
+    assert set(fg.snapshot) == {"2025-w01", "2025-w02"}  # within 7 days of the snapshot
+    assert len(scored[scored.comparison == "all"]) > len(fg)

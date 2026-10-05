@@ -103,3 +103,19 @@ def test_a_poisson_target_learns_a_skewed_rate():
     pred = np.exp(predict(result.model, x)[:, k])
     assert np.corrcoef(np.log(pred[val]), np.log(rate[val]))[0, 1] > 0.95
     assert np.median(pred[val] / rate[val]) == pytest.approx(1.0, abs=0.15)
+
+
+def test_target_weights_scale_each_column():
+    from fantasy_baseball.hitter_ros.features import horizon_columns, target_stat
+
+    cols = horizon_columns((25,))
+    y = np.ones((10, len(cols)))
+    w = np.ones_like(y)
+    weights = np.array([1.0] * 5 + [0.25] * 5)
+    spec = count_loss(
+        NetConfig(count_loss="none"), y, w, device(), [target_stat(c) for c in cols], weights
+    )
+    assert not spec.mask.any()
+    np.testing.assert_allclose(spec.scale.cpu().numpy(), weights)
+    with pytest.raises(ValueError):
+        count_loss(NetConfig(), y, w, device())  # 10 columns but ROS stats only

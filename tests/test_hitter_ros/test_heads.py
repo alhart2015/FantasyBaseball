@@ -114,3 +114,27 @@ def test_a_missing_head_column_is_refused():
             np.arange(8) < 2,
             NetConfig(heads=2, weighting="pa", max_epochs=1),
         )
+
+
+def test_horizon_heads_are_separate_heads_on_one_body():
+    from fantasy_baseball.hitter_ros.net import HorizonHeadsMLP, build_model
+
+    torch.manual_seed(0)
+    model = HorizonHeadsMLP(6, 20, [8], 0.0, head_width=4).eval()
+    out = model(torch.randn(3, 6))
+    assert out.shape == (3, 20) and len(model.heads) == 4
+    # A head's weights move only its own 5 outputs.
+    x = torch.randn(3, 6)
+    before = model(x)
+    with torch.no_grad():
+        model.heads[1][-1].bias += 1.0
+    after = model(x)
+    assert torch.allclose(after[:, :5], before[:, :5]) and torch.allclose(
+        after[:, 10:], before[:, 10:]
+    )
+    assert torch.allclose(after[:, 5:10], before[:, 5:10] + 1.0)
+    assert isinstance(build_model(6, 20, NetConfig(head_layers=4)), HorizonHeadsMLP)
+    with pytest.raises(ValueError):
+        NetConfig(head_layers=4, heads=2)
+    with pytest.raises(ValueError):
+        NetConfig(horizon_weights=[1.0, 1.0])

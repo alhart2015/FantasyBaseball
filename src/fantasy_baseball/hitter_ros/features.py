@@ -17,6 +17,8 @@ import numpy as np
 import pandas as pd
 
 WINDOWS = ("std", "p1", "p3", "car")
+# Recent form (#419): the last 7 / 14 days before the date (table.RECENT_WINDOWS).
+RECENT_WINDOWS = ("l7", "l14")
 
 # Answers: rest-of-season rates, and the counts that weight each one in the loss.
 TARGETS = ("r", "hr", "rbi", "sb", "avg")
@@ -206,9 +208,12 @@ def _steal_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
     return out
 
 
-def input_frame(t: pd.DataFrame, era: str = "none", steal: bool = False) -> pd.DataFrame:
+def input_frame(
+    t: pd.DataFrame, era: str = "none", steal: bool = False, recent: bool = False
+) -> pd.DataFrame:
     """Model inputs for every table row: rates per window plus context. NaN = unknown.
-    ``era``: see :func:`_era_inputs`. ``steal``: add :func:`_steal_inputs`."""
+    ``era``: see :func:`_era_inputs`. ``steal``: add :func:`_steal_inputs`. ``recent``:
+    add the same per-window rates over the last 7 and 14 days (#419)."""
     if era not in ERA_MODES:
         raise ValueError(f"unknown era mode {era!r}")
     cols: dict[str, pd.Series] = {}
@@ -232,6 +237,9 @@ def input_frame(t: pd.DataFrame, era: str = "none", steal: bool = False) -> pd.D
         }
     )
     cols.update(_era_inputs(t, era, cols))
+    if recent:
+        for w in RECENT_WINDOWS:
+            cols.update(_window_rates(t, w))
     if steal:
         cols.update(_steal_inputs(t))
     return pd.DataFrame(cols, index=t.index)
@@ -250,12 +258,43 @@ def rates_from_counts(df: pd.DataFrame) -> pd.DataFrame:
     return out[list(TARGETS)]
 
 
-def target_frame(t: pd.DataFrame) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """(rest-of-season rates, loss weights). A rate with no PA/AB is NaN with weight 0."""
-    ros = t[[f"ros_{c}" for c in COUNTS]]
-    rates = rates_from_counts(ros.rename(columns=lambda c: c.removeprefix("ros_")))
-    weights = pd.DataFrame({k: t[v].astype(float) for k, v in TARGET_WEIGHT.items()}, index=t.index)
-    return rates, weights
+def horizon_columns(horizons: tuple[int, ...] = ()) -> list[str]:
+    """Output column names: the rest-of-season ``TARGETS``, then ``n{N}_{stat}`` for each
+    short horizon (#419)."""
+    return [*TARGETS, *(f"n{n}_{s}" for n in horizons for s in TARGETS)]
+
+
+def target_stat(column: str) -> str:
+    """The stat of an output column: ``n25_hr`` -> ``hr``; ``hr`` -> ``hr``."""
+    return column.rsplit("_", 1)[-1] if column.startswith("n") else column
+
+
+def column_horizon(column: str) -> str:
+    """The horizon of an output column: ``n25_hr`` -> ``n25``; ``hr`` -> ``ros``."""
+    return column.split("_", 1)[0] if column.startswith("n") else "ros"
+
+
+def target_frame(
+    t: pd.DataFrame, horizons: tuple[int, ...] = ()
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """(rates, loss weights), one column per ``horizon_columns(horizons)``: rest of season,
+    then the next N PA (#419). A rate with no PA/AB -- or a horizon he didn't reach -- is
+    NaN with weight 0. Weights are the PA (AB for AVG) in that answer's window."""
+    rate_parts, weight_parts = [], []
+    for prefix, tag in (("ros_", ""), *((f"ros_n{n}_", f"n{n}_") for n in horizons)):
+        counts = t[[f"{prefix}{c}" for c in COUNTS]].rename(
+            columns=lambda c, p=prefix: c.removeprefix(p)
+        )
+        rate_parts.append(rates_from_counts(counts).add_prefix(tag))
+        weights = pd.DataFrame(
+            {
+                f"{tag}{k}": t[v.replace("ros_", prefix, 1)].astype(float)
+                for k, v in TARGET_WEIGHT.items()
+            },
+            index=t.index,
+        )
+        weight_parts.append(weights.fillna(0.0))
+    return pd.concat(rate_parts, axis=1), pd.concat(weight_parts, axis=1)
 
 
 class Standardizer:
