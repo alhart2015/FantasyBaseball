@@ -1,9 +1,10 @@
 """Tests for streaks DuckDB compaction (:mod:`...streaks.data.maintenance`).
 
-The bloat fixture reproduces the historical ``hitter_windows`` write
-pattern that caused the growth -- see
-:func:`fantasy_baseball.streaks.windows._bulk_replace_hitter_windows` for
-why it bloated and how the DROP+recreate fix avoids it.
+The historical bloat came from the ``hitter_windows`` DELETE+INSERT write
+pattern -- see :func:`fantasy_baseball.streaks.windows._bulk_replace_hitter_windows`
+for why it bloated and how the DROP+recreate fix avoids it. DuckDB 1.5.3 stopped
+that pattern from growing the file, so the fixture here leaves free space
+another way that every DuckDB version keeps until a full rewrite.
 """
 
 from __future__ import annotations
@@ -17,44 +18,45 @@ from fantasy_baseball.streaks.data import maintenance
 from fantasy_baseball.streaks.data.maintenance import compact_database
 
 _ROWS = 2000
-_RUNS = 20
+_SCRATCH_ROWS = 2_000_000
 
 
 def _build_bloated_db(db_path: Path) -> int:
-    """Create a DuckDB at *db_path* bloated by repeated DELETE+INSERT runs.
+    """Create a DuckDB at *db_path* holding free space only a rewrite reclaims.
 
-    Each "run" is a separate connection (mimicking separate process
-    invocations of the pipeline) that wipes and rewrites the table, then
-    checkpoints. Returns the final on-disk size in bytes. Includes a
-    second small table so the multi-table copy path is exercised.
+    A large scratch table is checkpointed first, the real rows are written
+    after it, then the scratch table is dropped: its freed blocks sit before
+    live data, so the file can't simply be truncated. Returns the final
+    on-disk size in bytes. Includes a second small table so the multi-table
+    copy path is exercised.
     """
-
-    def _run(first: bool) -> None:
-        conn = duckdb.connect(str(db_path))
-        try:
-            if first:
-                conn.execute(
-                    "CREATE TABLE windows("
-                    "player_id INTEGER, window_end DATE, window_days INTEGER, "
-                    "pa INTEGER, avg DOUBLE, "
-                    "PRIMARY KEY(player_id, window_end, window_days))"
-                )
-                conn.execute("CREATE TABLE meta(k VARCHAR PRIMARY KEY, v INTEGER)")
-                conn.execute("INSERT INTO meta VALUES ('schema_version', 5)")
-            conn.execute("DELETE FROM windows")
-            conn.execute(
-                "INSERT INTO windows SELECT "
-                "(i % 500)::INTEGER, DATE '2024-01-01' + (i // 500)::INTEGER, 14, "
-                "(i % 30)::INTEGER, (i % 30) / 100.0 FROM range(?) tbl(i)",
-                [_ROWS],
-            )
-            conn.execute("CHECKPOINT")
-        finally:
-            conn.close()
-
-    _run(first=True)
-    for _ in range(_RUNS):
-        _run(first=False)
+    conn = duckdb.connect(str(db_path))
+    try:
+        conn.execute(
+            "CREATE TABLE windows("
+            "player_id INTEGER, window_end DATE, window_days INTEGER, "
+            "pa INTEGER, avg DOUBLE, "
+            "PRIMARY KEY(player_id, window_end, window_days))"
+        )
+        conn.execute("CREATE TABLE meta(k VARCHAR PRIMARY KEY, v INTEGER)")
+        conn.execute("INSERT INTO meta VALUES ('schema_version', 5)")
+        conn.execute(
+            "CREATE TABLE scratch AS SELECT i::BIGINT AS a, (i * 7)::BIGINT AS b "
+            "FROM range(?) tbl(i)",
+            [_SCRATCH_ROWS],
+        )
+        conn.execute("CHECKPOINT")
+        conn.execute(
+            "INSERT INTO windows SELECT "
+            "(i % 500)::INTEGER, DATE '2024-01-01' + (i // 500)::INTEGER, 14, "
+            "(i % 30)::INTEGER, (i % 30) / 100.0 FROM range(?) tbl(i)",
+            [_ROWS],
+        )
+        conn.execute("CHECKPOINT")
+        conn.execute("DROP TABLE scratch")
+        conn.execute("CHECKPOINT")
+    finally:
+        conn.close()
     return db_path.stat().st_size
 
 
