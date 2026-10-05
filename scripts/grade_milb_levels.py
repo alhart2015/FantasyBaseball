@@ -22,6 +22,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import to_markdown
 from fantasy_baseball.hitter_ros.milb_grade import (
+    MLB,
     factor_table,
     league_rates,
     level_factors,
@@ -49,7 +50,8 @@ def main() -> int:
 
     conn = connect(STORE)
     lines = pd.concat([load_milb_lines(conn), load_mlb_lines(conn)], ignore_index=True)
-    levels = player_levels(relative_lines(lines))
+    by_league = league_rates(lines)
+    levels = player_levels(relative_lines(lines, by_league))
     first, last = int(lines["season"].min()), int(lines["season"].max())
 
     print("n = player pairs in the level's own step (to MLB for AAA and AA, else up a level)\n")
@@ -60,14 +62,14 @@ def main() -> int:
         print(f"\n### Factors a {test} backtest uses ({window[0]}-{window[1]})\n")
         print(to_markdown(_pairs_as_n(level_factors(levels, window)), digits=3))
 
-    env = league_rates(lines).reset_index()
-    env = env[env["sport_id"] != 1]
+    env = by_league.reset_index()
+    env = env[env["sport_id"] != MLB]
     spread = env.groupby("sport_id")[["avg", "hr"]].agg(["min", "max"])
     spread.columns = [f"{s} {agg}" for s, agg in spread.columns]
     print("\n### League environments by level (min / max over league-seasons)\n")
     print(to_markdown(spread.rename(index=MILB_LEVELS), digits=3))
 
-    ages = levels[levels["sport_id"] != 1].groupby("sport_id")["age_vs_level"].describe()
+    ages = levels[levels["sport_id"] != MLB].groupby("sport_id")["age_vs_level"].describe()
     print("\n### Age vs. level (player age minus the level's PA-weighted mean age)\n")
     print(to_markdown(ages[["count", "mean", "std", "min", "max"]].rename(index=MILB_LEVELS)))
     return 0

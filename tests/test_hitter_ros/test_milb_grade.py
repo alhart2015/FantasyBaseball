@@ -46,6 +46,12 @@ def test_rates_and_empty_denominators():
     assert r.loc[0, "avg"] == pytest.approx(0.300, abs=1e-3)
     assert r.loc[0, "hr"] == pytest.approx(0.03)
     assert r.loc[1].isna().all()
+    assert list(r.columns) == list(milb_grade.STATS)
+
+
+def test_rates_ignore_non_count_columns():
+    frame = pd.DataFrame([{**_line(2024, 1, AAA, 1, 1000, avg=0.300), "league": "PCL"}])
+    assert rates(frame).loc[0, "avg"] == pytest.approx(0.300, abs=1e-3)
 
 
 def test_a_small_league_uses_its_levels_pooled_rates(monkeypatch):
@@ -126,6 +132,25 @@ def test_level_factor_is_the_weighted_ratio_over_promoted_players(monkeypatch):
     assert f.loc[AAA, "hr"] == pytest.approx(1.0)
 
 
+def test_only_first_promotions_count_each_lower_season_once(monkeypatch):
+    monkeypatch.setattr(milb_grade, "MIN_PAIRS", 1)
+    levels = _levels(
+        [
+            # Player 1: AAA then MLB the same season and the next. One pair, same season.
+            (2020, 1, AAA, 400, 1.20),
+            (2020, 1, MLB, 400, 1.00),
+            (2021, 1, MLB, 400, 0.10),
+            # Player 2: a veteran with MLB PA (even a few) before his AAA season.
+            (2019, 2, MLB, 20, 1.00),
+            (2020, 2, AAA, 400, 1.00),
+            (2020, 2, MLB, 400, 3.00),
+        ]
+    )
+    f = level_factors(levels, (2019, 2021))
+    assert f.loc[AAA, "pairs"] == 1
+    assert f.loc[AAA, "avg"] == pytest.approx(1.0 / 1.2)
+
+
 def test_a_backtest_never_grades_with_seasons_after_its_window(monkeypatch):
     monkeypatch.setattr(milb_grade, "MIN_PAIRS", 1)
     levels = _levels(
@@ -157,6 +182,14 @@ def test_lower_levels_chain_up_and_thin_levels_are_left_out(monkeypatch):
     assert f.loc[HIGH_A, "pairs"] == 1
     # No AAA pairs, and nothing below A+ to chain: those levels have no factor.
     assert AAA not in f.index and 14 not in f.index
+
+
+def test_a_window_without_pairs_gives_no_factors_but_keeps_the_columns():
+    levels = _levels([(2020, 1, AAA, 400, 1.2), (2020, 1, MLB, 400, 1.0)])
+    f = level_factors(levels, (2001, 2007))
+    assert f.empty and list(f.columns) == ["pairs", *milb_grade.STATS]
+    assert milb_grade.factor_table(f).empty
+    assert translate(levels, f)["mlb_rel_avg"].isna().all()
 
 
 def test_translate_applies_each_levels_factor():

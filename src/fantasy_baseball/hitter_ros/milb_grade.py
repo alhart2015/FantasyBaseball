@@ -8,10 +8,15 @@ Pacific Coast League means less than .300 in the International League. Three ste
    fewer than ``MIN_LEAGUE_PA`` PA that season (stray PA filed under the wrong league)
    uses its level's pooled rates instead.
 2. **Level factors** (``level_factors``): how much a league-relative rate shrinks on the
-   way to MLB, measured on players with at least ``MIN_PAIR_PA`` PA at a level and at
-   the next level up (or MLB) in the same or the following season. A factor is the
-   ratio of the PA-weighted sums of the two relative rates (weight: the harmonic mean
-   of the two PA). AAA and AA are measured against MLB directly; the lower levels are
+   way to MLB, measured on first promotions: players with at least ``MIN_PAIR_PA`` PA
+   at a level and at the next level up (or MLB) in the same or the following season,
+   who had never batted at the higher level before. Each lower-level season counts
+   once (paired with the same season when it can be, else the next), so ``pairs`` is
+   that many player-seasons. Veterans going back and forth between AAA and MLB are
+   left out: they are not the rookies these factors are for, and they made AAA steals
+   look more valuable than they are for prospects (SB x0.85 vs. x0.80 without them).
+   A factor is the ratio of the PA-weighted sums of the two relative rates (weight: the
+   harmonic mean of the two PA). AAA and AA are measured against MLB directly; the lower levels are
    chained (``CHAIN``), because few of their players reach MLB within a season.
    Factors only use pairs whose later season is inside ``seasons``, so a backtest can
    grade with seasons before the test season only.
@@ -28,12 +33,11 @@ grade it with. Pitchers' plate appearances are left out everywhere.
 
 from __future__ import annotations
 
-from collections.abc import Iterable
-
 import duckdb
 import numpy as np
 import pandas as pd
 
+from fantasy_baseball.hitter_ros.features import rates_from_counts
 from fantasy_baseball.pitch_data.milb import MILB_LEVELS
 
 MLB = 1  # sportId of the major leagues
@@ -110,15 +114,15 @@ def load_mlb_lines(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
 
 
 def rates(counts: pd.DataFrame) -> pd.DataFrame:
-    """``STATS`` from count columns; NaN where the denominator is 0."""
-    c = counts.astype(float)
-    out = pd.DataFrame(index=counts.index)
-    out["avg"] = c["h"] / c["ab"].where(c["ab"] > 0)
-    for s in PER_PA:
+    """``STATS`` from the ``COUNTS`` columns (any other column is ignored); NaN where the
+    denominator is 0. AVG and R/HR/RBI/SB per PA are ``features.rates_from_counts``."""
+    c = counts[list(COUNTS)].astype(float)
+    out = rates_from_counts(c)
+    for s in ("bb", "k"):
         out[s] = c[s] / c["pa"].where(c["pa"] > 0)
     bip = c["ab"] - c["k"] - c["hr"] + c["sf"]
     out["babip"] = (c["h"] - c["hr"]) / bip.where(bip > 0)
-    return out
+    return out[list(STATS)]
 
 
 def league_rates(lines: pd.DataFrame) -> pd.DataFrame:
@@ -174,9 +178,14 @@ def _step(levels: pd.DataFrame, lo: int, hi: int, seasons: tuple[int, int]) -> p
     pairs = []
     for lag in PROMOTION_LAGS:
         later = b[b["season"].between(first + lag, last)]
-        later = later.assign(season=later["season"] - lag)
+        later = later.assign(season=later["season"] - lag, _lag=lag)
         pairs.append(a.merge(later, on=["season", "player_id"], suffixes=("_lo", "_hi")))
     m = pd.concat(pairs, ignore_index=True)
+    # First promotions only: no PA at the higher level in any earlier season.
+    debut = levels[levels["sport_id"] == hi].groupby("player_id")["season"].min()
+    m = m[~(m["player_id"].map(debut) < m["season"])]
+    # Each lower-level season once, with the earliest higher-level season it pairs with.
+    m = m.sort_values("_lag", kind="stable").drop_duplicates(["season", "player_id"])
     weight = 2.0 / (1.0 / m["pa_lo"] + 1.0 / m["pa_hi"])
     out = {"pairs": float(len(m))}
     for s in STATS:
@@ -200,11 +209,11 @@ def level_factors(levels: pd.DataFrame, seasons: tuple[int, int]) -> pd.DataFram
     for level, up in CHAIN.items():  # in order: each one's target is already done
         step = _step(levels, level, up, seasons)
         if step["pairs"] >= MIN_PAIRS and up in out:
-            out[level] = step[list(STATS)] * out[up][list(STATS)]
-            out[level]["pairs"] = step["pairs"]
-    frame = pd.DataFrame(out).T
+            out[level] = pd.concat([step[["pairs"]], step[list(STATS)] * out[up][list(STATS)]])
+    # Explicit columns, so a window without enough pairs at any level still has them.
+    frame = pd.DataFrame(out, index=["pairs", *STATS], dtype=float).T
     frame.index.name = "sport_id"
-    return frame[["pairs", *STATS]] if len(frame) else frame
+    return frame
 
 
 def translate(levels: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
@@ -214,6 +223,6 @@ def translate(levels: pd.DataFrame, factors: pd.DataFrame) -> pd.DataFrame:
     return levels.assign(**{f"mlb_rel_{s}": levels[f"rel_{s}"] * f[s] for s in STATS})
 
 
-def factor_table(factors: pd.DataFrame, stats: Iterable[str] = STATS) -> pd.DataFrame:
+def factor_table(factors: pd.DataFrame) -> pd.DataFrame:
     """``factors`` with level names for an index, for printing."""
-    return factors[["pairs", *stats]].rename(index=MILB_LEVELS)
+    return factors.rename(index=MILB_LEVELS)
