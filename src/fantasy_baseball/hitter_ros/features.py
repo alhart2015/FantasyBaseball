@@ -175,6 +175,9 @@ def _steal_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
     how often he runs when he is, how often he's safe, and his share of starts at C /
     SS / CF / DH. Plus his team's steal attempts per PA (the manager's green light),
     this season so far and last season, and his home-to-first time and bolt rate."""
+    # Local import: table.py pulls in the pitch-data store (duckdb, requests).
+    from fantasy_baseball.hitter_ros.table import START_POSITIONS
+
     out: dict[str, pd.Series] = {}
     for w in WINDOWS:
 
@@ -186,17 +189,18 @@ def _steal_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
         out[f"{w}_steal_opp_pa"] = _div(opp, c("pa"))
         out[f"{w}_attempts_per_opp"] = _div(attempts, opp)
         out[f"{w}_sb_success"] = _div(c("sb"), attempts)
-        for pos in ("c", "ss", "cf", "dh"):
+        for pos in (p.lower() for p in START_POSITIONS):
             out[f"{w}_start_share_{pos}"] = _div(c(f"starts_{pos}"), c("starts"))
     for w in ("std", "p1"):
         team = t[f"{w}_team_sb"].astype(float) + t[f"{w}_team_cs"].astype(float)
         out[f"{w}_team_steal_pa"] = _div(team, t[f"{w}_team_pa"].astype(float))
     # Savant's sprint leaderboard, the two previous seasons: home-to-first time, and
     # "bolts" (runs at 30+ ft/s) per competitive run. The leaderboard leaves bolts
-    # blank for a runner with none, so blank counts as 0 where his runs are known.
+    # blank for a runner with none, so blank counts as 0; _div leaves the rate NaN where
+    # his runs are unknown.
     for w in ("p1", "p2"):
         runs = t[f"{w}_sprint_runs"].astype(float)
-        bolts = t[f"{w}_bolts"].astype(float).fillna(0.0).where(runs.notna())
+        bolts = t[f"{w}_bolts"].astype(float).fillna(0.0)
         out[f"{w}_hp_to_1b"] = t[f"{w}_hp_to_1b"].astype(float)
         out[f"{w}_bolt_rate"] = _div(bolts, runs)
     return out

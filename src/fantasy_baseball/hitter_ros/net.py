@@ -195,7 +195,7 @@ def row_losses(
     log rate and ``y`` the rate, so ``w * exp(pred)`` is the expected count and ``w * y``
     the actual one; the deviance is 0 when they match and never negative."""
     loss = w * (pred - y) ** 2
-    if poisson is None or not bool(poisson.any()):
+    if poisson is None:  # poisson_mask gives None, never an all-False mask
         return loss
     f = pred.clamp(*LOG_RATE_CLAMP)
     dev = w * (torch.exp(f) - y * f - y + torch.xlogy(y, y))
@@ -343,7 +343,8 @@ def train(
     batcher: SequenceBatcher | None = None,
     season_time: np.ndarray | None = None,
 ) -> TrainResult:
-    """Fit the net. ``y`` is standardized targets (NaN allowed where ``w`` is 0).
+    """Fit the net. ``y`` is standardized targets, except the ``count_loss`` targets,
+    which are rates (the net predicts their log). NaN allowed where ``w`` is 0.
 
     With a sequence model, ``rows`` gives each row's position in the table the
     ``batcher`` was built on, so it can fetch that row's plate appearances.

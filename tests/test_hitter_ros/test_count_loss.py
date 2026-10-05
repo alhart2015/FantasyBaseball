@@ -22,6 +22,7 @@ def test_poisson_deviance_is_zero_when_right_and_handles_zero_counts():
     poisson = torch.tensor([True, True, False])
     right = torch.tensor([[np.log(1e-9), np.log(0.02), 0.5]], dtype=torch.float32)
     loss = row_losses(right, y, w, poisson)
+    assert loss[0, 0].item() == pytest.approx(0.0, abs=1e-4)  # no steals, rate ~0
     assert loss[0, 1].item() == pytest.approx(0.0, abs=1e-4)
     assert loss[0, 2].item() == pytest.approx(0.0)  # squared error column, exact
     wrong = torch.tensor([[np.log(0.01), np.log(0.04), 0.7]], dtype=torch.float32)
