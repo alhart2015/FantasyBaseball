@@ -408,3 +408,25 @@ def test_schedule_bounds_include_games_still_to_come(tmp_path):
 
     games = [_game(1, "2027-03-26"), _game(2, "2027-09-26", state="Preview", coded="S")]
     assert write_season_schedule(tmp_path, 2027, games)[1] == date(2027, 9, 26)
+
+
+def test_write_season_games_keeps_ballparks_and_the_played_entry(tmp_path):
+    from fantasy_baseball.pitch_data.store import games_path, write_season_games
+
+    def g(pk, d, venue, coded="F", game_type="R"):
+        return {
+            **_game(pk, d, game_type=game_type, coded=coded),
+            "venue": {"id": venue, "name": f"park {venue}"},
+            "teams": {"home": {"team": {"id": 112}}, "away": {"team": {"id": 119}}},
+        }
+
+    games = [
+        g(1, "2025-03-18", 2397),  # Tokyo
+        g(2, "2025-04-01", 17, coded="D"),  # postponed ...
+        g(2, "2025-04-02", 17),  # ... and played the next day
+        g(3, "2025-03-01", 17, game_type="S"),  # spring training: not stored
+    ]
+    assert write_season_games(tmp_path, 2025, games) == 2
+    df = pd.read_parquet(games_path(tmp_path, 2025)).set_index("game_pk")
+    assert df.loc[1, "venue_id"] == 2397 and df.loc[1, "home_team_id"] == 112
+    assert df.loc[2, "played"] and str(df.loc[2, "game_date"]) == "2025-04-02"

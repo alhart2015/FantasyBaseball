@@ -11,6 +11,8 @@ Layout::
                                                  game: batting order + box-score batting line
     sprint_speed/YYYY.parquet                    Savant sprint-speed leaderboard
     schedule/YYYY.parquet                        first/last scheduled regular-season date
+    games/YYYY.parquet                           each regular-season game: date, ballpark,
+                                                 home and away team (played or not)
     milb_season/, milb_weekly/                   minor-league hitting lines (see milb.py)
 
 Resumability: a file is final -- never fetched again -- only if it was *written* more
@@ -395,12 +397,51 @@ def write_season_schedule(root: Path, season: int, games: Games) -> tuple[date, 
     return first, last
 
 
+def games_path(root: Path, season: int) -> Path:
+    return root / "games" / f"{season}.parquet"
+
+
+def write_season_games(root: Path, season: int, games: Games) -> int:
+    """Store one row per regular-season game on the schedule: ``game_pk``, ``game_date``,
+    ``venue_id`` / ``venue_name`` (the ballpark -- not always the home team's usual one:
+    the Tokyo, London and Seoul series, the 2025 A's in Sacramento), ``home_team_id``,
+    ``away_team_id`` and ``played`` (``was_played``). Rewritten on every run, like the
+    schedule bounds: it is one cheap call and future games can still move."""
+    rows = [
+        {
+            "game_pk": g["gamePk"],
+            "season": season,
+            "game_date": date.fromisoformat(_game_context(g)[2]),
+            "venue_id": g.get("venue", {}).get("id"),
+            "venue_name": g.get("venue", {}).get("name"),
+            "home_team_id": g["teams"]["home"]["team"]["id"],
+            "away_team_id": g["teams"]["away"]["team"]["id"],
+            "played": was_played(g),
+        }
+        for g in games
+        if g.get("gameType") == "R"
+    ]
+    if not rows:
+        raise ValueError(f"games {season}: no regular-season games")
+    # A postponed game is listed again on its new date with the same gamePk: keep the
+    # played entry (or the last one listed).
+    df = (
+        pd.DataFrame(rows)
+        .sort_values(["played", "game_date"])
+        .drop_duplicates("game_pk", keep="last")
+        .sort_values(["game_date", "game_pk"])
+        .reset_index(drop=True)
+    )
+    _write_parquet(df, games_path(root, season))
+    return len(df)
+
+
 # --- reading --------------------------------------------------------------------
 
 
 def connect(root: Path) -> duckdb.DuckDBPyConnection:
     """In-memory DuckDB with ``pitches``, ``lineups``, ``sprint_speed``, ``schedule``,
-    ``milb_season`` and ``milb_weekly`` views.
+    ``games``, ``milb_season`` and ``milb_weekly`` views.
 
     A view is only created when its files exist. ``pitches`` carries a ``season`` column
     from the directory name; columns Savant added in later years are NULL in earlier ones.
@@ -411,6 +452,7 @@ def connect(root: Path) -> duckdb.DuckDBPyConnection:
         "lineups": "lineups/*.parquet",
         "sprint_speed": "sprint_speed/*.parquet",
         "schedule": "schedule/*.parquet",
+        "games": "games/*.parquet",
         "milb_season": "milb_season/*.parquet",
         "milb_weekly": "milb_weekly/*/*.parquet",
     }

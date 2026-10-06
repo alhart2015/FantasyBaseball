@@ -42,14 +42,13 @@ every ``milb_p1_*`` blank, log PA included -- not "no minor-league PA".
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.backtest import MIN_HISTORY_SEASONS
-from fantasy_baseball.hitter_ros.features import ROW_KEYS, aligned_inputs, check_aligned
+from fantasy_baseball.hitter_ros.features import ROW_KEYS, load_feature_file
 from fantasy_baseball.hitter_ros.milb_grade import (
     COUNTS,
     MLB,
@@ -87,25 +86,14 @@ def load_milb_inputs(
     ``table``'s rows, and the build options saved next to it (``milb_<name>.json``).
     ValueError, saying how to fix it, when the file is missing, lacks a feature, was
     built for another table, or -- for a ``MILB_PRESETS`` name -- with other options."""
-    path = milb_path(root, name)
-    rebuild = f"run scripts/build_hitter_ros_milb.py --name {name}"
-    if not path.exists():
-        raise ValueError(f"{path} is missing; {rebuild}")
-    options_path = path.with_suffix(".json")
-    options = json.loads(options_path.read_text()) if options_path.exists() else {}
-    if name in MILB_PRESETS and options != MILB_PRESETS[name]:
-        raise ValueError(
-            f"{path} was built with {options or 'unknown options'}, not the {name} preset "
-            f"{MILB_PRESETS[name]}; {rebuild}"
-        )
-    frame = pd.read_parquet(path)
-    missing = [c for c in MILB_FEATURES if c not in frame.columns]
-    if missing:
-        raise ValueError(f"{path} lacks {len(missing)} features (e.g. {missing[0]}); {rebuild}")
-    problem = check_aligned(table, frame)
-    if problem:
-        raise ValueError(f"{path}: {problem}; rebuild it for this table")
-    return aligned_inputs(table, frame, MILB_FEATURES), options
+    return load_feature_file(
+        table,
+        milb_path(root, name),
+        MILB_FEATURES,
+        f"run scripts/build_hitter_ros_milb.py --name {name}",
+        expected_options=MILB_PRESETS.get(name),
+        expected_label=f"the {name} preset",
+    )
 
 
 def _grade(rel: pd.DataFrame, factors: pd.DataFrame, level_age: pd.Series) -> pd.DataFrame:
