@@ -12,6 +12,7 @@ changing every ``ros_*`` value leaves the inputs unchanged.
 from __future__ import annotations
 
 from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
@@ -266,6 +267,24 @@ def check_aligned(table: pd.DataFrame, frame: pd.DataFrame) -> str | None:
     if moved:
         return f"{moved} rows have a different as-of date than the table"
     return None
+
+
+def load_feature_file(
+    table: pd.DataFrame, path: Path, columns: list[str], rebuild: str
+) -> pd.DataFrame:
+    """``columns`` of the feature file at ``path``, aligned to ``table``'s rows.
+    ValueError ending in ``rebuild`` (how to make the file) when it is missing, lacks a
+    column, or was built for another table."""
+    if not path.exists():
+        raise ValueError(f"{path} is missing; {rebuild}")
+    frame = pd.read_parquet(path)
+    missing = [c for c in columns if c not in frame.columns]
+    if missing:
+        raise ValueError(f"{path} lacks {len(missing)} features (e.g. {missing[0]}); {rebuild}")
+    problem = check_aligned(table, frame)
+    if problem:
+        raise ValueError(f"{path}: {problem}; {rebuild}")
+    return aligned_inputs(table, frame, columns)
 
 
 def aligned_inputs(table: pd.DataFrame, frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:

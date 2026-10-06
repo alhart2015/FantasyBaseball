@@ -51,6 +51,7 @@ from fantasy_baseball.hitter_ros.features import (
     input_frame,
     league_answer_rates,
     league_reference,
+    load_feature_file,
     target_frame,
     target_stat,
 )
@@ -71,6 +72,7 @@ from fantasy_baseball.hitter_ros.net import (
     predict,
     train,
 )
+from fantasy_baseball.hitter_ros.parks import PARK_FEATURES, parks_path
 from fantasy_baseball.hitter_ros.probes import (
     PROBE_FEATURES,
     check_probes,
@@ -319,6 +321,12 @@ def main() -> int:
         "(build them first with scripts/build_hitter_ros_milb.py --name <name>; none = off)",
     )
     parser.add_argument(
+        "--parks",
+        default=defaults.parks,
+        help="add park inputs (#433) from data/hitter_ros/parks_<name>.parquet "
+        "(build them first with scripts/build_hitter_ros_parks.py --name <name>; none = off)",
+    )
+    parser.add_argument(
         "--head-layers",
         type=_non_negative_int,
         default=defaults.head_layers,
@@ -408,6 +416,7 @@ def main() -> int:
             recent_inputs=args.recent_inputs,
             head_layers=args.head_layers,
             milb=args.milb,
+            parks=args.parks,
             count_loss=args.count_loss,
         )
     except ValueError as err:
@@ -460,6 +469,18 @@ def main() -> int:
         logger.info("added %d minor-league features (%s)", len(MILB_FEATURES), config.milb)
     else:
         milb_build = None
+    if config.parks != "none":
+        try:
+            parks = load_feature_file(
+                table,
+                parks_path(TABLE.parent, config.parks),
+                PARK_FEATURES,
+                f"run scripts/build_hitter_ros_parks.py --name {config.parks}",
+            )
+        except ValueError as err:
+            parser.error(str(err))
+        x_all = pd.concat([x_all, parks], axis=1)
+        logger.info("added %d park features (%s)", len(PARK_FEATURES), config.parks)
     y_all, w_all = target_frame(table, HORIZONS if config.horizons else ())
     batcher = None
     if config.seq != "none":

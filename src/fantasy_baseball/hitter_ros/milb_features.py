@@ -49,7 +49,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.backtest import MIN_HISTORY_SEASONS
-from fantasy_baseball.hitter_ros.features import ROW_KEYS, aligned_inputs, check_aligned
+from fantasy_baseball.hitter_ros.features import ROW_KEYS, load_feature_file
 from fantasy_baseball.hitter_ros.milb_grade import (
     COUNTS,
     MLB,
@@ -98,14 +98,7 @@ def load_milb_inputs(
             f"{path} was built with {options or 'unknown options'}, not the {name} preset "
             f"{MILB_PRESETS[name]}; {rebuild}"
         )
-    frame = pd.read_parquet(path)
-    missing = [c for c in MILB_FEATURES if c not in frame.columns]
-    if missing:
-        raise ValueError(f"{path} lacks {len(missing)} features (e.g. {missing[0]}); {rebuild}")
-    problem = check_aligned(table, frame)
-    if problem:
-        raise ValueError(f"{path}: {problem}; rebuild it for this table")
-    return aligned_inputs(table, frame, MILB_FEATURES), options
+    return load_feature_file(table, path, MILB_FEATURES, rebuild), options
 
 
 def _grade(rel: pd.DataFrame, factors: pd.DataFrame, level_age: pd.Series) -> pd.DataFrame:

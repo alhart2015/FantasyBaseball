@@ -122,6 +122,9 @@ class NetConfig:
     # vets within seed noise. Build: build_hitter_ros_milb.py --name rookies-s100
     # --vets-blank-from 300 --shrink-pa 100.
     milb: str = "rookies-s100"
+    # Park inputs (#433): park factors of his team's home park and of the parks he hit in
+    # (hitter_ros.parks), from data/hitter_ros/parks_<name>.parquet. "none": none.
+    parks: str = "none"
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):
