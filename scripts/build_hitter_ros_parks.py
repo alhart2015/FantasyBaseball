@@ -7,7 +7,7 @@ table or the store changes; train_hitter_ros.py --parks <name> refuses a file th
 doesn't match the table.
 
 Usage:
-    python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only milb   # stores ballparks
+    python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only lineups   # + ballparks
     python scripts/build_hitter_ros_parks.py --name p3   # the default park inputs
 """
 
@@ -30,6 +30,7 @@ from fantasy_baseball.hitter_ros.parks import (
     build_options,
     build_park_features,
     load_player_games,
+    load_schedule,
     load_team_games,
     parks_path,
 )
@@ -46,7 +47,9 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     table = pd.read_parquet(TABLE, columns=[*ROW_KEYS, "as_of", "team_id"])
     conn = connect(STORE)
-    features = build_park_features(table, load_team_games(conn), load_player_games(conn))
+    features = build_park_features(
+        table, load_team_games(conn), load_player_games(conn), load_schedule(conn)
+    )
     out = parks_path(TABLE.parent, args.name)
     features.to_parquet(out, index=False)
     out.with_suffix(".json").write_text(json.dumps(build_options(), indent=2))

@@ -141,7 +141,11 @@ def main() -> int:
             failures.append(f"{season} schedule")
             continue
         first, last = write_season_schedule(args.root, season, games)
-        write_season_games(args.root, season, games)
+        try:
+            write_season_games(args.root, season, games)
+        except Exception:
+            logging.exception("games %s: failed", season)
+            failures.append(f"{season} games")
         if "lineups" in args.only:
             try:
                 fetch_lineups_season(args.root, season, games=games)

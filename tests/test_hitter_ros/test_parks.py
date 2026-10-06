@@ -93,6 +93,13 @@ def _players():
     return pd.DataFrame(rows)
 
 
+def _schedule(team_games):
+    """The schedule behind ``team_games``: one row per game."""
+    return team_games.drop_duplicates(["season", "game_pk"])[
+        ["season", "game_pk", "venue_id", "home_team_id"]
+    ]
+
+
 def test_park_inputs_for_a_row(monkeypatch):
     monkeypatch.setattr(parks, "SHRINK_PA", 320.0)
     games = pd.concat([_league(2023), _league(2024)])
@@ -105,7 +112,7 @@ def test_park_inputs_for_a_row(monkeypatch):
             "team_id": [COL, COL],
         }
     )
-    out = build_park_features(table, games, _players()).set_index("week")
+    out = build_park_features(table, games, _players(), _schedule(games)).set_index("week")
     assert list(out.columns) == ["player_id", "season", "as_of", *PARK_FEATURES]
     # Home park: Coors, measured on 2023 only (the seasons before 2024 in the data).
     assert out.loc[0, "park_home_avg"] == pytest.approx(1.5)
@@ -183,10 +190,97 @@ def test_load_park_inputs_refuses_a_stale_or_unknown_file(tmp_path):
     with pytest.raises(ValueError, match="not the current"):
         load_park_inputs(table, tmp_path, "p3")
     path.with_suffix(".json").write_text(json.dumps(build_options()))
-    assert list(load_park_inputs(table, tmp_path, "p3").columns) == PARK_FEATURES
+    x, options = load_park_inputs(table, tmp_path, "p3")
+    assert list(x.columns) == PARK_FEATURES and options == build_options()
 
 
 def test_park_inputs_are_on_by_default():
     from fantasy_baseball.hitter_ros.net import NetConfig
 
     assert NetConfig().parks == "p3"
+
+
+def test_home_park_comes_from_the_schedule_before_any_home_game(monkeypatch):
+    """Opening day of a season Colorado opens on the road: no home game played yet, but
+    the schedule already says Coors."""
+    monkeypatch.setattr(parks, "SHRINK_PA", 320.0)
+    games = _league(2023)
+    upcoming = pd.DataFrame(
+        {
+            "season": [2024] * 2,
+            "game_pk": [1, 2],
+            "venue_id": [COORS, PETCO],
+            "home_team_id": [COL, SD],
+        }
+    )
+    table = pd.DataFrame(
+        {
+            "player_id": [7],
+            "season": [2024],
+            "week": [0],
+            "as_of": pd.to_datetime(["2024-04-01"]),
+            "team_id": [COL],
+        }
+    )
+    out = build_park_features(table, games, _players(), pd.concat([_schedule(games), upcoming]))
+    assert out.loc[0, "park_home_avg"] == pytest.approx(1.5)
+
+
+def test_a_doubleheader_at_two_parks_counts_both_games(monkeypatch):
+    monkeypatch.setattr(parks, "SHRINK_PA", 320.0)
+    games = pd.concat([_league(2023), _league(2024)])
+    player = pd.DataFrame(
+        {
+            "season": 2024,
+            "player_id": 7,
+            "game_date": [date(2024, 6, 1)] * 2,
+            "venue_id": [COORS, PETCO],
+            "pa": [4, 4],
+        }
+    )
+    table = pd.DataFrame(
+        {
+            "player_id": [7],
+            "season": [2024],
+            "week": [5],
+            "as_of": pd.to_datetime(["2024-06-02"]),
+            "team_id": [COL],
+        }
+    )
+    out = build_park_features(table, games, player, _schedule(games))
+    assert out.loc[0, "park_std_avg"] == pytest.approx((1.5 + 0.75) / 2)
+
+
+def test_a_season_without_a_games_file_is_an_error(tmp_path):
+    box = dict.fromkeys(COUNTS, 1)
+    for season in (2023, 2024):
+        lineups = pd.DataFrame(
+            [
+                {
+                    "game_pk": season,
+                    "game_date": f"{season}-05-01",
+                    "team_id": COL,
+                    "player_id": 7,
+                    **box,
+                }
+            ]
+        )
+        _write(tmp_path / "lineups" / f"{season}.parquet", lineups)
+    with pytest.raises(ValueError, match="no games files"):
+        load_team_games(connect(tmp_path))
+    games = pd.DataFrame(
+        [
+            {
+                "game_pk": 2024,
+                "season": 2024,
+                "game_date": date(2024, 5, 1),
+                "venue_id": COORS,
+                "home_team_id": COL,
+                "away_team_id": SD,
+                "played": True,
+            }
+        ]
+    )
+    _write(tmp_path / "games" / "2024.parquet", games)
+    with pytest.raises(ValueError, match=r"no games file for seasons \[2023\]"):
+        load_player_games(connect(tmp_path))

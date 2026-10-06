@@ -469,9 +469,10 @@ def main() -> int:
         logger.info("added %d minor-league features (%s)", len(MILB_FEATURES), config.milb)
     else:
         milb_build = None
+    parks_build = None
     if config.parks != "none":
         try:
-            parks = load_park_inputs(table, TABLE.parent, config.parks)
+            parks, parks_build = load_park_inputs(table, TABLE.parent, config.parks)
         except ValueError as err:
             parser.error(str(err))
         x_all = pd.concat([x_all, parks], axis=1)
@@ -513,6 +514,7 @@ def main() -> int:
         "train_seasons": args.train_seasons,
         "first_train_season": args.first_train_season,
         "milb_build": milb_build,  # the minor-league file's build options
+        "parks_build": parks_build,  # the park file's build options
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))

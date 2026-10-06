@@ -11,8 +11,10 @@ changing every ``ros_*`` value leaves the inputs unchanged.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pandas as pd
@@ -270,13 +272,27 @@ def check_aligned(table: pd.DataFrame, frame: pd.DataFrame) -> str | None:
 
 
 def load_feature_file(
-    table: pd.DataFrame, path: Path, columns: list[str], rebuild: str
-) -> pd.DataFrame:
-    """``columns`` of the feature file at ``path``, aligned to ``table``'s rows.
-    ValueError ending in ``rebuild`` (how to make the file) when it is missing, lacks a
-    column, or was built for another table."""
+    table: pd.DataFrame,
+    path: Path,
+    columns: list[str],
+    rebuild: str,
+    expected_options: dict[str, Any] | None = None,
+    expected_label: str = "the expected",
+) -> tuple[pd.DataFrame, dict[str, Any]]:
+    """``columns`` of the feature file at ``path``, aligned to ``table``'s rows, and the
+    build options saved next to it (``<file>.json``; ``{}`` without one). ValueError
+    ending in ``rebuild`` (how to make the file) when it is missing, was built with
+    options other than ``expected_options`` (when given), lacks a column, or was built
+    for another table."""
     if not path.exists():
         raise ValueError(f"{path} is missing; {rebuild}")
+    options_path = path.with_suffix(".json")
+    options: dict[str, Any] = json.loads(options_path.read_text()) if options_path.exists() else {}
+    if expected_options is not None and options != expected_options:
+        raise ValueError(
+            f"{path} was built with {options or 'unknown options'}, not {expected_label} "
+            f"{expected_options}; {rebuild}"
+        )
     frame = pd.read_parquet(path)
     missing = [c for c in columns if c not in frame.columns]
     if missing:
@@ -284,7 +300,7 @@ def load_feature_file(
     problem = check_aligned(table, frame)
     if problem:
         raise ValueError(f"{path}: {problem}; {rebuild}")
-    return aligned_inputs(table, frame, columns)
+    return aligned_inputs(table, frame, columns), options
 
 
 def aligned_inputs(table: pd.DataFrame, frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
