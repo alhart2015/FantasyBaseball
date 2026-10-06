@@ -68,12 +68,14 @@ STATS = ("avg", *PER_PA, "babip")
 KEYS = ["season", "sport_id", "league_id"]
 
 
-def load_milb_lines(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
+def load_milb_lines(conn: duckdb.DuckDBPyConnection, by_window: bool = False) -> pd.DataFrame:
     """Season x player x level x league totals from the weekly lines (whose league is
     the window's club, so a traded player's PA land in the right league), with the
-    player's season age at the level. Pitchers and ``EXCLUDED_LEAGUES`` left out."""
+    player's season age at the level. Pitchers and ``EXCLUDED_LEAGUES`` left out.
+    ``by_window``: one row per weekly window too (``window_end``), not season totals."""
     sums = ", ".join(f'sum("stat.{v}") AS {k}' for k, v in COUNTS.items())
     excluded = ", ".join(str(i) for i in EXCLUDED_LEAGUES)
+    window = ", w.window_end" if by_window else ""
     return conn.execute(
         f"""
         WITH age AS (
@@ -81,13 +83,13 @@ def load_milb_lines(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
             FROM milb_season GROUP BY ALL
         )
         SELECT w.season, w."player.id" AS player_id, w.sport_id, w."league.id" AS league_id,
-               {sums}, any_value(age.age) AS age
+               {sums}, any_value(age.age) AS age{window}
         FROM milb_weekly w
         LEFT JOIN age ON age.season = w.season AND age.player_id = w."player.id"
                      AND age.sport_id = w.sport_id
         WHERE coalesce(w."position.type", '') <> 'Pitcher'
           AND w."league.id" NOT IN ({excluded})
-        GROUP BY w.season, w."player.id", w.sport_id, w."league.id"
+        GROUP BY w.season, w."player.id", w.sport_id, w."league.id"{window}
         HAVING sum("stat.plateAppearances") > 0
         """
     ).df()
@@ -125,23 +127,26 @@ def rates(counts: pd.DataFrame) -> pd.DataFrame:
     return out[list(STATS)]
 
 
-def league_rates(lines: pd.DataFrame) -> pd.DataFrame:
-    """Rates per season x level x league (index ``KEYS``). A league-season under
-    ``MIN_LEAGUE_PA`` gets its level-season's pooled rates."""
+def league_rates(lines: pd.DataFrame, keys: list[str] = KEYS) -> pd.DataFrame:
+    """Rates per season x level x league (index ``keys``, which end in ``league_id``;
+    add a column such as ``window_end`` to keep periods apart). A league under
+    ``MIN_LEAGUE_PA`` in its period gets its level's pooled rates for the period."""
     counts = list(COUNTS)
-    league = lines.groupby(KEYS)[counts].sum()
-    level = lines.groupby(["season", "sport_id"])[counts].sum()
+    league = lines.groupby(keys)[counts].sum()
+    level = lines.groupby(keys[:-1])[counts].sum()
     small = league["pa"] < MIN_LEAGUE_PA
-    pooled = level.reindex(league.index.droplevel("league_id")).set_axis(league.index)
+    pooled = level.reindex(league.index.droplevel(keys[-1])).set_axis(league.index)
     return rates(league.where(~small, pooled))
 
 
-def relative_lines(lines: pd.DataFrame, by_league: pd.DataFrame | None = None) -> pd.DataFrame:
-    """``lines`` plus ``rel_<stat>``: each rate over its league-season's rate.
-    ``by_league``: ``league_rates`` to divide by (default: from ``lines`` itself)."""
-    ref = league_rates(lines) if by_league is None else by_league
+def relative_lines(
+    lines: pd.DataFrame, by_league: pd.DataFrame | None = None, keys: list[str] = KEYS
+) -> pd.DataFrame:
+    """``lines`` plus ``rel_<stat>``: each rate over its league's rate in the same
+    period. ``by_league``: ``league_rates`` to divide by (default: from ``lines``)."""
+    ref = league_rates(lines, keys) if by_league is None else by_league
     own = rates(lines)
-    league = ref.reindex(pd.MultiIndex.from_frame(lines[KEYS])).set_axis(lines.index)
+    league = ref.reindex(pd.MultiIndex.from_frame(lines[keys])).set_axis(lines.index)
     return lines.assign(**{f"rel_{s}": own[s] / league[s] for s in STATS})
 
 
@@ -162,12 +167,30 @@ def player_levels(rel: pd.DataFrame) -> pd.DataFrame:
         out[f"rel_{s}"] = sums[f"_w_{s}"] / sums[f"_n_{s}"].where(sums[f"_n_{s}"] > 0)
     out["age"] = rel.groupby(keys)["age"].max()
     out = out.reset_index()
-    has_age = out["age"].notna()
-    level_age = (out["age"] * out["pa"])[has_age].groupby(
-        [out["season"], out["sport_id"]]
-    ).sum() / out["pa"][has_age].groupby([out["season"], out["sport_id"]]).sum()
-    mean_age = level_age.reindex(pd.MultiIndex.from_frame(out[["season", "sport_id"]]))
+    mean_age = level_mean_ages(out).reindex(pd.MultiIndex.from_frame(out[["season", "sport_id"]]))
     return out.assign(age_vs_level=out["age"].to_numpy() - mean_age.to_numpy())
+
+
+def level_mean_ages(levels: pd.DataFrame) -> pd.Series:
+    """PA-weighted mean age per (season, sport_id), over rows with an age (MLB rows
+    have none)."""
+    known = levels[levels["age"].notna()]
+    group = [known["season"], known["sport_id"]]
+    ages: pd.Series = (known["age"] * known["pa"]).groupby(group).sum() / known["pa"].groupby(
+        group
+    ).sum()
+    return ages
+
+
+def season_totals(window_lines: pd.DataFrame) -> pd.DataFrame:
+    """``load_milb_lines(by_window=True)`` rows summed back to season x player x level x
+    league totals: the same as ``load_milb_lines()`` without a second scan."""
+    keys = ["season", "player_id", "sport_id", "league_id"]
+    return (
+        window_lines.groupby(keys)
+        .agg(**{c: (c, "sum") for c in COUNTS}, age=("age", "max"))
+        .reset_index()
+    )
 
 
 def _step(levels: pd.DataFrame, lo: int, hi: int, seasons: tuple[int, int]) -> pd.Series:

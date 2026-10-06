@@ -19,6 +19,7 @@ Usage:
     python scripts/build_hitter_ros_table.py      # if the table is stale
     python scripts/train_hitter_ros.py --name baseline-mlp
     python scripts/train_hitter_ros.py --name wider --hidden 256 128 --dropout 0.2
+    python scripts/build_hitter_ros_milb.py --name rookies-s100   # default minor-league inputs
     python scripts/build_hitter_ros_pa_tokens.py   # once, for sequence runs
     python scripts/train_hitter_ros.py --name 003a-gru --seq gru
 """
@@ -59,6 +60,7 @@ from fantasy_baseball.hitter_ros.horizons import (
     score_horizons,
     write_horizon_scores,
 )
+from fantasy_baseball.hitter_ros.milb_features import MILB_FEATURES, load_milb_inputs
 from fantasy_baseball.hitter_ros.net import (
     COUNT_LOSS_TARGETS,
     EVAL_BATCH,
@@ -311,6 +313,12 @@ def main() -> int:
         help="add the last 7 and 14 days as input windows (#419)",
     )
     parser.add_argument(
+        "--milb",
+        default=defaults.milb,
+        help="add graded minor-league inputs (#435) from data/hitter_ros/milb_<name>.parquet "
+        "(build them first with scripts/build_hitter_ros_milb.py --name <name>; none = off)",
+    )
+    parser.add_argument(
         "--head-layers",
         type=_non_negative_int,
         default=defaults.head_layers,
@@ -399,6 +407,7 @@ def main() -> int:
             horizon_weights=args.horizon_weights,
             recent_inputs=args.recent_inputs,
             head_layers=args.head_layers,
+            milb=args.milb,
             count_loss=args.count_loss,
         )
     except ValueError as err:
@@ -442,6 +451,15 @@ def main() -> int:
             parser.error(f"{probes_file}: {problem}; rebuild it for this table")
         x_all = pd.concat([x_all, probe_inputs(table, probes)], axis=1)
         logger.info("added %d probe features from %s", len(PROBE_FEATURES), probes_file.name)
+    if config.milb != "none":
+        try:
+            milb, milb_build = load_milb_inputs(table, TABLE.parent, config.milb)
+        except ValueError as err:
+            parser.error(str(err))
+        x_all = pd.concat([x_all, milb], axis=1)
+        logger.info("added %d minor-league features (%s)", len(MILB_FEATURES), config.milb)
+    else:
+        milb_build = None
     y_all, w_all = target_frame(table, HORIZONS if config.horizons else ())
     batcher = None
     if config.seq != "none":
@@ -478,6 +496,7 @@ def main() -> int:
         "shuffle_test_order": args.shuffle_test_order,
         "train_seasons": args.train_seasons,
         "first_train_season": args.first_train_season,
+        "milb_build": milb_build,  # the minor-league file's build options
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))

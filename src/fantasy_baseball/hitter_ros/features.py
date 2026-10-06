@@ -245,6 +245,39 @@ def input_frame(
     return pd.DataFrame(cols, index=t.index)
 
 
+# A feature file built for the table (probes #417, minor-league inputs #435) has one row
+# per table row, keyed by these, plus the row's as-of date to check it against.
+ROW_KEYS = ["player_id", "season", "week"]
+
+
+def check_aligned(table: pd.DataFrame, frame: pd.DataFrame) -> str | None:
+    """Why a feature file ``frame`` can't be used with ``table`` (None if it can):
+    duplicate keys, a table row it lacks, or an as-of date that differs (a file built for
+    another table would have cut its history at the wrong date)."""
+    if frame.duplicated(ROW_KEYS).any():
+        return "it has duplicate (player, season, week) rows"
+    merged = table[[*ROW_KEYS, "as_of"]].merge(
+        frame[[*ROW_KEYS, "as_of"]], on=ROW_KEYS, how="left", suffixes=("", "_file")
+    )
+    missing = int(merged["as_of_file"].isna().sum())
+    if missing:
+        return f"it lacks {missing} table rows"
+    moved = int((pd.to_datetime(merged["as_of"]) != pd.to_datetime(merged["as_of_file"])).sum())
+    if moved:
+        return f"{moved} rows have a different as-of date than the table"
+    return None
+
+
+def aligned_inputs(table: pd.DataFrame, frame: pd.DataFrame, columns: list[str]) -> pd.DataFrame:
+    """``columns`` of a feature file aligned to ``table``'s rows by ``ROW_KEYS``; NaN for
+    a row the file doesn't cover."""
+    merged = table[ROW_KEYS].merge(
+        frame[[*ROW_KEYS, *columns]], on=ROW_KEYS, how="left", validate="one_to_one"
+    )
+    merged.index = table.index
+    return merged[columns]
+
+
 # The counts the five answer rates are built from.
 COUNTS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
 

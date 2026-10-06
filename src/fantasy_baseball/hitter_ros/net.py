@@ -114,6 +114,14 @@ class NetConfig:
     horizon_weights: list[float] = field(default_factory=lambda: [0.25, 0.5, 0.75, 1.0])
     recent_inputs: bool = False
     head_layers: int = 0
+    # Minor-league inputs (#435): a graded minor-league line per window, from
+    # data/hitter_ros/milb_<name>.parquet (hitter_ros.milb_features). "none": none.
+    # Default from #435: only for players under 300 MLB PA (vets' rehab stints made
+    # noise), small samples shrunk 100 PA. Over 3 seeds it closed most of the rookie gap
+    # to FanGraphs (preseason HR -7.0 -> 0.0, SB -8.9 -> -0.4, AVG -12.5 -> -4.5) and left
+    # vets within seed noise. Build: build_hitter_ros_milb.py --name rookies-s100
+    # --vets-blank-from 300 --shrink-pa 100.
+    milb: str = "rookies-s100"
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):
