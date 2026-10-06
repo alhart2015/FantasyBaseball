@@ -101,14 +101,32 @@ def test_league_rates_with_pieces(table):
     assert avg_from_pieces(a.k_ab, a.hr_ab, a.babip) == pytest.approx(a.avg)
 
 
+def test_pieces_are_on_by_default():
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.net import NetConfig
+
+    assert NetConfig().avg_pieces == "extra"
+
+
+def test_fit_season_refuses_targets_without_pieces(table):
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.net import NetConfig
+    from scripts.train_hitter_ros import fit_season
+
+    y_all, w_all = target_frame(table, (25,))
+    with pytest.raises(ValueError, match="pieces"):
+        fit_season(table, input_frame(table), y_all, w_all, 2025, NetConfig(avg_pieces="extra"))
+    y_all, w_all = target_frame(table, (25,), pieces=True)
+    with pytest.raises(ValueError, match="head_layers"):
+        fit_season(table, input_frame(table), y_all, w_all, 2025, NetConfig(head_layers=8))
+
+
 def test_piece_config_and_loss():
     torch = pytest.importorskip("torch")
     from fantasy_baseball.hitter_ros.net import NetConfig, count_loss, device
 
     with pytest.raises(ValueError):
         NetConfig(avg_pieces="all")
-    with pytest.raises(ValueError):
-        NetConfig(avg_pieces="extra", head_layers=8)
     with pytest.raises(ValueError):
         NetConfig(avg_pieces="derived", avg_loss="binomial")
     stats = [*TARGETS, *PIECES]
