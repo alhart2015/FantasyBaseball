@@ -26,6 +26,11 @@ RECENT_WINDOWS = ("l7", "l14")
 # Answers: rest-of-season rates, and the counts that weight each one in the loss.
 TARGETS = ("r", "hr", "rbi", "sb", "avg")
 TARGET_WEIGHT = {"r": "ros_pa", "hr": "ros_pa", "rbi": "ros_pa", "sb": "ros_pa", "avg": "ros_ab"}
+# AVG as its pieces (#433): AVG = HR/AB + BABIP x (1 - K/AB - HR/AB), with balls in play
+# BIP = AB - K - HR (so the identity is exact; sacrifice flies aren't in AB). Each piece
+# is a success rate out of trials: K and HR out of AB, hits on balls in play out of BIP.
+PIECES = ("k_ab", "hr_ab", "babip")
+PIECE_COUNTS = ("ab", "h", "hr", "k")
 
 
 def _div(num: pd.Series, den: pd.Series) -> pd.Series:
@@ -136,7 +141,7 @@ def _era_inputs(t: pd.DataFrame, mode: str, player: dict[str, pd.Series]) -> dic
     return out
 
 
-def league_reference(t: pd.DataFrame) -> pd.DataFrame:
+def league_reference(t: pd.DataFrame, *, pieces: bool = False) -> pd.DataFrame:
     """Each row's league rates for the five answers, known on its as-of date: the last
     three seasons plus this season before the date, pooled. Used to predict a player
     relative to his league and scale back (``relative_target``). Across 2011-2026 the
@@ -144,16 +149,19 @@ def league_reference(t: pd.DataFrame) -> pd.DataFrame:
     season alone did (#421).
 
     NaN for a row with no earlier season in the store (its first season): a reference
-    built from a few days of this season's games would be mostly noise."""
+    built from a few days of this season's games would be mostly noise.
+
+    ``pieces``: also the ``PIECES`` rates (#433)."""
+    names = [*COUNTS, "k"] if pieces else COUNTS
     counts = pd.DataFrame(
-        {c: t[f"lg_p3_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in COUNTS},
+        {c: t[f"lg_p3_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in names},
         index=t.index,
     )
-    ref = rates_from_counts(counts)
+    ref = _with_pieces(counts, pieces)
     return ref.where(t["lg_p3_pa"].astype(float) > 0)
 
 
-def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
+def league_answer_rates(t: pd.DataFrame, *, pieces: bool = False) -> pd.DataFrame:
     """Each row's league rates over its answer window: every table row of the same
     season and as-of week, ``ros_*`` counts pooled. The table has a row for every
     hitter-season who plays on or after the date, so this is the league's rest of the
@@ -162,13 +170,21 @@ def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
     Uses the answers, so it is a **training target denominator only** (#424): dividing
     by it asks "how much better than the league will he be", which needs no forecast of
     the league's level. Never an input, and never used to turn a prediction into rates.
+
+    ``pieces``: also the ``PIECES`` rates (#433).
     """
     keys = [t["season"], t["week"]]
+    names = [*COUNTS, "k"] if pieces else COUNTS
     counts = pd.DataFrame(
-        {c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum") for c in COUNTS},
+        {c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum") for c in names},
         index=t.index,
     )
-    return rates_from_counts(counts)
+    return _with_pieces(counts, pieces)
+
+
+def _with_pieces(counts: pd.DataFrame, pieces: bool) -> pd.DataFrame:
+    rates = rates_from_counts(counts)
+    return pd.concat([rates, piece_rates(counts)], axis=1) if pieces else rates
 
 
 # Table columns the steal inputs read (#413); a table built before #413 lacks them.
@@ -326,30 +342,51 @@ def rates_from_counts(df: pd.DataFrame) -> pd.DataFrame:
     return out[list(TARGETS)]
 
 
-def horizon_columns(horizons: tuple[int, ...] = ()) -> list[str]:
-    """Output column names: the rest-of-season ``TARGETS``, then ``n{N}_{stat}`` for each
-    short horizon (#419)."""
-    return [*TARGETS, *(f"n{n}_{s}" for n in horizons for s in TARGETS)]
+def piece_rates(df: pd.DataFrame) -> pd.DataFrame:
+    """The ``PIECES`` rates from counts ``ab, h, hr, k`` (#433): K/AB, HR/AB and BABIP =
+    (H - HR) / (AB - K - HR); NaN with no AB (no BIP for BABIP)."""
+    ab, h, hr, k = (df[c].astype(float) for c in PIECE_COUNTS)
+    return pd.DataFrame(
+        {"k_ab": _div(k, ab), "hr_ab": _div(hr, ab), "babip": _div(h - hr, ab - k - hr)},
+        index=df.index,
+    )
+
+
+def avg_from_pieces(k_ab: Any, hr_ab: Any, babip: Any) -> Any:
+    """AVG from its ``PIECES`` (#433): HR/AB + BABIP x (1 - K/AB - HR/AB)."""
+    return hr_ab + babip * (1 - k_ab - hr_ab)
+
+
+def horizon_columns(horizons: tuple[int, ...] = (), stats: tuple[str, ...] = TARGETS) -> list[str]:
+    """Output column names: the rest-of-season ``stats`` (default ``TARGETS``), then
+    ``n{N}_{stat}`` for each short horizon (#419)."""
+    return [*stats, *(f"n{n}_{s}" for n in horizons for s in stats)]
 
 
 def target_stat(column: str) -> str:
-    """The stat of an output column: ``n25_hr`` -> ``hr``; ``hr`` -> ``hr``."""
-    return column.rsplit("_", 1)[-1] if column.startswith("n") else column
+    """The stat of an output column: ``n25_hr`` -> ``hr``; ``hr`` -> ``hr``;
+    ``n25_k_ab`` -> ``k_ab``."""
+    return column.split("_", 1)[1] if column_horizon(column) != "ros" else column
 
 
 def column_horizon(column: str) -> str:
     """The horizon of an output column: ``n25_hr`` -> ``n25``; ``hr`` -> ``ros``."""
-    return column.split("_", 1)[0] if column.startswith("n") else "ros"
+    head = column.split("_", 1)[0]
+    return head if head[:1] == "n" and head[1:].isdigit() else "ros"
 
 
 def target_frame(
-    t: pd.DataFrame, horizons: tuple[int, ...] = ()
+    t: pd.DataFrame, horizons: tuple[int, ...] = (), *, pieces: bool = False
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """(rates, loss weights), one column per ``horizon_columns(horizons)``: rest of season,
     then the next N PA (#419). A rate with no PA/AB -- or a horizon he didn't reach -- is
-    NaN with weight 0. Weights are the PA (AB for AVG) in that answer's window."""
+    NaN with weight 0. Weights are the PA (AB for AVG) in that answer's window.
+
+    ``pieces``: also the ``PIECES`` per window (#433), after all of those columns,
+    weighted by their trials (AB for K/AB and HR/AB, BIP for BABIP)."""
+    windows = (("ros_", ""), *((f"ros_n{n}_", f"n{n}_") for n in horizons))
     rate_parts, weight_parts = [], []
-    for prefix, tag in (("ros_", ""), *((f"ros_n{n}_", f"n{n}_") for n in horizons)):
+    for prefix, tag in windows:
         counts = t[[f"{prefix}{c}" for c in COUNTS]].rename(
             columns=lambda c, p=prefix: c.removeprefix(p)
         )
@@ -362,6 +399,16 @@ def target_frame(
             index=t.index,
         )
         weight_parts.append(weights.fillna(0.0))
+    for prefix, tag in windows if pieces else ():
+        counts = pd.DataFrame(
+            {c: t[f"{prefix}{c}"].astype(float) for c in PIECE_COUNTS}, index=t.index
+        )
+        rate_parts.append(piece_rates(counts).add_prefix(tag))
+        ab, bip = counts["ab"], counts["ab"] - counts["k"] - counts["hr"]
+        weights = pd.DataFrame(
+            {f"{tag}k_ab": ab, f"{tag}hr_ab": ab, f"{tag}babip": bip}, index=t.index
+        )
+        weight_parts.append(weights.clip(lower=0).fillna(0.0))
     return pd.concat(rate_parts, axis=1), pd.concat(weight_parts, axis=1)
 
 
