@@ -43,6 +43,11 @@ LOG_RATE_CLAMP = (-15.0, 8.0)
 # avg_loss (#433): "mse" = squared error on the standardized AVG; "binomial" = each AB is
 # a trial, the output is the log-odds of a hit.
 AVG_LOSSES = ("mse", "binomial")
+# avg_pieces (#433): "none"; "extra" = also predict AVG's pieces (features.PIECES), AVG
+# still predicted directly; "derived" = predict the pieces and build AVG from them.
+AVG_PIECES = ("none", "extra", "derived")
+# Each piece's loss weight: the three together count like one stat.
+PIECE_LOSS_WEIGHT = 1 / 3
 
 
 @dataclass
@@ -112,6 +117,12 @@ class NetConfig:
     # (logit) of AVG, every horizon. With a relative target the output is the log-odds
     # relative to the league: the league's logit is added to it (an offset), not divided.
     avg_loss: str = "mse"
+    # AVG as its pieces (#433): K/AB, HR/AB and BABIP (features.PIECES), each with a
+    # binomial loss (K and HR out of AB, hits out of balls in play), every horizon, each
+    # weighted PIECE_LOSS_WEIGHT. "extra": extra outputs that only shape the shared
+    # body; AVG is still its own output. "derived": no AVG output; AVG is built from the
+    # predicted pieces (features.avg_from_pieces).
+    avg_pieces: str = "none"
     # Short horizons (#419): also predict the next 25 / 100 / 250 PA, each with its own
     # 5 outputs on the shared body (so one more "head" per horizon). horizon_weights:
     # how much each horizon's loss counts, for next 25 / 100 / 250 PA and rest of season.
@@ -161,6 +172,12 @@ class NetConfig:
             raise ValueError(f"unknown count_loss {self.count_loss!r}")
         if self.avg_loss not in AVG_LOSSES:
             raise ValueError(f"unknown avg_loss {self.avg_loss!r}")
+        if self.avg_pieces not in AVG_PIECES:
+            raise ValueError(f"unknown avg_pieces {self.avg_pieces!r}")
+        if self.avg_pieces != "none" and self.head_layers:
+            raise ValueError("head_layers splits outputs into groups of 5; no avg_pieces")
+        if self.avg_pieces == "derived" and self.avg_loss != "mse":
+            raise ValueError("avg_pieces derived has no AVG output for avg_loss to apply to")
         if self.relative_target not in RELATIVE_TARGETS:
             raise ValueError(f"unknown relative_target {self.relative_target!r}")
         from fantasy_baseball.hitter_ros.features import ERA_MODES
@@ -458,10 +475,13 @@ def count_loss(
     rest-of-season columns). A Poisson or binomial target's scale is 1 / its deviance
     when predicting the weighted average rate on these rows (``y`` rates, ``w`` PA or
     AB), times its ``target_weights`` entry (default 1)."""
-    from fantasy_baseball.hitter_ros.features import TARGETS
+    from fantasy_baseball.hitter_ros.features import PIECES, TARGETS
 
     names = COUNT_LOSS_TARGETS[config.count_loss]
-    binomial_names = ("avg",) if config.avg_loss == "binomial" else ()
+    binomial_names = (
+        *(("avg",) if config.avg_loss == "binomial" else ()),
+        *(PIECES if config.avg_pieces != "none" else ()),
+    )
     unweighted = target_weights is None or np.all(np.asarray(target_weights) == 1)
     if not names and not binomial_names and unweighted:
         return None
