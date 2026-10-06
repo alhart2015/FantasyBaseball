@@ -162,3 +162,31 @@ def test_loaders_join_box_scores_to_ballparks(tmp_path):
     assert load_player_games(conn)["player_id"].tolist() == [7, 8] or set(
         load_player_games(conn)["player_id"]
     ) == {7, 8}
+
+
+def test_load_park_inputs_refuses_a_stale_or_unknown_file(tmp_path):
+    import json
+
+    from fantasy_baseball.hitter_ros.parks import build_options, load_park_inputs, parks_path
+
+    table = pd.DataFrame(
+        {"player_id": [7], "season": [2024], "week": [0], "as_of": pd.to_datetime(["2024-05-01"])}
+    )
+    with pytest.raises(ValueError, match="is missing"):
+        load_park_inputs(table, tmp_path, "p3")
+    built = table.assign(**dict.fromkeys(PARK_FEATURES, 1.0))
+    path = parks_path(tmp_path, "p3")
+    built.to_parquet(path, index=False)
+    with pytest.raises(ValueError, match="unknown options"):
+        load_park_inputs(table, tmp_path, "p3")
+    path.with_suffix(".json").write_text(json.dumps({**build_options(), "shrink_pa": 1.0}))
+    with pytest.raises(ValueError, match="not the current"):
+        load_park_inputs(table, tmp_path, "p3")
+    path.with_suffix(".json").write_text(json.dumps(build_options()))
+    assert list(load_park_inputs(table, tmp_path, "p3").columns) == PARK_FEATURES
+
+
+def test_park_inputs_are_on_by_default():
+    from fantasy_baseball.hitter_ros.net import NetConfig
+
+    assert NetConfig().parks == "p3"

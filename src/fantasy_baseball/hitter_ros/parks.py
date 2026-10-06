@@ -28,12 +28,13 @@ quarters. A park with no games in the range has no factor.
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.features import ROW_KEYS
+from fantasy_baseball.hitter_ros.features import ROW_KEYS, load_feature_file
 from fantasy_baseball.hitter_ros.milb_grade import COUNTS, rates
 
 PARK_STATS = ("avg", "hr", "r", "babip", "k", "bb")
@@ -46,6 +47,29 @@ PARK_FEATURES = [f"park_{w}_{s}" for w in PARK_WINDOWS for s in PARK_STATS]
 def parks_path(root: Path, name: str) -> Path:
     """Where ``scripts/build_hitter_ros_parks.py --name <name>`` writes the features."""
     return root / f"parks_{name}.parquet"
+
+
+def build_options() -> dict[str, float]:
+    """The settings a park file is built with; saved next to it as ``parks_<name>.json``."""
+    return {"park_seasons": float(PARK_SEASONS), "shrink_pa": SHRINK_PA}
+
+
+def load_park_inputs(table: pd.DataFrame, root: Path, name: str) -> pd.DataFrame:
+    """``PARK_FEATURES`` from ``parks_<name>.parquet`` under ``root``, aligned to
+    ``table``'s rows. ValueError, saying how to fix it, when the file is missing, stale
+    (built with other ``build_options``, e.g. before a constant changed), lacks a
+    feature, or was built for another table."""
+    path = parks_path(root, name)
+    rebuild = f"run scripts/build_hitter_ros_parks.py --name {name}"
+    options_path = path.with_suffix(".json")
+    if path.exists():
+        built = json.loads(options_path.read_text()) if options_path.exists() else None
+        if built != build_options():
+            raise ValueError(
+                f"{path} was built with {built or 'unknown options'}, not the current "
+                f"{build_options()}; {rebuild}"
+            )
+    return load_feature_file(table, path, PARK_FEATURES, rebuild)
 
 
 def load_team_games(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:

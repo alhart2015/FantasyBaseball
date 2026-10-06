@@ -20,6 +20,7 @@ Usage:
     python scripts/train_hitter_ros.py --name baseline-mlp
     python scripts/train_hitter_ros.py --name wider --hidden 256 128 --dropout 0.2
     python scripts/build_hitter_ros_milb.py --name rookies-s100   # default minor-league inputs
+    python scripts/build_hitter_ros_parks.py --name p3            # default park inputs
     python scripts/build_hitter_ros_pa_tokens.py   # once, for sequence runs
     python scripts/train_hitter_ros.py --name 003a-gru --seq gru
 """
@@ -51,7 +52,6 @@ from fantasy_baseball.hitter_ros.features import (
     input_frame,
     league_answer_rates,
     league_reference,
-    load_feature_file,
     target_frame,
     target_stat,
 )
@@ -72,7 +72,7 @@ from fantasy_baseball.hitter_ros.net import (
     predict,
     train,
 )
-from fantasy_baseball.hitter_ros.parks import PARK_FEATURES, parks_path
+from fantasy_baseball.hitter_ros.parks import PARK_FEATURES, load_park_inputs
 from fantasy_baseball.hitter_ros.probes import (
     PROBE_FEATURES,
     check_probes,
@@ -471,12 +471,7 @@ def main() -> int:
         milb_build = None
     if config.parks != "none":
         try:
-            parks = load_feature_file(
-                table,
-                parks_path(TABLE.parent, config.parks),
-                PARK_FEATURES,
-                f"run scripts/build_hitter_ros_parks.py --name {config.parks}",
-            )
+            parks = load_park_inputs(table, TABLE.parent, config.parks)
         except ValueError as err:
             parser.error(str(err))
         x_all = pd.concat([x_all, parks], axis=1)

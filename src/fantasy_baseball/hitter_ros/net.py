@@ -124,7 +124,10 @@ class NetConfig:
     milb: str = "rookies-s100"
     # Park inputs (#433): park factors of his team's home park and of the parks he hit in
     # (hitter_ros.parks), from data/hitter_ros/parks_<name>.parquet. "none": none.
-    parks: str = "none"
+    # Default from #433: over 3 seeds the preseason AVG gap to FanGraphs went from -0.55
+    # to -0.01 and Coors hitters' AVG bias from -8.7 to -3.2 points, other stats within
+    # seed noise. Build: build_hitter_ros_parks.py --name p3.
+    parks: str = "p3"
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):
