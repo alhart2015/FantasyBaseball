@@ -119,6 +119,10 @@ def fit_season(
     in_weeks = WEEKS[weeks](table["week"])
     pieces = config.avg_pieces != "none"
     out_cols = list(y_all.columns)  # what predictions hold, whatever the net outputs
+    if pieces and not set(PIECES) <= set(out_cols):
+        raise ValueError(f"avg_pieces {config.avg_pieces}: build targets with pieces=True")
+    if pieces and config.head_layers:
+        raise ValueError("head_layers splits outputs into groups of 5; use --avg-pieces none")
     if config.avg_pieces == "derived":  # no AVG output: built from the pieces below
         keep = [c for c in out_cols if target_stat(c) != "avg"]
         y_all, w_all = y_all[keep], w_all[keep]
