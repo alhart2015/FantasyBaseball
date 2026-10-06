@@ -167,12 +167,30 @@ def player_levels(rel: pd.DataFrame) -> pd.DataFrame:
         out[f"rel_{s}"] = sums[f"_w_{s}"] / sums[f"_n_{s}"].where(sums[f"_n_{s}"] > 0)
     out["age"] = rel.groupby(keys)["age"].max()
     out = out.reset_index()
-    has_age = out["age"].notna()
-    level_age = (out["age"] * out["pa"])[has_age].groupby(
-        [out["season"], out["sport_id"]]
-    ).sum() / out["pa"][has_age].groupby([out["season"], out["sport_id"]]).sum()
-    mean_age = level_age.reindex(pd.MultiIndex.from_frame(out[["season", "sport_id"]]))
+    mean_age = level_mean_ages(out).reindex(pd.MultiIndex.from_frame(out[["season", "sport_id"]]))
     return out.assign(age_vs_level=out["age"].to_numpy() - mean_age.to_numpy())
+
+
+def level_mean_ages(levels: pd.DataFrame) -> pd.Series:
+    """PA-weighted mean age per (season, sport_id), over rows with an age (MLB rows
+    have none)."""
+    known = levels[levels["age"].notna()]
+    group = [known["season"], known["sport_id"]]
+    ages: pd.Series = (known["age"] * known["pa"]).groupby(group).sum() / known["pa"].groupby(
+        group
+    ).sum()
+    return ages
+
+
+def season_totals(window_lines: pd.DataFrame) -> pd.DataFrame:
+    """``load_milb_lines(by_window=True)`` rows summed back to season x player x level x
+    league totals: the same as ``load_milb_lines()`` without a second scan."""
+    keys = ["season", "player_id", "sport_id", "league_id"]
+    return (
+        window_lines.groupby(keys)
+        .agg(**{c: (c, "sum") for c in COUNTS}, age=("age", "max"))
+        .reset_index()
+    )
 
 
 def _step(levels: pd.DataFrame, lo: int, hi: int, seasons: tuple[int, int]) -> pd.Series:

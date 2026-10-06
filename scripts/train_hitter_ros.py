@@ -19,7 +19,7 @@ Usage:
     python scripts/build_hitter_ros_table.py      # if the table is stale
     python scripts/train_hitter_ros.py --name baseline-mlp
     python scripts/train_hitter_ros.py --name wider --hidden 256 128 --dropout 0.2
-    python scripts/build_hitter_ros_milb.py --name rookies-s100 --vets-blank-from 300         --shrink-pa 100                            # the default minor-league inputs
+    python scripts/build_hitter_ros_milb.py --name rookies-s100   # default minor-league inputs
     python scripts/build_hitter_ros_pa_tokens.py   # once, for sequence runs
     python scripts/train_hitter_ros.py --name 003a-gru --seq gru
 """
@@ -453,11 +453,13 @@ def main() -> int:
         logger.info("added %d probe features from %s", len(PROBE_FEATURES), probes_file.name)
     if config.milb != "none":
         try:
-            milb = load_milb_inputs(table, TABLE.parent, config.milb)
+            milb, milb_build = load_milb_inputs(table, TABLE.parent, config.milb)
         except ValueError as err:
             parser.error(str(err))
         x_all = pd.concat([x_all, milb], axis=1)
         logger.info("added %d minor-league features (%s)", len(MILB_FEATURES), config.milb)
+    else:
+        milb_build = None
     y_all, w_all = target_frame(table, HORIZONS if config.horizons else ())
     batcher = None
     if config.seq != "none":
@@ -494,6 +496,7 @@ def main() -> int:
         "shuffle_test_order": args.shuffle_test_order,
         "train_seasons": args.train_seasons,
         "first_train_season": args.first_train_season,
+        "milb_build": milb_build,  # the minor-league file's build options
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))

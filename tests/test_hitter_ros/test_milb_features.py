@@ -149,7 +149,9 @@ def test_shrink_pulls_a_small_sample_toward_its_levels_average(factors):
 def test_vets_can_get_no_minor_league_inputs(factors):
     table, season_lines, window_lines, mlb = _inputs()
     # Player 1 is a vet by week 2 (250 + 60 MLB PA); player 3 never is.
-    table = table.assign(car_pa=[250.0, 250.0, 0.0], std_pa=[0.0, 60.0, 0.0])
+    table = table.assign(
+        car_pa=[250.0, 250.0, 0.0], std_pa=[0.0, 60.0, 0.0], car_seasons_in_store=10
+    )
     out = build_milb_features(table, season_lines, window_lines, mlb, vet_min_pa=300)
     keyed = out.set_index(["player_id", "week"])
     vet = keyed.loc[(1, 2)]
@@ -165,18 +167,73 @@ def test_vets_can_get_no_minor_league_inputs(factors):
 
 
 def test_load_milb_inputs_says_how_to_fix_a_missing_or_stale_file(factors, tmp_path):
+    import json
+
     from fantasy_baseball.hitter_ros.milb_features import load_milb_inputs
 
     table, season_lines, window_lines, mlb = _inputs()
     with pytest.raises(ValueError, match=r"build_hitter_ros_milb.py --name x"):
         load_milb_inputs(table, tmp_path, "x")
     built = build_milb_features(table, season_lines, window_lines, mlb)
-    built.to_parquet(milb_features.milb_path(tmp_path, "x"), index=False)
-    x = load_milb_inputs(table, tmp_path, "x")
+    path = milb_features.milb_path(tmp_path, "x")
+    built.to_parquet(path, index=False)
+    path.with_suffix(".json").write_text(json.dumps({"shrink_pa": 5.0}))
+    x, options = load_milb_inputs(table, tmp_path, "x")
     assert list(x.columns) == MILB_FEATURES and x.index.equals(table.index)
-    built.iloc[:1].to_parquet(milb_features.milb_path(tmp_path, "x"), index=False)
+    assert options == {"shrink_pa": 5.0}
+    built.iloc[:1].to_parquet(path, index=False)
     with pytest.raises(ValueError, match="lacks 2 table rows"):
         load_milb_inputs(table, tmp_path, "x")
+    # A file from before a feature was added: a fix-it message, not a KeyError.
+    built.drop(columns="milb_p1_avg").to_parquet(path, index=False)
+    with pytest.raises(ValueError, match="lacks 1 features"):
+        load_milb_inputs(table, tmp_path, "x")
+
+
+def test_a_preset_file_built_with_other_options_is_refused(factors, tmp_path):
+    import json
+
+    from fantasy_baseball.hitter_ros.milb_features import MILB_PRESETS, load_milb_inputs
+
+    table, season_lines, window_lines, mlb = _inputs()
+    path = milb_features.milb_path(tmp_path, "rookies-s100")
+    build_milb_features(table, season_lines, window_lines, mlb).to_parquet(path, index=False)
+    with pytest.raises(ValueError, match="unknown options"):  # no options file at all
+        load_milb_inputs(table, tmp_path, "rookies-s100")
+    path.with_suffix(".json").write_text(json.dumps({"shrink_pa": 0.0, "vets_blank_from": None}))
+    with pytest.raises(ValueError, match="not the rookies-s100 preset"):
+        load_milb_inputs(table, tmp_path, "rookies-s100")
+    path.with_suffix(".json").write_text(json.dumps(MILB_PRESETS["rookies-s100"]))
+    _, options = load_milb_inputs(table, tmp_path, "rookies-s100")
+    assert options == MILB_PRESETS["rookies-s100"]
+
+
+def test_too_little_history_to_tell_a_vet_gets_no_inputs(factors):
+    table, season_lines, window_lines, mlb = _inputs()
+    # Player 1 reads as a rookie (0 MLB PA), but the store has only 2 seasons before.
+    table = table.assign(car_pa=0.0, std_pa=0.0, car_seasons_in_store=[2, 2, 10])
+    out = build_milb_features(table, season_lines, window_lines, mlb, vet_min_pa=300)
+    row = out[(out["player_id"] == 1) & (out["week"] == 2)].iloc[0]
+    assert row["milb_p1_log_pa"] == 0 and np.isnan(row["milb_p1_avg"])
+
+
+def test_the_season_after_2020_has_an_unknown_last_season(factors):
+    table, season_lines, window_lines, mlb = _inputs()
+    lines = season_lines.assign(season=season_lines["season"] - 2)  # 2021, 2019, 2016
+    rows = table.assign(season=2021, as_of=table["as_of"] - pd.DateOffset(years=3))
+    out = build_milb_features(rows, lines, window_lines.iloc[:0], mlb)
+    row = out[(out["player_id"] == 1) & (out["week"] == 2)].iloc[0]
+    # 2020 had no minor leagues: last season is unknown, not "no PA".
+    assert np.isnan(row["milb_p1_log_pa"]) and np.isnan(row["milb_p1_avg"])
+    assert row["milb_p3_log_pa"] == pytest.approx(np.log1p(400))  # 2019 still counts
+
+
+def test_no_window_over_before_any_date_does_not_crash(factors):
+    table, season_lines, window_lines, mlb = _inputs()
+    opening_day = table[table["week"] == 0]  # every minor-league window ends later
+    out = build_milb_features(opening_day, season_lines, window_lines, mlb)
+    assert (out["milb_std_log_pa"] == 0).all()
+    assert out["milb_std_avg"].dtype == "float64"
 
 
 def test_the_default_is_rookies_only_and_shrunk():

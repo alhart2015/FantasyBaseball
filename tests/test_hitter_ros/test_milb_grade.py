@@ -246,3 +246,32 @@ def test_loaders_drop_pitchers_and_the_mexican_league(tmp_path):
     ]
     mlb = load_mlb_lines(conn)
     assert mlb["player_id"].tolist() == [1] and set(mlb["sport_id"]) == {MLB}
+
+
+def test_season_totals_match_the_season_loader(tmp_path):
+    from fantasy_baseball.hitter_ros.milb_grade import season_totals
+
+    def api_row(window_end, pa):
+        return {
+            "season": 2024,
+            "player.id": 1,
+            "sport_id": AAA,
+            "league.id": 117,
+            "position.type": "Infielder",
+            "window_end": window_end,
+            **{f"stat.{v}": pa for v in milb_grade.COUNTS.values()},
+        }
+
+    weekly = pd.DataFrame(
+        [api_row(pd.Timestamp("2024-04-07"), 3), api_row(pd.Timestamp("2024-04-14"), 4)]
+    )
+    _write(tmp_path / "milb_weekly" / "2024" / "a.parquet", weekly)
+    season = pd.DataFrame([{"season": 2024, "player.id": 1, "sport_id": AAA, "stat.age": 23}])
+    _write(tmp_path / "milb_season" / "2024.parquet", season)
+    conn = connect(tmp_path)
+    by_season = load_milb_lines(conn)
+    rebuilt = season_totals(load_milb_lines(conn, by_window=True))
+    cols = ["season", "player_id", "sport_id", "league_id", *milb_grade.COUNTS, "age"]
+    pd.testing.assert_frame_equal(
+        rebuilt[cols].astype(float), by_season[cols].astype(float), check_dtype=False
+    )

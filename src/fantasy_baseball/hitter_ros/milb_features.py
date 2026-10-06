@@ -23,23 +23,32 @@ No hindsight:
 * A level's mean age comes from the season the line is from; for ``std``, from the
   season before (this season's level ages are only known at its end).
 
-Two build options (``build_milb_features``), for the vets these inputs can add noise to:
+Two build options (``build_milb_features``), for the vets these inputs can add noise to
+(``MILB_PRESETS`` names the combinations in use; the default model's is ``rookies-s100``):
 
 * ``shrink_pa``: each window's graded rates are pulled toward the average line at its
   levels (the factor itself: 1x the league, graded) by that many PA, so an 18-PA
   rehab stint can't read as an 11x home-run rate.
 * ``vet_min_pa``: rows of players with at least that many MLB PA when projected (career
   before the season plus this season so far) get no minor-league inputs -- log PA 0 and
-  everything else blank, as for a player who never played in the minors.
+  everything else blank, as for a player who never played in the minors. So do rows
+  whose career count can't be trusted (fewer than ``backtest.MIN_HISTORY_SEASONS``
+  earlier seasons in the box-score store, i.e. 2008-2011): a veteran there reads as a
+  rookie, and only known rookies get the inputs.
+
+There was no minor-league season in 2020, so a 2021 row's ``p1`` window is unknown --
+every ``milb_p1_*`` blank, log PA included -- not "no minor-league PA".
 """
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
+from fantasy_baseball.hitter_ros.backtest import MIN_HISTORY_SEASONS
 from fantasy_baseball.hitter_ros.features import ROW_KEYS, aligned_inputs, check_aligned
 from fantasy_baseball.hitter_ros.milb_grade import (
     COUNTS,
@@ -47,10 +56,12 @@ from fantasy_baseball.hitter_ros.milb_grade import (
     STATS,
     league_rates,
     level_factors,
+    level_mean_ages,
     player_levels,
     rates,
     relative_lines,
 )
+from fantasy_baseball.pitch_data.milb import NO_MILB_SEASONS
 
 MILB_WINDOWS = ("std", "p1", "p3", "car")
 LEVEL_RANK = {11: 1, 12: 2, 13: 3, 14: 4, 15: 5, 16: 6}
@@ -58,6 +69,10 @@ FACTOR_SEASONS = 7
 _PER_WINDOW = (*STATS, "log_pa", "level", "top_level", "age_vs_level")
 MILB_FEATURES = [f"milb_{w}_{name}" for w in MILB_WINDOWS for name in _PER_WINDOW]
 _LEAGUE = ["season", "sport_id", "league_id"]
+# Named build options (scripts/build_hitter_ros_milb.py --name), checked on load.
+MILB_PRESETS: dict[str, dict[str, float | None]] = {
+    "rookies-s100": {"shrink_pa": 100.0, "vets_blank_from": 300.0},
+}
 
 
 def milb_path(root: Path, name: str) -> Path:
@@ -65,25 +80,32 @@ def milb_path(root: Path, name: str) -> Path:
     return root / f"milb_{name}.parquet"
 
 
-def load_milb_inputs(table: pd.DataFrame, root: Path, name: str) -> pd.DataFrame:
+def load_milb_inputs(
+    table: pd.DataFrame, root: Path, name: str
+) -> tuple[pd.DataFrame, dict[str, float | None]]:
     """``MILB_FEATURES`` from ``milb_<name>.parquet`` under ``root``, aligned to
-    ``table``'s rows. ValueError, saying how to fix it, when the file is missing or was
-    built for another table."""
+    ``table``'s rows, and the build options saved next to it (``milb_<name>.json``).
+    ValueError, saying how to fix it, when the file is missing, lacks a feature, was
+    built for another table, or -- for a ``MILB_PRESETS`` name -- with other options."""
     path = milb_path(root, name)
+    rebuild = f"run scripts/build_hitter_ros_milb.py --name {name}"
     if not path.exists():
-        raise ValueError(f"{path} is missing; run scripts/build_hitter_ros_milb.py --name {name}")
+        raise ValueError(f"{path} is missing; {rebuild}")
+    options_path = path.with_suffix(".json")
+    options = json.loads(options_path.read_text()) if options_path.exists() else {}
+    if name in MILB_PRESETS and options != MILB_PRESETS[name]:
+        raise ValueError(
+            f"{path} was built with {options or 'unknown options'}, not the {name} preset "
+            f"{MILB_PRESETS[name]}; {rebuild}"
+        )
     frame = pd.read_parquet(path)
+    missing = [c for c in MILB_FEATURES if c not in frame.columns]
+    if missing:
+        raise ValueError(f"{path} lacks {len(missing)} features (e.g. {missing[0]}); {rebuild}")
     problem = check_aligned(table, frame)
     if problem:
         raise ValueError(f"{path}: {problem}; rebuild it for this table")
-    return aligned_inputs(table, frame, MILB_FEATURES)
-
-
-def _level_ages(levels: pd.DataFrame) -> pd.Series:
-    """PA-weighted mean age per (season, sport_id), minor-league rows with an age."""
-    known = levels[levels["age"].notna() & (levels["sport_id"] != MLB)]
-    weighted = (known["age"] * known["pa"]).groupby([known["season"], known["sport_id"]]).sum()
-    return weighted / known["pa"].groupby([known["season"], known["sport_id"]]).sum()
+    return aligned_inputs(table, frame, MILB_FEATURES), options
 
 
 def _grade(rel: pd.DataFrame, factors: pd.DataFrame, level_age: pd.Series) -> pd.DataFrame:
@@ -175,6 +197,16 @@ def _cumulative_league(window_lines: pd.DataFrame) -> pd.DataFrame:
     return pd.concat(parts, ignore_index=True)
 
 
+def _no_std() -> pd.DataFrame:
+    """The std features with no rows (float columns, so a merge keeps them numeric)."""
+    return pd.DataFrame(
+        {
+            **{k: pd.Series(dtype="int64") for k in ROW_KEYS},
+            **{f"milb_std_{n}": pd.Series(dtype="float64") for n in _PER_WINDOW},
+        }
+    )
+
+
 def _std_window(
     rows: pd.DataFrame,
     window_lines: pd.DataFrame,
@@ -187,12 +219,13 @@ def _std_window(
     lines = window_lines[window_lines["player_id"].isin(rows["player_id"].unique())]
     lines = lines.sort_values("window_end")
     keys = ["season", "player_id", "sport_id", "league_id"]
-    cum = lines.assign(**{c: lines.groupby(keys)[c].cumsum() for c in counts})
+    cum = lines.copy()
+    cum[counts] = lines.groupby(keys)[counts].cumsum()
     # Each table row x each (level, league) the player had minor-league lines at.
     combos = lines[[*keys, "age"]].drop_duplicates(keys)
     left = rows[[*ROW_KEYS, "as_of"]].merge(combos, on=["season", "player_id"])
     if left.empty:
-        return pd.DataFrame(columns=[*ROW_KEYS, *(f"milb_std_{n}" for n in _PER_WINDOW)])
+        return _no_std()
     left = left.assign(as_of=pd.to_datetime(left["as_of"]).astype("datetime64[ns]"))
     cum = cum.assign(
         end=pd.to_datetime(cum["window_end"]).astype("datetime64[ns]"),
@@ -208,6 +241,8 @@ def _std_window(
         allow_exact_matches=False,  # a window ending on the as-of date isn't over yet
     ).dropna(subset=["pa"])
     player = player[player["pa"] > 0]
+    if player.empty:  # lines this season, but none in a window over before any date
+        return _no_std()
     # The league's rates over the same windows; a small league uses its level's.
     league_cum = _cumulative_league(window_lines)
     league_cum = league_cum.assign(
@@ -254,24 +289,30 @@ def build_milb_features(
     ``season_lines`` / ``window_lines``: ``milb_grade.load_milb_lines`` without and with
     ``by_window``; ``mlb_lines``: ``milb_grade.load_mlb_lines`` (for the factors).
     ``shrink_pa`` / ``vet_min_pa``: see the module doc; ``vet_min_pa`` needs the table's
-    ``car_pa`` and ``std_pa``."""
+    ``car_pa``, ``std_pa`` and ``car_seasons_in_store``."""
     rows = table[[*ROW_KEYS, "as_of"]].copy()
-    levels = player_levels(relative_lines(pd.concat([season_lines, mlb_lines], ignore_index=True)))
-    level_age = _level_ages(levels)
+    rel = relative_lines(pd.concat([season_lines, mlb_lines], ignore_index=True))
+    levels = player_levels(rel)
+    level_age = level_mean_ages(levels)
     factors = {
         int(s): level_factors(levels, (int(s) - FACTOR_SEASONS, int(s) - 1))
         for s in rows["season"].unique()
     }
-    season_rel = relative_lines(season_lines)
+    season_rel = rel[rel["sport_id"] != MLB]  # leagues never mix levels: MLB can't move it
     past = _past_windows(rows, season_rel, factors, level_age, shrink_pa)
     std = _std_window(rows, window_lines, factors, level_age, shrink_pa)
     out = rows.merge(past, on=["player_id", "season"], how="left").merge(
         std, on=ROW_KEYS, how="left"
     )
+    blank = np.zeros(len(out), dtype=bool)
     if vet_min_pa is not None:
         mlb_pa = table["car_pa"].astype(float) + table["std_pa"].astype(float)
-        vet = (mlb_pa >= vet_min_pa).to_numpy()
-        out.loc[vet, MILB_FEATURES] = np.nan
+        short_history = table["car_seasons_in_store"] < MIN_HISTORY_SEASONS
+        blank = ((mlb_pa >= vet_min_pa) | short_history).to_numpy()
+        out.loc[blank, MILB_FEATURES] = np.nan
     for w in MILB_WINDOWS:
         out[f"milb_{w}_log_pa"] = out[f"milb_{w}_log_pa"].fillna(0.0)
+    # Last season had no minor leagues: unknown, not zero (blanked rows stay "none").
+    no_p1 = out["season"].sub(1).isin(NO_MILB_SEASONS).to_numpy() & ~blank
+    out.loc[no_p1, [f"milb_p1_{n}" for n in _PER_WINDOW]] = np.nan
     return out[[*ROW_KEYS, "as_of", *MILB_FEATURES]]
