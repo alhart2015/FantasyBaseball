@@ -70,7 +70,8 @@ def test_count_loss_marks_and_scales_avg_as_binomial():
     wt = torch.as_tensor(w, dtype=torch.float32, device=dev)
     losses = row_losses(f, yt, wt, spec)
     assert float(losses[:, AVG].sum().cpu()) / w[:, AVG].sum() == pytest.approx(1.0, rel=1e-3)
-    # avg_loss alone (count_loss none) still gives a spec; the default has no binomial.
+    # avg_loss alone (count_loss none) still gives a spec; the default AVG loss (mse) has
+    # no binomial target among the TARGETS columns.
     alone = count_loss(NetConfig(count_loss="none", avg_loss="binomial"), y, w, device())
     assert alone.binomial[AVG] and not alone.mask.any()
     assert count_loss(NetConfig(), y, w, device()).binomial is None

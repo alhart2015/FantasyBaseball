@@ -44,6 +44,11 @@ LOG_RATE_CLAMP = (-15.0, 8.0)
 # avg_loss (#433): "mse" = squared error on the standardized AVG; "binomial" = each AB is
 # a trial, the output is the log-odds of a hit.
 AVG_LOSSES = ("mse", "binomial")
+# avg_pieces (#433): "none"; "extra" = also predict AVG's pieces (features.PIECES), AVG
+# still predicted directly; "derived" = predict the pieces and build AVG from them.
+AVG_PIECES = ("none", "extra", "derived")
+# Each piece's loss weight: the three together count like one stat.
+PIECE_LOSS_WEIGHT = 1 / 3
 
 
 @dataclass
@@ -113,6 +118,16 @@ class NetConfig:
     # (logit) of AVG, every horizon. With a relative target the output is the log-odds
     # relative to the league: the league's logit is added to it (an offset), not divided.
     avg_loss: str = "mse"
+    # AVG as its pieces (#433): K/AB, HR/AB and BABIP (features.PIECES), each with a
+    # binomial loss (K and HR out of AB, hits out of balls in play), every horizon, each
+    # weighted PIECE_LOSS_WEIGHT. "extra": extra outputs that only shape the shared
+    # body; AVG is still its own output. "derived": no AVG output; AVG is built from the
+    # predicted pieces (features.avg_from_pieces). Default from #433: "extra". Over 6
+    # seeds the 2026 mid-season AVG gap to FanGraphs went from -2.25 to -1.57 (vets
+    # -2.14 -> -1.25) and preseason AVG held (-0.04 -> +0.11); mid-season RBI slipped
+    # (+1.03 -> +0.78). "derived" was worse (preseason AVG -0.54). Neither makes the net
+    # use this season's actual AVG (the #433 blind spot).
+    avg_pieces: str = "extra"
     # Short horizons (#419): also predict the next 25 / 100 / 250 PA, each with its own
     # 5 outputs on the shared body (so one more "head" per horizon). horizon_weights:
     # how much each horizon's loss counts, for next 25 / 100 / 250 PA and rest of season.
@@ -162,6 +177,10 @@ class NetConfig:
             raise ValueError(f"unknown count_loss {self.count_loss!r}")
         if self.avg_loss not in AVG_LOSSES:
             raise ValueError(f"unknown avg_loss {self.avg_loss!r}")
+        if self.avg_pieces not in AVG_PIECES:
+            raise ValueError(f"unknown avg_pieces {self.avg_pieces!r}")
+        if self.avg_pieces == "derived" and self.avg_loss != "mse":
+            raise ValueError("avg_pieces derived has no AVG output for avg_loss to apply to")
         if self.relative_target not in RELATIVE_TARGETS:
             raise ValueError(f"unknown relative_target {self.relative_target!r}")
         from fantasy_baseball.hitter_ros.features import ERA_MODES
@@ -453,18 +472,24 @@ def count_loss(
     stats: list[str] | None = None,
     target_weights: np.ndarray | None = None,
 ) -> CountLoss | None:
-    """The Poisson targets of ``config.count_loss``, the binomial ones of
-    ``config.avg_loss``, and every target's scale; None when no target is either and
-    every weight is 1. ``stats``: each column's stat (default ``features.TARGETS``, the
+    """The Poisson targets of ``config.count_loss``, the binomial ones (AVG with
+    ``config.avg_loss`` binomial; AVG's pieces with ``config.avg_pieces``, when
+    ``stats`` names them), and every target's scale; None when no target is any of
+    those and every weight is 1. ``stats``: each column's stat (default ``features.TARGETS``, the
     rest-of-season columns). A Poisson or binomial target's scale is 1 / its deviance
     when predicting the weighted average rate on these rows (``y`` rates, ``w`` PA or
     AB), times its ``target_weights`` entry (default 1)."""
-    from fantasy_baseball.hitter_ros.features import TARGETS
+    from fantasy_baseball.hitter_ros.features import PIECES, TARGETS
 
     names = COUNT_LOSS_TARGETS[config.count_loss]
-    binomial_names = ("avg",) if config.avg_loss == "binomial" else ()
+    binomial_names = (
+        *(("avg",) if config.avg_loss == "binomial" else ()),
+        *(PIECES if config.avg_pieces != "none" else ()),
+    )
     unweighted = target_weights is None or np.all(np.asarray(target_weights) == 1)
-    if not names and not binomial_names and unweighted:
+    # Pieces are only ever named in ``stats`` (the default, TARGETS, has none).
+    has_pieces = stats is not None and any(s in PIECES for s in stats)
+    if not names and config.avg_loss != "binomial" and not has_pieces and unweighted:
         return None
     stats = list(TARGETS) if stats is None else stats
     if y.shape[1] != len(stats):

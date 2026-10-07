@@ -46,9 +46,11 @@ from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.features import (
     ERA_MODES,
     ERA_TABLE_COLUMNS,
+    PIECES,
     STEAL_TABLE_COLUMNS,
     TARGETS,
     Standardizer,
+    avg_from_pieces,
     column_horizon,
     input_frame,
     league_answer_rates,
@@ -65,9 +67,11 @@ from fantasy_baseball.hitter_ros.horizons import (
 from fantasy_baseball.hitter_ros.milb_features import MILB_FEATURES, load_milb_inputs
 from fantasy_baseball.hitter_ros.net import (
     AVG_LOSSES,
+    AVG_PIECES,
     COUNT_LOSS_TARGETS,
     EVAL_BATCH,
     LOG_RATE_CLAMP,
+    PIECE_LOSS_WEIGHT,
     RELATIVE_TARGETS,
     NetConfig,
     device,
@@ -113,6 +117,18 @@ def fit_season(
     """
     positions = np.arange(len(table))
     in_weeks = WEEKS[weeks](table["week"])
+    pieces = config.avg_pieces != "none"
+    out_cols = list(y_all.columns)  # what predictions hold, whatever the net outputs
+    if pieces != any(target_stat(c) in PIECES for c in out_cols):
+        raise ValueError(
+            f"avg_pieces {config.avg_pieces}: build targets with pieces={pieces} "
+            "(target_frame), so the piece columns and the setting agree"
+        )
+    if pieces and config.head_layers:
+        raise ValueError("head_layers splits outputs into groups of 5; use --avg-pieces none")
+    if config.avg_pieces == "derived":  # no AVG output: built from the pieces below
+        keep = [c for c in out_cols if target_stat(c) != "avg"]
+        y_all, w_all = y_all[keep], w_all[keep]
     train_rows = (
         table["season_complete"]
         & (table["season"] < test_season)
@@ -131,16 +147,23 @@ def fit_season(
     # known on the date (#421) or the league's actual rate over the answer window (#424)
     # -- and multiply back by the forecast. The forecast's own error then shows up only in
     # raw MAE, never in the relative scores.
-    ref = league_reference(table) if config.relative_target != "none" else None
-    denominator = league_answer_rates(table) if config.relative_target == "answer" else ref
+    ref = league_reference(table, pieces=pieces) if config.relative_target != "none" else None
+    denominator = (
+        league_answer_rates(table, pieces=pieces) if config.relative_target == "answer" else ref
+    )
     cols = list(y_all.columns)  # rest of season, then each short horizon (#419)
     y_fit = y_all / by_stat(denominator, cols) if denominator is not None else y_all
     # A row whose answer can't be computed (no PA, or no league reference) must not
     # count: train() expects weight 0 wherever the target is NaN.
     w_fit = w_all.where(y_fit.notna(), 0.0)
-    # Binomial targets (avg_loss, #433) stay as rates: the net predicts their log-odds,
-    # relative to the league's by adding the league's log-odds (an offset), not dividing.
-    binomial = {c for c in cols if config.avg_loss == "binomial" and target_stat(c) == "avg"}
+    # Binomial targets (avg_loss and AVG's pieces, #433) stay as rates: the net predicts
+    # their log-odds, relative to the league's by adding the league's log-odds (an
+    # offset), not dividing.
+    binomial = {
+        c
+        for c in cols
+        if (config.avg_loss == "binomial" and target_stat(c) == "avg") or target_stat(c) in PIECES
+    }
     offset = pd.DataFrame(0.0, index=table.index, columns=cols) if binomial else None
     for c in binomial:
         y_fit[c] = y_all[c]
@@ -180,7 +203,13 @@ def fit_season(
         batcher=batcher,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
         target_stats=[target_stat(c) for c in cols],
-        target_weights=np.array([horizon_weight[column_horizon(c)] for c in cols]),
+        target_weights=np.array(
+            [
+                horizon_weight[column_horizon(c)]
+                * (PIECE_LOSS_WEIGHT if target_stat(c) in PIECES else 1.0)
+                for c in cols
+            ]
+        ),
         offset=None if offset is None else offset[train_rows].to_numpy(dtype=np.float32),
     )
     test_rows = (table["season"] == test_season) & in_weeks
@@ -210,7 +239,10 @@ def fit_season(
     for c in binomial:  # league log-odds + the net's, back to a rate
         league = 0.0 if ref is None else logit(ref.loc[test_rows, target_stat(c)])
         preds[c] = expit(z[:, cols.index(c)] + league)
-    preds = preds[cols]
+    for c in set(out_cols) - set(cols):  # avg_pieces derived: AVG from its pieces
+        tag = c.removesuffix("avg")
+        preds[c] = avg_from_pieces(*(preds[f"{tag}{p}"] for p in PIECES))
+    preds = preds[out_cols]
     preds = pd.concat(
         [table.loc[test_rows, ["player_id", "season", "week", "as_of"]], preds], axis=1
     )
@@ -316,6 +348,12 @@ def main() -> int:
         choices=list(AVG_LOSSES),
         default=defaults.avg_loss,
         help="binomial: AVG as hits out of at-bats, a binomial loss on its log-odds (#433)",
+    )
+    parser.add_argument(
+        "--avg-pieces",
+        choices=list(AVG_PIECES),
+        default=defaults.avg_pieces,
+        help="AVG's pieces K/AB, HR/AB, BABIP (#433): extra outputs, or AVG derived from them",
     )
     parser.add_argument(
         "--horizons",
@@ -441,6 +479,7 @@ def main() -> int:
             parks=args.parks,
             count_loss=args.count_loss,
             avg_loss=args.avg_loss,
+            avg_pieces=args.avg_pieces,
         )
     except ValueError as err:
         parser.error(str(err))
@@ -449,6 +488,9 @@ def main() -> int:
     out = RUNS / args.name
     if out.exists() and any(out.iterdir()) and not args.overwrite:
         parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
+    if config.head_layers and config.avg_pieces != "none":
+        # Checked here, before an old run of this name is deleted (fit_season checks too).
+        parser.error("--head-layers splits outputs into groups of 5; add --avg-pieces none")
     if config.seq != "none" and not TOKENS.exists():
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
 
@@ -465,6 +507,7 @@ def main() -> int:
         parser.error(f"{TABLE} predates the steal columns; run scripts/build_hitter_ros_table.py")
     needed = {
         "ros_n25_pa": config.horizons,
+        "ros_n25_k": config.horizons and config.avg_pieces != "none",
         "l7_pa": config.recent_inputs,
     }
     stale = [col for col, used in needed.items() if used and col not in table.columns]
@@ -500,7 +543,9 @@ def main() -> int:
             parser.error(str(err))
         x_all = pd.concat([x_all, parks], axis=1)
         logger.info("added %d park features (%s)", len(PARK_FEATURES), config.parks)
-    y_all, w_all = target_frame(table, HORIZONS if config.horizons else ())
+    y_all, w_all = target_frame(
+        table, HORIZONS if config.horizons else (), pieces=config.avg_pieces != "none"
+    )
     batcher = None
     if config.seq != "none":
         batcher = SequenceBatcher(pd.read_parquet(TOKENS), table, config.seq_len, device())
