@@ -37,6 +37,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.special import expit, logit  # log-odds and back; NaN stays NaN
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -140,10 +141,10 @@ def fit_season(
     # Binomial targets (avg_loss, #433) stay as rates: the net predicts their log-odds,
     # relative to the league's by adding the league's log-odds (an offset), not dividing.
     binomial = {c for c in cols if config.avg_loss == "binomial" and target_stat(c) == "avg"}
-    offset = pd.DataFrame(0.0, index=table.index, columns=cols)
+    offset = pd.DataFrame(0.0, index=table.index, columns=cols) if binomial else None
     for c in binomial:
         y_fit[c] = y_all[c]
-        if denominator is not None:
+        if offset is not None and denominator is not None:
             offset[c] = logit(denominator[target_stat(c)])
     y_train, w_train = y_fit[train_rows], w_fit[train_rows]
     fit_rows = ~val_mask
@@ -180,7 +181,7 @@ def fit_season(
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
         target_stats=[target_stat(c) for c in cols],
         target_weights=np.array([horizon_weight[column_horizon(c)] for c in cols]),
-        offset=offset[train_rows].to_numpy(dtype=np.float32) if binomial else None,
+        offset=None if offset is None else offset[train_rows].to_numpy(dtype=np.float32),
     )
     test_rows = (table["season"] == test_season) & in_weeks
     z = predict(
@@ -224,16 +225,6 @@ def fit_season(
         "val_loss": result.val_loss,
     }
     return preds, info
-
-
-def logit(rate: pd.Series) -> pd.Series:
-    """Log-odds of a rate in (0, 1); NaN stays NaN."""
-    return np.log(rate / (1 - rate))
-
-
-def expit(log_odds: np.ndarray | pd.Series) -> np.ndarray | pd.Series:
-    """The rate of a log-odds: 1 / (1 + exp(-x))."""
-    return 1 / (1 + np.exp(-log_odds))
 
 
 def by_stat(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:

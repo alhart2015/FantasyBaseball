@@ -91,7 +91,9 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
     row: dict[str, object] = {
         "seed": meta["config"]["seed"],
         # Runs from before #424 have no loss setting: they all used MSE.
-        "loss": meta["config"].get("loss", "mse"),
+        "loss": meta["config"].get("loss", "mse")
+        # A binomial AVG loss (#433) is a deviance, not a squared error, in val_loss.
+        + ("+avg_binomial" if meta["config"].get("avg_loss", "mse") == "binomial" else ""),
         # Runs from before the weighting setting all used PA weighting. A --split run's
         # val_loss averages two models, each over its own rows.
         "weighting": meta["config"].get("weighting", "pa")
@@ -148,8 +150,9 @@ def warnings_for(df: pd.DataFrame) -> list[str]:
         )
     if df["loss"].nunique() > 1:
         out.append(
-            "losses differ: val_loss is a squared error for mse and a pairwise logistic "
-            "loss for rank, so it does not compare across them"
+            "losses differ: val_loss is a squared error for mse, a pairwise logistic "
+            "loss for rank and a binomial deviance for AVG with +avg_binomial, so it "
+            "does not compare across them"
         )
     if df["weighting"].nunique() > 1:
         out.append(

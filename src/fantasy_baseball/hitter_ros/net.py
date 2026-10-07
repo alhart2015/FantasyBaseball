@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import torch
+from scipy.special import logit
 from torch import nn
 
 if TYPE_CHECKING:
@@ -481,7 +482,7 @@ def count_loss(
         if mask[k]:
             f, deviance = np.log(mean), poisson_deviance
         else:
-            f, deviance = np.log(mean / (1 - mean)), binomial_deviance
+            f, deviance = float(logit(mean)), binomial_deviance
         base = deviance(torch.full_like(yk, f), yk, wk).sum() / wk.sum()
         scale[k] = 1.0 / float(base) if float(base) > 0 else 1.0  # no spread: leave as is
     return CountLoss(

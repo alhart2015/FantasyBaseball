@@ -100,6 +100,15 @@ def test_warns_when_losses_differ(runs):
     assert any("losses differ" in w for w in cmp.warnings_for(df))
 
 
+def test_warns_when_avg_losses_differ(runs):
+    """#433: a binomial AVG loss puts a deviance, not a squared error, into val_loss."""
+    _run(runs, "mse_avg", config={"avg_loss": "mse"})
+    _run(runs, "binomial", config={"avg_loss": "binomial"})
+    df = cmp.compare(["mse_avg", "binomial"], None, None)
+    assert list(df["loss"]) == ["mse", "mse+avg_binomial"]
+    assert any("losses differ" in w for w in cmp.warnings_for(df))
+
+
 def test_warns_when_weightings_differ(runs):
     _run(runs, "old")  # a run from before the weighting setting: PA weighting
     _run(runs, "pre_mid", config={"weighting": "pre_mid"})
