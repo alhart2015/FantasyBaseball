@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 import pandas as pd
 import torch
+from scipy.special import logit
 from torch import nn
 
 if TYPE_CHECKING:
@@ -40,6 +41,9 @@ RELATIVE_TARGETS = ("none", "known", "answer")
 COUNT_LOSS_TARGETS = {"none": (), "sb": ("sb",), "counts": ("r", "hr", "rbi", "sb")}
 # Poisson outputs are log rates; clamp before exp so a wild output can't overflow.
 LOG_RATE_CLAMP = (-15.0, 8.0)
+# avg_loss (#433): "mse" = squared error on the standardized AVG; "binomial" = each AB is
+# a trial, the output is the log-odds of a hit.
+AVG_LOSSES = ("mse", "binomial")
 
 
 @dataclass
@@ -105,6 +109,10 @@ class NetConfig:
     # RBI and SB) get a Poisson loss on the count, with the row's PA as exposure. Their
     # outputs are then the log of the (league-relative) rate, so 0 = league average.
     count_loss: str = "counts"
+    # AVG's loss (#433). "binomial": hits out of at-bats, a binomial loss on the log-odds
+    # (logit) of AVG, every horizon. With a relative target the output is the log-odds
+    # relative to the league: the league's logit is added to it (an offset), not divided.
+    avg_loss: str = "mse"
     # Short horizons (#419): also predict the next 25 / 100 / 250 PA, each with its own
     # 5 outputs on the shared body (so one more "head" per horizon). horizon_weights:
     # how much each horizon's loss counts, for next 25 / 100 / 250 PA and rest of season.
@@ -152,6 +160,8 @@ class NetConfig:
             raise ValueError("head_layers is built on the plain MLP (heads 1, seq none)")
         if self.count_loss not in COUNT_LOSS_TARGETS:
             raise ValueError(f"unknown count_loss {self.count_loss!r}")
+        if self.avg_loss not in AVG_LOSSES:
+            raise ValueError(f"unknown avg_loss {self.avg_loss!r}")
         if self.relative_target not in RELATIVE_TARGETS:
             raise ValueError(f"unknown relative_target {self.relative_target!r}")
         from fantasy_baseball.hitter_ros.features import ERA_MODES
@@ -224,8 +234,9 @@ def device() -> torch.device:
 
 @dataclass
 class CountLoss:
-    """Which targets get the Poisson loss (``mask``), and a per-target ``scale`` that
-    puts each Poisson target's loss on the same footing as a standardized squared error.
+    """Which targets get the Poisson loss (``mask``) or the binomial loss (``binomial``),
+    and a per-target ``scale`` that puts each such target's loss on the same footing as
+    a standardized squared error.
 
     Squared error on a standardized target is ~1 when predicting the average. A Poisson
     deviance is not: on the real table it is ~0.04 for R and ~0.7 for SB. Without the
@@ -233,9 +244,11 @@ class CountLoss:
     """
 
     mask: torch.Tensor  # bool, one per target
-    # float, one per target: the Poisson normalization (1 for squared-error targets)
-    # times the target's weight (e.g. its horizon's weight, #419).
+    # float, one per target: the Poisson or binomial normalization (1 for squared-error
+    # targets) times the target's weight (e.g. its horizon's weight, #419).
     scale: torch.Tensor
+    # bool, one per target: binomial (#433). None = no binomial target.
+    binomial: torch.Tensor | None = None
 
 
 def poisson_deviance(f: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
@@ -246,16 +259,29 @@ def poisson_deviance(f: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch
     return w * (torch.exp(f) - y * f - y + torch.xlogy(y, y))
 
 
+def binomial_deviance(f: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
+    """Weighted binomial deviance of log-odds ``f`` against success rate ``y`` with ``w``
+    trials (#433: hits out of at-bats): ``w * sigmoid(f)`` is the expected hits and
+    ``w * y`` the actual ones; 0 when they match and never negative."""
+    y = y.clamp(0.0, 1.0)
+    log_p, log_q = nn.functional.logsigmoid(f), nn.functional.logsigmoid(-f)
+    return w * (torch.xlogy(y, y) - y * log_p + torch.xlogy(1 - y, 1 - y) - (1 - y) * log_q)
+
+
 def row_losses(
     pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor, count: CountLoss | None = None
 ) -> torch.Tensor:
     """Each row's weighted loss per target: ``w * (pred - y)^2``, or for ``count``'s
     Poisson targets the scaled Poisson deviance (``pred`` is then the log rate and ``y``
-    the rate)."""
+    the rate), and for its binomial targets the scaled binomial deviance (``pred`` is the
+    log-odds and ``y`` the rate)."""
     loss = w * (pred - y) ** 2
     if count is None:
         return loss
-    return torch.where(count.mask, poisson_deviance(pred, y, w), loss) * count.scale
+    loss = torch.where(count.mask, poisson_deviance(pred, y, w), loss)
+    if count.binomial is not None:
+        loss = torch.where(count.binomial, binomial_deviance(pred, y, w), loss)
+    return loss * count.scale
 
 
 def weighted_mse(pred: torch.Tensor, y: torch.Tensor, w: torch.Tensor) -> torch.Tensor:
@@ -352,14 +378,18 @@ def _eval_loss(
     chunk: int = EVAL_BATCH,
     amp: bool = False,
     count: CountLoss | None = None,
+    offset: torch.Tensor | None = None,
 ) -> float:
-    """The training loss (``row_losses``) over all rows, computed in chunks."""
+    """The training loss (``row_losses``) over all rows, computed in chunks. ``offset``
+    (per row and target) is added to the net's output before the loss."""
     num = torch.zeros(y.shape[1], device=y.device)
     den = torch.zeros(y.shape[1], device=y.device)
     with torch.no_grad():
         for start in range(0, len(x), chunk):
             sl = slice(start, start + chunk)
             pred = _forward(model, x[sl], None if rows is None else rows[sl], batcher, amp=amp)
+            if offset is not None:
+                pred = pred + offset[sl]
             num += row_losses(pred, y[sl], w[sl], count).sum(dim=0)
             den += w[sl].sum(dim=0)
     return float((num / den.clamp(min=1e-9)).mean().item())
@@ -376,9 +406,11 @@ def accumulate_batch(
     micro_batch: int,
     amp: bool = False,
     count: CountLoss | None = None,
+    offset: torch.Tensor | None = None,
 ) -> float:
     """Backpropagate the loss (``row_losses``; plain weighted MSE without ``count``)
-    for batch ``idx``, in slices of ``micro_batch`` rows.
+    for batch ``idx``, in slices of ``micro_batch`` rows. ``offset`` (per row and
+    target) is added to the net's output before the loss.
 
     Each slice's loss is normalized by the whole batch's weight per target, so the
     slices' gradients sum to exactly the full-batch gradient. Returns the batch loss.
@@ -389,6 +421,8 @@ def accumulate_batch(
     for start in range(0, len(idx), step):
         sub = idx[start : start + step]
         pred = _forward(model, x[sub], None if rows is None else rows[sub], batcher, amp=amp)
+        if offset is not None:
+            pred = pred + offset[sub]
         part = (row_losses(pred, y[sub], w[sub], count).sum(dim=0) / w_total).mean()
         part.backward()
         total += part.detach()
@@ -419,33 +453,42 @@ def count_loss(
     stats: list[str] | None = None,
     target_weights: np.ndarray | None = None,
 ) -> CountLoss | None:
-    """The Poisson targets of ``config.count_loss`` and every target's scale, or None when
-    no target is Poisson and every weight is 1. ``stats``: each column's stat (default
-    ``features.TARGETS``, the rest-of-season columns). A Poisson target's scale is 1 / its
-    deviance when predicting the weighted average rate on these rows (``y`` rates, ``w``
-    PA), times its ``target_weights`` entry (default 1)."""
+    """The Poisson targets of ``config.count_loss``, the binomial ones of
+    ``config.avg_loss``, and every target's scale; None when no target is either and
+    every weight is 1. ``stats``: each column's stat (default ``features.TARGETS``, the
+    rest-of-season columns). A Poisson or binomial target's scale is 1 / its deviance
+    when predicting the weighted average rate on these rows (``y`` rates, ``w`` PA or
+    AB), times its ``target_weights`` entry (default 1)."""
     from fantasy_baseball.hitter_ros.features import TARGETS
 
     names = COUNT_LOSS_TARGETS[config.count_loss]
-    if not names and (target_weights is None or np.all(np.asarray(target_weights) == 1)):
+    binomial_names = ("avg",) if config.avg_loss == "binomial" else ()
+    unweighted = target_weights is None or np.all(np.asarray(target_weights) == 1)
+    if not names and not binomial_names and unweighted:
         return None
     stats = list(TARGETS) if stats is None else stats
     if y.shape[1] != len(stats):
         raise ValueError(f"{len(stats)} target stats for {y.shape[1]} target columns")
     weights = np.ones(len(stats)) if target_weights is None else np.asarray(target_weights)
     mask = [t in names for t in stats]
+    binomial = [t in binomial_names for t in stats]
     scale = np.ones(len(stats))
-    for k, poisson in enumerate(mask):
-        if not poisson:
+    for k in range(len(stats)):
+        if not (mask[k] or binomial[k]):
             continue
         yk = torch.as_tensor(np.nan_to_num(y[:, k]), dtype=torch.float64)
         wk = torch.as_tensor(w[:, k], dtype=torch.float64)
         mean = float((wk * yk).sum() / wk.sum())
-        base = poisson_deviance(torch.full_like(yk, np.log(mean)), yk, wk).sum() / wk.sum()
+        if mask[k]:
+            f, deviance = np.log(mean), poisson_deviance
+        else:
+            f, deviance = float(logit(mean)), binomial_deviance
+        base = deviance(torch.full_like(yk, f), yk, wk).sum() / wk.sum()
         scale[k] = 1.0 / float(base) if float(base) > 0 else 1.0  # no spread: leave as is
     return CountLoss(
         mask=torch.tensor(mask, device=dev),
         scale=torch.tensor(scale * weights, dtype=torch.float32, device=dev),
+        binomial=torch.tensor(binomial, device=dev) if any(binomial) else None,
     )
 
 
@@ -461,9 +504,13 @@ def train(
     season_time: np.ndarray | None = None,
     target_stats: list[str] | None = None,
     target_weights: np.ndarray | None = None,
+    offset: np.ndarray | None = None,
 ) -> TrainResult:
     """Fit the net. ``y`` is standardized targets, except the ``count_loss`` targets,
-    which are rates (the net predicts their log). NaN allowed where ``w`` is 0.
+    which are rates (the net predicts their log), and the ``avg_loss`` binomial targets,
+    which are rates (the net predicts their log-odds). NaN allowed where ``w`` is 0.
+    ``offset`` (same shape as ``y``, NaN = 0) is added to the net's output before the
+    loss, e.g. the league's log-odds of a hit (#433).
 
     With a sequence model, ``rows`` gives each row's position in the table the
     ``batcher`` was built on, so it can fetch that row's plate appearances.
@@ -489,6 +536,13 @@ def train(
 
     xt, yt, wt = tensors(~val_mask)
     xv, yv, wv = tensors(val_mask)
+    ot = ov = None
+    if offset is not None:
+        if offset.shape != y.shape:
+            raise ValueError(f"offset shape {offset.shape} != targets' {y.shape}")
+        off = np.nan_to_num(offset, nan=0.0)
+        ot = torch.tensor(off[~val_mask], dtype=torch.float32, device=dev)
+        ov = torch.tensor(off[val_mask], dtype=torch.float32, device=dev)
     rt = rv = None
     if rows is not None:
         rt = torch.as_tensor(rows[~val_mask], dtype=torch.long, device=dev)
@@ -510,7 +564,7 @@ def train(
             idx = order[start : start + config.batch_size]
             opt.zero_grad()
             loss = accumulate_batch(
-                model, idx, xt, yt, wt, rt, batcher, config.micro_batch, config.amp, count
+                model, idx, xt, yt, wt, rt, batcher, config.micro_batch, config.amp, count, ot
             )
             opt.step()
             total += loss * len(idx)
@@ -518,7 +572,16 @@ def train(
 
         model.eval()
         val = _eval_loss(
-            model, xv, yv, wv, rv, batcher, config.micro_batch or EVAL_BATCH, config.amp, count
+            model,
+            xv,
+            yv,
+            wv,
+            rv,
+            batcher,
+            config.micro_batch or EVAL_BATCH,
+            config.amp,
+            count,
+            ov,
         )
         val_hist.append(val)
         if not np.isfinite(val):

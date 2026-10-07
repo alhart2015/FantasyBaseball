@@ -37,6 +37,7 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+from scipy.special import expit, logit  # log-odds and back; NaN stays NaN
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -63,6 +64,7 @@ from fantasy_baseball.hitter_ros.horizons import (
 )
 from fantasy_baseball.hitter_ros.milb_features import MILB_FEATURES, load_milb_inputs
 from fantasy_baseball.hitter_ros.net import (
+    AVG_LOSSES,
     COUNT_LOSS_TARGETS,
     EVAL_BATCH,
     LOG_RATE_CLAMP,
@@ -131,13 +133,21 @@ def fit_season(
     # raw MAE, never in the relative scores.
     ref = league_reference(table) if config.relative_target != "none" else None
     denominator = league_answer_rates(table) if config.relative_target == "answer" else ref
-    y_fit = y_all / by_stat(denominator, list(y_all.columns)) if denominator is not None else y_all
+    cols = list(y_all.columns)  # rest of season, then each short horizon (#419)
+    y_fit = y_all / by_stat(denominator, cols) if denominator is not None else y_all
     # A row whose answer can't be computed (no PA, or no league reference) must not
     # count: train() expects weight 0 wherever the target is NaN.
     w_fit = w_all.where(y_fit.notna(), 0.0)
+    # Binomial targets (avg_loss, #433) stay as rates: the net predicts their log-odds,
+    # relative to the league's by adding the league's log-odds (an offset), not dividing.
+    binomial = {c for c in cols if config.avg_loss == "binomial" and target_stat(c) == "avg"}
+    offset = pd.DataFrame(0.0, index=table.index, columns=cols) if binomial else None
+    for c in binomial:
+        y_fit[c] = y_all[c]
+        if offset is not None and denominator is not None:
+            offset[c] = logit(denominator[target_stat(c)])
     y_train, w_train = y_fit[train_rows], w_fit[train_rows]
     fit_rows = ~val_mask
-    cols = list(y_all.columns)  # rest of season, then each short horizon (#419)
     mu = {c: np.average(y_train[c][fit_rows].fillna(0), weights=w_train[c][fit_rows]) for c in cols}
     sd = {
         c: np.sqrt(
@@ -150,7 +160,7 @@ def fit_season(
     # Poisson targets (count_loss) stay as rates: the net predicts their log.
     poisson = {c for c in cols if target_stat(c) in COUNT_LOSS_TARGETS[config.count_loss]}
     y_std = np.column_stack(
-        [y_train[c] if c in poisson else (y_train[c] - mu[c]) / sd[c] for c in cols]
+        [y_train[c] if c in poisson | binomial else (y_train[c] - mu[c]) / sd[c] for c in cols]
     )
 
     def inputs(rows: pd.Series) -> np.ndarray:
@@ -171,6 +181,7 @@ def fit_season(
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
         target_stats=[target_stat(c) for c in cols],
         target_weights=np.array([horizon_weight[column_horizon(c)] for c in cols]),
+        offset=None if offset is None else offset[train_rows].to_numpy(dtype=np.float32),
     )
     test_rows = (table["season"] == test_season) & in_weeks
     z = predict(
@@ -188,13 +199,18 @@ def fit_season(
             if c in poisson
             else z[:, i] * sd[c] + mu[c]
             for i, c in enumerate(cols)
+            if c not in binomial
         },
         index=table.index[test_rows],
     )
     if ref is not None:
         # Every horizon of a stat uses the same league rate (the forecast for the rest of
         # the season): the league's rate over one hitter's next N PA isn't computable.
-        preds = preds * by_stat(ref.loc[test_rows], cols)
+        preds = preds * by_stat(ref.loc[test_rows], list(preds.columns))
+    for c in binomial:  # league log-odds + the net's, back to a rate
+        league = 0.0 if ref is None else logit(ref.loc[test_rows, target_stat(c)])
+        preds[c] = expit(z[:, cols.index(c)] + league)
+    preds = preds[cols]
     preds = pd.concat(
         [table.loc[test_rows, ["player_id", "season", "week", "as_of"]], preds], axis=1
     )
@@ -294,6 +310,12 @@ def main() -> int:
         choices=list(COUNT_LOSS_TARGETS),
         default=defaults.count_loss,
         help="Poisson loss on counts for SB only, or for R/HR/RBI/SB (#413)",
+    )
+    parser.add_argument(
+        "--avg-loss",
+        choices=list(AVG_LOSSES),
+        default=defaults.avg_loss,
+        help="binomial: AVG as hits out of at-bats, a binomial loss on its log-odds (#433)",
     )
     parser.add_argument(
         "--horizons",
@@ -418,6 +440,7 @@ def main() -> int:
             milb=args.milb,
             parks=args.parks,
             count_loss=args.count_loss,
+            avg_loss=args.avg_loss,
         )
     except ValueError as err:
         parser.error(str(err))
