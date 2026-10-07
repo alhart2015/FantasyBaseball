@@ -472,9 +472,10 @@ def count_loss(
     stats: list[str] | None = None,
     target_weights: np.ndarray | None = None,
 ) -> CountLoss | None:
-    """The Poisson targets of ``config.count_loss``, the binomial ones of
-    ``config.avg_loss``, and every target's scale; None when no target is either and
-    every weight is 1. ``stats``: each column's stat (default ``features.TARGETS``, the
+    """The Poisson targets of ``config.count_loss``, the binomial ones (AVG with
+    ``config.avg_loss`` binomial; AVG's pieces with ``config.avg_pieces``, when
+    ``stats`` names them), and every target's scale; None when no target is any of
+    those and every weight is 1. ``stats``: each column's stat (default ``features.TARGETS``, the
     rest-of-season columns). A Poisson or binomial target's scale is 1 / its deviance
     when predicting the weighted average rate on these rows (``y`` rates, ``w`` PA or
     AB), times its ``target_weights`` entry (default 1)."""

@@ -48,7 +48,7 @@ import duckdb
 import pandas as pd
 
 from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS
-from fantasy_baseball.hitter_ros.features import COUNTS
+from fantasy_baseball.hitter_ros.features import COUNTS_WITH_PIECES
 from fantasy_baseball.hitter_ros.statcast_sql import CONTACT_SQL, SPRAY_SQL, SWING_SQL, WHIFF_SQL
 from fantasy_baseball.pitch_data.store import connect
 
@@ -69,7 +69,7 @@ RECENT_WINDOWS = {"l7": 7, "l14": 14}
 # Short-horizon answers (#419): his next N PA from the as-of date, same season only.
 HORIZONS = (25, 100, 250)
 # Their counts: the answers' COUNTS, plus K for AVG's pieces (#433).
-HORIZON_COUNTS = (*COUNTS, "k")
+HORIZON_COUNTS = COUNTS_WITH_PIECES
 # Steal opportunities (#413), from the runners on base at the first pitch of each PA:
 # on 1B with 2B open, and on 2B with 3B open.
 STEAL_COUNTS = ("steal_opp2", "steal_opp3")

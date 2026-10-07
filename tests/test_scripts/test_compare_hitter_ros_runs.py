@@ -109,6 +109,15 @@ def test_warns_when_avg_losses_differ(runs):
     assert any("losses differ" in w for w in cmp.warnings_for(df))
 
 
+def test_warns_when_avg_pieces_differ(runs):
+    """#433: AVG's pieces add binomial-deviance columns to val_loss."""
+    _run(runs, "plain", config={"avg_pieces": "none"})
+    _run(runs, "pieces", config={"avg_pieces": "extra"})
+    df = cmp.compare(["plain", "pieces"], None, None)
+    assert list(df["loss"]) == ["mse", "mse+avg_pieces_extra"]
+    assert any("losses differ" in w for w in cmp.warnings_for(df))
+
+
 def test_warns_when_weightings_differ(runs):
     _run(runs, "old")  # a run from before the weighting setting: PA weighting
     _run(runs, "pre_mid", config={"weighting": "pre_mid"})

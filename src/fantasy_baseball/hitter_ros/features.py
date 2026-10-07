@@ -142,7 +142,8 @@ def _era_inputs(t: pd.DataFrame, mode: str, player: dict[str, pd.Series]) -> dic
 
 
 def league_reference(t: pd.DataFrame, *, pieces: bool = False) -> pd.DataFrame:
-    """Each row's league rates for the five answers, known on its as-of date: the last
+    """Each row's league rates for the five answers (and, with ``pieces``, AVG's
+    pieces), known on its as-of date: the last
     three seasons plus this season before the date, pooled. Used to predict a player
     relative to his league and scale back (``relative_target``). Across 2011-2026 the
     3-season average missed next season's league R and HR rates by less than last
@@ -152,7 +153,7 @@ def league_reference(t: pd.DataFrame, *, pieces: bool = False) -> pd.DataFrame:
     built from a few days of this season's games would be mostly noise.
 
     ``pieces``: also the ``PIECES`` rates (#433)."""
-    names = [*COUNTS, "k"] if pieces else COUNTS
+    names = COUNTS_WITH_PIECES if pieces else COUNTS
     counts = pd.DataFrame(
         {c: t[f"lg_p3_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in names},
         index=t.index,
@@ -174,7 +175,7 @@ def league_answer_rates(t: pd.DataFrame, *, pieces: bool = False) -> pd.DataFram
     ``pieces``: also the ``PIECES`` rates (#433).
     """
     keys = [t["season"], t["week"]]
-    names = [*COUNTS, "k"] if pieces else COUNTS
+    names = COUNTS_WITH_PIECES if pieces else COUNTS
     counts = pd.DataFrame(
         {c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum") for c in names},
         index=t.index,
@@ -331,6 +332,8 @@ def aligned_inputs(table: pd.DataFrame, frame: pd.DataFrame, columns: list[str])
 
 # The counts the five answer rates are built from.
 COUNTS = ("pa", "ab", "h", "r", "hr", "rbi", "sb")
+# COUNTS plus what AVG's pieces need (K), #433.
+COUNTS_WITH_PIECES = (*COUNTS, *(c for c in PIECE_COUNTS if c not in COUNTS))
 
 
 def rates_from_counts(df: pd.DataFrame) -> pd.DataFrame:
@@ -384,10 +387,10 @@ def target_frame(
 
     ``pieces``: also the ``PIECES`` per window (#433), after all of those columns,
     weighted by their trials (AB for K/AB and HR/AB, BIP for BABIP)."""
-    windows = (("ros_", ""), *((f"ros_n{n}_", f"n{n}_") for n in horizons))
-    rate_parts, weight_parts = [], []
-    for prefix, tag in windows:
-        counts = t[[f"{prefix}{c}" for c in COUNTS]].rename(
+    rate_parts, weight_parts, piece_rate_parts, piece_weight_parts = [], [], [], []
+    names = COUNTS_WITH_PIECES if pieces else COUNTS
+    for prefix, tag in (("ros_", ""), *((f"ros_n{n}_", f"n{n}_") for n in horizons)):
+        counts = t[[f"{prefix}{c}" for c in names]].rename(
             columns=lambda c, p=prefix: c.removeprefix(p)
         )
         rate_parts.append(rates_from_counts(counts).add_prefix(tag))
@@ -399,17 +402,16 @@ def target_frame(
             index=t.index,
         )
         weight_parts.append(weights.fillna(0.0))
-    for prefix, tag in windows if pieces else ():
-        counts = pd.DataFrame(
-            {c: t[f"{prefix}{c}"].astype(float) for c in PIECE_COUNTS}, index=t.index
-        )
-        rate_parts.append(piece_rates(counts).add_prefix(tag))
-        ab, bip = counts["ab"], counts["ab"] - counts["k"] - counts["hr"]
-        weights = pd.DataFrame(
-            {f"{tag}k_ab": ab, f"{tag}hr_ab": ab, f"{tag}babip": bip}, index=t.index
-        )
-        weight_parts.append(weights.clip(lower=0).fillna(0.0))
-    return pd.concat(rate_parts, axis=1), pd.concat(weight_parts, axis=1)
+        if pieces:
+            piece_rate_parts.append(piece_rates(counts).add_prefix(tag))
+            ab = counts["ab"].astype(float)
+            bip = ab - counts["k"].astype(float) - counts["hr"].astype(float)
+            piece_weights = pd.DataFrame(
+                {f"{tag}k_ab": ab, f"{tag}hr_ab": ab, f"{tag}babip": bip}, index=t.index
+            )
+            piece_weight_parts.append(piece_weights.clip(lower=0).fillna(0.0))
+    rates = pd.concat([*rate_parts, *piece_rate_parts], axis=1)
+    return rates, pd.concat([*weight_parts, *piece_weight_parts], axis=1)
 
 
 class Standardizer:

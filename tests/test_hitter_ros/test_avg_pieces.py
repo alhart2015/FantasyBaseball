@@ -117,6 +117,9 @@ def test_fit_season_refuses_targets_without_pieces(table):
     with pytest.raises(ValueError, match="pieces"):
         fit_season(table, input_frame(table), y_all, w_all, 2025, NetConfig(avg_pieces="extra"))
     y_all, w_all = target_frame(table, (25,), pieces=True)
+    # Piece columns with pieces off would train them as plain standardized rates.
+    with pytest.raises(ValueError, match="pieces"):
+        fit_season(table, input_frame(table), y_all, w_all, 2025, NetConfig(avg_pieces="none"))
     with pytest.raises(ValueError, match="head_layers"):
         fit_season(table, input_frame(table), y_all, w_all, 2025, NetConfig(head_layers=8))
 

@@ -119,8 +119,11 @@ def fit_season(
     in_weeks = WEEKS[weeks](table["week"])
     pieces = config.avg_pieces != "none"
     out_cols = list(y_all.columns)  # what predictions hold, whatever the net outputs
-    if pieces and not set(PIECES) <= set(out_cols):
-        raise ValueError(f"avg_pieces {config.avg_pieces}: build targets with pieces=True")
+    if pieces != any(target_stat(c) in PIECES for c in out_cols):
+        raise ValueError(
+            f"avg_pieces {config.avg_pieces}: build targets with pieces={pieces} "
+            "(target_frame), so the piece columns and the setting agree"
+        )
     if pieces and config.head_layers:
         raise ValueError("head_layers splits outputs into groups of 5; use --avg-pieces none")
     if config.avg_pieces == "derived":  # no AVG output: built from the pieces below
@@ -485,6 +488,9 @@ def main() -> int:
     out = RUNS / args.name
     if out.exists() and any(out.iterdir()) and not args.overwrite:
         parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
+    if config.head_layers and config.avg_pieces != "none":
+        # Checked here, before an old run of this name is deleted (fit_season checks too).
+        parser.error("--head-layers splits outputs into groups of 5; add --avg-pieces none")
     if config.seq != "none" and not TOKENS.exists():
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
 
