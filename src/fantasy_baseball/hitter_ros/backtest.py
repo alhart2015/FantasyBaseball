@@ -18,6 +18,13 @@ Every scored row is also tagged vet or rookie (#433): a vet had at least
 season, or by the snapshot mid-season). Projecting the two is a different problem (a vet
 has MLB history; a rookie needs minor-league stats and pedigree we don't have yet), so
 the summary scores each group on its own, with pairs formed only inside a group.
+
+And every row is tagged ``relevant`` (#442): the player was among the
+``RELEVANT_TOP`` hitters by fantasy value (SGP in this league's categories) in the
+FanGraphs projections being compared against -- the preseason files, or that snapshot's
+rest-of-season files. Those are the hitters a team would actually roster; a score over
+everyone is mostly about bench bats nobody drafts. A season or snapshot without
+FanGraphs files has no tag (NA). The summary scores the relevant hitters on their own.
 """
 
 from __future__ import annotations
@@ -32,6 +39,7 @@ from fantasy_baseball.hitter_ros.baselines import baseline_predictions
 from fantasy_baseball.hitter_ros.evaluate import (
     SCALE,
     blend,
+    fantasy_value,
     load_systems,
     mae_table,
     order_scores,
@@ -50,6 +58,8 @@ from fantasy_baseball.hitter_ros.features import (
     rates_from_counts,
 )
 from fantasy_baseball.pitch_data.store import connect
+from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.utils.constants import Category
 
 PRESEASON_MIN_PA = 300
 SNAPSHOT_MIN_PA = 100
@@ -61,6 +71,10 @@ VET_MIN_CAREER_PA = 300
 # store (it starts in 2008, so from 2012 on); before that a vet can look like a rookie.
 MIN_HISTORY_SEASONS = 4
 GROUPS = ("vet", "rookie")  # scored separately; "unknown" rows are in neither
+# The hitters that matter in a fantasy league (#442): this many by FanGraphs' value.
+RELEVANT_TOP = 200
+# Young hitters among them, shown on their own: under this many MLB PA when projected.
+YOUNG_MAX_CAREER_PA = 700
 
 
 def vet_or_unknown_rows(table: pd.DataFrame, vet_min_pa: float) -> np.ndarray:
@@ -83,16 +97,47 @@ def _with_fangraphs(
     return projections
 
 
+def league_denominators(config_path: Path) -> dict[Category, float]:
+    """The league's SGP denominators (``league.yaml``'s overrides on the defaults); the
+    defaults alone when there is no league file."""
+    if not config_path.exists():
+        return get_sgp_denominators()
+    from fantasy_baseball.config import load_config
+
+    return get_sgp_denominators(load_config(config_path).sgp_overrides)
+
+
+def relevant_players(
+    systems: dict[str, pd.DataFrame], denoms: dict[Category, float], top: int = RELEVANT_TOP
+) -> pd.Index:
+    """The ``top`` hitters by fantasy value, averaged over the FanGraphs systems that
+    project each one."""
+    values = pd.concat([fantasy_value(p, denoms) for p in systems.values()], axis=1)
+    return values.mean(axis=1).nlargest(top).index
+
+
+def _tag_relevant(
+    scored: pd.DataFrame, systems: dict[str, pd.DataFrame], denoms: dict[Category, float] | None
+) -> pd.DataFrame:
+    if not systems:
+        return scored.assign(relevant=pd.array([pd.NA] * len(scored), dtype="boolean"))
+    denoms = denoms if denoms is not None else get_sgp_denominators()
+    top = relevant_players(systems, denoms, RELEVANT_TOP)
+    return scored.assign(relevant=pd.array(scored["player_id"].isin(top), dtype="boolean"))
+
+
 def preseason(
     table: pd.DataFrame,
     candidates: dict[str, pd.DataFrame],
     season: int,
     projections_dir: Path,
+    denoms: dict[Category, float] | None = None,
 ) -> pd.DataFrame:
     """Score week-0 rows of ``season``. ``candidates``: our predictions and baselines.
 
     Seasons without FanGraphs files (before 2022) are still scored, on ours and the
     baselines only, so our own variants can be compared over many more seasons.
+    ``denoms``: SGP denominators for the ``relevant`` tag (None: the code defaults).
     """
     systems = load_systems(projections_dir / str(season), preseason=True)
     week0 = table[(table["season"] == season) & (table["week"] == 0)].set_index("player_id")
@@ -103,7 +148,7 @@ def preseason(
         for name, p in candidates.items()
     }
     scored = scored_players(_with_fangraphs(ours, systems), actual, PRESEASON_MIN_PA)
-    return scored.assign(season=season)
+    return _tag_relevant(scored, systems, denoms).assign(season=season)
 
 
 def _season_games(store: Path, season: int) -> pd.DataFrame:
@@ -127,8 +172,9 @@ def snapshots(
     season: int,
     projections_dir: Path,
     store: Path,
+    denoms: dict[Category, float] | None = None,
 ) -> pd.DataFrame | None:
-    """Score every dated ROS snapshot of ``season``."""
+    """Score every dated ROS snapshot of ``season``; ``denoms`` as for :func:`preseason`."""
     root = projections_dir / str(season) / "rest_of_season"
     if not root.is_dir():
         return None
@@ -150,6 +196,7 @@ def snapshots(
             known = p[p["as_of"] <= snap]
             ours[name] = known.groupby("player_id").tail(1).set_index("player_id")[list(TARGETS)]
         scored = scored_players(_with_fangraphs(ours, systems), actual, SNAPSHOT_MIN_PA)
+        scored = _tag_relevant(scored, systems, denoms)
         parts.append(scored.assign(season=season, snapshot=snap.date().isoformat()))
     return pd.concat(parts, ignore_index=True) if parts else None
 
@@ -210,15 +257,20 @@ def tag_experience(scored: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
 
 
 def score_predictions(
-    table: pd.DataFrame, preds: pd.DataFrame, projections_dir: Path, store: Path
+    table: pd.DataFrame,
+    preds: pd.DataFrame,
+    projections_dir: Path,
+    store: Path,
+    denoms: dict[Category, float] | None = None,
 ) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
     """(preseason, snapshots) scored frames for every season in ``preds``, each row
-    tagged vet or rookie (``tag_experience``)."""
+    tagged vet or rookie (``tag_experience``) and ``relevant`` or not (``denoms``: the
+    league's SGP denominators; None = the code defaults)."""
     pre_parts, snap_parts = [], []
     for season in sorted(int(s) for s in preds["season"].unique()):
         candidates = {OURS: preds[preds["season"] == season], **baseline_predictions(table, season)}
-        pre_parts.append(preseason(table, candidates, season, projections_dir))
-        snap = snapshots(candidates, season, projections_dir, store)
+        pre_parts.append(preseason(table, candidates, season, projections_dir, denoms))
+        snap = snapshots(candidates, season, projections_dir, store, denoms)
         if snap is not None:
             snap_parts.append(snap)
     return (
@@ -386,6 +438,39 @@ def _group_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     return md
 
 
+def _relevant_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
+    """Every score over only the fantasy-relevant hitters (``RELEVANT_TOP`` by
+    FanGraphs' value), averaged over the seasons or snapshots (``unit``) that have the
+    tag, plus their young hitters (under ``YOUNG_MAX_CAREER_PA`` MLB PA) on their own.
+    Pairs form only inside the set. Empty for a frame scored before the tag existed."""
+    if "relevant" not in frame.columns:
+        return []
+    rel = frame[frame["relevant"].fillna(False).astype(bool)]
+    if rel.empty:
+        return []
+    rel = systems_in_every_season(rel, unit)
+    n = rel.drop_duplicates([unit, "player_id"]).groupby(unit).size().mean()
+    md = [
+        "",
+        f"**Fantasy-relevant hitters** (top {RELEVANT_TOP} by FanGraphs' projected value "
+        f"in this league's categories; {n:.0f} of them scored per {unit}; pairs only among "
+        f"them; mean over the {rel[unit].nunique()} {unit}s with FanGraphs files)",
+        *_mean_blocks(rel, unit),
+    ]
+    if "career_pa" in rel.columns:
+        young = rel[rel["career_pa"] < YOUNG_MAX_CAREER_PA]
+        if not young.empty:
+            n = young.drop_duplicates([unit, "player_id"]).groupby(unit).size().mean()
+            md += [
+                "",
+                f"Of them, under {YOUNG_MAX_CAREER_PA} MLB PA when projected, {n:.0f} per "
+                f"{unit} -- gap-weighted pairwise (%):",
+                "",
+                to_markdown(order_table(young, "pairwise_w"), digits=1),
+            ]
+    return md
+
+
 def league_forecast_lines(table: pd.DataFrame, seasons: list[int]) -> list[str]:
     """Markdown: the preseason league-rate forecast (the last three seasons, the
     multiplier that turns a relative projection back into rates) vs. the league's
@@ -437,6 +522,7 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         md += ["", "**Mean over seasons** (systems present every season)"]
         md += _mean_blocks(pooled, "season")
         md += _group_blocks(pooled, "season")
+        md += _relevant_blocks(pooled, "season")
         fg_seasons = pre.loc[pre["system"] == BLEND, "season"].unique()
         if 0 < len(fg_seasons) < pre["season"].nunique():
             # Older seasons have no FanGraphs files; keep the comparison with them visible.
@@ -459,4 +545,5 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         every = systems_in_every_season(snap, "snapshot")
         md += _mean_blocks(every, "snapshot")
         md += _group_blocks(every, "snapshot")
+        md += _relevant_blocks(every, "snapshot")
     return md
