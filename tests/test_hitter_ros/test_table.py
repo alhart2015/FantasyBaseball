@@ -344,7 +344,8 @@ def test_steal_opportunities_positions_and_team_steals(store):
     row = _row(df, HITTER, 2025, 1)  # as of 2025-04-08: 7 games played this season
     assert row["std_steal_opp2"] == 7 and row["std_steal_opp3"] == 0
     assert row["p1_steal_opp2"] == 10  # all of 2024
-    assert row["ros_pa"] > 0 and "ros_steal_opp2" not in df.columns  # never an answer
+    # Going forward they're an answer for SB's pieces (#413): the other 14 games, one each.
+    assert row["ros_steal_opp2"] == 14 and row["ros_steal_opp3"] == 0
     assert row["std_starts_cf"] == 7 and row["std_starts_c"] == 0
     assert row["std_team_sb"] == 0 and row["p1_team_cs"] == 0
     assert _row(df, OTHER, 2025, 1)["std_steal_opp2"] == 0  # he hit; he wasn't on base

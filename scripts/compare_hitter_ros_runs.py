@@ -116,6 +116,12 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
             f"+avg_pieces_{meta['config']['avg_pieces']}"
             if meta["config"].get("avg_pieces", "none") != "none"
             else ""
+        )
+        # SB's pieces (#413) add Poisson and binomial deviances to val_loss.
+        + (
+            f"+sb_pieces_{meta['config']['sb_pieces']}"
+            if meta["config"].get("sb_pieces", "none") != "none"
+            else ""
         ),
         # Runs from before the weighting setting all used PA weighting. A --split run's
         # val_loss averages two models, each over its own rows.
