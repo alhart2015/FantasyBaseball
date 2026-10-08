@@ -41,18 +41,34 @@ def _systems():
     return {"steamer": a, "zips": b}
 
 
+def _actual(breakout):
+    """What happened: player ``breakout`` hit like a star, everyone else like a bench bat."""
+    ids = pd.Index([1, 2, 3, 4], name="player_id")
+    bench = {"pa": 300.0, "ab": 270.0, "r": 0.10, "hr": 0.02, "rbi": 0.10, "sb": 0.0, "avg": 0.230}
+    df = pd.DataFrame([bench] * 4, index=ids)
+    df.loc[breakout, ["hr", "avg"]] = [0.08, 0.320]
+    return df
+
+
 def test_relevant_players_rank_by_mean_value_over_systems():
-    assert list(backtest.relevant_players(_systems(), DENOMS, top=2)) == [1, 2]
-    assert list(backtest.relevant_players(_systems(), DENOMS, top=1)) == [1]
+    # Nobody broke out beyond the projected top: the set is the projected top.
+    assert list(backtest.relevant_players(_systems(), _actual(1), DENOMS, top=2)) == [1, 2]
+    assert list(backtest.relevant_players(_systems(), _actual(1), DENOMS, top=1)) == [1]
+
+
+def test_a_breakout_the_projections_missed_counts_too():
+    # Player 4 wasn't projected at all and player 3 was projected last; both broke out.
+    assert list(backtest.relevant_players(_systems(), _actual(4), DENOMS, top=1)) == [1, 4]
+    assert list(backtest.relevant_players(_systems(), _actual(3), DENOMS, top=1)) == [1, 3]
 
 
 def test_rows_are_tagged_and_untagged_without_fangraphs(monkeypatch):
     monkeypatch.setattr(backtest, "RELEVANT_TOP", 1)
-    scored = pd.DataFrame({"player_id": [1, 3, 3], "system": ["ours"] * 3})
-    tagged = backtest._tag_relevant(scored, _systems(), DENOMS)
+    scored = pd.DataFrame({"player_id": [1, 2, 3, 3], "system": ["ours"] * 4})
+    tagged = backtest._tag_relevant(scored, _systems(), _actual(3), DENOMS)
     assert tagged["relevant"].dtype == "boolean"
-    assert tagged["relevant"].tolist() == [True, False, False]
-    assert backtest._tag_relevant(scored, {}, DENOMS)["relevant"].isna().all()
+    assert tagged["relevant"].tolist() == [True, False, True, True]
+    assert backtest._tag_relevant(scored, {}, _actual(3), DENOMS)["relevant"].isna().all()
 
 
 def _scored(unit):

@@ -19,8 +19,8 @@ train_hitter_ros.py writes last):
   (pairs only inside a group). Runs scored before the vet/rookie tag lack these rows;
   re-score them with score_hitter_ros_run.py.
 * Fantasy-relevant hitters (#442): the main-score gap to the blend over only the top
-  ``RELEVANT_TOP`` hitters by FanGraphs' projected fantasy value (pairs only among
-  them). Runs scored before the tag lack these rows; re-score them.
+  ``RELEVANT_TOP`` hitters by FanGraphs' projected or by actual fantasy value (pairs
+  only among them). Runs scored before the tag lack these rows; re-score them.
 
 Usage:
     python scripts/compare_hitter_ros_runs.py 001-baseline-mlp 002a-lr3e-4 002b-lr1e-4
