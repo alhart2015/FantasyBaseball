@@ -105,3 +105,16 @@ def test_compare_reports_the_relevant_gap():
 
 def test_league_denominators_fall_back_to_the_defaults(tmp_path):
     assert backtest.league_denominators(tmp_path / "missing.yaml") == DENOMS
+
+
+def test_summary_keeps_the_blend_for_relevant_hitters_when_older_seasons_are_scored():
+    # A season without FanGraphs files drops the blend from the all-season means; the
+    # relevant hitters (tagged only in FanGraphs seasons) must still be compared with it.
+    fg = _scored("season")
+    old = fg[(fg["season"] == "2025") & (fg["system"] == "ours")]
+    old = old.assign(season="2019", relevant=pd.array([pd.NA] * len(old), dtype="boolean"))
+    pre = pd.concat([fg, old], ignore_index=True)
+    md = backtest.summarize(pre, None)
+    start = next(i for i, line in enumerate(md) if "Fantasy-relevant hitters" in line)
+    end = next(i for i in range(start + 1, len(md)) if md[i].startswith("**"))
+    assert any(f"| {backtest.BLEND} |" in line for line in md[start:end])
