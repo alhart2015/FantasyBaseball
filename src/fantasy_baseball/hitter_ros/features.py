@@ -265,11 +265,13 @@ def input_frame(
     steal: bool = False,
     recent: bool = False,
     zone: str = "statcast",
+    xba_ab: bool = False,
 ) -> pd.DataFrame:
     """Model inputs for every table row: rates per window plus context. NaN = unknown.
     ``era``: see :func:`_era_inputs`. ``steal``: add :func:`_steal_inputs`. ``recent``:
     add the same per-window rates over the last 7 and 14 days (#419). ``zone``: which
-    strike zone the zone / chase inputs use (``ZONES``, #433)."""
+    strike zone the zone / chase inputs use (``ZONES``, #433). ``xba_ab``: add
+    :func:`_xba_per_ab` per window (#433)."""
     if era not in ERA_MODES:
         raise ValueError(f"unknown era mode {era!r}")
     if zone not in ZONES:
@@ -300,7 +302,20 @@ def input_frame(
             cols.update(_window_rates(t, w, zone))
     if steal:
         cols.update(_steal_inputs(t))
+    if xba_ab:
+        for w in (*WINDOWS, *(RECENT_WINDOWS if recent else ())):
+            cols[f"{w}_xba_ab"] = _xba_per_ab(t, w, cols[f"{w}_xba_con"])
     return pd.DataFrame(cols, index=t.index)
+
+
+def _xba_per_ab(t: pd.DataFrame, w: str, xba_con: pd.Series) -> pd.Series:
+    """Expected AVG per at-bat in window ``w``, strikeouts as outs (#433): xBA on contact
+    times the share of at-bats that weren't strikeouts. The net has both pieces, but
+    hitters with 300-700 MLB PA showed it under-used them: nudging its AVG toward this
+    season's xBA per AB ordered them better in every season 2022-2026. ``xba_con``:
+    the window's xBA on contact, from :func:`_window_rates`."""
+    ab = t[f"{w}_ab"].astype(float)
+    return xba_con * _div(ab - t[f"{w}_k"].astype(float), ab)
 
 
 # A feature file built for the table (probes #417, minor-league inputs #435) has one row

@@ -43,6 +43,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros import backtest
+from fantasy_baseball.hitter_ros.backtest import league_denominators
 from fantasy_baseball.hitter_ros.features import (
     ERA_MODES,
     ERA_TABLE_COLUMNS,
@@ -99,6 +100,7 @@ TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 TOKENS = PROJECT_ROOT / "data" / "hitter_ros" / "pa_tokens.parquet"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
+LEAGUE = PROJECT_ROOT / "config" / "league.yaml"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 
 logger = logging.getLogger("train_hitter_ros")
@@ -382,6 +384,12 @@ def main() -> int:
         help="add the last 7 and 14 days as input windows (#419)",
     )
     parser.add_argument(
+        "--xba-ab-inputs",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.xba_ab_inputs,
+        help="add expected AVG per at-bat (strikeouts as outs) per window (#433)",
+    )
+    parser.add_argument(
         "--milb",
         default=defaults.milb,
         help="add graded minor-league inputs (#435) from data/hitter_ros/milb_<name>.parquet "
@@ -493,6 +501,7 @@ def main() -> int:
             horizons=args.horizons,
             horizon_weights=args.horizon_weights,
             recent_inputs=args.recent_inputs,
+            xba_ab_inputs=args.xba_ab_inputs,
             head_layers=args.head_layers,
             milb=args.milb,
             parks=args.parks,
@@ -547,6 +556,7 @@ def main() -> int:
         steal=config.steal_inputs,
         recent=config.recent_inputs,
         zone=config.zone,
+        xba_ab=config.xba_ab_inputs,
     )
     if config.probes != "none":
         probes_file = probe_path(TABLE.parent, config.probes)
@@ -581,6 +591,11 @@ def main() -> int:
     batcher = None
     if config.seq != "none":
         batcher = SequenceBatcher(pd.read_parquet(TOKENS), table, config.seq_len, device())
+    # Read before training, so a bad league file fails now rather than after the fits.
+    try:
+        denoms = league_denominators(LEAGUE)
+    except ValueError as err:
+        parser.error(f"{LEAGUE}: {err}")
     # Only now, with every input loaded, replace an old run of the same name.
     if out.exists():
         shutil.rmtree(out)
@@ -618,7 +633,7 @@ def main() -> int:
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))
-    pre, snap = backtest.score_predictions(table, predictions, PROJECTIONS, STORE)
+    pre, snap = backtest.score_predictions(table, predictions, PROJECTIONS, STORE, denoms)
     backtest.write_scores(out, pre, snap)
     md = [
         f"### Run `{args.name}`",

@@ -36,6 +36,12 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.features import TARGETS, rates_from_counts
+from fantasy_baseball.sgp.player_value import (
+    REPLACEMENT_AVG,
+    calculate_counting_sgp,
+    calculate_hitting_rate_sgp,
+)
+from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, Category
 
 logger = logging.getLogger(__name__)
 
@@ -47,7 +53,7 @@ PRESEASON_MIN_TOP_PA = 450
 
 
 def load_fangraphs_hitters(path: Path) -> pd.DataFrame:
-    """One FanGraphs hitter CSV -> rates (+ pa) indexed by MLBAM id."""
+    """One FanGraphs hitter CSV -> rates (+ pa, ab) indexed by MLBAM id."""
     raw = pd.read_csv(path, encoding="utf-8-sig")
     raw = raw.assign(MLBAMID=pd.to_numeric(raw["MLBAMID"], errors="coerce"))
     raw = raw[raw["MLBAMID"].notna()]
@@ -59,8 +65,39 @@ def load_fangraphs_hitters(path: Path) -> pd.DataFrame:
     counts = raw.rename(columns={c: c.lower() for c in ("PA", "AB", "H", "R", "HR", "RBI", "SB")})
     rates = rates_from_counts(counts)
     rates["pa"] = counts["pa"].astype(float)
+    rates["ab"] = counts["ab"].astype(float)
     rates.index = pd.Index(raw["MLBAMID"], name="player_id")
     return rates
+
+
+_COUNTING = (("r", Category.R), ("hr", Category.HR), ("rbi", Category.RBI), ("sb", Category.SB))
+
+
+def fantasy_value(projection: pd.DataFrame, denoms: dict[Category, float]) -> pd.Series:
+    """Roto value (SGP) of a projection, one per player: R, HR, RBI and SB from rate x
+    PA, AVG as marginal hits over a replacement hitter on ``ab`` at-bats
+    (``sgp.player_value``). ``projection``: rates plus ``pa`` and ``ab``, as from
+    :func:`load_fangraphs_hitters`."""
+    pa = projection["pa"].astype(float)
+    value = sum(
+        (
+            calculate_counting_sgp(projection[s].astype(float) * pa, denoms[cat])
+            for s, cat in _COUNTING
+        ),
+        start=pd.Series(0.0, index=projection.index),
+    )
+    # The sgp helpers are plain arithmetic, so they work elementwise on Series too.
+    avg = pd.Series(
+        calculate_hitting_rate_sgp(
+            player_avg=projection["avg"].astype(float),
+            player_ab=projection["ab"].astype(float),
+            replacement_avg=REPLACEMENT_AVG,
+            sgp_denominator=denoms[Category.AVG],
+            team_ab=DEFAULT_TEAM_AB,
+        ),
+        index=projection.index,
+    )
+    return (value + avg.fillna(0.0)).rename("value")
 
 
 def load_systems(directory: Path, *, preseason: bool = False) -> dict[str, pd.DataFrame]:

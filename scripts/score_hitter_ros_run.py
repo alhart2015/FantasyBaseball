@@ -29,16 +29,20 @@ from fantasy_baseball.hitter_ros.horizons import (
     score_horizons,
     write_horizon_scores,
 )
+from fantasy_baseball.utils.constants import Category
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
+LEAGUE = PROJECT_ROOT / "config" / "league.yaml"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 
 
-def score_run(table: pd.DataFrame, run: Path) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+def score_run(
+    table: pd.DataFrame, run: Path, denoms: dict[Category, float]
+) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
     preds = pd.read_parquet(run / "predictions.parquet")
-    pre_all, snap_all = backtest.score_predictions(table, preds, PROJECTIONS, STORE)
+    pre_all, snap_all = backtest.score_predictions(table, preds, PROJECTIONS, STORE, denoms)
     backtest.write_scores(run, pre_all, snap_all)
     seasons = sorted(int(x) for x in preds["season"].unique())
     md = [
@@ -84,7 +88,8 @@ def main() -> int:
     parser.add_argument("runs", nargs="+")
     args = parser.parse_args()
     table = pd.read_parquet(TABLE)
-    results = {name: score_run(table, RUNS / name) for name in args.runs}
+    denoms = backtest.league_denominators(LEAGUE)
+    results = {name: score_run(table, RUNS / name, denoms) for name in args.runs}
     if len(results) > 1:
         seed_range(results)
     return 0
