@@ -502,3 +502,24 @@ def test_horizon_scores_against_a_fresh_fangraphs_snapshot(table, tmp_path):
     assert set(fg.system) == {"head", "ros_rate", "fg_ros"}
     assert set(fg.snapshot) == {"2025-w01", "2025-w02"}  # within 7 days of the snapshot
     assert len(scored[scored.comparison == "all"]) > len(fg)
+
+
+def test_league_reference_sb_leans_on_last_season_and_this_one():
+    """#413: SB's league level from last season plus this season, this season's games
+    counted SB_STD_WEIGHT times; the other answers keep the 3-season pool."""
+    from fantasy_baseball.hitter_ros.features import COUNTS, SB_STD_WEIGHT, league_reference
+
+    assert SB_STD_WEIGHT == 3
+    zeros = {f"lg_{w}_{c}": [0.0] for w in ("p1", "p3", "std") for c in COUNTS}
+    t = pd.DataFrame(zeros)
+    # Three seasons back: 3000 PA, 30 SB, 60 HR; last season (part of them): 1000 PA,
+    # 20 SB. This season so far: 500 PA, 5 SB, 10 HR.
+    t[["lg_p3_pa", "lg_p3_sb", "lg_p3_hr"]] = [3000.0, 30.0, 60.0]
+    t[["lg_p1_pa", "lg_p1_sb"]] = [1000.0, 20.0]
+    t[["lg_std_pa", "lg_std_sb", "lg_std_hr"]] = [500.0, 5.0, 10.0]
+    ref = league_reference(t).iloc[0]
+    assert ref["sb"] == pytest.approx((20 + 3 * 5) / (1000 + 3 * 500))
+    assert ref["hr"] == pytest.approx(70 / 3500)
+    # Preseason (nothing this season yet): last season alone.
+    t[["lg_std_pa", "lg_std_sb", "lg_std_hr"]] = [0.0, 0.0, 0.0]
+    assert league_reference(t).iloc[0]["sb"] == pytest.approx(20 / 1000)

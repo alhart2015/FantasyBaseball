@@ -487,9 +487,10 @@ def _relevant_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
 
 
 def league_forecast_lines(table: pd.DataFrame, seasons: list[int]) -> list[str]:
-    """Markdown: the preseason league-rate forecast (the last three seasons, the
-    multiplier that turns a relative projection back into rates) vs. the league's
-    actual rates that season, so its error shows on its own (#424). Empty for a table
+    """Markdown: the preseason league-rate forecast (``league_reference``: the last
+    three seasons, last season for SB; the multiplier that turns a relative projection
+    back into rates) vs. the league's actual rates that season, so its error shows on
+    its own (#424). Empty for a table
     built before the league columns (#421): the forecast can't be computed there."""
     if not set(ERA_TABLE_COLUMNS) <= set(table.columns):
         return []
@@ -503,7 +504,7 @@ def league_forecast_lines(table: pd.DataFrame, seasons: list[int]) -> list[str]:
     err.loc["mean abs"] = err.abs().mean()
     return [
         "",
-        "#### League-level forecast (last 3 seasons) minus actual, preseason",
+        "#### League-level forecast (last 3 seasons; SB last season) minus actual, preseason",
         "",
         "Same units as MAE; positive = forecast too high. Relative scores ignore this; "
         "raw MAE pays it for every player.",
