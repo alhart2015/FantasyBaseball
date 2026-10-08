@@ -49,12 +49,14 @@ from fantasy_baseball.hitter_ros.features import (
     PIECES,
     STEAL_TABLE_COLUMNS,
     TARGETS,
+    ZONES,
     Standardizer,
     avg_from_pieces,
     column_horizon,
     input_frame,
     league_answer_rates,
     league_reference,
+    read_build_options,
     target_frame,
     target_stat,
 )
@@ -87,6 +89,7 @@ from fantasy_baseball.hitter_ros.probes import (
 )
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.hitter_ros.table import HORIZONS
+from fantasy_baseball.hitter_ros.table import build_options as table_build_options
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
@@ -387,6 +390,12 @@ def main() -> int:
         "(build them first with scripts/build_hitter_ros_parks.py --name <name>; none = off)",
     )
     parser.add_argument(
+        "--zone",
+        choices=list(ZONES),
+        default=defaults.zone,
+        help="strike zone for the zone / chase inputs (#433): Savant's, or one fixed box",
+    )
+    parser.add_argument(
         "--head-layers",
         type=_non_negative_int,
         default=defaults.head_layers,
@@ -480,6 +489,7 @@ def main() -> int:
             count_loss=args.count_loss,
             avg_loss=args.avg_loss,
             avg_pieces=args.avg_pieces,
+            zone=args.zone,
         )
     except ValueError as err:
         parser.error(str(err))
@@ -508,13 +518,24 @@ def main() -> int:
     needed = {
         "ros_n25_pa": config.horizons,
         "ros_n25_k": config.horizons and config.avg_pieces != "none",
+        "std_fzone_pitches": config.zone == "fixed",
         "l7_pa": config.recent_inputs,
     }
     stale = [col for col, used in needed.items() if used and col not in table.columns]
     if stale:
         parser.error(f"{TABLE} predates {stale}; run scripts/build_hitter_ros_table.py")
+    if config.zone == "fixed" and read_build_options(TABLE) != table_build_options():
+        parser.error(
+            f"{TABLE}'s fixed-zone counts were built with "
+            f"{read_build_options(TABLE) or 'unknown options'}, not the current "
+            f"{table_build_options()}; run scripts/build_hitter_ros_table.py"
+        )
     x_all = input_frame(
-        table, era=config.era, steal=config.steal_inputs, recent=config.recent_inputs
+        table,
+        era=config.era,
+        steal=config.steal_inputs,
+        recent=config.recent_inputs,
+        zone=config.zone,
     )
     if config.probes != "none":
         probes_file = probe_path(TABLE.parent, config.probes)

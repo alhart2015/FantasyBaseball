@@ -8,7 +8,8 @@ quality features of models pretrained only before Statcast's contact classes.
 Writes data/hitter_ros/probes_<run>.parquet: player_id, season, week, as_of + the features.
 Then train with:  python scripts/train_hitter_ros.py --probes <run> ...
 
-The token file must be the one the run was pretrained on (p003: pitch_tokens.parquet).
+The token file must be the one the run was pretrained on (p004: pitch_tokens.parquet),
+with Savant's strike zone: the probe pitches' heights (probes.LOCATIONS) are in it.
 
 Usage:
     python scripts/build_hitter_ros_probes.py --run p003
@@ -32,10 +33,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.net import device
+from fantasy_baseball.hitter_ros.pitch_tokens import recorded_token_options, token_options
 from fantasy_baseball.hitter_ros.pretrain import (
     PitchStore,
     PretrainConfig,
     PretrainModel,
+    run_token_options,
     tokens_fingerprint,
 )
 from fantasy_baseball.hitter_ros.probes import (
@@ -72,6 +75,16 @@ def main() -> int:
         parser.error(f"{run_dir} has no run.json; is the pretraining run name right?")
     run_meta = json.loads((run_dir / "run.json").read_text())
     config = PretrainConfig(**run_meta["config"])
+    trained_on, given = run_token_options(run_meta), recorded_token_options(args.tokens)
+    if given != trained_on:
+        parser.error(
+            f"{args.tokens} was built with {given}; {args.run} was pretrained on {trained_on}"
+        )
+    if trained_on != token_options("statcast"):
+        # probes.LOCATIONS gives heights in Savant's zone (e.g. 1.3 = a bit above his top).
+        parser.error(
+            f"probe pitch heights are in Savant's strike zone; {args.run} has {trained_on}"
+        )
     table = pd.read_parquet(TABLE, columns=[*PROBE_KEYS, "as_of"])
     seasons = sorted(args.seasons or table["season"].unique())
     tokens = pd.read_parquet(args.tokens)

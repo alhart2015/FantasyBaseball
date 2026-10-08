@@ -168,7 +168,7 @@ def test_pretrain_script_keeps_an_old_run_when_tokens_are_missing(tmp_path, monk
     old.mkdir(parents=True)
     (old / "run.json").write_text("{}")
     monkeypatch.setattr(pretrain_hitter_ros, "PRETRAIN", tmp_path / "p")
-    monkeypatch.setattr(pretrain_hitter_ros, "TOKENS", tmp_path / "missing.parquet")
+    monkeypatch.setattr(pretrain_hitter_ros, "TOKEN_DIR", tmp_path / "no_tokens")
     monkeypatch.setattr("sys.argv", ["pretrain", "--name", "keep", "--overwrite"])
     with pytest.raises(SystemExit):
         pretrain_hitter_ros.main()

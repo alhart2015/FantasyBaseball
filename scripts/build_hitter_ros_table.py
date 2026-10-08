@@ -10,13 +10,14 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.table import build_table
+from fantasy_baseball.hitter_ros.table import build_options, build_table
 
 DEFAULT_STORE = PROJECT_ROOT / "data" / "pitch_data"
 DEFAULT_OUT = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
@@ -31,6 +32,7 @@ def main() -> int:
     df = build_table(args.store)
     args.out.parent.mkdir(parents=True, exist_ok=True)
     df.to_parquet(args.out, index=False)
+    args.out.with_suffix(".json").write_text(json.dumps(build_options(), indent=2))
 
     print(f"{len(df)} rows x {len(df.columns)} columns -> {args.out}")
     print("\nseason  rows  hitters  weeks")

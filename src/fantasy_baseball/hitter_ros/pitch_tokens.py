@@ -23,11 +23,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import numpy as np
 import pandas as pd
 
+from fantasy_baseball.hitter_ros.features import (
+    FIXED_ZONE,
+    ZONES,
+    read_build_options,
+    zone_options,
+)
 from fantasy_baseball.pitch_data.store import connect
 
 logger = logging.getLogger(__name__)
@@ -92,7 +99,7 @@ CONTEXT_FEATURES = (
     "has_spin",
     "spin",  # release_spin_rate / 2500
     "loc_in",  # plate_x toward the hitter (inside), feet
-    "loc_up",  # height within the hitter's zone: 0 = bottom, 1 = top
+    "loc_up",  # height within the strike zone (see ``zone``): 0 = bottom, 1 = top
     "balls",  # / 3
     "strikes",  # / 2
     "outs",  # / 2
@@ -105,6 +112,24 @@ CONTEXT_FEATURES = (
 )
 OUTCOME_FEATURES = (*(f"out_{o}" for o in OUTCOMES), "ev", "la")  # ev / 100, la / 50
 TOKEN_FEATURES = (*CONTEXT_FEATURES, *OUTCOME_FEATURES)
+
+
+def token_path(root: Path, zone: str) -> Path:
+    """Where ``scripts/build_hitter_ros_pitch_tokens.py --zone <zone>`` writes the tokens
+    under ``root``; the strike zone is recorded next to them (:func:`token_options`)."""
+    zone_options(zone)  # validates
+    return root / ("pitch_tokens.parquet" if zone == "statcast" else f"pitch_tokens_{zone}.parquet")
+
+
+def token_options(zone: str) -> dict[str, Any]:
+    """The build options a token file records (``<file>.json``): its strike zone."""
+    return zone_options(zone)
+
+
+def recorded_token_options(path: Path) -> dict[str, Any]:
+    """A token file's recorded build options. Token files from before #433 recorded none;
+    they were all built with Savant's zone."""
+    return read_build_options(path) or token_options("statcast")
 
 
 def outcome_index(description: pd.Series, bb_class: pd.Series, pitch_type: pd.Series) -> np.ndarray:
@@ -132,11 +157,12 @@ def outcome_index(description: pd.Series, bb_class: pd.Series, pitch_type: pd.Se
     return idx
 
 
-def build_pitch_tokens(store: Path) -> pd.DataFrame:
+def build_pitch_tokens(store: Path, zone: str = "statcast") -> pd.DataFrame:
     """One row per regular-season pitch, sorted by hitter, then game, PA and pitch.
 
     Built a season at a time to keep memory down; ``gap`` is recomputed over the whole
-    frame at the end so a hitter's first pitch of a season sees the offseason.
+    frame at the end so a hitter's first pitch of a season sees the offseason. ``zone``:
+    see :func:`tokens_from_pitches`.
     """
     conn = connect(store)
     try:
@@ -144,7 +170,7 @@ def build_pitch_tokens(store: Path) -> pd.DataFrame:
             int(r[0])
             for r in conn.execute("SELECT DISTINCT season FROM pitches ORDER BY 1").fetchall()
         ]
-        parts = [tokens_from_pitches(_season_pitches(conn, s)) for s in seasons]
+        parts = [tokens_from_pitches(_season_pitches(conn, s), zone) for s in seasons]
     finally:
         conn.close()
     tokens = pd.concat(parts, ignore_index=True)
@@ -183,8 +209,15 @@ def _gap(player: np.ndarray, dates: pd.Series) -> np.ndarray:
     return out
 
 
-def tokens_from_pitches(df: pd.DataFrame) -> pd.DataFrame:
-    """The token frame from raw (sorted) pitch rows; split out so tests can feed rows."""
+def tokens_from_pitches(df: pd.DataFrame, zone: str = "statcast") -> pd.DataFrame:
+    """The token frame from raw (sorted) pitch rows; split out so tests can feed rows.
+
+    ``zone`` (features.ZONES, #433) is the strike zone ``loc_up`` is measured in:
+    "statcast" = each pitch's sz_bot / sz_top, "fixed" = features.FIXED_ZONE for every
+    season (2026's ABS-recorded sz_top / sz_bot sit lower than before).
+    """
+    if zone not in ZONES:
+        raise ValueError(f"unknown zone {zone!r}")
     f32 = np.float32
     out = df[["player_id", "game_date", "season", "game_pk", "at_bat_number", "pitch_number"]]
     out = out.copy()
@@ -208,7 +241,10 @@ def tokens_from_pitches(df: pd.DataFrame) -> pd.DataFrame:
     out["spin"] = (df["release_spin_rate"] / 2500).fillna(0).astype(f32)
     # plate_x + = toward first base = inside to a lefty, outside to a righty.
     out["loc_in"] = (df["plate_x"].where(lefty_b, -df["plate_x"])).fillna(0).astype(f32)
-    height = (df["plate_z"] - df["sz_bot"]) / (df["sz_top"] - df["sz_bot"])
+    if zone == "fixed":
+        height = (df["plate_z"] - FIXED_ZONE[1]) / (FIXED_ZONE[2] - FIXED_ZONE[1])
+    else:
+        height = (df["plate_z"] - df["sz_bot"]) / (df["sz_top"] - df["sz_bot"])
     out["loc_up"] = height.replace([np.inf, -np.inf], np.nan).fillna(0.5).astype(f32)
     out["balls"] = (df["balls"] / 3).astype(f32)
     out["strikes"] = (df["strikes"] / 2).astype(f32)

@@ -42,6 +42,7 @@ from fantasy_baseball.hitter_ros.pitch_tokens import (
     CONTEXT_FEATURES,
     OUTCOMES,
     TOKEN_FEATURES,
+    token_options,
 )
 
 logger = logging.getLogger(__name__)
@@ -193,12 +194,20 @@ class PretrainModel(nn.Module):
 def tokens_fingerprint(tokens: pd.DataFrame) -> dict[str, Any]:
     """What identifies a token file's layout: rows, feature columns, seasons. Recorded
     with a pretraining run, so anything that later feeds the run's models histories can
-    check it uses the same file."""
+    check it uses the same file. (The strike zone, which the layout doesn't show, is
+    recorded too: :func:`run_token_options`.)"""
     return {
         "rows": len(tokens),
         "features": list(TOKEN_FEATURES),
         "seasons": [int(tokens["season"].min()), int(tokens["season"].max())],
     }
+
+
+def run_token_options(run_meta: dict[str, Any]) -> dict[str, Any]:
+    """The token build options a pretraining run recorded (``run.json``). Runs from
+    before #433 recorded none; they were all pretrained on Savant-zone tokens."""
+    recorded: dict[str, Any] = run_meta.get("token_options") or token_options("statcast")
+    return recorded
 
 
 def next_pitch_loss(logits: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

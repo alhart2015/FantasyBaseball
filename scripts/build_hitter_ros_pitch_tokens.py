@@ -2,30 +2,51 @@
 
 Reads data/pitch_data/ and writes one row per regular-season pitch a hitter saw to
 data/hitter_ros/pitch_tokens.parquet (see hitter_ros/pitch_tokens.py). ~8.3M rows.
+With --zone fixed, pitch heights are measured in one fixed strike zone for every season
+(#433) and the file is pitch_tokens_fixed.parquet.
 
 Usage:
     python scripts/build_hitter_ros_pitch_tokens.py
+    python scripts/build_hitter_ros_pitch_tokens.py --zone fixed
 """
 
 from __future__ import annotations
 
+import argparse
+import json
 import sys
 from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.pitch_tokens import OUTCOMES, build_pitch_tokens
+from fantasy_baseball.hitter_ros.features import ZONES
+from fantasy_baseball.hitter_ros.pitch_tokens import (
+    OUTCOMES,
+    build_pitch_tokens,
+    token_options,
+    token_path,
+)
 
 STORE = PROJECT_ROOT / "data" / "pitch_data"
-OUT = PROJECT_ROOT / "data" / "hitter_ros" / "pitch_tokens.parquet"
+OUT_DIR = PROJECT_ROOT / "data" / "hitter_ros"
 
 
 def main() -> int:
-    tokens = build_pitch_tokens(STORE)
-    OUT.parent.mkdir(parents=True, exist_ok=True)
-    tokens.to_parquet(OUT, index=False)
-    print(f"{len(tokens)} pitches, {tokens['player_id'].nunique()} hitters -> {OUT}")
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument(
+        "--zone",
+        choices=list(ZONES),
+        default="statcast",
+        help="strike zone pitch heights are measured in (#433)",
+    )
+    args = parser.parse_args()
+    tokens = build_pitch_tokens(STORE, zone=args.zone)
+    out = token_path(OUT_DIR, args.zone)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    tokens.to_parquet(out, index=False)
+    out.with_suffix(".json").write_text(json.dumps(token_options(args.zone), indent=2))
+    print(f"{len(tokens)} pitches, {tokens['player_id'].nunique()} hitters -> {out}")
     print("\nseason  pitches")
     for season, n in tokens.groupby("season").size().items():
         print(f"{season}  {n}")

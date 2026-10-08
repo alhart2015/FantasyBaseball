@@ -17,6 +17,7 @@ Setup (once): python scripts/build_hitter_ros_pitch_tokens.py
 Usage:
     python scripts/pretrain_hitter_ros.py --name p002
     python scripts/pretrain_hitter_ros.py --name smoke --seasons 2026 --max-epochs 1
+    python scripts/pretrain_hitter_ros.py --name p005 --zone fixed
 """
 
 from __future__ import annotations
@@ -35,7 +36,9 @@ import torch
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from fantasy_baseball.hitter_ros.features import ZONES
 from fantasy_baseball.hitter_ros.net import device
+from fantasy_baseball.hitter_ros.pitch_tokens import recorded_token_options, token_path
 from fantasy_baseball.hitter_ros.pretrain import (
     PitchStore,
     PretrainConfig,
@@ -43,7 +46,7 @@ from fantasy_baseball.hitter_ros.pretrain import (
     tokens_fingerprint,
 )
 
-TOKENS = PROJECT_ROOT / "data" / "hitter_ros" / "pitch_tokens.parquet"
+TOKEN_DIR = PROJECT_ROOT / "data" / "hitter_ros"
 PRETRAIN = PROJECT_ROOT / "data" / "hitter_ros" / "pretrain"
 
 logger = logging.getLogger("pretrain_hitter_ros")
@@ -76,6 +79,12 @@ def main() -> int:
         parser.add_argument(f"--{field.replace('_', '-')}", type=int, default=getattr(d, field))
     for field in _FLOAT_FIELDS:
         parser.add_argument(f"--{field.replace('_', '-')}", type=float, default=getattr(d, field))
+    parser.add_argument(
+        "--zone",
+        choices=list(ZONES),
+        default="statcast",
+        help="the token file's strike zone (build_hitter_ros_pitch_tokens --zone, #433)",
+    )
     parser.add_argument("--no-amp", action="store_true", help="float32 instead of bfloat16")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -86,13 +95,17 @@ def main() -> int:
         config = PretrainConfig(**values, amp=not args.no_amp)
     except ValueError as err:
         parser.error(str(err))
-    if not TOKENS.exists():
-        parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pitch_tokens.py")
+    tokens_path = token_path(TOKEN_DIR, args.zone)
+    if not tokens_path.exists():
+        parser.error(
+            f"{tokens_path} is missing; run scripts/build_hitter_ros_pitch_tokens.py "
+            f"--zone {args.zone}"
+        )
     out_root = PRETRAIN / args.name
     if out_root.exists() and not args.overwrite:
         parser.error(f"{out_root} exists; pick another --name or pass --overwrite")
 
-    tokens = pd.read_parquet(TOKENS)
+    tokens = pd.read_parquet(tokens_path)
     all_seasons = sorted(int(s) for s in tokens["season"].unique())
     seasons = args.seasons or all_seasons[1:]
     too_early = [s for s in seasons if s <= all_seasons[0]]
@@ -109,6 +122,7 @@ def main() -> int:
     run_meta = {
         "config": config.to_dict(),
         "tokens": fingerprint,
+        "token_options": recorded_token_options(tokens_path),
         "seasons": [],
         "complete": False,
     }
