@@ -81,6 +81,10 @@ from fantasy_baseball.hitter_ros.net import (
     train,
 )
 from fantasy_baseball.hitter_ros.parks import PARK_FEATURES, load_park_inputs
+from fantasy_baseball.hitter_ros.pedigree_features import (
+    PEDIGREE_FEATURES,
+    load_pedigree_inputs,
+)
 from fantasy_baseball.hitter_ros.probes import (
     PROBE_FEATURES,
     check_probes,
@@ -390,6 +394,12 @@ def main() -> int:
         "(build them first with scripts/build_hitter_ros_parks.py --name <name>; none = off)",
     )
     parser.add_argument(
+        "--pedigree",
+        default=defaults.pedigree,
+        help="add prospect-pedigree inputs (#433) from data/hitter_ros/pedigree_<name>.parquet "
+        "(build them first with scripts/build_hitter_ros_pedigree.py --name <name>; none = off)",
+    )
+    parser.add_argument(
         "--zone",
         choices=list(ZONES),
         default=defaults.zone,
@@ -486,6 +496,7 @@ def main() -> int:
             head_layers=args.head_layers,
             milb=args.milb,
             parks=args.parks,
+            pedigree=args.pedigree,
             count_loss=args.count_loss,
             avg_loss=args.avg_loss,
             avg_pieces=args.avg_pieces,
@@ -564,6 +575,14 @@ def main() -> int:
             parser.error(str(err))
         x_all = pd.concat([x_all, parks], axis=1)
         logger.info("added %d park features (%s)", len(PARK_FEATURES), config.parks)
+    pedigree_build = None
+    if config.pedigree != "none":
+        try:
+            pedigree, pedigree_build = load_pedigree_inputs(table, TABLE.parent, config.pedigree)
+        except ValueError as err:
+            parser.error(str(err))
+        x_all = pd.concat([x_all, pedigree], axis=1)
+        logger.info("added %d pedigree features (%s)", len(PEDIGREE_FEATURES), config.pedigree)
     y_all, w_all = target_frame(
         table, HORIZONS if config.horizons else (), pieces=config.avg_pieces != "none"
     )
@@ -604,6 +623,7 @@ def main() -> int:
         "first_train_season": args.first_train_season,
         "milb_build": milb_build,  # the minor-league file's build options
         "parks_build": parks_build,  # the park file's build options
+        "pedigree_build": pedigree_build,  # the pedigree file's build options
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))

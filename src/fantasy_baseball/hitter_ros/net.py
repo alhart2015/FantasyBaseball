@@ -151,6 +151,10 @@ class NetConfig:
     # to -0.01 and Coors hitters' AVG bias from -8.7 to -3.2 points, other stats within
     # seed noise. Build: build_hitter_ros_parks.py --name p3.
     parks: str = "p3"
+    # Prospect-pedigree inputs (#433): MLB Pipeline list values and June-draft inputs,
+    # from data/hitter_ros/pedigree_<name>.parquet (hitter_ros.pedigree_features).
+    # "none": none. Build: build_hitter_ros_pedigree.py --name <name>.
+    pedigree: str = "none"
     # Strike zone for the zone / chase inputs (#433): features.ZONES. "fixed" uses one box
     # for every season, so 2026's ABS-recorded zone doesn't shift them. Default from
     # #433: over 6 seeds the mid-season gap to FanGraphs rose on every seed (AVG -1.57 ->
