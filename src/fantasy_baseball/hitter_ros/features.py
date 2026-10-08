@@ -191,7 +191,8 @@ def league_reference(t: pd.DataFrame, *, pieces: bool = False) -> pd.DataFrame:
     this season weighted ``SB_STD_WEIGHT`` (#413).
 
     NaN for a row with no earlier season in the store (its first season): a reference
-    built from a few days of this season's games would be mostly noise.
+    built from a few days of this season's games would be mostly noise. SB, which
+    reads only last season, is NaN without last season too.
 
     ``pieces``: also the ``PIECES`` rates (#433)."""
     names = COUNTS_WITH_PIECES if pieces else COUNTS
@@ -204,7 +205,7 @@ def league_reference(t: pd.DataFrame, *, pieces: bool = False) -> pd.DataFrame:
     def fast(c: str) -> pd.Series:
         return t[f"lg_p1_{c}"].astype(float) + SB_STD_WEIGHT * t[f"lg_std_{c}"].astype(float)
 
-    ref["sb"] = _div(fast("sb"), fast("pa"))
+    ref["sb"] = _div(fast("sb"), fast("pa")).where(t["lg_p1_pa"].astype(float) > 0)
     return ref.where(t["lg_p3_pa"].astype(float) > 0)
 
 

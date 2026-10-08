@@ -523,3 +523,9 @@ def test_league_reference_sb_leans_on_last_season_and_this_one():
     # Preseason (nothing this season yet): last season alone.
     t[["lg_std_pa", "lg_std_sb", "lg_std_hr"]] = [0.0, 0.0, 0.0]
     assert league_reference(t).iloc[0]["sb"] == pytest.approx(20 / 1000)
+    # No last season in the store (a gap), even with older seasons and games this
+    # season: SB unknown rather than a rate from this season's few games alone.
+    t[["lg_p1_pa", "lg_p1_sb"]] = [0.0, 0.0]
+    t[["lg_std_pa", "lg_std_sb", "lg_std_hr"]] = [500.0, 5.0, 10.0]
+    gap = league_reference(t).iloc[0]
+    assert np.isnan(gap["sb"]) and gap["hr"] == pytest.approx(70 / 3500)

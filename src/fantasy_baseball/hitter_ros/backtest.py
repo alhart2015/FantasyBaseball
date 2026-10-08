@@ -490,8 +490,8 @@ def league_forecast_lines(table: pd.DataFrame, seasons: list[int]) -> list[str]:
     """Markdown: the preseason league-rate forecast (``league_reference``: the last
     three seasons, last season for SB; the multiplier that turns a relative projection
     back into rates) vs. the league's actual rates that season, so its error shows on
-    its own (#424). Empty for a table
-    built before the league columns (#421): the forecast can't be computed there."""
+    its own (#424). Empty for a table built before the league columns (#421): the
+    forecast can't be computed there."""
     if not set(ERA_TABLE_COLUMNS) <= set(table.columns):
         return []
     week0 = table[table["season"].isin(seasons) & (table["week"] == 0)]
