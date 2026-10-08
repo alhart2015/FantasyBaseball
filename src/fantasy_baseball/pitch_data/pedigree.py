@@ -11,7 +11,12 @@ minor-league lines are in the store (#435); this adds what scouts thought of the
   finished seasons, but the current season's are edited as players graduate, so they
   aren't the preseason lists. (Checked against MLB debuts: each 2011-2025 list still
   holds 56-120 hitters who debuted that season; 2026's holds 28, and 2 who debuted
-  earlier against 30-80 in other years.)
+  earlier against 30-80 in other years.) So a season fetched while it was current is
+  fetched again once it is over (:func:`fetch_rankings_season`): the in-season copy
+  would read that season's graduates as never listed. That only helps if MLB's copy of
+  a finished season is its preseason list again, which the 2011-2025 lists suggest but
+  nobody has seen happen yet: after re-fetching 2026, redo the debut check before
+  trusting it.
 * Draft: every pick of the June (Rule 4) draft, from the MLB Stats API. One row per pick,
   so a player drafted twice (out of high school, then college) has two rows.
 
@@ -24,12 +29,15 @@ Layout (under the store root, read through :func:`store.connect`)::
 from __future__ import annotations
 
 import logging
+from datetime import date
 from pathlib import Path
 from typing import Any
 
 import pandas as pd
+import pyarrow.parquet as pq
 
 from fantasy_baseball.pitch_data.store import _write_parquet
+from fantasy_baseball.utils.time_utils import local_today
 
 logger = logging.getLogger(__name__)
 
@@ -101,12 +109,22 @@ def rankings_rows(season: int, name: str, items: list[dict[str, Any]]) -> pd.Dat
     )
 
 
-def fetch_rankings_season(root: Path, season: int, *, refresh: bool = False) -> int:
+def _fetched_while_current(path: Path, season: int, today: date) -> bool:
+    """True when the file on disk holds a now-finished season's lists as they read while
+    it was current (edited as players graduated), so it must be fetched again."""
+    return season < today.year and date.fromtimestamp(path.stat().st_mtime).year <= season
+
+
+def fetch_rankings_season(
+    root: Path, season: int, *, refresh: bool = False, today: date | None = None
+) -> int:
     """Write the season's Top 100 and club Top 30s; returns the row count. A season on
-    disk is kept unless ``refresh``."""
+    disk is kept unless ``refresh``, or it was fetched while current and is now over."""
     path = rankings_path(root, season)
-    if path.exists() and not refresh:
-        return len(pd.read_parquet(path))
+    if today is None:
+        today = local_today()
+    if path.exists() and not refresh and not _fetched_while_current(path, season, today):
+        return int(pq.read_metadata(path).num_rows)
     frames = [rankings_rows(season, TOP100, _list_items(season, TOP100))]
     for team in TEAM_LISTS:
         frames.append(rankings_rows(season, team, _list_items(season, team)))
@@ -152,7 +170,7 @@ def draft_rows(year: int, data: dict[str, Any]) -> pd.DataFrame:
                 {
                     "year": year,
                     "player_id": int(person["id"]),
-                    "round": str(pick.get("pickRound")),
+                    "round": pick.get("pickRound"),
                     "pick_number": _int(pick.get("pickNumber")),
                     "pick_value": _int(pick.get("pickValue")),
                     "signing_bonus": _int(pick.get("signingBonus")),
@@ -163,7 +181,9 @@ def draft_rows(year: int, data: dict[str, Any]) -> pd.DataFrame:
                 }
             )
     # Fixed dtypes, so a year where a column is all blank still stacks with the others.
-    return pd.DataFrame(rows, columns=list(_DRAFT_DTYPES)).astype(_DRAFT_DTYPES)
+    # The API repeats the odd pick verbatim (2008 has one): keep one row per pick.
+    df = pd.DataFrame(rows, columns=list(_DRAFT_DTYPES)).astype(_DRAFT_DTYPES)
+    return df.drop_duplicates(ignore_index=True)
 
 
 def fetch_draft_year(root: Path, year: int, *, refresh: bool = False) -> int:
@@ -171,7 +191,7 @@ def fetch_draft_year(root: Path, year: int, *, refresh: bool = False) -> int:
     unless ``refresh``."""
     path = draft_path(root, year)
     if path.exists() and not refresh:
-        return len(pd.read_parquet(path))
+        return int(pq.read_metadata(path).num_rows)
     df = draft_rows(year, _get_json(f"{_DRAFT_URL}/{year}"))
     if df.empty:
         raise RuntimeError(f"{year}: no draft picks")

@@ -1,6 +1,6 @@
 """Fetch prospect pedigree into the pitch-data store (#433): MLB Pipeline rankings and
 June draft picks (see pitch_data/pedigree.py). Seasons and years on disk are skipped
-unless --refresh.
+unless --refresh (or, for rankings, the season was fetched while current and is over).
 
 Usage:
     python scripts/fetch_pedigree.py

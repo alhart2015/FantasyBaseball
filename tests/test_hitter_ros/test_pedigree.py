@@ -161,3 +161,62 @@ def test_pedigree_setting_defaults_off():
     from fantasy_baseball.hitter_ros.net import NetConfig
 
     assert NetConfig().pedigree == "none"
+
+
+def test_a_club_list_past_30_never_ranks_below_off_list():
+    rankings = pd.concat(
+        [
+            _rankings(),
+            pd.DataFrame(
+                {"season": [2020], "list": ["angels"], "rank": [42], "player_id": [SIGNEE]}
+            ).assign(list_size=42),
+        ],
+        ignore_index=True,
+    )
+    signee = _row(build_pedigree_features(_table(), rankings, _draft()), SIGNEE)
+    assert signee["ped_org_p1"] == 0.0 and signee["ped_org_best"] == 0.0
+    assert signee["ped_seasons_listed"] == 1
+
+
+def test_a_season_missing_from_the_store_is_unknown_not_unlisted():
+    # 2020's lists never fetched: a 2021 row can't tell "off the list" from "no data".
+    rankings = _rankings().query("season != 2020")
+    out = build_pedigree_features(_table(), rankings, _draft())
+    assert _row(out, STAR)[PEDIGREE_FEATURES[:5]].isna().all()
+    assert _row(out, STAR)["ped_draft_log_pick"] == 0.0
+
+
+def test_draft_rows_drop_a_repeated_pick():
+    pick = {
+        "person": {"id": 7, "birthDate": "2000-01-01"},
+        "pickRound": "4",
+        "pickNumber": 127,
+        "draftType": {"code": "JR"},
+    }
+    df = draft_rows(2008, {"drafts": {"rounds": [{"picks": [pick, dict(pick)]}]}})
+    assert df["player_id"].tolist() == [7]
+    assert df["round"].tolist() == ["4"]
+
+
+def test_a_season_fetched_while_current_is_fetched_again_once_over(tmp_path, monkeypatch):
+    import os
+
+    calls = []
+
+    def fake(season, name):
+        calls.append(name)
+        return [_entry(5)]
+
+    monkeypatch.setattr(pedigree, "_list_items", fake)
+    path = pedigree.rankings_path(tmp_path, 2026)
+    pedigree.fetch_rankings_season(tmp_path, 2026, today=date(2026, 6, 1))
+    n_lists = len(calls)
+    mid_2026 = date(2026, 6, 1)
+    stamp = float(np.datetime64(mid_2026, "s").astype("int64"))
+    os.utime(path, (stamp, stamp))
+    # Still 2026: the in-season copy is kept.
+    pedigree.fetch_rankings_season(tmp_path, 2026, today=date(2026, 9, 1))
+    assert len(calls) == n_lists
+    # 2026 is over: the edited copy is replaced.
+    pedigree.fetch_rankings_season(tmp_path, 2026, today=date(2027, 2, 1))
+    assert len(calls) == 2 * n_lists

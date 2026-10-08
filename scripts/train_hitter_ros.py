@@ -558,31 +558,23 @@ def main() -> int:
             parser.error(f"{probes_file}: {problem}; rebuild it for this table")
         x_all = pd.concat([x_all, probe_inputs(table, probes)], axis=1)
         logger.info("added %d probe features from %s", len(PROBE_FEATURES), probes_file.name)
-    if config.milb != "none":
+    # Feature files built by scripts/build_hitter_ros_<kind>.py; each one's build options
+    # go into config.json as "<kind>_build" (None when off).
+    builds: dict[str, dict | None] = {}
+    for kind, label, name, load, columns in (
+        ("milb", "minor-league", config.milb, load_milb_inputs, MILB_FEATURES),
+        ("parks", "park", config.parks, load_park_inputs, PARK_FEATURES),
+        ("pedigree", "pedigree", config.pedigree, load_pedigree_inputs, PEDIGREE_FEATURES),
+    ):
+        builds[kind] = None
+        if name == "none":
+            continue
         try:
-            milb, milb_build = load_milb_inputs(table, TABLE.parent, config.milb)
+            inputs, builds[kind] = load(table, TABLE.parent, name)
         except ValueError as err:
             parser.error(str(err))
-        x_all = pd.concat([x_all, milb], axis=1)
-        logger.info("added %d minor-league features (%s)", len(MILB_FEATURES), config.milb)
-    else:
-        milb_build = None
-    parks_build = None
-    if config.parks != "none":
-        try:
-            parks, parks_build = load_park_inputs(table, TABLE.parent, config.parks)
-        except ValueError as err:
-            parser.error(str(err))
-        x_all = pd.concat([x_all, parks], axis=1)
-        logger.info("added %d park features (%s)", len(PARK_FEATURES), config.parks)
-    pedigree_build = None
-    if config.pedigree != "none":
-        try:
-            pedigree, pedigree_build = load_pedigree_inputs(table, TABLE.parent, config.pedigree)
-        except ValueError as err:
-            parser.error(str(err))
-        x_all = pd.concat([x_all, pedigree], axis=1)
-        logger.info("added %d pedigree features (%s)", len(PEDIGREE_FEATURES), config.pedigree)
+        x_all = pd.concat([x_all, inputs], axis=1)
+        logger.info("added %d %s features (%s)", len(columns), label, name)
     y_all, w_all = target_frame(
         table, HORIZONS if config.horizons else (), pieces=config.avg_pieces != "none"
     )
@@ -621,9 +613,8 @@ def main() -> int:
         "shuffle_test_order": args.shuffle_test_order,
         "train_seasons": args.train_seasons,
         "first_train_season": args.first_train_season,
-        "milb_build": milb_build,  # the minor-league file's build options
-        "parks_build": parks_build,  # the park file's build options
-        "pedigree_build": pedigree_build,  # the pedigree file's build options
+        # the minor-league / park / pedigree files' build options
+        **{f"{kind}_build": build for kind, build in builds.items()},
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))
