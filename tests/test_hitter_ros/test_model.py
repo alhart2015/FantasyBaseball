@@ -437,6 +437,19 @@ def test_recent_inputs_are_optional(table):
     assert added and all(c.startswith(("l7_", "l14_")) for c in added)
 
 
+def test_xba_per_ab_inputs_are_optional(table):
+    plain = input_frame(table)
+    more = input_frame(table, xba_ab=True)
+    added = sorted(set(more.columns) - set(plain.columns))
+    assert added == sorted(f"{w}_xba_ab" for w in ("std", "p1", "p3", "car"))
+    t = table.astype({c: float for c in ("std_xba_sum", "std_xba_n", "std_ab", "std_k")})
+    expect = t.std_xba_sum / t.std_xba_n * (t.std_ab - t.std_k) / t.std_ab
+    known = expect.notna() & np.isfinite(expect)
+    assert known.any()
+    np.testing.assert_allclose(more.loc[known, "std_xba_ab"], expect[known])
+    assert input_frame(table, recent=True, xba_ab=True).columns.str.endswith("l7_xba_ab").any()
+
+
 def test_horizon_scores_grade_each_horizon_against_its_own_answer(table):
     from fantasy_baseball.hitter_ros.features import TARGETS, horizon_columns, target_frame
     from fantasy_baseball.hitter_ros.horizons import horizon_summary, score_horizons

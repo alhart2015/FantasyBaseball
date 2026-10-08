@@ -33,12 +33,15 @@ from fantasy_baseball.hitter_ros.horizons import (
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
+LEAGUE = PROJECT_ROOT / "config" / "league.yaml"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 
 
 def score_run(table: pd.DataFrame, run: Path) -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
     preds = pd.read_parquet(run / "predictions.parquet")
-    pre_all, snap_all = backtest.score_predictions(table, preds, PROJECTIONS, STORE)
+    pre_all, snap_all = backtest.score_predictions(
+        table, preds, PROJECTIONS, STORE, backtest.league_denominators(LEAGUE)
+    )
     backtest.write_scores(run, pre_all, snap_all)
     seasons = sorted(int(x) for x in preds["season"].unique())
     md = [
