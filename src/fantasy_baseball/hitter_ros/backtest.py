@@ -20,11 +20,15 @@ has MLB history; a rookie needs minor-league stats and pedigree we don't have ye
 the summary scores each group on its own, with pairs formed only inside a group.
 
 And every row is tagged ``relevant`` (#442): the player was among the
-``RELEVANT_TOP`` hitters by fantasy value (SGP in this league's categories) in the
-FanGraphs projections being compared against -- the preseason files, or that snapshot's
-rest-of-season files. Those are the hitters a team would actually roster; a score over
-everyone is mostly about bench bats nobody drafts. A season or snapshot without
-FanGraphs files has no tag (NA). The summary scores the relevant hitters on their own.
+``RELEVANT_TOP`` hitters by fantasy value (SGP in this league's categories) either in
+the FanGraphs projections being compared against (the preseason files, or that
+snapshot's rest-of-season files) or in what actually happened over the same span. Those
+are the hitters a team would roster, or wish it had; a score over everyone is mostly
+about bench bats nobody drafts. Picking by FanGraphs' value alone would choose the set
+on the compared system's own output: on 2026 mid-season that showed an R gap that
+vanished when the set was picked on actual value, so both count. A season or snapshot
+without FanGraphs files has no tag (NA). The summary scores the relevant hitters on
+their own.
 """
 
 from __future__ import annotations
@@ -108,21 +112,29 @@ def league_denominators(config_path: Path) -> dict[Category, float]:
 
 
 def relevant_players(
-    systems: dict[str, pd.DataFrame], denoms: dict[Category, float], top: int = RELEVANT_TOP
+    systems: dict[str, pd.DataFrame],
+    actual: pd.DataFrame,
+    denoms: dict[Category, float],
+    top: int = RELEVANT_TOP,
 ) -> pd.Index:
-    """The ``top`` hitters by fantasy value, averaged over the FanGraphs systems that
-    project each one."""
+    """The ``top`` hitters by fantasy value averaged over the FanGraphs systems that
+    project each one, together with the ``top`` by actual value (``actual``: rates plus
+    ``pa`` and ``ab`` over the scored span)."""
     values = pd.concat([fantasy_value(p, denoms) for p in systems.values()], axis=1)
-    return values.mean(axis=1).nlargest(top).index
+    projected = values.mean(axis=1).nlargest(top).index
+    return projected.union(fantasy_value(actual, denoms).nlargest(top).index)
 
 
 def _tag_relevant(
-    scored: pd.DataFrame, systems: dict[str, pd.DataFrame], denoms: dict[Category, float] | None
+    scored: pd.DataFrame,
+    systems: dict[str, pd.DataFrame],
+    actual: pd.DataFrame,
+    denoms: dict[Category, float] | None,
 ) -> pd.DataFrame:
     if not systems:
         return scored.assign(relevant=pd.array([pd.NA] * len(scored), dtype="boolean"))
     denoms = denoms if denoms is not None else get_sgp_denominators()
-    top = relevant_players(systems, denoms, RELEVANT_TOP)
+    top = relevant_players(systems, actual, denoms, RELEVANT_TOP)
     return scored.assign(relevant=pd.array(scored["player_id"].isin(top), dtype="boolean"))
 
 
@@ -143,12 +155,13 @@ def preseason(
     week0 = table[(table["season"] == season) & (table["week"] == 0)].set_index("player_id")
     actual = rates_from_counts(week0.rename(columns=lambda c: c.removeprefix("ros_")))
     actual["pa"] = week0["ros_pa"]
+    actual["ab"] = week0["ros_ab"]
     ours = {
         name: p[p["week"] == 0].set_index("player_id")[list(TARGETS)]
         for name, p in candidates.items()
     }
     scored = scored_players(_with_fangraphs(ours, systems), actual, PRESEASON_MIN_PA)
-    return _tag_relevant(scored, systems, denoms).assign(season=season)
+    return _tag_relevant(scored, systems, actual, denoms).assign(season=season)
 
 
 def _season_games(store: Path, season: int) -> pd.DataFrame:
@@ -189,6 +202,7 @@ def snapshots(
         counts = games[games["game_date"] >= snap].groupby("player_id")[list(COUNTS)].sum()
         actual = rates_from_counts(counts)
         actual["pa"] = counts["pa"]
+        actual["ab"] = counts["ab"]
         if (actual["pa"] >= SNAPSHOT_MIN_PA).sum() == 0:
             continue
         ours = {}
@@ -196,7 +210,7 @@ def snapshots(
             known = p[p["as_of"] <= snap]
             ours[name] = known.groupby("player_id").tail(1).set_index("player_id")[list(TARGETS)]
         scored = scored_players(_with_fangraphs(ours, systems), actual, SNAPSHOT_MIN_PA)
-        scored = _tag_relevant(scored, systems, denoms)
+        scored = _tag_relevant(scored, systems, actual, denoms)
         parts.append(scored.assign(season=season, snapshot=snap.date().isoformat()))
     return pd.concat(parts, ignore_index=True) if parts else None
 
@@ -440,7 +454,7 @@ def _group_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
 
 def _relevant_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     """Every score over only the fantasy-relevant hitters (``RELEVANT_TOP`` by
-    FanGraphs' value), averaged over the seasons or snapshots (``unit``) that have the
+    FanGraphs' projected or by actual value), averaged over the seasons or snapshots (``unit``) that have the
     tag, plus their young hitters (under ``YOUNG_MAX_CAREER_PA`` MLB PA) on their own.
     Pairs form only inside the set. Empty for a frame scored before the tag existed."""
     if "relevant" not in frame.columns:
@@ -453,7 +467,8 @@ def _relevant_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     md = [
         "",
         f"**Fantasy-relevant hitters** (top {RELEVANT_TOP} by FanGraphs' projected value "
-        f"in this league's categories; {n:.0f} of them scored per {unit}; pairs only among "
+        f"or by actual value, in this league's categories; {n:.0f} of them scored per "
+        f"{unit}; pairs only among "
         f"them; mean over the {rel[unit].nunique()} {unit}s with FanGraphs files)",
         *_mean_blocks(rel, unit),
     ]
