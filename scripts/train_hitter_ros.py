@@ -591,6 +591,11 @@ def main() -> int:
     batcher = None
     if config.seq != "none":
         batcher = SequenceBatcher(pd.read_parquet(TOKENS), table, config.seq_len, device())
+    # Read before training, so a bad league file fails now rather than after the fits.
+    try:
+        denoms = league_denominators(LEAGUE)
+    except ValueError as err:
+        parser.error(f"{LEAGUE}: {err}")
     # Only now, with every input loaded, replace an old run of the same name.
     if out.exists():
         shutil.rmtree(out)
@@ -628,9 +633,7 @@ def main() -> int:
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))
-    pre, snap = backtest.score_predictions(
-        table, predictions, PROJECTIONS, STORE, league_denominators(LEAGUE)
-    )
+    pre, snap = backtest.score_predictions(table, predictions, PROJECTIONS, STORE, denoms)
     backtest.write_scores(out, pre, snap)
     md = [
         f"### Run `{args.name}`",

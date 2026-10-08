@@ -522,7 +522,10 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         md += ["", "**Mean over seasons** (systems present every season)"]
         md += _mean_blocks(pooled, "season")
         md += _group_blocks(pooled, "season")
-        md += _relevant_blocks(pooled, "season")
+        # From ``pre``, not ``pooled``: pooled drops the FanGraphs systems whenever an
+        # older season without their files is scored, and the relevant rows are
+        # exactly the seasons that have them.
+        md += _relevant_blocks(pre, "season")
         fg_seasons = pre.loc[pre["system"] == BLEND, "season"].unique()
         if 0 < len(fg_seasons) < pre["season"].nunique():
             # Older seasons have no FanGraphs files; keep the comparison with them visible.
@@ -545,5 +548,5 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         every = systems_in_every_season(snap, "snapshot")
         md += _mean_blocks(every, "snapshot")
         md += _group_blocks(every, "snapshot")
-        md += _relevant_blocks(every, "snapshot")
+        md += _relevant_blocks(snap, "snapshot")
     return md
