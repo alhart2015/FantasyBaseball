@@ -151,6 +151,11 @@ class NetConfig:
     # to -0.01 and Coors hitters' AVG bias from -8.7 to -3.2 points, other stats within
     # seed noise. Build: build_hitter_ros_parks.py --name p3.
     parks: str = "p3"
+    # Strike zone for the zone / chase inputs (#433): features.ZONES. "fixed" uses one box
+    # for every season, so 2026's ABS-recorded zone doesn't shift them. Default from
+    # #433: over 6 seeds the mid-season gap to FanGraphs rose on every seed (AVG -1.57 ->
+    # -1.36, RBI +0.78 -> +0.90), preseason unchanged.
+    zone: str = "fixed"
 
     def __post_init__(self) -> None:
         if self.heads not in (1, 2):
@@ -177,6 +182,10 @@ class NetConfig:
             raise ValueError(f"unknown count_loss {self.count_loss!r}")
         if self.avg_loss not in AVG_LOSSES:
             raise ValueError(f"unknown avg_loss {self.avg_loss!r}")
+        from fantasy_baseball.hitter_ros.features import ZONES
+
+        if self.zone not in ZONES:
+            raise ValueError(f"unknown zone {self.zone!r}")
         if self.avg_pieces not in AVG_PIECES:
             raise ValueError(f"unknown avg_pieces {self.avg_pieces!r}")
         if self.avg_pieces == "derived" and self.avg_loss != "mse":

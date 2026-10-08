@@ -191,14 +191,23 @@ class PretrainModel(nn.Module):
 
 
 def tokens_fingerprint(tokens: pd.DataFrame) -> dict[str, Any]:
-    """What identifies a token file's layout: rows, feature columns, seasons. Recorded
+    """What identifies a token file: rows, feature columns, seasons, and the mean pitch
+    height (which tells files built with different strike zones apart, #433). Recorded
     with a pretraining run, so anything that later feeds the run's models histories can
-    check it uses the same file."""
+    check it uses the same file (:func:`same_tokens`)."""
     return {
         "rows": len(tokens),
         "features": list(TOKEN_FEATURES),
         "seasons": [int(tokens["season"].min()), int(tokens["season"].max())],
+        "loc_up_mean": round(float(tokens["loc_up"].astype(float).mean()), 6),
     }
+
+
+def same_tokens(recorded: dict[str, Any], tokens: pd.DataFrame) -> bool:
+    """Whether ``tokens`` matches a run's recorded fingerprint, on the keys it recorded
+    (runs from before the pitch height was fingerprinted have fewer)."""
+    now = tokens_fingerprint(tokens)
+    return all(now.get(k) == v for k, v in recorded.items())
 
 
 def next_pitch_loss(logits: torch.Tensor, y: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

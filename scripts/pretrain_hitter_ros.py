@@ -17,6 +17,8 @@ Setup (once): python scripts/build_hitter_ros_pitch_tokens.py
 Usage:
     python scripts/pretrain_hitter_ros.py --name p002
     python scripts/pretrain_hitter_ros.py --name smoke --seasons 2026 --max-epochs 1
+    python scripts/pretrain_hitter_ros.py --name p005 \
+        --tokens data/hitter_ros/pitch_tokens_fixed.parquet
 """
 
 from __future__ import annotations
@@ -76,6 +78,9 @@ def main() -> int:
         parser.add_argument(f"--{field.replace('_', '-')}", type=int, default=getattr(d, field))
     for field in _FLOAT_FIELDS:
         parser.add_argument(f"--{field.replace('_', '-')}", type=float, default=getattr(d, field))
+    parser.add_argument(
+        "--tokens", type=Path, default=TOKENS, help="token file (build_hitter_ros_pitch_tokens)"
+    )
     parser.add_argument("--no-amp", action="store_true", help="float32 instead of bfloat16")
     parser.add_argument("--overwrite", action="store_true")
     args = parser.parse_args()
@@ -86,13 +91,13 @@ def main() -> int:
         config = PretrainConfig(**values, amp=not args.no_amp)
     except ValueError as err:
         parser.error(str(err))
-    if not TOKENS.exists():
-        parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pitch_tokens.py")
+    if not args.tokens.exists():
+        parser.error(f"{args.tokens} is missing; run scripts/build_hitter_ros_pitch_tokens.py")
     out_root = PRETRAIN / args.name
     if out_root.exists() and not args.overwrite:
         parser.error(f"{out_root} exists; pick another --name or pass --overwrite")
 
-    tokens = pd.read_parquet(TOKENS)
+    tokens = pd.read_parquet(args.tokens)
     all_seasons = sorted(int(s) for s in tokens["season"].unique())
     seasons = args.seasons or all_seasons[1:]
     too_early = [s for s in seasons if s <= all_seasons[0]]

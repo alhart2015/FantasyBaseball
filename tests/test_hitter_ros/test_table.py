@@ -58,6 +58,11 @@ def _pitch(d, batter, **kw):
         "on_3b": None,
     }
     row.update(kw)
+    # Savant always records where the pitch crossed the plate: by default, a location
+    # that agrees with its zone number (middle of the plate, or off the plate).
+    in_zone = row["zone"] is not None and 1 <= row["zone"] <= 9
+    row.setdefault("plate_x", 0.0 if in_zone else 1.5)
+    row.setdefault("plate_z", 2.5)
     return row
 
 
@@ -175,6 +180,10 @@ def test_pitch_counts(store):
     assert w1.std_pitches == 21
     assert w1.std_swings == 14 and w1.std_whiffs == 7
     assert w1.std_chase_pitches == 7 and w1.std_chase_swings == 0
+    # The fixed box (#433) agrees with Savant's zone on these locations.
+    for kind in ("zone", "chase"):
+        for count in ("pitches", "swings", "contacts"):
+            assert w1[f"std_f{kind}_{count}"] == w1[f"std_{kind}_{count}"]
     assert w1.std_bip == 7 and w1.std_barrels == 7
     assert w1.std_ev_sum == 700.0 and w1.std_ev_sq_sum == 70000.0
     assert w1.std_fb == 7 and w1.std_pulled_air == 7 and w1.std_oppo == 0

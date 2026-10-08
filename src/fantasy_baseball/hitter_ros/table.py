@@ -48,7 +48,7 @@ import duckdb
 import pandas as pd
 
 from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS
-from fantasy_baseball.hitter_ros.features import COUNTS_WITH_PIECES
+from fantasy_baseball.hitter_ros.features import COUNTS_WITH_PIECES, FIXED_ZONE
 from fantasy_baseball.hitter_ros.statcast_sql import CONTACT_SQL, SPRAY_SQL, SWING_SQL, WHIFF_SQL
 from fantasy_baseball.pitch_data.store import connect
 
@@ -94,6 +94,9 @@ TARGET_COUNTS = (
 _PULL_DEG = 15
 _ZONE = "zone BETWEEN 1 AND 9"
 _CHASE = "zone BETWEEN 11 AND 14"
+# features.FIXED_ZONE (#433): outside it, with a known location, is a chase pitch.
+_FZONE = f"abs(plate_x) <= {FIXED_ZONE[0]} AND plate_z BETWEEN {FIXED_ZONE[1]} AND {FIXED_ZONE[2]}"
+_FCHASE = f"plate_x IS NOT NULL AND plate_z IS NOT NULL AND NOT ({_FZONE})"
 _BIP = "type = 'X'"
 _AIR = "bb_type IN ('fly_ball', 'line_drive')"
 _PULLED = (
@@ -114,6 +117,12 @@ PITCH_AGGS: dict[str, str] = {
     "chase_pitches": f"count(*) FILTER (WHERE {_CHASE})",
     "chase_swings": f"count(*) FILTER (WHERE {_CHASE} AND {SWING_SQL})",
     "chase_contacts": f"count(*) FILTER (WHERE {_CHASE} AND {CONTACT_SQL})",
+    "fzone_pitches": f"count(*) FILTER (WHERE {_FZONE})",
+    "fzone_swings": f"count(*) FILTER (WHERE {_FZONE} AND {SWING_SQL})",
+    "fzone_contacts": f"count(*) FILTER (WHERE {_FZONE} AND {CONTACT_SQL})",
+    "fchase_pitches": f"count(*) FILTER (WHERE {_FCHASE})",
+    "fchase_swings": f"count(*) FILTER (WHERE {_FCHASE} AND {SWING_SQL})",
+    "fchase_contacts": f"count(*) FILTER (WHERE {_FCHASE} AND {CONTACT_SQL})",
     "first_pitch_swings": f"count(*) FILTER (WHERE balls = 0 AND strikes = 0 AND {SWING_SQL})",
     "first_pitches": "count(*) FILTER (WHERE balls = 0 AND strikes = 0)",
     "pitches_vs_lhp": "count(*) FILTER (WHERE p_throws = 'L')",

@@ -8,11 +8,14 @@ quality features of models pretrained only before Statcast's contact classes.
 Writes data/hitter_ros/probes_<run>.parquet: player_id, season, week, as_of + the features.
 Then train with:  python scripts/train_hitter_ros.py --probes <run> ...
 
-The token file must be the one the run was pretrained on (p003: pitch_tokens.parquet).
+The token file must be the one the run was pretrained on (p004: pitch_tokens.parquet;
+p005: pitch_tokens_fixed.parquet, the fixed strike zone of #433).
 
 Usage:
     python scripts/build_hitter_ros_probes.py --run p003
     python scripts/build_hitter_ros_probes.py --run p003 --seasons 2024   # quick check
+    python scripts/build_hitter_ros_probes.py --run p005 \
+        --tokens data/hitter_ros/pitch_tokens_fixed.parquet
 """
 
 from __future__ import annotations
@@ -36,7 +39,7 @@ from fantasy_baseball.hitter_ros.pretrain import (
     PitchStore,
     PretrainConfig,
     PretrainModel,
-    tokens_fingerprint,
+    same_tokens,
 )
 from fantasy_baseball.hitter_ros.probes import (
     CONTACT_FEATURES,
@@ -76,7 +79,7 @@ def main() -> int:
     seasons = sorted(args.seasons or table["season"].unique())
     tokens = pd.read_parquet(args.tokens)
     if "tokens" in run_meta:
-        if run_meta["tokens"] != tokens_fingerprint(tokens):
+        if not same_tokens(run_meta["tokens"], tokens):
             parser.error(f"{args.tokens} is not the token file {args.run} was pretrained on")
     else:
         logger.warning(
