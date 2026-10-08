@@ -13,6 +13,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -20,16 +21,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.features import ZONES
-from fantasy_baseball.hitter_ros.pitch_tokens import OUTCOMES, build_pitch_tokens
+from fantasy_baseball.hitter_ros.pitch_tokens import (
+    OUTCOMES,
+    build_pitch_tokens,
+    token_options,
+    token_path,
+)
 
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 OUT_DIR = PROJECT_ROOT / "data" / "hitter_ros"
-
-
-def token_path(zone: str) -> Path:
-    return OUT_DIR / (
-        "pitch_tokens.parquet" if zone == "statcast" else f"pitch_tokens_{zone}.parquet"
-    )
 
 
 def main() -> int:
@@ -42,9 +42,10 @@ def main() -> int:
     )
     args = parser.parse_args()
     tokens = build_pitch_tokens(STORE, zone=args.zone)
-    out = token_path(args.zone)
+    out = token_path(OUT_DIR, args.zone)
     out.parent.mkdir(parents=True, exist_ok=True)
     tokens.to_parquet(out, index=False)
+    out.with_suffix(".json").write_text(json.dumps(token_options(args.zone), indent=2))
     print(f"{len(tokens)} pitches, {tokens['player_id'].nunique()} hitters -> {out}")
     print("\nseason  pitches")
     for season, n in tokens.groupby("season").size().items():

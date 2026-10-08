@@ -23,12 +23,18 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import numpy as np
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.features import FIXED_ZONE, ZONES
+from fantasy_baseball.hitter_ros.features import (
+    FIXED_ZONE,
+    ZONES,
+    read_build_options,
+    zone_options,
+)
 from fantasy_baseball.pitch_data.store import connect
 
 logger = logging.getLogger(__name__)
@@ -108,6 +114,24 @@ OUTCOME_FEATURES = (*(f"out_{o}" for o in OUTCOMES), "ev", "la")  # ev / 100, la
 TOKEN_FEATURES = (*CONTEXT_FEATURES, *OUTCOME_FEATURES)
 
 
+def token_path(root: Path, zone: str) -> Path:
+    """Where ``scripts/build_hitter_ros_pitch_tokens.py --zone <zone>`` writes the tokens
+    under ``root``; the strike zone is recorded next to them (:func:`token_options`)."""
+    zone_options(zone)  # validates
+    return root / ("pitch_tokens.parquet" if zone == "statcast" else f"pitch_tokens_{zone}.parquet")
+
+
+def token_options(zone: str) -> dict[str, Any]:
+    """The build options a token file records (``<file>.json``): its strike zone."""
+    return zone_options(zone)
+
+
+def recorded_token_options(path: Path) -> dict[str, Any]:
+    """A token file's recorded build options. Token files from before #433 recorded none;
+    they were all built with Savant's zone."""
+    return read_build_options(path) or token_options("statcast")
+
+
 def outcome_index(description: pd.Series, bb_class: pd.Series, pitch_type: pd.Series) -> np.ndarray:
     """Outcome class index per pitch (see ``OUTCOMES``).
 
@@ -140,8 +164,6 @@ def build_pitch_tokens(store: Path, zone: str = "statcast") -> pd.DataFrame:
     frame at the end so a hitter's first pitch of a season sees the offseason. ``zone``:
     see :func:`tokens_from_pitches`.
     """
-    if zone not in ZONES:
-        raise ValueError(f"unknown zone {zone!r}")
     conn = connect(store)
     try:
         seasons = [

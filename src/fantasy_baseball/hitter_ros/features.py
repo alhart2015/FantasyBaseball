@@ -45,11 +45,26 @@ ZONES = ("statcast", "fixed")
 # A fixed strike zone, the same box for every season and hitter. Savant's zone comes
 # from sz_top / sz_bot, which the 2026 ABS system records differently (mean top 3.43 ->
 # 3.22 ft, spread halved), so its in-zone share fell from 50.5% to 47.5% while pitch
-# locations didn't move. This box (plate half-width plus a ball, 1.5-3.5 ft up) holds
-# 49-50% of pitches in 2023-2026 and agrees with Savant's zone on 96% of pitches before
-# 2026. (half-width, bottom, top) in feet.
+# locations didn't move. The box tests the ball's center: sideways, within the plate's
+# half-width plus a ball (0.83 ft); up and down, 1.5-3.5 ft, with no ball added (chosen
+# so it holds 49-50% of pitches in 2023-2026 and agrees with Savant's zone on 96% of
+# pitches before 2026). (half-width, bottom, top) in feet. Files counted with it record
+# it (:func:`zone_options`), so changing it asks for a rebuild.
 FIXED_ZONE = (0.83, 1.5, 3.5)
-FIXED_ZONE_TABLE_COLUMNS = ("std_fzone_pitches",)
+
+
+def zone_options(zone: str) -> dict[str, Any]:
+    """The strike-zone build options a file made with ``zone`` records next to it."""
+    if zone not in ZONES:
+        raise ValueError(f"unknown zone {zone!r}")
+    return {"zone": zone, **({"fixed_zone": list(FIXED_ZONE)} if zone == "fixed" else {})}
+
+
+def read_build_options(path: Path) -> dict[str, Any]:
+    """The build options saved next to a data file (``<file>.json``); ``{}`` without one."""
+    options_path = path.with_suffix(".json")
+    out: dict[str, Any] = json.loads(options_path.read_text()) if options_path.exists() else {}
+    return out
 
 
 def _window_rates(t: pd.DataFrame, w: str, zone: str = "statcast") -> dict[str, pd.Series]:
@@ -326,8 +341,7 @@ def load_feature_file(
     for another table."""
     if not path.exists():
         raise ValueError(f"{path} is missing; {rebuild}")
-    options_path = path.with_suffix(".json")
-    options: dict[str, Any] = json.loads(options_path.read_text()) if options_path.exists() else {}
+    options = read_build_options(path)
     if expected_options is not None and options != expected_options:
         raise ValueError(
             f"{path} was built with {options or 'unknown options'}, not {expected_label} "

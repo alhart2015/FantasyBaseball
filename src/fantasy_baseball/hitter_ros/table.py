@@ -43,12 +43,13 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from pathlib import Path
+from typing import Any
 
 import duckdb
 import pandas as pd
 
 from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS
-from fantasy_baseball.hitter_ros.features import COUNTS_WITH_PIECES, FIXED_ZONE
+from fantasy_baseball.hitter_ros.features import COUNTS_WITH_PIECES, FIXED_ZONE, zone_options
 from fantasy_baseball.hitter_ros.statcast_sql import CONTACT_SQL, SPRAY_SQL, SWING_SQL, WHIFF_SQL
 from fantasy_baseball.pitch_data.store import connect
 
@@ -95,6 +96,7 @@ _PULL_DEG = 15
 _ZONE = "zone BETWEEN 1 AND 9"
 _CHASE = "zone BETWEEN 11 AND 14"
 # features.FIXED_ZONE (#433): outside it, with a known location, is a chase pitch.
+# The table records the box it counted with (build_options) next to it.
 _FZONE = f"abs(plate_x) <= {FIXED_ZONE[0]} AND plate_z BETWEEN {FIXED_ZONE[1]} AND {FIXED_ZONE[2]}"
 _FCHASE = f"plate_x IS NOT NULL AND plate_z IS NOT NULL AND NOT ({_FZONE})"
 _BIP = "type = 'X'"
@@ -413,6 +415,12 @@ def _season_totals(conn: duckdb.DuckDBPyConnection, daily: str, cols: Iterable[s
         f"CREATE TEMP TABLE {name} AS SELECT player_id, season, {sums} FROM {daily} GROUP BY 1, 2"
     )
     return name
+
+
+def build_options() -> dict[str, Any]:
+    """The settings a table is built with; saved next to it as ``<table>.json``. The
+    fixed-box counts (fzone_ / fchase_) depend on features.FIXED_ZONE."""
+    return {"fixed_zone": zone_options("fixed")["fixed_zone"]}
 
 
 def build_table(root: Path) -> pd.DataFrame:

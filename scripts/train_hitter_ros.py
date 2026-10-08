@@ -46,7 +46,6 @@ from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.features import (
     ERA_MODES,
     ERA_TABLE_COLUMNS,
-    FIXED_ZONE_TABLE_COLUMNS,
     PIECES,
     STEAL_TABLE_COLUMNS,
     TARGETS,
@@ -57,6 +56,7 @@ from fantasy_baseball.hitter_ros.features import (
     input_frame,
     league_answer_rates,
     league_reference,
+    read_build_options,
     target_frame,
     target_stat,
 )
@@ -89,6 +89,7 @@ from fantasy_baseball.hitter_ros.probes import (
 )
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.hitter_ros.table import HORIZONS
+from fantasy_baseball.hitter_ros.table import build_options as table_build_options
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
@@ -517,12 +518,18 @@ def main() -> int:
     needed = {
         "ros_n25_pa": config.horizons,
         "ros_n25_k": config.horizons and config.avg_pieces != "none",
-        FIXED_ZONE_TABLE_COLUMNS[0]: config.zone == "fixed",
+        "std_fzone_pitches": config.zone == "fixed",
         "l7_pa": config.recent_inputs,
     }
     stale = [col for col, used in needed.items() if used and col not in table.columns]
     if stale:
         parser.error(f"{TABLE} predates {stale}; run scripts/build_hitter_ros_table.py")
+    if config.zone == "fixed" and read_build_options(TABLE) != table_build_options():
+        parser.error(
+            f"{TABLE}'s fixed-zone counts were built with "
+            f"{read_build_options(TABLE) or 'unknown options'}, not the current "
+            f"{table_build_options()}; run scripts/build_hitter_ros_table.py"
+        )
     x_all = input_frame(
         table,
         era=config.era,

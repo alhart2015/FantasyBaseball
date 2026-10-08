@@ -117,15 +117,52 @@ def test_pitch_height_in_the_fixed_box():
         tokens_from_pitches(df, zone="abs")
 
 
-def test_fingerprint_tells_zones_apart():
-    pytest.importorskip("torch")
-    from fantasy_baseball.hitter_ros.pitch_tokens import tokens_from_pitches
-    from fantasy_baseball.hitter_ros.pretrain import same_tokens, tokens_fingerprint
+def test_token_files_record_their_zone(tmp_path):
+    import json
 
-    df = _pitches([2.0, 3.0], sz_bot=[1.6, 1.6], sz_top=[3.2, 3.2])
-    savant, fixed = tokens_from_pitches(df), tokens_from_pitches(df, zone="fixed")
-    recorded = tokens_fingerprint(savant)
-    assert same_tokens(recorded, savant) and not same_tokens(recorded, fixed)
-    # A run recorded before the height was fingerprinted still matches on what it has.
-    old = {k: v for k, v in recorded.items() if k != "loc_up_mean"}
-    assert same_tokens(old, savant) and same_tokens(old, fixed)
+    from fantasy_baseball.hitter_ros.pitch_tokens import (
+        recorded_token_options,
+        token_options,
+        token_path,
+    )
+
+    assert token_path(tmp_path, "statcast").name == "pitch_tokens.parquet"
+    fixed = token_path(tmp_path, "fixed")
+    assert fixed.name == "pitch_tokens_fixed.parquet"
+    assert token_options("fixed") == {"zone": "fixed", "fixed_zone": list(FIXED_ZONE)}
+    # A file from before #433 recorded nothing: Savant's zone.
+    assert recorded_token_options(fixed) == {"zone": "statcast"}
+    fixed.with_suffix(".json").write_text(json.dumps(token_options("fixed")))
+    assert recorded_token_options(fixed) == token_options("fixed")
+    with pytest.raises(ValueError):
+        token_path(tmp_path, "abs")
+
+
+def test_pretraining_runs_record_their_zone():
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.pretrain import run_token_options
+
+    assert run_token_options({"tokens": {}}) == {"zone": "statcast"}  # before #433
+    fixed = {"zone": "fixed", "fixed_zone": list(FIXED_ZONE)}
+    assert run_token_options({"token_options": fixed}) == fixed
+
+
+def test_training_refuses_a_table_counted_with_another_box(table, tmp_path, monkeypatch, capsys):
+    import json
+
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.table import build_options
+    from scripts import train_hitter_ros
+
+    assert build_options() == {"fixed_zone": list(FIXED_ZONE)}
+    path = tmp_path / "table.parquet"
+    table.to_parquet(path)
+    old_box = {"fixed_zone": [0.83, 1.6, 3.4]}
+    path.with_suffix(".json").write_text(json.dumps(old_box))
+    monkeypatch.setattr(train_hitter_ros, "TABLE", path)
+    monkeypatch.setattr(train_hitter_ros, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr("sys.argv", ["train", "--name", "x"])
+    with pytest.raises(SystemExit):
+        train_hitter_ros.main()
+    err = capsys.readouterr().err
+    assert "fixed-zone counts" in err and "build_hitter_ros_table" in err

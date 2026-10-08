@@ -154,7 +154,9 @@ class NetConfig:
     # Strike zone for the zone / chase inputs (#433): features.ZONES. "fixed" uses one box
     # for every season, so 2026's ABS-recorded zone doesn't shift them. Default from
     # #433: over 6 seeds the mid-season gap to FanGraphs rose on every seed (AVG -1.57 ->
-    # -1.36, RBI +0.78 -> +0.90), preseason unchanged.
+    # -1.36, RBI +0.78 -> +0.90), preseason unchanged. The probes' pitch tokens keep
+    # Savant's zone: pretrained on fixed-box heights (p005) the pitch model predicted
+    # worse in every season, 2026 included.
     zone: str = "fixed"
 
     def __post_init__(self) -> None:
