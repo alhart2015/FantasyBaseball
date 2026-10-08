@@ -441,7 +441,7 @@ def write_season_games(root: Path, season: int, games: Games) -> int:
 
 def connect(root: Path) -> duckdb.DuckDBPyConnection:
     """In-memory DuckDB with ``pitches``, ``lineups``, ``sprint_speed``, ``schedule``,
-    ``games``, ``milb_season`` and ``milb_weekly`` views.
+    ``games``, ``milb_season``, ``milb_weekly``, ``prospect_rankings`` and ``draft`` views.
 
     A view is only created when its files exist. ``pitches`` carries a ``season`` column
     from the directory name; columns Savant added in later years are NULL in earlier ones.
@@ -455,6 +455,8 @@ def connect(root: Path) -> duckdb.DuckDBPyConnection:
         "games": "games/*.parquet",
         "milb_season": "milb_season/*.parquet",
         "milb_weekly": "milb_weekly/*/*.parquet",
+        "prospect_rankings": "prospect_rankings/*.parquet",
+        "draft": "draft/*.parquet",
     }
     for name, pattern in patterns.items():
         if not any(root.glob(pattern)):

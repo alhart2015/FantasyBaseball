@@ -47,7 +47,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.backtest import MIN_HISTORY_SEASONS
+from fantasy_baseball.hitter_ros.backtest import vet_or_unknown_rows
 from fantasy_baseball.hitter_ros.features import ROW_KEYS, load_feature_file
 from fantasy_baseball.hitter_ros.milb_grade import (
     COUNTS,
@@ -294,9 +294,7 @@ def build_milb_features(
     )
     blank = np.zeros(len(out), dtype=bool)
     if vet_min_pa is not None:
-        mlb_pa = table["car_pa"].astype(float) + table["std_pa"].astype(float)
-        short_history = table["car_seasons_in_store"] < MIN_HISTORY_SEASONS
-        blank = ((mlb_pa >= vet_min_pa) | short_history).to_numpy()
+        blank = vet_or_unknown_rows(table, vet_min_pa)
         out.loc[blank, MILB_FEATURES] = np.nan
     for w in MILB_WINDOWS:
         out[f"milb_{w}_log_pa"] = out[f"milb_{w}_log_pa"].fillna(0.0)

@@ -81,6 +81,10 @@ from fantasy_baseball.hitter_ros.net import (
     train,
 )
 from fantasy_baseball.hitter_ros.parks import PARK_FEATURES, load_park_inputs
+from fantasy_baseball.hitter_ros.pedigree_features import (
+    PEDIGREE_FEATURES,
+    load_pedigree_inputs,
+)
 from fantasy_baseball.hitter_ros.probes import (
     PROBE_FEATURES,
     check_probes,
@@ -390,6 +394,12 @@ def main() -> int:
         "(build them first with scripts/build_hitter_ros_parks.py --name <name>; none = off)",
     )
     parser.add_argument(
+        "--pedigree",
+        default=defaults.pedigree,
+        help="add prospect-pedigree inputs (#433) from data/hitter_ros/pedigree_<name>.parquet "
+        "(build them first with scripts/build_hitter_ros_pedigree.py --name <name>; none = off)",
+    )
+    parser.add_argument(
         "--zone",
         choices=list(ZONES),
         default=defaults.zone,
@@ -486,6 +496,7 @@ def main() -> int:
             head_layers=args.head_layers,
             milb=args.milb,
             parks=args.parks,
+            pedigree=args.pedigree,
             count_loss=args.count_loss,
             avg_loss=args.avg_loss,
             avg_pieces=args.avg_pieces,
@@ -547,23 +558,23 @@ def main() -> int:
             parser.error(f"{probes_file}: {problem}; rebuild it for this table")
         x_all = pd.concat([x_all, probe_inputs(table, probes)], axis=1)
         logger.info("added %d probe features from %s", len(PROBE_FEATURES), probes_file.name)
-    if config.milb != "none":
+    # Feature files built by scripts/build_hitter_ros_<kind>.py; each one's build options
+    # go into config.json as "<kind>_build" (None when off).
+    builds: dict[str, dict | None] = {}
+    for kind, label, name, load, columns in (
+        ("milb", "minor-league", config.milb, load_milb_inputs, MILB_FEATURES),
+        ("parks", "park", config.parks, load_park_inputs, PARK_FEATURES),
+        ("pedigree", "pedigree", config.pedigree, load_pedigree_inputs, PEDIGREE_FEATURES),
+    ):
+        builds[kind] = None
+        if name == "none":
+            continue
         try:
-            milb, milb_build = load_milb_inputs(table, TABLE.parent, config.milb)
+            inputs, builds[kind] = load(table, TABLE.parent, name)
         except ValueError as err:
             parser.error(str(err))
-        x_all = pd.concat([x_all, milb], axis=1)
-        logger.info("added %d minor-league features (%s)", len(MILB_FEATURES), config.milb)
-    else:
-        milb_build = None
-    parks_build = None
-    if config.parks != "none":
-        try:
-            parks, parks_build = load_park_inputs(table, TABLE.parent, config.parks)
-        except ValueError as err:
-            parser.error(str(err))
-        x_all = pd.concat([x_all, parks], axis=1)
-        logger.info("added %d park features (%s)", len(PARK_FEATURES), config.parks)
+        x_all = pd.concat([x_all, inputs], axis=1)
+        logger.info("added %d %s features (%s)", len(columns), label, name)
     y_all, w_all = target_frame(
         table, HORIZONS if config.horizons else (), pieces=config.avg_pieces != "none"
     )
@@ -602,8 +613,8 @@ def main() -> int:
         "shuffle_test_order": args.shuffle_test_order,
         "train_seasons": args.train_seasons,
         "first_train_season": args.first_train_season,
-        "milb_build": milb_build,  # the minor-league file's build options
-        "parks_build": parks_build,  # the park file's build options
+        # the minor-league / park / pedigree files' build options
+        **{f"{kind}_build": build for kind, build in builds.items()},
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))

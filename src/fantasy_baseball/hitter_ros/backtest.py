@@ -25,6 +25,7 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.baselines import baseline_predictions
@@ -60,6 +61,17 @@ VET_MIN_CAREER_PA = 300
 # store (it starts in 2008, so from 2012 on); before that a vet can look like a rookie.
 MIN_HISTORY_SEASONS = 4
 GROUPS = ("vet", "rookie")  # scored separately; "unknown" rows are in neither
+
+
+def vet_or_unknown_rows(table: pd.DataFrame, vet_min_pa: float) -> np.ndarray:
+    """Per ``table`` row: at least ``vet_min_pa`` MLB PA when projected (``car_pa +
+    std_pa``), or a career count that can't be trusted (fewer than
+    ``MIN_HISTORY_SEASONS`` earlier seasons in the store). The rows the minor-league and
+    pedigree build options blank."""
+    mlb_pa = table["car_pa"].astype(float) + table["std_pa"].astype(float)
+    short_history = table["car_seasons_in_store"] < MIN_HISTORY_SEASONS
+    out: np.ndarray = ((mlb_pa >= vet_min_pa) | short_history).to_numpy()
+    return out
 
 
 def _with_fangraphs(
