@@ -14,6 +14,10 @@ and scored_snapshots.parquet (one row per player x system x stat), and summary.m
 into #404). Scoring is hitter_ros/backtest.py, shared with score_hitter_ros_run.py.
 A name that already has a run is refused unless --overwrite.
 
+--predict-only skips the scoring: for a season with nothing to score yet (next season's
+preseason rows, once its schedule is in the store and the table is rebuilt). The run
+then has predictions.parquet, config.json and a short summary.md only.
+
 Setup (once): pip install torch --index-url https://download.pytorch.org/whl/cu128
 Usage:
     python scripts/build_hitter_ros_table.py      # if the table is stale
@@ -23,6 +27,7 @@ Usage:
     python scripts/build_hitter_ros_parks.py --name p3            # default park inputs
     python scripts/build_hitter_ros_pa_tokens.py   # once, for sequence runs
     python scripts/train_hitter_ros.py --name 003a-gru --seq gru --sb-inputs full
+    python scripts/train_hitter_ros.py --name proj-2027 --test-seasons 2027 --predict-only
 """
 
 from __future__ import annotations
@@ -562,6 +567,11 @@ def main() -> int:
         help="train only on the N seasons right before each test season (learning curves)",
     )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
+    parser.add_argument(
+        "--predict-only",
+        action="store_true",
+        help="write the predictions without scoring them (a season not played yet)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
@@ -657,6 +667,15 @@ def main() -> int:
             f"{read_build_options(TABLE) or 'unknown options'}, not the current "
             f"{table_build_options()}; run scripts/build_hitter_ros_table.py"
         )
+    absent = sorted(set(args.test_seasons) - set(table["season"].unique()))
+    if absent:
+        parser.error(
+            f"{TABLE} has no rows for {absent}; for next season, store its schedule "
+            "(fetch_pitch_data.py) and rebuild the table"
+        )
+    unplayed = backtest.unplayed_seasons(table, args.test_seasons)
+    if unplayed and not args.predict_only:
+        parser.error(f"no games played yet in {unplayed} to score; add --predict-only")
     main_inputs = input_frame(
         table,
         era=config.era,
@@ -726,6 +745,8 @@ def main() -> int:
         logger.info("test season %s: training on complete seasons before it", season)
         # --split: a preseason-only model and a mid-season-only model (#422).
         for weeks in ("pre", "mid") if config.split else ("all",):
+            if not ((table["season"] == season) & WEEKS[weeks](table["week"])).any():
+                continue  # e.g. --split's mid-season model for a season not played yet
             preds, info = fit_season(
                 table,
                 x_all,
@@ -770,6 +791,22 @@ def main() -> int:
         "seasons": infos,
     }
     (out / "config.json").write_text(json.dumps(meta, indent=2))
+    epochs = ", ".join(f"{_fit_label(i)}: {i['best_epoch']}" for i in infos)
+    epoch_lines = [
+        "",
+        f"Best epoch per test season: {epochs}. Inputs: {infos[0]['n_features']}.",
+    ]
+    if x_sb is not None:
+        sb_epochs = ", ".join(f"{_fit_label(i)}: {i['sb_net']['best_epoch']}" for i in infos)
+        epoch_lines += [
+            f"SB net: best epoch {sb_epochs}. Inputs: {infos[0]['sb_net']['n_features']}."
+        ]
+    if args.predict_only:
+        md = [f"### Run `{args.name}` (predictions only, not scored)", "", args.note, ""]
+        md += [f"Config: `{json.dumps(config.to_dict())}`", *epoch_lines]
+        (out / "summary.md").write_text("\n".join(md) + "\n")
+        print("\n".join(md))
+        return 0
     pre, snap = backtest.score_predictions(table, predictions, PROJECTIONS, STORE, denoms)
     backtest.write_scores(out, pre, snap)
     md = [
@@ -786,11 +823,7 @@ def main() -> int:
     write_horizon_scores(out, horizon_scores)
     if horizon_scores is not None:
         md += ["", *horizon_summary(horizon_scores)]
-    epochs = ", ".join(f"{_fit_label(i)}: {i['best_epoch']}" for i in infos)
-    md += ["", f"Best epoch per test season: {epochs}. Inputs: {infos[0]['n_features']}."]
-    if x_sb is not None:
-        sb_epochs = ", ".join(f"{_fit_label(i)}: {i['sb_net']['best_epoch']}" for i in infos)
-        md += [f"SB net: best epoch {sb_epochs}. Inputs: {infos[0]['sb_net']['n_features']}."]
+    md += epoch_lines
     (out / "summary.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return 0

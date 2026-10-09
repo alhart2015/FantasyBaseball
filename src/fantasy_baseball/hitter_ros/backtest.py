@@ -33,6 +33,7 @@ their own.
 
 from __future__ import annotations
 
+from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
 
@@ -268,6 +269,14 @@ def tag_experience(scored: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
     group[vet] = "vet"
     group[~vet & known] = "rookie"
     return tagged.drop(columns="car_seasons_in_store").assign(group=group)
+
+
+def unplayed_seasons(table: pd.DataFrame, seasons: Iterable[int]) -> list[int]:
+    """The ``seasons`` with rows in ``table`` but no game played yet (every answer
+    empty): next season's preseason rows, with nothing to score them against."""
+    rows = table.loc[table["season"].isin(list(seasons))]
+    ros_pa = rows.groupby("season")["ros_pa"].sum()
+    return sorted(int(season) for season, pa in ros_pa.items() if pa == 0)
 
 
 def score_predictions(

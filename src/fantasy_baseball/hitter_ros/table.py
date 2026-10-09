@@ -2,7 +2,12 @@
 
 As-of dates are the season's first scheduled date (week 0 = preseason: nothing played
 yet) and every 7 days after it. A row exists for each hitter with at least one lineup
-appearance on or after the as-of date that season. A hitter-season is one where he
+appearance on or after the as-of date that season. Until a season is complete, its week 0
+also has a row for every hitter of the three seasons before, played this season or not:
+the rows to project it from -- next season once its schedule is stored, before any game
+or after an early overseas series. A row with no game after its date has his last team
+(so an offseason move is missed, #456) and his last Savant age plus the seasons since; its
+answers are empty. A hitter-season is one where he
 started a game at a position other than P, or had a non-pitching lineup role and threw
 no pitches that season -- so a pitcher who pinch-runs is not a hitter row.
 
@@ -480,6 +485,12 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
                g.season_complete
         FROM grid g JOIN box_daily b ON b.season = g.season AND b.game_date >= g.as_of
         WHERE (b.player_id, b.season) IN (SELECT player_id, season FROM hitter_seasons)
+        UNION
+        -- A season not complete: week 0 for every hitter of the three seasons before.
+        SELECT DISTINCT hs.player_id, g.season, g.week, g.as_of, g.first_date, g.last_date,
+               g.season_complete
+        FROM grid g JOIN hitter_seasons hs ON hs.season BETWEEN g.season - 3 AND g.season - 1
+        WHERE g.week = 0 AND NOT g.season_complete
         """
     )
 
@@ -530,13 +541,19 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
 
     # The hitter's team going forward: the team of his first game on or after the date.
     # That is the roster as known on the date (it catches offseason and deadline moves);
-    # the team's stats below still use only games before the date.
+    # the team's stats below still use only games before the date. With no game after
+    # the date (a preseason row of a season he hasn't played in yet), his last team: an
+    # offseason move is missed (#456).
     conn.execute(
         """
         CREATE TEMP TABLE cur_team AS
-        SELECT pop.player_id, pop.season, pop.week, b.team_id
-        FROM pop ASOF LEFT JOIN box_daily b
+        SELECT pop.player_id, pop.season, pop.week,
+               CASE WHEN b.game_date IS NULL THEN last.team_id ELSE b.team_id END AS team_id
+        FROM pop
+        ASOF LEFT JOIN box_daily b
           ON b.player_id = pop.player_id AND pop.as_of <= b.game_date
+        ASOF LEFT JOIN box_daily last
+          ON last.player_id = pop.player_id AND pop.as_of > last.game_date
         """
     )
     team_std = _sums(TEAM_COUNTS, "t", "std_")
@@ -574,7 +591,10 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
                pop.season - 1 >= {first_store_season} AS p1_in_store,
                least(3, pop.season - {first_store_season}) AS p3_seasons_in_store,
                pop.season - {first_store_season} AS car_seasons_in_store,
-               a.age,
+               -- No Savant age yet in a season not complete (he hasn't batted): his
+               -- last one plus the seasons since.
+               CASE WHEN a.age IS NULL AND NOT pop.season_complete
+                    THEN a1.age + pop.season - a1.season ELSE a.age END AS age,
                s1.sprint_speed AS p1_sprint_speed, s1.competitive_runs AS p1_sprint_runs,
                s2.sprint_speed AS p2_sprint_speed, s2.competitive_runs AS p2_sprint_runs,
                s1.hp_to_1b AS p1_hp_to_1b, s1.bolts AS p1_bolts,
@@ -589,6 +609,7 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
         JOIN team_ctx_p1 tp USING (player_id, season, week)
         JOIN league_ctx lg USING (player_id, season, week)
         LEFT JOIN season_age a ON a.player_id = pop.player_id AND a.season = pop.season
+        ASOF LEFT JOIN season_age a1 ON a1.player_id = pop.player_id AND pop.season > a1.season
         LEFT JOIN sprint s1 ON s1.player_id = pop.player_id AND s1.season = pop.season - 1
         LEFT JOIN sprint s2 ON s2.player_id = pop.player_id AND s2.season = pop.season - 2
         ORDER BY pop.season, pop.week, pop.player_id

@@ -88,6 +88,11 @@ def main() -> int:
     parser.add_argument("runs", nargs="+")
     args = parser.parse_args()
     table = pd.read_parquet(TABLE)
+    for name in args.runs:
+        seasons = pd.read_parquet(RUNS / name / "predictions.parquet", columns=["season"])
+        unplayed = backtest.unplayed_seasons(table, seasons["season"].unique())
+        if unplayed:
+            parser.error(f"{name}: no games played yet in {unplayed} to score")
     denoms = backtest.league_denominators(LEAGUE)
     results = {name: score_run(table, RUNS / name, denoms) for name in args.runs}
     if len(results) > 1:
