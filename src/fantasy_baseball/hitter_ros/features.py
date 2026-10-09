@@ -142,8 +142,9 @@ _ERA_RATES: dict[str, Callable[[Column], pd.Series]] = {
 
 
 ERA_MODES = ("none", "relative", "full")
-# Table columns the era options read; a table built before #421 lacks them.
-ERA_TABLE_COLUMNS = ("lg_std_pa", "lg_p3_pa")
+# Table columns the era options and league_reference read; a table built before #421
+# lacks them.
+ERA_TABLE_COLUMNS = ("lg_std_pa", "lg_p3_pa", "lg_p1_pa")
 
 
 def _era_inputs(t: pd.DataFrame, mode: str, player: dict[str, pd.Series]) -> dict[str, pd.Series]:
@@ -172,16 +173,26 @@ def _era_inputs(t: pd.DataFrame, mode: str, player: dict[str, pd.Series]) -> dic
     return out
 
 
+# SB's league level moves faster than the other answers' (the 2023 rules, the 2026
+# cool-off), so its reference is last season plus this season before the date, this
+# season's games counted SB_STD_WEIGHT times. Across 2016-2026 it missed the league's
+# rest-of-season SB rate by 0.69 SB/600 preseason and 0.61 mid-season (weeks 1-22),
+# vs. 0.99 and 0.96 for the 3-season pool (#413).
+SB_STD_WEIGHT = 3
+
+
 def league_reference(t: pd.DataFrame, *, pieces: bool = False) -> pd.DataFrame:
     """Each row's league rates for the five answers (and, with ``pieces``, AVG's
     pieces), known on its as-of date: the last
     three seasons plus this season before the date, pooled. Used to predict a player
     relative to his league and scale back (``relative_target``). Across 2011-2026 the
     3-season average missed next season's league R and HR rates by less than last
-    season alone did (#421).
+    season alone did (#421). SB is the exception: last season plus this season,
+    this season weighted ``SB_STD_WEIGHT`` (#413).
 
     NaN for a row with no earlier season in the store (its first season): a reference
-    built from a few days of this season's games would be mostly noise.
+    built from a few days of this season's games would be mostly noise. SB, which
+    reads only last season, is NaN without last season too.
 
     ``pieces``: also the ``PIECES`` rates (#433)."""
     names = COUNTS_WITH_PIECES if pieces else COUNTS
@@ -190,6 +201,11 @@ def league_reference(t: pd.DataFrame, *, pieces: bool = False) -> pd.DataFrame:
         index=t.index,
     )
     ref = _with_pieces(counts, pieces)
+
+    def fast(c: str) -> pd.Series:
+        return t[f"lg_p1_{c}"].astype(float) + SB_STD_WEIGHT * t[f"lg_std_{c}"].astype(float)
+
+    ref["sb"] = _div(fast("sb"), fast("pa")).where(t["lg_p1_pa"].astype(float) > 0)
     return ref.where(t["lg_p3_pa"].astype(float) > 0)
 
 
