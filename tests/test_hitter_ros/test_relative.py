@@ -97,6 +97,8 @@ def test_league_forecast_lines_report_forecast_minus_actual():
             row[f"lg_std_{c}"] = 0.0
         for c in ("rbi", "sb"):
             row[f"lg_p3_{c}"], row[f"lg_std_{c}"] = 100.0, 0.0
+        # Last season, for SB's reference (#413).
+        row["lg_p1_pa"], row["lg_p1_sb"] = 1000.0, 100.0
         row.update(ros_pa=500, ros_ab=450, ros_h=110, ros_r=60, ros_hr=ros_hr, ros_rbi=50)
         row["ros_sb"] = 5
         rows.append(row)

@@ -118,6 +118,13 @@ def test_league_rates_with_sb_pieces(table):
     rows = (table.season == 2025) & (table.week == 0)
     first = a.loc[rows].iloc[0]
     assert sb_from_pieces(first.opp_pa, first.att_opp, first.sb_att) == pytest.approx(first.sb)
+    # The reference's pieces use SB's window too, so they multiply back to its SB.
+    ref = league_reference(table, sb_pieces=True)
+    known = ref[list(SB_PIECES)].notna().all(axis=1)
+    assert known.any()
+    np.testing.assert_allclose(
+        sb_from_pieces(ref.opp_pa, ref.att_opp, ref.sb_att)[known], ref.sb[known]
+    )
 
 
 def test_sb_piece_config_and_loss():
