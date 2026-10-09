@@ -667,12 +667,15 @@ def main() -> int:
             f"{read_build_options(TABLE) or 'unknown options'}, not the current "
             f"{table_build_options()}; run scripts/build_hitter_ros_table.py"
         )
-    if not args.predict_only:
-        # A season not played yet has only preseason rows, with nothing to score them on.
-        ros_pa = table.loc[table["season"].isin(args.test_seasons)].groupby("season")["ros_pa"]
-        unplayed = sorted(int(season) for season, pa in ros_pa.sum().items() if pa == 0)
-        if unplayed:
-            parser.error(f"no games played yet in {unplayed} to score; add --predict-only")
+    absent = sorted(set(args.test_seasons) - set(table["season"].unique()))
+    if absent:
+        parser.error(
+            f"{TABLE} has no rows for {absent}; for next season, store its schedule "
+            "(fetch_pitch_data.py) and rebuild the table"
+        )
+    unplayed = backtest.unplayed_seasons(table, args.test_seasons)
+    if unplayed and not args.predict_only:
+        parser.error(f"no games played yet in {unplayed} to score; add --predict-only")
     main_inputs = input_frame(
         table,
         era=config.era,
@@ -742,6 +745,8 @@ def main() -> int:
         logger.info("test season %s: training on complete seasons before it", season)
         # --split: a preseason-only model and a mid-season-only model (#422).
         for weeks in ("pre", "mid") if config.split else ("all",):
+            if not ((table["season"] == season) & WEEKS[weeks](table["week"])).any():
+                continue  # e.g. --split's mid-season model for a season not played yet
             preds, info = fit_season(
                 table,
                 x_all,

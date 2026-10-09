@@ -400,24 +400,40 @@ def test_next_n_pa_window_ends_on_a_date_with_pa(tmp_path):
     assert w0.ros_n25_pa == 28 and w0.ros_n25_r == 7 and w0.ros_n25_sb == 0
 
 
-def test_an_unstarted_season_gets_preseason_rows_to_project_from(tmp_path):
+INJURED = 5
+
+
+def _seasons_with_a_lost_season():
+    """2024-2025, where HITTER moves to TEAM_B for 2025's last game and INJURED bats in
+    2024 only (missing all of 2025)."""
     seasons = {2024: _season(2024, date(2024, 4, 1), 10), 2025: _season(2025, date(2025, 4, 1), 21)}
-    # HITTER moves to TEAM_B for the last game of 2025.
     seasons[2025][0][-2]["team_id"] = TEAM_B
-    _write(tmp_path, seasons)
+    d = date(2024, 4, 1)
+    seasons[2024][0].append(_lineup_row(2024000, d, INJURED, TEAM_A, spot=3, pa=4, ab=4, h=1))
+    seasons[2024][1].append(_pitch(d, INJURED, age_bat=30))
+    return seasons
+
+
+def _schedule(root, year, first, last):
+    pd.DataFrame({"season": [year], "first_date": [first], "last_date": [last]}).to_parquet(
+        root / "schedule" / f"{year}.parquet", index=False
+    )
+
+
+def test_an_unstarted_season_gets_preseason_rows_to_project_from(tmp_path):
+    _write(tmp_path, _seasons_with_a_lost_season())
     before = build_table(tmp_path)
     # 2026's schedule is out, no game played yet.
-    path = tmp_path / "schedule" / "2026.parquet"
-    pd.DataFrame(
-        {"season": [2026], "first_date": [date(2026, 3, 26)], "last_date": [date(2026, 9, 27)]}
-    ).to_parquet(path, index=False)
+    _schedule(tmp_path, 2026, date(2026, 3, 26), date(2026, 9, 27))
     df = build_table(tmp_path)
 
     # Every earlier row is unchanged.
     pd.testing.assert_frame_equal(df[df.season < 2026].reset_index(drop=True), before)
     new = df[df.season == 2026]
-    # Week 0 only, one row per 2025 hitter (the pitcher who batted is not one).
-    assert sorted(new.player_id) == sorted(before.loc[before.season == 2025, "player_id"].unique())
+    # Week 0 only, one row per hitter of the three seasons before -- INJURED, who missed
+    # 2025, too; the pitcher who batted is not one.
+    assert sorted(new.player_id) == sorted(before.loc[before.season >= 2024, "player_id"].unique())
+    assert INJURED in set(new.player_id)
     assert set(new.week) == {0} and not new.season_complete.any()
     w0 = _row(df, HITTER, 2026, 0)
     assert w0.as_of.date() == date(2026, 3, 26) and w0.frac_season_left == 1
@@ -429,3 +445,33 @@ def test_an_unstarted_season_gets_preseason_rows_to_project_from(tmp_path):
     assert w0.p1_team_games == 4
     # League 2025: HITTER and OTHER 8 PA a game, the pinch-hitter 1; the pitcher left out.
     assert w0.lg_p1_pa == 21 * 8 + 1 and w0.lg_std_pa == 0
+    lost = _row(df, INJURED, 2026, 0)
+    assert lost.age == 32  # his 2024 age plus two seasons
+    assert lost.p1_pa == 0 and lost.p3_pa == 4 and lost.team_id == TEAM_A
+
+
+def test_preseason_rows_survive_an_early_overseas_series(tmp_path):
+    """One 2026 game played (HITTER only) with the season still scheduled into September:
+    every hitter of the seasons before keeps his week-0 row to project from."""
+    seasons = _seasons_with_a_lost_season()
+    d = date(2026, 3, 18)
+    seasons[2026] = (
+        [_lineup_row(2026000, d, HITTER, TEAM_A, pa=4, ab=4, h=1)],
+        [_pitch(d, HITTER)],
+    )
+    _write(tmp_path, seasons, scheduled_last={2026: date(2026, 9, 27)})
+    df = build_table(tmp_path)
+    w0 = df[(df.season == 2026) & (df.week == 0)]
+    assert {HITTER, OTHER, BENCH, INJURED} <= set(w0.player_id)
+    assert _row(df, HITTER, 2026, 0).ros_pa == 4  # he did play: his answer counts it
+    other = _row(df, OTHER, 2026, 0)
+    assert other.ros_pa == 0 and other.team_id == TEAM_A and other.age == 28
+    # Once a season is complete, week 0 is again only the hitters who played in it.
+    complete = build_table(_complete_copy(tmp_path, seasons))
+    assert set(complete.loc[complete.season == 2026, "player_id"]) == {HITTER}
+
+
+def _complete_copy(root, seasons):
+    out = root / "complete"
+    _write(out, seasons)  # the schedule ends on the last game played
+    return out
