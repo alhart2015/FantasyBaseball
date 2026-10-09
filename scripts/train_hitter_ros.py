@@ -54,6 +54,7 @@ from fantasy_baseball.hitter_ros.features import (
     ZONES,
     Standardizer,
     avg_from_pieces,
+    box_score_inputs,
     column_horizon,
     input_frame,
     league_answer_rates,
@@ -78,6 +79,7 @@ from fantasy_baseball.hitter_ros.net import (
     LOG_RATE_CLAMP,
     PIECE_LOSS_WEIGHT,
     RELATIVE_TARGETS,
+    SB_INPUTS,
     SB_PIECES_MODES,
     NetConfig,
     binomial_stats,
@@ -299,6 +301,18 @@ def fit_season(
     return preds, info
 
 
+def with_sb_from(preds: pd.DataFrame, sb_preds: pd.DataFrame) -> pd.DataFrame:
+    """``preds`` with every SB column (each horizon's SB and SB's pieces) taken from
+    ``sb_preds``, the SB net's predictions for the same rows (``--sb-inputs box``)."""
+    if not preds.index.equals(sb_preds.index):
+        raise ValueError("the SB net predicted different rows than the main net")
+    out = preds.copy()
+    for c in out.columns:
+        if target_stat(c) in ("sb", *SB_PIECES):
+            out[c] = sb_preds[c]
+    return out
+
+
 def usable_league_rates(rates: pd.DataFrame, binomial: tuple[str, ...]) -> pd.DataFrame:
     """League rates (one column per stat) usable as a divisor or a log-odds offset: NaN
     unless above 0, and for a ``binomial`` stat also below 1. A late-season window with
@@ -440,6 +454,19 @@ def main() -> int:
         help="add expected AVG per at-bat (strikeouts as outs) per window (#433)",
     )
     parser.add_argument(
+        "--blend-inputs",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.blend_inputs,
+        help="add season-to-date rates blended with a prior, a ladder of strengths (#451)",
+    )
+    parser.add_argument(
+        "--sb-inputs",
+        choices=list(SB_INPUTS),
+        default=defaults.sb_inputs,
+        help="box: predict SB with a second net on box-score inputs only, plus the probe, "
+        "minor-league, park and pedigree inputs (#451)",
+    )
+    parser.add_argument(
         "--milb",
         default=defaults.milb,
         help="add graded minor-league inputs (#435) from data/hitter_ros/milb_<name>.parquet "
@@ -558,6 +585,8 @@ def main() -> int:
             horizon_weights=args.horizon_weights,
             recent_inputs=args.recent_inputs,
             xba_ab_inputs=args.xba_ab_inputs,
+            blend_inputs=args.blend_inputs,
+            sb_inputs=args.sb_inputs,
             head_layers=args.head_layers,
             milb=args.milb,
             milb_sb=args.milb_sb,
@@ -606,6 +635,7 @@ def main() -> int:
         "ros_n25_steal_opp2": config.horizons and config.sb_pieces != "none",
         "std_fzone_pitches": config.zone == "fixed",
         "l7_pa": config.recent_inputs,
+        "lg_p3_steal_opp2": config.blend_inputs or config.sb_inputs == "box",
     }
     stale = [col for col, used in needed.items() if used and col not in table.columns]
     if stale:
@@ -616,14 +646,17 @@ def main() -> int:
             f"{read_build_options(TABLE) or 'unknown options'}, not the current "
             f"{table_build_options()}; run scripts/build_hitter_ros_table.py"
         )
-    x_all = input_frame(
+    main_inputs = input_frame(
         table,
         era=config.era,
         steal=config.steal_inputs,
         recent=config.recent_inputs,
         zone=config.zone,
         xba_ab=config.xba_ab_inputs,
+        blend=config.blend_inputs,
     )
+    # Inputs from outside the table (probes, feature files): both nets get them.
+    extra: list[pd.DataFrame] = []
     if config.probes != "none":
         probes_file = probe_path(TABLE.parent, config.probes)
         if not probes_file.exists():
@@ -632,7 +665,7 @@ def main() -> int:
         problem = check_probes(table, probes)
         if problem:
             parser.error(f"{probes_file}: {problem}; rebuild it for this table")
-        x_all = pd.concat([x_all, probe_inputs(table, probes)], axis=1)
+        extra.append(probe_inputs(table, probes))
         logger.info("added %d probe features from %s", len(PROBE_FEATURES), probes_file.name)
     # Feature files built by scripts/build_hitter_ros_<kind>.py; each one's build options
     # go into config.json as "<kind>_build" (None when off).
@@ -649,11 +682,18 @@ def main() -> int:
             inputs, builds[kind] = load(table, TABLE.parent, name)
         except ValueError as err:
             parser.error(str(err))
-        x_all = pd.concat([x_all, inputs], axis=1)
+        extra.append(inputs)
         logger.info("added %d %s features (%s)", len(columns), label, name)
     if config.milb != "none" and not config.milb_sb:
-        x_all = x_all.drop(columns=[c for c in MILB_FEATURES if c.endswith("_sb")])
+        extra = [
+            x.drop(columns=[c for c in MILB_FEATURES if c.endswith("_sb")], errors="ignore")
+            for x in extra
+        ]
         logger.info("dropped the minor-league steal rates (--no-milb-sb)")
+    x_all = pd.concat([main_inputs, *extra], axis=1)
+    x_sb = (
+        pd.concat([box_score_inputs(table), *extra], axis=1) if config.sb_inputs == "box" else None
+    )
     y_all, w_all = target_frame(
         table,
         HORIZONS if config.horizons else (),
@@ -690,6 +730,23 @@ def main() -> int:
                 train_from=_train_from(season, args.train_seasons, args.first_train_season),
                 weeks=weeks,
             )
+            if x_sb is not None:  # --sb-inputs box: SB from a second net (#451)
+                sb_preds, sb_info = fit_season(
+                    table,
+                    x_sb,
+                    y_all,
+                    w_all,
+                    season,
+                    config,
+                    batcher,
+                    args.shuffle_test_order,
+                    train_from=_train_from(season, args.train_seasons, args.first_train_season),
+                    weeks=weeks,
+                )
+                preds = with_sb_from(preds, sb_preds)
+                info["sb_net"] = {
+                    k: sb_info[k] for k in ("n_features", "best_epoch", "train_loss", "val_loss")
+                }
             all_preds.append(preds)
             infos.append(info)
     predictions = pd.concat(all_preds)
@@ -728,6 +785,13 @@ def main() -> int:
         for i in infos
     )
     md += ["", f"Best epoch per test season: {epochs}. Inputs: {infos[0]['n_features']}."]
+    if x_sb is not None:
+        sb_epochs = ", ".join(
+            f"{i['test_season']}{'' if i['weeks'] == 'all' else ' ' + str(i['weeks'])}: "
+            f"{i['sb_net']['best_epoch']}"
+            for i in infos
+        )
+        md += [f"SB net: best epoch {sb_epochs}. Inputs: {infos[0]['sb_net']['n_features']}."]
     (out / "summary.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return 0

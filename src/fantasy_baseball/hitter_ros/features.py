@@ -311,12 +311,13 @@ def input_frame(
     recent: bool = False,
     zone: str = "statcast",
     xba_ab: bool = False,
+    blend: bool = False,
 ) -> pd.DataFrame:
     """Model inputs for every table row: rates per window plus context. NaN = unknown.
     ``era``: see :func:`_era_inputs`. ``steal``: add :func:`_steal_inputs`. ``recent``:
     add the same per-window rates over the last 7 and 14 days (#419). ``zone``: which
     strike zone the zone / chase inputs use (``ZONES``, #433). ``xba_ab``: add
-    :func:`_xba_per_ab` per window (#433)."""
+    :func:`_xba_per_ab` per window (#433). ``blend``: add :func:`_blend_inputs` (#451)."""
     if era not in ERA_MODES:
         raise ValueError(f"unknown era mode {era!r}")
     if zone not in ZONES:
@@ -350,6 +351,8 @@ def input_frame(
     if xba_ab:
         for w in (*WINDOWS, *(RECENT_WINDOWS if recent else ())):
             cols[f"{w}_xba_ab"] = _xba_per_ab(t, w, cols[f"{w}_xba_con"])
+    if blend:
+        cols.update(_blend_inputs(t))
     return pd.DataFrame(cols, index=t.index)
 
 
@@ -361,6 +364,95 @@ def _xba_per_ab(t: pd.DataFrame, w: str, xba_con: pd.Series) -> pd.Series:
     the window's xBA on contact, from :func:`_window_rates`."""
     ab = t[f"{w}_ab"].astype(float)
     return xba_con * _div(ab - t[f"{w}_k"].astype(float), ab)
+
+
+# Blended inputs (#451): this season to date mixed with a prior, one mix per entry here,
+# each counting this many PA of prior. Walk-forward 2022-2026, the plain net left this
+# season's signal on the table: late in the season about a fifth of the gap between a
+# hitter's season-to-date rate and our call (SB: over half) showed up again in his rest
+# of season. The net has the rate and the PA as separate inputs and must learn "trust
+# the rate more as PA grow" itself; these do that mix for it, a ladder of strengths it
+# can combine.
+BLEND_PA = (50, 150, 450, 1350)
+
+
+def _blend_parts(c: Column) -> dict[str, tuple[pd.Series, pd.Series]]:
+    """(successes, trials) for each blended rate, from one window's count getter: the
+    answers, AVG's pieces (``PIECES``), SB's pieces (``SB_PIECES``) and BB/PA."""
+    pa, ab, h, hr, k, sb = (c(n) for n in ("pa", "ab", "h", "hr", "k", "sb"))
+    opp = c("steal_opp2") + c("steal_opp3")
+    attempts = sb + c("cs")
+    return {
+        **{f"{s}_pa": (c(s), pa) for s in ("r", "hr", "rbi", "sb", "bb")},
+        "avg": (h, ab),
+        "k_ab": (k, ab),
+        "hr_ab": (hr, ab),
+        "babip": (h - hr, ab - k - hr),
+        "opp_pa": (opp, pa),
+        "att_opp": (attempts, opp),
+        "sb_att": (sb, attempts),
+    }
+
+
+def _blend_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
+    """Season-to-date rates blended with a prior, ``bl{K}_{rate}`` for each K in
+    ``BLEND_PA`` (#451), Marcel-style:
+
+    * prior = (last season x 2 + the two before) shrunk toward the league's rate over
+      the same seasons by K PA: (successes + K' x league rate) / (trials + K').
+    * blend = this season to date shrunk toward that prior by K PA the same way.
+
+    K' is K PA in the rate's own trials (league trials per PA x K), so attempts per
+    opportunity or SB per attempt get as much prior as K PA would bring. NaN where the
+    league rate is unknown (a row in the store's first season)."""
+
+    def counts(w: str) -> Column:
+        return lambda name: t[f"{w}_{name}"].astype(float)
+
+    std, p1, p3 = (_blend_parts(counts(w)) for w in ("std", "p1", "p3"))
+    lg_p1, lg_p3 = (_blend_parts(counts(w)) for w in ("lg_p1", "lg_p3"))
+    lg_pa = counts("lg_p1")("pa") + counts("lg_p3")("pa")
+    out = {}
+    for name, (made, tried) in std.items():
+        lg_made, lg_tried = lg_p1[name][0] + lg_p3[name][0], lg_p1[name][1] + lg_p3[name][1]
+        lg_rate, tried_per_pa = _div(lg_made, lg_tried), _div(lg_tried, lg_pa)
+        prior_made, prior_tried = p1[name][0] + p3[name][0], p1[name][1] + p3[name][1]
+        for k in BLEND_PA:
+            shrink = k * tried_per_pa
+            prior = (prior_made + shrink * lg_rate) / (prior_tried + shrink)
+            out[f"bl{k}_{name}"] = (made + shrink * prior) / (tried + shrink)
+    return out
+
+
+# The box-score rates of box_score_inputs: (count, per, input name).
+BOX_RATES = (
+    ("r", "pa", "r"),
+    ("hr", "pa", "hr"),
+    ("rbi", "pa", "rbi"),
+    ("sb", "pa", "sb"),
+    ("h", "ab", "avg"),
+    ("k", "ab", "k"),
+    ("bb", "pa", "bb"),
+)
+
+
+def box_score_inputs(t: pd.DataFrame) -> pd.DataFrame:
+    """The SB net's inputs (``NetConfig.sb_inputs`` "box", #451): :func:`_blend_inputs`,
+    each window's box-score rates (``BOX_RATES``) and log PA / AB, the week, the share of
+    the season left and age. None of :func:`input_frame`'s batted-ball, plate-discipline,
+    speed, team or steal-opportunity inputs. NaN = unknown."""
+    cols = dict(_blend_inputs(t))
+    for count, per, name in BOX_RATES:
+        for w in WINDOWS:
+            cols[f"{w}_{name}"] = _div(
+                t[f"{w}_{count}"].astype(float), t[f"{w}_{per}"].astype(float)
+            )
+    for w in WINDOWS:
+        cols[f"{w}_log_pa"] = np.log1p(t[f"{w}_pa"].astype(float))
+        cols[f"{w}_log_ab"] = np.log1p(t[f"{w}_ab"].astype(float))
+    for c in ("week", "frac_season_left", "age"):
+        cols[c] = t[c].astype(float)
+    return pd.DataFrame(cols, index=t.index)
 
 
 # A feature file built for the table (probes #417, minor-league inputs #435) has one row
