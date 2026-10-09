@@ -184,13 +184,16 @@ def fit_season(
         if config.relative_target == "answer"
         else ref
     )
+    if ref is not None:
+        ref = usable_league_rates(ref, binomial_stats(config))
+    if denominator is not None:
+        denominator = usable_league_rates(denominator, binomial_stats(config))
     cols = list(y_all.columns)  # rest of season, then each short horizon (#419)
     y_fit = y_all / by_stat(denominator, cols) if denominator is not None else y_all
-    # A row whose answer can't be computed (no PA, or no league reference) must not
-    # count: train() expects weight 0 wherever the target is NaN. A league rate of 0
-    # (no steal attempts league-wide in a late-season window, #413) leaves 0/0 = NaN; a
-    # nonzero rate over it would be inf, so that is unknown too.
-    y_fit = y_fit.replace([np.inf, -np.inf], np.nan)
+    # A row whose answer can't be computed (no PA, or no usable league rate) must not
+    # count: train() expects weight 0 wherever the target is NaN. Binomial targets are
+    # reset to rates below, but keep this weight 0, so a row with no league log-odds
+    # (offset NaN, filled with 0 in train) never counts.
     w_fit = w_all.where(y_fit.notna(), 0.0)
     # Binomial targets (avg_loss and AVG's pieces, #433; SB per attempt, #413)
     # stay as rates: the net predicts their log-odds, relative to the league's by adding
@@ -294,6 +297,18 @@ def fit_season(
         "val_loss": result.val_loss,
     }
     return preds, info
+
+
+def usable_league_rates(rates: pd.DataFrame, binomial: tuple[str, ...]) -> pd.DataFrame:
+    """League rates (one column per stat) usable as a divisor or a log-odds offset: NaN
+    unless above 0, and for a ``binomial`` stat also below 1. A late-season window with
+    no steal attempts league-wide, or with every attempt successful, would otherwise give
+    an infinite target or offset (#413)."""
+    ok = rates > 0
+    for s in binomial:
+        if s in rates.columns:
+            ok[s] &= rates[s] < 1
+    return rates.where(ok)
 
 
 def by_stat(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
@@ -561,6 +576,9 @@ def main() -> int:
     out = RUNS / args.name
     if out.exists() and any(out.iterdir()) and not args.overwrite:
         parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
+    if config.milb == "none" and not config.milb_sb:
+        # A setting that would do nothing, but be stored in config.json as if it had.
+        parser.error("--no-milb-sb drops minor-league inputs; add --milb <name>")
     if config.head_layers and (config.avg_pieces != "none" or config.sb_pieces != "none"):
         # Checked here, before an old run of this name is deleted (fit_season checks too).
         parser.error(
@@ -584,7 +602,7 @@ def main() -> int:
         "ros_n25_pa": config.horizons,
         "ros_n25_k": config.horizons and config.avg_pieces != "none",
         "ros_steal_opp2": config.sb_pieces != "none",
-        "lg_std_steal_opp2": config.sb_pieces != "none",
+        "lg_std_steal_opp2": config.sb_pieces != "none" and config.relative_target != "none",
         "ros_n25_steal_opp2": config.horizons and config.sb_pieces != "none",
         "std_fzone_pitches": config.zone == "fixed",
         "l7_pa": config.recent_inputs,

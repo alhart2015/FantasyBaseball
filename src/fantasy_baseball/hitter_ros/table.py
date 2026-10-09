@@ -219,6 +219,13 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
             SELECT on_2b, CAST(game_date AS DATE), CAST(season AS INTEGER), 0, 1
             FROM pitches
             WHERE game_type = 'R' AND pitch_number = 1 AND on_2b IS NOT NULL AND on_3b IS NULL
+        ) s
+        -- Only dates with a box_daily row for the runner (none are missing in the
+        -- store; this keeps it so): the horizon answers count steal chances through
+        -- box_daily's dates and subtract those before the as-of date, so a chance on
+        -- any other date would make them too low (#413).
+        WHERE EXISTS (
+            SELECT 1 FROM box_daily b WHERE b.player_id = s.runner AND b.game_date = s.game_date
         )
         GROUP BY 1, 2, 3
         """

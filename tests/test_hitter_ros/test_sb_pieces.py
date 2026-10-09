@@ -191,3 +191,61 @@ def test_fit_season_with_sb_pieces(table, mode):
             pd.testing.assert_series_equal(preds[f"{tag}sb"], derived, check_names=False)
         else:
             assert not np.allclose(preds[f"{tag}sb"], derived)  # its own output
+
+
+def test_steal_chances_only_on_dates_with_a_lineup_row(tmp_path):
+    """A steal chance on a date with no lineup row for the runner would sit in the
+    counts before the date but never in the horizon's running totals, so the horizon
+    count would come out too low. Such dates are left out everywhere."""
+    lineups, pitches = _with_steals(_season(2025, date(2025, 4, 1), 21))
+    gap = date(2025, 4, 4).isoformat()  # game 3, before week 1 (2025-04-08)
+    lineups = [r for r in lineups if not (r["player_id"] == HITTER and r["game_date"] == gap)]
+    seasons = {2024: _with_steals(_season(2024, date(2024, 4, 1), 10)), 2025: (lineups, pitches)}
+    _write(tmp_path, seasons)
+    t = build_table(tmp_path)
+    w1 = _row(t, HITTER, 2025, 1)
+    assert w1.std_steal_opp2 == 6  # games 0-6 less game 3
+    # Next 25 PA from week 1: games 7-13, one chance each.
+    assert w1.ros_n25_steal_opp2 == 7
+    horizon = [c for c in t.columns if c.startswith("ros_n") and "steal_opp" in c]
+    assert (t[horizon].fillna(0) >= 0).all().all()
+
+
+def test_sb_piece_weights_are_never_negative():
+    t = pd.DataFrame({f"ros_{c}": [0] for c in ("pa", "ab", "h", "r", "hr", "rbi", "sb", "k")})
+    for c in ("cs", "steal_opp2", "steal_opp3"):
+        t[f"ros_{c}"] = [-1]
+    t["ros_pa"], t["ros_sb"] = [10], [0]
+    _, weights = target_frame(t, sb_pieces=True)
+    assert (weights[list(SB_PIECES)] >= 0).all().all()
+
+
+def test_usable_league_rates_blank_rates_that_would_be_infinite():
+    from scripts.train_hitter_ros import usable_league_rates
+
+    rates = pd.DataFrame(
+        {"sb": [0.0, 0.01, 0.02], "sb_att": [0.0, 1.0, 0.75], "avg": [0.25, 0.25, np.nan]}
+    )
+    got = usable_league_rates(rates, ("sb_att",))
+    # A count rate needs only to be above 0; a binomial one also below 1.
+    assert got["sb"].isna().tolist() == [True, False, False]
+    assert got["sb_att"].isna().tolist() == [True, True, False]
+    assert got["avg"].isna().tolist() == [False, False, True]
+
+
+def test_sb_piece_loss_split_is_named():
+    from fantasy_baseball.hitter_ros.features import SB_BINOMIAL_PIECES, SB_POISSON_PIECES
+
+    assert (*SB_POISSON_PIECES, *SB_BINOMIAL_PIECES) == SB_PIECES
+    assert SB_BINOMIAL_PIECES == ("sb_att",)
+
+
+def test_no_milb_sb_without_milb_is_refused(tmp_path, monkeypatch, capsys):
+    pytest.importorskip("torch")
+    from scripts import train_hitter_ros
+
+    monkeypatch.setattr(train_hitter_ros, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr("sys.argv", ["train", "--name", "x", "--milb", "none", "--no-milb-sb"])
+    with pytest.raises(SystemExit):
+        train_hitter_ros.main()
+    assert "--no-milb-sb" in capsys.readouterr().err

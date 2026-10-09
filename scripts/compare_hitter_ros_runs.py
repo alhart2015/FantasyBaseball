@@ -183,7 +183,8 @@ def warnings_for(df: pd.DataFrame) -> list[str]:
         out.append(
             "losses differ: val_loss is a squared error for mse, a pairwise logistic "
             "loss for rank and a binomial deviance for AVG with +avg_binomial (and for "
-            "AVG's pieces with +avg_pieces), so it does not compare across them"
+            "AVG's pieces with +avg_pieces; +sb_pieces adds Poisson and binomial "
+            "deviances for SB's pieces), so it does not compare across them"
         )
     if df["weighting"].nunique() > 1:
         out.append(

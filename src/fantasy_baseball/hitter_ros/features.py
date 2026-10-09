@@ -38,7 +38,9 @@ PIECE_COUNTS = ("ab", "h", "hr", "k")
 # attempts with opportunities as exposure -- a runner can try twice on one opportunity,
 # 2B then 3B, so attempts per opportunity can pass 1); SB out of attempts is a success
 # rate (binomial).
-SB_PIECES = ("opp_pa", "att_opp", "sb_att")
+SB_POISSON_PIECES = ("opp_pa", "att_opp")
+SB_BINOMIAL_PIECES = ("sb_att",)
+SB_PIECES = (*SB_POISSON_PIECES, *SB_BINOMIAL_PIECES)
 SB_PIECE_COUNTS = ("pa", "sb", "cs", "steal_opp2", "steal_opp3")
 
 
@@ -472,16 +474,22 @@ def sb_piece_rates(df: pd.DataFrame) -> pd.DataFrame:
     """The ``SB_PIECES`` rates from counts ``pa, sb, cs, steal_opp2, steal_opp3`` (#413):
     opportunities per PA, attempts per opportunity, SB per attempt; NaN where the
     denominator is 0."""
-    pa, sb, cs, opp2, opp3 = (df[c].astype(float) for c in SB_PIECE_COUNTS)
-    opp, attempts = opp2 + opp3, sb + cs
+    trials = sb_piece_trials(df)
+    opp, attempts = trials["att_opp"], trials["sb_att"]
     return pd.DataFrame(
-        {"opp_pa": _div(opp, pa), "att_opp": _div(attempts, opp), "sb_att": _div(sb, attempts)},
+        {
+            "opp_pa": _div(opp, trials["opp_pa"]),
+            "att_opp": _div(attempts, opp),
+            "sb_att": _div(df["sb"].astype(float), attempts),
+        },
         index=df.index,
     )
 
 
 def sb_piece_trials(df: pd.DataFrame) -> pd.DataFrame:
-    """Each ``SB_PIECES`` rate's trials, its loss weight: PA, opportunities, attempts."""
+    """Each ``SB_PIECES`` rate's trials (its denominator and loss weight): PA,
+    opportunities (``table.STEAL_COUNTS``), attempts (SB + CS). The one place they are
+    defined."""
     return pd.DataFrame(
         {
             "opp_pa": df["pa"].astype(float),
@@ -555,7 +563,8 @@ def target_frame(
             piece_weight_parts.append(piece_weights.clip(lower=0).fillna(0.0))
         if sb_pieces:
             sb_rate_parts.append(sb_piece_rates(counts).add_prefix(tag))
-            sb_weight_parts.append(sb_piece_trials(counts).add_prefix(tag).fillna(0.0))
+            sb_weights = sb_piece_trials(counts).add_prefix(tag)
+            sb_weight_parts.append(sb_weights.clip(lower=0).fillna(0.0))
     rates = pd.concat([*rate_parts, *piece_rate_parts, *sb_rate_parts], axis=1)
     weights = pd.concat([*weight_parts, *piece_weight_parts, *sb_weight_parts], axis=1)
     return rates, weights

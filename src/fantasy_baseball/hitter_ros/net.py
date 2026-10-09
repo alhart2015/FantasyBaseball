@@ -500,21 +500,23 @@ def poisson_stats(config: NetConfig) -> tuple[str, ...]:
     """Stats trained with a Poisson loss (the net predicts the log of their rate):
     ``config.count_loss``'s, plus SB's count pieces (#413): opportunities per PA and
     attempts per opportunity (which can pass 1, so not a binomial success rate)."""
+    from fantasy_baseball.hitter_ros.features import SB_POISSON_PIECES
+
     return (
         *COUNT_LOSS_TARGETS[config.count_loss],
-        *(("opp_pa", "att_opp") if config.sb_pieces != "none" else ()),
+        *(SB_POISSON_PIECES if config.sb_pieces != "none" else ()),
     )
 
 
 def binomial_stats(config: NetConfig) -> tuple[str, ...]:
     """Stats trained with a binomial loss (the net predicts their log-odds): AVG with
     ``avg_loss`` binomial, AVG's pieces (#433) and SB per attempt (#413)."""
-    from fantasy_baseball.hitter_ros.features import PIECES, SB_PIECES
+    from fantasy_baseball.hitter_ros.features import PIECES, SB_BINOMIAL_PIECES
 
     return (
         *(("avg",) if config.avg_loss == "binomial" else ()),
         *(PIECES if config.avg_pieces != "none" else ()),
-        *(SB_PIECES[2:] if config.sb_pieces != "none" else ()),
+        *(SB_BINOMIAL_PIECES if config.sb_pieces != "none" else ()),
     )
 
 
