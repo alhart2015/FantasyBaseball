@@ -242,3 +242,20 @@ def test_run_row_reports_vets_and_rookies_separately(runs):
     # A run scored before the tag has no group rows.
     _run(runs, "old", pre=pre.drop(columns="group"))
     assert "pre_vet_pairw_gap_hr" not in cmp.compare(["old"], None, None).columns
+
+
+def test_run_row_shows_where_sb_came_from(runs):
+    _run(runs, "old")  # before #451: no setting, SB from the main net
+    box = _run(runs, "box", config={"sb_inputs": "box"})
+    meta = json.loads((box / "config.json").read_text())
+    for season, (epoch, losses) in zip(
+        meta["seasons"], [(5, [0.5, 0.4]), (7, [0.3, 0.2, 0.25])], strict=True
+    ):
+        season["sb_net"] = {"best_epoch": epoch, "val_loss": losses}
+    (box / "config.json").write_text(json.dumps(meta))
+    df = cmp.compare(["old", "box"], None, None)
+    assert df.loc["old", "sb_inputs"] == "full" and pd.isna(df.loc["old", "sb_best_epoch"])
+    assert df.loc["box", "sb_inputs"] == "box"
+    assert df.loc["box", "sb_best_epoch"] == 6
+    assert df.loc["box", "sb_val_loss"] == pytest.approx(0.3)
+    assert df.loc["box", "val_loss"] == pytest.approx(0.7)  # the main net's, unchanged

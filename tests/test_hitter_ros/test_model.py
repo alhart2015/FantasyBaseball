@@ -450,6 +450,56 @@ def test_xba_per_ab_inputs_are_optional(table):
     assert input_frame(table, recent=True, xba_ab=True).columns.str.endswith("l7_xba_ab").any()
 
 
+def test_blend_inputs_are_optional(table):
+    from fantasy_baseball.hitter_ros.features import BLEND_PA
+
+    plain = input_frame(table)
+    more = input_frame(table, blend=True)
+    added = sorted(set(more.columns) - set(plain.columns))
+    rates = ("r_pa", "hr_pa", "rbi_pa", "sb_pa", "bb_pa", "avg", "k_ab", "hr_ab", "babip")
+    rates += ("opp_pa", "att_opp", "sb_att")
+    assert added == sorted(f"bl{k}_{r}" for k in BLEND_PA for r in rates)
+
+
+def test_blend_inputs_mix_this_season_with_a_shrunk_prior(table):
+    from fantasy_baseball.hitter_ros.features import BLEND_PA
+
+    rows = table[(table.season == 2025) & (table.std_pa > 0) & (table.lg_p3_pa > 0)]
+    assert len(rows)
+    x = input_frame(rows, blend=True)
+    t = rows
+    lg_pa = t.lg_p1_pa + t.lg_p3_pa
+    lg_ab = t.lg_p1_ab + t.lg_p3_ab
+    for k in BLEND_PA:
+        # HR per PA: K PA of prior; the prior (last season twice + the two before) is
+        # itself shrunk K PA toward the league's rate over the same seasons.
+        lg_hr = (t.lg_p1_hr + t.lg_p3_hr) / lg_pa
+        prior = (t.p1_hr + t.p3_hr + k * lg_hr) / (t.p1_pa + t.p3_pa + k)
+        expect = (t.std_hr + k * prior) / (t.std_pa + k)
+        np.testing.assert_allclose(x[f"bl{k}_hr_pa"], expect)
+        # AVG: K PA is K x (league AB per PA) at-bats.
+        k_ab = k * lg_ab / lg_pa
+        lg_avg = (t.lg_p1_h + t.lg_p3_h) / lg_ab
+        prior = (t.p1_h + t.p3_h + k_ab * lg_avg) / (t.p1_ab + t.p3_ab + k_ab)
+        expect = (t.std_h + k_ab * prior) / (t.std_ab + k_ab)
+        np.testing.assert_allclose(x[f"bl{k}_avg"], expect)
+
+
+def test_blend_inputs_are_unknown_without_an_earlier_league_season(table):
+    first = table[table.lg_p3_pa == 0]
+    assert len(first)
+    x = input_frame(first, blend=True)
+    assert x.filter(like="bl50_").isna().all().all()
+
+
+def test_blend_inputs_ignore_every_ros_column(table):
+    changed = table.copy()
+    for c in changed.columns:
+        if c.startswith("ros_"):
+            changed[c] = changed[c] * 7 + 3
+    pd.testing.assert_frame_equal(input_frame(table, blend=True), input_frame(changed, blend=True))
+
+
 def test_horizon_scores_grade_each_horizon_against_its_own_answer(table):
     from fantasy_baseball.hitter_ros.features import TARGETS, horizon_columns, target_frame
     from fantasy_baseball.hitter_ros.horizons import horizon_summary, score_horizons

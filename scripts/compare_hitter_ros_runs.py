@@ -4,6 +4,8 @@ For each finished run in data/hitter_ros/runs/<name>/ (one with a summary.md, wh
 train_hitter_ros.py writes last):
 
 * seed, seasons: what the run was trained and scored on.
+* SB inputs (#451): "box" when SB came from a second net on box-score inputs; then the
+  training columns add that net's best epoch and validation loss.
 * best_epoch, val_loss: the early-stopping epoch and the best validation loss, averaged
   over test seasons. Validation loss compares across runs with the same seed and
   weighting only (the seed picks the validation players, the weighting weights their
@@ -136,7 +138,13 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
         "seasons": ",".join(dict.fromkeys(str(s["test_season"]) for s in seasons)),
         "best_epoch": float(np.mean([s["best_epoch"] for s in seasons])),
         "val_loss": float(np.mean([min(s["val_loss"]) for s in seasons])),
+        # Where SB comes from (#451): the main net, or a second net on box-score inputs.
+        # Runs from before the setting all used the main net.
+        "sb_inputs": meta["config"].get("sb_inputs", "full"),
     }
+    if all("sb_net" in s for s in seasons):  # the SB net's own training, when there is one
+        row["sb_best_epoch"] = float(np.mean([s["sb_net"]["best_epoch"] for s in seasons]))
+        row["sb_val_loss"] = float(np.mean([min(s["sb_net"]["val_loss"]) for s in seasons]))
     pre_path = run / "scored_preseason.parquet"
     if pre_path.exists():
         pre = pd.read_parquet(pre_path)
@@ -211,11 +219,21 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
                 ("seed", "seed"),
                 ("loss", "loss"),
                 ("weighting", "weighting"),
+                ("sb_inputs", "SB inputs"),
                 ("seasons", "test seasons"),
             ],
             0,
         ),
-        ("Training", [("best_epoch", "best epoch"), ("val_loss", "val loss")], 3),
+        (
+            "Training",
+            [
+                ("best_epoch", "best epoch"),
+                ("val_loss", "val loss"),
+                ("sb_best_epoch", "SB net best epoch"),
+                ("sb_val_loss", "SB net val loss"),
+            ],
+            3,
+        ),
         ("MAIN: preseason gap-weighted pairwise % (ours)", cols("pre_pairw_"), 2),
         (
             "MAIN: preseason gap-weighted pairwise gap to blend (positive = ours better)",

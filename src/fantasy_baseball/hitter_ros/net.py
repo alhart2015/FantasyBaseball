@@ -51,6 +51,8 @@ AVG_PIECES = ("none", "extra", "derived")
 PIECE_LOSS_WEIGHT = 1 / 3
 # sb_pieces (#413): the same modes for SB's pieces (features.SB_PIECES).
 SB_PIECES_MODES = AVG_PIECES
+# sb_inputs (#451): which inputs SB is predicted from (see NetConfig.sb_inputs).
+SB_INPUTS = ("full", "box")
 
 
 @dataclass
@@ -146,6 +148,19 @@ class NetConfig:
     recent_inputs: bool = False
     # xba_ab_inputs (#433): add expected AVG per at-bat (strikeouts as outs) per window.
     xba_ab_inputs: bool = False
+    # blend_inputs (#451): add season-to-date rates blended with a prior
+    # (features._blend_inputs), so the net needn't learn on its own how far to trust
+    # this season as its PA grow.
+    blend_inputs: bool = False
+    # sb_inputs (#451): "full" = SB comes from the one net, like every stat. "box" = a
+    # second net, the same in every other setting, reads features.box_score_inputs in
+    # place of features.input_frame (probes, minor-league, park and pedigree inputs kept)
+    # and SB (every horizon, and SB's pieces) comes from it. Default from #451: over 6
+    # seeds x 2022-2026 the box net's SB ordered hitters better (gap-weighted pairwise)
+    # in every week band on 6/6 seeds: weeks 1-6 +0.30, 7-13 +0.41, 14-20 +1.17, 21+
+    # +2.68; preseason even (-0.04). The full net was under-reacting to this season's
+    # steals even on players it trained on. Fitting takes about twice as long.
+    sb_inputs: str = "box"
     head_layers: int = 0
     # Minor-league inputs (#435): a graded minor-league line per window, from
     # data/hitter_ros/milb_<name>.parquet (hitter_ros.milb_features). "none": none.
@@ -213,6 +228,8 @@ class NetConfig:
             raise ValueError("avg_pieces derived has no AVG output for avg_loss to apply to")
         if self.sb_pieces not in SB_PIECES_MODES:
             raise ValueError(f"unknown sb_pieces {self.sb_pieces!r}")
+        if self.sb_inputs not in SB_INPUTS:
+            raise ValueError(f"unknown sb_inputs {self.sb_inputs!r}")
         if self.relative_target not in RELATIVE_TARGETS:
             raise ValueError(f"unknown relative_target {self.relative_target!r}")
         from fantasy_baseball.hitter_ros.features import ERA_MODES
