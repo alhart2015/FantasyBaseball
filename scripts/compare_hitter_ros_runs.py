@@ -116,6 +116,12 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
             f"+avg_pieces_{meta['config']['avg_pieces']}"
             if meta["config"].get("avg_pieces", "none") != "none"
             else ""
+        )
+        # SB's pieces (#413) add Poisson and binomial deviances to val_loss.
+        + (
+            f"+sb_pieces_{meta['config']['sb_pieces']}"
+            if meta["config"].get("sb_pieces", "none") != "none"
+            else ""
         ),
         # Runs from before the weighting setting all used PA weighting. A --split run's
         # val_loss averages two models, each over its own rows.
@@ -177,7 +183,8 @@ def warnings_for(df: pd.DataFrame) -> list[str]:
         out.append(
             "losses differ: val_loss is a squared error for mse, a pairwise logistic "
             "loss for rank and a binomial deviance for AVG with +avg_binomial (and for "
-            "AVG's pieces with +avg_pieces), so it does not compare across them"
+            "AVG's pieces with +avg_pieces; +sb_pieces adds Poisson and binomial "
+            "deviances for SB's pieces), so it does not compare across them"
         )
     if df["weighting"].nunique() > 1:
         out.append(

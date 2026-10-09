@@ -240,3 +240,11 @@ def test_the_default_is_rookies_only_and_shrunk():
     from fantasy_baseball.hitter_ros.net import NetConfig
 
     assert NetConfig().milb == "rookies-s100"
+
+
+def test_minor_league_steal_rates_are_kept_by_default():
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.net import NetConfig
+
+    # #413: dropping them (--no-milb-sb) made rookie SB ordering much worse.
+    assert NetConfig().milb_sb is True

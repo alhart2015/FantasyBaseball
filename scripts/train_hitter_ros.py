@@ -48,6 +48,7 @@ from fantasy_baseball.hitter_ros.features import (
     ERA_MODES,
     ERA_TABLE_COLUMNS,
     PIECES,
+    SB_PIECES,
     STEAL_TABLE_COLUMNS,
     TARGETS,
     ZONES,
@@ -58,6 +59,7 @@ from fantasy_baseball.hitter_ros.features import (
     league_answer_rates,
     league_reference,
     read_build_options,
+    sb_from_pieces,
     target_frame,
     target_stat,
 )
@@ -76,8 +78,11 @@ from fantasy_baseball.hitter_ros.net import (
     LOG_RATE_CLAMP,
     PIECE_LOSS_WEIGHT,
     RELATIVE_TARGETS,
+    SB_PIECES_MODES,
     NetConfig,
+    binomial_stats,
     device,
+    poisson_stats,
     predict,
     train,
 )
@@ -135,8 +140,21 @@ def fit_season(
         )
     if pieces and config.head_layers:
         raise ValueError("head_layers splits outputs into groups of 5; use --avg-pieces none")
-    if config.avg_pieces == "derived":  # no AVG output: built from the pieces below
-        keep = [c for c in out_cols if target_stat(c) != "avg"]
+    sb_pieces = config.sb_pieces != "none"
+    if sb_pieces != any(target_stat(c) in SB_PIECES for c in out_cols):
+        raise ValueError(
+            f"sb_pieces {config.sb_pieces}: build targets with sb_pieces={sb_pieces} "
+            "(target_frame), so the piece columns and the setting agree"
+        )
+    if sb_pieces and config.head_layers:
+        raise ValueError("head_layers splits outputs into groups of 5; use --sb-pieces none")
+    # derived: no AVG / SB output; each is built from its pieces below.
+    derived = {
+        *(("avg",) if config.avg_pieces == "derived" else ()),
+        *(("sb",) if config.sb_pieces == "derived" else ()),
+    }
+    if derived:
+        keep = [c for c in out_cols if target_stat(c) not in derived]
         y_all, w_all = y_all[keep], w_all[keep]
     train_rows = (
         table["season_complete"]
@@ -156,23 +174,31 @@ def fit_season(
     # known on the date (#421) or the league's actual rate over the answer window (#424)
     # -- and multiply back by the forecast. The forecast's own error then shows up only in
     # raw MAE, never in the relative scores.
-    ref = league_reference(table, pieces=pieces) if config.relative_target != "none" else None
-    denominator = (
-        league_answer_rates(table, pieces=pieces) if config.relative_target == "answer" else ref
+    ref = (
+        league_reference(table, pieces=pieces, sb_pieces=sb_pieces)
+        if config.relative_target != "none"
+        else None
     )
+    denominator = (
+        league_answer_rates(table, pieces=pieces, sb_pieces=sb_pieces)
+        if config.relative_target == "answer"
+        else ref
+    )
+    if ref is not None:
+        ref = usable_league_rates(ref, binomial_stats(config))
+    if denominator is not None:
+        denominator = usable_league_rates(denominator, binomial_stats(config))
     cols = list(y_all.columns)  # rest of season, then each short horizon (#419)
     y_fit = y_all / by_stat(denominator, cols) if denominator is not None else y_all
-    # A row whose answer can't be computed (no PA, or no league reference) must not
-    # count: train() expects weight 0 wherever the target is NaN.
+    # A row whose answer can't be computed (no PA, or no usable league rate) must not
+    # count: train() expects weight 0 wherever the target is NaN. Binomial targets are
+    # reset to rates below, but keep this weight 0, so a row with no league log-odds
+    # (offset NaN, filled with 0 in train) never counts.
     w_fit = w_all.where(y_fit.notna(), 0.0)
-    # Binomial targets (avg_loss and AVG's pieces, #433) stay as rates: the net predicts
-    # their log-odds, relative to the league's by adding the league's log-odds (an
-    # offset), not dividing.
-    binomial = {
-        c
-        for c in cols
-        if (config.avg_loss == "binomial" and target_stat(c) == "avg") or target_stat(c) in PIECES
-    }
+    # Binomial targets (avg_loss and AVG's pieces, #433; SB per attempt, #413)
+    # stay as rates: the net predicts their log-odds, relative to the league's by adding
+    # the league's log-odds (an offset), not dividing.
+    binomial = {c for c in cols if target_stat(c) in binomial_stats(config)}
     offset = pd.DataFrame(0.0, index=table.index, columns=cols) if binomial else None
     for c in binomial:
         y_fit[c] = y_all[c]
@@ -189,8 +215,9 @@ def fit_season(
     }
     # Loss weight per horizon (#419): NetConfig.horizon_weights, in HORIZON_NAMES order.
     horizon_weight = dict(zip(HORIZON_NAMES, config.horizon_weights, strict=True))
-    # Poisson targets (count_loss) stay as rates: the net predicts their log.
-    poisson = {c for c in cols if target_stat(c) in COUNT_LOSS_TARGETS[config.count_loss]}
+    # Poisson targets (count_loss; SB's count pieces) are relative rates: the net
+    # predicts their log.
+    poisson = {c for c in cols if target_stat(c) in poisson_stats(config)}
     y_std = np.column_stack(
         [y_train[c] if c in poisson | binomial else (y_train[c] - mu[c]) / sd[c] for c in cols]
     )
@@ -215,7 +242,7 @@ def fit_season(
         target_weights=np.array(
             [
                 horizon_weight[column_horizon(c)]
-                * (PIECE_LOSS_WEIGHT if target_stat(c) in PIECES else 1.0)
+                * (PIECE_LOSS_WEIGHT if target_stat(c) in (*PIECES, *SB_PIECES) else 1.0)
                 for c in cols
             ]
         ),
@@ -248,9 +275,13 @@ def fit_season(
     for c in binomial:  # league log-odds + the net's, back to a rate
         league = 0.0 if ref is None else logit(ref.loc[test_rows, target_stat(c)])
         preds[c] = expit(z[:, cols.index(c)] + league)
-    for c in set(out_cols) - set(cols):  # avg_pieces derived: AVG from its pieces
-        tag = c.removesuffix("avg")
-        preds[c] = avg_from_pieces(*(preds[f"{tag}{p}"] for p in PIECES))
+    for c in set(out_cols) - set(cols):  # derived: AVG / SB from their pieces
+        stat = target_stat(c)
+        tag = c.removesuffix(stat)
+        if stat == "avg":
+            preds[c] = avg_from_pieces(*(preds[f"{tag}{p}"] for p in PIECES))
+        else:
+            preds[c] = sb_from_pieces(*(preds[f"{tag}{p}"] for p in SB_PIECES))
     preds = preds[out_cols]
     preds = pd.concat(
         [table.loc[test_rows, ["player_id", "season", "week", "as_of"]], preds], axis=1
@@ -266,6 +297,18 @@ def fit_season(
         "val_loss": result.val_loss,
     }
     return preds, info
+
+
+def usable_league_rates(rates: pd.DataFrame, binomial: tuple[str, ...]) -> pd.DataFrame:
+    """League rates (one column per stat) usable as a divisor or a log-odds offset: NaN
+    unless above 0, and for a ``binomial`` stat also below 1. A late-season window with
+    no steal attempts league-wide, or with every attempt successful, would otherwise give
+    an infinite target or offset (#413)."""
+    ok = rates > 0
+    for s in binomial:
+        if s in rates.columns:
+            ok[s] &= rates[s] < 1
+    return rates.where(ok)
 
 
 def by_stat(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
@@ -365,6 +408,13 @@ def main() -> int:
         help="AVG's pieces K/AB, HR/AB, BABIP (#433): extra outputs, or AVG derived from them",
     )
     parser.add_argument(
+        "--sb-pieces",
+        choices=list(SB_PIECES_MODES),
+        default=defaults.sb_pieces,
+        help="SB's pieces: opportunities/PA, attempts/opportunity, SB/attempt (#413): "
+        "extra outputs, or SB derived from them",
+    )
+    parser.add_argument(
         "--horizons",
         action=argparse.BooleanOptionalAction,
         default=defaults.horizons,
@@ -394,6 +444,12 @@ def main() -> int:
         default=defaults.milb,
         help="add graded minor-league inputs (#435) from data/hitter_ros/milb_<name>.parquet "
         "(build them first with scripts/build_hitter_ros_milb.py --name <name>; none = off)",
+    )
+    parser.add_argument(
+        "--milb-sb",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.milb_sb,
+        help="keep the minor-league steal rates among the minor-league inputs (#413)",
     )
     parser.add_argument(
         "--parks",
@@ -504,11 +560,13 @@ def main() -> int:
             xba_ab_inputs=args.xba_ab_inputs,
             head_layers=args.head_layers,
             milb=args.milb,
+            milb_sb=args.milb_sb,
             parks=args.parks,
             pedigree=args.pedigree,
             count_loss=args.count_loss,
             avg_loss=args.avg_loss,
             avg_pieces=args.avg_pieces,
+            sb_pieces=args.sb_pieces,
             zone=args.zone,
         )
     except ValueError as err:
@@ -518,9 +576,14 @@ def main() -> int:
     out = RUNS / args.name
     if out.exists() and any(out.iterdir()) and not args.overwrite:
         parser.error(f"{out} already has a run; pick another --name or pass --overwrite")
-    if config.head_layers and config.avg_pieces != "none":
+    if config.milb == "none" and not config.milb_sb:
+        # A setting that would do nothing, but be stored in config.json as if it had.
+        parser.error("--no-milb-sb drops minor-league inputs; add --milb <name>")
+    if config.head_layers and (config.avg_pieces != "none" or config.sb_pieces != "none"):
         # Checked here, before an old run of this name is deleted (fit_season checks too).
-        parser.error("--head-layers splits outputs into groups of 5; add --avg-pieces none")
+        parser.error(
+            "--head-layers splits outputs into groups of 5; add --avg-pieces none --sb-pieces none"
+        )
     if config.seq != "none" and not TOKENS.exists():
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
 
@@ -538,6 +601,9 @@ def main() -> int:
     needed = {
         "ros_n25_pa": config.horizons,
         "ros_n25_k": config.horizons and config.avg_pieces != "none",
+        "ros_steal_opp2": config.sb_pieces != "none",
+        "lg_std_steal_opp2": config.sb_pieces != "none" and config.relative_target != "none",
+        "ros_n25_steal_opp2": config.horizons and config.sb_pieces != "none",
         "std_fzone_pitches": config.zone == "fixed",
         "l7_pa": config.recent_inputs,
     }
@@ -585,8 +651,14 @@ def main() -> int:
             parser.error(str(err))
         x_all = pd.concat([x_all, inputs], axis=1)
         logger.info("added %d %s features (%s)", len(columns), label, name)
+    if config.milb != "none" and not config.milb_sb:
+        x_all = x_all.drop(columns=[c for c in MILB_FEATURES if c.endswith("_sb")])
+        logger.info("dropped the minor-league steal rates (--no-milb-sb)")
     y_all, w_all = target_frame(
-        table, HORIZONS if config.horizons else (), pieces=config.avg_pieces != "none"
+        table,
+        HORIZONS if config.horizons else (),
+        pieces=config.avg_pieces != "none",
+        sb_pieces=config.sb_pieces != "none",
     )
     batcher = None
     if config.seq != "none":

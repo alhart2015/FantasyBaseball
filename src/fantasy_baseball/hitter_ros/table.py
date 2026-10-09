@@ -49,7 +49,7 @@ import duckdb
 import pandas as pd
 
 from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS
-from fantasy_baseball.hitter_ros.features import COUNTS_WITH_PIECES, FIXED_ZONE, zone_options
+from fantasy_baseball.hitter_ros.features import ALL_ANSWER_COUNTS, FIXED_ZONE, zone_options
 from fantasy_baseball.hitter_ros.statcast_sql import CONTACT_SQL, SPRAY_SQL, SWING_SQL, WHIFF_SQL
 from fantasy_baseball.pitch_data.store import connect
 
@@ -69,8 +69,9 @@ BOX_COUNTS = (
 RECENT_WINDOWS = {"l7": 7, "l14": 14}
 # Short-horizon answers (#419): his next N PA from the as-of date, same season only.
 HORIZONS = (25, 100, 250)
-# Their counts: the answers' COUNTS, plus K for AVG's pieces (#433).
-HORIZON_COUNTS = COUNTS_WITH_PIECES
+# Their counts: the answers' COUNTS, plus K for AVG's pieces (#433) and CS and steal
+# opportunities for SB's (#413).
+HORIZON_COUNTS = ALL_ANSWER_COUNTS
 # Steal opportunities (#413), from the runners on base at the first pitch of each PA:
 # on 1B with 2B open, and on 2B with 3B open.
 STEAL_COUNTS = ("steal_opp2", "steal_opp3")
@@ -159,8 +160,10 @@ PITCH_AGGS: dict[str, str] = {
 }
 PITCH_COUNTS = tuple(PITCH_AGGS)
 TEAM_COUNTS = ("team_r", "team_pa", "team_games", "team_sb", "team_cs")
-# League totals per window (#421), for league rates and player-vs-league ratios.
-LEAGUE_COUNTS = ("pa", "ab", "h", "b2", "b3", "hr", "r", "rbi", "sb", "cs", "bb", "k", "hbp")
+# League totals per window (#421), for league rates and player-vs-league ratios: the
+# box-score counts, plus steal opportunities for SB's pieces (#413).
+LEAGUE_BOX_COUNTS = ("pa", "ab", "h", "b2", "b3", "hr", "r", "rbi", "sb", "cs", "bb", "k", "hbp")
+LEAGUE_COUNTS = (*LEAGUE_BOX_COUNTS, *STEAL_COUNTS)
 
 _REQUIRED_VIEWS = ("pitches", "lineups", "schedule")
 
@@ -216,6 +219,13 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
             SELECT on_2b, CAST(game_date AS DATE), CAST(season AS INTEGER), 0, 1
             FROM pitches
             WHERE game_type = 'R' AND pitch_number = 1 AND on_2b IS NOT NULL AND on_3b IS NULL
+        ) s
+        -- Only dates with a box_daily row for the runner (none are missing in the
+        -- store; this keeps it so): the horizon answers count steal chances through
+        -- box_daily's dates and subtract those before the as-of date, so a chance on
+        -- any other date would make them too low (#413).
+        WHERE EXISTS (
+            SELECT 1 FROM box_daily b WHERE b.player_id = s.runner AND b.game_date = s.game_date
         )
         GROUP BY 1, 2, 3
         """
@@ -305,16 +315,27 @@ def _league_context(conn: duckdb.DuckDBPyConnection) -> None:
     # PA, -4 points of AVG) and made them jump in 2020 and 2022 when pitchers stopped
     # batting. Filtering on the season rather than the game's position keeps a position
     # player's at-bats on a day he also mopped up on the mound (listed as P).
-    by_row = ", ".join(f"sum(l.{c}) AS {c}" for c in LEAGUE_COUNTS)
+    by_row = ", ".join(f"sum(l.{c}) AS {c}" for c in LEAGUE_BOX_COUNTS)
+    steal_by_day = ", ".join(f"sum(d.{c}) AS {c}" for c in STEAL_COUNTS)
+    steal_cols = ", ".join(f"coalesce(st.{c}, 0) AS {c}" for c in STEAL_COUNTS)
     conn.execute(
         f"""
         CREATE TEMP TABLE league_daily AS
-        SELECT year(CAST(l.game_date AS DATE)) AS season, CAST(l.game_date AS DATE) AS game_date,
-               {by_row}
-        FROM lineups l
-        JOIN hitter_seasons hs
-          ON hs.player_id = l.player_id AND hs.season = year(CAST(l.game_date AS DATE))
-        GROUP BY 1, 2
+        WITH box AS (
+            SELECT year(CAST(l.game_date AS DATE)) AS season,
+                   CAST(l.game_date AS DATE) AS game_date, {by_row}
+            FROM lineups l
+            JOIN hitter_seasons hs
+              ON hs.player_id = l.player_id AND hs.season = year(CAST(l.game_date AS DATE))
+            GROUP BY 1, 2
+        ), steal AS (
+            SELECT d.season, d.game_date, {steal_by_day}
+            FROM steal_daily d
+            JOIN hitter_seasons hs ON hs.player_id = d.player_id AND hs.season = d.season
+            GROUP BY 1, 2
+        )
+        SELECT box.*, {steal_cols}
+        FROM box LEFT JOIN steal st USING (season, game_date)
         """
     )
     running = ", ".join(
@@ -378,16 +399,22 @@ def _horizon_answers(conn: duckdb.DuckDBPyConnection) -> list[str]:
     # defensive sub) ties the date before it, and could otherwise be matched instead,
     # adding its runs and steals from after the window. Its counts still land in the
     # running totals of the next date with a PA.
+    steal_cols = ", ".join(f"coalesce(st.{c}, 0) AS {c}" for c in STEAL_COUNTS)
     conn.execute(
         f"CREATE TEMP TABLE box_cum AS SELECT * FROM ("
-        f"SELECT player_id, season, game_date, pa, {running} FROM box_daily"
+        f"SELECT player_id, season, game_date, pa, {running} FROM ("
+        f"SELECT b.*, {steal_cols} FROM box_daily b"
+        f" LEFT JOIN steal_daily st USING (player_id, season, game_date))"
         ") WHERE coalesce(pa, 0) > 0"
     )
     names = []
     for n in HORIZONS:
         name = f"horizon_{n}"
+        # Counts before the date: box-score ones from std_box, steal opportunities from
+        # std_steal.
         counts = ", ".join(
-            f"CASE WHEN b.cum_pa IS NULL THEN NULL ELSE b.cum_{c} - s.std_{c} END AS ros_n{n}_{c}"
+            f"CASE WHEN b.cum_pa IS NULL THEN NULL "
+            f"ELSE b.cum_{c} - {'ss' if c in STEAL_COUNTS else 's'}.std_{c} END AS ros_n{n}_{c}"
             for c in HORIZON_COUNTS
         )
         conn.execute(
@@ -400,6 +427,7 @@ def _horizon_answers(conn: duckdb.DuckDBPyConnection) -> list[str]:
             SELECT g.player_id, g.season, g.week, {counts}
             FROM goal g
             JOIN std_box s USING (player_id, season, week)
+            JOIN std_steal ss USING (player_id, season, week)
             ASOF LEFT JOIN box_cum b
               ON b.player_id = g.player_id AND b.season = g.season AND g.goal_pa <= b.cum_pa
             """
@@ -482,6 +510,8 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
         "p3_steal": window(steal_season, STEAL_COUNTS, "p3_", p3),
         "car_steal": window(steal_season, STEAL_COUNTS, "car_", car),
         "ros": window("box_daily", TARGET_COUNTS, "ros_", ros),
+        # SB's pieces (#413): steal opportunities over the answer window.
+        "ros_steal": window("steal_daily", STEAL_COUNTS, "ros_", ros),
         # Recent form (#419): the last 7 and 14 days before the date, this season only.
         **{
             f"{w}_{kind}": window(

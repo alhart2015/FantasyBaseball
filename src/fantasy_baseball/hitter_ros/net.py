@@ -49,6 +49,8 @@ AVG_LOSSES = ("mse", "binomial")
 AVG_PIECES = ("none", "extra", "derived")
 # Each piece's loss weight: the three together count like one stat.
 PIECE_LOSS_WEIGHT = 1 / 3
+# sb_pieces (#413): the same modes for SB's pieces (features.SB_PIECES).
+SB_PIECES_MODES = AVG_PIECES
 
 
 @dataclass
@@ -128,6 +130,12 @@ class NetConfig:
     # (+1.03 -> +0.78). "derived" was worse (preseason AVG -0.54). Neither makes the net
     # use this season's actual AVG (the #433 blind spot).
     avg_pieces: str = "extra"
+    # SB as its pieces (#413): opportunities per PA and attempts per opportunity
+    # (Poisson) and SB per attempt (binomial), features.SB_PIECES, every horizon,
+    # each weighted PIECE_LOSS_WEIGHT. Modes as for avg_pieces: "extra" adds them as
+    # outputs; "derived" drops the SB output and builds SB from them
+    # (features.sb_from_pieces).
+    sb_pieces: str = "none"
     # Short horizons (#419): also predict the next 25 / 100 / 250 PA, each with its own
     # 5 outputs on the shared body (so one more "head" per horizon). horizon_weights:
     # how much each horizon's loss counts, for next 25 / 100 / 250 PA and rest of season.
@@ -147,6 +155,11 @@ class NetConfig:
     # vets within seed noise. Build: build_hitter_ros_milb.py --name rookies-s100
     # --vets-blank-from 300 --shrink-pa 100.
     milb: str = "rookies-s100"
+    # milb_sb (#413): keep the minor-league steal rates (milb_<window>_sb) among those
+    # inputs. Minor-league steals ran hot under rules MLB adopted later (2021-22 pickoff
+    # limits), and young hitters with big minor-league steal rates were projected ~5 SB
+    # per 600 PA too high mid-season 2026.
+    milb_sb: bool = True
     # Park inputs (#433): park factors of his team's home park and of the parks he hit in
     # (hitter_ros.parks), from data/hitter_ros/parks_<name>.parquet. "none": none.
     # Default from #433: over 3 seeds the preseason AVG gap to FanGraphs went from -0.55
@@ -198,6 +211,8 @@ class NetConfig:
             raise ValueError(f"unknown avg_pieces {self.avg_pieces!r}")
         if self.avg_pieces == "derived" and self.avg_loss != "mse":
             raise ValueError("avg_pieces derived has no AVG output for avg_loss to apply to")
+        if self.sb_pieces not in SB_PIECES_MODES:
+            raise ValueError(f"unknown sb_pieces {self.sb_pieces!r}")
         if self.relative_target not in RELATIVE_TARGETS:
             raise ValueError(f"unknown relative_target {self.relative_target!r}")
         from fantasy_baseball.hitter_ros.features import ERA_MODES
@@ -481,6 +496,30 @@ def loss_weights(w: np.ndarray, config: NetConfig, season_time: np.ndarray | Non
     return w
 
 
+def poisson_stats(config: NetConfig) -> tuple[str, ...]:
+    """Stats trained with a Poisson loss (the net predicts the log of their rate):
+    ``config.count_loss``'s, plus SB's count pieces (#413): opportunities per PA and
+    attempts per opportunity (which can pass 1, so not a binomial success rate)."""
+    from fantasy_baseball.hitter_ros.features import SB_POISSON_PIECES
+
+    return (
+        *COUNT_LOSS_TARGETS[config.count_loss],
+        *(SB_POISSON_PIECES if config.sb_pieces != "none" else ()),
+    )
+
+
+def binomial_stats(config: NetConfig) -> tuple[str, ...]:
+    """Stats trained with a binomial loss (the net predicts their log-odds): AVG with
+    ``avg_loss`` binomial, AVG's pieces (#433) and SB per attempt (#413)."""
+    from fantasy_baseball.hitter_ros.features import PIECES, SB_BINOMIAL_PIECES
+
+    return (
+        *(("avg",) if config.avg_loss == "binomial" else ()),
+        *(PIECES if config.avg_pieces != "none" else ()),
+        *(SB_BINOMIAL_PIECES if config.sb_pieces != "none" else ()),
+    )
+
+
 def count_loss(
     config: NetConfig,
     y: np.ndarray,
@@ -496,17 +535,19 @@ def count_loss(
     rest-of-season columns). A Poisson or binomial target's scale is 1 / its deviance
     when predicting the weighted average rate on these rows (``y`` rates, ``w`` PA or
     AB), times its ``target_weights`` entry (default 1)."""
-    from fantasy_baseball.hitter_ros.features import PIECES, TARGETS
+    from fantasy_baseball.hitter_ros.features import PIECES, SB_PIECES, TARGETS
 
-    names = COUNT_LOSS_TARGETS[config.count_loss]
-    binomial_names = (
-        *(("avg",) if config.avg_loss == "binomial" else ()),
-        *(PIECES if config.avg_pieces != "none" else ()),
-    )
+    names = poisson_stats(config)
+    binomial_names = binomial_stats(config)
     unweighted = target_weights is None or np.all(np.asarray(target_weights) == 1)
     # Pieces are only ever named in ``stats`` (the default, TARGETS, has none).
-    has_pieces = stats is not None and any(s in PIECES for s in stats)
-    if not names and config.avg_loss != "binomial" and not has_pieces and unweighted:
+    has_pieces = stats is not None and any(s in (*PIECES, *SB_PIECES) for s in stats)
+    if (
+        not COUNT_LOSS_TARGETS[config.count_loss]
+        and config.avg_loss != "binomial"
+        and not has_pieces
+        and unweighted
+    ):
         return None
     stats = list(TARGETS) if stats is None else stats
     if y.shape[1] != len(stats):
