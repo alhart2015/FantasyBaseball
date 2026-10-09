@@ -398,3 +398,34 @@ def test_next_n_pa_window_ends_on_a_date_with_pa(tmp_path):
     w0 = _row(build_table(tmp_path), HITTER, 2025, 0)
     # Games on days 0-6: 28 PA, 7 R (1 a game), 0 SB. Day 7's pinch-run is after the window.
     assert w0.ros_n25_pa == 28 and w0.ros_n25_r == 7 and w0.ros_n25_sb == 0
+
+
+def test_an_unstarted_season_gets_preseason_rows_to_project_from(tmp_path):
+    seasons = {2024: _season(2024, date(2024, 4, 1), 10), 2025: _season(2025, date(2025, 4, 1), 21)}
+    # HITTER moves to TEAM_B for the last game of 2025.
+    seasons[2025][0][-2]["team_id"] = TEAM_B
+    _write(tmp_path, seasons)
+    before = build_table(tmp_path)
+    # 2026's schedule is out, no game played yet.
+    path = tmp_path / "schedule" / "2026.parquet"
+    pd.DataFrame(
+        {"season": [2026], "first_date": [date(2026, 3, 26)], "last_date": [date(2026, 9, 27)]}
+    ).to_parquet(path, index=False)
+    df = build_table(tmp_path)
+
+    # Every earlier row is unchanged.
+    pd.testing.assert_frame_equal(df[df.season < 2026].reset_index(drop=True), before)
+    new = df[df.season == 2026]
+    # Week 0 only, one row per 2025 hitter (the pitcher who batted is not one).
+    assert sorted(new.player_id) == sorted(before.loc[before.season == 2025, "player_id"].unique())
+    assert set(new.week) == {0} and not new.season_complete.any()
+    w0 = _row(df, HITTER, 2026, 0)
+    assert w0.as_of.date() == date(2026, 3, 26) and w0.frac_season_left == 1
+    assert w0.team_id == TEAM_B  # his last team
+    assert w0.age == 28  # Savant's 2025 age plus one
+    assert w0.std_pa == 0 and w0.ros_pa == 0 and pd.isna(w0.ros_n25_pa)
+    assert w0.p1_pa == 21 * 4 and w0.p3_pa == (10 + 21) * 4
+    # TEAM_B's 2025 games: the pitcher's two, the pinch-hitter's and HITTER's last.
+    assert w0.p1_team_games == 4
+    # League 2025: HITTER and OTHER 8 PA a game, the pinch-hitter 1; the pitcher left out.
+    assert w0.lg_p1_pa == 21 * 8 + 1 and w0.lg_std_pa == 0

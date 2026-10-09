@@ -11,13 +11,16 @@ data/hitter_ros/pretrain/<name>/<S>/:
 and <name>/run.json listing the seasons and config. With --overwrite the whole <name>
 folder is replaced, but only after the inputs are found; each season is written to a
 temporary folder and moved into place when it finishes, so a crash never leaves a
-half-written season behind.
+half-written season behind. With --add, --seasons are added to an existing run with its
+own settings, and only if the token file is the one it was pretrained on (e.g. next
+season's model, once the last season is in the token file).
 
 Setup (once): python scripts/build_hitter_ros_pitch_tokens.py
 Usage:
     python scripts/pretrain_hitter_ros.py --name p002
     python scripts/pretrain_hitter_ros.py --name smoke --seasons 2026 --max-epochs 1
     python scripts/pretrain_hitter_ros.py --name p005 --zone fixed
+    python scripts/pretrain_hitter_ros.py --name p004 --add --seasons 2027
 """
 
 from __future__ import annotations
@@ -43,6 +46,7 @@ from fantasy_baseball.hitter_ros.pretrain import (
     PitchStore,
     PretrainConfig,
     pretrain,
+    run_token_options,
     tokens_fingerprint,
 )
 
@@ -87,12 +91,38 @@ def main() -> int:
     )
     parser.add_argument("--no-amp", action="store_true", help="float32 instead of bfloat16")
     parser.add_argument("--overwrite", action="store_true")
+    parser.add_argument(
+        "--add",
+        action="store_true",
+        help="add --seasons to the existing run <name>, with its own settings",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
+    out_root = PRETRAIN / args.name
+    added_to: dict | None = None
+    if args.add:
+        if args.overwrite:
+            parser.error("--add keeps the run's seasons; it can't also --overwrite")
+        if not args.seasons:
+            parser.error("--add needs --seasons")
+        if not (out_root / "run.json").exists():
+            parser.error(f"{out_root} has no run.json to add to")
+        changed = [
+            f for f in (*_INT_FIELDS, *_FLOAT_FIELDS) if getattr(args, f) != getattr(d, f)
+        ] + (["no_amp"] if args.no_amp else [])
+        if changed:
+            parser.error(f"--add uses the run's own settings; drop {', '.join(changed)}")
+        added_to = json.loads((out_root / "run.json").read_text())
+        already = sorted(set(args.seasons) & set(added_to["seasons"]))
+        if already:
+            parser.error(f"{args.name} already has {already}")
     try:
-        values = {f: getattr(args, f) for f in (*_INT_FIELDS, *_FLOAT_FIELDS)}
-        config = PretrainConfig(**values, amp=not args.no_amp)
+        if added_to is not None:
+            config = PretrainConfig(**added_to["config"])
+        else:
+            values = {f: getattr(args, f) for f in (*_INT_FIELDS, *_FLOAT_FIELDS)}
+            config = PretrainConfig(**values, amp=not args.no_amp)
     except ValueError as err:
         parser.error(str(err))
     tokens_path = token_path(TOKEN_DIR, args.zone)
@@ -101,8 +131,7 @@ def main() -> int:
             f"{tokens_path} is missing; run scripts/build_hitter_ros_pitch_tokens.py "
             f"--zone {args.zone}"
         )
-    out_root = PRETRAIN / args.name
-    if out_root.exists() and not args.overwrite:
+    if added_to is None and out_root.exists() and not args.overwrite:
         parser.error(f"{out_root} exists; pick another --name or pass --overwrite")
 
     tokens = pd.read_parquet(tokens_path)
@@ -115,17 +144,26 @@ def main() -> int:
     fingerprint = tokens_fingerprint(tokens)
     del tokens
 
-    # Every input is loaded and checked; only now replace an old run of this name.
-    if out_root.exists():
-        shutil.rmtree(out_root)
-    out_root.mkdir(parents=True)
-    run_meta = {
-        "config": config.to_dict(),
-        "tokens": fingerprint,
-        "token_options": recorded_token_options(tokens_path),
-        "seasons": [],
-        "complete": False,
-    }
+    if added_to is not None:
+        # The run's other seasons were pretrained on one token file: the new ones must be too.
+        if added_to.get("tokens") != fingerprint:
+            parser.error(f"{tokens_path} is not the token file {args.name} was pretrained on")
+        if run_token_options(added_to) != recorded_token_options(tokens_path):
+            parser.error(f"{tokens_path}'s build options differ from {args.name}'s")
+        run_meta = added_to
+        run_meta["complete"] = False
+    else:
+        # Every input is loaded and checked; only now replace an old run of this name.
+        if out_root.exists():
+            shutil.rmtree(out_root)
+        out_root.mkdir(parents=True)
+        run_meta = {
+            "config": config.to_dict(),
+            "tokens": fingerprint,
+            "token_options": recorded_token_options(tokens_path),
+            "seasons": [],
+            "complete": False,
+        }
     for season in seasons:
         t0 = time.time()
         result = pretrain(store, before_season=season, config=config)
