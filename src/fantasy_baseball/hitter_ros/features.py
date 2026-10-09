@@ -376,21 +376,34 @@ def _xba_per_ab(t: pd.DataFrame, w: str, xba_con: pd.Series) -> pd.Series:
 BLEND_PA = (50, 150, 450, 1350)
 
 
-def _blend_parts(c: Column) -> dict[str, tuple[pd.Series, pd.Series]]:
-    """(successes, trials) for each blended rate, from one window's count getter: the
-    answers, AVG's pieces (``PIECES``), SB's pieces (``SB_PIECES``) and BB/PA."""
-    pa, ab, h, hr, k, sb = (c(n) for n in ("pa", "ab", "h", "hr", "k", "sb"))
-    opp = c("steal_opp2") + c("steal_opp3")
-    attempts = sb + c("cs")
+# The counts _blend_parts reads from each window.
+BLEND_COUNTS = (
+    "pa",
+    "ab",
+    "h",
+    "r",
+    "hr",
+    "rbi",
+    "sb",
+    "bb",
+    "k",
+    "cs",
+    "steal_opp2",
+    "steal_opp3",
+)
+
+
+def _blend_parts(t: pd.DataFrame, w: str) -> dict[str, tuple[pd.Series, pd.Series]]:
+    """(successes, trials) for each blended rate in window ``w``: the answers, BB/PA,
+    AVG's pieces (:func:`piece_parts`) and SB's pieces (:func:`sb_piece_parts`)."""
+    counts = t[[f"{w}_{n}" for n in BLEND_COUNTS]].astype(float)
+    counts.columns = list(BLEND_COUNTS)
+    pa = counts["pa"]
     return {
-        **{f"{s}_pa": (c(s), pa) for s in ("r", "hr", "rbi", "sb", "bb")},
-        "avg": (h, ab),
-        "k_ab": (k, ab),
-        "hr_ab": (hr, ab),
-        "babip": (h - hr, ab - k - hr),
-        "opp_pa": (opp, pa),
-        "att_opp": (attempts, opp),
-        "sb_att": (sb, attempts),
+        **{f"{s}_pa": (counts[s], pa) for s in ("r", "hr", "rbi", "sb", "bb")},
+        "avg": (counts["h"], counts["ab"]),
+        **piece_parts(counts),
+        **sb_piece_parts(counts),
     }
 
 
@@ -406,12 +419,9 @@ def _blend_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
     opportunity or SB per attempt get as much prior as K PA would bring. NaN where the
     league rate is unknown (a row in the store's first season)."""
 
-    def counts(w: str) -> Column:
-        return lambda name: t[f"{w}_{name}"].astype(float)
-
-    std, p1, p3 = (_blend_parts(counts(w)) for w in ("std", "p1", "p3"))
-    lg_p1, lg_p3 = (_blend_parts(counts(w)) for w in ("lg_p1", "lg_p3"))
-    lg_pa = counts("lg_p1")("pa") + counts("lg_p3")("pa")
+    std, p1, p3 = (_blend_parts(t, w) for w in ("std", "p1", "p3"))
+    lg_p1, lg_p3 = (_blend_parts(t, w) for w in ("lg_p1", "lg_p3"))
+    lg_pa = t["lg_p1_pa"].astype(float) + t["lg_p3_pa"].astype(float)
     out = {}
     for name, (made, tried) in std.items():
         lg_made, lg_tried = lg_p1[name][0] + lg_p3[name][0], lg_p1[name][1] + lg_p3[name][1]
@@ -439,8 +449,10 @@ BOX_RATES = (
 def box_score_inputs(t: pd.DataFrame) -> pd.DataFrame:
     """The SB net's inputs (``NetConfig.sb_inputs`` "box", #451): :func:`_blend_inputs`,
     each window's box-score rates (``BOX_RATES``) and log PA / AB, the week, the share of
-    the season left and age. None of :func:`input_frame`'s batted-ball, plate-discipline,
-    speed, team or steal-opportunity inputs. NaN = unknown."""
+    the season left and age. Steal opportunities come in only through the blends of SB's
+    pieces (opportunities per PA, attempts per opportunity); none of :func:`input_frame`'s
+    batted-ball, plate-discipline, speed, team, position or green-light inputs. NaN =
+    unknown."""
     cols = dict(_blend_inputs(t))
     for count, per, name in BOX_RATES:
         for w in WINDOWS:
@@ -547,12 +559,19 @@ def rates_from_counts(df: pd.DataFrame) -> pd.DataFrame:
     return out[list(TARGETS)]
 
 
-def piece_rates(df: pd.DataFrame) -> pd.DataFrame:
-    """The ``PIECES`` rates from counts ``ab, h, hr, k`` (#433): K/AB, HR/AB and BABIP =
-    (H - HR) / (AB - K - HR); NaN with no AB (no BIP for BABIP)."""
+def piece_parts(df: pd.DataFrame) -> dict[str, tuple[pd.Series, pd.Series]]:
+    """Each ``PIECES`` rate's (successes, trials) from counts ``ab, h, hr, k`` (#433): K
+    and HR out of AB, hits on balls in play (H - HR) out of BIP (AB - K - HR). The one
+    place they are defined."""
     ab, h, hr, k = (df[c].astype(float) for c in PIECE_COUNTS)
+    return {"k_ab": (k, ab), "hr_ab": (hr, ab), "babip": (h - hr, ab - k - hr)}
+
+
+def piece_rates(df: pd.DataFrame) -> pd.DataFrame:
+    """The ``PIECES`` rates from counts ``ab, h, hr, k`` (#433): K/AB, HR/AB and BABIP;
+    NaN with no AB (no BIP for BABIP)."""
     return pd.DataFrame(
-        {"k_ab": _div(k, ab), "hr_ab": _div(hr, ab), "babip": _div(h - hr, ab - k - hr)},
+        {name: _div(made, tried) for name, (made, tried) in piece_parts(df).items()},
         index=df.index,
     )
 
@@ -566,29 +585,32 @@ def sb_piece_rates(df: pd.DataFrame) -> pd.DataFrame:
     """The ``SB_PIECES`` rates from counts ``pa, sb, cs, steal_opp2, steal_opp3`` (#413):
     opportunities per PA, attempts per opportunity, SB per attempt; NaN where the
     denominator is 0."""
-    trials = sb_piece_trials(df)
-    opp, attempts = trials["att_opp"], trials["sb_att"]
     return pd.DataFrame(
-        {
-            "opp_pa": _div(opp, trials["opp_pa"]),
-            "att_opp": _div(attempts, opp),
-            "sb_att": _div(df["sb"].astype(float), attempts),
-        },
+        {name: _div(made, tried) for name, (made, tried) in sb_piece_parts(df).items()},
         index=df.index,
     )
 
 
-def sb_piece_trials(df: pd.DataFrame) -> pd.DataFrame:
-    """Each ``SB_PIECES`` rate's trials (its denominator and loss weight): PA,
-    opportunities (``table.STEAL_COUNTS``), attempts (SB + CS). The one place they are
+def sb_piece_parts(df: pd.DataFrame) -> dict[str, tuple[pd.Series, pd.Series]]:
+    """Each ``SB_PIECES`` rate's (successes, trials) from counts ``pa, sb, cs,
+    steal_opp2, steal_opp3`` (#413): opportunities (``table.STEAL_COUNTS``) out of PA,
+    attempts (SB + CS) out of opportunities, SB out of attempts. The one place they are
     defined."""
+    sb = df["sb"].astype(float)
+    opp = df["steal_opp2"].astype(float) + df["steal_opp3"].astype(float)
+    attempts = sb + df["cs"].astype(float)
+    return {
+        "opp_pa": (opp, df["pa"].astype(float)),
+        "att_opp": (attempts, opp),
+        "sb_att": (sb, attempts),
+    }
+
+
+def sb_piece_trials(df: pd.DataFrame) -> pd.DataFrame:
+    """Each ``SB_PIECES`` rate's trials (its denominator and loss weight), from
+    :func:`sb_piece_parts`."""
     return pd.DataFrame(
-        {
-            "opp_pa": df["pa"].astype(float),
-            "att_opp": df["steal_opp2"].astype(float) + df["steal_opp3"].astype(float),
-            "sb_att": df["sb"].astype(float) + df["cs"].astype(float),
-        },
-        index=df.index,
+        {name: tried for name, (_, tried) in sb_piece_parts(df).items()}, index=df.index
     )
 
 
@@ -647,10 +669,9 @@ def target_frame(
         weight_parts.append(weights.fillna(0.0))
         if pieces:
             piece_rate_parts.append(piece_rates(counts).add_prefix(tag))
-            ab = counts["ab"].astype(float)
-            bip = ab - counts["k"].astype(float) - counts["hr"].astype(float)
             piece_weights = pd.DataFrame(
-                {f"{tag}k_ab": ab, f"{tag}hr_ab": ab, f"{tag}babip": bip}, index=t.index
+                {f"{tag}{name}": tried for name, (_, tried) in piece_parts(counts).items()},
+                index=t.index,
             )
             piece_weight_parts.append(piece_weights.clip(lower=0).fillna(0.0))
         if sb_pieces:

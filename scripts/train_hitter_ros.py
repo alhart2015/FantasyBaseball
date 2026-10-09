@@ -22,7 +22,7 @@ Usage:
     python scripts/build_hitter_ros_milb.py --name rookies-s100   # default minor-league inputs
     python scripts/build_hitter_ros_parks.py --name p3            # default park inputs
     python scripts/build_hitter_ros_pa_tokens.py   # once, for sequence runs
-    python scripts/train_hitter_ros.py --name 003a-gru --seq gru
+    python scripts/train_hitter_ros.py --name 003a-gru --seq gru --sb-inputs full
 """
 
 from __future__ import annotations
@@ -347,6 +347,13 @@ def _train_from(season: int, n_seasons: int | None, first: int | None) -> int | 
     return max(limits) if limits else None
 
 
+def _fit_label(info: dict) -> str:
+    """One fit's test season, plus "pre" / "mid" for a --split run's two models per
+    season, so their epochs aren't ambiguous."""
+    weeks = info["weeks"]
+    return f"{info['test_season']}{'' if weeks == 'all' else ' ' + str(weeks)}"
+
+
 def _positive_int(text: str) -> int:
     value = int(text)
     if value < 1:
@@ -615,6 +622,10 @@ def main() -> int:
         )
     if config.seq != "none" and not TOKENS.exists():
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
+    if config.seq != "none" and config.sb_inputs == "box":
+        # The SB net is built like the main one, so it would read the plate-appearance
+        # sequences too: not the box-score-only net #451 measured.
+        parser.error("--sb-inputs box is a plain MLP; with --seq add --sb-inputs full")
 
     table = pd.read_parquet(TABLE)
     if (config.era != "none" or config.relative_target != "none") and not set(
@@ -682,14 +693,11 @@ def main() -> int:
             inputs, builds[kind] = load(table, TABLE.parent, name)
         except ValueError as err:
             parser.error(str(err))
-        extra.append(inputs)
         logger.info("added %d %s features (%s)", len(columns), label, name)
-    if config.milb != "none" and not config.milb_sb:
-        extra = [
-            x.drop(columns=[c for c in MILB_FEATURES if c.endswith("_sb")], errors="ignore")
-            for x in extra
-        ]
-        logger.info("dropped the minor-league steal rates (--no-milb-sb)")
+        if kind == "milb" and not config.milb_sb:
+            inputs = inputs.drop(columns=[c for c in MILB_FEATURES if c.endswith("_sb")])
+            logger.info("dropped the minor-league steal rates (--no-milb-sb)")
+        extra.append(inputs)
     x_all = pd.concat([main_inputs, *extra], axis=1)
     x_sb = (
         pd.concat([box_score_inputs(table), *extra], axis=1) if config.sb_inputs == "box" else None
@@ -778,19 +786,10 @@ def main() -> int:
     write_horizon_scores(out, horizon_scores)
     if horizon_scores is not None:
         md += ["", *horizon_summary(horizon_scores)]
-    # A --split run has two models per season: label them so the epochs aren't ambiguous.
-    epochs = ", ".join(
-        f"{i['test_season']}{'' if i['weeks'] == 'all' else ' ' + str(i['weeks'])}: "
-        f"{i['best_epoch']}"
-        for i in infos
-    )
+    epochs = ", ".join(f"{_fit_label(i)}: {i['best_epoch']}" for i in infos)
     md += ["", f"Best epoch per test season: {epochs}. Inputs: {infos[0]['n_features']}."]
     if x_sb is not None:
-        sb_epochs = ", ".join(
-            f"{i['test_season']}{'' if i['weeks'] == 'all' else ' ' + str(i['weeks'])}: "
-            f"{i['sb_net']['best_epoch']}"
-            for i in infos
-        )
+        sb_epochs = ", ".join(f"{_fit_label(i)}: {i['sb_net']['best_epoch']}" for i in infos)
         md += [f"SB net: best epoch {sb_epochs}. Inputs: {infos[0]['sb_net']['n_features']}."]
     (out / "summary.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))

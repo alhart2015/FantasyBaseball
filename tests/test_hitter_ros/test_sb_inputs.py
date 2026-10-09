@@ -104,3 +104,46 @@ def test_an_sb_net_fits_on_box_score_inputs(table):
     preds, _ = fit_season(table, box_score_inputs(table), y_all, w_all, 2025, config)
     assert len(preds) == (table.season == 2025).sum()
     assert preds[["sb", "n25_sb"]].notna().all().all() and (preds["sb"] >= 0).all()
+
+
+def test_a_sequence_run_needs_sb_inputs_full(tmp_path, monkeypatch, capsys):
+    pytest.importorskip("torch")
+    from scripts import train_hitter_ros
+
+    tokens = tmp_path / "tokens.parquet"
+    tokens.write_text("")
+    monkeypatch.setattr(train_hitter_ros, "TOKENS", tokens)
+    monkeypatch.setattr(train_hitter_ros, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr("sys.argv", ["train", "--name", "x", "--seq", "gru"])
+    with pytest.raises(SystemExit):
+        train_hitter_ros.main()
+    assert "--sb-inputs full" in capsys.readouterr().err
+
+
+def test_sb_parts_are_the_targets_definitions(table):
+    from fantasy_baseball.hitter_ros.features import (
+        piece_parts,
+        piece_rates,
+        sb_piece_parts,
+        sb_piece_rates,
+    )
+
+    counts = table[[f"std_{c}" for c in ("pa", "ab", "h", "hr", "k", "sb", "cs")]]
+    counts = counts.join(table[["std_steal_opp2", "std_steal_opp3"]])
+    counts.columns = [c.removeprefix("std_") for c in counts.columns]
+    opp = counts.steal_opp2 + counts.steal_opp3
+    parts = sb_piece_parts(counts)
+    pd.testing.assert_series_equal(parts["att_opp"][0], counts.sb + counts.cs, check_names=False)
+    pd.testing.assert_series_equal(parts["att_opp"][1], opp.astype(float), check_names=False)
+    rates = sb_piece_rates(counts)
+    known = opp > 0
+    assert known.any()
+    np.testing.assert_allclose(rates.loc[known, "att_opp"], ((counts.sb + counts.cs) / opp)[known])
+    bip = counts.ab - counts.k - counts.hr
+    pd.testing.assert_series_equal(
+        piece_parts(counts)["babip"][1], bip.astype(float), check_names=False
+    )
+    hit = bip > 0
+    np.testing.assert_allclose(
+        piece_rates(counts).loc[hit, "babip"], ((counts.h - counts.hr) / bip)[hit]
+    )
