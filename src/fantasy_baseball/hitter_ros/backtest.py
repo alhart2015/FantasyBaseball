@@ -33,6 +33,7 @@ their own.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
@@ -43,6 +44,7 @@ import pandas as pd
 from fantasy_baseball.hitter_ros.baselines import baseline_predictions
 from fantasy_baseball.hitter_ros.evaluate import (
     SCALE,
+    SURE_BAR,
     blend,
     fantasy_value,
     load_systems,
@@ -344,12 +346,30 @@ def to_markdown(df: pd.DataFrame, digits: int = 2) -> str:
     return "\n".join(lines)
 
 
+def sure_text(value: float) -> str:
+    """``evaluate.sure`` in words: "96% sure better (real)", "90% sure worse", "no lean".
+    The percent is rounded down, so it reads 95% exactly when it is marked real, and a
+    bootstrap can't print "100% sure": above 99% it reads ">99%"."""
+    if pd.isna(value):
+        return "n/a"
+    if value == 0:
+        return "no lean"
+    size = abs(value)
+    pct = ">99%" if size > 0.99 else f"{math.floor(size * 100 + 1e-9)}%"
+    real = " (real)" if size >= SURE_BAR - 1e-9 else ""
+    return f"{pct} sure {'better' if value > 0 else 'worse'}{real}"
+
+
 def _interval_line(b: pd.DataFrame | None, better: str) -> str:
-    """One line of ours-minus-blend intervals per stat; ``better`` names the good sign."""
+    """One line of ours-minus-blend intervals per stat, each with how sure ours is better
+    or worse; ``better`` names the good sign."""
     if b is None:
         return ""
-    cells = [f"{s} {r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}]" for s, r in b.iterrows()]
-    return f"ours - fg_blend ({better} = ours better), 95% interval: " + "; ".join(cells)
+    cells = [
+        f"{s} {r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}] {sure_text(r['sure'])}"
+        for s, r in b.iterrows()
+    ]
+    return f"ours - fg_blend ({better} = ours better), 95% interval, how sure: " + "; ".join(cells)
 
 
 def _unit_block(g: pd.DataFrame) -> list[str]:
@@ -399,12 +419,20 @@ def _mean_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     """Every score averaged over the seasons or snapshots (``unit``) in ``frame``."""
     over = f"{unit}s"
     per_unit = order_scores(frame)
+    # Players redrawn once across every season or snapshot (pairwise_bootstrap), so
+    # overlapping snapshots don't count as independent evidence.
+    luck = (
+        [_interval_line(pairwise_bootstrap(frame, OURS, BLEND), "positive"), ""]
+        if {OURS, BLEND} <= set(frame["system"])
+        else []
+    )
     return [
         "",
         f"Gap-weighted pairwise accuracy (%) -- main score, mean over {over}:",
         "",
         to_markdown(order_table(frame, "pairwise_w", per_unit), digits=1),
         "",
+        *luck,
         f"Pairwise accuracy (%), mean over {over}:",
         "",
         to_markdown(order_table(frame, "pairwise", per_unit), digits=1),
@@ -537,7 +565,11 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         f"Mid-season: >= {SNAPSHOT_MIN_PA} PA after the snapshot. "
         "`league_avg` and `marcel` are simple floors (see hitter_ros/baselines.py). "
         "Intervals resample players; each line says which sign means ours is better; "
-        "an interval crossing 0 = can't tell apart."
+        'an interval crossing 0 = can\'t tell apart. "N% sure better/worse" means what '
+        "it says: how sure ours really differs, and which way; 95%+ is marked real (the "
+        "interval clears 0). It counts only the luck of which hitters were scored, not seed or "
+        "season swings. Over several seasons or snapshots each hitter is redrawn once "
+        "for all of them."
     ]
     if pre is not None:
         md += ["", "#### Preseason"]
