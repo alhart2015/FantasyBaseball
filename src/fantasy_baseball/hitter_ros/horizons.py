@@ -51,6 +51,7 @@ def _actual(rows: pd.DataFrame, horizon: str) -> pd.DataFrame:
     counts = rows[[f"{prefix}{c}" for c in COUNTS]].rename(columns=lambda c: c.removeprefix(prefix))
     actual = rates_from_counts(counts)
     actual["pa"] = counts["pa"]
+    actual["ab"] = counts["ab"]
     return actual
 
 
@@ -189,7 +190,7 @@ def _horizon_blocks(scored: pd.DataFrame) -> list[str]:
             "",
             f"**{horizon}** ({units} season-weeks, {len(g) // len(TARGETS) // g['system'].nunique():,} player-rows)",
             "",
-            "MSE -- main score (totals over the next N PA; AVG in points, PA-weighted):",
+            "MSE -- main score (totals over the next N PA; AVG in points, AB-weighted):",
             "",
             to_markdown(mse_table(g), digits=2),
             "",

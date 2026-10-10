@@ -5,8 +5,8 @@ squared error pooled over every scored player-unit, lower is better.
 
 * R, HR, RBI, SB: on season totals over the PA the hitter actually got,
   ``(pa x (projected rate - actual rate))^2`` -- "how many R off, squared".
-* AVG: in points, ``(1000 x (projected - actual))^2``, weighted by PA (the scored
-  frames carry PA, not AB).
+* AVG: in points, ``(1000 x (projected - actual))^2``, weighted by the at-bats the
+  hitter actually got (``ab``; frames scored before it was kept fall back to PA).
 
 Pairwise accuracy and raw error (#399's original bar) are reported next to it.
 
@@ -24,8 +24,9 @@ together. So three more scores ask "is X better than Y", not "25 or 30 HR":
   that is right about every player except for one league-wide factor scores 0.
 * **Pairwise order accuracy**: over every pair of scored players, the share the
   projection orders the same way as what happened (a projected tie gets half credit;
-  pairs that tied in reality are skipped). The gap-weighted version counts each pair by the actual gap, so near-ties matter less. Neither cares how far
-  off the projected numbers were, only whether the order was right.
+  pairs that tied in reality are skipped). The gap-weighted version counts each pair
+  by the actual gap, so near-ties matter less. Neither cares how far off the projected
+  numbers were, only whether the order was right.
 * **Rank correlation** (Spearman) between projected and actual rates.
 
 Every system is scored on the same players, so the numbers are comparable down a column.
@@ -145,16 +146,17 @@ def _common_index(frames: Iterable[pd.DataFrame]) -> pd.Index:
 def scored_players(
     projections: dict[str, pd.DataFrame], actual: pd.DataFrame, min_pa: float
 ) -> pd.DataFrame:
-    """One row per (player, system, stat): projected and actual rate, actual PA, and the
-    scaled raw and level-free errors.
+    """One row per (player, system, stat): projected and actual rate, actual PA (and AB
+    when ``actual`` has it), and the scaled raw and level-free errors.
 
-    ``actual`` has rates plus ``pa`` (actual PA in the window); only players with
-    ``pa >= min_pa`` that every projection covers are kept. Call it once per season or
-    snapshot: the level-free error rescales over exactly these players.
+    ``actual`` has rates plus ``pa`` (actual PA in the window) and optionally ``ab``;
+    only players with ``pa >= min_pa`` that every projection covers are kept. Call it
+    once per season or snapshot: the level-free error rescales over exactly these players.
     """
     players = actual.index[actual["pa"] >= min_pa]
     players = players.intersection(_common_index([*projections.values(), actual]))
     pa = actual.loc[players, "pa"].to_numpy(dtype=float)
+    ab = {"ab": actual.loc[players, "ab"].to_numpy(dtype=float)} if "ab" in actual else {}
     parts = []
     for name, proj in projections.items():
         for s in TARGETS:
@@ -169,6 +171,7 @@ def scored_players(
                         "projected": projected,
                         "actual": truth,
                         "pa": pa,
+                        **ab,
                         "abs_err": abs(projected - truth) * SCALE[s],
                         "lf_err": level_free_error(projected, truth, pa) * SCALE[s],
                     }
@@ -215,6 +218,15 @@ _BOOT_CHUNK = 25
 
 # A difference counts as real when ``sure`` reaches this (#457).
 SURE_BAR = 0.95
+
+
+def player_draws(n: int, n_boot: int, rng: np.random.Generator) -> np.ndarray:
+    """(1 + n_boot) x n: how many times each of ``n`` players is drawn. Row 0 is every
+    player once (the actual score); each other row draws ``n`` players with replacement.
+    Shared by the bootstraps so their intervals mean the same thing."""
+    return np.vstack(
+        [np.ones(n), *(np.bincount(rng.integers(0, n, n), minlength=n) for _ in range(n_boot))]
+    )
 
 
 def sure(draws: np.ndarray) -> float:
@@ -264,9 +276,7 @@ def pairwise_bootstrap(
         rows = scored[scored["stat"] == s]
         players = pd.Index(sorted(rows["player_id"].unique()))
         n = len(players)
-        counts = np.vstack(
-            [np.ones(n), *(np.bincount(rng.integers(0, n, n), minlength=n) for _ in range(n_boot))]
-        )
+        counts = player_draws(n, n_boot, rng)
         total = np.zeros(len(counts))
         n_units = np.zeros(len(counts))  # per draw: the units with an untied drawn pair
         for key, g in rows.groupby(units, sort=False) if units else [(None, rows)]:
@@ -339,28 +349,23 @@ def mae_table(scored: pd.DataFrame, value: str = "abs_err") -> pd.DataFrame:
     return table.loc[order, [*TARGETS, "n"]]
 
 
-MSE_COLUMNS = ("projected", "actual", "pa")
-
-
-def has_mse_columns(scored: pd.DataFrame) -> bool:
-    """Whether ``scored`` carries what MSE needs (very old test frames don't)."""
-    return set(MSE_COLUMNS) <= set(scored.columns)
-
-
 def squared_error(scored: pd.DataFrame, keep: list[str]) -> pd.DataFrame:
     """``scored[keep]`` plus, per row, MSE's numerator ``sq`` and weight ``w`` (see module
-    doc): R/HR/RBI/SB ``(pa x err)^2`` with weight 1; AVG ``pa x (1000 x err)^2`` with
-    weight ``pa``. MSE over any set of rows = sum(sq) / sum(w). Rows keep their order on
-    a fresh index (a stacked frame can repeat index labels)."""
+    doc): R/HR/RBI/SB ``(pa x err)^2`` with weight 1; AVG ``ab x (1000 x err)^2`` with
+    weight ``ab`` (``pa`` where a row has no AB: frames scored before it was kept).
+    MSE over any set of rows = sum(sq) / sum(w). Rows keep their order on a fresh index
+    (a stacked frame can repeat index labels)."""
     err = (scored["projected"] - scored["actual"]).to_numpy(dtype=float)
     pa = scored["pa"].to_numpy(dtype=float)
+    ab = scored["ab"].to_numpy(dtype=float) if "ab" in scored.columns else np.full(len(pa), np.nan)
+    avg_w = np.where(np.isnan(ab), pa, ab)
     is_avg = (scored["stat"] == "avg").to_numpy()
     return (
         scored[keep]
         .reset_index(drop=True)
         .assign(
-            sq=np.where(is_avg, pa * (SCALE["avg"] * err) ** 2, (pa * err) ** 2),
-            w=np.where(is_avg, pa, 1.0),
+            sq=np.where(is_avg, avg_w * (SCALE["avg"] * err) ** 2, (pa * err) ** 2),
+            w=np.where(is_avg, avg_w, 1.0),
         )
     )
 
@@ -388,17 +393,16 @@ def mse_bootstrap(
     key = unit_key(scored)
     rows = scored[scored["system"].isin([a, b])]
     parts = squared_error(rows, [*key, "system", "stat"])
+    # One set of draws for every stat: the same players are redrawn in each.
+    players = pd.Index(sorted(parts["player_id"].unique()))
+    counts = player_draws(len(players), n_boot, rng)
     out = {}
     for s in TARGETS:
         g = parts[parts["stat"] == s]
         wide = g.set_index([*key, "system"])[["sq", "w"]].unstack("system")
         if {a, b} - set(g["system"]) or wide.isna().to_numpy().any():
             raise ValueError(f"{s}: {a} and {b} must be scored on the same player-units")
-        per = wide.groupby(level="player_id").sum()
-        n = len(per)
-        counts = np.vstack(
-            [np.ones(n), *(np.bincount(rng.integers(0, n, n), minlength=n) for _ in range(n_boot))]
-        )
+        per = wide.groupby(level="player_id").sum().reindex(players, fill_value=0.0)
         mse = {
             x: (counts @ per[("sq", x)].to_numpy()) / (counts @ per[("w", x)].to_numpy())
             for x in (a, b)

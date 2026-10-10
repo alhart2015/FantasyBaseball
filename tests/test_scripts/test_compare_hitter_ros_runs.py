@@ -5,15 +5,30 @@ import json
 import pandas as pd
 import pytest
 
+from fantasy_baseball.hitter_ros.evaluate import SCALE
 from fantasy_baseball.hitter_ros.features import TARGETS
 from scripts import compare_hitter_ros_runs as cmp
 
 
 def _scored(errors, **unit):
+    """One hitter scored ``err`` off (raw MAE) per system, as a real scored frame has it:
+    projected and actual rates, PA and AB."""
     rows = []
     for system, err in errors.items():
         for s in TARGETS:
-            rows.append({"player_id": 1, "system": system, "stat": s, "abs_err": err, **unit})
+            rows.append(
+                {
+                    "player_id": 1,
+                    "system": system,
+                    "stat": s,
+                    "projected": err / SCALE[s],
+                    "actual": 0.0,
+                    "pa": 500.0,
+                    "ab": 450.0,
+                    "abs_err": err,
+                    **unit,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -284,11 +299,7 @@ def test_run_row_reports_mse_as_the_main_score(runs):
     assert row["pre_mse_hr"] == pytest.approx(25.0)
     gap = table.loc["ours", "hr"] - table.loc["fg_blend", "hr"]
     assert gap < 0
-    for col in ("pre_mse_gap_hr", "mid_mse_gap_hr", "pre_vet_mse_gap_hr", "pre_top_mse_gap_hr"):
-        assert row[col] == pytest.approx(gap)
-    # Ours is closer on every hitter, so on every resample.
-    assert row["pre_mse_sure_hr"] == pytest.approx(1.0)
-    assert row["mid_mse_sure_hr"] == pytest.approx(1.0)
-    # Old test frames without projected/actual/pa just lack the MSE columns.
-    _run(runs, "old", pre=_scored({"ours": 1.0, "fg_blend": 2.0}, season=2025))
-    assert "pre_mse_hr" not in cmp.compare(["old"], None, None).columns
+    for prefix in ("pre", "mid", "pre_vet", "mid_vet", "pre_top", "mid_top"):
+        assert row[f"{prefix}_mse_gap_hr"] == pytest.approx(gap)
+        # Ours is closer on every hitter, so on every resample.
+        assert row[f"{prefix}_mse_sure_hr"] == pytest.approx(1.0)

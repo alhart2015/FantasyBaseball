@@ -13,7 +13,7 @@ predicted rates are averaged over those seeds and scored against the first arm l
   actual PA).
 
 Two tables per arm. First the main score, MSE (``evaluate``: R/HR/RBI/SB on totals over
-the PA each hitter actually got, AVG in points weighted by PA), pooled over every scored
+the PA each hitter actually got, AVG in points weighted by AB), pooled over every scored
 hitter-week in a band, so a week with more hitters and more PA left weighs more. Each
 cell: arm minus base (negative = the arm is better), that as a % of the base's MSE, the
 95% interval and how sure the arm is better or worse (``evaluate.sure``: "96% sure
@@ -96,8 +96,10 @@ def band_of(snapshot: str) -> str:
 
 
 def run_scores(run: Path) -> pd.DataFrame:
-    """One run's scored rates (``KEYS`` + projected, actual, pa): rest of season mid-season
-    and the preseason. ``snapshot`` is the season-week, "pre" for the preseason."""
+    """One run's scored rates (``KEYS`` + projected, actual, pa, ab): rest of season
+    mid-season and the preseason. ``snapshot`` is the season-week, "pre" for the
+    preseason. ``ab`` is NaN in files scored before it was kept (MSE then weights AVG by
+    PA)."""
     parts = []
     hz = run / "scored_horizons.parquet"
     if hz.exists():
@@ -112,7 +114,7 @@ def run_scores(run: Path) -> pd.DataFrame:
         parts.append(p[p["system"] == "ours"].assign(band=PRESEASON, snapshot="pre"))
     if not parts:
         raise ValueError(f"{run} has no scored_horizons or scored_preseason file")
-    return pd.concat(parts)[[*KEYS, "projected", "actual", "pa"]]
+    return pd.concat(parts).reindex(columns=[*KEYS, "projected", "actual", "pa", "ab"])
 
 
 def seed_mean(scores: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -124,7 +126,7 @@ def seed_mean(scores: dict[str, pd.DataFrame]) -> pd.DataFrame:
         if not f.set_index(KEYS).sort_index().index.equals(first.index):
             raise ValueError("an arm's seeds scored different rows; were they run alike?")
     mean = pd.concat(frames).groupby(KEYS)["projected"].mean()
-    return first[["actual", "pa"]].join(mean).reset_index()
+    return first[["actual", "pa", "ab"]].join(mean).reset_index()
 
 
 def band_means(scored: pd.DataFrame, score: str) -> pd.DataFrame:
@@ -205,10 +207,10 @@ def compare_arm(base: Arm, arm: Arm, n_boot: int, score: str = "mse") -> pd.Data
             continue
         long = pd.concat(
             [
-                g[[*KEYS, "actual_b", "pa_b"]].assign(system=name, projected=g[col])
+                g[[*KEYS, "actual_b", "pa_b", "ab_b"]].assign(system=name, projected=g[col])
                 for name, col in (("base", "projected_b"), ("arm", "projected_a"))
             ]
-        ).rename(columns={"actual_b": "actual", "pa_b": "pa"})
+        ).rename(columns={"actual_b": "actual", "pa_b": "pa", "ab_b": "ab"})
         if score == "mse":
             boot = mse_bootstrap(long, "arm", "base", n_boot=n_boot)
         else:

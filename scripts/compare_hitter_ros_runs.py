@@ -58,7 +58,6 @@ from fantasy_baseball.hitter_ros.backtest import (
     to_markdown,
 )
 from fantasy_baseball.hitter_ros.evaluate import (
-    has_mse_columns,
     mse_bootstrap,
     mse_table,
     order_scores,
@@ -79,12 +78,10 @@ def _both_scored(scored: pd.DataFrame, unit: str) -> pd.DataFrame:
 
 
 def _scores(scored: pd.DataFrame, unit: str) -> dict[str, pd.DataFrame]:
-    """Systems x stats: MSE pooled over every scored player-unit (in frames with PA),
-    and averaged over seasons or snapshots: raw MAE, and (in frames scored after #424)
-    level-free MAE and gap-weighted and plain pairwise accuracy."""
-    out = {"": mean_over_seasons(scored, unit=unit)}
-    if has_mse_columns(scored):
-        out["mse_"] = mse_table(scored)
+    """Systems x stats: MSE pooled over every scored player-unit, and averaged over
+    seasons or snapshots: raw MAE, and (in frames scored after #424) level-free MAE and
+    gap-weighted and plain pairwise accuracy."""
+    out = {"": mean_over_seasons(scored, unit=unit), "mse_": mse_table(scored)}
     if "lf_err" in scored.columns:
         out["lf_"] = mean_over_seasons(scored, "lf_err", unit)
         per_unit = order_scores(scored)
@@ -96,11 +93,8 @@ def _scores(scored: pd.DataFrame, unit: str) -> dict[str, pd.DataFrame]:
 def _luck(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None:
     """How sure ours is better (+) or worse (-) than the blend on MSE and on gap-weighted
     pairwise, into ``row`` as ``{prefix}_mse_sure_{stat}`` and ``{prefix}_pairw_sure_{stat}``.
-    No MSE without PA; no pairwise for frames scored before #424."""
-    if has_mse_columns(both):
-        m = mse_bootstrap(both, OURS, BLEND)
-        for s in TARGETS:
-            row[f"{prefix}_mse_sure_{s}"] = m.loc[s, "sure"]
+    No pairwise for frames scored before #424."""
+    _mse_gap(row, both, prefix, gap=False)
     if "lf_err" not in both.columns:
         return
     b = pairwise_bootstrap(both, OURS, BLEND)
@@ -108,9 +102,20 @@ def _luck(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None:
         row[f"{prefix}_pairw_sure_{s}"] = b.loc[s, "sure"]
 
 
+def _mse_gap(row: dict[str, object], sub: pd.DataFrame, prefix: str, *, gap: bool = True) -> None:
+    """Ours-minus-blend MSE over ``sub`` (negative = ours better) and how sure, into
+    ``row`` as ``{prefix}_mse_gap_{stat}`` (when ``gap``) and ``{prefix}_mse_sure_{stat}``."""
+    m = mse_bootstrap(sub, OURS, BLEND)
+    for s in TARGETS:
+        if gap:
+            row[f"{prefix}_mse_gap_{s}"] = m.loc[s, "diff"]
+        row[f"{prefix}_mse_sure_{s}"] = m.loc[s, "sure"]
+
+
 def _group_gaps(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None:
-    """MSE and pairwise gaps to the blend for vets and rookies separately (#433), into
-    ``row`` as ``{prefix}_{group}_mse_gap_{stat}`` and ``{prefix}_{group}_pairw_gap_{stat}``.
+    """MSE gap (with how sure) and pairwise gap to the blend for vets and rookies
+    separately (#433), into ``row`` as ``{prefix}_{group}_mse_gap_{stat}``,
+    ``{prefix}_{group}_mse_sure_{stat}`` and ``{prefix}_{group}_pairw_gap_{stat}``.
     Nothing for frames without the tag."""
     if "group" not in both.columns:
         return
@@ -118,28 +123,23 @@ def _group_gaps(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None
         sub = both[both["group"] == group]
         if sub.empty:
             continue
-        if has_mse_columns(sub):
-            mse = mse_table(sub)
-            for s in TARGETS:
-                row[f"{prefix}_{group}_mse_gap_{s}"] = mse.loc[OURS, s] - mse.loc[BLEND, s]
+        _mse_gap(row, sub, f"{prefix}_{group}")
         pairw = order_table(sub, "pairwise_w")
         for s in TARGETS:
             row[f"{prefix}_{group}_pairw_gap_{s}"] = pairw.loc[OURS, s] - pairw.loc[BLEND, s]
 
 
 def _relevant_gaps(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None:
-    """MSE and pairwise gaps to the blend over the fantasy-relevant hitters only (#442),
-    into ``row`` as ``{prefix}_top_mse_gap_{stat}`` and ``{prefix}_top_pairw_gap_{stat}``.
-    Nothing for frames without the tag."""
+    """MSE gap (with how sure) and pairwise gap to the blend over the fantasy-relevant
+    hitters only (#442), into ``row`` as ``{prefix}_top_mse_gap_{stat}``,
+    ``{prefix}_top_mse_sure_{stat}`` and ``{prefix}_top_pairw_gap_{stat}``. Nothing for
+    frames without the tag."""
     if "relevant" not in both.columns:
         return
     sub = both[both["relevant"].fillna(False).astype(bool)]
     if sub.empty:
         return
-    if has_mse_columns(sub):
-        mse = mse_table(sub)
-        for s in TARGETS:
-            row[f"{prefix}_top_mse_gap_{s}"] = mse.loc[OURS, s] - mse.loc[BLEND, s]
+    _mse_gap(row, sub, f"{prefix}_top")
     pairw = order_table(sub, "pairwise_w")
     for s in TARGETS:
         row[f"{prefix}_top_pairw_gap_{s}"] = pairw.loc[OURS, s] - pairw.loc[BLEND, s]
@@ -302,22 +302,19 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
         ),
         *(
             (
-                f"MAIN, top {RELEVANT_TOP} fantasy hitters only: {when} MSE gap to blend"
-                + (f", {window}" if prefix == "mid" else ""),
-                cols(f"{prefix}_top_mse_gap_"),
+                f"MAIN, {who}: {when} MSE {what}" + (f", {window}" if prefix == "mid" else ""),
+                cols(f"{prefix}_{key}_mse_{kind}_"),
                 2,
             )
-            for prefix, when in (("pre", "preseason"), ("mid", "mid-season"))
-        ),
-        *(
-            (
-                f"MAIN, {group}s only: {when} MSE gap to blend"
-                + (f", {window}" if prefix == "mid" else ""),
-                cols(f"{prefix}_{group}_mse_gap_"),
-                2,
+            for key, who in (
+                ("top", f"top {RELEVANT_TOP} fantasy hitters only"),
+                *((g, f"{g}s only") for g in GROUPS),
             )
             for prefix, when in (("pre", "preseason"), ("mid", "mid-season"))
-            for group in GROUPS
+            for kind, what in (
+                ("gap", "gap to blend (negative = ours better)"),
+                ("sure", "how sure ours is better (+) or worse (-) than blend (0.95+ = real)"),
+            )
         ),
         ("Preseason gap-weighted pairwise % (ours)", cols("pre_pairw_"), 2),
         (

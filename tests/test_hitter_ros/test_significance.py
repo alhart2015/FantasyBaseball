@@ -181,15 +181,26 @@ def test_every_unit_needs_both_systems():
 
 
 def test_mse_is_on_totals_and_avg_in_points():
-    """R/HR/RBI/SB: (pa x rate error)^2, one per hitter. AVG: (1000 x error)^2, PA-weighted."""
+    """R/HR/RBI/SB: (pa x rate error)^2, one per hitter. AVG: (1000 x error)^2,
+    AB-weighted."""
     actual = pd.DataFrame({s: [0.10, 0.20] for s in TARGETS}, index=[1, 2])
     actual["pa"] = [600.0, 200.0]
+    actual["ab"] = [500.0, 190.0]
     proj = actual[list(TARGETS)] + np.array([[0.01], [0.03]])
-    table = mse_table(scored_players({"a": proj}, actual, 1).assign(season=2025))
-    # 6 off over 600 PA and 6 off over 200 PA.
+    scored = scored_players({"a": proj}, actual, 1).assign(season=2025)
+    table = mse_table(scored)
+    # 6 off over 600 PA and 6 off over 200 PA: PA, not AB, for the counting stats.
     assert table.loc["a", "hr"] == pytest.approx((6.0**2 + 6.0**2) / 2)
-    # 10 and 30 points, weighted 600 and 200.
-    assert table.loc["a", "avg"] == pytest.approx((600 * 10.0**2 + 200 * 30.0**2) / 800)
+    # 10 and 30 points, weighted by AB: 500 and 190.
+    assert table.loc["a", "avg"] == pytest.approx((500 * 10.0**2 + 190 * 30.0**2) / 690)
+    # A frame scored before AB was kept falls back to PA: 600 and 200.
+    old = mse_table(scored.drop(columns="ab"))
+    assert old.loc["a", "avg"] == pytest.approx((600 * 10.0**2 + 200 * 30.0**2) / 800)
+    # So does a row with no AB in a stack of old and new frames.
+    mixed = pd.concat([scored, scored.drop(columns="ab").assign(season=2024)])
+    assert mse_table(mixed).loc["a", "avg"] == pytest.approx(
+        (500 * 10.0**2 + 190 * 30.0**2 + 600 * 10.0**2 + 200 * 30.0**2) / (690 + 800)
+    )
 
 
 def test_mse_pools_rows_over_snapshots():
@@ -239,3 +250,7 @@ def test_summary_leads_with_mse():
     assert first.index("MSE -- main score") < first.index("Gap-weighted pairwise accuracy (%):")
     luck = [line for line in mean.splitlines() if line.startswith("ours - fg_blend")]
     assert luck[0].startswith("ours - fg_blend (negative = ours better)")
+    # The pooled pairwise gap keeps its own luck line, named so it can't pass for MSE.
+    pair = [line for line in mean.splitlines() if line.startswith("Gap-weighted pairwise: ")]
+    assert len(pair) == 1 and "(positive = ours better)" in pair[0]
+    assert ">99% sure better (real)" in pair[0]
