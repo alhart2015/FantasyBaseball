@@ -208,6 +208,16 @@ def _pair_credit(
 _BOOT_CHUNK = 25
 
 
+def p_better(draws: np.ndarray) -> float:
+    """Share of bootstrap ``draws`` (a minus b, positive = a better) where a is better;
+    a draw tied at 0 counts half. ~50% = can't tell them apart; 97.5%+ (or 2.5%-) is
+    about where the 95% interval stops crossing 0. It counts only the luck of which
+    players happened to be scored, not seed-to-seed or season-to-season swings."""
+    if not len(draws):
+        return float("nan")
+    return float(np.mean((draws > 0) + 0.5 * (draws == 0)))
+
+
 def pairwise_bootstrap(
     scored: pd.DataFrame,
     a: str,
@@ -217,47 +227,65 @@ def pairwise_bootstrap(
     n_boot: int = 300,
     seed: int = 0,
 ) -> pd.DataFrame:
-    """Pairwise accuracy (%) of ``a`` minus ``b`` per stat, with a 95% interval from
-    resampling players. Positive = ``a`` orders better. ``scored`` must be one season or
-    snapshot (pairs never cross them). Paired: both systems are scored on each draw.
+    """Pairwise accuracy (%) of ``a`` minus ``b`` per stat, with a 95% interval and
+    ``p_better`` (share of draws where ``a`` orders better), from resampling players.
+    Positive = ``a`` orders better. Paired: both systems are scored on each draw.
+
+    ``scored`` may stack several seasons or snapshots (``UNIT_COLS``): the score is then
+    the mean over them of each one's score, as in ``order_table`` (pairs never cross
+    them; one with no untied pair is left out). Each draw resamples players once for all
+    of them, so a player scored in several overlapping snapshots is one draw, not several
+    independent ones -- otherwise the interval would be too narrow.
 
     A draw that picks player i ``c_i`` times and j ``c_j`` times holds their pair
     ``c_i * c_j`` times (a player paired with his own copy tied in reality, so it is
     skipped). So each draw's accuracy is a count-weighted average over the distinct
     pairs, which is computed for many draws at once as a matrix product."""
     rng = np.random.default_rng(seed)
+    units = [c for c in UNIT_COLS if c in scored.columns]
     out = {}
     for s in TARGETS:
         rows = scored[scored["stat"] == s]
-        wide = rows.pivot_table(index="player_id", columns="system", values="projected")
-        actual = rows.drop_duplicates("player_id").set_index("player_id")["actual"]
-        actual = actual.loc[wide.index].to_numpy()
-        n = len(actual)
-        i, j = np.triu_indices(n, k=1)
-        gap = actual[i] - actual[j]
-        keep = gap != 0
-        i, j, gap = i[keep], j[keep], gap[keep]
-        weight = np.abs(gap) if weighted else np.ones_like(gap)
-        # Per pair: weight x (credit of a - credit of b).
-        edge = weight * (
-            _pair_credit(wide[a].to_numpy(), np.sign(gap), i, j)
-            - _pair_credit(wide[b].to_numpy(), np.sign(gap), i, j)
-        )
+        players = pd.Index(sorted(rows["player_id"].unique()))
+        n = len(players)
         counts = np.vstack(
             [np.ones(n), *(np.bincount(rng.integers(0, n, n), minlength=n) for _ in range(n_boot))]
         )
-        diffs = []
-        for start in range(0, len(counts), _BOOT_CHUNK):
-            c = counts[start : start + _BOOT_CHUNK]
-            mult = c[:, i] * c[:, j]
-            with np.errstate(invalid="ignore", divide="ignore"):
-                diffs.append(100 * (mult @ edge) / (mult @ weight))
-        d = np.concatenate(diffs)
-        boot = d[1:][~np.isnan(d[1:])]  # NaN: a draw where every pair tied
+        total = np.zeros(len(counts))
+        n_units = 0
+        for _, g in rows.groupby(units, sort=False) if units else [(None, rows)]:
+            wide = g.pivot_table(index="player_id", columns="system", values="projected")
+            actual = g.drop_duplicates("player_id").set_index("player_id")["actual"]
+            actual = actual.loc[wide.index].to_numpy()
+            pid = players.get_indexer(wide.index)
+            i, j = np.triu_indices(len(actual), k=1)
+            gap = actual[i] - actual[j]
+            keep = gap != 0
+            if not keep.any():
+                continue
+            i, j, gap = i[keep], j[keep], gap[keep]
+            weight = np.abs(gap) if weighted else np.ones_like(gap)
+            # Per pair: weight x (credit of a - credit of b).
+            edge = weight * (
+                _pair_credit(wide[a].to_numpy(), np.sign(gap), i, j)
+                - _pair_credit(wide[b].to_numpy(), np.sign(gap), i, j)
+            )
+            pi, pj = pid[i], pid[j]
+            diffs = []
+            for start in range(0, len(counts), _BOOT_CHUNK):
+                c = counts[start : start + _BOOT_CHUNK]
+                mult = c[:, pi] * c[:, pj]
+                with np.errstate(invalid="ignore", divide="ignore"):
+                    diffs.append(100 * (mult @ edge) / (mult @ weight))
+            total += np.concatenate(diffs)  # NaN: a draw where every pair tied
+            n_units += 1
+        d = total / n_units if n_units else np.full(len(counts), np.nan)
+        boot = d[1:][~np.isnan(d[1:])]
         out[s] = {
             "diff": float(d[0]),
             "lo": float(np.percentile(boot, 2.5)) if len(boot) else float("nan"),
             "hi": float(np.percentile(boot, 97.5)) if len(boot) else float("nan"),
+            "p_better": p_better(boot),
         }
     return pd.DataFrame(out).T
 
@@ -337,7 +365,8 @@ def paired_bootstrap(
     seed: int = 0,
     value: str = "abs_err",
 ) -> pd.DataFrame:
-    """MAE(a) - MAE(b) per stat, with a 95% interval from resampling scored player-units.
+    """MAE(a) - MAE(b) per stat, with a 95% interval and ``p_better`` (share of draws
+    where ``a``'s MAE is lower), from resampling scored player-units.
     ``value``: ``abs_err`` (raw MAE) or ``lf_err`` (level-free MAE).
 
     Negative = ``a`` is better. Paired: each resample draws player-units (a player in a
@@ -358,6 +387,7 @@ def paired_bootstrap(
             "diff": diff.mean(),
             "lo": float(np.percentile(boot, 2.5)),
             "hi": float(np.percentile(boot, 97.5)),
+            "p_better": p_better(-boot),
         }
     return pd.DataFrame(out).T
 
