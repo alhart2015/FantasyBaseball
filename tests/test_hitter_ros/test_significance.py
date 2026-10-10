@@ -1,4 +1,4 @@
-"""Luck ranges and P(better) on every comparison: resampling hitters, one draw shared
+"""Luck ranges and how sure, on every comparison: resampling hitters, one draw shared
 across every season or snapshot (so overlapping snapshots aren't independent)."""
 
 import numpy as np
@@ -31,6 +31,9 @@ def test_sure_text():
 
     assert sure_text(0.96) == "96% sure better (real)"
     assert sure_text(0.95) == "95% sure better (real)"
+    assert sure_text(0.9467) == "94% sure better"  # rounded down: 95% only when real
+    assert sure_text(0.999) == ">99% sure better (real)"
+    assert sure_text(-1.0) == ">99% sure worse (real)"  # 300 draws can't show 100%
     assert sure_text(-0.9) == "90% sure worse"
     assert sure_text(0.0) == "no lean"
     assert sure_text(float("nan")) == "n/a"
@@ -119,9 +122,9 @@ def test_summary_shows_how_sure_for_one_snapshot_and_the_mean():
     scored["system"] = scored["system"].map({"a": "ours", "b": "fg_blend"})
     md = "\n".join(summarize(None, scored))
     first, mean = md.split("**Mean over snapshots**")
-    assert "how sure" in first and "100% sure better (real)" in first
+    assert "how sure" in first and ">99% sure better (real)" in first
     luck = [line for line in mean.splitlines() if line.startswith("ours - fg_blend")]
-    assert len(luck) == 1 and "100% sure better (real)" in luck[0]  # main score only
+    assert len(luck) == 1 and ">99% sure better (real)" in luck[0]  # main score only
 
 
 def test_summary_mean_has_no_luck_line_without_the_blend():
@@ -131,3 +134,45 @@ def test_summary_mean_has_no_luck_line_without_the_blend():
     scored["system"] = scored["system"].map({"a": "ours", "b": "marcel"})
     md = "\n".join(summarize(None, scored))
     assert "ours - fg_blend" not in md
+
+
+def test_a_draw_missing_a_small_snapshot_still_counts():
+    """A snapshot of two players often has under two of them drawn. That draw must still
+    count, scored on the other snapshots, not be thrown away whole."""
+    scored, truth = _snapshots(n=20)
+    tiny_actual = pd.DataFrame({s: [0.1, 0.9] for s in TARGETS}, index=[500, 501])
+    tiny_actual["pa"] = 500
+    right = tiny_actual[list(TARGETS)]
+    wrong = right.iloc[::-1].set_axis(right.index)
+    tiny = scored_players({"a": right, "b": wrong}, tiny_actual, 1)
+    scored = pd.concat([scored, tiny.assign(season=2026, snapshot="2026-09-30")])
+    truth["2026-09-30"] = (tiny_actual, right, wrong)
+    fast = pairwise_bootstrap(scored, "a", "b", n_boot=60, seed=2)
+    rng = np.random.default_rng(2)
+    for s in TARGETS:
+        players = np.array(sorted(scored.loc[scored["stat"] == s, "player_id"].unique()))
+        slow = []
+        for _ in range(60):
+            drawn = players[rng.integers(0, len(players), len(players))]
+            per_unit = []
+            for actual, a, b in truth.values():
+                ids = [p for p in drawn if p in actual.index]
+                act = actual.loc[ids, s].to_numpy()
+                per_unit.append(
+                    100
+                    * (
+                        pairwise_accuracy(a.loc[ids, s].to_numpy(), act, weighted=True)
+                        - pairwise_accuracy(b.loc[ids, s].to_numpy(), act, weighted=True)
+                    )
+                )
+            slow.append(np.nanmean(per_unit))  # a unit with no untied pair sits out
+        assert fast.loc[s, "lo"] == pytest.approx(np.percentile(slow, 2.5))
+        assert fast.loc[s, "hi"] == pytest.approx(np.percentile(slow, 97.5))
+        assert fast.loc[s, "sure"] == pytest.approx(sure(np.array(slow)))
+
+
+def test_every_unit_needs_both_systems():
+    scored, _ = _snapshots()
+    gone = scored[~((scored["snapshot"] == "2026-07-01") & (scored["system"] == "b"))]
+    with pytest.raises(ValueError, match="both a and b"):
+        pairwise_bootstrap(gone, "a", "b", n_boot=5)

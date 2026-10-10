@@ -241,9 +241,12 @@ def pairwise_bootstrap(
 
     ``scored`` may stack several seasons or snapshots (``UNIT_COLS``): the score is then
     the mean over them of each one's score, as in ``order_table`` (pairs never cross
-    them; one with no untied pair is left out). Each draw resamples players once for all
-    of them, so a player scored in several overlapping snapshots is one draw, not several
-    independent ones -- otherwise the interval would be too narrow.
+    them; one with no untied pair is left out, and so, in a draw, is one where too few
+    of its players were drawn to form an untied pair). Each draw resamples players once
+    for all of them, so a player scored in several overlapping snapshots is one draw, not
+    several independent ones -- otherwise the interval would be too narrow. Both systems
+    must be scored in every season or snapshot (``order_table`` would average each over
+    its own, a different set).
 
     A draw that picks player i ``c_i`` times and j ``c_j`` times holds their pair
     ``c_i * c_j`` times (a player paired with his own copy tied in reality, so it is
@@ -260,9 +263,11 @@ def pairwise_bootstrap(
             [np.ones(n), *(np.bincount(rng.integers(0, n, n), minlength=n) for _ in range(n_boot))]
         )
         total = np.zeros(len(counts))
-        n_units = 0
-        for _, g in rows.groupby(units, sort=False) if units else [(None, rows)]:
+        n_units = np.zeros(len(counts))  # per draw: the units with an untied drawn pair
+        for key, g in rows.groupby(units, sort=False) if units else [(None, rows)]:
             wide = g.pivot_table(index="player_id", columns="system", values="projected")
+            if not {a, b} <= set(wide.columns):
+                raise ValueError(f"{s} at {key}: both {a} and {b} must be scored in every unit")
             actual = g.drop_duplicates("player_id").set_index("player_id")["actual"]
             actual = actual.loc[wide.index].to_numpy()
             pid = players.get_indexer(wide.index)
@@ -285,9 +290,12 @@ def pairwise_bootstrap(
                 mult = c[:, pi] * c[:, pj]
                 with np.errstate(invalid="ignore", divide="ignore"):
                     diffs.append(100 * (mult @ edge) / (mult @ weight))
-            total += np.concatenate(diffs)  # NaN: a draw where every pair tied
-            n_units += 1
-        d = total / n_units if n_units else np.full(len(counts), np.nan)
+            unit_diff = np.concatenate(diffs)  # NaN: a draw with no untied pair here
+            ok = ~np.isnan(unit_diff)
+            total[ok] += unit_diff[ok]
+            n_units += ok
+        with np.errstate(invalid="ignore", divide="ignore"):
+            d = np.where(n_units > 0, total / n_units, np.nan)
         boot = d[1:][~np.isnan(d[1:])]
         out[s] = {
             "diff": float(d[0]),

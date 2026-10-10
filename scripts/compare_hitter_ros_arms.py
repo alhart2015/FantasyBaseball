@@ -1,8 +1,10 @@
 """Compare training arms on what actually happened, with the luck of the draw shown.
 
 An arm is a set of runs that differ only by seed: data/hitter_ros/runs/<arm>-s<N>/ (or
-one run named <arm>). Each arm's predicted rates are averaged over its seeds and scored
-against the first arm listed (the base), on the same hitters:
+one run named <arm>). Two arms are compared over the seeds they share (an average over
+more seeds is steadier, so different seed counts wouldn't be a fair fight): each arm's
+predicted rates are averaged over those seeds and scored against the first arm listed
+(the base), on the same hitters:
 
 * Mid-season, by stretch of the season: rest-of-season rates from
   scored_horizons.parquet (the net's own output, every hitter with
@@ -16,7 +18,9 @@ worse (``evaluate.sure``: "96% sure better" means what it says; 95%+ is marked r
 both from resampling hitters (``evaluate.pairwise_bootstrap``: each hitter redrawn once
 across every season-week, so overlapping weeks aren't counted as independent), then how
 many seeds were better on their own (seeds paired by number). How sure counts only
-which hitters were scored; the seed count shows the training noise.
+which hitters were scored; the seed count shows the training noise. Every season-week
+counts once in a band, as in the run summaries, so the last weeks of a season (a few
+dozen hitters with 100+ PA left) weigh as much as a full week.
 
 Judge a change here first, on actuals over every week and season, before checking it
 against FanGraphs: the FanGraphs mid-season snapshots are one season (#453).
@@ -31,6 +35,7 @@ from __future__ import annotations
 import argparse
 import re
 import sys
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import pandas as pd
@@ -85,6 +90,8 @@ def run_scores(run: Path) -> pd.DataFrame:
     hz = run / "scored_horizons.parquet"
     if hz.exists():
         h = pd.read_parquet(hz)
+        if "comparison" not in h.columns:  # scored before the FanGraphs set existed
+            h = h.assign(comparison="all")
         h = h[(h["horizon"] == "ros") & (h["comparison"] == "all") & (h["system"] == "head")]
         parts.append(h.assign(band=h["snapshot"].map(band_of)))
     pre = run / "scored_preseason.parquet"
@@ -94,15 +101,6 @@ def run_scores(run: Path) -> pd.DataFrame:
     if not parts:
         raise ValueError(f"{run} has no scored_horizons or scored_preseason file")
     return pd.concat(parts)[[*KEYS, "projected", "actual"]]
-
-
-def arm_scores(arm: str, seasons: list[int] | None) -> dict[str, pd.DataFrame]:
-    """Each seed's scored rates, by seed label."""
-    out = {}
-    for label, run in arm_runs(arm).items():
-        s = run_scores(run)
-        out[label] = s[s["season"].isin(seasons)] if seasons else s
-    return out
 
 
 def seed_mean(scores: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -124,16 +122,58 @@ def band_means(scored: pd.DataFrame) -> pd.DataFrame:
     return per.groupby(["band", "stat"])["pairwise_w"].mean().unstack("stat") * 100
 
 
-def compare_arm(
-    base: dict[str, pd.DataFrame], arm: dict[str, pd.DataFrame], n_boot: int
-) -> pd.DataFrame:
-    """Bands x stats: "diff [lo, hi] how sure, wins/seeds" for ``arm`` minus ``base``."""
-    b, a = seed_mean(base), seed_mean(arm)
+@dataclass
+class Arm:
+    """One arm's scored rates per seed (by seed label). Its seed means and per-seed band
+    scores are worked out once, however many arms it is compared with."""
+
+    name: str
+    scores: dict[str, pd.DataFrame]
+    _means: dict[tuple[str, ...], pd.DataFrame] = field(default_factory=dict, repr=False)
+    _bands: dict[str, pd.DataFrame] = field(default_factory=dict, repr=False)
+
+    def mean(self, seeds: tuple[str, ...]) -> pd.DataFrame:
+        if seeds not in self._means:
+            self._means[seeds] = seed_mean({s: self.scores[s] for s in seeds})
+        return self._means[seeds]
+
+    def bands(self, seed: str) -> pd.DataFrame:
+        if seed not in self._bands:
+            self._bands[seed] = band_means(self.scores[seed])
+        return self._bands[seed]
+
+
+def load_arm(name: str, seasons: list[int] | None) -> Arm:
+    """The arm's scored rates per seed, only ``seasons`` when given."""
+    scores = {}
+    for label, run in arm_runs(name).items():
+        s = run_scores(run)
+        scores[label] = s[s["season"].isin(seasons)] if seasons else s
+    return Arm(name, scores)
+
+
+def shared_seeds(base: Arm, arm: Arm) -> tuple[str, ...]:
+    """The seed labels both arms have; only these are compared."""
+    seeds = tuple(s for s in base.scores if s in arm.scores)
+    if not seeds:
+        raise ValueError(
+            f"{base.name} and {arm.name} share no seed (seeds {sorted(base.scores)} vs "
+            f"{sorted(arm.scores)}; '' = a run without a seed suffix)"
+        )
+    return seeds
+
+
+def compare_arm(base: Arm, arm: Arm, n_boot: int) -> pd.DataFrame:
+    """Bands x stats: "diff [lo, hi] how sure, wins/seeds" for ``arm`` minus ``base``,
+    over the seeds both have."""
+    seeds = shared_seeds(base, arm)
+    b, a = base.mean(seeds), arm.mean(seeds)
     both = b.merge(a, on=KEYS, suffixes=("_b", "_a"))
     if len(both) != len(b) or len(both) != len(a):
         raise ValueError("the two arms scored different rows; compare like with like")
-    seeds = [s for s in base if s in arm]
-    wins = sum(((band_means(arm[s]) - band_means(base[s])) > 0).astype(int) for s in seeds)
+    # A seed-by-seed count only means something between seeded runs.
+    counted = [s for s in seeds if s]
+    wins = sum(((arm.bands(s) - base.bands(s)) > 0).astype(int) for s in counted)
     cells: dict[str, dict[str, str]] = {}
     for band in BANDS:
         g = both[both["band"] == band]
@@ -148,7 +188,7 @@ def compare_arm(
         boot = pairwise_bootstrap(long, "arm", "base", n_boot=n_boot)
         cells[band] = {
             s: f"{r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}] {sure_text(r['sure'])}"
-            + (f", {int(wins.loc[band, s])}/{len(seeds)} seeds" if seeds else "")
+            + (f", {int(wins.loc[band, s])}/{len(counted)} seeds" if counted else "")
             for s, r in boot.iterrows()
             if s in TARGETS
         }
@@ -163,17 +203,20 @@ def main() -> int:
     parser.add_argument("--n-boot", type=int, default=300, help="hitter resamples")
     args = parser.parse_args()
     try:
-        base = arm_scores(args.base, args.seasons)
-        arms = {name: arm_scores(name, args.seasons) for name in args.arms}
+        base = load_arm(args.base, args.seasons)
+        arms = [load_arm(name, args.seasons) for name in args.arms]
+        for arm in arms:  # fail before any of the slow scoring
+            shared_seeds(base, arm)
     except ValueError as err:
         parser.error(str(err))
     print(
         "Gap-weighted pairwise points, arm minus base (positive = arm better), mean of "
-        "seeds' predictions: diff [95% interval] how sure the arm is better or worse, "
-        "seeds better/seeds"
+        "the shared seeds' predictions: diff [95% interval] how sure the arm is better "
+        "or worse, seeds better/seeds"
     )
-    for name, arm in arms.items():
-        print(f"\n**{name} minus {args.base}** ({len(arm)} vs {len(base)} seeds)\n")
+    for arm in arms:
+        n = len(shared_seeds(base, arm))
+        print(f"\n**{arm.name} minus {base.name}** ({n} shared seeds)\n")
         print(to_markdown(compare_arm(base, arm, args.n_boot)))
     return 0
 

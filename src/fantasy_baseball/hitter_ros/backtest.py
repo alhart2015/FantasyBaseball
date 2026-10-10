@@ -33,6 +33,7 @@ their own.
 
 from __future__ import annotations
 
+import math
 from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
@@ -346,13 +347,17 @@ def to_markdown(df: pd.DataFrame, digits: int = 2) -> str:
 
 
 def sure_text(value: float) -> str:
-    """``evaluate.sure`` in words: "96% sure better (real)", "90% sure worse", "no lean"."""
+    """``evaluate.sure`` in words: "96% sure better (real)", "90% sure worse", "no lean".
+    The percent is rounded down, so it reads 95% exactly when it is marked real, and a
+    bootstrap can't print "100% sure": above 99% it reads ">99%"."""
     if pd.isna(value):
         return "n/a"
     if value == 0:
         return "no lean"
-    real = " (real)" if abs(value) >= SURE_BAR else ""
-    return f"{abs(value):.0%} sure {'better' if value > 0 else 'worse'}{real}"
+    size = abs(value)
+    pct = ">99%" if size > 0.99 else f"{math.floor(size * 100 + 1e-9)}%"
+    real = " (real)" if size >= SURE_BAR - 1e-9 else ""
+    return f"{pct} sure {'better' if value > 0 else 'worse'}{real}"
 
 
 def _interval_line(b: pd.DataFrame | None, better: str) -> str:

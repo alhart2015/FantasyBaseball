@@ -63,7 +63,9 @@ def runs(tmp_path, monkeypatch):
     for seed in (0, 1):
         _run(tmp_path, f"base-s{seed}", truth, 0.6, seed)
         _run(tmp_path, f"good-s{seed}", truth, 0.1, 10 + seed)
+    _run(tmp_path, "good-s2", truth, 0.1, 12)  # a seed base lacks
     _run(tmp_path, "single", truth, 0.6, 99)
+    _run(tmp_path, "single2", truth, 0.1, 98)
     (tmp_path / "base-s9").mkdir()  # still training: no summary.md, so not a seed
     (tmp_path / "base-sx").mkdir()
     return tmp_path
@@ -87,10 +89,15 @@ def test_run_scores_keep_only_the_rest_of_season_head(runs):
     s = arms.run_scores(runs / "base-s0")
     assert set(s["band"]) == set(arms.BANDS)
     assert len(s) == 2 * (len(WEEKS) + 1) * 25 * len(TARGETS)
+    # Scored before the FanGraphs set existed: no comparison column, every row is "all".
+    hz = runs / "base-s0" / "scored_horizons.parquet"
+    old = pd.read_parquet(hz)
+    old[old["comparison"] == "all"].drop(columns="comparison").to_parquet(hz)
+    pd.testing.assert_frame_equal(arms.run_scores(runs / "base-s0"), s)
 
 
 def test_seed_mean_averages_the_projections(runs):
-    scores = arms.arm_scores("base", None)
+    scores = arms.load_arm("base", None).scores
     mean = arms.seed_mean(scores)
     keyed = [s.set_index(arms.KEYS)["projected"] for s in scores.values()]
     expected = (keyed[0] + keyed[1]) / 2
@@ -103,19 +110,34 @@ def test_seed_mean_averages_the_projections(runs):
 
 
 def test_a_better_arm_wins_every_band_on_every_seed(runs):
-    out = arms.compare_arm(arms.arm_scores("base", None), arms.arm_scores("good", None), 100)
+    base, good = arms.load_arm("base", None), arms.load_arm("good", None)
+    out = arms.compare_arm(base, good, 100)
     assert list(out.index) == list(arms.BANDS) and list(out.columns) == list(TARGETS)
     for cell in out.to_numpy().ravel():
-        assert cell.startswith("+") and cell.endswith(" 100% sure better (real), 2/2 seeds")
+        assert cell.startswith("+") and cell.endswith(" >99% sure better (real), 2/2 seeds")
+
+
+def test_only_shared_seeds_are_compared(runs):
+    """good has seeds 0-2, base 0-1: good's average must be over 0-1 only, or the bigger
+    average alone would make it look better."""
+    base, good = arms.load_arm("base", None), arms.load_arm("good", None)
+    assert arms.shared_seeds(base, good) == ("0", "1")
+    arms.compare_arm(base, good, 10)
+    assert list(good._means) == [("0", "1")]
+    pd.testing.assert_frame_equal(
+        good.mean(("0", "1")), arms.seed_mean({s: good.scores[s] for s in ("0", "1")})
+    )
+    with pytest.raises(ValueError, match="share no seed"):
+        arms.compare_arm(base, arms.load_arm("single", None), 10)
 
 
 def test_seasons_filter_and_mismatched_arms(runs):
-    only = arms.arm_scores("base", [2025])
-    assert set(only["0"]["season"]) == {2025}
+    only = arms.load_arm("base", [2025])
+    assert set(only.scores["0"]["season"]) == {2025}
     with pytest.raises(ValueError, match="different rows"):
-        arms.compare_arm(only, arms.arm_scores("good", None), 10)
+        arms.compare_arm(only, arms.load_arm("good", None), 10)
 
 
-def test_an_unseeded_arm_compares_without_a_seed_count(runs):
-    out = arms.compare_arm(arms.arm_scores("base", None), arms.arm_scores("single", None), 20)
-    assert not out.loc["wk1-6", "r"].endswith("seeds")
+def test_unseeded_runs_compare_without_a_seed_count(runs):
+    out = arms.compare_arm(arms.load_arm("single", None), arms.load_arm("single2", None), 20)
+    assert out.loc["wk1-6", "r"].endswith("sure better (real)")
