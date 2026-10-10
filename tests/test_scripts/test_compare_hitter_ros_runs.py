@@ -215,11 +215,11 @@ def test_run_row_reports_the_league_free_scores(runs):
     assert row["pre_pairw_gap_hr"] == pytest.approx(100.0)
     assert row["pre_lf_gap_hr"] < 0  # ours ordered right, the blend backwards
     # Ours orders every pair right and the blend every pair wrong, on every resample.
-    assert row["pre_pairw_p_hr"] == pytest.approx(1.0)
+    assert row["pre_pairw_sure_hr"] == pytest.approx(1.0)
     # Old runs (scored before #424) have no level-free column: their rows just lack it.
     _run(runs, "old", pre=_scored({"ours": 1.0, "fg_blend": 2.0}, season=2025))
     both = cmp.compare(["r1", "old"], None, None)
-    assert pd.isna(both.loc["old", "pre_lf_hr"]) and pd.isna(both.loc["old", "pre_pairw_p_hr"])
+    assert pd.isna(both.loc["old", "pre_lf_hr"]) and pd.isna(both.loc["old", "pre_pairw_sure_hr"])
 
 
 def test_run_row_reports_vets_and_rookies_separately(runs):
@@ -244,7 +244,7 @@ def test_run_row_reports_vets_and_rookies_separately(runs):
     assert row["mid_rookie_pairw_gap_hr"] == pytest.approx(-100.0)
     # Over everyone the two cancel out: a coin flip, whatever the luck of the draw.
     assert row["mid_pairw_gap_hr"] == pytest.approx(0.0)
-    assert 0.0 < row["mid_pairw_p_hr"] < 1.0
+    assert -1.0 < row["mid_pairw_sure_hr"] < 1.0
     # A run scored before the tag has no group rows.
     _run(runs, "old", pre=pre.drop(columns="group"))
     assert "pre_vet_pairw_gap_hr" not in cmp.compare(["old"], None, None).columns

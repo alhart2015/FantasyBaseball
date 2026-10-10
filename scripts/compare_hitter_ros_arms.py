@@ -11,12 +11,12 @@ against the first arm listed (the base), on the same hitters:
   actual PA).
 
 Each cell: arm minus base in gap-weighted pairwise points (the main score; positive =
-the arm orders hitters better), the 95% interval and P(arm better) from resampling
-hitters (``evaluate.pairwise_bootstrap``: each hitter redrawn once across every
-season-week, so overlapping weeks aren't counted as independent), then how many seeds
-were better on their own (seeds paired by number). ~50% = can't tell apart; 97.5%+ or
-2.5%- = the interval clears 0. P counts only which hitters were scored; the seed count
-shows the training noise.
+the arm orders hitters better), the 95% interval and how sure the arm is better or
+worse (``evaluate.sure``: "96% sure better" means what it says; 95%+ is marked real),
+both from resampling hitters (``evaluate.pairwise_bootstrap``: each hitter redrawn once
+across every season-week, so overlapping weeks aren't counted as independent), then how
+many seeds were better on their own (seeds paired by number). How sure counts only
+which hitters were scored; the seed count shows the training noise.
 
 Judge a change here first, on actuals over every week and season, before checking it
 against FanGraphs: the FanGraphs mid-season snapshots are one season (#453).
@@ -38,7 +38,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.backtest import to_markdown
+from fantasy_baseball.hitter_ros.backtest import sure_text, to_markdown
 from fantasy_baseball.hitter_ros.evaluate import order_scores, pairwise_bootstrap
 from fantasy_baseball.hitter_ros.features import TARGETS
 
@@ -127,7 +127,7 @@ def band_means(scored: pd.DataFrame) -> pd.DataFrame:
 def compare_arm(
     base: dict[str, pd.DataFrame], arm: dict[str, pd.DataFrame], n_boot: int
 ) -> pd.DataFrame:
-    """Bands x stats: "diff [lo, hi] P% wins/seeds" for ``arm`` minus ``base``."""
+    """Bands x stats: "diff [lo, hi] how sure, wins/seeds" for ``arm`` minus ``base``."""
     b, a = seed_mean(base), seed_mean(arm)
     both = b.merge(a, on=KEYS, suffixes=("_b", "_a"))
     if len(both) != len(b) or len(both) != len(a):
@@ -147,8 +147,8 @@ def compare_arm(
         ).rename(columns={"actual_b": "actual"})
         boot = pairwise_bootstrap(long, "arm", "base", n_boot=n_boot)
         cells[band] = {
-            s: f"{r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}] {r['p_better']:.0%}"
-            + (f" {int(wins.loc[band, s])}/{len(seeds)}" if seeds else "")
+            s: f"{r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}] {sure_text(r['sure'])}"
+            + (f", {int(wins.loc[band, s])}/{len(seeds)} seeds" if seeds else "")
             for s, r in boot.iterrows()
             if s in TARGETS
         }
@@ -169,7 +169,8 @@ def main() -> int:
         parser.error(str(err))
     print(
         "Gap-weighted pairwise points, arm minus base (positive = arm better), mean of "
-        "seeds' predictions: diff [95% interval] P(arm better) seeds better/seeds"
+        "seeds' predictions: diff [95% interval] how sure the arm is better or worse, "
+        "seeds better/seeds"
     )
     for name, arm in arms.items():
         print(f"\n**{name} minus {args.base}** ({len(arm)} vs {len(base)} seeds)\n")

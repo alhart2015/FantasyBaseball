@@ -43,6 +43,7 @@ import pandas as pd
 from fantasy_baseball.hitter_ros.baselines import baseline_predictions
 from fantasy_baseball.hitter_ros.evaluate import (
     SCALE,
+    SURE_BAR,
     blend,
     fantasy_value,
     load_systems,
@@ -344,18 +345,26 @@ def to_markdown(df: pd.DataFrame, digits: int = 2) -> str:
     return "\n".join(lines)
 
 
+def sure_text(value: float) -> str:
+    """``evaluate.sure`` in words: "96% sure better (real)", "90% sure worse", "no lean"."""
+    if pd.isna(value):
+        return "n/a"
+    if value == 0:
+        return "no lean"
+    real = " (real)" if abs(value) >= SURE_BAR else ""
+    return f"{abs(value):.0%} sure {'better' if value > 0 else 'worse'}{real}"
+
+
 def _interval_line(b: pd.DataFrame | None, better: str) -> str:
-    """One line of ours-minus-blend intervals per stat, each with P(ours better);
-    ``better`` names the good sign."""
+    """One line of ours-minus-blend intervals per stat, each with how sure ours is better
+    or worse; ``better`` names the good sign."""
     if b is None:
         return ""
     cells = [
-        f"{s} {r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}] P {r['p_better']:.0%}"
+        f"{s} {r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}] {sure_text(r['sure'])}"
         for s, r in b.iterrows()
     ]
-    return f"ours - fg_blend ({better} = ours better), 95% interval, P(ours better): " + "; ".join(
-        cells
-    )
+    return f"ours - fg_blend ({better} = ours better), 95% interval, how sure: " + "; ".join(cells)
 
 
 def _unit_block(g: pd.DataFrame) -> list[str]:
@@ -551,9 +560,9 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         f"Mid-season: >= {SNAPSHOT_MIN_PA} PA after the snapshot. "
         "`league_avg` and `marcel` are simple floors (see hitter_ros/baselines.py). "
         "Intervals resample players; each line says which sign means ours is better; "
-        "an interval crossing 0 = can't tell apart. P(ours better) = share of the "
-        "resamples where ours wins: ~50% = a coin flip, 97.5%+ (or 2.5%-) = the interval "
-        "clears 0. It counts only the luck of which hitters were scored, not seed or "
+        'an interval crossing 0 = can\'t tell apart. "N% sure better/worse" means what '
+        "it says: how sure ours really differs, and which way; 95%+ is marked real (the "
+        "interval clears 0). It counts only the luck of which hitters were scored, not seed or "
         "season swings. Over several seasons or snapshots each hitter is redrawn once "
         "for all of them."
     ]

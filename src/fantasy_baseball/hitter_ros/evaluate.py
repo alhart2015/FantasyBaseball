@@ -208,14 +208,22 @@ def _pair_credit(
 _BOOT_CHUNK = 25
 
 
-def p_better(draws: np.ndarray) -> float:
-    """Share of bootstrap ``draws`` (a minus b, positive = a better) where a is better;
-    a draw tied at 0 counts half. ~50% = can't tell them apart; 97.5%+ (or 2.5%-) is
-    about where the 95% interval stops crossing 0. It counts only the luck of which
-    players happened to be scored, not seed-to-seed or season-to-season swings."""
+# A difference counts as real when ``sure`` reaches this (#457).
+SURE_BAR = 0.95
+
+
+def sure(draws: np.ndarray) -> float:
+    """How sure bootstrap ``draws`` (a minus b, positive = a better) are that a and b
+    really differ, signed by which is better: +0.95 = 95% sure a is better, -0.90 = 90%
+    sure a is worse, 0 = no lean. It is 1 minus the two-sided p-value: the widest
+    middle slice of the draws that leaves out 0 holds this share of them, so +/-0.95 is
+    exactly where the 95% interval stops crossing 0. Read as is; no halving. Ties at 0
+    count half to each side. It counts only the luck of which players happened to be
+    scored, not seed-to-seed or season-to-season swings."""
     if not len(draws):
         return float("nan")
-    return float(np.mean((draws > 0) + 0.5 * (draws == 0)))
+    a_better = float(np.mean((draws > 0) + 0.5 * (draws == 0)))
+    return 2 * a_better - 1
 
 
 def pairwise_bootstrap(
@@ -228,7 +236,7 @@ def pairwise_bootstrap(
     seed: int = 0,
 ) -> pd.DataFrame:
     """Pairwise accuracy (%) of ``a`` minus ``b`` per stat, with a 95% interval and
-    ``p_better`` (share of draws where ``a`` orders better), from resampling players.
+    ``sure`` (how sure ``a`` orders better (+) or worse (-)), from resampling players.
     Positive = ``a`` orders better. Paired: both systems are scored on each draw.
 
     ``scored`` may stack several seasons or snapshots (``UNIT_COLS``): the score is then
@@ -285,7 +293,7 @@ def pairwise_bootstrap(
             "diff": float(d[0]),
             "lo": float(np.percentile(boot, 2.5)) if len(boot) else float("nan"),
             "hi": float(np.percentile(boot, 97.5)) if len(boot) else float("nan"),
-            "p_better": p_better(boot),
+            "sure": sure(boot),
         }
     return pd.DataFrame(out).T
 
@@ -365,8 +373,8 @@ def paired_bootstrap(
     seed: int = 0,
     value: str = "abs_err",
 ) -> pd.DataFrame:
-    """MAE(a) - MAE(b) per stat, with a 95% interval and ``p_better`` (share of draws
-    where ``a``'s MAE is lower), from resampling scored player-units.
+    """MAE(a) - MAE(b) per stat, with a 95% interval and ``sure`` (how sure ``a``'s MAE
+    is lower (+) or higher (-)), from resampling scored player-units.
     ``value``: ``abs_err`` (raw MAE) or ``lf_err`` (level-free MAE).
 
     Negative = ``a`` is better. Paired: each resample draws player-units (a player in a
@@ -387,7 +395,7 @@ def paired_bootstrap(
             "diff": diff.mean(),
             "lo": float(np.percentile(boot, 2.5)),
             "hi": float(np.percentile(boot, 97.5)),
-            "p_better": p_better(-boot),
+            "sure": sure(-boot),
         }
     return pd.DataFrame(out).T
 

@@ -17,10 +17,10 @@ train_hitter_ros.py writes last):
   blend, over the seasons where both were scored.
 * Mid-season: our gap to the blend, averaged over the snapshots where both were scored
   (all of them, or those between --from and --to), with how many snapshots that was.
-* P(ours better) for the main-score gaps: the share of resamples of the scored hitters
-  where ours beats the blend (evaluate.pairwise_bootstrap; each hitter redrawn once
-  across every season or snapshot). ~50% = can't tell apart; 97.5%+ or 2.5%- = the 95%
-  interval clears 0. Only the luck of which hitters were scored, not seed swings.
+* How sure the main-score gaps are (evaluate.sure, from resampling the scored hitters,
+  each redrawn once across every season or snapshot): +0.95 = 95% sure ours is better
+  than the blend, -0.90 = 90% sure it is worse, 0 = no lean; +/-0.95 or beyond is real.
+  Only the luck of which hitters were scored, not seed swings.
 * Vets and rookies (#433): the main-score gap to the blend for each group on its own
   (pairs only inside a group). Runs scored before the vet/rookie tag lack these rows;
   re-score them with score_hitter_ros_run.py.
@@ -82,13 +82,13 @@ def _scores(scored: pd.DataFrame, unit: str) -> dict[str, pd.DataFrame]:
 
 
 def _luck(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None:
-    """P(ours better than the blend) on the main score, into ``row`` as
-    ``{prefix}_pairw_p_{stat}``. Nothing for frames scored before #424 (no pairwise)."""
+    """How sure ours is better (+) or worse (-) than the blend on the main score, into
+    ``row`` as ``{prefix}_pairw_sure_{stat}``. Nothing for frames scored before #424."""
     if "lf_err" not in both.columns:
         return
     b = pairwise_bootstrap(both, OURS, BLEND)
     for s in TARGETS:
-        row[f"{prefix}_pairw_p_{s}"] = b.loc[s, "p_better"]
+        row[f"{prefix}_pairw_sure_{s}"] = b.loc[s, "sure"]
 
 
 def _group_gaps(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None:
@@ -257,8 +257,8 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            "MAIN: preseason P(ours better than blend), from resampling hitters",
-            cols("pre_pairw_p_"),
+            "MAIN: preseason, how sure ours is better (+) or worse (-) than blend (0.95+ = real)",
+            cols("pre_pairw_sure_"),
             2,
         ),
         (
@@ -267,8 +267,9 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            f"MAIN: mid-season P(ours better than blend), {window}",
-            cols("mid_pairw_p_"),
+            "MAIN: mid-season, how sure ours is better (+) or worse (-) than blend "
+            f"(0.95+ = real), {window}",
+            cols("mid_pairw_sure_"),
             2,
         ),
         *(
