@@ -265,3 +265,30 @@ def test_run_row_shows_where_sb_came_from(runs):
     assert df.loc["box", "sb_best_epoch"] == 6
     assert df.loc["box", "sb_val_loss"] == pytest.approx(0.3)
     assert df.loc["box", "val_loss"] == pytest.approx(0.7)  # the main net's, unchanged
+
+
+def test_run_row_reports_mse_as_the_main_score(runs):
+    from fantasy_baseball.hitter_ros.evaluate import mse_table, scored_players
+
+    actual = pd.DataFrame({s: [0.1, 0.2, 0.3, 0.4] for s in TARGETS}, index=[1, 2, 3, 4])
+    actual["pa"] = 500
+    close = actual[list(TARGETS)] + 0.01
+    far = actual[list(TARGETS)] + 0.05
+    pre = scored_players({"ours": close, "fg_blend": far}, actual, 1).assign(
+        season=2025, group="vet", relevant=True
+    )
+    _run(runs, "r1", pre=pre, snap=pre.assign(snapshot="2026-06-04"))
+    row = cmp.compare(["r1"], None, None).loc["r1"]
+    table = mse_table(pre)
+    assert row["pre_mse_hr"] == pytest.approx(table.loc["ours", "hr"])  # 5 HR off, squared
+    assert row["pre_mse_hr"] == pytest.approx(25.0)
+    gap = table.loc["ours", "hr"] - table.loc["fg_blend", "hr"]
+    assert gap < 0
+    for col in ("pre_mse_gap_hr", "mid_mse_gap_hr", "pre_vet_mse_gap_hr", "pre_top_mse_gap_hr"):
+        assert row[col] == pytest.approx(gap)
+    # Ours is closer on every hitter, so on every resample.
+    assert row["pre_mse_sure_hr"] == pytest.approx(1.0)
+    assert row["mid_mse_sure_hr"] == pytest.approx(1.0)
+    # Old test frames without projected/actual/pa just lack the MSE columns.
+    _run(runs, "old", pre=_scored({"ours": 1.0, "fg_blend": 2.0}, season=2025))
+    assert "pre_mse_hr" not in cmp.compare(["old"], None, None).columns

@@ -1,8 +1,14 @@
 """Score projections against what happened.
 
-The **main score is gap-weighted pairwise accuracy** (user call, #424): "does X beat
-Y", with pairs that ended up far apart counting more. Plain pairwise accuracy and raw
-error (#399's original bar) are always reported next to it.
+The **main score is MSE** (user call, #433; it replaced gap-weighted pairwise, #424):
+squared error pooled over every scored player-unit, lower is better.
+
+* R, HR, RBI, SB: on season totals over the PA the hitter actually got,
+  ``(pa x (projected rate - actual rate))^2`` -- "how many R off, squared".
+* AVG: in points, ``(1000 x (projected - actual))^2``, weighted by PA (the scored
+  frames carry PA, not AB).
+
+Pairwise accuracy and raw error (#399's original bar) are reported next to it.
 
 Raw error is the mean absolute error (MAE) of the projected rate vs. the actual rate,
 over a fixed set of players that every compared projection covers:
@@ -18,8 +24,7 @@ together. So three more scores ask "is X better than Y", not "25 or 30 HR":
   that is right about every player except for one league-wide factor scores 0.
 * **Pairwise order accuracy**: over every pair of scored players, the share the
   projection orders the same way as what happened (a projected tie gets half credit;
-  pairs that tied in reality are skipped). The gap-weighted version (the main score)
-  counts each pair by the actual gap, so near-ties matter less. Neither cares how far
+  pairs that tied in reality are skipped). The gap-weighted version counts each pair by the actual gap, so near-ties matter less. Neither cares how far
   off the projected numbers were, only whether the order was right.
 * **Rank correlation** (Spearman) between projected and actual rates.
 
@@ -332,6 +337,83 @@ def mae_table(scored: pd.DataFrame, value: str = "abs_err") -> pd.DataFrame:
     units = scored.drop_duplicates([*unit_key(scored), "system"])
     table["n"] = units.groupby("system").size()
     return table.loc[order, [*TARGETS, "n"]]
+
+
+MSE_COLUMNS = ("projected", "actual", "pa")
+
+
+def has_mse_columns(scored: pd.DataFrame) -> bool:
+    """Whether ``scored`` carries what MSE needs (very old test frames don't)."""
+    return set(MSE_COLUMNS) <= set(scored.columns)
+
+
+def squared_error(scored: pd.DataFrame, keep: list[str]) -> pd.DataFrame:
+    """``scored[keep]`` plus, per row, MSE's numerator ``sq`` and weight ``w`` (see module
+    doc): R/HR/RBI/SB ``(pa x err)^2`` with weight 1; AVG ``pa x (1000 x err)^2`` with
+    weight ``pa``. MSE over any set of rows = sum(sq) / sum(w). Rows keep their order on
+    a fresh index (a stacked frame can repeat index labels)."""
+    err = (scored["projected"] - scored["actual"]).to_numpy(dtype=float)
+    pa = scored["pa"].to_numpy(dtype=float)
+    is_avg = (scored["stat"] == "avg").to_numpy()
+    return (
+        scored[keep]
+        .reset_index(drop=True)
+        .assign(
+            sq=np.where(is_avg, pa * (SCALE["avg"] * err) ** 2, (pa * err) ** 2),
+            w=np.where(is_avg, pa, 1.0),
+        )
+    )
+
+
+def mse_table(scored: pd.DataFrame) -> pd.DataFrame:
+    """Systems (in first-seen order) x stats: MSE pooled over every scored player-unit,
+    so a season or snapshot with more hitters weighs more."""
+    parts = squared_error(scored, ["system", "stat"])
+    sums = parts.groupby(["system", "stat"])[["sq", "w"]].sum()
+    table = (sums["sq"] / sums["w"]).unstack("stat")
+    order = list(dict.fromkeys(scored["system"]))
+    return table.reindex(index=order, columns=list(TARGETS))
+
+
+def mse_bootstrap(
+    scored: pd.DataFrame, a: str, b: str, *, n_boot: int = 2000, seed: int = 0
+) -> pd.DataFrame:
+    """MSE of ``a`` minus ``b`` per stat (negative = ``a`` better), with ``a``'s and
+    ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower (+) or
+    higher (-)), from resampling players. Paired: both are scored on each draw. As in
+    ``pairwise_bootstrap``, each draw redraws a player once for every season or snapshot
+    he is in, so overlapping snapshots aren't independent evidence. Both systems must be
+    scored on every player-unit either is."""
+    rng = np.random.default_rng(seed)
+    key = unit_key(scored)
+    rows = scored[scored["system"].isin([a, b])]
+    parts = squared_error(rows, [*key, "system", "stat"])
+    out = {}
+    for s in TARGETS:
+        g = parts[parts["stat"] == s]
+        wide = g.set_index([*key, "system"])[["sq", "w"]].unstack("system")
+        if {a, b} - set(g["system"]) or wide.isna().to_numpy().any():
+            raise ValueError(f"{s}: {a} and {b} must be scored on the same player-units")
+        per = wide.groupby(level="player_id").sum()
+        n = len(per)
+        counts = np.vstack(
+            [np.ones(n), *(np.bincount(rng.integers(0, n, n), minlength=n) for _ in range(n_boot))]
+        )
+        mse = {
+            x: (counts @ per[("sq", x)].to_numpy()) / (counts @ per[("w", x)].to_numpy())
+            for x in (a, b)
+        }
+        d = mse[a] - mse[b]
+        boot = d[1:]
+        out[s] = {
+            "diff": float(d[0]),
+            "lo": float(np.percentile(boot, 2.5)),
+            "hi": float(np.percentile(boot, 97.5)),
+            "sure": sure(-boot),
+            "a": float(mse[a][0]),
+            "b": float(mse[b][0]),
+        }
+    return pd.DataFrame(out).T
 
 
 ORDER_METRICS = ("pairwise", "pairwise_w", "spearman")

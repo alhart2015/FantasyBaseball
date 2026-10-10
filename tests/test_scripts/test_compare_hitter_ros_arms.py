@@ -33,6 +33,7 @@ def _run(root, name, truth, noise, seed):
                     "stat": s,
                     "projected": proj[:, k],
                     "actual": act[:, k],
+                    "pa": 500.0,
                     "season": season,
                 }
             )
@@ -111,10 +112,15 @@ def test_seed_mean_averages_the_projections(runs):
 
 def test_a_better_arm_wins_every_band_on_every_seed(runs):
     base, good = arms.load_arm("base", None), arms.load_arm("good", None)
-    out = arms.compare_arm(base, good, 100)
-    assert list(out.index) == list(arms.BANDS) and list(out.columns) == list(TARGETS)
-    for cell in out.to_numpy().ravel():
-        assert cell.startswith("+") and cell.endswith(" >99% sure better (real), 2/2 seeds")
+    # MSE (the main score, the default) goes down for a better arm; pairwise goes up.
+    for score, sign in (("mse", "-"), ("pairwise", "+")):
+        out = arms.compare_arm(base, good, 100, score)
+        assert list(out.index) == list(arms.BANDS) and list(out.columns) == list(TARGETS)
+        for cell in out.to_numpy().ravel():
+            assert cell.startswith(sign) and cell.endswith(" >99% sure better (real), 2/2 seeds")
+    assert arms.compare_arm(base, good, 10).equals(arms.compare_arm(base, good, 10, "mse"))
+    with pytest.raises(ValueError, match="unknown score"):
+        arms.compare_arm(base, good, 10, "mae")
 
 
 def test_only_shared_seeds_are_compared(runs):
