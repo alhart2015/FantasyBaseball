@@ -6,6 +6,8 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.hitter_ros.evaluate import (
+    mse_bootstrap,
+    mse_table,
     order_table,
     paired_bootstrap,
     pairwise_accuracy,
@@ -176,3 +178,79 @@ def test_every_unit_needs_both_systems():
     gone = scored[~((scored["snapshot"] == "2026-07-01") & (scored["system"] == "b"))]
     with pytest.raises(ValueError, match="both a and b"):
         pairwise_bootstrap(gone, "a", "b", n_boot=5)
+
+
+def test_mse_is_on_totals_and_avg_in_points():
+    """R/HR/RBI/SB: (pa x rate error)^2, one per hitter. AVG: (1000 x error)^2,
+    AB-weighted."""
+    actual = pd.DataFrame({s: [0.10, 0.20] for s in TARGETS}, index=[1, 2])
+    actual["pa"] = [600.0, 200.0]
+    actual["ab"] = [500.0, 190.0]
+    proj = actual[list(TARGETS)] + np.array([[0.01], [0.03]])
+    scored = scored_players({"a": proj}, actual, 1).assign(season=2025)
+    table = mse_table(scored)
+    # 6 off over 600 PA and 6 off over 200 PA: PA, not AB, for the counting stats.
+    assert table.loc["a", "hr"] == pytest.approx((6.0**2 + 6.0**2) / 2)
+    # 10 and 30 points, weighted by AB: 500 and 190.
+    assert table.loc["a", "avg"] == pytest.approx((500 * 10.0**2 + 190 * 30.0**2) / 690)
+    # A frame scored before AB was kept falls back to PA: 600 and 200.
+    old = mse_table(scored.drop(columns="ab"))
+    assert old.loc["a", "avg"] == pytest.approx((600 * 10.0**2 + 200 * 30.0**2) / 800)
+    # So does a row with no AB in a stack of old and new frames.
+    mixed = pd.concat([scored, scored.drop(columns="ab").assign(season=2024)])
+    assert mse_table(mixed).loc["a", "avg"] == pytest.approx(
+        (500 * 10.0**2 + 190 * 30.0**2 + 600 * 10.0**2 + 200 * 30.0**2) / (690 + 800)
+    )
+
+
+def test_mse_pools_rows_over_snapshots():
+    scored, _ = _snapshots()
+    one = scored[scored["snapshot"] == "2026-06-01"]
+    two = scored[scored["snapshot"] == "2026-07-01"]
+    both = pd.concat([one, two])
+    sums = [mse_table(g).loc["a", "r"] * g["player_id"].nunique() for g in (one, two)]
+    pooled = sum(sums) / (one["player_id"].nunique() + two["player_id"].nunique())
+    assert mse_table(both).loc["a", "r"] == pytest.approx(pooled)
+
+
+def test_mse_bootstrap_matches_the_table_and_favors_the_less_noisy():
+    scored, _ = _snapshots()
+    table = mse_table(scored)
+    boot = mse_bootstrap(scored, "a", "b", n_boot=200)
+    for s in TARGETS:
+        assert boot.loc[s, "diff"] == pytest.approx(table.loc["a", s] - table.loc["b", s])
+        assert boot.loc[s, "a"] == pytest.approx(table.loc["a", s])
+        assert boot.loc[s, "b"] == pytest.approx(table.loc["b", s])
+    assert (boot["diff"] < 0).all() and (boot["sure"] > 0.95).all()  # lower = better
+
+
+def test_mse_bootstrap_redraws_each_player_once_for_every_snapshot():
+    """Ten copies of one snapshot hold no more evidence than one."""
+    one, _ = _snapshots(n_units=1, n=40, noise_a=0.5, noise_b=0.55, seed=3)
+    copies = pd.concat([one.assign(snapshot=f"2026-06-{d:02d}") for d in range(1, 11)])
+    width_one = mse_bootstrap(one, "a", "b", n_boot=200).eval("hi - lo")
+    width_ten = mse_bootstrap(copies, "a", "b", n_boot=200).eval("hi - lo")
+    np.testing.assert_allclose(width_ten, width_one)
+
+
+def test_mse_bootstrap_needs_both_systems_on_the_same_rows():
+    scored, _ = _snapshots()
+    gone = scored[~((scored["snapshot"] == "2026-07-01") & (scored["system"] == "b"))]
+    with pytest.raises(ValueError, match="same player-units"):
+        mse_bootstrap(gone, "a", "b", n_boot=5)
+
+
+def test_summary_leads_with_mse():
+    from fantasy_baseball.hitter_ros.backtest import summarize
+
+    scored, _ = _snapshots()
+    scored["system"] = scored["system"].map({"a": "ours", "b": "fg_blend"})
+    md = "\n".join(summarize(None, scored))
+    first, mean = md.split("**Mean over snapshots**")
+    assert first.index("MSE -- main score") < first.index("Gap-weighted pairwise accuracy (%):")
+    luck = [line for line in mean.splitlines() if line.startswith("ours - fg_blend")]
+    assert luck[0].startswith("ours - fg_blend (negative = ours better)")
+    # The pooled pairwise gap keeps its own luck line, named so it can't pass for MSE.
+    pair = [line for line in mean.splitlines() if line.startswith("Gap-weighted pairwise: ")]
+    assert len(pair) == 1 and "(positive = ours better)" in pair[0]
+    assert ">99% sure better (real)" in pair[0]

@@ -11,7 +11,8 @@ he did over them:
 * ``hot_hand``: his season-to-date rate, the naive "he's hot, he'll stay hot".
 
 Players are compared only within the same season and week (a unit), as in the snapshot
-scores, and every score is averaged over units. Only rows where he got at least N PA
+scores. MSE (the main score, ``evaluate``; totals over the next N PA) is pooled over
+every scored row; the other scores are averaged over units. Only rows where he got at least N PA
 (rest of season: ``ROS_MIN_PA``) and every system has a rate are scored.
 
 **vs FanGraphs** (``projections_dir``; only seasons with dated ROS snapshots, i.e. 2026):
@@ -32,6 +33,7 @@ from fantasy_baseball.hitter_ros.baselines import baseline_predictions
 from fantasy_baseball.hitter_ros.evaluate import (
     blend,
     load_systems,
+    mse_table,
     order_scores,
     order_table,
     scored_players,
@@ -49,6 +51,7 @@ def _actual(rows: pd.DataFrame, horizon: str) -> pd.DataFrame:
     counts = rows[[f"{prefix}{c}" for c in COUNTS]].rename(columns=lambda c: c.removeprefix(prefix))
     actual = rates_from_counts(counts)
     actual["pa"] = counts["pa"]
+    actual["ab"] = counts["ab"]
     return actual
 
 
@@ -147,12 +150,14 @@ def write_horizon_scores(run_dir: Path, scored: pd.DataFrame | None) -> None:
 
 
 def horizon_summary(scored: pd.DataFrame) -> list[str]:
-    """Markdown: per horizon, every score averaged over (season, week) units."""
+    """Markdown: per horizon, MSE pooled over every scored row, and the other scores
+    averaged over (season, week) units."""
     md = [
         "#### Short horizons (#419), mid-season rows (week 1+)",
         "",
         "Each system's rate for a hitter's next N PA vs what he did, players compared "
-        "within the same season and week, averaged over those units. `head` = this "
+        "within the same season and week, averaged over those units (MSE, the main score, "
+        "is pooled over every scored row). `head` = this "
         "horizon's own head; `ros_rate` = our rest-of-season rate used for the next N PA; "
         "`hot_hand` = his season-to-date rate.",
     ]
@@ -185,7 +190,11 @@ def _horizon_blocks(scored: pd.DataFrame) -> list[str]:
             "",
             f"**{horizon}** ({units} season-weeks, {len(g) // len(TARGETS) // g['system'].nunique():,} player-rows)",
             "",
-            "Gap-weighted pairwise accuracy (%) -- main score:",
+            "MSE -- main score (totals over the next N PA; AVG in points, AB-weighted):",
+            "",
+            to_markdown(mse_table(g), digits=2),
+            "",
+            "Gap-weighted pairwise accuracy (%):",
             "",
             to_markdown(order_table(g, "pairwise_w", per_unit), digits=1),
             "",

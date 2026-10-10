@@ -5,15 +5,30 @@ import json
 import pandas as pd
 import pytest
 
+from fantasy_baseball.hitter_ros.evaluate import SCALE
 from fantasy_baseball.hitter_ros.features import TARGETS
 from scripts import compare_hitter_ros_runs as cmp
 
 
 def _scored(errors, **unit):
+    """One hitter scored ``err`` off (raw MAE) per system, as a real scored frame has it:
+    projected and actual rates, PA and AB."""
     rows = []
     for system, err in errors.items():
         for s in TARGETS:
-            rows.append({"player_id": 1, "system": system, "stat": s, "abs_err": err, **unit})
+            rows.append(
+                {
+                    "player_id": 1,
+                    "system": system,
+                    "stat": s,
+                    "projected": err / SCALE[s],
+                    "actual": 0.0,
+                    "pa": 500.0,
+                    "ab": 450.0,
+                    "abs_err": err,
+                    **unit,
+                }
+            )
     return pd.DataFrame(rows)
 
 
@@ -265,3 +280,26 @@ def test_run_row_shows_where_sb_came_from(runs):
     assert df.loc["box", "sb_best_epoch"] == 6
     assert df.loc["box", "sb_val_loss"] == pytest.approx(0.3)
     assert df.loc["box", "val_loss"] == pytest.approx(0.7)  # the main net's, unchanged
+
+
+def test_run_row_reports_mse_as_the_main_score(runs):
+    from fantasy_baseball.hitter_ros.evaluate import mse_table, scored_players
+
+    actual = pd.DataFrame({s: [0.1, 0.2, 0.3, 0.4] for s in TARGETS}, index=[1, 2, 3, 4])
+    actual["pa"] = 500
+    close = actual[list(TARGETS)] + 0.01
+    far = actual[list(TARGETS)] + 0.05
+    pre = scored_players({"ours": close, "fg_blend": far}, actual, 1).assign(
+        season=2025, group="vet", relevant=True
+    )
+    _run(runs, "r1", pre=pre, snap=pre.assign(snapshot="2026-06-04"))
+    row = cmp.compare(["r1"], None, None).loc["r1"]
+    table = mse_table(pre)
+    assert row["pre_mse_hr"] == pytest.approx(table.loc["ours", "hr"])  # 5 HR off, squared
+    assert row["pre_mse_hr"] == pytest.approx(25.0)
+    gap = table.loc["ours", "hr"] - table.loc["fg_blend", "hr"]
+    assert gap < 0
+    for prefix in ("pre", "mid", "pre_vet", "mid_vet", "pre_top", "mid_top"):
+        assert row[f"{prefix}_mse_gap_hr"] == pytest.approx(gap)
+        # Ours is closer on every hitter, so on every resample.
+        assert row[f"{prefix}_mse_sure_hr"] == pytest.approx(1.0)

@@ -12,15 +12,21 @@ predicted rates are averaged over those seeds and scored against the first arm l
 * Preseason: scored_preseason.parquet (hitters with ``backtest.PRESEASON_MIN_PA``+
   actual PA).
 
-Each cell: arm minus base in gap-weighted pairwise points (the main score; positive =
-the arm orders hitters better), the 95% interval and how sure the arm is better or
-worse (``evaluate.sure``: "96% sure better" means what it says; 95%+ is marked real),
-both from resampling hitters (``evaluate.pairwise_bootstrap``: each hitter redrawn once
-across every season-week, so overlapping weeks aren't counted as independent), then how
-many seeds were better on their own (seeds paired by number). How sure counts only
-which hitters were scored; the seed count shows the training noise. Every season-week
-counts once in a band, as in the run summaries, so the last weeks of a season (a few
-dozen hitters with 100+ PA left) weigh as much as a full week.
+Two tables per arm. First the main score, MSE (``evaluate``: R/HR/RBI/SB on totals over
+the PA each hitter actually got, AVG in points weighted by AB), pooled over every scored
+hitter-week in a band, so a week with more hitters and more PA left weighs more. Each
+cell: arm minus base (negative = the arm is better), that as a % of the base's MSE, the
+95% interval and how sure the arm is better or worse (``evaluate.sure``: "96% sure
+better" means what it says; 95%+ is marked real), both from resampling hitters
+(``evaluate.mse_bootstrap``: each hitter redrawn once across every season-week, so
+overlapping weeks aren't counted as independent), then how many seeds were better on
+their own (seeds paired by number). How sure counts only which hitters were scored; the
+seed count shows the training noise.
+
+Then gap-weighted pairwise points, the same way (positive = the arm orders hitters
+better; ``evaluate.pairwise_bootstrap``). There every season-week counts once in a band,
+as in the run summaries, so the last weeks of a season (a few dozen hitters with 100+ PA
+left) weigh as much as a full week.
 
 Judge a change here first, on actuals over every week and season, before checking it
 against FanGraphs: the FanGraphs mid-season snapshots are one season (#453).
@@ -44,7 +50,12 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import sure_text, to_markdown
-from fantasy_baseball.hitter_ros.evaluate import order_scores, pairwise_bootstrap
+from fantasy_baseball.hitter_ros.evaluate import (
+    mse_bootstrap,
+    mse_table,
+    order_scores,
+    pairwise_bootstrap,
+)
 from fantasy_baseball.hitter_ros.features import TARGETS
 
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
@@ -54,6 +65,7 @@ WEEK_BANDS = ((1, 6, "wk1-6"), (7, 13, "wk7-13"), (14, 20, "wk14-20"), (21, 99, 
 PRESEASON = "preseason"
 BANDS = (*(label for *_, label in WEEK_BANDS), PRESEASON)
 KEYS = ["band", "season", "snapshot", "player_id", "stat"]
+SCORES = ("mse", "pairwise")  # the main score first
 
 
 def arm_runs(arm: str) -> dict[str, Path]:
@@ -84,8 +96,10 @@ def band_of(snapshot: str) -> str:
 
 
 def run_scores(run: Path) -> pd.DataFrame:
-    """One run's scored rates (``KEYS`` + projected, actual): rest of season mid-season
-    and the preseason. ``snapshot`` is the season-week, "pre" for the preseason."""
+    """One run's scored rates (``KEYS`` + projected, actual, pa, ab): rest of season
+    mid-season and the preseason. ``snapshot`` is the season-week, "pre" for the
+    preseason. ``ab`` is NaN in files scored before it was kept (MSE then weights AVG by
+    PA)."""
     parts = []
     hz = run / "scored_horizons.parquet"
     if hz.exists():
@@ -100,7 +114,7 @@ def run_scores(run: Path) -> pd.DataFrame:
         parts.append(p[p["system"] == "ours"].assign(band=PRESEASON, snapshot="pre"))
     if not parts:
         raise ValueError(f"{run} has no scored_horizons or scored_preseason file")
-    return pd.concat(parts)[[*KEYS, "projected", "actual"]]
+    return pd.concat(parts).reindex(columns=[*KEYS, "projected", "actual", "pa", "ab"])
 
 
 def seed_mean(scores: dict[str, pd.DataFrame]) -> pd.DataFrame:
@@ -112,11 +126,16 @@ def seed_mean(scores: dict[str, pd.DataFrame]) -> pd.DataFrame:
         if not f.set_index(KEYS).sort_index().index.equals(first.index):
             raise ValueError("an arm's seeds scored different rows; were they run alike?")
     mean = pd.concat(frames).groupby(KEYS)["projected"].mean()
-    return first[["actual"]].join(mean).reset_index()
+    return first[["actual", "pa", "ab"]].join(mean).reset_index()
 
 
-def band_means(scored: pd.DataFrame) -> pd.DataFrame:
-    """Gap-weighted pairwise (%) per band x stat, each season-week counting once."""
+def band_means(scored: pd.DataFrame, score: str) -> pd.DataFrame:
+    """Band x stat: MSE pooled over the band's hitter-weeks, or gap-weighted pairwise
+    (%) with each season-week counting once."""
+    if score == "mse":
+        return pd.DataFrame(
+            {band: mse_table(g.assign(system="x")).loc["x"] for band, g in scored.groupby("band")}
+        ).T
     per = order_scores(scored.assign(system="x"))
     per["band"] = per["snapshot"].map(band_of)
     return per.groupby(["band", "stat"])["pairwise_w"].mean().unstack("stat") * 100
@@ -130,17 +149,17 @@ class Arm:
     name: str
     scores: dict[str, pd.DataFrame]
     _means: dict[tuple[str, ...], pd.DataFrame] = field(default_factory=dict, repr=False)
-    _bands: dict[str, pd.DataFrame] = field(default_factory=dict, repr=False)
+    _bands: dict[tuple[str, str], pd.DataFrame] = field(default_factory=dict, repr=False)
 
     def mean(self, seeds: tuple[str, ...]) -> pd.DataFrame:
         if seeds not in self._means:
             self._means[seeds] = seed_mean({s: self.scores[s] for s in seeds})
         return self._means[seeds]
 
-    def bands(self, seed: str) -> pd.DataFrame:
-        if seed not in self._bands:
-            self._bands[seed] = band_means(self.scores[seed])
-        return self._bands[seed]
+    def bands(self, seed: str, score: str) -> pd.DataFrame:
+        if (seed, score) not in self._bands:
+            self._bands[seed, score] = band_means(self.scores[seed], score)
+        return self._bands[seed, score]
 
 
 def load_arm(name: str, seasons: list[int] | None) -> Arm:
@@ -163,9 +182,12 @@ def shared_seeds(base: Arm, arm: Arm) -> tuple[str, ...]:
     return seeds
 
 
-def compare_arm(base: Arm, arm: Arm, n_boot: int) -> pd.DataFrame:
+def compare_arm(base: Arm, arm: Arm, n_boot: int, score: str = "mse") -> pd.DataFrame:
     """Bands x stats: "diff [lo, hi] how sure, wins/seeds" for ``arm`` minus ``base``,
-    over the seeds both have."""
+    over the seeds both have, on ``score`` (one of ``SCORES``; MSE cells also give the
+    diff as a % of the base's MSE)."""
+    if score not in SCORES:
+        raise ValueError(f"unknown score {score!r}")
     seeds = shared_seeds(base, arm)
     b, a = base.mean(seeds), arm.mean(seeds)
     both = b.merge(a, on=KEYS, suffixes=("_b", "_a"))
@@ -173,7 +195,11 @@ def compare_arm(base: Arm, arm: Arm, n_boot: int) -> pd.DataFrame:
         raise ValueError("the two arms scored different rows; compare like with like")
     # A seed-by-seed count only means something between seeded runs.
     counted = [s for s in seeds if s]
-    wins = sum(((arm.bands(s) - base.bands(s)) > 0).astype(int) for s in counted)
+    # A seed is better on its own with a lower MSE or a higher pairwise score.
+    sign = -1 if score == "mse" else 1
+    wins = sum(
+        ((sign * (arm.bands(s, score) - base.bands(s, score))) > 0).astype(int) for s in counted
+    )
     cells: dict[str, dict[str, str]] = {}
     for band in BANDS:
         g = both[both["band"] == band]
@@ -181,13 +207,18 @@ def compare_arm(base: Arm, arm: Arm, n_boot: int) -> pd.DataFrame:
             continue
         long = pd.concat(
             [
-                g[[*KEYS, "actual_b"]].assign(system=name, projected=g[col])
+                g[[*KEYS, "actual_b", "pa_b", "ab_b"]].assign(system=name, projected=g[col])
                 for name, col in (("base", "projected_b"), ("arm", "projected_a"))
             ]
-        ).rename(columns={"actual_b": "actual"})
-        boot = pairwise_bootstrap(long, "arm", "base", n_boot=n_boot)
+        ).rename(columns={"actual_b": "actual", "pa_b": "pa", "ab_b": "ab"})
+        if score == "mse":
+            boot = mse_bootstrap(long, "arm", "base", n_boot=n_boot)
+        else:
+            boot = pairwise_bootstrap(long, "arm", "base", n_boot=n_boot)
         cells[band] = {
-            s: f"{r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}] {sure_text(r['sure'])}"
+            s: f"{r['diff']:+.2f}"
+            + (f" ({100 * r['diff'] / r['b']:+.1f}%)" if score == "mse" else "")
+            + f" [{r['lo']:+.2f}, {r['hi']:+.2f}] {sure_text(r['sure'])}"
             + (f", {int(wins.loc[band, s])}/{len(counted)} seeds" if counted else "")
             for s, r in boot.iterrows()
             if s in TARGETS
@@ -210,14 +241,16 @@ def main() -> int:
     except ValueError as err:
         parser.error(str(err))
     print(
-        "Gap-weighted pairwise points, arm minus base (positive = arm better), mean of "
-        "the shared seeds' predictions: diff [95% interval] how sure the arm is better "
-        "or worse, seeds better/seeds"
+        "Arm minus base, mean of the shared seeds' predictions: diff [95% interval] how "
+        "sure the arm is better or worse, seeds better/seeds. MSE (main score; negative "
+        "= arm better; also as a % of the base's MSE): R/HR/RBI/SB on totals over actual "
+        "PA, AVG in points. Gap-weighted pairwise points: positive = arm better."
     )
     for arm in arms:
         n = len(shared_seeds(base, arm))
-        print(f"\n**{arm.name} minus {base.name}** ({n} shared seeds)\n")
-        print(to_markdown(compare_arm(base, arm, args.n_boot)))
+        for score, label in (("mse", "MSE, main score"), ("pairwise", "gap-weighted pairwise")):
+            print(f"\n**{arm.name} minus {base.name}, {label}** ({n} shared seeds)\n")
+            print(to_markdown(compare_arm(base, arm, args.n_boot, score)))
     return 0
 
 

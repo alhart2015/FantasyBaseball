@@ -10,8 +10,9 @@ Given the net's predictions for some test seasons, this builds the long "scored"
   using each projection's row from the latest as-of date on or before the snapshot;
   actuals are the games on or after the snapshot date.
 
-and renders a markdown summary with MAE tables, a paired bootstrap of ours vs. the
-FanGraphs blend, and how spread out each system's projections are.
+and renders a markdown summary led by MSE (the main score, ``evaluate``), with
+pairwise and MAE tables, a paired bootstrap of ours vs. the FanGraphs blend, and how
+spread out each system's projections are.
 
 Every scored row is also tagged vet or rookie (#433): a vet had at least
 ``VET_MIN_CAREER_PA`` MLB plate appearances when the projection was made (before the
@@ -49,6 +50,8 @@ from fantasy_baseball.hitter_ros.evaluate import (
     fantasy_value,
     load_systems,
     mae_table,
+    mse_bootstrap,
+    mse_table,
     order_scores,
     order_table,
     paired_bootstrap,
@@ -360,21 +363,32 @@ def sure_text(value: float) -> str:
     return f"{pct} sure {'better' if value > 0 else 'worse'}{real}"
 
 
-def _interval_line(b: pd.DataFrame | None, better: str) -> str:
+def _interval_line(b: pd.DataFrame | None, better: str, name: str = "") -> str:
     """One line of ours-minus-blend intervals per stat, each with how sure ours is better
-    or worse; ``better`` names the good sign."""
+    or worse; ``better`` names the good sign, ``name`` (if any) the score, as a prefix."""
     if b is None:
         return ""
     cells = [
         f"{s} {r['diff']:+.2f} [{r['lo']:+.2f}, {r['hi']:+.2f}] {sure_text(r['sure'])}"
         for s, r in b.iterrows()
     ]
-    return f"ours - fg_blend ({better} = ours better), 95% interval, how sure: " + "; ".join(cells)
+    prefix = f"{name}: " if name else ""
+    return (
+        f"{prefix}ours - fg_blend ({better} = ours better), 95% interval, how sure: "
+        + "; ".join(cells)
+    )
+
+
+def _mse_line(frame: pd.DataFrame) -> str:
+    """The main score's ours-minus-blend line, or "" without the blend."""
+    if not {OURS, BLEND} <= set(frame["system"]):
+        return ""
+    return _interval_line(mse_bootstrap(frame, OURS, BLEND), "negative")
 
 
 def _unit_block(g: pd.DataFrame) -> list[str]:
-    """One season's or snapshot's tables: gap-weighted pairwise accuracy (the main
-    score), plain pairwise accuracy, raw MAE and level-free MAE, each vs. the blend."""
+    """One season's or snapshot's tables: MSE (the main score), gap-weighted and plain
+    pairwise accuracy, raw MAE and level-free MAE, each vs. the blend."""
     per_unit = order_scores(g)
     blend = BLEND in set(g["system"])
 
@@ -389,7 +403,13 @@ def _unit_block(g: pd.DataFrame) -> list[str]:
 
     return [
         "",
-        "Gap-weighted pairwise accuracy (%) -- main score:",
+        "MSE -- main score:",
+        "",
+        to_markdown(mse_table(g), digits=1),
+        "",
+        _mse_line(g),
+        "",
+        "Gap-weighted pairwise accuracy (%):",
         "",
         to_markdown(order_table(g, "pairwise_w", per_unit), digits=1),
         "",
@@ -419,20 +439,27 @@ def _mean_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     """Every score averaged over the seasons or snapshots (``unit``) in ``frame``."""
     over = f"{unit}s"
     per_unit = order_scores(frame)
-    # Players redrawn once across every season or snapshot (pairwise_bootstrap), so
+    # Players redrawn once across every season or snapshot (mse_bootstrap), so
     # overlapping snapshots don't count as independent evidence.
-    luck = (
-        [_interval_line(pairwise_bootstrap(frame, OURS, BLEND), "positive"), ""]
-        if {OURS, BLEND} <= set(frame["system"])
-        else []
+    luck = _mse_line(frame)
+    both = {OURS, BLEND} <= set(frame["system"])
+    pair_luck = (
+        _interval_line(pairwise_bootstrap(frame, OURS, BLEND), "positive", "Gap-weighted pairwise")
+        if both
+        else ""
     )
     return [
         "",
-        f"Gap-weighted pairwise accuracy (%) -- main score, mean over {over}:",
+        f"MSE -- main score, pooled over {over}:",
+        "",
+        to_markdown(mse_table(frame), digits=1),
+        "",
+        *([luck, ""] if luck else []),
+        f"Gap-weighted pairwise accuracy (%), mean over {over}:",
         "",
         to_markdown(order_table(frame, "pairwise_w", per_unit), digits=1),
         "",
-        *luck,
+        *([pair_luck, ""] if pair_luck else []),
         f"Pairwise accuracy (%), mean over {over}:",
         "",
         to_markdown(order_table(frame, "pairwise", per_unit), digits=1),
@@ -452,8 +479,9 @@ def _mean_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
 
 
 def _group_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
-    """Main score and raw MAE for vets and rookies separately, averaged over the
-    seasons or snapshots (``unit``) in ``frame``. Pairs form only inside a group, so
+    """MSE (the main score), gap-weighted pairwise and raw MAE for vets and rookies
+    separately, over the seasons or snapshots (``unit``) in ``frame`` (MSE pooled, the
+    others averaged per unit). Pairs form only inside a group, so
     each group's pairwise score asks "did we order these players right among
     themselves". Empty for a frame scored before the tag existed."""
     if "group" not in frame.columns:
@@ -461,7 +489,8 @@ def _group_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     md = [
         "",
         f"**Vets vs rookies** (vet = {VET_MIN_CAREER_PA}+ MLB PA when projected: before the "
-        f"season, or by the snapshot; pairs only inside a group; mean over {unit}s)",
+        f"season, or by the snapshot; pairs only inside a group; MSE pooled over the "
+        f"{unit}s, the other scores averaged over them)",
     ]
     unknown = frame.loc[frame["group"] == "unknown", [unit, "player_id"]].drop_duplicates()
     if len(unknown):
@@ -478,6 +507,11 @@ def _group_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
         n = g.drop_duplicates([unit, "player_id"]).groupby(unit).size().mean()
         md += [
             "",
+            f"{group.capitalize()}s, {n:.0f} players per {unit} -- MSE (main score):",
+            "",
+            to_markdown(mse_table(g), digits=1),
+            "",
+            *([line, ""] if (line := _mse_line(g)) else []),
             f"{group.capitalize()}s, {n:.0f} players per {unit} -- gap-weighted pairwise (%):",
             "",
             to_markdown(order_table(g, "pairwise_w"), digits=1),
@@ -516,7 +550,12 @@ def _relevant_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
             md += [
                 "",
                 f"Of them, under {YOUNG_MAX_CAREER_PA} MLB PA when projected, {n:.0f} per "
-                f"{unit} -- gap-weighted pairwise (%):",
+                f"{unit} -- MSE (main score):",
+                "",
+                to_markdown(mse_table(young), digits=1),
+                "",
+                *([line, ""] if (line := _mse_line(young)) else []),
+                "Same hitters -- gap-weighted pairwise (%):",
                 "",
                 to_markdown(order_table(young, "pairwise_w"), digits=1),
             ]
@@ -551,13 +590,16 @@ def league_forecast_lines(table: pd.DataFrame, seasons: list[int]) -> list[str]:
 
 
 def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
-    """Markdown lines: per-season and per-snapshot tables (gap-weighted and plain
+    """Markdown lines: per-season and per-snapshot tables (MSE, gap-weighted and plain
     pairwise accuracy, raw and level-free MAE, each with a bootstrap vs. the blend),
     means over seasons and snapshots, and spread."""
     md = [
-        "**Main score: gap-weighted pairwise accuracy** -- % of player pairs ordered as "
-        "they turned out, each pair counted by how far apart they really finished; higher "
-        "is better (50 = coin flip). Plain pairwise counts every pair the same. "
+        "**Main score: MSE** -- squared error, lower is better: R/HR/RBI/SB on totals "
+        "over the PA each hitter actually got, AVG in points (.001) weighted by AB; pooled "
+        "over every scored hitter-season or hitter-snapshot. "
+        "Gap-weighted pairwise accuracy: % of player pairs ordered as they turned out, "
+        "each pair counted by how far apart they really finished; higher is better (50 = "
+        "coin flip). Plain pairwise counts every pair the same. "
         "Raw error, lower is better: R/HR/RBI/SB = MAE per 600 PA, AVG = MAE in points. "
         "Level-free MAE: the same after scaling each projection so its PA-weighted mean "
         "matches the actuals' (a league-wide miss costs nothing). "

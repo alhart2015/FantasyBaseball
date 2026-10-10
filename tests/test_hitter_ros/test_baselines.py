@@ -331,6 +331,11 @@ def test_summary_scores_vets_and_rookies_separately():
     # Pairs only inside a group: ours is perfect on vets and backwards on rookies.
     assert "| ours | 100.0 |" in vets.split("raw MAE")[0]
     assert "| ours | 0.0 |" in rookies.split("raw MAE")[0]
+    # Each group's MSE (the main score) comes with its own ours-minus-blend luck line.
+    for group in ("Vets", "Rookies"):
+        mse = md.split(f"{group}, 3 players per season -- MSE (main score):")[1]
+        mse = mse.split("gap-weighted pairwise")[0]
+        assert "ours - fg_blend (negative = ours better)" in mse
     # Unknown players are in neither group, and the summary says how many.
     unknown = _grouped_units().assign(group="unknown")
     assert "6 player-seasons are in neither group" in "\n".join(summarize(unknown, None))
