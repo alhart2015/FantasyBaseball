@@ -90,6 +90,7 @@ def test_a_poisson_target_learns_a_skewed_rate():
     w[:, k] = exposure
     val = rng.random(n) < 0.2
     config = NetConfig(
+        seq="none",
         hidden=[16],
         dropout=0.0,
         lr=1e-2,

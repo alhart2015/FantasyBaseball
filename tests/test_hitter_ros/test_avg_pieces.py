@@ -115,13 +115,19 @@ def test_fit_season_refuses_targets_without_pieces(table):
 
     y_all, w_all = target_frame(table, (25,))
     with pytest.raises(ValueError, match="pieces"):
-        fit_season(table, input_frame(table), y_all, w_all, 2025, NetConfig(avg_pieces="extra"))
+        fit_season(
+            table, input_frame(table), y_all, w_all, 2025, NetConfig(seq="none", avg_pieces="extra")
+        )
     y_all, w_all = target_frame(table, (25,), pieces=True)
     # Piece columns with pieces off would train them as plain standardized rates.
     with pytest.raises(ValueError, match="pieces"):
-        fit_season(table, input_frame(table), y_all, w_all, 2025, NetConfig(avg_pieces="none"))
+        fit_season(
+            table, input_frame(table), y_all, w_all, 2025, NetConfig(seq="none", avg_pieces="none")
+        )
     with pytest.raises(ValueError, match="head_layers"):
-        fit_season(table, input_frame(table), y_all, w_all, 2025, NetConfig(head_layers=8))
+        fit_season(
+            table, input_frame(table), y_all, w_all, 2025, NetConfig(seq="none", head_layers=8)
+        )
 
 
 def test_piece_config_and_loss():
@@ -149,6 +155,7 @@ def test_fit_season_with_pieces(table, mode):
     from scripts.train_hitter_ros import fit_season
 
     config = NetConfig(
+        seq="none",
         hidden=[4],
         max_epochs=2,
         probes="none",

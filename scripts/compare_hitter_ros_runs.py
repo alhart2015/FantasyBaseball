@@ -181,8 +181,10 @@ def run_row(run: Path, snap_from: str | None, snap_to: str | None) -> dict[str, 
         "best_epoch": float(np.mean([s["best_epoch"] for s in seasons])),
         "val_loss": float(np.mean([min(s["val_loss"]) for s in seasons])),
         # Where SB comes from (#451): the main net, or a second net on box-score inputs.
-        # Runs from before the setting all used the main net.
-        "sb_inputs": meta["config"].get("sb_inputs", "full"),
+        # Runs from before the setting all used the main net. "+seq": that second net
+        # reads the plate-appearance sequence too (sb_seq).
+        "sb_inputs": meta["config"].get("sb_inputs", "full")
+        + ("+seq" if meta["config"].get("sb_seq") else ""),
     }
     if all("sb_net" in s for s in seasons):  # the SB net's own training, when there is one
         row["sb_best_epoch"] = float(np.mean([s["sb_net"]["best_epoch"] for s in seasons]))

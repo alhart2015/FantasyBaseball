@@ -175,11 +175,11 @@ def test_hybrid_net_learns_from_the_sequence(kind):
         y,
         w,
         val,
-        NetConfig(**base, seq=kind, seq_len=20, seq_dim=16, seq_layers=1),
+        NetConfig(**base, seq=kind, seq_len=20, seq_dim=16, seq_layers=1, amp=False),
         rows=positions,
         batcher=batcher,
     )
-    plain = train(x, y, w, val, NetConfig(**base))
+    plain = train(x, y, w, val, NetConfig(**base, seq="none"))
     assert min(seq.val_loss) < 0.5 * min(plain.val_loss)
     out = predict(seq.model, x, rows=positions, batcher=batcher)
     assert out.shape == (n_players, 1)

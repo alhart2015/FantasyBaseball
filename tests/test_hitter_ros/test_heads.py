@@ -47,6 +47,7 @@ def test_two_heads_learn_opposite_rules_one_head_cannot():
     # Synthetic rows have no season time and aren't the 5 ROS targets: pin plain PA
     # weighting and squared error (not the pre_mid / Poisson defaults).
     base = dict(
+        seq="none",
         hidden=[16],
         dropout=0.0,
         lr=1e-2,
@@ -112,7 +113,7 @@ def test_a_missing_head_column_is_refused():
             np.zeros((8, 1), np.float32),
             np.ones((8, 1), np.float32),
             np.arange(8) < 2,
-            NetConfig(heads=2, weighting="pa", max_epochs=1),
+            NetConfig(seq="none", heads=2, weighting="pa", max_epochs=1),
         )
 
 
@@ -133,8 +134,8 @@ def test_horizon_heads_are_separate_heads_on_one_body():
         after[:, 10:], before[:, 10:]
     )
     assert torch.allclose(after[:, 5:10], before[:, 5:10] + 1.0)
-    assert isinstance(build_model(6, 20, NetConfig(head_layers=4)), HorizonHeadsMLP)
+    assert isinstance(build_model(6, 20, NetConfig(seq="none", head_layers=4)), HorizonHeadsMLP)
     with pytest.raises(ValueError):
-        NetConfig(head_layers=4, heads=2)
+        NetConfig(seq="none", head_layers=4, heads=2)
     with pytest.raises(ValueError):
         NetConfig(horizon_weights=[1.0, 1.0])

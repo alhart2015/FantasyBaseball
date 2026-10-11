@@ -225,6 +225,7 @@ def test_an_sb_net_fits_on_box_score_inputs(table):
     from scripts.train_hitter_ros import fit_season
 
     config = NetConfig(
+        seq="none",
         hidden=[4],
         max_epochs=2,
         probes="none",
@@ -239,18 +240,18 @@ def test_an_sb_net_fits_on_box_score_inputs(table):
     assert preds[["sb", "n25_sb"]].notna().all().all() and (preds["sb"] >= 0).all()
 
 
-def test_a_sequence_run_needs_sb_inputs_full(tmp_path, monkeypatch, capsys):
+def test_by_default_a_transformer_runs_beside_a_plain_sb_net():
     pytest.importorskip("torch")
-    from scripts import train_hitter_ros
+    from fantasy_baseball.hitter_ros.net import NetConfig
+    from scripts.train_hitter_ros import sb_net_setup
 
-    tokens = tmp_path / "tokens.parquet"
-    tokens.write_text("")
-    monkeypatch.setattr(train_hitter_ros, "TOKENS", tokens)
-    monkeypatch.setattr(train_hitter_ros, "RUNS", tmp_path / "runs")
-    monkeypatch.setattr("sys.argv", ["train", "--name", "x", "--seq", "gru"])
-    with pytest.raises(SystemExit):
-        train_hitter_ros.main()
-    assert "--sb-inputs full" in capsys.readouterr().err
+    # #414 re-test: the transformer helps R/HR/RBI mid-season; reading the sequence
+    # made preseason SB worse, so the second SB net stays the box-score net #451 measured.
+    config = NetConfig()
+    assert config.seq == "transformer" and config.sb_inputs == "box_relative"
+    assert not config.sb_seq
+    sb_config, sb_batcher = sb_net_setup(config, object())
+    assert sb_config.seq == "none" and sb_batcher is None
 
 
 def test_sb_parts_are_the_targets_definitions(table):
@@ -280,3 +281,27 @@ def test_sb_parts_are_the_targets_definitions(table):
     np.testing.assert_allclose(
         piece_rates(counts).loc[hit, "babip"], ((counts.h - counts.hr) / bip)[hit]
     )
+
+
+def test_sb_seq_needs_a_sequence_and_a_second_sb_net():
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.net import NetConfig
+
+    assert NetConfig(seq="gru", sb_seq=True).sb_seq
+    with pytest.raises(ValueError, match="sb_seq"):
+        NetConfig(seq="none", sb_seq=True)  # no sequence encoder
+    with pytest.raises(ValueError, match="sb_seq"):
+        NetConfig(seq="gru", sb_inputs="full", sb_seq=True)  # no second SB net
+
+
+def test_the_sb_net_reads_the_sequence_only_with_sb_seq():
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.net import NetConfig
+    from scripts.train_hitter_ros import sb_net_setup
+
+    batcher = object()  # stands in for a SequenceBatcher
+    plain, no_batcher = sb_net_setup(NetConfig(seq="transformer"), batcher)
+    assert plain.seq == "none" and no_batcher is None
+    assert plain.sb_inputs == "box_relative"  # everything else kept
+    seq, same = sb_net_setup(NetConfig(seq="transformer", sb_seq=True), batcher)
+    assert seq.seq == "transformer" and same is batcher
