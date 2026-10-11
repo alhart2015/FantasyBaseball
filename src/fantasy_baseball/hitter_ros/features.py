@@ -134,6 +134,34 @@ def _window_rates(t: pd.DataFrame, w: str, zone: str = "statcast") -> dict[str, 
 # with like.
 Column = Callable[[str], pd.Series]
 
+# Windows that span several seasons. Their league rates come from ``lgp_*`` (the league
+# over the hitter's own seasons, weighted by his PA; see table.py), not the ``lg_*``
+# pool, which weights every season equally: against the pool, a hitter whose seasons
+# all came after a league-wide jump (SB after the 2023 rules) reads as beating a league
+# he never played in (#413).
+MIXED_WINDOWS = ("p3", "car")
+
+
+def league_column(t: pd.DataFrame, w: str, matched: bool = True) -> Column:
+    """Getter for the league's count ``name`` matching the player's window ``w``: the
+    season-matched ``lgp_{w}_*`` for ``MIXED_WINDOWS``, else ``lg_{w}_*`` (one season,
+    or this season before the date: already the same seasons as his). ``matched=False``:
+    always the league's own window totals, ``lg_{w}_*``."""
+    prefix = "lgp" if matched and w in MIXED_WINDOWS else "lg"
+
+    def column(name: str) -> pd.Series:
+        return t[f"{prefix}_{w}_{name}"].astype(float)
+
+    return column
+
+
+def vs_league(t: pd.DataFrame, w: str, count: str, per: str) -> pd.Series:
+    """The player's ``count`` per ``per`` in window ``w`` over the league's, the league
+    from :func:`league_column`. 1 = the league; NaN where either rate is unknown."""
+    lg = league_column(t, w)
+    player = _div(t[f"{w}_{count}"].astype(float), t[f"{w}_{per}"].astype(float))
+    return _div(player, _div(lg(count), lg(per)))
+
 
 def _per_pa(stat: str) -> Callable[[Column], pd.Series]:
     def rate(c: Column) -> pd.Series:
@@ -160,7 +188,8 @@ ERA_TABLE_COLUMNS = ("lg_std_pa", "lg_p3_pa", "lg_p1_pa")
 
 def _era_inputs(t: pd.DataFrame, mode: str, player: dict[str, pd.Series]) -> dict[str, pd.Series]:
     """Era inputs (#421). ``relative``: the player's rate divided by the league's in the
-    same window. ``full`` adds the league rates themselves and rule flags known before
+    same window (:func:`league_column`: for the multi-season windows, the league in his
+    own seasons, #413). ``full`` adds the league rates themselves and rule flags known before
     the season -- but those are identical for every row of a season, so with ~18
     seasons the net uses them as a season label, memorizes each season's quirks, and
     extrapolates badly to a new one (seen in #421: single test seasons blew up)."""
@@ -168,15 +197,12 @@ def _era_inputs(t: pd.DataFrame, mode: str, player: dict[str, pd.Series]) -> dic
     if mode == "none":
         return out
     for w in WINDOWS:
-
-        def lg(name: str, w: str = w) -> pd.Series:
-            return t[f"lg_{w}_{name}"].astype(float)
-
+        lg = league_column(t, w)
         for name, rate in _ERA_RATES.items():
             league = rate(lg)
             out[f"{w}_{name}_vs_lg"] = _div(player[f"{w}_{name}"], league)
-            if mode == "full":
-                out[f"lg_{w}_{name}"] = league
+            if mode == "full":  # the league's own rate in the window, as before #413
+                out[f"lg_{w}_{name}"] = rate(league_column(t, w, matched=False))
     if mode == "full":
         season = t["season"]
         out["rules_universal_dh"] = ((season == 2020) | (season >= 2022)).astype(float)
@@ -407,6 +433,26 @@ def _blend_parts(t: pd.DataFrame, w: str) -> dict[str, tuple[pd.Series, pd.Serie
     }
 
 
+def _blend_ladder(
+    name: str,
+    made: pd.Series,
+    tried: pd.Series,
+    prior_made: pd.Series,
+    prior_tried: pd.Series,
+    target: pd.Series | float,
+    tried_per_pa: pd.Series,
+) -> dict[str, pd.Series]:
+    """``bl{K}_{name}`` for each K in ``BLEND_PA``: the prior (``prior_made`` over
+    ``prior_tried``) shrunk toward ``target`` by K PA, then this season (``made`` over
+    ``tried``) shrunk toward that prior by K PA. K PA = K x ``tried_per_pa`` trials."""
+    out = {}
+    for k in BLEND_PA:
+        shrink = k * tried_per_pa
+        prior = (prior_made + shrink * target) / (prior_tried + shrink)
+        out[f"bl{k}_{name}"] = (made + shrink * prior) / (tried + shrink)
+    return out
+
+
 def _blend_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
     """Season-to-date rates blended with a prior, ``bl{K}_{rate}`` for each K in
     ``BLEND_PA`` (#451), Marcel-style:
@@ -427,10 +473,51 @@ def _blend_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
         lg_made, lg_tried = lg_p1[name][0] + lg_p3[name][0], lg_p1[name][1] + lg_p3[name][1]
         lg_rate, tried_per_pa = _div(lg_made, lg_tried), _div(lg_tried, lg_pa)
         prior_made, prior_tried = p1[name][0] + p3[name][0], p1[name][1] + p3[name][1]
-        for k in BLEND_PA:
-            shrink = k * tried_per_pa
-            prior = (prior_made + shrink * lg_rate) / (prior_tried + shrink)
-            out[f"bl{k}_{name}"] = (made + shrink * prior) / (tried + shrink)
+        out.update(_blend_ladder(name, made, tried, prior_made, prior_tried, lg_rate, tried_per_pa))
+    return out
+
+
+def _relative_blend_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
+    """:func:`_blend_inputs` on the league's scale (#413): successes are counted against
+    what a league-average hitter would have had in the same trials, each season at its
+    own league rate (this season's, last season's, and for the two before the league
+    over his own seasons, ``lgp_p3``), so a jump in the league's rate (the 2023 rules)
+    moves none of them. 1 = the league; the prior shrinks toward 1. The same ladder as
+    :func:`_blend_inputs` (:func:`_blend_ladder`), on counts in league-average units:
+    this season's successes over this season's league rate, the prior's (successes and
+    expected) over last season's (the pool's without one), so the K-PA pull toward 1 is
+    sized at a recent league rate, not the multi-season pool. NaN where the league rate
+    is unknown."""
+    std, p1, p3 = (_blend_parts(t, w) for w in ("std", "p1", "p3"))
+    lg = {w: _blend_parts(t, w) for w in ("lg_std", "lg_p1", "lg_p3", "lgp_p3")}
+    lg_pa = t["lg_p1_pa"].astype(float) + t["lg_p3_pa"].astype(float)
+    out = {}
+    for name, (made, tried) in std.items():
+        pool_made = lg["lg_p1"][name][0] + lg["lg_p3"][name][0]
+        pool_tried = lg["lg_p1"][name][1] + lg["lg_p3"][name][1]
+        pool_rate, tried_per_pa = _div(pool_made, pool_tried), _div(pool_tried, lg_pa)
+
+        def expected(trials: pd.Series, league: str, name: str = name) -> pd.Series:
+            """Successes a league-average hitter has in ``trials`` (0 with no trials,
+            even where that window's league rate is unknown)."""
+            return (trials * _div(*lg[league][name])).where(trials > 0, 0.0)
+
+        prior_made = p1[name][0] + p3[name][0]
+        prior_expected = expected(p1[name][1], "lg_p1") + expected(p3[name][1], "lgp_p3")
+        # This season in league-average units: each success over the league's rate.
+        std_made = _div(made, _div(*lg["lg_std"][name])).where(tried > 0, 0.0)
+        recent_rate = _div(*lg["lg_p1"][name]).fillna(pool_rate)
+        out.update(
+            _blend_ladder(
+                name,
+                std_made,
+                tried,
+                _div(prior_made, recent_rate),
+                _div(prior_expected, recent_rate),
+                1.0,
+                tried_per_pa,
+            )
+        )
     return out
 
 
@@ -446,65 +533,29 @@ BOX_RATES = (
 )
 
 
-def _relative_blend_inputs(t: pd.DataFrame) -> dict[str, pd.Series]:
-    """:func:`_blend_inputs` on the league's scale (#413): each window's successes over
-    the successes a league-average hitter would have had in the same trials (observed
-    over expected, 1 = the league), so a jump in the league's rate (the 2023 rules)
-    moves none of them.
-
-    * prior = last season x 2 + the two before, observed over expected, shrunk toward 1
-      by K PA: (successes + K' x pool rate) / (expected + K' x pool rate), the pool being
-      the league over those same seasons.
-    * blend = this season to date, observed over expected at this season's league rate,
-      shrunk toward that prior by K PA the same way.
-
-    K' is K PA in the rate's own trials, as in :func:`_blend_inputs`. Before any game this
-    season (preseason) the blend is the prior. NaN where the league rate is unknown."""
-    std, p1, p3 = (_blend_parts(t, w) for w in ("std", "p1", "p3"))
-    lg = {w: _blend_parts(t, f"lg_{w}") for w in ("std", "p1", "p3")}
-    lg_pa = t["lg_p1_pa"].astype(float) + t["lg_p3_pa"].astype(float)
-    out = {}
-    for name, (made, tried) in std.items():
-        pool_made, pool_tried = (
-            lg["p1"][name][0] + lg["p3"][name][0],
-            lg["p1"][name][1] + lg["p3"][name][1],
-        )
-        pool_rate, tried_per_pa = _div(pool_made, pool_tried), _div(pool_tried, lg_pa)
-        prior_made = p1[name][0] + p3[name][0]
-        prior_expected = p1[name][1] * _div(*lg["p1"][name]) + p3[name][1] * _div(*lg["p3"][name])
-        # This season's league rate; the pool's before any game, where it is unknown.
-        std_rate = _div(*lg["std"][name]).fillna(pool_rate)
-        for k in BLEND_PA:
-            shrink = k * tried_per_pa
-            prior = (prior_made + shrink * pool_rate) / (prior_expected + shrink * pool_rate)
-            out[f"bl{k}_{name}"] = (made + shrink * std_rate * prior) / (
-                tried * std_rate + shrink * std_rate
-            )
-    return out
-
-
 def box_score_inputs(t: pd.DataFrame, relative: bool = False) -> pd.DataFrame:
-    """The SB net's inputs (``NetConfig.sb_inputs`` "box", #451): :func:`_blend_inputs`,
+    """The SB net's inputs (``NetConfig.sb_inputs`` "box" / "box_relative", #451):
+    :func:`_blend_inputs`,
     each window's box-score rates (``BOX_RATES``) and log PA / AB, the week, the share of
     the season left and age. Steal opportunities come in only through the blends of SB's
     pieces (opportunities per PA, attempts per opportunity); none of :func:`input_frame`'s
     batted-ball, plate-discipline, speed, team, position or green-light inputs. NaN =
     unknown.
 
-    ``relative`` ("box_relative", #413): every rate on the league's scale instead -- each
-    window's rate over the league's in the same window, and :func:`_relative_blend_inputs`
-    -- so the inputs, like the league-relative answers the net learns, carry no league
+    ``relative`` ("box_relative", #413, the default): every rate on the league's scale
+    instead -- each window's rate over the league's in the same seasons (:func:`vs_league`),
+    and :func:`_relative_blend_inputs` -- so the inputs, like the league-relative answers the net learns, carry no league
     level. With raw rates, a league-wide jump (SB after the 2023 rules) reads as every
     hitter getting better than his league, and is then counted again when the prediction
     is multiplied back by the new league rate."""
     cols = dict(_relative_blend_inputs(t) if relative else _blend_inputs(t))
     for count, per, name in BOX_RATES:
         for w in WINDOWS:
-            rate = _div(t[f"{w}_{count}"].astype(float), t[f"{w}_{per}"].astype(float))
-            if relative:
-                league = _div(t[f"lg_{w}_{count}"].astype(float), t[f"lg_{w}_{per}"].astype(float))
-                rate = _div(rate, league)
-            cols[f"{w}_{name}"] = rate
+            cols[f"{w}_{name}"] = (
+                vs_league(t, w, count, per)
+                if relative
+                else _div(t[f"{w}_{count}"].astype(float), t[f"{w}_{per}"].astype(float))
+            )
     for w in WINDOWS:
         cols[f"{w}_log_pa"] = np.log1p(t[f"{w}_pa"].astype(float))
         cols[f"{w}_log_ab"] = np.log1p(t[f"{w}_ab"].astype(float))

@@ -161,12 +161,13 @@ class NetConfig:
     # +2.68; preseason even (-0.04). The full net was under-reacting to this season's
     # steals even on players it trained on. Fitting takes about twice as long.
     # "box_relative" (#413): the same net with every box-score rate on the league's scale
-    # (features.box_score_inputs(relative=True)). Default from #413: with raw rates the
-    # net read the 2023 rules' league-wide jump in steals as every hitter beating his
-    # league, then multiplied by the new league rate too, projecting 2024-2026 at
-    # 13.5-14.8 SB/600 vs 10.8-12.3 actual. Over 6 seeds x 2022-2026, SB MSE (season
-    # totals) vs "box": preseason 43.4 -> 37.1 [-8.5, -4.0], weeks 1-6 -14%, 7-13 -16%,
-    # 14-20 -6% (all 95%+ sure, 6/6 seeds), weeks 21+ -4% (73%); ordering unchanged.
+    # (features.box_score_inputs(relative=True); multi-season windows against the
+    # league in his own seasons). Default from #413: with raw rates the net read the
+    # 2023 rules' league-wide jump in steals as every hitter beating his league, then
+    # multiplied by the new league rate too, projecting 2024-2026 at 13.5-14.8 SB/600
+    # vs 10.8-12.3 actual. Over 6 seeds x 2022-2026, SB MSE (season totals) vs "box":
+    # preseason 43.4 -> 37.0 [-8.8, -4.0], weeks 1-6 -15%, 7-13 -16% (both >99% sure),
+    # 14-20 -7% (94%), 21+ -4% (77%), better on 6/6 seeds everywhere; ordering unchanged.
     sb_inputs: str = "box_relative"
     head_layers: int = 0
     # Minor-league inputs (#435): a graded minor-league line per window, from

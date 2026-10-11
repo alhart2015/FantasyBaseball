@@ -92,6 +92,11 @@ def test_relative_box_rates_are_the_players_over_the_leagues(table):
     played = t.std_pa > 0
     league = t.lg_std_hr / t.lg_std_pa
     np.testing.assert_allclose(x.loc[played, "std_hr"], (t.std_hr / t.std_pa / league)[played])
+    # Multi-season windows: the league over his own seasons (lgp), not the pool.
+    known = t.car_pa > 0
+    np.testing.assert_allclose(
+        x.loc[known, "car_sb"], (t.car_sb / t.car_pa / (t.lgp_car_sb / t.lgp_car_pa))[known]
+    )
     batted = t.p1_ab > 0
     np.testing.assert_allclose(
         x.loc[batted, "p1_avg"], (t.p1_h / t.p1_ab / (t.lg_p1_h / t.lg_p1_ab))[batted]
@@ -106,15 +111,85 @@ def test_relative_box_rates_are_the_players_over_the_leagues(table):
 def test_relative_blends_are_one_for_a_league_average_hitter(table):
     """A hitter whose every window matches his league's rates blends to exactly 1."""
     avg = table.copy()
-    for w in ("std", "p1", "p3"):
+    for w, lg in (("std", "lg_std"), ("p1", "lg_p1"), ("p3", "lgp_p3")):
         for n in ("h", "r", "hr", "rbi", "sb", "bb", "k", "cs", "steal_opp2", "steal_opp3"):
             per = "ab" if n in ("h", "k") else "pa"
-            avg[f"{w}_{n}"] = avg[f"lg_{w}_{n}"] / avg[f"lg_{w}_{per}"] * avg[f"{w}_{per}"]
+            avg[f"{w}_{n}"] = avg[f"{lg}_{n}"] / avg[f"{lg}_{per}"] * avg[f"{w}_{per}"]
     x = box_score_inputs(avg, relative=True)
     blends = x[[f"bl{k}_{n}" for k in BLEND_PA for n in ("r_pa", "hr_pa", "sb_pa", "avg")]]
     known = blends.notna()
     assert known.to_numpy().any()
     np.testing.assert_allclose(blends[known].to_numpy()[known.to_numpy()], 1.0)
+
+
+# Per-PA league rates for the synthetic world below (SB set per season).
+_RATES = {
+    "ab": 0.9,
+    "h": 0.22,
+    "r": 0.12,
+    "hr": 0.03,
+    "rbi": 0.115,
+    "bb": 0.08,
+    "k": 0.22,
+    "cs": 0.005,
+    "steal_opp2": 0.1,
+    "steal_opp3": 0.03,
+}
+_COUNTS = ("pa", *_RATES, "sb")
+
+
+def _season_counts(pa, sb_rate, sb_factor=1.0):
+    return {"pa": pa, **{c: r * pa for c, r in _RATES.items()}, "sb": sb_factor * sb_rate * pa}
+
+
+def _step_world(jump):
+    """One hitter's season-2026 row (week 10), built from season totals. He debuted in
+    2024 and steals at 2x the league's rate every season. The league steals 0.02 per PA
+    from 2024 on; with ``jump``, it stole 0.013 before that (a 2023-style rules jump
+    that came before he arrived), else 0.02 throughout."""
+    seasons = range(2020, 2026)
+    league = {y: _season_counts(180_000, 0.013 if jump and y < 2024 else 0.02) for y in seasons}
+    his = {y: _season_counts(600, 0.02, sb_factor=2.0) for y in (2024, 2025)}
+    std, lg_std = _season_counts(300, 0.02, sb_factor=2.0), _season_counts(90_000, 0.02)
+    windows = {"p1": [2025], "p3": [2023, 2024, 2025], "car": list(seasons)}
+    row = {"week": 10.0, "frac_season_left": 0.6, "age": 25.0}
+    for c in _COUNTS:
+        row[f"std_{c}"], row[f"lg_std_{c}"] = std[c], lg_std[c]
+        for w, ys in windows.items():
+            row[f"{w}_{c}"] = sum(his[y][c] for y in ys if y in his)
+            row[f"lg_{w}_{c}"] = sum(league[y][c] for y in ys)
+            row[f"lgp_{w}_{c}"] = sum(
+                his[y]["pa"] / league[y]["pa"] * league[y][c] for y in ys if y in his
+            )
+    return pd.DataFrame([row])
+
+
+def test_relative_inputs_ignore_a_league_jump_before_his_seasons():
+    """The review's case (#413): every one of his seasons came after the jump, so his
+    inputs must not depend on it. The pooled multi-season league (lg_p3, lg_car) still
+    holds the pre-jump seasons and would read him as beating it by more than 2x."""
+    before, after = (
+        box_score_inputs(_step_world(False), True),
+        box_score_inputs(_step_world(True), True),
+    )
+    sb = [c for c in before.columns if c.endswith("_sb") or c.endswith("sb_pa")]
+    pd.testing.assert_frame_equal(before[sb], after[sb])
+    for w in WINDOWS:
+        assert after.loc[0, f"{w}_sb"] == pytest.approx(2.0), w
+    pooled = _step_world(True)
+    pooled_car = (pooled.car_sb / pooled.car_pa) / (pooled.lg_car_sb / pooled.lg_car_pa)
+    assert pooled_car.iloc[0] > 2.5  # what the pooled league read
+
+
+def test_box_relative_needs_a_relative_target(tmp_path, monkeypatch, capsys):
+    pytest.importorskip("torch")
+    from scripts import train_hitter_ros
+
+    monkeypatch.setattr(train_hitter_ros, "RUNS", tmp_path / "runs")
+    monkeypatch.setattr("sys.argv", ["train", "--name", "x", "--relative-target", "none"])
+    with pytest.raises(SystemExit):
+        train_hitter_ros.main()
+    assert "--sb-inputs box" in capsys.readouterr().err
 
 
 def test_sb_inputs_setting():
