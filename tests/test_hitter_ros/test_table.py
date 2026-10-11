@@ -318,6 +318,31 @@ def test_league_context_uses_only_games_before_the_date(store):
     assert w1.lg_p1_pa == 10 * 8 + 1 and w1.lg_p3_pa == w1.lg_p1_pa == w1.lg_car_pa
 
 
+def test_league_over_his_own_seasons(tmp_path):
+    """lgp_* (#413): the league in the seasons he played, weighted by his PA. A hitter who
+    played only 2024 gets 2024's league rates, not the 2023-2024 pool."""
+    late = 6
+    seasons = {
+        2023: _season(2023, date(2023, 4, 1), 10, hr_per_game=0),
+        2024: _season(2024, date(2024, 4, 1), 10, hr_per_game=1),
+        2025: _season(2025, date(2025, 4, 1), 5),
+    }
+    seasons[2024][0].append(_lineup_row(2024999, date(2024, 4, 1), late, TEAM_A, pa=4, ab=4))
+    seasons[2025][0].append(_lineup_row(2025999, date(2025, 4, 5), late, TEAM_A, pa=4, ab=4))
+    _write(tmp_path, seasons)
+    t = build_table(tmp_path)
+    newcomer, vet = _row(t, late, 2025, 0), _row(t, HITTER, 2025, 0)
+    # His PA, and 2024's league HR rate (lg_p1 = 2024), not the pooled 2023-2024 rate.
+    assert newcomer.lgp_p3_pa == newcomer.p3_pa == 4
+    assert newcomer.lgp_p3_hr / newcomer.lgp_p3_pa == pytest.approx(vet.lg_p1_hr / vet.lg_p1_pa)
+    assert newcomer.lg_p3_hr / newcomer.lg_p3_pa < newcomer.lgp_p3_hr / newcomer.lgp_p3_pa
+    # Two seasons: each season's league counts, weighted by his share of its PA.
+    lg_2023_pa = vet.lg_p3_pa - vet.lg_p1_pa
+    assert vet.lgp_p3_pa == pytest.approx(vet.p3_pa)
+    assert vet.lgp_car_hr == pytest.approx(40 / vet.lg_p1_pa * vet.lg_p1_hr + 40 / lg_2023_pa * 0)
+    assert vet.lgp_car_hr == vet.lgp_p3_hr
+
+
 def test_pitchers_batting_are_not_league_or_team_offense(store):
     w0 = _row(build_table(store), BENCH, 2025, 0)
     # BENCH plays for TEAM_B, whose only other batter is PITCHER (batting as P).

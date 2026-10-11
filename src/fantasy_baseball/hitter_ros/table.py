@@ -35,6 +35,15 @@ The store starts in 2015, so earlier history reads as zero. ``p1_in_store``,
 ``p3_seasons_in_store`` and ``car_seasons_in_store`` say how much of each window the
 store actually covers, so the model can tell "no history" from "rookie".
 
+League columns (#421): ``lg_{std,p1,p3,car}_*``, the league's totals over each window.
+``lgp_{p3,car}_*`` (#413): the league over **his own** seasons in the multi-season windows,
+each season weighted by his PA in it: sum over his seasons of (his PA / league PA) x the
+league's count. So ``lgp_p3_pa`` is his own PA, and any ratio of two ``lgp`` counts is the
+league's rate in the seasons he played, mixed as he played them -- what a league-average
+hitter would have done with his playing time. ``lg_p3`` and ``lg_car`` pool every season
+equally, so a hitter whose seasons are all after a league-wide jump (SB after 2023) would
+read as beating a league he never played in.
+
 Context columns: sprint speed for the two previous seasons, NULL when unknown (the
 current season's leaderboard is end-of-season, so it would leak), the hitter's team
 going forward (the team of his first game on or after the date) and that team's runs,
@@ -368,6 +377,17 @@ def _league_context(conn: duckdb.DuckDBPyConnection) -> None:
         + window("p3", "l.season BETWEEN s.season - 3 AND s.season - 1")
     )
     conn.execute(f"CREATE TEMP TABLE league_car AS {window('car', 'l.season < s.season')}")
+    # The league over each hitter's own seasons (#413), weighted by his PA share of the
+    # league that season; summed per window in _build (lgp_p3_*, lgp_car_*).
+    mix = ", ".join(f"b.pa / l.pa * l.{c} AS {c}" for c in LEAGUE_COUNTS)
+    conn.execute(
+        f"""
+        CREATE TEMP TABLE league_mix AS
+        SELECT b.player_id, b.season, {mix}
+        FROM box_daily_season b JOIN league_season l USING (season)
+        WHERE b.pa > 0 AND l.pa > 0
+        """
+    )
     std_cols = ", ".join(f"coalesce(c.{c}, 0) AS lg_std_{c}" for c in LEAGUE_COUNTS)
     # League running totals through the latest game day strictly before the date.
     conn.execute(
@@ -579,9 +599,14 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
     )
 
     _league_context(conn)
+    for w, cond in (("p3", p3), ("car", car)):
+        conn.execute(
+            f"CREATE TEMP TABLE league_mix_{w} AS "
+            + window("league_mix", LEAGUE_COUNTS, f"lgp_{w}_", cond)
+        )
 
     first_store_season = "(SELECT min(season) FROM box_daily)"
-    tables = [*parts, *horizon_tables]
+    tables = [*parts, *horizon_tables, "league_mix_p3", "league_mix_car"]
     joined = ", ".join(f"{p}.* EXCLUDE (player_id, season, week)" for p in tables)
     df = conn.execute(
         f"""

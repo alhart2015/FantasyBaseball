@@ -4,8 +4,9 @@ For each finished run in data/hitter_ros/runs/<name>/ (one with a summary.md, wh
 train_hitter_ros.py writes last):
 
 * seed, seasons: what the run was trained and scored on.
-* SB inputs (#451): "box" when SB came from a second net on box-score inputs; then the
-  training columns add that net's best epoch and validation loss.
+* SB inputs (#451): "box" (or "box_relative", its rates over the league's, #413) when SB
+  came from a second net on box-score inputs; then the training columns add that net's
+  best epoch and validation loss.
 * best_epoch, val_loss: the early-stopping epoch and the best validation loss, averaged
   over test seasons. Validation loss compares across runs with the same seed and
   weighting only (the seed picks the validation players, the weighting weights their

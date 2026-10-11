@@ -308,7 +308,8 @@ def fit_season(
 
 def with_sb_from(preds: pd.DataFrame, sb_preds: pd.DataFrame) -> pd.DataFrame:
     """``preds`` with every SB column (each horizon's SB and SB's pieces) taken from
-    ``sb_preds``, the SB net's predictions for the same rows (``--sb-inputs box``)."""
+    ``sb_preds``, the SB net's predictions for the same rows (``--sb-inputs`` box or
+    box_relative)."""
     if not preds.index.equals(sb_preds.index):
         raise ValueError("the SB net predicted different rows than the main net")
     out = preds.copy()
@@ -476,7 +477,8 @@ def main() -> int:
         choices=list(SB_INPUTS),
         default=defaults.sb_inputs,
         help="box: predict SB with a second net on box-score inputs only, plus the probe, "
-        "minor-league, park and pedigree inputs (#451)",
+        "minor-league, park and pedigree inputs (#451); box_relative: the same with every "
+        "box-score rate over the league's (#413)",
     )
     parser.add_argument(
         "--milb",
@@ -632,10 +634,19 @@ def main() -> int:
         )
     if config.seq != "none" and not TOKENS.exists():
         parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
-    if config.seq != "none" and config.sb_inputs == "box":
+    if config.seq != "none" and config.sb_inputs != "full":
         # The SB net is built like the main one, so it would read the plate-appearance
         # sequences too: not the box-score-only net #451 measured.
-        parser.error("--sb-inputs box is a plain MLP; with --seq add --sb-inputs full")
+        parser.error(
+            f"--sb-inputs {config.sb_inputs} is a plain MLP; with --seq add --sb-inputs full"
+        )
+    if config.sb_inputs == "box_relative" and config.relative_target == "none":
+        # League-relative inputs, raw-rate answers: no input carries the league's level,
+        # so the SB net would predict every season at the training seasons' average.
+        parser.error(
+            "--sb-inputs box_relative needs a league-relative target; with "
+            "--relative-target none add --sb-inputs box"
+        )
 
     table = pd.read_parquet(TABLE)
     if (config.era != "none" or config.relative_target != "none") and not set(
@@ -656,7 +667,9 @@ def main() -> int:
         "ros_n25_steal_opp2": config.horizons and config.sb_pieces != "none",
         "std_fzone_pitches": config.zone == "fixed",
         "l7_pa": config.recent_inputs,
-        "lg_p3_steal_opp2": config.blend_inputs or config.sb_inputs == "box",
+        "lg_p3_steal_opp2": config.blend_inputs or config.sb_inputs != "full",
+        # The league over his own seasons (#413), for league-relative multi-season rates.
+        "lgp_p3_steal_opp2": config.era != "none" or config.sb_inputs == "box_relative",
     }
     stale = [col for col, used in needed.items() if used and col not in table.columns]
     if stale:
@@ -719,7 +732,11 @@ def main() -> int:
         extra.append(inputs)
     x_all = pd.concat([main_inputs, *extra], axis=1)
     x_sb = (
-        pd.concat([box_score_inputs(table), *extra], axis=1) if config.sb_inputs == "box" else None
+        pd.concat(
+            [box_score_inputs(table, relative=config.sb_inputs == "box_relative"), *extra], axis=1
+        )
+        if config.sb_inputs != "full"
+        else None
     )
     y_all, w_all = target_frame(
         table,
@@ -759,7 +776,7 @@ def main() -> int:
                 train_from=_train_from(season, args.train_seasons, args.first_train_season),
                 weeks=weeks,
             )
-            if x_sb is not None:  # --sb-inputs box: SB from a second net (#451)
+            if x_sb is not None:  # --sb-inputs box / box_relative: SB from a second net (#451)
                 sb_preds, sb_info = fit_season(
                     table,
                     x_sb,
