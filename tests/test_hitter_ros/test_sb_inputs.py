@@ -60,11 +60,69 @@ def test_box_score_inputs_ignore_every_ros_column(table):
     pd.testing.assert_frame_equal(box_score_inputs(table), box_score_inputs(changed))
 
 
+def _league_steals_scaled(table, factor):
+    """The table with every SB count, the player's and the league's, in every window
+    times ``factor``: a league-wide jump in steals (the 2023 rules)."""
+    changed = table.copy()
+    for c in changed.columns:
+        if c.endswith("_sb") and not c.startswith("ros_") and "team" not in c:
+            changed[c] = changed[c].astype(float) * factor
+    return changed
+
+
+def test_relative_box_inputs_ignore_a_league_wide_jump_in_steals(table):
+    jumped = _league_steals_scaled(table, 1.4)
+    sb_cols = [
+        c for c in box_score_inputs(table).columns if c.endswith("_sb") or c.endswith("sb_pa")
+    ]
+    assert len(sb_cols) == len(WINDOWS) + len(BLEND_PA)
+    raw, raw_jumped = box_score_inputs(table)[sb_cols], box_score_inputs(jumped)[sb_cols]
+    rel = box_score_inputs(table, relative=True)[sb_cols]
+    rel_jumped = box_score_inputs(jumped, relative=True)[sb_cols]
+    known = rel.notna() & (raw > 0)
+    assert known.to_numpy().any()
+    # Raw rates rise with the league; league-relative ones don't move.
+    np.testing.assert_allclose(raw_jumped[known], 1.4 * raw[known])
+    np.testing.assert_allclose(rel_jumped[known], rel[known])
+
+
+def test_relative_box_rates_are_the_players_over_the_leagues(table):
+    x = box_score_inputs(table, relative=True)
+    t = table
+    played = t.std_pa > 0
+    league = t.lg_std_hr / t.lg_std_pa
+    np.testing.assert_allclose(x.loc[played, "std_hr"], (t.std_hr / t.std_pa / league)[played])
+    batted = t.p1_ab > 0
+    np.testing.assert_allclose(
+        x.loc[batted, "p1_avg"], (t.p1_h / t.p1_ab / (t.lg_p1_h / t.lg_p1_ab))[batted]
+    )
+    # Same columns, and the volumes and context are untouched.
+    raw = box_score_inputs(table)
+    assert list(x.columns) == list(raw.columns)
+    for c in ("car_log_pa", "week", "age"):
+        pd.testing.assert_series_equal(x[c], raw[c])
+
+
+def test_relative_blends_are_one_for_a_league_average_hitter(table):
+    """A hitter whose every window matches his league's rates blends to exactly 1."""
+    avg = table.copy()
+    for w in ("std", "p1", "p3"):
+        for n in ("h", "r", "hr", "rbi", "sb", "bb", "k", "cs", "steal_opp2", "steal_opp3"):
+            per = "ab" if n in ("h", "k") else "pa"
+            avg[f"{w}_{n}"] = avg[f"lg_{w}_{n}"] / avg[f"lg_{w}_{per}"] * avg[f"{w}_{per}"]
+    x = box_score_inputs(avg, relative=True)
+    blends = x[[f"bl{k}_{n}" for k in BLEND_PA for n in ("r_pa", "hr_pa", "sb_pa", "avg")]]
+    known = blends.notna()
+    assert known.to_numpy().any()
+    np.testing.assert_allclose(blends[known].to_numpy()[known.to_numpy()], 1.0)
+
+
 def test_sb_inputs_setting():
     pytest.importorskip("torch")
     from fantasy_baseball.hitter_ros.net import NetConfig
 
     assert NetConfig(sb_inputs="box").sb_inputs == "box"
+    assert NetConfig(sb_inputs="box_relative").sb_inputs == "box_relative"
     with pytest.raises(ValueError, match="sb_inputs"):
         NetConfig(sb_inputs="simple")
 
