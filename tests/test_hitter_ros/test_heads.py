@@ -101,7 +101,7 @@ def test_pre_mid_weighting_balances_week_0_against_the_rest():
             np.zeros((4, 1), np.float32),
             np.ones((4, 1), np.float32),
             np.array([False, False, False, True]),
-            NetConfig(weighting="pre_mid", max_epochs=1),
+            NetConfig(seq="none", weighting="pre_mid", max_epochs=1),
         )
 
 

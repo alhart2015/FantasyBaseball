@@ -654,8 +654,6 @@ def main() -> int:
         parser.error(
             "--head-layers splits outputs into groups of 5; add --avg-pieces none --sb-pieces none"
         )
-    if config.seq != "none" and not TOKENS.exists():
-        parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
     if config.sb_inputs == "box_relative" and config.relative_target == "none":
         # League-relative inputs, raw-rate answers: no input carries the league's level,
         # so the SB net would predict every season at the training seasons' average.
@@ -762,6 +760,10 @@ def main() -> int:
     )
     batcher = None
     if config.seq != "none":
+        # Checked here, after the settings and the table, so their errors come first
+        # (the default transformer needs this local file; --seq none does not).
+        if not TOKENS.exists():
+            parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
         batcher = SequenceBatcher(pd.read_parquet(TOKENS), table, config.seq_len, device())
     # Read before training, so a bad league file fails now rather than after the fits.
     try:
@@ -808,6 +810,8 @@ def main() -> int:
                 info["sb_net"] = {
                     k: sb_info[k] for k in ("n_features", "best_epoch", "train_loss", "val_loss")
                 }
+                # Its encoder, which differs from config.seq unless sb_seq.
+                info["sb_net"]["seq"] = sb_net_setup(config, batcher)[0].seq
             all_preds.append(preds)
             infos.append(info)
     predictions = pd.concat(all_preds)

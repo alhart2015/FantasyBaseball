@@ -650,6 +650,12 @@ def train(
             f"with heads {config.heads} the last column of x must be each row's head "
             f"index (0..{config.heads - 1})"
         )
+    if (config.seq != "none") != (batcher is not None and rows is not None):
+        # A sequence model with no plate appearances to read would fail deep in
+        # forward(); a plain net handed them would silently ignore them.
+        raise ValueError(
+            f"seq {config.seq!r} needs rows and a batcher exactly when seq is not 'none'"
+        )
     w = loss_weights(w, config, season_time)
     torch.manual_seed(config.seed)
     np.random.seed(config.seed)
