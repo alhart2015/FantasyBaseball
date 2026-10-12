@@ -3,11 +3,13 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.pitcher_ros.saves import (
+    SNAPSHOT_WEEK,
     TEAM_COLUMNS,
     fangraphs_shares,
     fangraphs_team_ids,
     fit_team_saves,
     fit_usage_shares,
+    net_with_saves,
     scheduled_games_left,
     score_methods,
     team_weeks,
@@ -86,19 +88,21 @@ def test_scheduled_games_left_counts_every_listed_game():
 
 
 def _fg_file(path, rows):
-    path.write_text("Name,Team,SV,MLBAMID\n" + "\n".join(rows) + "\n", encoding="utf-8")
+    path.write_text("Name,Team,SV,MLBAMID,TBF\n" + "\n".join(rows) + "\n", encoding="utf-8")
 
 
 def test_fangraphs_shares_average_saves_and_shares_over_the_same_systems(tmp_path):
-    _fg_file(tmp_path / "steamer-pitchers.csv", ["A,SDP,30,1", "B,SDP,10,2", "C,,5,3"])
-    _fg_file(tmp_path / "zips-pitchers.csv", ["A,SDP,20,1", "B,,20,2"])
-    _fg_file(tmp_path / "atc-pitchers.csv", ["A,SDP,,1"])  # no saves projected: left out
+    _fg_file(tmp_path / "steamer-pitchers.csv", ["A,SDP,30,1,260", "B,SDP,10,2,0", "C,,5,3,90"])
+    _fg_file(tmp_path / "zips-pitchers.csv", ["A,SDP,20,1,280", "B,,20,2,250"])
+    _fg_file(tmp_path / "atc-pitchers.csv", ["A,SDP,,1,300"])  # no saves projected: left out
     fg = fangraphs_shares(tmp_path)
     assert fg.loc[1, "sv_fg"] == 25 and fg.loc[1, "share_fg"] == pytest.approx((0.75 + 1) / 2)
     # On no team in ZiPS: share 0 there, so both averages cover both systems.
     assert fg.loc[2, "sv_fg"] == 15 and fg.loc[2, "share_fg"] == pytest.approx(0.25 / 2)
     assert fg.loc[3, "share_fg"] == 0 and pd.isna(fg.loc[3, "team_fg"])
     assert fg.loc[1, "team_fg"] == "SDP"
+    # Batters faced: over the systems with some (Steamer's 0 for B is none).
+    assert fg.loc[1, "bf_fg"] == 270 and fg.loc[2, "bf_fg"] == 250
     assert fangraphs_shares(tmp_path, ("oopsy",)) is None
 
 
@@ -151,3 +155,28 @@ def test_score_methods_ranks_the_closer_projection():
     assert none is None and list(only.columns) == ["mse", "typical_miss"]
     with pytest.raises(ValueError, match="missing"):
         score_methods(units.assign(good=np.nan), ["good", "bad"], ["player_id", "season"])
+
+
+def test_net_with_saves_swaps_sv_per_span_and_redates_snapshots():
+    days = pd.to_datetime(["2025-03-27", "2025-04-03", "2025-04-10"])
+    preds = pd.DataFrame(
+        {"player_id": [1, 1, 1, 2, 2, 2, 3], "season": 2025, "week": [0, 1, 2, 0, 1, 2, 0],
+         "as_of": [*days, *days, days[0]], "k": 0.2, "w": 0.01, "sv": 0.001, "era": 4.0,
+         "whip": 1.3}
+    )  # fmt: skip
+    pre = pd.DataFrame({"player_id": [1, 2], "season": 2025, "mix": [30.0, 3.0],
+                        "bf_fg": [250.0, np.nan]})  # fmt: skip
+    mid = pd.DataFrame({"player_id": [1, 1], "season": 2025, "mix": [20.0, 10.0],
+                        "bf_fg": [200.0, 100.0], "snapshot": ["2025-04-05", "2025-04-06"]})  # fmt: skip
+    out = net_with_saves(preds, pre, mid)
+    week0 = out[out["week"] == 0].set_index("player_id")["sv"]
+    assert len(week0) == 3 and week0[1] == pytest.approx(30 / 250)
+    assert week0[2] == 0.001 and week0[3] == 0.001  # no batters faced / no units: the net's
+    snaps = out[out["week"] == SNAPSHOT_WEEK]
+    # Both snapshots fall in week 1: each gets its own rows, dated to it.
+    assert sorted(snaps["as_of"].unique()) == list(pd.to_datetime(["2025-04-05", "2025-04-06"]))
+    first = snaps[snaps["as_of"] == pd.Timestamp("2025-04-05")].set_index("player_id")
+    assert set(first.index) == {1, 2, 3} and first.loc[1, "sv"] == pytest.approx(0.1)
+    assert first.loc[2, "sv"] == 0.001 and first.loc[1, "k"] == 0.2
+    with pytest.raises(ValueError, match="more than one row"):
+        net_with_saves(preds, pd.concat([pre, pre]), mid)
