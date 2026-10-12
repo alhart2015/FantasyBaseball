@@ -1,11 +1,13 @@
-"""Score the pitcher net with its SV taken from the saves model (#474).
+"""Experiment: score the pitcher net with its SV taken from the saves model (#474).
 
-``ours`` is a pitcher net run's predictions (scripts/train_pitcher_ros.py); ``ours_sv``
-is the same with SV from the saves model's ``mix`` (the average of FanGraphs' share and
-our usage share, each x our team projection; scripts/compare_pitcher_saves.py), as a
-rate over FanGraphs' projected batters faced. Both are scored beside FanGraphs and the
+``ours`` is a pitcher net run's predictions (scripts/train_pitcher_ros.py), and stays
+our projection (the net's own SV; see pitcher_ros/saves.py). ``ours_sv`` is the same
+with SV from one of the saves model's projections (scripts/compare_pitcher_saves.py),
+as a rate over FanGraphs' projected batters faced: ``--method usage`` (our usage share
+x our team projection, no FanGraphs projection in it) or ``mix`` (also FanGraphs'
+share: a blend with FanGraphs, not ours). Both are scored beside FanGraphs and the
 baselines (pitcher_ros.backtest), on the seasons the saves units cover. Writes
-saves-scores-s<seed>.md into the run's folder and prints it.
+saves-scores-<method>-s<seed>.md into the run's folder and prints it.
 
 Needs the run and the saves units for the seed (units-pre-s<seed>.parquet,
 units-mid-s<seed>.parquet in data/pitcher_ros/saves/, from compare_pitcher_saves.py).
@@ -14,6 +16,7 @@ backtest scores must have saves units, or ours_sv would carry stale SV there.
 
 Usage:
     python scripts/score_pitcher_net_saves.py --run 001-plain-s0
+    python scripts/score_pitcher_net_saves.py --run 001-plain-s0 --method mix
 """
 
 from __future__ import annotations
@@ -39,12 +42,13 @@ PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 LEAGUE = PROJECT_ROOT / "config" / "league.yaml"
 RUNS = PROJECT_ROOT / "data" / "pitcher_ros" / "runs"
 SAVES = PROJECT_ROOT / "data" / "pitcher_ros" / "saves"
-METHOD = "mix"
+METHODS = ("usage", "mix")
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", required=True, help="run folder under data/pitcher_ros/runs/")
+    parser.add_argument("--method", choices=METHODS, default="usage")
     parser.add_argument(
         "--saves-seed", type=int, default=None, help="default: the run's seed (config.json)"
     )
@@ -78,7 +82,7 @@ def main() -> int:
         seasons,
         PROJECTIONS,
         league_denominators(LEAGUE),
-        ours={"ours": preds, "ours_sv": net_with_saves(preds, pre, mid, METHOD)},
+        ours={"ours": preds, "ours_sv": net_with_saves(preds, pre, mid, args.method)},
     )
     if scores.snap is not None:
         uncovered = set(scores.snap["snapshot"]) - set(mid["snapshot"])
@@ -90,12 +94,12 @@ def main() -> int:
     md = [
         f"### Pitcher run `{args.run}` with SV from the saves model (seed {seed})",
         "",
-        f"`ours_sv` = `ours` with SV from the saves model's `{METHOD}`; every other stat "
+        f"`ours_sv` = `ours` with SV from the saves model's `{args.method}`; every other stat "
         "is the same.",
         "",
         *backtest.summarize(scores),
     ]
-    (run / f"saves-scores-s{seed}.md").write_text("\n".join(md) + "\n")
+    (run / f"saves-scores-{args.method}-s{seed}.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return 1 if scores.failures else 0
 

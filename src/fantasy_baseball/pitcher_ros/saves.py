@@ -21,12 +21,15 @@ the team's projected **total**.
     his share of his team's saves), fit on every complete season before the projected
     one; the answer is his saves for his current team over its rest-of-season saves.
 
-The projection to use is the plain average of the two (``mix`` in
-scripts/compare_pitcher_saves.py): it beats both, and FanGraphs' own saves. Weights
-fit on earlier seasons (non-negative least squares) didn't beat it: preseason
-2023-2026 MSE 10.76-10.79 vs 10.80-10.84, and mid-season even weights fit on the
-answers only reached 3.12-3.16 vs 3.15-3.17. :func:`net_with_saves` puts it into the
-pitcher net's predictions as SV.
+The pitcher net keeps its own SV as ours: ``usage`` (no FanGraphs projection in it)
+only ties it in the backtest's SV score (scripts/score_pitcher_net_saves.py, 3
+seeds): preseason 2022-2026 MSE 19.98-20.19 vs the net's 18.75-19.57 (41-85% sure
+worse), 2026 snapshots 5.31-5.54 vs 5.35-5.52. Both lose to FanGraphs' saves there.
+``mix`` (the average of the two shares) beats FanGraphs' own saves, but it carries
+FanGraphs' closer calls, so it belongs to the step that blends ours with FanGraphs,
+not to ours. Weights fit on earlier seasons didn't beat the plain average: preseason
+2023-2026 MSE 10.76-10.79 vs 10.80-10.84. :func:`net_with_saves` swaps either into
+the net's predictions as SV, for experiments like these.
 
 Everything is dated like the training table: inputs only from games before the date.
 """
@@ -313,7 +316,7 @@ def _swap_sv(rows: pd.DataFrame, units: pd.DataFrame, column: str) -> pd.DataFra
 
 
 def net_with_saves(
-    preds: pd.DataFrame, pre: pd.DataFrame, mid: pd.DataFrame, column: str = "mix"
+    preds: pd.DataFrame, pre: pd.DataFrame, mid: pd.DataFrame, column: str
 ) -> pd.DataFrame:
     """The net's predictions with SV taken from a saves projection: ``column`` saves
     per unit over FanGraphs' projected batters faced (``bf_fg``, averaged over the
