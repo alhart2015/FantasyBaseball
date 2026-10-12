@@ -253,7 +253,8 @@ def test_targets_and_coverage_flags(store):
     assert {f"ros_{c}" for c in TARGET_COUNTS} <= set(df.columns)
     first, later = _row(df, STARTER, 2024, 0), _row(df, STARTER, 2025, 0)
     assert not first.p1_in_store and first.car_seasons_in_store == 0
-    assert later.p1_in_store and later.sc_p1_in_store and later.sc_car_seasons_in_store == 1
+    assert later.p1_in_store and later.battedtrack_p1_in_store
+    assert later.battedtrack_car_seasons_in_store == 1 and later.pitchtrack_p3_seasons_in_store == 1
 
 
 def test_an_unstarted_season_gets_preseason_rows_to_project_from(store):
@@ -272,3 +273,36 @@ def test_an_unstarted_season_gets_preseason_rows_to_project_from(store):
 def test_missing_store_says_how_to_fill_it(tmp_path):
     with pytest.raises(FileNotFoundError, match="fetch_pitch_data"):
         build_table(tmp_path)
+
+
+def test_team_going_forward_only_looks_two_weeks_ahead(tmp_path):
+    traded, rookie = 5, 6
+    seasons = _seasons()
+    seasons[2024][0].append(_line(2024901, date(2024, 4, 5), traded, TEAM_A, outs=3, bf=4))
+    # 2025: both first pitch on April 20, for TEAM_B -- 19 days after week 0's date,
+    # 12 after week 1's.
+    for player, pk in ((traded, 2025901), (rookie, 2025902)):
+        seasons[2025][0].append(_line(pk, date(2025, 4, 20), player, TEAM_B, outs=3, bf=4))
+    _write(tmp_path, seasons)
+    df = build_table(tmp_path)
+    # Too far ahead to know: his last team, or none for a pitcher with no MLB game yet.
+    assert _row(df, traded, 2025, 0).team_id == TEAM_A
+    w0 = _row(df, rookie, 2025, 0)
+    assert pd.isna(w0.team_id) and w0.std_team_games == 0
+    # Within two weeks: the team he is about to pitch for.
+    assert _row(df, traded, 2025, 1).team_id == TEAM_B
+    assert _row(df, rookie, 2025, 1).team_id == TEAM_B
+
+
+def test_without_pitch_files_tracking_reads_as_not_measured(tmp_path):
+    _write(tmp_path, _seasons())
+    for f in (tmp_path / "pitches").rglob("*.parquet"):
+        f.unlink()
+    df = build_table(tmp_path)
+    later = _row(df, STARTER, 2025, 1)
+    assert later.p1_in_store and later.std_outs == 7 * 18
+    for kind in ("pitchtrack_", "battedtrack_"):
+        assert not later[f"{kind}p1_in_store"]
+        assert later[f"{kind}p3_seasons_in_store"] == 0
+        assert later[f"{kind}car_seasons_in_store"] == 0
+    assert later.std_sc_pitches == 0 and pd.isna(later.age)

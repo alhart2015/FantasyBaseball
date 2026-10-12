@@ -55,7 +55,6 @@ Two inputs come from on or after the date, both known on the date itself: ``team
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from pathlib import Path
 from typing import Any
 
@@ -66,8 +65,23 @@ from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS
 from fantasy_baseball.hitter_ros.features import ALL_ANSWER_COUNTS, FIXED_ZONE, zone_options
 from fantasy_baseball.hitter_ros.statcast_sql import CONTACT_SQL, SPRAY_SQL, SWING_SQL, WHIFF_SQL
 from fantasy_baseball.pitch_data.store import connect
-
-AS_OF_STEP_DAYS = 7
+from fantasy_baseball.ros_table import (
+    AGE_JOINS,
+    AGE_SELECT,
+    CAR,
+    P1,
+    P3,
+    ROS,
+    STD,
+    coverage_sql,
+    league_window_sql,
+    season_totals,
+    stage_current_team,
+    stage_grid,
+    stage_population,
+    sums,
+    window_sql,
+)
 
 # Starts at the positions that say most about running (#413): catchers almost never
 # run; shortstops and center fielders are usually fast; a DH is usually slow.
@@ -182,10 +196,6 @@ LEAGUE_COUNTS = (*LEAGUE_BOX_COUNTS, *STEAL_COUNTS)
 _REQUIRED_VIEWS = ("pitches", "lineups", "schedule")
 
 
-def _sums(cols: Iterable[str], src: str, prefix: str) -> str:
-    return ", ".join(f"coalesce(sum({src}.{c}), 0) AS {prefix}{c}" for c in cols)
-
-
 def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
     """Daily per-player sums, hitter-seasons, season bounds and the as-of grid."""
     box_sums = ", ".join(f"sum({c}) AS {c}" for c in FULL_HITTER_FIELDS.values())
@@ -283,27 +293,7 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> None:
         GROUP BY 1, 2
         """
     )
-    conn.execute(
-        """
-        CREATE TEMP TABLE seasons AS
-        SELECT CAST(s.season AS INTEGER) AS season,
-               CAST(s.first_date AS DATE) AS first_date,
-               CAST(s.last_date AS DATE) AS last_date,
-               coalesce(max(b.game_date) >= CAST(s.last_date AS DATE), false) AS season_complete
-        FROM schedule s LEFT JOIN box_daily b ON b.season = s.season
-        GROUP BY 1, 2, 3
-        """
-    )
-    conn.execute(
-        f"""
-        CREATE TEMP TABLE grid AS
-        SELECT s.season, s.first_date, s.last_date, s.season_complete,
-               CAST(s.first_date + CAST(g.k * {AS_OF_STEP_DAYS} AS INTEGER) AS DATE) AS as_of,
-               g.k AS week
-        FROM seasons s,
-             LATERAL (SELECT unnest(range(0, (s.last_date - s.first_date) // {AS_OF_STEP_DAYS} + 1)) AS k) g
-        """
-    )
+    stage_grid(conn, "box_daily")
     # Sprint speed: always the same columns, NULL when unknown or not fetched.
     sprint_src = (
         """SELECT CAST(player_id AS BIGINT) AS player_id, CAST(season AS INTEGER) AS season,
@@ -323,7 +313,7 @@ def _league_context(conn: duckdb.DuckDBPyConnection) -> None:
     """League totals for each row's windows (#421): this season before the date, last
     season, the last three seasons and every earlier season in the store. Counts only;
     ``features.py`` turns them into league rates and player-vs-league ratios."""
-    sums = ", ".join(f"sum({c}) AS {c}" for c in LEAGUE_COUNTS)
+    season_sums = ", ".join(f"sum({c}) AS {c}" for c in LEAGUE_COUNTS)
     # Hitter-seasons only (same rule as the table's population). Before the universal DH,
     # pitchers took ~3% of PA, which lowered league rates (about -1.3 R, -0.5 HR per 600
     # PA, -4 points of AVG) and made them jump in 2020 and 2022 when pitchers stopped
@@ -359,24 +349,16 @@ def _league_context(conn: duckdb.DuckDBPyConnection) -> None:
         f"CREATE TEMP TABLE league_cum AS SELECT season, game_date, {running} FROM league_daily"
     )
     conn.execute(
-        f"CREATE TEMP TABLE league_season AS SELECT season, {sums} FROM league_daily GROUP BY 1"
+        f"CREATE TEMP TABLE league_season AS SELECT season, {season_sums} FROM league_daily GROUP BY 1"
     )
 
-    def window(prefix: str, cond: str) -> str:
-        cols = ", ".join(f"coalesce(sum(l.{c}), 0) AS lg_{prefix}_{c}" for c in LEAGUE_COUNTS)
-        return f"""
-            SELECT s.season, {cols}
-            FROM (SELECT DISTINCT season FROM pop) s
-            LEFT JOIN league_season l ON {cond}
-            GROUP BY 1
-        """
-
-    conn.execute(f"CREATE TEMP TABLE league_p1 AS {window('p1', 'l.season = s.season - 1')}")
-    conn.execute(
-        "CREATE TEMP TABLE league_p3 AS "
-        + window("p3", "l.season BETWEEN s.season - 3 AND s.season - 1")
-    )
-    conn.execute(f"CREATE TEMP TABLE league_car AS {window('car', 'l.season < s.season')}")
+    for w, cond in (
+        ("p1", "l.season = s.season - 1"),
+        ("p3", "l.season BETWEEN s.season - 3 AND s.season - 1"),
+        ("car", "l.season < s.season"),
+    ):
+        sql = league_window_sql("league_season", LEAGUE_COUNTS, f"lg_{w}_", cond)
+        conn.execute(f"CREATE TEMP TABLE league_{w} AS {sql}")
     # The league over each hitter's own seasons (#413), weighted by his PA share of the
     # league that season; summed per window in _build (lgp_p3_*, lgp_car_*).
     mix = ", ".join(f"b.pa / l.pa * l.{c} AS {c}" for c in LEAGUE_COUNTS)
@@ -461,15 +443,6 @@ def _horizon_answers(conn: duckdb.DuckDBPyConnection) -> list[str]:
     return names
 
 
-def _season_totals(conn: duckdb.DuckDBPyConnection, daily: str, cols: Iterable[str]) -> str:
-    name = f"{daily}_season"
-    sums = ", ".join(f"sum({c}) AS {c}" for c in cols)
-    conn.execute(
-        f"CREATE TEMP TABLE {name} AS SELECT player_id, season, {sums} FROM {daily} GROUP BY 1, 2"
-    )
-    return name
-
-
 def build_options() -> dict[str, Any]:
     """The settings a table is built with; saved next to it as ``<table>.json``. The
     fixed-box counts (fzone_ / fchase_) depend on features.FIXED_ZONE."""
@@ -494,59 +467,32 @@ def build_table(root: Path) -> pd.DataFrame:
 
 def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame:
     _stage(conn, has_sprint=has_sprint)
-    box_season = _season_totals(conn, "box_daily", BOX_COUNTS)
-    pitch_season = _season_totals(conn, "pitch_daily", PITCH_COUNTS)
-    steal_season = _season_totals(conn, "steal_daily", STEAL_COUNTS)
+    box_season = season_totals(conn, "box_daily", BOX_COUNTS)
+    pitch_season = season_totals(conn, "pitch_daily", PITCH_COUNTS)
+    steal_season = season_totals(conn, "steal_daily", STEAL_COUNTS)
 
-    conn.execute(
-        """
-        CREATE TEMP TABLE pop AS
-        SELECT DISTINCT b.player_id, g.season, g.week, g.as_of, g.first_date, g.last_date,
-               g.season_complete
-        FROM grid g JOIN box_daily b ON b.season = g.season AND b.game_date >= g.as_of
-        WHERE (b.player_id, b.season) IN (SELECT player_id, season FROM hitter_seasons)
-        UNION
-        -- A season not complete: week 0 for every hitter of the three seasons before.
-        SELECT DISTINCT hs.player_id, g.season, g.week, g.as_of, g.first_date, g.last_date,
-               g.season_complete
-        FROM grid g JOIN hitter_seasons hs ON hs.season BETWEEN g.season - 3 AND g.season - 1
-        WHERE g.week = 0 AND NOT g.season_complete
-        """
-    )
+    stage_population(conn, "box_daily", "hitter_seasons")
 
-    def window(source: str, cols: Iterable[str], prefix: str, cond: str) -> str:
-        """Per-pop-row sums of ``source`` over the rows matching ``cond``."""
-        return f"""
-            SELECT pop.player_id, pop.season, pop.week, {_sums(cols, "d", prefix)}
-            FROM pop LEFT JOIN {source} d ON d.player_id = pop.player_id AND {cond}
-            GROUP BY 1, 2, 3
-        """
-
-    std = "d.season = pop.season AND d.game_date < pop.as_of"
-    ros = "d.season = pop.season AND d.game_date >= pop.as_of"
-    p1 = "d.season = pop.season - 1"
-    p3 = "d.season BETWEEN pop.season - 3 AND pop.season - 1"
-    car = "d.season < pop.season"
     parts = {
-        "std_box": window("box_daily", BOX_COUNTS, "std_", std),
-        "std_pitch": window("pitch_daily", PITCH_COUNTS, "std_", std),
-        "p1_box": window(box_season, BOX_COUNTS, "p1_", p1),
-        "p1_pitch": window(pitch_season, PITCH_COUNTS, "p1_", p1),
-        "p3_box": window(box_season, BOX_COUNTS, "p3_", p3),
-        "p3_pitch": window(pitch_season, PITCH_COUNTS, "p3_", p3),
-        "car_box": window(box_season, BOX_COUNTS, "car_", car),
-        "car_pitch": window(pitch_season, PITCH_COUNTS, "car_", car),
-        "std_steal": window("steal_daily", STEAL_COUNTS, "std_", std),
-        "p1_steal": window(steal_season, STEAL_COUNTS, "p1_", p1),
-        "p3_steal": window(steal_season, STEAL_COUNTS, "p3_", p3),
-        "car_steal": window(steal_season, STEAL_COUNTS, "car_", car),
-        "ros": window("box_daily", TARGET_COUNTS, "ros_", ros),
+        "std_box": window_sql("box_daily", BOX_COUNTS, "std_", STD),
+        "std_pitch": window_sql("pitch_daily", PITCH_COUNTS, "std_", STD),
+        "p1_box": window_sql(box_season, BOX_COUNTS, "p1_", P1),
+        "p1_pitch": window_sql(pitch_season, PITCH_COUNTS, "p1_", P1),
+        "p3_box": window_sql(box_season, BOX_COUNTS, "p3_", P3),
+        "p3_pitch": window_sql(pitch_season, PITCH_COUNTS, "p3_", P3),
+        "car_box": window_sql(box_season, BOX_COUNTS, "car_", CAR),
+        "car_pitch": window_sql(pitch_season, PITCH_COUNTS, "car_", CAR),
+        "std_steal": window_sql("steal_daily", STEAL_COUNTS, "std_", STD),
+        "p1_steal": window_sql(steal_season, STEAL_COUNTS, "p1_", P1),
+        "p3_steal": window_sql(steal_season, STEAL_COUNTS, "p3_", P3),
+        "car_steal": window_sql(steal_season, STEAL_COUNTS, "car_", CAR),
+        "ros": window_sql("box_daily", TARGET_COUNTS, "ros_", ROS),
         # SB's pieces (#413): steal opportunities over the answer window.
-        "ros_steal": window("steal_daily", STEAL_COUNTS, "ros_", ros),
+        "ros_steal": window_sql("steal_daily", STEAL_COUNTS, "ros_", ROS),
         # Recent form (#419): the last 7 and 14 days before the date, this season only.
         **{
-            f"{w}_{kind}": window(
-                src, cols, f"{w}_", f"{std} AND d.game_date >= pop.as_of - {days}"
+            f"{w}_{kind}": window_sql(
+                src, cols, f"{w}_", f"{STD} AND d.game_date >= pop.as_of - {days}"
             )
             for w, days in RECENT_WINDOWS.items()
             for kind, src, cols in (
@@ -564,20 +510,9 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
     # the team's stats below still use only games before the date. With no game after
     # the date (a preseason row of a season he hasn't played in yet), his last team: an
     # offseason move is missed (#456).
-    conn.execute(
-        """
-        CREATE TEMP TABLE cur_team AS
-        SELECT pop.player_id, pop.season, pop.week,
-               CASE WHEN b.game_date IS NULL THEN last.team_id ELSE b.team_id END AS team_id
-        FROM pop
-        ASOF LEFT JOIN box_daily b
-          ON b.player_id = pop.player_id AND pop.as_of <= b.game_date
-        ASOF LEFT JOIN box_daily last
-          ON last.player_id = pop.player_id AND pop.as_of > last.game_date
-        """
-    )
-    team_std = _sums(TEAM_COUNTS, "t", "std_")
-    team_p1 = _sums(TEAM_COUNTS, "t1", "p1_")
+    stage_current_team(conn, "box_daily")
+    team_std = sums(TEAM_COUNTS, "t", "std_")
+    team_p1 = sums(TEAM_COUNTS, "t1", "p1_")
     conn.execute(
         f"""
         CREATE TEMP TABLE team_ctx AS
@@ -599,10 +534,10 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
     )
 
     _league_context(conn)
-    for w, cond in (("p3", p3), ("car", car)):
+    for w, cond in (("p3", P3), ("car", CAR)):
         conn.execute(
             f"CREATE TEMP TABLE league_mix_{w} AS "
-            + window("league_mix", LEAGUE_COUNTS, f"lgp_{w}_", cond)
+            + window_sql("league_mix", LEAGUE_COUNTS, f"lgp_{w}_", cond)
         )
 
     first_store_season = "(SELECT min(season) FROM box_daily)"
@@ -613,13 +548,10 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
         SELECT pop.player_id, pop.season, pop.week, pop.as_of, pop.season_complete,
                (pop.last_date - pop.as_of + 1) / (pop.last_date - pop.first_date + 1)
                    AS frac_season_left,
-               pop.season - 1 >= {first_store_season} AS p1_in_store,
-               least(3, pop.season - {first_store_season}) AS p3_seasons_in_store,
-               pop.season - {first_store_season} AS car_seasons_in_store,
+               {coverage_sql(first_store_season)},
                -- No Savant age yet in a season not complete (he hasn't batted): his
                -- last one plus the seasons since.
-               CASE WHEN a.age IS NULL AND NOT pop.season_complete
-                    THEN a1.age + pop.season - a1.season ELSE a.age END AS age,
+               {AGE_SELECT},
                s1.sprint_speed AS p1_sprint_speed, s1.competitive_runs AS p1_sprint_runs,
                s2.sprint_speed AS p2_sprint_speed, s2.competitive_runs AS p2_sprint_runs,
                s1.hp_to_1b AS p1_hp_to_1b, s1.bolts AS p1_bolts,
@@ -633,8 +565,7 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_sprint: bool) -> pd.DataFrame
         JOIN team_ctx tc USING (player_id, season, week)
         JOIN team_ctx_p1 tp USING (player_id, season, week)
         JOIN league_ctx lg USING (player_id, season, week)
-        LEFT JOIN season_age a ON a.player_id = pop.player_id AND a.season = pop.season
-        ASOF LEFT JOIN season_age a1 ON a1.player_id = pop.player_id AND pop.season > a1.season
+        {AGE_JOINS}
         LEFT JOIN sprint s1 ON s1.player_id = pop.player_id AND s1.season = pop.season - 1
         LEFT JOIN sprint s2 ON s2.player_id = pop.player_id AND s2.season = pop.season - 2
         ORDER BY pop.season, pop.week, pop.player_id

@@ -87,6 +87,7 @@ files = [
     "src/fantasy_baseball/hitter_ros/",
     "src/fantasy_baseball/pitcher_ros/",
     "src/fantasy_baseball/projection_eval.py",
+    "src/fantasy_baseball/ros_table.py",
     "src/fantasy_baseball/keepers/",
     "src/fantasy_baseball/lineup/delta_roto.py",
     "src/fantasy_baseball/lineup/leverage.py",
