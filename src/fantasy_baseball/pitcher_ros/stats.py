@@ -22,7 +22,7 @@ from fantasy_baseball.pitch_data.store import connect
 GAME_DATE_SQL = "CAST(COALESCE(resumed_date, game_date) AS DATE)"
 
 # Summed per pitcher over any span of games; ``g`` is games pitched.
-COUNTS = ("g", "gs", "bf", "outs", "k", "bb", "h", "hr", "er", "w", "sv")
+COUNTS = ("g", "gs", "bf", "outs", "k", "bb", "h", "hr", "er", "w", "sv", "svo")
 TARGETS = ("k", "w", "sv", "era", "whip")
 PER_BF = ("k", "w", "sv")
 
@@ -40,7 +40,7 @@ def rates_from_counts(counts: pd.DataFrame) -> pd.DataFrame:
 
 def load_games(store: Path) -> pd.DataFrame:
     """Every pitcher-game line in the store's ``pitching`` view: ``player_id``,
-    ``game_date`` (datetime), ``season`` and ``COUNTS``.
+    ``game_pk``, ``team_id``, ``game_date`` (datetime), ``season`` and ``COUNTS``.
 
     A suspended game is dated to the day it was finished (the store's ``resumed_date``),
     not the day it started (the store's ``game_date``): the box score doesn't say which
@@ -53,7 +53,7 @@ def load_games(store: Path) -> pd.DataFrame:
     try:
         games = conn.execute(
             f"""
-            SELECT player_id, {GAME_DATE_SQL} AS game_date, 1 AS g, {cols}
+            SELECT player_id, game_pk, team_id, {GAME_DATE_SQL} AS game_date, 1 AS g, {cols}
             FROM pitching
             """
         ).df()
