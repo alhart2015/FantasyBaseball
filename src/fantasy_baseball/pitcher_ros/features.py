@@ -34,6 +34,10 @@ def _div(num: pd.Series, den: pd.Series) -> pd.Series:
     return num.astype(float) / den.where(den != 0)
 
 
+# K/W/SV loss weight (see answers). "bf" by default: over 3 seeds x 2022-2026, "bf2"
+# (the scorer's own weighting) was worse on K -- preseason +3.1 / +1.1 / +4.3% MSE (real
+# on 2 of 3 seeds), mid-season +1.2 to +1.8% -- and better on preseason W among the
+# fantasy-relevant pitchers (-5.4 / -3.5 / -5.0%, real on all 3), the rest mixed.
 PER_BF_WEIGHTS = ("bf", "bf2")
 
 
