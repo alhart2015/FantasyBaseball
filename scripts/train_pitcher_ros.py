@@ -12,6 +12,7 @@ Usage:
     python scripts/train_pitcher_ros.py --name 001-plain
     python scripts/train_pitcher_ros.py --name 001-plain-s1 --seed 1
     python scripts/train_pitcher_ros.py --name quick --test-seasons 2026
+    python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
 
 from __future__ import annotations
@@ -19,6 +20,7 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import shutil
 import sys
 from pathlib import Path
 
@@ -29,8 +31,13 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import league_denominators
 from fantasy_baseball.pitcher_ros import backtest
-from fantasy_baseball.pitcher_ros.features import input_frame, target_frame, weight_frame
-from fantasy_baseball.pitcher_ros.model import fit_season, plain_config
+from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
+from fantasy_baseball.pitcher_ros.model import (
+    applied_settings,
+    check_week_zero,
+    fit_season,
+    plain_config,
+)
 from fantasy_baseball.pitcher_ros.stats import load_games
 
 TABLE = PROJECT_ROOT / "data" / "pitcher_ros" / "table.parquet"
@@ -49,18 +56,37 @@ def main() -> int:
     parser.add_argument("--seed", type=int, default=0)
     parser.add_argument("--test-seasons", type=int, nargs="+", default=list(DEFAULT_TEST_SEASONS))
     parser.add_argument("--table", type=Path, default=TABLE)
+    parser.add_argument(
+        "--per-bf-weight",
+        choices=PER_BF_WEIGHTS,
+        default="bf",
+        help="K/W/SV loss weight: batters faced, or its square (what the scorer charges)",
+    )
+    parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    seasons = sorted(set(args.test_seasons))
 
     run = RUNS / args.name
-    run.mkdir(parents=True, exist_ok=True)
+    if run.exists() and any(run.iterdir()) and not args.overwrite:
+        parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
     config = plain_config(seed=args.seed)
-    (run / "config.json").write_text(json.dumps(config.to_dict(), indent=2))
-
     table = pd.read_parquet(args.table)
-    x, y, w = input_frame(table), target_frame(table), weight_frame(table)
+    try:
+        check_week_zero(table)
+    except ValueError as err:
+        parser.error(f"{args.table}: {err}")
+    x = input_frame(table)
+    y, w = answers(table, args.per_bf_weight)
+    # Everything has loaded: only now clear an old run, so a failed start leaves it.
+    if run.exists():
+        shutil.rmtree(run)
+    run.mkdir(parents=True)
+    settings = {**applied_settings(config), "per_bf_weight": args.per_bf_weight}
+    (run / "config.json").write_text(json.dumps(settings, indent=2))
+
     parts, infos = [], []
-    for season in sorted(args.test_seasons):
+    for season in seasons:
         logging.info("test season %s", season)
         preds, info = fit_season(table, x, y, w, season, config)
         parts.append(preds)
@@ -71,7 +97,7 @@ def main() -> int:
 
     scores = backtest.score_seasons(
         load_games(STORE),
-        args.test_seasons,
+        seasons,
         PROJECTIONS,
         league_denominators(LEAGUE),
         ours={OURS: preds},

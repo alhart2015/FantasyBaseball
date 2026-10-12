@@ -1,10 +1,8 @@
 """Model inputs and answers from the pitcher training table (``pitcher_ros/table.py``, #465).
 
-Answers (``target_frame``): the five roto rates over the rest of the season, as the
-scorer reads them (``stats``): K, W and SV per batter faced, ERA and WHIP. Each has a
-loss weight (``weight_frame``): the batters he went on to face for K/W/SV, the innings
-for ERA/WHIP -- the same weights the scorer's MSE uses, so the net is fit on what it is
-graded on.
+Answers (``answers``): the five roto rates over the rest of the season, as the scorer
+reads them (``stats``): K, W and SV per batter faced, ERA and WHIP, each with a loss
+weight (see :func:`answers` for how they compare with the scorer's).
 
 Inputs (``input_frame``): rates per window (season to date, last 30 days, last season,
 last three, career), box-score and pitch-tracking, plus context (age, how much of the
@@ -36,20 +34,27 @@ def _div(num: pd.Series, den: pd.Series) -> pd.Series:
     return num.astype(float) / den.where(den != 0)
 
 
-def target_frame(t: pd.DataFrame) -> pd.DataFrame:
-    """Rest-of-season ``TARGETS`` rates per table row; NaN where there is nothing to
-    divide by (no batters faced, or no outs)."""
+PER_BF_WEIGHTS = ("bf", "bf2")
+
+
+def answers(t: pd.DataFrame, per_bf_weight: str = "bf") -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Rest-of-season ``TARGETS`` rates per table row (NaN where there is nothing to
+    divide by: no batters faced, or no outs) and each one's loss weight (0 where the
+    rate is NaN).
+
+    ERA/WHIP: the innings he went on to pitch -- exactly how the scorer weights them
+    (``ip x err^2``). K/W/SV: the scorer charges a rate's error on his actual batters
+    faced, ``(bf x err)^2``, so per row its weight is ``bf^2``: ``per_bf_weight`` "bf2"
+    matches it; "bf" weights by batters faced, which leans further toward low-volume
+    pitchers than the score does."""
+    if per_bf_weight not in PER_BF_WEIGHTS:
+        raise ValueError(f"unknown per_bf_weight {per_bf_weight!r}; one of {PER_BF_WEIGHTS}")
     counts = pd.DataFrame({c: t[f"ros_{c}"].astype(float) for c in _ANSWER_COUNTS})
-    return rates_from_counts(counts)[list(TARGETS)]
-
-
-def weight_frame(t: pd.DataFrame) -> pd.DataFrame:
-    """Each answer's loss weight: rest-of-season batters faced for K/W/SV, innings for
-    ERA/WHIP (as the scorer weights them); 0 where the answer is NaN."""
-    bf = t["ros_bf"].astype(float)
-    ip = t["ros_outs"].astype(float) / 3
+    y = rates_from_counts(counts)[list(TARGETS)]
+    bf = counts["bf"] ** (2 if per_bf_weight == "bf2" else 1)
+    ip = counts["outs"] / 3
     w = pd.DataFrame({s: bf if s in PER_BF else ip for s in TARGETS}, index=t.index)
-    return w.where(target_frame(t).notna(), 0.0)
+    return y, w.where(y.notna(), 0.0)
 
 
 def _box_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:

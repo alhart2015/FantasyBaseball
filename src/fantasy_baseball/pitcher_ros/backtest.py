@@ -51,7 +51,7 @@ from fantasy_baseball.pitcher_ros.evaluate import (
     scored_players,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS, rates_from_counts, totals
-from fantasy_baseball.projection_eval import systems_in_every_unit, top_by_value
+from fantasy_baseball.projection_eval import common_index, systems_in_every_unit, top_by_value
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import Category
 
@@ -95,11 +95,16 @@ def score_span(
     baselines and ``systems`` (plus their blend, with two or more) on ``season``'s games
     from ``before`` on, the baselines knowing only the games before it. None when no
     pitcher reaches ``min_bf`` (a season not played yet). ``league``:
-    ``baselines.league_rates`` for ``season`` if already computed."""
+    ``baselines.league_rates`` for ``season`` if already computed.
+
+    Every system is scored on the same pitchers, so one of ``ours`` without a
+    projection for a pitcher the others would score is an error, not a smaller sample
+    for everyone; so is one of ``ours`` named like a baseline, the blend or a system."""
     in_season = games[games["season"] == season]
     actual = _actual(in_season[in_season["game_date"] >= before])
     if (actual["bf"] >= min_bf).sum() == 0:
         return None
+    _check_ours(ours or {}, systems, actual, min_bf, f"{season} from {before.date()}")
     projections = {
         **(ours or {}),
         **baseline_predictions(actual.index, games, season, before, league),
@@ -126,19 +131,45 @@ def score_span(
     return scored
 
 
+def _check_ours(
+    ours: dict[str, pd.DataFrame],
+    systems: dict[str, pd.DataFrame],
+    actual: pd.DataFrame,
+    min_bf: float,
+    span: str,
+) -> None:
+    clash = set(ours) & {*BASELINES, BLEND, *systems}
+    if clash:
+        raise ValueError(f"our projections are named like other systems: {sorted(clash)}")
+    scored = actual.index[actual["bf"] >= min_bf]
+    if systems:
+        scored = scored.intersection(common_index(systems.values(), TARGETS))
+    for name, p in ours.items():
+        missing = scored.difference(p.dropna(subset=list(TARGETS)).index)
+        if len(missing):
+            raise ValueError(
+                f"{name} has no projection for {len(missing)} of the {len(scored)} "
+                f"pitchers scored in {span}, e.g. player_id {list(missing[:5])}"
+            )
+
+
 def _ours_at(
     ours: dict[str, pd.DataFrame] | None, season: int, when: pd.Timestamp | None
 ) -> dict[str, pd.DataFrame]:
     """Each of ``ours`` (prediction frames: ``player_id``, ``season``, ``week``,
-    ``as_of`` and the ``TARGETS``) as known at ``when``: each pitcher's row from the
-    latest as-of date on or before it in ``season``, or week 0 with ``when`` None."""
+    ``as_of`` and the ``TARGETS``; one row per pitcher and as-of date) as known at
+    ``when``: each pitcher's row from the latest as-of date on or before it in
+    ``season``, or week 0 with ``when`` None."""
     out = {}
     for name, p in (ours or {}).items():
         rows = p[p["season"] == season]
         if when is None:
             rows = rows[rows["week"] == 0]
         else:
-            rows = rows[rows["as_of"] <= when].sort_values("as_of").groupby("player_id").tail(1)
+            rows = rows[rows["as_of"] <= when]
+            rows = rows.loc[rows.groupby("player_id")["as_of"].idxmax()]
+        if rows["player_id"].duplicated().any():
+            raise ValueError(f"{name}: more than one {season} row per pitcher and date")
         out[name] = rows.set_index("player_id")[list(TARGETS)]
     return out
 
