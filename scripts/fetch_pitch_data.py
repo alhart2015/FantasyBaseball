@@ -1,7 +1,8 @@
 """Backfill / refresh the raw pitch-level store for the batted-ball model (#399, #400).
 
 Pulls every Statcast pitch, the Savant sprint-speed leaderboard, MLB box-score
-batting order, and minor-league hitting lines (#435) into parquet under data/pitch_data/. Safe to stop and re-run: finished
+batting order, box-score pitching lines (#465), and minor-league hitting lines (#435)
+into parquet under data/pitch_data/. Safe to stop and re-run: finished
 weekly chunks and finished seasons are skipped, so a re-run only fetches what is
 missing or still changing. A full 2015-2026 backfill takes several hours, almost all
 of it the pitch pull.
@@ -10,6 +11,7 @@ Usage:
     python scripts/fetch_pitch_data.py --start 2015 --end 2026
     python scripts/fetch_pitch_data.py --start 2026 --end 2026 --only lineups sprint
     python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only milb
+    python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only pitching
     python scripts/fetch_pitch_data.py --summary
 """
 
@@ -29,8 +31,9 @@ from fantasy_baseball.data.mlb_game_logs import _fetch_season_games
 from fantasy_baseball.hitter_ros.table import AS_OF_STEP_DAYS
 from fantasy_baseball.pitch_data.milb import MILB_LEVELS, fetch_milb_season
 from fantasy_baseball.pitch_data.store import (
+    BOXSCORE_KINDS,
     connect,
-    fetch_lineups_season,
+    fetch_boxscore_season,
     fetch_pitches_season,
     fetch_sprint_speed_season,
     write_season_games,
@@ -39,7 +42,7 @@ from fantasy_baseball.pitch_data.store import (
 from fantasy_baseball.utils.time_utils import local_today
 
 DEFAULT_ROOT = PROJECT_ROOT / "data" / "pitch_data"
-KINDS = ("pitches", "lineups", "sprint", "milb")
+KINDS = ("pitches", "lineups", "pitching", "sprint", "milb")
 _LINEUP_TOTALS = ("pa", "hr", "r", "rbi", "sb")
 
 
@@ -81,6 +84,30 @@ def print_summary(root: Path) -> None:
         ).fetchall():
             cells = "".join(f"{v if v is not None else '-':>8}" for v in values)
             print(f"{season}  {n:>11}  {games:>5}  {starters / games:>17.2f}{cells}")
+    if "pitching" in views:
+        # Per game: 2 starts and about 2 x 27 outs (fewer when the home team skips the
+        # bottom of the 9th, more in extra innings).
+        # A column no file has yet sums to NULL and prints "-", like the lineup totals.
+        have = {r[0] for r in conn.execute("DESCRIBE pitching").fetchall()}
+        sums = ", ".join(
+            f"sum({c})" if c in have else "NULL" for c in ("gs", "outs", "bf", "k", "er")
+        )
+        print(
+            "\nseason  pitching_rows  games  starts_per_game  outs_per_game"
+            "        bf        k       er"
+        )
+        for season, n, games, gs, outs, bf, k, er in conn.execute(
+            f"""
+            SELECT year(CAST(game_date AS DATE)), count(*), count(DISTINCT game_pk), {sums}
+            FROM pitching GROUP BY 1 ORDER BY 1
+            """
+        ).fetchall():
+            per_game = [f"{v / games:.2f}" if v is not None else "-" for v in (gs, outs)]
+            totals = [v if v is not None else "-" for v in (bf, k, er)]
+            print(
+                f"{season}  {n:>13}  {games:>5}  {per_game[0]:>15}  {per_game[1]:>13}"
+                f"  {totals[0]:>8}  {totals[1]:>7}  {totals[2]:>7}"
+            )
     if "sprint_speed" in views:
         print("\nseason  sprint_rows")
         for season, n in conn.execute(
@@ -146,12 +173,13 @@ def main() -> int:
         except Exception:
             logging.exception("games %s: failed", season)
             failures.append(f"{season} games")
-        if "lineups" in args.only:
+        # Lineups and pitching lines come from the same box scores: one fetch per game.
+        if boxscore_kinds := [k for k in BOXSCORE_KINDS if k in args.only]:
             try:
-                fetch_lineups_season(args.root, season, games=games)
+                fetch_boxscore_season(args.root, season, boxscore_kinds, games=games)
             except Exception:
-                logging.exception("lineups %s: failed", season)
-                failures.append(f"{season} lineups")
+                logging.exception("%s %s: failed", " + ".join(boxscore_kinds), season)
+                failures.append(f"{season} {' + '.join(boxscore_kinds)}")
         if "sprint" in args.only:
             try:
                 fetch_sprint_speed_season(args.root, season, games=games)

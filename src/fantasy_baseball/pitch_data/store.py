@@ -9,6 +9,8 @@ Layout::
     pitches/season=YYYY/<start>_<end>.parquet   one file per weekly chunk
     lineups/YYYY.parquet                         one row per player per lineup slot per
                                                  game: batting order + box-score batting line
+    pitching/YYYY.parquet                        one row per pitcher per game: order of
+                                                 appearance + box-score pitching line (#465)
     sprint_speed/YYYY.parquet                    Savant sprint-speed leaderboard
     schedule/YYYY.parquet                        first/last scheduled regular-season date
     games/YYYY.parquet                           each regular-season game: date, ballpark,
@@ -20,7 +22,7 @@ than ``SETTLE_DAYS`` after the end of the dates it covers. A file written earlie
 mid-season or next-day run) is re-fetched on every run until a settled copy replaces it,
 so late Savant corrections and the rest of a season are never frozen out. A lineup file
 missing a current column (e.g. one written before the batting line was stored) is not
-final either.
+final either; the same goes for a pitching file.
 
 Pitch chunks are fixed weeks counted from opening day and capped at the last scheduled
 regular-season date, never at today, so a chunk's file name does not change while its
@@ -50,7 +52,12 @@ import duckdb
 import pandas as pd
 import pyarrow.parquet as pq
 
-from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS, full_hitter_line
+from fantasy_baseball.analysis.game_logs import (
+    FULL_HITTER_FIELDS,
+    FULL_PITCHER_FIELDS,
+    full_hitter_line,
+    full_pitcher_line,
+)
 from fantasy_baseball.data.mlb_game_logs import (
     _fetch_boxscore,
     _fetch_season_games,
@@ -302,28 +309,195 @@ def fetch_lineups_season(
     Skips (returns None) when the season's file is already final (see :func:`is_final`). Any box-score failure
     raises without writing, so the next run retries the season whole.
     """
-    games = games if games is not None else _fetch_season_games(season)
-    path = lineup_path(root, season)
-    _, season_end = season_window(games)
-    if is_final(path, season_end, LINEUP_STAT_COLUMNS):
-        return None
-    finals = [_game_context(g) for g in games if was_played(g)]
-    # A suspended game is listed under both its start and resume dates with one gamePk;
-    # fetch it once, dated to the later (completion) date.
-    by_pk: dict[int, str] = {}
-    for pk, _, d in finals:
-        by_pk[pk] = max(d, by_pk.get(pk, d))
+    return fetch_boxscore_season(
+        root, season, ("lineups",), games=games, fetch_boxscore=fetch_boxscore
+    )["lineups"]
 
-    def _one(item: tuple[int, str]) -> list[dict[str, Any]]:
-        pk, d = item
-        return lineup_rows(fetch_boxscore(pk), pk, d)
+
+# --- pitching lines ---------------------------------------------------------------
+
+
+# A pitching file without these is from an older field list and gets re-fetched.
+PITCHING_STAT_COLUMNS = (*FULL_PITCHER_FIELDS.values(), "resumed_date")
+# Checked per team and game: the stored pitcher lines must add up to the box score's
+# team pitching line. Not earned runs: by scoring rule 9.16(i) a reliever who enters
+# after an error can be charged earned runs the team is not, so the pitchers' ER can add
+# up to more than the team's (21 of 2,429 games in 2026). The pitchers' own ER are the
+# official ones, the ones ERA is built from.
+PITCHING_TEAM_CHECK = ("outs", "bf", "k", "bb", "h", "hr", "r", "pitches")
+_PITCHER_FIELD = {col: field for field, col in FULL_PITCHER_FIELDS.items()}
+
+
+def pitching_path(root: Path, season: int) -> Path:
+    return root / "pitching" / f"{season}.parquet"
+
+
+def _pitching_line(team: dict[str, Any], pitcher_id: int) -> dict[str, Any] | None:
+    """His ``stats.pitching`` block in this team's box score; None when it is missing."""
+    entry = team.get("players", {}).get(f"ID{pitcher_id}", {})
+    line: dict[str, Any] | None = entry.get("stats", {}).get("pitching")
+    return line
+
+
+def pitching_rows(boxscore: dict[str, Any], game_pk: int, game_date: str) -> list[dict[str, Any]]:
+    """One row per pitcher who appeared in this box score. ``appearance`` is his place in
+    the team's ``pitchers`` list (1 = the team's first pitcher, 2 the next, ...); ``gs``
+    is who was credited with the start (an opener is appearance 1 with gs 1, the bulk
+    man after him gs 0). The pitching line rides along (``FULL_PITCHER_FIELDS`` columns;
+    a missing field is 0). A listed pitcher with no pitching line gets no row
+    (:func:`pitching_problems` reports him); the others keep their places.
+    """
+    rows: list[dict[str, Any]] = []
+    for side in ("home", "away"):
+        team = boxscore.get("teams", {}).get(side, {})
+        team_id = team.get("team", {}).get("id")
+        for i, person_id in enumerate(team.get("pitchers", []), start=1):
+            line = _pitching_line(team, person_id)
+            if line is None:
+                continue
+            rows.append(
+                {
+                    "game_pk": game_pk,
+                    "game_date": game_date,
+                    "team_id": team_id,
+                    "is_home": side == "home",
+                    "player_id": int(person_id),
+                    "appearance": i,
+                    **full_pitcher_line(line),
+                }
+            )
+    return rows
+
+
+def pitching_problems(boxscore: dict[str, Any], rows: list[dict[str, Any]]) -> list[str]:
+    """What looks wrong with one game's pitching ``rows`` (from :func:`pitching_rows`):
+    ``side:no line for <id>`` for a listed pitcher with no pitching line, and
+    ``side:<column>`` for each ``PITCHING_TEAM_CHECK`` column whose stored rows don't add
+    up to the team's pitching line (a total the team line lacks is not checked)."""
+    out = []
+    for side in ("home", "away"):
+        team = boxscore.get("teams", {}).get(side, {})
+        out += [
+            f"{side}:no line for {pid}"
+            for pid in team.get("pitchers", [])
+            if _pitching_line(team, pid) is None
+        ]
+        total = team.get("teamStats", {}).get("pitching", {})
+        mine = [r for r in rows if r["is_home"] == (side == "home")]
+        for col in PITCHING_TEAM_CHECK:
+            expected = total.get(_PITCHER_FIELD[col])
+            if expected is not None and sum(r[col] for r in mine) != int(expected):
+                out.append(f"{side}:{col}")
+    return out
+
+
+def fetch_pitching_season(
+    root: Path,
+    season: int,
+    *,
+    games: Games | None = None,
+    fetch_boxscore: Callable[[int], dict[str, Any]] = _fetch_boxscore,
+) -> int | None:
+    """Fetch every pitcher's line for every played regular-season game (see
+    :func:`fetch_boxscore_season`). Returns rows written; None when the season's file is
+    already final."""
+    return fetch_boxscore_season(
+        root, season, ("pitching",), games=games, fetch_boxscore=fetch_boxscore
+    )["pitching"]
+
+
+# --- one pass over a season's box scores --------------------------------------------
+
+
+BOXSCORE_KINDS = ("lineups", "pitching")
+
+
+def _played_dates(games: Games) -> dict[int, tuple[str, str | None]]:
+    """game_pk -> (date, resumed) for every played game. ``date`` is its official date
+    (the latest, if listed under more than one). A suspended game is listed twice with one
+    gamePk and the same official date, the day it started; the day it was finished is the
+    schedule's ``resumeGameDate`` -> ``resumed``. None for a game played in one go."""
+    resumed = {g["gamePk"]: str(g["resumeGameDate"])[:10] for g in games if g.get("resumeGameDate")}
+    out: dict[int, tuple[str, str | None]] = {}
+    for pk, _, d in (_game_context(g) for g in games if was_played(g)):
+        out[pk] = (max(d, out[pk][0]) if pk in out else d, resumed.get(pk))
+    return out
+
+
+def fetch_boxscore_season(
+    root: Path,
+    season: int,
+    kinds: Iterable[str] = BOXSCORE_KINDS,
+    *,
+    games: Games | None = None,
+    fetch_boxscore: Callable[[int], dict[str, Any]] = _fetch_boxscore,
+) -> dict[str, int | None]:
+    """Fetch every played regular-season box score once and write the ``kinds`` files
+    (``lineups``, ``pitching``) that aren't already final (see :func:`is_final`).
+
+    Returns rows written per kind: None when its file was already final, 0 when there
+    were no rows (a season not started yet: nothing is written, so no empty file stands
+    in for it). Any box-score failure raises without writing, so the next run retries
+    the season whole.
+
+    Every row is dated to the game's official date (``game_date``), for a suspended game
+    the day it started. Pitching rows also carry ``resumed_date``, the day a suspended
+    game was finished (None otherwise): a pitcher in such a game pitched on one of the
+    two, and the box score doesn't say which.
+
+    A game whose pitching rows look wrong (:func:`pitching_problems`) is kept, and logged:
+    it is MLB's own box score, with nothing here to fix it from.
+    """
+    games = games if games is not None else _fetch_season_games(season)
+    _, season_end = season_window(games)
+    paths = {"lineups": lineup_path(root, season), "pitching": pitching_path(root, season)}
+    columns = {"lineups": LINEUP_STAT_COLUMNS, "pitching": PITCHING_STAT_COLUMNS}
+    result: dict[str, int | None] = {}
+    todo = []
+    for kind in kinds:
+        if kind not in paths:
+            raise ValueError(f"unknown box-score kind {kind!r}; expected {BOXSCORE_KINDS}")
+        result[kind] = None
+        if not is_final(paths[kind], season_end, columns[kind]):
+            todo.append(kind)
+    if not todo:
+        return result
+    dates = _played_dates(games)
+
+    def _one(item: tuple[int, tuple[str, str | None]]) -> dict[str, Any]:
+        pk, (game_date, resumed) = item
+        box = fetch_boxscore(pk)
+        out: dict[str, Any] = {}
+        if "lineups" in todo:
+            out["lineups"] = lineup_rows(box, pk, game_date)
+        if "pitching" in todo:
+            rows = [{**r, "resumed_date": resumed} for r in pitching_rows(box, pk, game_date)]
+            out["pitching"] = rows
+            out["problems"] = pitching_problems(box, rows)
+        return out
 
     with ThreadPoolExecutor(max_workers=_BOXSCORE_WORKERS) as pool:
-        rows = [r for game_rows in pool.map(_one, by_pk.items()) for r in game_rows]
-    df = pd.DataFrame(rows)
-    _write_parquet(df, path)
-    logger.info("lineups %s: %d games, %d rows", season, len(by_pk), len(df))
-    return len(df)
+        per_game = dict(zip(dates, pool.map(_one, dates.items()), strict=True))
+    if "pitching" in todo:
+        bad = sorted(
+            f"{pk} ({', '.join(g['problems'])})" for pk, g in per_game.items() if g["problems"]
+        )
+        if bad:
+            logger.warning(
+                "pitching %s: %d games whose pitcher lines look wrong: %s",
+                season,
+                len(bad),
+                "; ".join(bad),
+            )
+    for kind in todo:
+        df = pd.DataFrame([r for g in per_game.values() for r in g[kind]])
+        result[kind] = len(df)
+        if df.empty:
+            logger.info("%s %s: no games played yet, nothing written", kind, season)
+            continue
+        _write_parquet(df, paths[kind])
+        logger.info("%s %s: %d games, %d rows", kind, season, len(dates), len(df))
+    return result
 
 
 # --- sprint speed ---------------------------------------------------------------
@@ -440,7 +614,7 @@ def write_season_games(root: Path, season: int, games: Games) -> int:
 
 
 def connect(root: Path) -> duckdb.DuckDBPyConnection:
-    """In-memory DuckDB with ``pitches``, ``lineups``, ``sprint_speed``, ``schedule``,
+    """In-memory DuckDB with ``pitches``, ``lineups``, ``pitching``, ``sprint_speed``, ``schedule``,
     ``games``, ``milb_season``, ``milb_weekly``, ``prospect_rankings`` and ``draft`` views.
 
     A view is only created when its files exist. ``pitches`` carries a ``season`` column
@@ -450,6 +624,7 @@ def connect(root: Path) -> duckdb.DuckDBPyConnection:
     patterns = {
         "pitches": "pitches/*/*.parquet",
         "lineups": "lineups/*.parquet",
+        "pitching": "pitching/*.parquet",
         "sprint_speed": "sprint_speed/*.parquet",
         "schedule": "schedule/*.parquet",
         "games": "games/*.parquet",

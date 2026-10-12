@@ -33,3 +33,15 @@ def test_summary_with_old_and_new_lineup_files(tmp_path, capsys):
     new = next(line for line in lines if line.startswith("2025"))
     assert old.split()[-5:] == ["-"] * 5
     assert new.split()[-5:] == ["9", "1", "3", "2", "1"]
+
+
+def test_summary_with_pitching_files_missing_columns(tmp_path, capsys):
+    path = tmp_path / "pitching" / "2025.parquet"
+    path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        {"game_pk": [1, 1], "game_date": ["2025-04-01"] * 2, "gs": [1, 1], "outs": [27, 27]}
+    ).to_parquet(path, index=False)
+    print_summary(tmp_path)
+    row = next(line for line in capsys.readouterr().out.splitlines() if line.startswith("2025"))
+    # starts and outs per game are there; bf, k and er are missing and print "-".
+    assert row.split()[3:] == ["2.00", "54.00", "-", "-", "-"]
