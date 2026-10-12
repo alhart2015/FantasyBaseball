@@ -15,7 +15,9 @@ Our team projection is saves per remaining game x the games left on the stored
 schedule. Two checks split the error: each share x the team's **actual** saves (no
 team error), and his actual share x our team projection (no share error). A pitcher
 with no team yet (before his first MLB game) gets the average team's numbers.
-Writes data/pitcher_ros/saves/compare-s<seed>.md and prints it.
+Writes data/pitcher_ros/saves/compare-s<seed>.md and prints it, and the units (one row
+per pitcher and span, every method) to units-pre-s<seed>.parquet / units-mid-s<seed>.parquet
+there for scripts/score_pitcher_net_saves.py.
 
 Usage:
     python scripts/compare_pitcher_saves.py
@@ -209,6 +211,14 @@ def main() -> int:
             )
             mid.append(u.assign(snapshot=snap.date().isoformat()))
 
+    OUT.mkdir(parents=True, exist_ok=True)
+    # A span with no units removes the file, so an old run's units can't be read as these.
+    for name, parts in (("pre", pre), ("mid", mid)):
+        path = OUT / f"units-{name}-s{args.seed}.parquet"
+        if parts:
+            pd.concat(parts, ignore_index=True).to_parquet(path)
+        else:
+            path.unlink(missing_ok=True)
     md = ["### Saves: FanGraphs' closer calls vs our usage model (#474)", ""]
     md.append(
         "Squared miss in saves over the span (preseason: the season; snapshot: the rest "

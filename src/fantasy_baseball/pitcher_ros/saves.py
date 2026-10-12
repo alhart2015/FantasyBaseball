@@ -21,6 +21,13 @@ the team's projected **total**.
     his share of his team's saves), fit on every complete season before the projected
     one; the answer is his saves for his current team over its rest-of-season saves.
 
+The projection to use is the plain average of the two (``mix`` in
+scripts/compare_pitcher_saves.py): it beats both, and FanGraphs' own saves. Weights
+fit on earlier seasons (non-negative least squares) didn't beat it: preseason
+2023-2026 MSE 10.76-10.79 vs 10.80-10.84, and mid-season even weights fit on the
+answers only reached 3.12-3.16 vs 3.15-3.17. :func:`net_with_saves` puts it into the
+pitcher net's predictions as SV.
+
 Everything is dated like the training table: inputs only from games before the date.
 """
 
@@ -159,7 +166,8 @@ def fangraphs_shares(
     """FanGraphs' projected saves and share of their team's, per pitcher (``player_id``
     index), each averaged over the same systems -- the ones that project him:
     ``sv_fg``; ``share_fg``, his saves over his FanGraphs team's total in each (0 in a
-    system that has him on no team: a free agent, a minor leaguer); and ``team_fg``,
+    system that has him on no team: a free agent, a minor leaguer); ``bf_fg``, his
+    projected batters faced (TBF; over the systems with some); and ``team_fg``,
     his FanGraphs team (the one most of those systems list; NaN with none).
     ``systems``: just these (None: every ``*-pitchers*.csv`` with saves). None when no
     file has saves."""
@@ -168,10 +176,11 @@ def fangraphs_shares(
         name = path.name.split("-pitchers")[0]
         if systems is not None and name not in systems:
             continue
-        raw = pd.read_csv(path, encoding="utf-8-sig", usecols=["Team", "SV", "MLBAMID"])
+        raw = pd.read_csv(path, encoding="utf-8-sig", usecols=["Team", "SV", "TBF", "MLBAMID"])
         raw = raw.assign(
             MLBAMID=pd.to_numeric(raw["MLBAMID"], errors="coerce"),
             SV=pd.to_numeric(raw["SV"], errors="coerce"),
+            TBF=pd.to_numeric(raw["TBF"], errors="coerce"),
         ).dropna(subset=["MLBAMID"])
         if raw["SV"].isna().all():
             continue
@@ -182,6 +191,7 @@ def fangraphs_shares(
         parts.append(
             pd.DataFrame(
                 {"sv_fg": raw["SV"].to_numpy(), "share_fg": share.to_numpy(),
+                 "bf_fg": raw["TBF"].where(raw["TBF"] > 0).to_numpy(),
                  "team_fg": team.to_numpy(), "system": name},
                 index=pd.Index(raw["MLBAMID"].to_numpy(), name="player_id"),
             )
@@ -189,7 +199,7 @@ def fangraphs_shares(
     if not parts:
         return None
     stacked = pd.concat(parts)
-    out = stacked.groupby(level="player_id")[["sv_fg", "share_fg"]].mean()
+    out = stacked.groupby(level="player_id")[["sv_fg", "share_fg", "bf_fg"]].mean()
     out["team_fg"] = stacked.groupby(level="player_id")["team_fg"].agg(
         lambda s: s.mode().iloc[0] if s.notna().any() else pd.NA
     )
@@ -290,3 +300,54 @@ def fit_usage_shares(
     return pd.Series(
         np.clip(model.predict(x[test]), 0.0, 1.0), index=table.index[test], name="share_usage"
     )
+
+
+# The ``week`` of a prediction row re-dated to a snapshot (:func:`net_with_saves`): not a
+# week of the table, so the backtest's preseason pick (week 0) never takes one.
+SNAPSHOT_WEEK = -1
+
+
+def _swap_sv(rows: pd.DataFrame, units: pd.DataFrame, column: str) -> pd.DataFrame:
+    rate = div(units[column], units["bf_fg"]).set_axis(units["player_id"])
+    return rows.assign(sv=rows["player_id"].map(rate).fillna(rows["sv"]))
+
+
+def net_with_saves(
+    preds: pd.DataFrame, pre: pd.DataFrame, mid: pd.DataFrame, column: str = "mix"
+) -> pd.DataFrame:
+    """The net's predictions with SV taken from a saves projection: ``column`` saves
+    per unit over FanGraphs' projected batters faced (``bf_fg``, averaged over the
+    systems the units used), so rate x ``bf_fg`` gives back the saves. Used for
+    something else, the rate has to be over the playing time it will be multiplied by
+    (Depth Charts in production), or the saves come out scaled.
+
+    ``preds``: one row per pitcher and as-of date (``player_id``, ``season``, ``week``,
+    ``as_of`` and the targets). ``pre``: one row per pitcher and season (preseason);
+    ``mid``: per pitcher and ``snapshot`` (ISO date). Every row of ``preds`` is kept;
+    the week-0 rows of the seasons in ``pre`` get its SV. Per snapshot, each pitcher's
+    latest row on or before the date is copied, re-dated to it (week
+    ``SNAPSHOT_WEEK``) and given its SV, so the backtest (``backtest._ours_at``) reads
+    that snapshot's rows. A date with no units reads the net's other stats as of then
+    (a copied row is never newer than the net's latest), with the SV of an earlier
+    snapshot in the same week, if any.
+    The snapshot rows come first, so on a snapshot dated like a table week the
+    backtest's pick (the first latest row) is the snapshot's.
+    A pitcher with no saves projection (or no FanGraphs batters faced) keeps the net's
+    SV."""
+    for name, units, key in (
+        ("pre", pre, ["player_id", "season"]),
+        ("mid", mid, ["player_id", "season", "snapshot"]),
+    ):
+        if units.duplicated(key).any():
+            raise ValueError(f"{name}: more than one row per {key}")
+    preseason = (preds["week"] == 0) & preds["season"].isin(pre["season"])
+    parts = []
+    for (season, snap), units in mid.groupby(["season", "snapshot"]):
+        when = pd.Timestamp(snap)
+        rows = preds[(preds["season"] == season) & (preds["as_of"] <= when)]
+        rows = rows.loc[rows.groupby("player_id")["as_of"].idxmax()]
+        parts.append(_swap_sv(rows, units, column).assign(as_of=when, week=SNAPSHOT_WEEK))
+    for season, units in pre.groupby("season"):
+        parts.append(_swap_sv(preds[preseason & (preds["season"] == season)], units, column))
+    parts.append(preds[~preseason])
+    return pd.concat(parts, ignore_index=True)
