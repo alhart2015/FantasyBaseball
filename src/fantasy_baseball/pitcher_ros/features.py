@@ -5,9 +5,10 @@ reads them (``stats``): K, W and SV per batter faced, ERA and WHIP, each with a 
 weight (see :func:`answers` for how they compare with the scorer's).
 
 Inputs (``input_frame``): rates per window (season to date, last 30 days, last season,
-last three, career), box-score and pitch-tracking, plus context (age, how much of the
-season is left, how much history the store covers, team run support and save chances,
-league rates). NaN = unknown (no batters faced, or not measured that season);
+last three, career), box-score and pitch-tracking, minor-league pitching (last season,
+last three; raw and against the level), plus context (age, how much of the season is
+left, how much history the store covers, team run support and save chances, league
+rates). NaN = unknown (no batters faced, or not measured that season);
 ``hitter_ros.features.Standardizer`` turns it into 0 plus a missing flag.
 """
 
@@ -17,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.pitcher_ros.stats import PER_BF, TARGETS, rates_from_counts
-from fantasy_baseball.pitcher_ros.table import RECENT_WINDOWS
+from fantasy_baseball.pitcher_ros.table import MILB_WINDOWS, RECENT_WINDOWS
 
 WINDOWS = ("std", "p1", "p3", "car")
 # The recent window used as input (l14 is in the table too).
@@ -165,10 +166,54 @@ def _team_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
     }
 
 
-COVERAGE = tuple(
-    f"{kind}{c}"
-    for kind in ("", "pitchtrack_", "battedtrack_")
-    for c in ("p1_in_store", "p3_seasons_in_store", "car_seasons_in_store")
+# Minor-league inputs, 3 seeds x 2022-2026 (runs 003-milb vs 001-plain): preseason K MSE
+# 186.7 / 187.9 / 185.4 vs 191.3 / 198.9 / 196.2 (90%, >99%, >99% sure better); fantasy-
+# relevant 13%, 96%, 97%. Mid-season K and the other stats within seed noise (no stat
+# worse on more than one seed). Batters faced that pull a minor-league K-rate gap
+# halfway to 0 (``milb_*_k_rel_shrunk``):
+MILB_SHRINK_BF = 100
+
+
+def _milb_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
+    """Minor-league pitching rates for window ``w`` (``table.MILB_WINDOWS``), each line
+    also read against its level (``*_rel``: what he allowed minus what his levels
+    allowed, per batter faced, or per 27 outs for ERA). All NaN, log batters faced
+    included, where the store has none of the window's seasons: "not stored", not
+    "pitched nowhere"."""
+
+    def c(name: str) -> pd.Series:
+        return t[f"milb_{w}_{name}"].astype(float)
+
+    bf, outs = c("bf"), c("outs")
+    out = {
+        "log_bf": np.log1p(bf),
+        **{f"{s}_bf": div(c(s), bf) for s in ("k", "bb", "hr", "h")},
+        **{f"{s}_rel": div(c(s) - c(f"x{s}"), bf) for s in ("k", "bb", "hr", "h")},
+        "k_rel_shrunk": (c("k") - c("xk")) / (bf + MILB_SHRINK_BF),
+        "era": 27 * div(c("er"), outs),
+        "era_rel": 27 * div(c("er") - c("xer"), outs),
+        "whip": 3 * div(c("h") + c("bb"), outs),
+        "gs_share": div(c("gs"), c("g")),
+        "outs_per_g": div(outs, c("g")),
+        "level": div(c("level_bf"), bf),
+        "age_vs_level": div(c("age_gap_bf"), c("age_bf")),
+    }
+    stored = (
+        t["milb_p1_in_store"].astype(bool)
+        if w == "p1"
+        else t["milb_p3_seasons_in_store"].astype(float) > 0
+    )
+    return {f"milb_{w}_{k}": v.where(stored) for k, v in out.items()}
+
+
+COVERAGE = (
+    *(
+        f"{kind}{c}"
+        for kind in ("", "pitchtrack_", "battedtrack_")
+        for c in ("p1_in_store", "p3_seasons_in_store", "car_seasons_in_store")
+    ),
+    "milb_p1_in_store",
+    "milb_p3_seasons_in_store",
 )
 
 
@@ -182,6 +227,8 @@ def input_frame(t: pd.DataFrame) -> pd.DataFrame:
         cols.update(_league_rates(t, w))
     for w in ("std", "p1"):
         cols.update(_team_rates(t, w))
+    for w in MILB_WINDOWS:
+        cols.update(_milb_rates(t, w))
     cols.update(
         {
             "age": t["age"].astype(float),

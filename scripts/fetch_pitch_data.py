@@ -1,8 +1,8 @@
 """Backfill / refresh the raw pitch-level store for the batted-ball model (#399, #400).
 
 Pulls every Statcast pitch, the Savant sprint-speed leaderboard, MLB box-score
-batting order, box-score pitching lines (#465), and minor-league hitting lines (#435)
-into parquet under data/pitch_data/. Safe to stop and re-run: finished
+batting order, box-score pitching lines (#465), and minor-league hitting (#435) and
+pitching (#465) lines into parquet under data/pitch_data/. Safe to stop and re-run: finished
 weekly chunks and finished seasons are skipped, so a re-run only fetches what is
 missing or still changing. A full 2015-2026 backfill takes several hours, almost all
 of it the pitch pull.
@@ -11,6 +11,7 @@ Usage:
     python scripts/fetch_pitch_data.py --start 2015 --end 2026
     python scripts/fetch_pitch_data.py --start 2026 --end 2026 --only lineups sprint
     python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only milb
+    python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only milb_pitching
     python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only pitching
     python scripts/fetch_pitch_data.py --summary
 """
@@ -42,7 +43,9 @@ from fantasy_baseball.ros_table import AS_OF_STEP_DAYS
 from fantasy_baseball.utils.time_utils import local_today
 
 DEFAULT_ROOT = PROJECT_ROOT / "data" / "pitch_data"
-KINDS = ("pitches", "lineups", "pitching", "sprint", "milb")
+# MiLB kind -> the API stat group it fetches (milb.GROUPS).
+MILB_KINDS = {"milb": "hitting", "milb_pitching": "pitching"}
+KINDS = ("pitches", "lineups", "pitching", "sprint", *MILB_KINDS)
 _LINEUP_TOTALS = ("pa", "hr", "r", "rbi", "sb")
 
 
@@ -115,28 +118,34 @@ def print_summary(root: Path) -> None:
         ).fetchall():
             print(f"{season}  {n:>11}")
     if "milb_season" in views:
-        print_milb_summary(conn, "milb_weekly" in views)
+        print_milb_summary(conn, "milb", "stat.plateAppearances", "PA")
+    if "milb_pitching_season" in views:
+        print_milb_summary(conn, "milb_pitching", "stat.battersFaced", "BF")
     print(f"\ntotal on disk: {_dir_mb(root):.1f} MB")
 
 
-def print_milb_summary(conn: duckdb.DuckDBPyConnection, has_weekly: bool) -> None:
-    """Players per level and season, and total PA in the season lines vs. the weekly
-    lines (equal once a season is complete)."""
-    pa = '"stat.plateAppearances"'
+def print_milb_summary(
+    conn: duckdb.DuckDBPyConnection, prefix: str, count: str, label: str
+) -> None:
+    """Players per level and season, and the total ``count`` (PA, or batters faced) in
+    the season lines vs. the weekly lines (equal once a season is complete). ``prefix``:
+    the views' name before ``_season`` / ``_weekly``."""
+    views = {r[0] for r in conn.execute("SELECT view_name FROM duckdb_views()").fetchall()}
+    pa = f'"{count}"'
     weekly = (
-        dict(conn.execute(f"SELECT season, sum({pa}) FROM milb_weekly GROUP BY 1").fetchall())
-        if has_weekly
+        dict(conn.execute(f"SELECT season, sum({pa}) FROM {prefix}_weekly GROUP BY 1").fetchall())
+        if f"{prefix}_weekly" in views
         else {}
     )
     counts: dict[int, dict[int, int]] = {}
     season_pa: dict[int, float] = {}
     for season, sport, n, total in conn.execute(
-        f"SELECT season, sport_id, count(*), sum({pa}) FROM milb_season GROUP BY 1, 2"
+        f"SELECT season, sport_id, count(*), sum({pa}) FROM {prefix}_season GROUP BY 1, 2"
     ).fetchall():
         counts.setdefault(season, {})[sport] = n
         season_pa[season] = season_pa.get(season, 0) + total
     header = "".join(f"{level:>7}" for level in MILB_LEVELS.values())
-    print(f"\nseason  {header}  season_PA  weekly_PA")
+    print(f"\n{prefix}\nseason  {header}  season_{label}  weekly_{label}")
     for season in sorted(counts):
         cells = "".join(f"{counts[season].get(s, 0):>7}" for s in MILB_LEVELS)
         print(f"{season}  {cells}  {season_pa[season]:>9.0f}  {weekly.get(season, 0):>9.0f}")
@@ -186,16 +195,22 @@ def main() -> int:
             except Exception:
                 logging.exception("sprint speed %s: failed", season)
                 failures.append(f"{season} sprint speed")
-        if "milb" in args.only:
+        for kind in (k for k in MILB_KINDS if k in args.only):
             try:
                 result = fetch_milb_season(
-                    args.root, season, first, last, step_days=AS_OF_STEP_DAYS, today=today
+                    args.root,
+                    season,
+                    first,
+                    last,
+                    step_days=AS_OF_STEP_DAYS,
+                    today=today,
+                    group=MILB_KINDS[kind],
                 )
                 if result["failed"]:
-                    failures.append(f"{season} milb ({result['failed']} windows)")
+                    failures.append(f"{season} {kind} ({result['failed']} windows)")
             except Exception:
-                logging.exception("milb %s: failed", season)
-                failures.append(f"{season} milb")
+                logging.exception("%s %s: failed", kind, season)
+                failures.append(f"{season} {kind}")
         if "pitches" in args.only:
             result = fetch_pitches_season(args.root, season, today, games=games)
             logging.info("pitches %s: %s", season, result)

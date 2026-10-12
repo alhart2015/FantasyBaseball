@@ -16,6 +16,7 @@ Layout::
     games/YYYY.parquet                           each regular-season game: date, ballpark,
                                                  home and away team (played or not)
     milb_season/, milb_weekly/                   minor-league hitting lines (see milb.py)
+    milb_pitching_season/, milb_pitching_weekly/ minor-league pitching lines (see milb.py)
 
 Resumability: a file is final -- never fetched again -- only if it was *written* more
 than ``SETTLE_DAYS`` after the end of the dates it covers. A file written earlier (a
@@ -615,7 +616,8 @@ def write_season_games(root: Path, season: int, games: Games) -> int:
 
 def connect(root: Path) -> duckdb.DuckDBPyConnection:
     """In-memory DuckDB with ``pitches``, ``lineups``, ``pitching``, ``sprint_speed``, ``schedule``,
-    ``games``, ``milb_season``, ``milb_weekly``, ``prospect_rankings`` and ``draft`` views.
+    ``games``, ``milb_season``, ``milb_weekly``, ``milb_pitching_season``,
+    ``milb_pitching_weekly``, ``prospect_rankings`` and ``draft`` views.
 
     A view is only created when its files exist. ``pitches`` carries a ``season`` column
     from the directory name; columns Savant added in later years are NULL in earlier ones.
@@ -630,6 +632,8 @@ def connect(root: Path) -> duckdb.DuckDBPyConnection:
         "games": "games/*.parquet",
         "milb_season": "milb_season/*.parquet",
         "milb_weekly": "milb_weekly/*/*.parquet",
+        "milb_pitching_season": "milb_pitching_season/*.parquet",
+        "milb_pitching_weekly": "milb_pitching_weekly/*/*.parquet",
         "prospect_rankings": "prospect_rankings/*.parquet",
         "draft": "draft/*.parquet",
     }

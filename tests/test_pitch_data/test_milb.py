@@ -280,3 +280,68 @@ def test_a_short_season_file_from_an_earlier_run_is_fetched_again(tmp_path):
     assert {c["stats"] for c in api.calls} == {"season"}  # the windows were all final
     season = pd.read_parquet(milb_season_path(tmp_path, 2025))
     assert season.set_index("player.id")["stat.plateAppearances"].to_dict() == {1: 250, 2: 50}
+
+
+def _as_pitching(lines):
+    """Hitting splits relabeled as pitching ones: plate appearances -> batters faced."""
+    out = []
+    for split in lines:
+        stat = dict(split["stat"])
+        stat["battersFaced"] = stat.pop("plateAppearances")
+        out.append({**split, "stat": stat})
+    return out
+
+
+def test_pitching_lines_go_to_their_own_folders_and_add_up_on_batters_faced(tmp_path):
+    windows = week_windows(FIRST, LAST, 7)
+    api = FakeApi(short=windows[2])
+    asked = []
+
+    def fetch(params):
+        asked.append(params["group"])
+        return _as_pitching(api(params))
+
+    hitting_log = _game_log()
+
+    def game_log(player, season, sport_id):
+        return _as_pitching(hitting_log(player, season, sport_id))
+
+    result = fetch_milb_season(
+        tmp_path,
+        2025,
+        FIRST,
+        LAST,
+        step_days=7,
+        today=DONE,
+        group="pitching",
+        fetch=fetch,
+        game_log=game_log,
+    )
+    assert result["failed"] == 0 and set(asked) == {"pitching"}
+    assert milb_season_path(tmp_path, 2025, "pitching").exists()
+    assert not milb_season_path(tmp_path, 2025).exists()  # nothing in the hitting folders
+    conn = connect(tmp_path)
+    views = {r[0] for r in conn.execute("SELECT view_name FROM duckdb_views()").fetchall()}
+    assert {"milb_pitching_season", "milb_pitching_weekly"} <= views
+    assert "milb_weekly" not in views
+    # The window the API dropped was caught on batters faced and rebuilt from the log.
+    weekly = conn.execute("SELECT * FROM milb_pitching_weekly").df()
+    assert weekly["stat.battersFaced"].sum() == 300
+    assert weekly.loc[weekly["player.id"] == 1, "from_game_log"].all()
+
+
+def test_pitching_weekly_lines_that_dont_add_up_fail_the_fetch(tmp_path):
+    windows = week_windows(FIRST, LAST, 7)
+    api = FakeApi(short=windows[2])
+    with pytest.raises(ValueError, match="battersFaced totals don't add up"):
+        fetch_milb_season(
+            tmp_path,
+            2025,
+            FIRST,
+            LAST,
+            step_days=7,
+            today=DONE,
+            group="pitching",
+            fetch=lambda params: _as_pitching(api(params)),
+            game_log=lambda player, season, sport_id: [],
+        )

@@ -1,10 +1,12 @@
 import shutil
 from datetime import date, timedelta
 
+import numpy as np
 import pandas as pd
 import pytest
 
 from fantasy_baseball.pitch_data.store import PITCHING_STAT_COLUMNS
+from fantasy_baseball.pitcher_ros.features import MILB_SHRINK_BF, input_frame
 from fantasy_baseball.pitcher_ros.table import TARGET_COUNTS, build_table
 
 STARTER, RELIEVER, MOPUP, TWOWAY, BATTER = 1, 2, 3, 4, 9
@@ -336,3 +338,96 @@ def test_saves_model_columns(tmp_path):
     # Without schedule files the games left are unknown.
     shutil.rmtree(tmp_path / "games")
     assert pd.isna(_row(build_table(tmp_path), RELIEVER, 2025, 1).team_games_left)
+
+
+def _milb(player, season, sport, league, bf, k, age, **stats):
+    """One minor-league pitching season line, in the store's raw API columns."""
+    counts = {"bf": bf, "k": k, "bb": 0, "hr": 0, "h": 0, "er": 0, "outs": 0, "g": 1, "gs": 0}
+    counts.update(stats)
+    names = {
+        "bf": "battersFaced",
+        "k": "strikeOuts",
+        "bb": "baseOnBalls",
+        "hr": "homeRuns",
+        "h": "hits",
+        "er": "earnedRuns",
+        "outs": "outs",
+        "g": "gamesPitched",
+        "gs": "gamesStarted",
+    }
+    return {
+        "player.id": player,
+        "season": season,
+        "sport_id": sport,
+        "league.id": league,
+        "stat.age": age,
+        **{f"stat.{names[c]}": v for c, v in counts.items()},
+    }
+
+
+def test_minor_league_windows_read_each_line_against_its_level(store):
+    other = 7  # a minor-leaguer who never pitched in the majors
+    lines = {
+        2023: [_milb(RELIEVER, 2023, 11, 111, bf=40, k=8, age=23)],
+        2024: [
+            _milb(RELIEVER, 2024, 11, 111, bf=100, k=30, age=24, gs=4, g=5),
+            _milb(RELIEVER, 2024, 12, 112, bf=50, k=10, age=22),
+            _milb(other, 2024, 11, 111, bf=200, k=40, age=26),
+            # The Mexican League is filed under AAA but left out.
+            _milb(RELIEVER, 2024, 11, 125, bf=500, k=50, age=24),
+        ],
+        # 2025's lines are after every 2025 row's date: never an input to them.
+        2025: [_milb(RELIEVER, 2025, 11, 111, bf=999, k=999, age=25)],
+    }
+    (store / "milb_pitching_season").mkdir()
+    for year, rows in lines.items():
+        pd.DataFrame(rows).to_parquet(store / "milb_pitching_season" / f"{year}.parquet")
+    df = build_table(store)
+
+    r = _row(df, RELIEVER, 2025, 1)
+    assert (r.milb_p1_bf, r.milb_p1_k, r.milb_p1_gs, r.milb_p1_g) == (150, 40, 4, 6)
+    # AAA struck out (30 + 40) / 300 that season and AA 10 / 50.
+    assert r.milb_p1_xk == pytest.approx(100 * 70 / 300 + 50 * 10 / 50)
+    assert r.milb_p1_level_bf == 1 * 100 + 2 * 50
+    # AAA's mean age (24 x 100 + 26 x 200) / 300; he was the only AA pitcher.
+    assert r.milb_p1_age_gap_bf == pytest.approx((24 - 7600 / 300) * 100)
+    assert r.milb_p1_age_bf == 150
+    assert (r.milb_p3_bf, r.milb_p3_k) == (190, 48)
+    assert r.milb_p1_in_store and r.milb_p3_seasons_in_store == 2
+    # Every week of a season reads the same seasons before it.
+    assert _row(df, RELIEVER, 2025, 0).milb_p3_bf == 190
+
+    s = _row(df, STARTER, 2025, 1)
+    assert s.milb_p1_bf == 0 and s.milb_p1_in_store  # stored, and no line: none pitched
+    first = _row(df, STARTER, 2024, 0)
+    assert first.milb_p1_in_store and first.milb_p3_seasons_in_store == 1
+
+
+def test_without_minor_league_files_the_windows_read_as_not_stored(store):
+    r = _row(build_table(store), RELIEVER, 2025, 1)
+    assert r.milb_p1_bf == 0 and not r.milb_p1_in_store and r.milb_p3_seasons_in_store == 0
+
+
+def test_minor_league_inputs_read_against_the_level_and_blank_when_not_stored(store):
+    (store / "milb_pitching_season").mkdir()
+    pd.DataFrame(
+        [
+            _milb(RELIEVER, 2024, 11, 111, bf=100, k=30, age=24, outs=75, er=5),
+            _milb(7, 2024, 11, 111, bf=300, k=60, age=26, outs=225, er=25),
+        ]
+    ).to_parquet(store / "milb_pitching_season" / "2024.parquet")
+    df = build_table(store)
+    x = input_frame(df)
+    r = x.loc[_row(df, RELIEVER, 2025, 1).name]
+    # AAA struck out 90 / 400 that season; he struck out 30 / 100.
+    assert r.milb_p1_k_bf == pytest.approx(0.30)
+    assert r.milb_p1_k_rel == pytest.approx(0.30 - 90 / 400)
+    assert r.milb_p1_k_rel_shrunk == pytest.approx((30 - 100 * 90 / 400) / (100 + MILB_SHRINK_BF))
+    assert r.milb_p1_era_rel == pytest.approx(27 * (5 - 75 * 30 / 300) / 75)
+    assert r.milb_p1_level == 1
+    # 2023 isn't stored: 2024's rows have no minor-league last season, not an empty one.
+    first = x.loc[_row(df, RELIEVER, 2024, 0).name]
+    assert np.isnan(first.milb_p1_log_bf) and np.isnan(first.milb_p1_k_rel)
+    # Stored but no line: no batters faced, rates unknown.
+    s = x.loc[_row(df, STARTER, 2025, 1).name]
+    assert s.milb_p1_log_bf == 0 and np.isnan(s.milb_p1_k_bf)
