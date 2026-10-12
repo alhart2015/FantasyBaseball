@@ -28,7 +28,6 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.data.mlb_game_logs import _fetch_season_games
-from fantasy_baseball.hitter_ros.table import AS_OF_STEP_DAYS
 from fantasy_baseball.pitch_data.milb import MILB_LEVELS, fetch_milb_season
 from fantasy_baseball.pitch_data.store import (
     BOXSCORE_KINDS,
@@ -39,6 +38,7 @@ from fantasy_baseball.pitch_data.store import (
     write_season_games,
     write_season_schedule,
 )
+from fantasy_baseball.ros_table import AS_OF_STEP_DAYS
 from fantasy_baseball.utils.time_utils import local_today
 
 DEFAULT_ROOT = PROJECT_ROOT / "data" / "pitch_data"
