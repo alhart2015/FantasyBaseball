@@ -309,36 +309,45 @@ SNAPSHOT_WEEK = -1
 
 def _swap_sv(rows: pd.DataFrame, units: pd.DataFrame, column: str) -> pd.DataFrame:
     rate = div(units[column], units["bf_fg"]).set_axis(units["player_id"])
-    new = rows["player_id"].map(rate)
-    return rows.assign(sv=new.where(new.notna(), rows["sv"]))
+    return rows.assign(sv=rows["player_id"].map(rate).fillna(rows["sv"]))
 
 
 def net_with_saves(
     preds: pd.DataFrame, pre: pd.DataFrame, mid: pd.DataFrame, column: str = "mix"
 ) -> pd.DataFrame:
     """The net's predictions with SV taken from a saves projection: ``column`` saves
-    per unit over FanGraphs' projected batters faced (``bf_fg``), the playing time
-    projections run on, so rate x that playing time gives back the saves.
+    per unit over FanGraphs' projected batters faced (``bf_fg``, averaged over the
+    systems the units used), so rate x ``bf_fg`` gives back the saves. Used for
+    something else, the rate has to be over the playing time it will be multiplied by
+    (Depth Charts in production), or the saves come out scaled.
 
     ``preds``: one row per pitcher and as-of date (``player_id``, ``season``, ``week``,
     ``as_of`` and the targets). ``pre``: one row per pitcher and season (preseason);
-    ``mid``: per pitcher and ``snapshot`` (ISO date). Preseason: the week-0 rows.
-    Snapshot: each pitcher's latest row on or before the date, re-dated to it (week
-    ``SNAPSHOT_WEEK``), for every pitcher the net has then, so the backtest
-    (``backtest._ours_at``) reads that snapshot's rows. A pitcher with no saves
-    projection there (or no FanGraphs batters faced) keeps the net's SV. Seasons with
-    no preseason units keep their week-0 rows as they are."""
-    for name, units in (("pre", pre), ("mid", mid)):
-        key = ["player_id", "season", *(["snapshot"] if name == "mid" else [])]
+    ``mid``: per pitcher and ``snapshot`` (ISO date). Every row of ``preds`` is kept;
+    the week-0 rows of the seasons in ``pre`` get its SV. Per snapshot, each pitcher's
+    latest row on or before the date is copied, re-dated to it (week
+    ``SNAPSHOT_WEEK``) and given its SV, so the backtest (``backtest._ours_at``) reads
+    that snapshot's rows. A date with no units reads the net's other stats as of then
+    (a copied row is never newer than the net's latest), with the SV of an earlier
+    snapshot in the same week, if any.
+    The snapshot rows come first, so on a snapshot dated like a table week the
+    backtest's pick (the first latest row) is the snapshot's.
+    A pitcher with no saves projection (or no FanGraphs batters faced) keeps the net's
+    SV."""
+    for name, units, key in (
+        ("pre", pre, ["player_id", "season"]),
+        ("mid", mid, ["player_id", "season", "snapshot"]),
+    ):
         if units.duplicated(key).any():
             raise ValueError(f"{name}: more than one row per {key}")
-    week0 = preds[preds["week"] == 0]
-    parts = [week0[~week0["season"].isin(pre["season"])]]
-    for season, units in pre.groupby("season"):
-        parts.append(_swap_sv(week0[week0["season"] == season], units, column))
+    preseason = (preds["week"] == 0) & preds["season"].isin(pre["season"])
+    parts = []
     for (season, snap), units in mid.groupby(["season", "snapshot"]):
         when = pd.Timestamp(snap)
         rows = preds[(preds["season"] == season) & (preds["as_of"] <= when)]
         rows = rows.loc[rows.groupby("player_id")["as_of"].idxmax()]
         parts.append(_swap_sv(rows, units, column).assign(as_of=when, week=SNAPSHOT_WEEK))
+    for season, units in pre.groupby("season"):
+        parts.append(_swap_sv(preds[preseason & (preds["season"] == season)], units, column))
+    parts.append(preds[~preseason])
     return pd.concat(parts, ignore_index=True)

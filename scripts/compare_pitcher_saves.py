@@ -212,10 +212,13 @@ def main() -> int:
             mid.append(u.assign(snapshot=snap.date().isoformat()))
 
     OUT.mkdir(parents=True, exist_ok=True)
-    if pre:
-        pd.concat(pre, ignore_index=True).to_parquet(OUT / f"units-pre-s{args.seed}.parquet")
-    if mid:
-        pd.concat(mid, ignore_index=True).to_parquet(OUT / f"units-mid-s{args.seed}.parquet")
+    # A span with no units removes the file, so an old run's units can't be read as these.
+    for name, parts in (("pre", pre), ("mid", mid)):
+        path = OUT / f"units-{name}-s{args.seed}.parquet"
+        if parts:
+            pd.concat(parts, ignore_index=True).to_parquet(path)
+        else:
+            path.unlink(missing_ok=True)
     md = ["### Saves: FanGraphs' closer calls vs our usage model (#474)", ""]
     md.append(
         "Squared miss in saves over the span (preseason: the season; snapshot: the rest "

@@ -2,6 +2,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from fantasy_baseball.pitcher_ros.backtest import _ours_at
 from fantasy_baseball.pitcher_ros.saves import (
     SNAPSHOT_WEEK,
     TEAM_COLUMNS,
@@ -180,3 +181,29 @@ def test_net_with_saves_swaps_sv_per_span_and_redates_snapshots():
     assert first.loc[2, "sv"] == 0.001 and first.loc[1, "k"] == 0.2
     with pytest.raises(ValueError, match="more than one row"):
         net_with_saves(preds, pd.concat([pre, pre]), mid)
+
+
+def test_backtest_reads_each_snapshots_swapped_rows():
+    """What backtest._ours_at picks from net_with_saves: the swapped week-0 rows
+    preseason; a snapshot's own rows, even one dated like a table week; and on a date
+    with no saves units, the net's stats as of then."""
+    days = pd.to_datetime(["2025-03-27", "2025-04-03", "2025-04-10"])
+    preds = pd.DataFrame(
+        {"player_id": 1, "season": 2025, "week": [0, 1, 2], "as_of": days,
+         "k": [0.20, 0.21, 0.22], "w": 0.01, "sv": 0.001, "era": 4.0, "whip": 1.3}
+    )  # fmt: skip
+    pre = pd.DataFrame({"player_id": [1], "season": 2025, "mix": [30.0], "bf_fg": [300.0]})
+    mid = pd.DataFrame({"player_id": [1, 1], "season": 2025, "mix": [20.0, 8.0],
+                        "bf_fg": [200.0, 100.0], "snapshot": ["2025-04-05", "2025-04-10"]})  # fmt: skip
+    ours = {"ours_sv": net_with_saves(preds, pre, mid)}
+
+    def at(when):
+        return _ours_at(ours, 2025, when)["ours_sv"].loc[1]
+
+    assert at(None)["sv"] == pytest.approx(0.1) and at(None)["k"] == 0.20
+    assert at(pd.Timestamp("2025-04-05"))["sv"] == pytest.approx(0.1)
+    assert at(pd.Timestamp("2025-04-05"))["k"] == 0.21
+    tie = at(pd.Timestamp("2025-04-10"))  # the snapshot's row, not week 2's
+    assert tie["sv"] == pytest.approx(0.08) and tie["k"] == 0.22
+    later = at(pd.Timestamp("2025-04-07"))  # no units: week 1's stats, 04-05's SV
+    assert later["k"] == 0.21 and later["sv"] == pytest.approx(0.1)

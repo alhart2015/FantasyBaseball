@@ -5,18 +5,21 @@ is the same with SV from the saves model's ``mix`` (the average of FanGraphs' sh
 our usage share, each x our team projection; scripts/compare_pitcher_saves.py), as a
 rate over FanGraphs' projected batters faced. Both are scored beside FanGraphs and the
 baselines (pitcher_ros.backtest), on the seasons the saves units cover. Writes
-saves-scores.md into the run's folder and prints it.
+saves-scores-s<seed>.md into the run's folder and prints it.
 
 Needs the run and the saves units for the seed (units-pre-s<seed>.parquet,
 units-mid-s<seed>.parquet in data/pitcher_ros/saves/, from compare_pitcher_saves.py).
+The seed is the run's (its config.json); another one is refused. Every snapshot the
+backtest scores must have saves units, or ours_sv would carry stale SV there.
 
 Usage:
-    python scripts/score_pitcher_net_saves.py --run 001-plain-s0 --saves-seed 0
+    python scripts/score_pitcher_net_saves.py --run 001-plain-s0
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import logging
 import sys
 from pathlib import Path
@@ -42,23 +45,31 @@ METHOD = "mix"
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", required=True, help="run folder under data/pitcher_ros/runs/")
-    parser.add_argument("--saves-seed", type=int, default=0)
+    parser.add_argument(
+        "--saves-seed", type=int, default=None, help="default: the run's seed (config.json)"
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     run = RUNS / args.run
+    if not (run / "config.json").exists():
+        parser.error(f"{run / 'config.json'} not found; train the run first")
+    seed = json.loads((run / "config.json").read_text())["seed"]
+    if args.saves_seed is not None and args.saves_seed != seed:
+        parser.error(f"--saves-seed {args.saves_seed} is not the run's seed ({seed})")
     paths = {
         "predictions": run / "predictions.parquet",
-        "pre": SAVES / f"units-pre-s{args.saves_seed}.parquet",
-        "mid": SAVES / f"units-mid-s{args.saves_seed}.parquet",
+        "pre": SAVES / f"units-pre-s{seed}.parquet",
+        "mid": SAVES / f"units-mid-s{seed}.parquet",
     }
     missing = [str(p) for p in paths.values() if not p.exists()]
     if missing:
         parser.error(f"missing {missing}; run train_pitcher_ros.py / compare_pitcher_saves.py")
     preds = pd.read_parquet(paths["predictions"])
     pre, mid = pd.read_parquet(paths["pre"]), pd.read_parquet(paths["mid"])
-    if "bf_fg" not in pre.columns:
-        parser.error(f"{paths['pre']} predates bf_fg; rerun scripts/compare_pitcher_saves.py")
+    for name, units in (("pre", pre), ("mid", mid)):
+        if "bf_fg" not in units.columns:
+            parser.error(f"{paths[name]} predates bf_fg; rerun scripts/compare_pitcher_saves.py")
 
     seasons = sorted(set(preds["season"]) & set(pre["season"]))
     preds = preds[preds["season"].isin(seasons)]
@@ -69,15 +80,22 @@ def main() -> int:
         league_denominators(LEAGUE),
         ours={"ours": preds, "ours_sv": net_with_saves(preds, pre, mid, METHOD)},
     )
+    if scores.snap is not None:
+        uncovered = set(scores.snap["snapshot"]) - set(mid["snapshot"])
+        if uncovered:
+            parser.error(
+                f"snapshots with no saves units: {sorted(uncovered)}; rerun "
+                "scripts/compare_pitcher_saves.py"
+            )
     md = [
-        f"### Pitcher run `{args.run}` with SV from the saves model (saves seed {args.saves_seed})",
+        f"### Pitcher run `{args.run}` with SV from the saves model (seed {seed})",
         "",
         f"`ours_sv` = `ours` with SV from the saves model's `{METHOD}`; every other stat "
         "is the same.",
         "",
         *backtest.summarize(scores),
     ]
-    (run / f"saves-scores-s{args.saves_seed}.md").write_text("\n".join(md) + "\n")
+    (run / f"saves-scores-s{seed}.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return 1 if scores.failures else 0
 
