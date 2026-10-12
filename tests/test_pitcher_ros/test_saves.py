@@ -165,7 +165,7 @@ def test_net_with_saves_swaps_sv_per_span_and_redates_snapshots():
          "as_of": [*days, *days, days[0]], "k": 0.2, "w": 0.01, "sv": 0.001, "era": 4.0,
          "whip": 1.3}
     )  # fmt: skip
-    pre = pd.DataFrame({"player_id": [1, 2], "season": 2025, "usage": [30.0, 3.0],
+    pre = pd.DataFrame({"player_id": [1, 2], "season": 2025, "usage": [30.0, 3.0], "mix": 0.0,
                         "bf_fg": [250.0, np.nan]})  # fmt: skip
     mid = pd.DataFrame({"player_id": [1, 1], "season": 2025, "usage": [20.0, 10.0],
                         "bf_fg": [200.0, 100.0], "snapshot": ["2025-04-05", "2025-04-06"]})  # fmt: skip
@@ -179,6 +179,9 @@ def test_net_with_saves_swaps_sv_per_span_and_redates_snapshots():
     first = snaps[snaps["as_of"] == pd.Timestamp("2025-04-05")].set_index("player_id")
     assert set(first.index) == {1, 2, 3} and first.loc[1, "sv"] == pytest.approx(0.1)
     assert first.loc[2, "sv"] == 0.001 and first.loc[1, "k"] == 0.2
+    # The column named is the one swapped in.
+    other = net_with_saves(preds, pre, mid.assign(mix=0.0), "mix")
+    assert other[other["week"] == 0].set_index("player_id").loc[1, "sv"] == 0.0
     with pytest.raises(ValueError, match="more than one row"):
         net_with_saves(preds, pd.concat([pre, pre]), mid, "usage")
 

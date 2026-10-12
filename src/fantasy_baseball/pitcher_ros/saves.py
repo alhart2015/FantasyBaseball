@@ -21,15 +21,19 @@ the team's projected **total**.
     his share of his team's saves), fit on every complete season before the projected
     one; the answer is his saves for his current team over its rest-of-season saves.
 
-The pitcher net keeps its own SV as ours: ``usage`` (no FanGraphs projection in it)
-only ties it in the backtest's SV score (scripts/score_pitcher_net_saves.py, 3
-seeds): preseason 2022-2026 MSE 19.98-20.19 vs the net's 18.75-19.57 (41-85% sure
-worse), 2026 snapshots 5.31-5.54 vs 5.35-5.52. Both lose to FanGraphs' saves there.
+The pitcher net keeps its own SV as ours. ``usage`` (no FanGraphs saves or shares in
+it; swapped in as a rate over FanGraphs' playing time, the volume projections run on)
+doesn't beat it in the backtest's SV score (scripts/score_pitcher_net_saves.py, 3
+seeds, paired against the net): preseason 2022-2026 MSE 19.98-20.19 vs 18.75-19.57,
+worse on every seed (41-85% sure; fantasy-relevant pitchers 73-96%, real on 1 of 3);
+2026 snapshots 5.31-5.54 vs 5.35-5.52, a tie. Both lose to FanGraphs' saves.
 ``mix`` (the average of the two shares) beats FanGraphs' own saves, but it carries
 FanGraphs' closer calls, so it belongs to the step that blends ours with FanGraphs,
-not to ours. Weights fit on earlier seasons didn't beat the plain average: preseason
-2023-2026 MSE 10.76-10.79 vs 10.80-10.84. :func:`net_with_saves` swaps either into
-the net's predictions as SV, for experiments like these.
+not to ours. Weights fit by non-negative least squares didn't beat the plain average:
+preseason 2023-2026 (fit on earlier seasons) MSE 10.76-10.79 vs 10.80-10.84, and
+mid-season even weights fit on the answers only reached 3.12-3.16 vs 3.15-3.17.
+:func:`net_with_saves` swaps either into the net's predictions as SV, for experiments
+like these.
 
 Everything is dated like the training table: inputs only from games before the date.
 """
