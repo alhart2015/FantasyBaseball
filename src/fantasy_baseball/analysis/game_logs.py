@@ -86,16 +86,75 @@ FULL_HITTER_FIELDS: dict[str, str] = {
 }
 
 
+# MLB stat-block field -> column, for a pitcher's full pitching line in one game (the
+# pitch_data box-score store, #465). Innings are ``outs`` (an integer), not the "6.2"
+# innings string. Shared column names with the batting line where the stat is the same
+# event (``k``, ``bb``, ``hbp``, ``h``, ``hr`` ...), from the pitcher's side.
+FULL_PITCHER_FIELDS: dict[str, str] = {
+    "gamesStarted": "gs",
+    "gamesFinished": "gf",
+    "completeGames": "cg",
+    "shutouts": "sho",
+    "outs": "outs",
+    "battersFaced": "bf",
+    "atBats": "ab",
+    "hits": "h",
+    "doubles": "b2",
+    "triples": "b3",
+    "homeRuns": "hr",
+    "baseOnBalls": "bb",
+    "intentionalWalks": "ibb",
+    "hitBatsmen": "hbp",
+    "strikeOuts": "k",
+    "sacFlies": "sf",
+    "sacBunts": "sh",
+    "catchersInterference": "ci",
+    "runs": "r",
+    "earnedRuns": "er",
+    "wins": "w",
+    "losses": "l",
+    "saves": "sv",
+    "saveOpportunities": "svo",
+    "holds": "hld",
+    "blownSaves": "bs",
+    "inheritedRunners": "ir",
+    "inheritedRunnersScored": "irs",
+    "numberOfPitches": "pitches",
+    "strikes": "strikes",
+    "balls": "balls",
+    "groundOuts": "go",
+    "airOuts": "ao",
+    "flyOuts": "fo",
+    "popOuts": "po",
+    "lineOuts": "lo",
+    "stolenBases": "sb",
+    "caughtStealing": "cs",
+    "pickoffs": "pickoffs",
+    "wildPitches": "wp",
+    "balks": "bk",
+}
+
+
+def _stat_line(stat: dict[str, Any], fields: dict[str, str]) -> dict[str, int]:
+    out: dict[str, int] = {}
+    for field, col in fields.items():
+        value = stat.get(field)
+        out[col] = int(value) if value is not None else 0
+    return out
+
+
 def full_hitter_line(stat: dict[str, Any]) -> dict[str, int]:
     """Every ``FULL_HITTER_FIELDS`` stat from an MLB stat block; missing or null is 0.
 
     Works on a gameLog split's ``stat`` and a box score's ``stats.batting`` alike.
     """
-    out: dict[str, int] = {}
-    for field, col in FULL_HITTER_FIELDS.items():
-        value = stat.get(field)
-        out[col] = int(value) if value is not None else 0
-    return out
+    return _stat_line(stat, FULL_HITTER_FIELDS)
+
+
+def full_pitcher_line(stat: dict[str, Any]) -> dict[str, int]:
+    """Every ``FULL_PITCHER_FIELDS`` stat from an MLB stat block (a box score's
+    ``stats.pitching``); missing or null is 0."""
+    return _stat_line(stat, FULL_PITCHER_FIELDS)
 
 
 def hitter_stats_from_statblock(stat: dict[str, Any]) -> HitterStatBlock:

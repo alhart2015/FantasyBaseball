@@ -1,7 +1,8 @@
 """Backfill / refresh the raw pitch-level store for the batted-ball model (#399, #400).
 
 Pulls every Statcast pitch, the Savant sprint-speed leaderboard, MLB box-score
-batting order, and minor-league hitting lines (#435) into parquet under data/pitch_data/. Safe to stop and re-run: finished
+batting order, box-score pitching lines (#465), and minor-league hitting lines (#435)
+into parquet under data/pitch_data/. Safe to stop and re-run: finished
 weekly chunks and finished seasons are skipped, so a re-run only fetches what is
 missing or still changing. A full 2015-2026 backfill takes several hours, almost all
 of it the pitch pull.
@@ -10,6 +11,7 @@ Usage:
     python scripts/fetch_pitch_data.py --start 2015 --end 2026
     python scripts/fetch_pitch_data.py --start 2026 --end 2026 --only lineups sprint
     python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only milb
+    python scripts/fetch_pitch_data.py --start 2008 --end 2026 --only pitching
     python scripts/fetch_pitch_data.py --summary
 """
 
@@ -32,6 +34,7 @@ from fantasy_baseball.pitch_data.store import (
     connect,
     fetch_lineups_season,
     fetch_pitches_season,
+    fetch_pitching_season,
     fetch_sprint_speed_season,
     write_season_games,
     write_season_schedule,
@@ -39,7 +42,7 @@ from fantasy_baseball.pitch_data.store import (
 from fantasy_baseball.utils.time_utils import local_today
 
 DEFAULT_ROOT = PROJECT_ROOT / "data" / "pitch_data"
-KINDS = ("pitches", "lineups", "sprint", "milb")
+KINDS = ("pitches", "lineups", "pitching", "sprint", "milb")
 _LINEUP_TOTALS = ("pa", "hr", "r", "rbi", "sb")
 
 
@@ -81,6 +84,24 @@ def print_summary(root: Path) -> None:
         ).fetchall():
             cells = "".join(f"{v if v is not None else '-':>8}" for v in values)
             print(f"{season}  {n:>11}  {games:>5}  {starters / games:>17.2f}{cells}")
+    if "pitching" in views:
+        # Per game: 2 starts and about 2 x 27 outs (fewer when the home team skips the
+        # bottom of the 9th, more in extra innings).
+        print(
+            "\nseason  pitching_rows  games  starts_per_game  outs_per_game"
+            "        bf        k       er"
+        )
+        for season, n, games, gs, outs, bf, k, er in conn.execute(
+            """
+            SELECT year(CAST(game_date AS DATE)), count(*), count(DISTINCT game_pk),
+                   sum(gs), sum(outs), sum(bf), sum(k), sum(er)
+            FROM pitching GROUP BY 1 ORDER BY 1
+            """
+        ).fetchall():
+            print(
+                f"{season}  {n:>13}  {games:>5}  {gs / games:>15.2f}  {outs / games:>13.1f}"
+                f"  {bf:>8}  {k:>7}  {er:>7}"
+            )
     if "sprint_speed" in views:
         print("\nseason  sprint_rows")
         for season, n in conn.execute(
@@ -152,6 +173,12 @@ def main() -> int:
             except Exception:
                 logging.exception("lineups %s: failed", season)
                 failures.append(f"{season} lineups")
+        if "pitching" in args.only:
+            try:
+                fetch_pitching_season(args.root, season, games=games)
+            except Exception:
+                logging.exception("pitching %s: failed", season)
+                failures.append(f"{season} pitching")
         if "sprint" in args.only:
             try:
                 fetch_sprint_speed_season(args.root, season, games=games)

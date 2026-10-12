@@ -9,7 +9,9 @@ Layout::
     pitches/season=YYYY/<start>_<end>.parquet   one file per weekly chunk
     lineups/YYYY.parquet                         one row per player per lineup slot per
                                                  game: batting order + box-score batting line
-    sprint_speed/YYYY.parquet                    Savant sprint-speed leaderboard
+    pitching/YYYY.parquet                        one row per pitcher per game: order of
+                                                 appearance + box-score pitching line (#465)
+    sprint_speed/YYYY.parquet                   Savant sprint-speed leaderboard
     schedule/YYYY.parquet                        first/last scheduled regular-season date
     games/YYYY.parquet                           each regular-season game: date, ballpark,
                                                  home and away team (played or not)
@@ -20,7 +22,7 @@ than ``SETTLE_DAYS`` after the end of the dates it covers. A file written earlie
 mid-season or next-day run) is re-fetched on every run until a settled copy replaces it,
 so late Savant corrections and the rest of a season are never frozen out. A lineup file
 missing a current column (e.g. one written before the batting line was stored) is not
-final either.
+final either; the same goes for a pitching file.
 
 Pitch chunks are fixed weeks counted from opening day and capped at the last scheduled
 regular-season date, never at today, so a chunk's file name does not change while its
@@ -50,7 +52,12 @@ import duckdb
 import pandas as pd
 import pyarrow.parquet as pq
 
-from fantasy_baseball.analysis.game_logs import FULL_HITTER_FIELDS, full_hitter_line
+from fantasy_baseball.analysis.game_logs import (
+    FULL_HITTER_FIELDS,
+    FULL_PITCHER_FIELDS,
+    full_hitter_line,
+    full_pitcher_line,
+)
 from fantasy_baseball.data.mlb_game_logs import (
     _fetch_boxscore,
     _fetch_season_games,
@@ -307,6 +314,20 @@ def fetch_lineups_season(
     _, season_end = season_window(games)
     if is_final(path, season_end, LINEUP_STAT_COLUMNS):
         return None
+    n_games, rows = _season_boxscore_rows(games, lineup_rows, fetch_boxscore)
+    df = pd.DataFrame(rows)
+    _write_parquet(df, path)
+    logger.info("lineups %s: %d games, %d rows", season, n_games, len(df))
+    return len(df)
+
+
+def _season_boxscore_rows(
+    games: Games,
+    rows_of: Callable[[dict[str, Any], int, str], list[dict[str, Any]]],
+    fetch_boxscore: Callable[[int], dict[str, Any]],
+) -> tuple[int, list[dict[str, Any]]]:
+    """``rows_of(box score, game_pk, date)`` over every played regular-season game, the
+    box scores fetched in parallel. Returns (games, rows). Any fetch failure raises."""
     finals = [_game_context(g) for g in games if was_played(g)]
     # A suspended game is listed under both its start and resume dates with one gamePk;
     # fetch it once, dated to the later (completion) date.
@@ -316,13 +337,126 @@ def fetch_lineups_season(
 
     def _one(item: tuple[int, str]) -> list[dict[str, Any]]:
         pk, d = item
-        return lineup_rows(fetch_boxscore(pk), pk, d)
+        return rows_of(fetch_boxscore(pk), pk, d)
 
     with ThreadPoolExecutor(max_workers=_BOXSCORE_WORKERS) as pool:
         rows = [r for game_rows in pool.map(_one, by_pk.items()) for r in game_rows]
+    return len(by_pk), rows
+
+
+# --- pitching lines ---------------------------------------------------------------
+
+
+# A pitching file without these is from an older field list and gets re-fetched.
+PITCHING_STAT_COLUMNS = tuple(FULL_PITCHER_FIELDS.values())
+# Checked per team and game: the pitchers' lines must add up to the box score's team
+# pitching line (MLB stat-block fields). Not earned runs: by scoring rule 9.16(i) a
+# reliever who enters after an error can be charged earned runs the team is not, so the
+# pitchers' ER can add up to more than the team's (21 of 2,429 games in 2026). The
+# pitchers' own ER are the official ones, the ones ERA is built from.
+PITCHING_TEAM_CHECK = (
+    "outs",
+    "battersFaced",
+    "strikeOuts",
+    "baseOnBalls",
+    "hits",
+    "homeRuns",
+    "runs",
+    "numberOfPitches",
+)
+
+
+def pitching_path(root: Path, season: int) -> Path:
+    return root / "pitching" / f"{season}.parquet"
+
+
+def _pitching_lines(team: dict[str, Any]) -> list[tuple[int, dict[str, Any]]]:
+    """(pitcher id, his ``stats.pitching`` block) for each pitcher in the team's
+    ``pitchers`` list, in the order they pitched."""
+    players = team.get("players", {})
+    return [
+        (int(pid), players.get(f"ID{pid}", {}).get("stats", {}).get("pitching") or {})
+        for pid in team.get("pitchers", [])
+    ]
+
+
+def pitching_rows(boxscore: dict[str, Any], game_pk: int, game_date: str) -> list[dict[str, Any]]:
+    """One row per pitcher who appeared in this box score. ``appearance`` is 1 for the
+    team's first pitcher, 2 for the next, and so on; ``gs`` is who was credited with the
+    start (an opener is appearance 1 with gs 1, the bulk man after him gs 0). The
+    pitching line rides along (``FULL_PITCHER_FIELDS`` columns; a missing field is 0).
+    """
+    rows: list[dict[str, Any]] = []
+    for side in ("home", "away"):
+        team = boxscore.get("teams", {}).get(side, {})
+        team_id = team.get("team", {}).get("id")
+        for i, (person_id, pitching) in enumerate(_pitching_lines(team), start=1):
+            rows.append(
+                {
+                    "game_pk": game_pk,
+                    "game_date": game_date,
+                    "team_id": team_id,
+                    "is_home": side == "home",
+                    "player_id": person_id,
+                    "appearance": i,
+                    **full_pitcher_line(pitching),
+                }
+            )
+    return rows
+
+
+def pitching_mismatches(boxscore: dict[str, Any]) -> list[str]:
+    """``side:field`` for each ``PITCHING_TEAM_CHECK`` total where the pitchers' lines
+    don't add up to the team's pitching line (a field the team line lacks is skipped)."""
+    out = []
+    for side in ("home", "away"):
+        team = boxscore.get("teams", {}).get(side, {})
+        total = team.get("teamStats", {}).get("pitching", {})
+        lines = [line for _, line in _pitching_lines(team)]
+        for field in PITCHING_TEAM_CHECK:
+            if total.get(field) is None:
+                continue
+            if sum(int(line.get(field) or 0) for line in lines) != int(total[field]):
+                out.append(f"{side}:{field}")
+    return out
+
+
+def fetch_pitching_season(
+    root: Path,
+    season: int,
+    *,
+    games: Games | None = None,
+    fetch_boxscore: Callable[[int], dict[str, Any]] = _fetch_boxscore,
+) -> int | None:
+    """Fetch every pitcher's line for every played regular-season game. Returns rows
+    written; None when the season's file is already final (see :func:`is_final`). Any
+    box-score failure raises without writing, so the next run retries the season whole.
+    A game whose pitcher lines don't add up to its team totals is kept, and logged: it
+    is MLB's own box score, with nothing here to fix it from.
+    """
+    games = games if games is not None else _fetch_season_games(season)
+    path = pitching_path(root, season)
+    _, season_end = season_window(games)
+    if is_final(path, season_end, PITCHING_STAT_COLUMNS):
+        return None
+    bad: list[str] = []
+
+    def rows_of(box: dict[str, Any], pk: int, d: str) -> list[dict[str, Any]]:
+        if mismatches := pitching_mismatches(box):
+            bad.append(f"{pk} ({', '.join(mismatches)})")
+        return pitching_rows(box, pk, d)
+
+    n_games, rows = _season_boxscore_rows(games, rows_of, fetch_boxscore)
+    if bad:
+        logger.warning(
+            "pitching %s: %d games whose pitcher lines don't add up to the team's: %s",
+            season,
+            len(bad),
+            "; ".join(sorted(bad)),
+        )
     df = pd.DataFrame(rows)
     _write_parquet(df, path)
-    logger.info("lineups %s: %d games, %d rows", season, len(by_pk), len(df))
+    logger.info("pitching %s: %d games, %d rows", season, n_games, len(df))
     return len(df)
 
 
@@ -440,7 +574,7 @@ def write_season_games(root: Path, season: int, games: Games) -> int:
 
 
 def connect(root: Path) -> duckdb.DuckDBPyConnection:
-    """In-memory DuckDB with ``pitches``, ``lineups``, ``sprint_speed``, ``schedule``,
+    """In-memory DuckDB with ``pitches``, ``lineups``, ``pitching``, ``sprint_speed``, ``schedule``,
     ``games``, ``milb_season``, ``milb_weekly``, ``prospect_rankings`` and ``draft`` views.
 
     A view is only created when its files exist. ``pitches`` carries a ``season`` column
@@ -450,6 +584,7 @@ def connect(root: Path) -> duckdb.DuckDBPyConnection:
     patterns = {
         "pitches": "pitches/*/*.parquet",
         "lineups": "lineups/*.parquet",
+        "pitching": "pitching/*.parquet",
         "sprint_speed": "sprint_speed/*.parquet",
         "schedule": "schedule/*.parquet",
         "games": "games/*.parquet",
