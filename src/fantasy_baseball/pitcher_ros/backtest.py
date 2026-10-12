@@ -13,6 +13,12 @@ Builds the long "scored" frames (one row per pitcher x system x stat, tagged wit
 and renders a markdown summary led by MSE (the main score, ``evaluate``), with a paired
 bootstrap of each system vs. the FanGraphs blend.
 
+Each season or snapshot is scored twice. Its own table has every FanGraphs system on
+file for it. The pooled tables (over seasons, over snapshots) are scored again with only
+the systems on file for every one of them, so ``fg_blend`` averages the same systems
+throughout and every system is scored on the same pitchers; the summary names the
+systems left out of them.
+
 Every scored row is tagged like the hitters' (``hitter_ros/backtest.py``):
 
 * ``group``: "vet" with at least ``VET_MIN_CAREER_BF`` MLB batters faced before the
@@ -20,19 +26,22 @@ Every scored row is tagged like the hitters' (``hitter_ros/backtest.py``):
   ``MIN_HISTORY_SEASONS`` earlier seasons, so a vet could look like a rookie.
 * ``relevant``: among the ``RELEVANT_TOP`` pitchers by fantasy value either in the
   FanGraphs projections compared against or in what actually happened over the span
-  (both count, so the set isn't picked on the compared system's own output alone).
-  ``RELEVANT_TOP`` is 150: this league starts 9 pitchers on each of 10 teams.
+  (``projection_eval.top_by_value``). ``RELEVANT_TOP`` is 150: this league starts 9
+  pitchers on each of 10 teams.
 """
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Collection, Iterable
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.backtest import sure_text, to_markdown
-from fantasy_baseball.pitcher_ros.baselines import baseline_predictions
+from fantasy_baseball.pitcher_ros.baselines import baseline_predictions, league_rates
 from fantasy_baseball.pitcher_ros.evaluate import (
     blend,
     fantasy_value,
@@ -42,12 +51,16 @@ from fantasy_baseball.pitcher_ros.evaluate import (
     scored_players,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS, rates_from_counts, totals
+from fantasy_baseball.projection_eval import systems_in_every_unit, top_by_value
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import Category
+
+logger = logging.getLogger(__name__)
 
 PRESEASON_MIN_BF = 100
 SNAPSHOT_MIN_BF = 40
 BLEND = "fg_blend"
+BASELINES = ("marcel", "league_avg")
 VET_MIN_CAREER_BF = 300
 MIN_HISTORY_SEASONS = 4
 GROUPS = ("vet", "rookie")
@@ -62,6 +75,12 @@ def _actual(games: pd.DataFrame) -> pd.DataFrame:
     return actual
 
 
+def _only(
+    systems: dict[str, pd.DataFrame], only: Collection[str] | None
+) -> dict[str, pd.DataFrame]:
+    return systems if only is None else {k: v for k, v in systems.items() if k in only}
+
+
 def score_span(
     games: pd.DataFrame,
     season: int,
@@ -69,15 +88,20 @@ def score_span(
     systems: dict[str, pd.DataFrame],
     min_bf: float,
     denoms: dict[Category, float],
+    league: pd.Series | None = None,
 ) -> pd.DataFrame | None:
     """Score the baselines and ``systems`` (plus their blend, with two or more) on
     ``season``'s games from ``before`` on, the baselines knowing only the games before
-    it. None when no pitcher reaches ``min_bf`` (a season not played yet)."""
+    it. None when no pitcher reaches ``min_bf`` (a season not played yet). ``league``:
+    ``baselines.league_rates`` for ``season`` if already computed."""
     in_season = games[games["season"] == season]
     actual = _actual(in_season[in_season["game_date"] >= before])
     if (actual["bf"] >= min_bf).sum() == 0:
         return None
-    projections = {**baseline_predictions(actual.index, games, season, before), **systems}
+    projections = {
+        **baseline_predictions(actual.index, games, season, before, league),
+        **systems,
+    }
     if len(systems) > 1:
         projections[BLEND] = blend(systems)
     scored = scored_players(projections, actual, min_bf)
@@ -91,9 +115,8 @@ def score_span(
     scored.loc[~vet, "group"] = "rookie" if known else "unknown"
 
     if systems:
-        values = pd.concat([fantasy_value(p, denoms) for p in systems.values()], axis=1)
-        top = values.mean(axis=1).nlargest(RELEVANT_TOP).index
-        top = top.union(fantasy_value(actual, denoms).nlargest(RELEVANT_TOP).index)
+        projected = (fantasy_value(p, denoms) for p in systems.values())
+        top = top_by_value(projected, fantasy_value(actual, denoms), RELEVANT_TOP)
         scored["relevant"] = pd.array(scored["player_id"].isin(top), dtype="boolean")
     else:
         scored["relevant"] = pd.array([pd.NA] * len(scored), dtype="boolean")
@@ -105,11 +128,13 @@ def preseason(
     season: int,
     projections_dir: Path,
     denoms: dict[Category, float] | None = None,
+    only: Collection[str] | None = None,
 ) -> pd.DataFrame | None:
     """Score the whole of ``season`` against the preseason files (and the baselines,
     which know every earlier season). ``denoms``: SGP denominators for the
-    ``relevant`` tag (None: the code defaults)."""
-    systems = load_systems(projections_dir / str(season), preseason=True)
+    ``relevant`` tag (None: the code defaults). ``only``: score just these FanGraphs
+    systems (None: every one on file)."""
+    systems = _only(load_systems(projections_dir / str(season), preseason=True), only)
     before = pd.Timestamp(season, 1, 1)
     denoms = denoms if denoms is not None else get_sgp_denominators()
     scored = score_span(games, season, before, systems, PRESEASON_MIN_BF, denoms)
@@ -121,29 +146,100 @@ def snapshots(
     season: int,
     projections_dir: Path,
     denoms: dict[Category, float] | None = None,
+    only: Collection[str] | None = None,
 ) -> pd.DataFrame | None:
-    """Score every dated ROS snapshot of ``season`` that has pitcher files."""
+    """Score every dated ROS snapshot of ``season`` that has pitcher files; ``denoms``
+    and ``only`` as for :func:`preseason`. A folder not named for a date is skipped,
+    with a warning."""
     root = projections_dir / str(season) / "rest_of_season"
     if not root.is_dir():
         return None
     denoms = denoms if denoms is not None else get_sgp_denominators()
+    league = league_rates(games, season)  # the same for every snapshot of the season
     parts = []
     for snap_dir in sorted(p for p in root.iterdir() if p.is_dir()):
-        systems = load_systems(snap_dir)
+        try:
+            snap = pd.Timestamp(date.fromisoformat(snap_dir.name))
+        except ValueError:
+            logger.warning("%s: not named for a date (YYYY-MM-DD), skipped", snap_dir)
+            continue
+        systems = _only(load_systems(snap_dir), only)
         if not systems:
             continue
-        snap = pd.Timestamp(date.fromisoformat(snap_dir.name))
-        scored = score_span(games, season, snap, systems, SNAPSHOT_MIN_BF, denoms)
+        scored = score_span(games, season, snap, systems, SNAPSHOT_MIN_BF, denoms, league)
         if scored is not None:
             parts.append(scored.assign(season=season, snapshot=snap.date().isoformat()))
     return pd.concat(parts, ignore_index=True) if parts else None
 
 
-def systems_in_every_unit(scored: pd.DataFrame, unit: str) -> pd.DataFrame:
-    """The rows of systems scored in every season (or snapshot), so their scores are
-    over the same units and compare down a column."""
-    counts = scored.groupby("system")[unit].nunique()
-    return scored[scored["system"].isin(counts.index[counts == scored[unit].nunique()])]
+def fangraphs_systems(scored: pd.DataFrame) -> list[str]:
+    """The FanGraphs systems in ``scored`` (not the baselines or the blend), in order."""
+    return [s for s in dict.fromkeys(scored["system"]) if s not in (*BASELINES, BLEND)]
+
+
+def systems_in_every(scored: pd.DataFrame, unit: str) -> list[str]:
+    """The FanGraphs systems scored in every season (or snapshot) of ``scored``."""
+    return fangraphs_systems(systems_in_every_unit(scored, unit))
+
+
+def _concat(parts: Iterable[pd.DataFrame | None]) -> pd.DataFrame | None:
+    frames = [p for p in parts if p is not None]
+    return pd.concat(frames, ignore_index=True) if frames else None
+
+
+@dataclass
+class Scores:
+    """Scored frames for a set of seasons. ``pre`` and ``snap``: every system on file
+    for each season or snapshot. ``pre_pooled`` and ``snap_pooled``: the same, scored
+    with only the systems on file for every one, for the pooled tables. ``failures``:
+    the seasons that couldn't be scored, with why."""
+
+    pre: pd.DataFrame | None = None
+    snap: pd.DataFrame | None = None
+    pre_pooled: pd.DataFrame | None = None
+    snap_pooled: pd.DataFrame | None = None
+    failures: list[str] = field(default_factory=list)
+
+
+def score_seasons(
+    games: pd.DataFrame,
+    seasons: Iterable[int],
+    projections_dir: Path,
+    denoms: dict[Category, float] | None = None,
+) -> Scores:
+    """Score every season in ``seasons`` (preseason and its snapshots). A season that
+    fails (a bad file, no earlier season in the store for the baselines) is logged and
+    listed in ``failures``, and the rest are still scored. A season with no games yet
+    is skipped."""
+    out = Scores()
+    pre: dict[int, pd.DataFrame] = {}
+    snap: dict[int, pd.DataFrame] = {}
+    for season in sorted(seasons):
+        try:
+            p = preseason(games, season, projections_dir, denoms)
+            if p is None:
+                logger.info("%s: no games played yet, skipped", season)
+                continue
+            s = snapshots(games, season, projections_dir, denoms)
+        except (ValueError, KeyError) as exc:
+            logger.exception("%s: not scored", season)
+            out.failures.append(f"{season}: {exc}")
+            continue
+        pre[season] = p
+        if s is not None:
+            snap[season] = s
+    out.pre, out.snap = _concat(pre.values()), _concat(snap.values())
+    if out.pre is not None:
+        core = systems_in_every(out.pre, "season")
+        out.pre_pooled = _concat(
+            preseason(games, season, projections_dir, denoms, only=core) for season in pre
+        )
+    if out.snap is not None:
+        core = systems_in_every(out.snap, "snapshot")
+        out.snap_pooled = _concat(
+            snapshots(games, season, projections_dir, denoms, only=core) for season in snap
+        )
+    return out
 
 
 def _vs_blend_lines(frame: pd.DataFrame) -> list[str]:
@@ -220,33 +316,59 @@ def _tag_blocks(frame: pd.DataFrame, unit: str) -> list[str]:
     return md
 
 
-def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
-    """Markdown lines: per-season and per-snapshot MSE tables, then pooled tables with
-    each system vs. the blend, for everyone, the fantasy-relevant pitchers, vets and
-    rookies."""
+def _pooled_note(every: pd.DataFrame, pooled: pd.DataFrame, unit: str) -> str:
+    """Which FanGraphs systems the pooled tables use, and which they leave out."""
+    used = fangraphs_systems(pooled)
+    n = every[unit].nunique()
+    left_out = [
+        f"{s} (on file for {every.loc[every['system'] == s, unit].nunique()} of {n})"
+        for s in fangraphs_systems(every)
+        if s not in used
+    ]
+    note = f"Pooled tables use the FanGraphs systems on file for every {unit}: " + (
+        ", ".join(used) or "none"
+    )
+    if BLEND in set(pooled["system"]):
+        note += f"; `{BLEND}` here is their average"
+    if left_out:
+        note += ". Left out: " + ", ".join(left_out)
+    return note + "."
+
+
+def summarize(scores: Scores) -> list[str]:
+    """Markdown lines: per-season and per-snapshot MSE tables (every system on file),
+    then pooled tables (the systems on file throughout) with each system vs. the blend,
+    for everyone, the fantasy-relevant pitchers, vets and rookies."""
     md = [
         "**Main score: MSE**, lower is better. K, W, SV: squared miss in season totals "
         "over the batters each pitcher actually faced. ERA, WHIP: squared miss in the "
-        "stat's units, weighted by actual innings. Every system is scored on the same "
-        f"pitchers: preseason, those with >= {PRESEASON_MIN_BF} actual batters faced; "
-        f"mid-season, >= {SNAPSHOT_MIN_BF} after the snapshot. `{BLEND}` = plain average "
-        "of the FanGraphs systems' rates; `marcel` and `league_avg` are simple floors "
-        "(pitcher_ros/baselines.py). Intervals resample pitchers; "
+        "stat's units, weighted by actual innings. Every system in a table is scored on "
+        f"the same pitchers: preseason, those with >= {PRESEASON_MIN_BF} actual batters "
+        f"faced; mid-season, >= {SNAPSHOT_MIN_BF} after the snapshot. `{BLEND}` = plain "
+        "average of the FanGraphs systems' rates; `marcel` and `league_avg` are simple "
+        "floors (pitcher_ros/baselines.py). Intervals resample pitchers; "
         '"N% sure better/worse" is how sure the system really differs from the blend; '
         "95%+ is marked real. It counts only the luck of which pitchers were scored.",
     ]
-    if pre is not None:
-        md += ["", "#### Preseason"]
-        for season, g in pre.groupby("season"):
-            md += ["", f"**{season}**", "", _table(g)]
-        every = systems_in_every_unit(pre, "season")
-        md += _pooled_block(every, "season", "All seasons, systems in every season")
-        md += _tag_blocks(every, "season")
-    if snap is not None:
-        md += ["", "#### Mid-season (ROS snapshots)"]
-        for snapshot, g in snap.groupby("snapshot"):
-            md += ["", f"**{snapshot}**", "", _table(g)]
-        every = systems_in_every_unit(snap, "snapshot")
-        md += _pooled_block(every, "snapshot", "All snapshots")
-        md += _tag_blocks(every, "snapshot")
+    if scores.failures:
+        md += ["", "**Not scored:** " + "; ".join(scores.failures)]
+    for every, pooled, unit, heading, title in (
+        (scores.pre, scores.pre_pooled, "season", "Preseason", "All seasons"),
+        (
+            scores.snap,
+            scores.snap_pooled,
+            "snapshot",
+            "Mid-season (ROS snapshots)",
+            "All snapshots",
+        ),
+    ):
+        if every is None:
+            continue
+        md += ["", f"#### {heading}"]
+        for name, g in every.groupby(unit):
+            md += ["", f"**{name}**", "", _table(g)]
+        if pooled is not None:
+            md += ["", _pooled_note(every, pooled, unit)]
+            md += _pooled_block(pooled, unit, title)
+            md += _tag_blocks(pooled, unit)
     return md

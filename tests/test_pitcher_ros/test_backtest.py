@@ -1,3 +1,5 @@
+import logging
+
 import pandas as pd
 import pytest
 
@@ -8,6 +10,15 @@ from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from .conftest import game, league_games
 
 HEADER = "Name,W,SV,IP,TBF,ER,H,BB,SO,ERA,WHIP,MLBAMID"
+# Rest-of-season sized, and full-season sized (passes the preseason check).
+ROWS = ["A,4,0,80,330,30,70,20,90,3.4,1.12,1", "B,2,0,40,170,20,40,15,30,4.5,1.4,2"]
+FULL_ROWS = ["A,12,0,180,750,70,150,50,200,3.5,1.11,1", "B,4,0,70,300,35,70,30,60,4.5,1.43,2"]
+
+
+def _write(folder, systems, rows=FULL_ROWS):
+    folder.mkdir(parents=True, exist_ok=True)
+    for name in systems:
+        (folder / f"{name}-pitchers.csv").write_text("\n".join([HEADER, *rows]) + "\n")
 
 
 def _games():
@@ -82,14 +93,59 @@ def test_short_store_history_makes_rookies_unknown():
 
 
 def test_snapshots_score_each_dated_folder(tmp_path):
-    folder = tmp_path / "2025" / "rest_of_season" / "2025-07-01"
-    folder.mkdir(parents=True)
-    rows = ["A,4,0,80,330,30,70,20,90,3.4,1.12,1", "B,2,0,40,170,20,40,15,30,4.5,1.4,2"]
-    (folder / "steamer-pitchers.csv").write_text("\n".join([HEADER, *rows]) + "\n")
+    _write(tmp_path / "2025" / "rest_of_season" / "2025-07-01", ["steamer"], ROWS)
     out = backtest.snapshots(_games(), 2025, tmp_path)
     assert out is not None
     assert set(out["snapshot"]) == {"2025-07-01"} and set(out["season"]) == {2025}
     # One system: no blend.
     assert set(out["system"]) == {"marcel", "league_avg", "steamer"}
-    md = "\n".join(backtest.summarize(None, out))
+    md = "\n".join(backtest.summarize(backtest.Scores(snap=out, snap_pooled=out)))
     assert "2025-07-01" in md and "All snapshots" in md
+
+
+def test_snapshot_folders_not_named_for_a_date_are_skipped(tmp_path, caplog):
+    root = tmp_path / "2025" / "rest_of_season"
+    _write(root / "2025-07-01", ["steamer"], ROWS)
+    _write(root / "2025-07-01_old", ["steamer"], ROWS)
+    with caplog.at_level(logging.WARNING):
+        out = backtest.snapshots(_games(), 2025, tmp_path)
+    assert out is not None and set(out["snapshot"]) == {"2025-07-01"}
+    assert "2025-07-01_old" in caplog.text
+
+
+def test_score_seasons_pools_only_systems_on_file_every_season(tmp_path):
+    games = pd.concat(
+        [
+            _games(),
+            pd.DataFrame(
+                [
+                    game(1, "2026-05-01", bf=600, outs=420, k=150, w=8, er=60, h=120, bb=40),
+                    game(2, "2026-05-01", bf=300, outs=200, k=60, w=2, er=40, h=80, bb=30),
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+    _write(tmp_path / "2025", ["steamer", "zips"])
+    _write(tmp_path / "2026", ["steamer", "zips", "atc"])
+    scores = backtest.score_seasons(games, [2025, 2026], tmp_path)
+    assert not scores.failures
+    assert scores.pre is not None and scores.pre_pooled is not None
+    # Each season's own table has every system on file for it ...
+    assert "atc" in set(scores.pre.loc[scores.pre["season"] == 2026, "system"])
+    # ... the pooled frame only the ones on file for both, blended from just those.
+    assert "atc" not in set(scores.pre_pooled["system"])
+    assert BLEND in set(scores.pre_pooled["system"])
+    md = "\n".join(backtest.summarize(scores))
+    assert "Left out: atc (on file for 1 of 2)" in md
+
+
+def test_score_seasons_reports_a_failed_season_and_scores_the_rest(tmp_path):
+    _write(tmp_path / "2025", ["steamer"])
+    # 2016 is the store's first season: no earlier one for the baselines' league rates.
+    _write(tmp_path / "2016", ["steamer"])
+    games = pd.concat([_games(), pd.DataFrame([game(1, "2016-07-01", bf=200, outs=140)])])
+    scores = backtest.score_seasons(games, [2016, 2025], tmp_path)
+    assert [f.split(":")[0] for f in scores.failures] == ["2016"]
+    assert scores.pre is not None and set(scores.pre["season"]) == {2025}
+    assert "**Not scored:** 2016" in "\n".join(backtest.summarize(scores))

@@ -45,7 +45,6 @@ import pandas as pd
 from fantasy_baseball.hitter_ros.baselines import baseline_predictions
 from fantasy_baseball.hitter_ros.evaluate import (
     SCALE,
-    SURE_BAR,
     blend,
     fantasy_value,
     load_systems,
@@ -68,6 +67,7 @@ from fantasy_baseball.hitter_ros.features import (
     rates_from_counts,
 )
 from fantasy_baseball.pitch_data.store import connect
+from fantasy_baseball.projection_eval import SURE_BAR, systems_in_every_unit, top_by_value
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import Category
 
@@ -126,9 +126,8 @@ def relevant_players(
     """The ``top`` hitters by fantasy value averaged over the FanGraphs systems that
     project each one, together with the ``top`` by actual value (``actual``: rates plus
     ``pa`` and ``ab`` over the scored span)."""
-    values = pd.concat([fantasy_value(p, denoms) for p in systems.values()], axis=1)
-    projected = values.mean(axis=1).nlargest(top).index
-    return projected.union(fantasy_value(actual, denoms).nlargest(top).index)
+    projected = (fantasy_value(p, denoms) for p in systems.values())
+    return top_by_value(projected, fantasy_value(actual, denoms), top)
 
 
 def _tag_relevant(
@@ -320,9 +319,7 @@ def write_scores(run_dir: Path, pre: pd.DataFrame | None, snap: pd.DataFrame | N
 def systems_in_every_season(scored: pd.DataFrame, unit: str = "season") -> pd.DataFrame:
     """The rows of systems scored in every season (or snapshot, with ``unit``), so their
     means are over the same units and compare down a column."""
-    n_units = scored[unit].nunique()
-    counts = scored.groupby("system")[unit].nunique()
-    return scored[scored["system"].isin(counts.index[counts == n_units])]
+    return systems_in_every_unit(scored, unit)
 
 
 def mean_over_seasons(

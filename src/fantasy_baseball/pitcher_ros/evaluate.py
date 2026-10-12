@@ -15,14 +15,14 @@ isn't charged for missing on playing time (that is scored on its own):
 from __future__ import annotations
 
 import logging
-from collections.abc import Iterable
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.evaluate import player_draws, sure
+from fantasy_baseball import projection_eval
 from fantasy_baseball.pitcher_ros.stats import PER_BF, TARGETS
+from fantasy_baseball.projection_eval import unit_key
 from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_ERA,
     REPLACEMENT_WHIP,
@@ -36,8 +36,6 @@ logger = logging.getLogger(__name__)
 # A full-season (preseason) projection has its top starters near 180+ IP. A file whose
 # biggest projection is under this is a rest-of-season export saved in the wrong place.
 PRESEASON_MIN_TOP_IP = 150
-# A scored frame may stack several seasons or snapshots; a pitcher is scored once per unit.
-UNIT_COLS = ("season", "snapshot")
 
 
 def load_fangraphs_pitchers(path: Path) -> pd.DataFrame:
@@ -75,7 +73,8 @@ def load_systems(directory: Path, *, preseason: bool = False) -> dict[str, pd.Da
     would hand FanGraphs part of it in hindsight. A file with no rows (a failed
     download) or with a stat blank for everyone (some ZiPS rest-of-season exports
     have no SV) is left out, with a warning: every system is scored on the same
-    pitchers and stats.
+    pitchers and stats. Two files for one system (``zips-pitchers.csv`` next to
+    ``zips-pitchers-old.csv``) is an error: which one to score is not a guess to make.
     """
     systems = {}
     for path in sorted(directory.glob("*-pitchers*.csv")):
@@ -90,25 +89,18 @@ def load_systems(directory: Path, *, preseason: bool = False) -> dict[str, pd.Da
                 f"{path}: top projected IP is {top_ip:.0f}, so this looks like a "
                 "rest-of-season export, not a preseason projection"
             )
-        systems[path.name.split("-pitchers")[0]] = proj
+        name = path.name.split("-pitchers")[0]
+        if name in systems:
+            raise ValueError(
+                f"{directory}: more than one {name}-pitchers*.csv; keep one per system"
+            )
+        systems[name] = proj
     return systems
-
-
-def _common_index(frames: Iterable[pd.DataFrame]) -> pd.Index:
-    """Players every frame has a value for, on every stat."""
-    common: pd.Index | None = None
-    for f in frames:
-        have = f.dropna(subset=list(TARGETS)).index
-        common = have if common is None else common.intersection(have)
-    assert common is not None, "no projections"
-    return common
 
 
 def blend(systems: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Plain average of the systems' rates over the pitchers they all cover."""
-    common = _common_index(systems.values())
-    stacked = [s.loc[common, list(TARGETS)] for s in systems.values()]
-    return sum(stacked[1:], stacked[0]) / len(stacked)
+    return projection_eval.blend(systems, TARGETS)
 
 
 def fantasy_value(projection: pd.DataFrame, denoms: dict[Category, float]) -> pd.Series:
@@ -149,7 +141,9 @@ def scored_players(
     over the scored span. Only pitchers with ``bf >= min_bf`` that every projection
     covers are kept, so every system is scored on the same pitchers."""
     players = actual.index[actual["bf"] >= min_bf]
-    players = players.intersection(_common_index([*projections.values(), actual]))
+    players = players.intersection(
+        projection_eval.common_index([*projections.values(), actual], TARGETS)
+    )
     volume = {v: actual.loc[players, v].to_numpy(dtype=float) for v in ("bf", "ip")}
     parts = [
         pd.DataFrame(
@@ -166,11 +160,6 @@ def scored_players(
         for s in TARGETS
     ]
     return pd.concat(parts, ignore_index=True)
-
-
-def unit_key(scored: pd.DataFrame) -> list[str]:
-    """Columns that identify one scored pitcher-unit."""
-    return ["player_id", *(c for c in UNIT_COLS if c in scored.columns)]
 
 
 def squared_error(scored: pd.DataFrame, keep: list[str]) -> pd.DataFrame:
@@ -210,31 +199,7 @@ def mse_bootstrap(
     ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower (+) or
     higher (-)), from resampling pitchers. Paired: both are scored on each draw. Each
     draw redraws a pitcher once for every season or snapshot he is in, so overlapping
-    snapshots aren't counted as independent evidence (as ``hitter_ros.evaluate``)."""
-    rng = np.random.default_rng(seed)
+    snapshots aren't counted as independent evidence (``projection_eval``)."""
     key = unit_key(scored)
     parts = squared_error(scored[scored["system"].isin([a, b])], [*key, "system", "stat"])
-    players = pd.Index(sorted(parts["player_id"].unique()))
-    counts = player_draws(len(players), n_boot, rng)
-    out = {}
-    for s in TARGETS:
-        g = parts[parts["stat"] == s]
-        wide = g.set_index([*key, "system"])[["sq", "w"]].unstack("system")
-        if {a, b} - set(g["system"]) or wide.isna().to_numpy().any():
-            raise ValueError(f"{s}: {a} and {b} must be scored on the same pitcher-units")
-        per = wide.groupby(level="player_id").sum().reindex(players, fill_value=0.0)
-        mse = {
-            x: (counts @ per[("sq", x)].to_numpy()) / (counts @ per[("w", x)].to_numpy())
-            for x in (a, b)
-        }
-        d = mse[a] - mse[b]
-        boot = d[1:]
-        out[s] = {
-            "diff": float(d[0]),
-            "lo": float(np.percentile(boot, 2.5)),
-            "hi": float(np.percentile(boot, 97.5)),
-            "sure": sure(-boot),
-            "a": float(mse[a][0]),
-            "b": float(mse[b][0]),
-        }
-    return pd.DataFrame(out).T
+    return projection_eval.mse_bootstrap(parts, key, a, b, TARGETS, n_boot=n_boot, seed=seed)

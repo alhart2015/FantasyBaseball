@@ -72,10 +72,15 @@ def marcel(
 
 
 def baseline_predictions(
-    players: pd.Index, games: pd.DataFrame, season: int, before: pd.Timestamp
+    players: pd.Index,
+    games: pd.DataFrame,
+    season: int,
+    before: pd.Timestamp,
+    league: pd.Series | None = None,
 ) -> dict[str, pd.DataFrame]:
-    """Both baselines for ``players``, rates indexed by ``player_id``."""
-    league = league_rates(games, season)
+    """Both baselines for ``players``, rates indexed by ``player_id``. ``league``:
+    :func:`league_rates` for ``season`` if already computed."""
+    league = league if league is not None else league_rates(games, season)
     return {
         "marcel": marcel(players, games, season, before, league),
         "league_avg": league_average(players, league),

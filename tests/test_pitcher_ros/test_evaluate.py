@@ -39,6 +39,13 @@ def test_load_systems_leaves_out_files_missing_a_stat(tmp_path, caplog):
     assert "no sv projections" in caplog.text
 
 
+def test_load_systems_refuses_two_files_for_one_system(tmp_path):
+    _csv(tmp_path / "zips-pitchers.csv", ["A,10,0,180,750,70,150,50,200,3.5,1.11,1"])
+    _csv(tmp_path / "zips-pitchers-old.csv", ["A,9,0,170,720,70,150,50,190,3.7,1.15,1"])
+    with pytest.raises(ValueError, match="more than one zips"):
+        load_systems(tmp_path)
+
+
 def test_load_systems_refuses_a_rest_of_season_file_as_preseason(tmp_path):
     _csv(tmp_path / "steamer-pitchers.csv", ["A,4,0,80,330,30,70,20,90,3.4,1.12,1"])
     with pytest.raises(ValueError, match="rest-of-season"):

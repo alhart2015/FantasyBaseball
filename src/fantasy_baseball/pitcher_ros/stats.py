@@ -36,14 +36,21 @@ def rates_from_counts(counts: pd.DataFrame) -> pd.DataFrame:
 
 def load_games(store: Path) -> pd.DataFrame:
     """Every pitcher-game line in the store's ``pitching`` view: ``player_id``,
-    ``game_date`` (datetime; a suspended game's is the day it finished), ``season`` and
-    ``COUNTS``."""
+    ``game_date`` (datetime), ``season`` and ``COUNTS``.
+
+    A suspended game is dated to the day it was finished (the store's ``resumed_date``),
+    not the day it started (the store's ``game_date``): the box score doesn't say which
+    of the two days a pitcher worked, and only from the later one is his whole line
+    known. So a projection dated between the two never sees the line as history, and a
+    pitcher who worked only the first day counts in the actuals after it.
+    """
     cols = ", ".join(c for c in COUNTS if c != "g")
     conn = connect(store)
     try:
         games = conn.execute(
             f"""
-            SELECT player_id, CAST(game_date AS DATE) AS game_date, 1 AS g, {cols}
+            SELECT player_id, CAST(COALESCE(resumed_date, game_date) AS DATE) AS game_date,
+                   1 AS g, {cols}
             FROM pitching
             """
         ).df()
