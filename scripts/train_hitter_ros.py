@@ -58,7 +58,6 @@ from fantasy_baseball.hitter_ros.features import (
     STEAL_TABLE_COLUMNS,
     TARGETS,
     ZONES,
-    Standardizer,
     avg_from_pieces,
     box_score_inputs,
     column_horizon,
@@ -108,6 +107,7 @@ from fantasy_baseball.hitter_ros.probes import (
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.hitter_ros.table import HORIZONS
 from fantasy_baseball.hitter_ros.table import build_options as table_build_options
+from fantasy_baseball.ros_training import holdout_and_scaler, weighted_moments
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
@@ -172,12 +172,7 @@ def fit_season(
     )
     if train_from is not None:  # learning-curve runs: train on fewer, more recent seasons
         train_rows &= table["season"] >= train_from
-    rng = np.random.default_rng(config.seed)
-    players = table.loc[train_rows, "player_id"].unique()
-    val_players = rng.choice(players, size=int(len(players) * config.val_frac), replace=False)
-    val_mask = table.loc[train_rows, "player_id"].isin(val_players).to_numpy()
-
-    scaler = Standardizer().fit(x_all[train_rows & ~table["player_id"].isin(val_players)])
+    val_mask, scaler = holdout_and_scaler(table, x_all, train_rows, config.val_frac, config.seed)
     # relative_target: learn each player's rates divided by a league rate -- the forecast
     # known on the date (#421) or the league's actual rate over the answer window (#424)
     # -- and multiply back by the forecast. The forecast's own error then shows up only in
@@ -213,14 +208,7 @@ def fit_season(
         if offset is not None and denominator is not None:
             offset[c] = logit(denominator[target_stat(c)])
     y_train, w_train = y_fit[train_rows], w_fit[train_rows]
-    fit_rows = ~val_mask
-    mu = {c: np.average(y_train[c][fit_rows].fillna(0), weights=w_train[c][fit_rows]) for c in cols}
-    sd = {
-        c: np.sqrt(
-            np.average((y_train[c][fit_rows].fillna(0) - mu[c]) ** 2, weights=w_train[c][fit_rows])
-        )
-        for c in cols
-    }
+    mu, sd = weighted_moments(y_train, w_train, ~val_mask)
     # Loss weight per horizon (#419): NetConfig.horizon_weights, in HORIZON_NAMES order.
     horizon_weight = dict(zip(HORIZON_NAMES, config.horizon_weights, strict=True))
     # Poisson targets (count_loss; SB's count pieces) are relative rates: the net
