@@ -28,7 +28,7 @@ PITCH_GROUPS = ("fb", "fc", "brk", "off")
 _ANSWER_COUNTS = ("bf", "outs", "k", "w", "sv", "er", "h", "bb")
 
 
-def _div(num: pd.Series, den: pd.Series) -> pd.Series:
+def div(num: pd.Series, den: pd.Series) -> pd.Series:
     """num / den, NaN where den is 0."""
     den = den.astype(float)
     return num.astype(float) / den.where(den != 0)
@@ -70,30 +70,30 @@ def _box_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
     out = {
         "log_bf": np.log1p(bf),
         "log_g": np.log1p(g),
-        "gs_share": _div(c("gs"), g),
-        "relief_out_share": _div(c("rel_outs"), outs),
-        "outs_per_g": _div(outs, g),
-        "outs_per_bf": _div(outs, bf),
-        **{f"{s}_bf": _div(c(s), bf) for s in ("k", "bb", "hbp", "h", "hr", "w", "l", "sv", "wp")},
-        "era": 27 * _div(c("er"), outs),
-        "ra9": 27 * _div(c("r"), outs),
-        "whip": 3 * _div(c("h") + c("bb"), outs),
-        "babip": _div(c("h") - c("hr"), balls_in_play),
-        "gb_share": _div(c("go"), c("go") + c("ao")),
-        "pitches_per_bf": _div(c("pitches"), bf),
-        "strike_share": _div(c("strikes"), c("pitches")),
-        "w_per_gs": _div(c("w"), c("gs")),
-        **{f"{s}_per_g": _div(c(s), g) for s in ("svo", "hld", "bs", "gf")},
-        "sv_per_svo": _div(c("sv"), c("svo")),
-        "irs_share": _div(c("irs"), c("ir")),
+        "gs_share": div(c("gs"), g),
+        "relief_out_share": div(c("rel_outs"), outs),
+        "outs_per_g": div(outs, g),
+        "outs_per_bf": div(outs, bf),
+        **{f"{s}_bf": div(c(s), bf) for s in ("k", "bb", "hbp", "h", "hr", "w", "l", "sv", "wp")},
+        "era": 27 * div(c("er"), outs),
+        "ra9": 27 * div(c("r"), outs),
+        "whip": 3 * div(c("h") + c("bb"), outs),
+        "babip": div(c("h") - c("hr"), balls_in_play),
+        "gb_share": div(c("go"), c("go") + c("ao")),
+        "pitches_per_bf": div(c("pitches"), bf),
+        "strike_share": div(c("strikes"), c("pitches")),
+        "w_per_gs": div(c("w"), c("gs")),
+        **{f"{s}_per_g": div(c(s), g) for s in ("svo", "hld", "bs", "gf")},
+        "sv_per_svo": div(c("sv"), c("svo")),
+        "irs_share": div(c("irs"), c("ir")),
     }
     return {f"{w}_{k}": v for k, v in out.items()}
 
 
 def _mean_sd(t: pd.DataFrame, w: str, name: str) -> tuple[pd.Series, pd.Series]:
     n = t[f"{w}_sc_{name}_n"].astype(float)
-    mean = _div(t[f"{w}_sc_{name}_sum"], n)
-    sq = _div(t[f"{w}_sc_{name}_sq_sum"], n)
+    mean = div(t[f"{w}_sc_{name}_sum"], n)
+    sq = div(t[f"{w}_sc_{name}_sq_sum"], n)
     return mean, np.sqrt((sq - mean**2).clip(lower=0))
 
 
@@ -110,29 +110,29 @@ def _tracking_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
         "velo_sd": velo_sd,
         "ext": _mean_sd(t, w, "ext")[0],
         "arm_angle": _mean_sd(t, w, "arm_angle")[0],
-        "swing_rate": _div(swings, pitches),
-        "whiff_rate": _div(c("whiffs"), swings),
-        "csw_rate": _div(c("called_strikes") + c("whiffs"), pitches),
-        "zone_rate": _div(c("zone_pitches"), pitches),
-        "zone_swing": _div(c("zone_swings"), c("zone_pitches")),
-        "zone_contact": _div(c("zone_contacts"), c("zone_swings")),
-        "chase_rate": _div(c("chase_pitches"), pitches),
-        "chase_swing": _div(c("chase_swings"), c("chase_pitches")),
-        "first_strike": _div(c("first_strikes"), c("first_pitches")),
-        "lhb_share": _div(c("pitches_vs_lhb"), pitches),
+        "swing_rate": div(swings, pitches),
+        "whiff_rate": div(c("whiffs"), swings),
+        "csw_rate": div(c("called_strikes") + c("whiffs"), pitches),
+        "zone_rate": div(c("zone_pitches"), pitches),
+        "zone_swing": div(c("zone_swings"), c("zone_pitches")),
+        "zone_contact": div(c("zone_contacts"), c("zone_swings")),
+        "chase_rate": div(c("chase_pitches"), pitches),
+        "chase_swing": div(c("chase_swings"), c("chase_pitches")),
+        "first_strike": div(c("first_strikes"), c("first_pitches")),
+        "lhb_share": div(c("pitches_vs_lhb"), pitches),
         "ev": ev,
         "ev_sd": ev_sd,
         "la": _mean_sd(t, w, "la")[0],
-        "hard_rate": _div(c("hard_hit"), c("ev_n")),
-        "barrel_rate": _div(c("barrels"), bip),
-        **{f"{s}_rate": _div(c(s), bip) for s in ("gb", "ld", "fb", "pu")},
-        "woba": _div(c("woba_sum"), c("woba_n")),
-        "xwoba": _div(c("xwoba_sum"), c("xwoba_n")),
-        "rv_per_100": 100 * _div(c("rv_sum"), c("rv_n")),
+        "hard_rate": div(c("hard_hit"), c("ev_n")),
+        "barrel_rate": div(c("barrels"), bip),
+        **{f"{s}_rate": div(c(s), bip) for s in ("gb", "ld", "fb", "pu")},
+        "woba": div(c("woba_sum"), c("woba_n")),
+        "xwoba": div(c("xwoba_sum"), c("xwoba_n")),
+        "rv_per_100": 100 * div(c("rv_sum"), c("rv_n")),
     }
     for g in PITCH_GROUPS:
-        out[f"{g}_share"] = _div(c(f"{g}_pitches"), pitches)
-        out[f"{g}_whiff"] = _div(c(f"{g}_whiffs"), c(f"{g}_swings"))
+        out[f"{g}_share"] = div(c(f"{g}_pitches"), pitches)
+        out[f"{g}_whiff"] = div(c(f"{g}_whiffs"), c(f"{g}_swings"))
         for m in ("velo", "spin", "ivb", "hbreak"):
             out[f"{g}_{m}"] = _mean_sd(t, w, f"{g}_{m}")[0]
     return {f"{w}_{k}": v for k, v in out.items()}
@@ -144,9 +144,9 @@ def _league_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
 
     bf, outs = c("bf"), c("outs")
     out = {
-        **{f"{s}_bf": _div(c(s), bf) for s in ("k", "bb", "hr", "w", "sv")},
-        "era": 27 * _div(c("er"), outs),
-        "whip": 3 * _div(c("h") + c("bb"), outs),
+        **{f"{s}_bf": div(c(s), bf) for s in ("k", "bb", "hr", "w", "sv")},
+        "era": 27 * div(c("er"), outs),
+        "whip": 3 * div(c("h") + c("bb"), outs),
     }
     return {f"lg_{w}_{k}": v for k, v in out.items()}
 
@@ -157,10 +157,10 @@ def _team_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
 
     games = c("games")
     return {
-        f"{w}_team_r_per_g": _div(c("r"), games),
-        f"{w}_team_svo_per_g": _div(c("svo"), games),
-        f"{w}_team_sv_per_g": _div(c("sv"), games),
-        f"{w}_team_era": 27 * _div(c("er"), c("outs")),
+        f"{w}_team_r_per_g": div(c("r"), games),
+        f"{w}_team_svo_per_g": div(c("svo"), games),
+        f"{w}_team_sv_per_g": div(c("sv"), games),
+        f"{w}_team_era": 27 * div(c("er"), c("outs")),
         f"{w}_team_log_games": np.log1p(games),
     }
 

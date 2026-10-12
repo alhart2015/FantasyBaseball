@@ -1,3 +1,4 @@
+import shutil
 from datetime import date, timedelta
 
 import pandas as pd
@@ -306,3 +307,32 @@ def test_without_pitch_files_tracking_reads_as_not_measured(tmp_path):
         assert later[f"{kind}p3_seasons_in_store"] == 0
         assert later[f"{kind}car_seasons_in_store"] == 0
     assert later.std_sc_pitches == 0 and pd.isna(later.age)
+
+
+def test_saves_model_columns(tmp_path):
+    seasons = _seasons()
+    lines = seasons[2025][0]
+    # A reliever who saves for TEAM_B, then for TEAM_A two days later.
+    moved = 7
+    lines.append(_line(2025801, date(2025, 4, 10), moved, TEAM_B, outs=3, bf=3, sv=1, svo=1))
+    lines.append(_line(2025802, date(2025, 4, 12), moved, TEAM_A, outs=3, bf=3, sv=1, svo=1))
+    _write(tmp_path, seasons)
+    # The stored schedule: TEAM_B's 21 games, plus one rained out and never made up.
+    sched = [
+        {"game_pk": 2025000 + i, "season": 2025, "game_date": date(2025, 4, 1) + timedelta(days=i),
+         "home_team_id": TEAM_B, "away_team_id": TEAM_A, "played": i < 21}
+        for i in range(22)
+    ]  # fmt: skip
+    (tmp_path / "games").mkdir()
+    pd.DataFrame(sched).to_parquet(tmp_path / "games" / "2025.parquet", index=False)
+    df = build_table(tmp_path)
+    closer = _row(df, RELIEVER, 2025, 1)  # TEAM_B, as of April 8
+    assert closer.ros_team_sv == 14 + 1 and closer.ros_team_games == 14
+    assert closer.ros_sv_for_team == 14 and closer.std_team_w == 0
+    assert closer.team_games_left == 14 + 1  # the rained-out game was still on the schedule
+    assert _row(df, STARTER, 2025, 1).std_team_w == 7
+    w1 = _row(df, moved, 2025, 1)
+    assert w1.team_id == TEAM_B and w1.ros_sv == 2 and w1.ros_sv_for_team == 1
+    # Without schedule files the games left are unknown.
+    shutil.rmtree(tmp_path / "games")
+    assert pd.isna(_row(build_table(tmp_path), RELIEVER, 2025, 1).team_games_left)

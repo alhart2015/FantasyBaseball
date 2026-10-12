@@ -6,12 +6,15 @@ pitchers who pitched in the span and that FanGraphs projects:
 
 * ``fg``: FanGraphs' own projected saves (preseason: Steamer + ZiPS, every year;
   snapshots: every system with saves).
-* ``fg_share``: FanGraphs' share of his team's projected saves x our team projection.
-* ``usage``: our usage model's share x our team projection (no FanGraphs).
-* ``mix``: the two shares averaged, x our team projection.
+* ``fg_share``: FanGraphs' share of their team's projected saves x our projection for
+  that team (their team, matched to ours by ``saves.fangraphs_team_ids``).
+* ``usage``: our usage model's share x our projection for his team (no FanGraphs).
+* ``mix``: the average of ``fg_share`` and ``usage``.
 
-and two checks that split the error: each share x the team's **actual** saves (no
-team error), and the actual share x our team projection (no share error).
+Our team projection is saves per remaining game x the games left on the stored
+schedule. Two checks split the error: each share x the team's **actual** saves (no
+team error), and his actual share x our team projection (no share error). A pitcher
+with no team yet (before his first MLB game) gets the average team's numbers.
 Writes data/pitcher_ros/saves/compare-s<seed>.md and prints it.
 
 Usage:
@@ -27,19 +30,22 @@ import sys
 from datetime import date
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import sure_text, to_markdown
+from fantasy_baseball.pitch_data.store import connect
+from fantasy_baseball.pitcher_ros.features import input_frame
 from fantasy_baseball.pitcher_ros.saves import (
+    TEAM_KEY,
     fangraphs_shares,
+    fangraphs_team_ids,
     fit_team_saves,
     fit_usage_shares,
+    scheduled_games_left,
     score_methods,
-    team_games,
     team_weeks,
     usage_answer,
     usage_inputs,
@@ -62,28 +68,37 @@ CANDIDATE_SV = 5
 def _units(
     rows: pd.DataFrame,
     actual_sv: pd.Series,
-    team_actual: pd.Series,
+    sv_for_team: pd.Series,
     team_proj: pd.Series,
+    team_actual: pd.Series,
     share_usage: pd.Series,
     fg: pd.DataFrame,
+    fg_ids: pd.Series,
 ) -> pd.DataFrame:
     """One row per pitcher in ``rows`` (table rows, one per pitcher) that FanGraphs
-    projects: every method's projected saves and the actual saves."""
-    u = rows[["player_id", "season"]].copy()
-    u["actual"] = actual_sv.reindex(u["player_id"]).fillna(0).to_numpy()
-    u["team_actual"] = team_actual.to_numpy()
-    u["team_proj"] = team_proj.to_numpy()
-    u["share_usage"] = share_usage.to_numpy()
-    u = u.join(fg, on="player_id", how="inner")
+    projects: every method's projected saves, the checks and the actual saves.
+    ``actual_sv`` / ``sv_for_team``: his saves over the span (all, and for his team),
+    by ``player_id``. ``team_proj`` / ``team_actual``: our projection and the actual
+    team saves over the span, by ``team_id``."""
+    proj_avg, actual_avg = team_proj.mean(), team_actual.mean()
+    u = rows[["player_id", "season", "team_id"]].join(fg, on="player_id", how="inner")
+    u["share_usage"] = share_usage.reindex(u.index)
+    u["actual"] = u["player_id"].map(actual_sv).fillna(0.0)
+    fg_team = u["team_fg"].map(fg_ids).fillna(u["team_id"])
+    u["proj_his"] = u["team_id"].map(team_proj).fillna(proj_avg)
+    u["actual_his"] = u["team_id"].map(team_actual).fillna(actual_avg)
+    proj_fg = fg_team.map(team_proj).fillna(proj_avg)
+    actual_fg = fg_team.map(team_actual).fillna(actual_avg)
     u["fg"] = u["sv_fg"]
-    u["fg_share"] = u["share_fg"] * u["team_proj"]
-    u["usage"] = u["share_usage"] * u["team_proj"]
-    u["mix"] = (u["share_fg"] + u["share_usage"]) / 2 * u["team_proj"]
-    u["fg_share_actual_team"] = u["share_fg"] * u["team_actual"]
-    u["usage_actual_team"] = u["share_usage"] * u["team_actual"]
-    actual_share = (u["actual"] / u["team_actual"].where(u["team_actual"] > 0)).fillna(0)
-    u["actual_share_our_team"] = actual_share.clip(upper=1) * u["team_proj"]
-    return u
+    u["fg_share"] = u["share_fg"] * proj_fg
+    u["usage"] = u["share_usage"] * u["proj_his"]
+    u["mix"] = (u["fg_share"] + u["usage"]) / 2
+    u["fg_share_actual_team"] = u["share_fg"] * actual_fg
+    u["usage_actual_team"] = u["share_usage"] * u["actual_his"]
+    for_team = u["player_id"].map(sv_for_team).fillna(0.0)
+    actual_share = (for_team / u["actual_his"].where(u["actual_his"] > 0)).fillna(0.0)
+    u["actual_share_our_team"] = actual_share.clip(upper=1.0) * u["proj_his"]
+    return u.drop(columns=["team_id", "team_fg"])
 
 
 def _block(units: pd.DataFrame, key: list[str], title: str) -> list[str]:
@@ -96,13 +111,14 @@ def _block(units: pd.DataFrame, key: list[str], title: str) -> list[str]:
         ),
     ):
         table, pairs = score_methods(sub, METHODS, key)
-        checks, _ = score_methods(sub, CHECKS, key, n_boot=1)
+        checks, _ = score_methods(sub, CHECKS, key, pairs=False)
+        assert pairs is not None
         n_per = sub.groupby([c for c in key if c != "player_id"]).size().mean()
         md += [
             "",
             f"**{title}, {label}** ({n_per:.0f} pitchers per unit, {len(sub)} in all)",
             "",
-            to_markdown(pd.concat([table, checks])[["mse", "typical_miss"]], digits=2),
+            to_markdown(pd.concat([table, checks]), digits=2),
             "",
             "MSE gaps (a minus b; negative = a better), 95% interval, how sure a is better:",
             "",
@@ -121,54 +137,47 @@ def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
     table = pd.read_parquet(TABLE)
+    missing = {"team_games_left", "ros_team_sv", "ros_sv_for_team"} - set(table.columns)
+    if missing:
+        parser.error(f"{TABLE} predates {sorted(missing)}; run scripts/build_pitcher_ros_table.py")
+    if table["team_games_left"].isna().all():
+        parser.error("no schedule in the store: fill it with scripts/fetch_pitch_data.py")
     games = load_games(STORE)
-    tg = team_games(games)
-    grid = table[["season", "week", "as_of"]].drop_duplicates()
-    tw = team_weeks(tg, grid)
-    complete = {int(s) for s, ok in table.groupby("season")["season_complete"].all().items() if ok}
-    tw_key = tw.set_index(["team_id", "season", "week"])
-    row_key = pd.MultiIndex.from_frame(table[["team_id", "season", "week"]])
-    team_ros_actual = pd.Series(
-        tw_key["ros_sv"].reindex(row_key).to_numpy(), index=table.index, dtype=float
-    )
-    x = usage_inputs(table)
-    share, weight = usage_answer(table, team_ros_actual)
+    conn = connect(STORE)
+    try:
+        schedule = conn.execute("SELECT * FROM games").df()
+    finally:
+        conn.close()
+    x = usage_inputs(table, input_frame(table))
+    share, weight = usage_answer(table)
+    tw = team_weeks(table)
 
     pre, mid = [], []
     for season in SEASONS:
         logging.info("season %s", season)
-        rate = fit_team_saves(tw, season, complete)
-        rate_key = tw.loc[rate.index].set_index(["team_id", "season", "week"])
-        rate_key = rate_key.assign(rate=rate.to_numpy())
+        rates = tw.loc[:, [*TEAM_KEY, "as_of", "team_games_left", "ros_team_sv"]]
+        rates = rates[rates["season"] == season].assign(rate=fit_team_saves(tw, season))
         rows_t = table["season"] == season
-        row_rate = pd.Series(
-            rate_key["rate"].reindex(row_key[rows_t.to_numpy()]).to_numpy(),
-            index=table.index[rows_t],
-        )
-        # No team yet (a pitcher before his first MLB game): the league's average team.
-        week_mean = rate_key.groupby("week")["rate"].mean()
-        row_rate = row_rate.fillna(table.loc[rows_t, "week"].map(week_mean))
         share_usage = fit_usage_shares(table, x, share, weight, season, args.seed)
 
-        # Preseason: week-0 rows; actuals and the team's games are the whole season.
-        w0 = table.index[rows_t & (table["week"] == 0) & (table["ros_bf"] > 0)]
+        # Preseason: week-0 rows; the whole season's saves and the team's games left.
+        w0 = table[rows_t & (table["week"] == 0) & (table["ros_bf"] > 0)]
         fg = fangraphs_shares(PROJECTIONS / str(season), PRESEASON_SYSTEMS)
         if fg is not None:
-            team_g = pd.Series(
-                tw_key["ros_g"].reindex(row_key[table.index.get_indexer(w0)]).to_numpy(), index=w0
-            )
+            r0 = rates[rates["week"] == 0].set_index("team_id")
             pre.append(
                 _units(
-                    table.loc[w0],
-                    table.loc[w0].set_index("player_id")["ros_sv"],
-                    # No team yet: the average team, as for the projection.
-                    team_ros_actual[w0].fillna(team_ros_actual[w0].mean()),
-                    row_rate[w0] * team_g.fillna(team_g.mean()),
-                    share_usage[w0],
+                    w0,
+                    w0.set_index("player_id")["ros_sv"],
+                    w0.set_index("player_id")["ros_sv_for_team"],
+                    r0["rate"] * r0["team_games_left"],
+                    r0["ros_team_sv"],
+                    share_usage,
                     fg,
+                    fangraphs_team_ids(fg, w0),
                 )
             )
-        # Snapshots: each pitcher's latest row on or before the date; actuals from it.
+        # Snapshots: each pitcher's latest row on or before the date; spans from it.
         root = PROJECTIONS / str(season) / "rest_of_season"
         for snap_dir in sorted(p for p in root.iterdir() if p.is_dir()) if root.is_dir() else []:
             snap = pd.Timestamp(date.fromisoformat(snap_dir.name))
@@ -176,24 +185,27 @@ def main() -> int:
             if fg is None:
                 continue
             after = games[(games["season"] == season) & (games["game_date"] >= snap)]
-            played = after.groupby("player_id")["bf"].sum()
+            pitched = after.groupby("player_id")["bf"].sum()
             known = table.loc[rows_t & (table["as_of"] <= snap)]
             latest = known.loc[known.groupby("player_id")["as_of"].idxmax()]
-            latest = latest[latest["player_id"].isin(played.index[played > 0])]
+            latest = latest[latest["player_id"].isin(pitched.index[pitched > 0])]
             if latest.empty:
                 continue
-            tga = tg[(tg["season"] == season) & (tg["game_date"] >= snap)]
-            team_left = tga.groupby("team_id").size()
-            team_sv_left = tga.groupby("team_id")["sv"].sum()
-            g_left = latest["team_id"].map(team_left)
-            proj = row_rate[latest.index] * g_left.fillna(team_left.mean())
+            # Each team's rate from its latest week on or before the date.
+            r = rates[rates["as_of"] <= snap]
+            r = r.loc[r.groupby("team_id")["as_of"].idxmax()].set_index("team_id")["rate"]
+            left = scheduled_games_left(schedule, season, snap)
+            his_team = latest.set_index("player_id")["team_id"]
+            for_team = after[after["team_id"] == after["player_id"].map(his_team)]
             u = _units(
                 latest,
                 after.groupby("player_id")["sv"].sum(),
-                latest["team_id"].map(team_sv_left).fillna(0),
-                proj,
-                share_usage[latest.index],
+                for_team.groupby("player_id")["sv"].sum(),
+                (r * left.reindex(r.index)).dropna(),
+                after.groupby("team_id")["sv"].sum(),
+                share_usage,
                 fg,
+                fangraphs_team_ids(fg, latest),
             )
             mid.append(u.assign(snapshot=snap.date().isoformat()))
 
@@ -201,9 +213,10 @@ def main() -> int:
     md.append(
         "Squared miss in saves over the span (preseason: the season; snapshot: the rest "
         "of it), per pitcher who pitched in it and that FanGraphs projects. `fg` = "
-        "FanGraphs' saves; `fg_share` / `usage` / `mix` = that share x our team-saves "
-        "projection. Checks: `*_actual_team` uses the team's actual saves (no team "
-        "error); `actual_share_our_team` the actual share (no share error)."
+        "FanGraphs' saves; `fg_share` / `usage` = that share x our projection of the "
+        "team's saves (games left on the schedule x projected saves per game); `mix` = "
+        "their average. Checks: `*_actual_team` uses the team's actual saves (no team "
+        "error); `actual_share_our_team` his actual share (no share error)."
     )
     if pre:
         md += _block(
@@ -222,5 +235,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    np.seterr(all="ignore")
     sys.exit(main())
