@@ -46,8 +46,11 @@ Context: the pitcher's team going forward (``ros_table.stage_current_team``: the
 of his next game when it is at most ``TEAM_LOOKAHEAD_DAYS`` off, else his last team, so
 a team he joins later while hurt or in the minors isn't read from the future) and that
 team's runs scored, games, saves, save
-chances, outs and earned runs before the date and last season (``team_*``: run support
-for W, the bullpen's save chances for SV). League totals per window (``lg_*``) over
+chances, outs, earned runs and wins before the date and last season (``team_*``: run
+support for W, the bullpen's save chances for SV), and its games left on the stored
+schedule (``team_games_left``). For the saves model (#474), answers: the team's saves
+and games from the date on (``ros_team_sv``, ``ros_team_games``) and his saves for that
+team (``ros_sv_for_team``). League totals per window (``lg_*``) over
 pitcher-seasons. ``age``: Savant's season age (``age_pit``; NULL with no pitch files),
 the last one plus the seasons since when a season isn't complete and he hasn't pitched
 yet.
@@ -196,7 +199,7 @@ PITCH_AGGS: dict[str, str] = {
     "sc_rv_sum": "sum(delta_pitcher_run_exp)",
 }
 PITCH_COUNTS = tuple(PITCH_AGGS)
-TEAM_COUNTS = ("team_r", "team_games", "team_sv", "team_svo", "team_outs", "team_er")
+TEAM_COUNTS = ("team_r", "team_games", "team_sv", "team_svo", "team_outs", "team_er", "team_w")
 LEAGUE_COUNTS = ("bf", "outs", "k", "bb", "hbp", "h", "hr", "r", "er", "w", "sv")
 
 _REQUIRED_VIEWS = ("pitching", "lineups", "schedule")
@@ -249,13 +252,15 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_pitches: bool) -> None:
             FROM lineups l JOIN game_dates g USING (game_pk) GROUP BY 1, 2
         ), pitching_days AS (
             SELECT team_id, {GAME_DATE_SQL} AS game_date, sum(sv) AS team_sv,
-                   sum(svo) AS team_svo, sum(outs) AS team_outs, sum(er) AS team_er
+                   sum(svo) AS team_svo, sum(outs) AS team_outs, sum(er) AS team_er,
+                   sum(w) AS team_w
             FROM pitching GROUP BY 1, 2
         )
         SELECT team_id, game_date, year(game_date) AS season,
                coalesce(b.team_r, 0) AS team_r, coalesce(b.team_games, 0) AS team_games,
                coalesce(p.team_sv, 0) AS team_sv, coalesce(p.team_svo, 0) AS team_svo,
-               coalesce(p.team_outs, 0) AS team_outs, coalesce(p.team_er, 0) AS team_er
+               coalesce(p.team_outs, 0) AS team_outs, coalesce(p.team_er, 0) AS team_er,
+               coalesce(p.team_w, 0) AS team_w
         FROM batting b FULL OUTER JOIN pitching_days p USING (team_id, game_date)
         """
     )
@@ -313,12 +318,14 @@ def build_table(root: Path) -> pd.DataFrame:
                 f"pitch-data store {root} has no {', '.join(missing)} files; "
                 "fill it with scripts/fetch_pitch_data.py"
             )
-        return _build(conn, has_pitches="pitches" in views)
+        return _build(conn, has_pitches="pitches" in views, has_games="games" in views)
     finally:
         conn.close()
 
 
-def _build(conn: duckdb.DuckDBPyConnection, *, has_pitches: bool) -> pd.DataFrame:
+def _build(
+    conn: duckdb.DuckDBPyConnection, *, has_pitches: bool, has_games: bool = False
+) -> pd.DataFrame:
     _stage(conn, has_pitches=has_pitches)
     box_season = season_totals(conn, "box_daily", BOX_COUNTS)
     pitch_season = season_totals(conn, "pitch_daily", PITCH_COUNTS)
@@ -377,6 +384,46 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_pitches: bool) -> pd.DataFram
         GROUP BY 1, 2, 3
         """
     )
+    # Answers for the saves model (#474): his team's saves and games from the date on,
+    # and his own saves for that team (a pitcher traded later saves for another).
+    conn.execute(
+        """
+        CREATE TEMP TABLE team_ros AS
+        SELECT pop.player_id, pop.season, pop.week,
+               coalesce(sum(t.team_sv), 0) AS ros_team_sv,
+               coalesce(sum(t.team_games), 0) AS ros_team_games
+        FROM pop JOIN cur_team ct USING (player_id, season, week)
+        LEFT JOIN team_daily t
+          ON t.team_id = ct.team_id AND t.season = pop.season AND t.game_date >= pop.as_of
+        GROUP BY 1, 2, 3
+        """
+    )
+    conn.execute(
+        """
+        CREATE TEMP TABLE sv_for_team AS
+        SELECT pop.player_id, pop.season, pop.week, coalesce(sum(b.sv), 0) AS ros_sv_for_team
+        FROM pop JOIN cur_team ct USING (player_id, season, week)
+        LEFT JOIN box_daily b
+          ON b.player_id = pop.player_id AND b.season = pop.season
+         AND b.game_date >= pop.as_of AND b.team_id = ct.team_id
+        GROUP BY 1, 2, 3
+        """
+    )
+    # The team's games left on the season's schedule (the stored one: every game listed
+    # on or after the date, played or not), known on the date. NULL without schedule
+    # files or a team.
+    sched = (
+        """SELECT pop.player_id, pop.season, pop.week,
+                  count(g.game_pk) FILTER (WHERE ct.team_id IS NOT NULL) AS team_games_left
+           FROM pop JOIN cur_team ct USING (player_id, season, week)
+           LEFT JOIN games g ON g.season = pop.season AND g.game_date >= pop.as_of
+            AND ct.team_id IN (g.home_team_id, g.away_team_id)
+           GROUP BY 1, 2, 3"""
+        if has_games
+        else """SELECT player_id, season, week, CAST(NULL AS BIGINT) AS team_games_left
+                FROM pop"""
+    )
+    conn.execute(f"CREATE TEMP TABLE team_sched AS {sched}")
 
     for w, cond in (
         ("p1", "l.season = s.season - 1"),
@@ -412,13 +459,18 @@ def _build(conn: duckdb.DuckDBPyConnection, *, has_pitches: bool) -> pd.DataFram
                {AGE_SELECT},
                tc.team_id, tc.* EXCLUDE (player_id, season, week, team_id),
                tp.* EXCLUDE (player_id, season, week),
+               ts.team_games_left,
                {joined},
+               tr.ros_team_sv, tr.ros_team_games, sft.ros_sv_for_team,
                ls.* EXCLUDE (season, week),
                p1l.* EXCLUDE (season), p3l.* EXCLUDE (season), carl.* EXCLUDE (season)
         FROM pop
         {" ".join(f"JOIN {p} USING (player_id, season, week)" for p in parts)}
         JOIN team_ctx tc USING (player_id, season, week)
         JOIN team_ctx_p1 tp USING (player_id, season, week)
+        JOIN team_sched ts USING (player_id, season, week)
+        JOIN team_ros tr USING (player_id, season, week)
+        JOIN sv_for_team sft USING (player_id, season, week)
         JOIN league_std ls USING (season, week)
         JOIN league_p1 p1l ON p1l.season = pop.season
         JOIN league_p3 p3l ON p3l.season = pop.season
