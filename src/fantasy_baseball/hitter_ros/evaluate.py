@@ -41,7 +41,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+from fantasy_baseball import projection_eval
 from fantasy_baseball.hitter_ros.features import TARGETS, rates_from_counts
+from fantasy_baseball.projection_eval import UNIT_COLS, player_draws, sure, unit_key
 from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_AVG,
     calculate_counting_sgp,
@@ -128,19 +130,12 @@ def load_systems(directory: Path, *, preseason: bool = False) -> dict[str, pd.Da
 
 def blend(systems: dict[str, pd.DataFrame]) -> pd.DataFrame:
     """Plain average of the systems' rates over the players they all cover."""
-    common = _common_index(systems.values())
-    stacked = [s.loc[common, list(TARGETS)] for s in systems.values()]
-    return sum(stacked[1:], stacked[0]) / len(stacked)
+    return projection_eval.blend(systems, TARGETS)
 
 
 def _common_index(frames: Iterable[pd.DataFrame]) -> pd.Index:
     """Players every frame has a value for, on every stat."""
-    common: pd.Index | None = None
-    for f in frames:
-        have = f.dropna(subset=list(TARGETS)).index
-        common = have if common is None else common.intersection(have)
-    assert common is not None, "no projections"
-    return common
+    return projection_eval.common_index(frames, TARGETS)
 
 
 def scored_players(
@@ -214,33 +209,6 @@ def _pair_credit(
 
 # Bootstrap draws handled per matrix product (memory: draws x player pairs floats).
 _BOOT_CHUNK = 25
-
-
-# A difference counts as real when ``sure`` reaches this (#457).
-SURE_BAR = 0.95
-
-
-def player_draws(n: int, n_boot: int, rng: np.random.Generator) -> np.ndarray:
-    """(1 + n_boot) x n: how many times each of ``n`` players is drawn. Row 0 is every
-    player once (the actual score); each other row draws ``n`` players with replacement.
-    Shared by the bootstraps so their intervals mean the same thing."""
-    return np.vstack(
-        [np.ones(n), *(np.bincount(rng.integers(0, n, n), minlength=n) for _ in range(n_boot))]
-    )
-
-
-def sure(draws: np.ndarray) -> float:
-    """How sure bootstrap ``draws`` (a minus b, positive = a better) are that a and b
-    really differ, signed by which is better: +0.95 = 95% sure a is better, -0.90 = 90%
-    sure a is worse, 0 = no lean. It is 1 minus the two-sided p-value: the widest
-    middle slice of the draws that leaves out 0 holds this share of them, so +/-0.95 is
-    exactly where the 95% interval stops crossing 0. Read as is; no halving. Ties at 0
-    count half to each side. It counts only the luck of which players happened to be
-    scored, not seed-to-seed or season-to-season swings."""
-    if not len(draws):
-        return float("nan")
-    a_better = float(np.mean((draws > 0) + 0.5 * (draws == 0)))
-    return 2 * a_better - 1
 
 
 def pairwise_bootstrap(
@@ -329,16 +297,6 @@ def spearman(projected: np.ndarray, actual: np.ndarray) -> float:
     return float(np.corrcoef(p, a)[0, 1])
 
 
-# A scored frame may stack several seasons or snapshots; a player is scored once per
-# unit, so these columns (when present) are part of what identifies a scored row.
-UNIT_COLS = ("season", "snapshot")
-
-
-def unit_key(scored: pd.DataFrame) -> list[str]:
-    """Columns that identify one scored player-unit: player plus season/snapshot if present."""
-    return ["player_id", *(c for c in UNIT_COLS if c in scored.columns)]
-
-
 def mae_table(scored: pd.DataFrame, value: str = "abs_err") -> pd.DataFrame:
     """Rows = systems (in first-seen order), columns = stats, plus ``n`` scored player-units.
     ``value``: ``abs_err`` (raw MAE) or ``lf_err`` (level-free MAE)."""
@@ -389,35 +347,9 @@ def mse_bootstrap(
     ``pairwise_bootstrap``, each draw redraws a player once for every season or snapshot
     he is in, so overlapping snapshots aren't independent evidence. Both systems must be
     scored on every player-unit either is."""
-    rng = np.random.default_rng(seed)
     key = unit_key(scored)
-    rows = scored[scored["system"].isin([a, b])]
-    parts = squared_error(rows, [*key, "system", "stat"])
-    # One set of draws for every stat: the same players are redrawn in each.
-    players = pd.Index(sorted(parts["player_id"].unique()))
-    counts = player_draws(len(players), n_boot, rng)
-    out = {}
-    for s in TARGETS:
-        g = parts[parts["stat"] == s]
-        wide = g.set_index([*key, "system"])[["sq", "w"]].unstack("system")
-        if {a, b} - set(g["system"]) or wide.isna().to_numpy().any():
-            raise ValueError(f"{s}: {a} and {b} must be scored on the same player-units")
-        per = wide.groupby(level="player_id").sum().reindex(players, fill_value=0.0)
-        mse = {
-            x: (counts @ per[("sq", x)].to_numpy()) / (counts @ per[("w", x)].to_numpy())
-            for x in (a, b)
-        }
-        d = mse[a] - mse[b]
-        boot = d[1:]
-        out[s] = {
-            "diff": float(d[0]),
-            "lo": float(np.percentile(boot, 2.5)),
-            "hi": float(np.percentile(boot, 97.5)),
-            "sure": sure(-boot),
-            "a": float(mse[a][0]),
-            "b": float(mse[b][0]),
-        }
-    return pd.DataFrame(out).T
+    parts = squared_error(scored[scored["system"].isin([a, b])], [*key, "system", "stat"])
+    return projection_eval.mse_bootstrap(parts, key, a, b, TARGETS, n_boot=n_boot, seed=seed)
 
 
 ORDER_METRICS = ("pairwise", "pairwise_w", "spearman")

@@ -88,3 +88,7 @@ data/pitch_data/
 # Hitter ROS training table (#403), rebuilt from data/pitch_data/ by
 # scripts/build_hitter_ros_table.py.
 data/hitter_ros/
+
+# Pitcher ROS scores and (later) training table (#465), rebuilt from data/pitch_data/
+# by scripts/score_pitcher_baselines.py.
+data/pitcher_ros/
