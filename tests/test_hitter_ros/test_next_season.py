@@ -33,7 +33,7 @@ def _train(monkeypatch, table_path, tmp_path, *args):
     monkeypatch.setattr(train_hitter_ros, "TABLE", table_path)
     monkeypatch.setattr(train_hitter_ros, "RUNS", tmp_path / "runs")
     argv = ["train", "--name", "x", "--test-seasons", "2026", "--hidden", "4", "--max-epochs"]
-    argv += ["2", "--probes", "none", "--milb", "none", "--parks", "none", *args]
+    argv += ["2", "--probes", "none", "--milb", "none", "--parks", "none", "--seq", "none", *args]
     monkeypatch.setattr("sys.argv", argv)
     return train_hitter_ros.main()
 

@@ -137,6 +137,7 @@ def test_net_learns_a_simple_rule_and_is_repeatable():
     # Synthetic rows have no season time and aren't the 5 ROS targets: pin plain PA
     # weighting and squared error (not the pre_mid / Poisson defaults).
     config = NetConfig(
+        seq="none",
         hidden=[32],
         dropout=0.0,
         lr=1e-2,
@@ -223,7 +224,7 @@ def test_net_fails_loudly_on_a_nan_loss():
             y,
             np.ones_like(y),
             val,
-            NetConfig(hidden=[4], max_epochs=3, weighting="pa", count_loss="none"),
+            NetConfig(seq="none", hidden=[4], max_epochs=3, weighting="pa", count_loss="none"),
         )
 
 
@@ -279,14 +280,16 @@ def test_balanced_weighting_is_applied_by_train_itself():
             y,
             w,
             val,
-            NetConfig(hidden=[4], weighting="balanced", max_epochs=1, count_loss="none"),
+            NetConfig(
+                seq="none", hidden=[4], weighting="balanced", max_epochs=1, count_loss="none"
+            ),
         )
     train(
         x,
         y,
         w,
         val,
-        NetConfig(hidden=[4], weighting="balanced", max_epochs=1, count_loss="none"),
+        NetConfig(seq="none", hidden=[4], weighting="balanced", max_epochs=1, count_loss="none"),
         season_time=np.linspace(0, 1, 20),
     )
 

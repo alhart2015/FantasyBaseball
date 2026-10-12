@@ -175,11 +175,11 @@ def test_hybrid_net_learns_from_the_sequence(kind):
         y,
         w,
         val,
-        NetConfig(**base, seq=kind, seq_len=20, seq_dim=16, seq_layers=1),
+        NetConfig(**base, seq=kind, seq_len=20, seq_dim=16, seq_layers=1, amp=False),
         rows=positions,
         batcher=batcher,
     )
-    plain = train(x, y, w, val, NetConfig(**base))
+    plain = train(x, y, w, val, NetConfig(**base, seq="none"))
     assert min(seq.val_loss) < 0.5 * min(plain.val_loss)
     out = predict(seq.model, x, rows=positions, batcher=batcher)
     assert out.shape == (n_players, 1)
@@ -242,6 +242,18 @@ def test_config_rejects_bad_sequence_settings():
         NetConfig(micro_batch=-1)
     with pytest.raises(ValueError, match="unknown seq"):
         NetConfig(seq="lstm")
+
+
+def test_train_refuses_a_sequence_model_without_its_plate_appearances():
+    x = np.zeros((8, 3), np.float32)
+    y, w = np.zeros((8, 1), np.float32), np.ones((8, 1), np.float32)
+    val = np.arange(8) < 2
+    plain = dict(weighting="pa", count_loss="none", max_epochs=1)
+    with pytest.raises(ValueError, match="batcher"):
+        train(x, y, w, val, NetConfig(**plain, seq="transformer"))  # nothing to read
+    with pytest.raises(ValueError, match="batcher"):
+        batcher = object()  # a plain net handed plate appearances would ignore them
+        train(x, y, w, val, NetConfig(**plain, seq="none"), rows=np.arange(8), batcher=batcher)
 
 
 def test_predict_on_no_rows_returns_an_empty_array():

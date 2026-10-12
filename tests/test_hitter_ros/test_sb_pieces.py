@@ -149,6 +149,7 @@ def _config(**kw):
     from fantasy_baseball.hitter_ros.net import NetConfig
 
     return NetConfig(
+        seq="none",
         hidden=[4],
         max_epochs=2,
         probes="none",

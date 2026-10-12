@@ -110,6 +110,7 @@ def test_a_binomial_target_learns_the_rate_relative_to_an_offset():
     offset[:, AVG] = np.log(league / (1 - league))
     val = rng.random(n) < 0.2
     config = NetConfig(
+        seq="none",
         hidden=[16],
         dropout=0.0,
         lr=1e-2,

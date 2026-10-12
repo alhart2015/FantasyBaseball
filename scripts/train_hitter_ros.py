@@ -25,8 +25,8 @@ Usage:
     python scripts/train_hitter_ros.py --name wider --hidden 256 128 --dropout 0.2
     python scripts/build_hitter_ros_milb.py --name rookies-s100   # default minor-league inputs
     python scripts/build_hitter_ros_parks.py --name p3            # default park inputs
-    python scripts/build_hitter_ros_pa_tokens.py   # once, for sequence runs
-    python scripts/train_hitter_ros.py --name 003a-gru --seq gru --sb-inputs full
+    python scripts/build_hitter_ros_pa_tokens.py   # once: the default transformer reads it
+    python scripts/train_hitter_ros.py --name quick --seq none   # plain net, ~17x faster
     python scripts/train_hitter_ros.py --name proj-2027 --test-seasons 2027 --predict-only
 """
 
@@ -37,6 +37,7 @@ import json
 import logging
 import shutil
 import sys
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -306,6 +307,16 @@ def fit_season(
     return preds, info
 
 
+def sb_net_setup(
+    config: NetConfig, batcher: SequenceBatcher | None
+) -> tuple[NetConfig, SequenceBatcher | None]:
+    """The config and sequence batcher the second SB net trains with: the main net's,
+    minus the sequence encoder unless ``config.sb_seq``."""
+    if config.sb_seq:
+        return config, batcher
+    return replace(config, seq="none"), None
+
+
 def with_sb_from(preds: pd.DataFrame, sb_preds: pd.DataFrame) -> pd.DataFrame:
     """``preds`` with every SB column (each horizon's SB and SB's pieces) taken from
     ``sb_preds``, the SB net's predictions for the same rows (``--sb-inputs`` box or
@@ -540,6 +551,13 @@ def main() -> int:
         default=defaults.seq,
         help="sequence encoder over recent plate appearances (#414)",
     )
+    parser.add_argument(
+        "--sb-seq",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.sb_seq,
+        help="with --seq and a second SB net (--sb-inputs box / box_relative): the SB net "
+        "reads the sequence too (--sb-seq) or stays box-score only (--no-sb-seq)",
+    )
     parser.add_argument("--seq-len", type=int, default=defaults.seq_len)
     parser.add_argument("--seq-dim", type=int, default=defaults.seq_dim)
     parser.add_argument("--seq-layers", type=int, default=defaults.seq_layers)
@@ -550,7 +568,10 @@ def main() -> int:
         help="rows per forward pass inside a batch (saves GPU memory; same update)",
     )
     parser.add_argument(
-        "--amp", action="store_true", help="bfloat16 for the sequence model on the GPU"
+        "--amp",
+        action=argparse.BooleanOptionalAction,
+        default=defaults.amp,
+        help="bfloat16 for the sequence model on the GPU",
     )
     parser.add_argument(
         "--shuffle-test-order",
@@ -606,6 +627,7 @@ def main() -> int:
             xba_ab_inputs=args.xba_ab_inputs,
             blend_inputs=args.blend_inputs,
             sb_inputs=args.sb_inputs,
+            sb_seq=args.sb_seq,
             head_layers=args.head_layers,
             milb=args.milb,
             milb_sb=args.milb_sb,
@@ -631,14 +653,6 @@ def main() -> int:
         # Checked here, before an old run of this name is deleted (fit_season checks too).
         parser.error(
             "--head-layers splits outputs into groups of 5; add --avg-pieces none --sb-pieces none"
-        )
-    if config.seq != "none" and not TOKENS.exists():
-        parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
-    if config.seq != "none" and config.sb_inputs != "full":
-        # The SB net is built like the main one, so it would read the plate-appearance
-        # sequences too: not the box-score-only net #451 measured.
-        parser.error(
-            f"--sb-inputs {config.sb_inputs} is a plain MLP; with --seq add --sb-inputs full"
         )
     if config.sb_inputs == "box_relative" and config.relative_target == "none":
         # League-relative inputs, raw-rate answers: no input carries the league's level,
@@ -746,6 +760,10 @@ def main() -> int:
     )
     batcher = None
     if config.seq != "none":
+        # Checked here, after the settings and the table, so their errors come first
+        # (the default transformer needs this local file; --seq none does not).
+        if not TOKENS.exists():
+            parser.error(f"{TOKENS} is missing; run scripts/build_hitter_ros_pa_tokens.py")
         batcher = SequenceBatcher(pd.read_parquet(TOKENS), table, config.seq_len, device())
     # Read before training, so a bad league file fails now rather than after the fits.
     try:
@@ -783,8 +801,7 @@ def main() -> int:
                     y_all,
                     w_all,
                     season,
-                    config,
-                    batcher,
+                    *sb_net_setup(config, batcher),
                     args.shuffle_test_order,
                     train_from=_train_from(season, args.train_seasons, args.first_train_season),
                     weeks=weeks,
@@ -793,6 +810,8 @@ def main() -> int:
                 info["sb_net"] = {
                     k: sb_info[k] for k in ("n_features", "best_epoch", "train_loss", "val_loss")
                 }
+                # Its encoder, which differs from config.seq unless sb_seq.
+                info["sb_net"]["seq"] = sb_net_setup(config, batcher)[0].seq
             all_preds.append(preds)
             infos.append(info)
     predictions = pd.concat(all_preds)

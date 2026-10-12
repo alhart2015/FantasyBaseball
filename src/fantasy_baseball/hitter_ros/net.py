@@ -72,8 +72,13 @@ class NetConfig:
     val_frac: float = 0.15
     seed: int = 0
     # Sequence encoder over each hitter's recent plate appearances (#414): "none" (the
-    # plain MLP), "gru" or "transformer". Its summary joins the MLP's inputs.
-    seq: str = "none"
+    # plain MLP), "gru" or "transformer". Its summary joins the MLP's inputs. Transformer
+    # by default (#414 re-test, 6 seeds, MSE vs the plain net, SB net plain in both):
+    # mid-season R/HR/RBI better, real (>99% sure) in weeks 14-20 (-0.9% / -1.6% / -1.4%)
+    # and 21+ (-1.5% / -2.2% / -1.4%), HR and RBI also in weeks 7-13; AVG -0.1% to -0.4%
+    # (not real); preseason flat. About 17x slower to train (~54 vs ~3 min a seed on an
+    # RTX 5090); --seq none for quick screens.
+    seq: str = "transformer"
     seq_len: int = 600
     seq_dim: int = 64
     seq_layers: int = 1
@@ -83,8 +88,9 @@ class NetConfig:
     # used as the evaluation chunk size.
     micro_batch: int = 0
     # Run the sequence encoder in bfloat16 on the GPU (about 2x faster for the
-    # transformer). Outputs and the loss stay float32.
-    amp: bool = False
+    # transformer). Outputs and the loss stay float32. On by default: the #414 re-test
+    # that made the transformer the default ran with it. No effect on the CPU.
+    amp: bool = True
     # "pa": each row's loss counts by its rest-of-season PA. "balanced": the same, then
     # rescaled so each fifth of the season carries equal total weight (late-season rows
     # otherwise get ~4% of it). "pre_mid": rescaled so week-0 rows and week 1+ rows carry
@@ -169,6 +175,13 @@ class NetConfig:
     # preseason 43.4 -> 37.0 [-8.8, -4.0], weeks 1-6 -15%, 7-13 -16% (both >99% sure),
     # 14-20 -7% (94%), 21+ -4% (77%), better on 6/6 seeds everywhere; ordering unchanged.
     sb_inputs: str = "box_relative"
+    # sb_seq (#414 re-test): with a sequence encoder (seq) and a second SB net (sb_inputs
+    # box / box_relative), whether the SB net reads the plate-appearance sequence too.
+    # False (default) keeps it the box-score-only net #451 measured; the main net still
+    # gets it. With it, over 6 seeds: SB weeks 21+ -2.9% (97% sure better) and 14-20
+    # -1.8% (94%), but preseason +1.3% (90% sure worse, 1/6 seeds better) and weeks 1-6
+    # +0.7%; preseason is what we draft on.
+    sb_seq: bool = False
     head_layers: int = 0
     # Minor-league inputs (#435): a graded minor-league line per window, from
     # data/hitter_ros/milb_<name>.parquet (hitter_ros.milb_features). "none": none.
@@ -238,6 +251,10 @@ class NetConfig:
             raise ValueError(f"unknown sb_pieces {self.sb_pieces!r}")
         if self.sb_inputs not in SB_INPUTS:
             raise ValueError(f"unknown sb_inputs {self.sb_inputs!r}")
+        if self.sb_seq and (self.seq == "none" or self.sb_inputs == "full"):
+            raise ValueError(
+                "sb_seq needs a sequence encoder (seq) and a second SB net (sb_inputs)"
+            )
         if self.relative_target not in RELATIVE_TARGETS:
             raise ValueError(f"unknown relative_target {self.relative_target!r}")
         from fantasy_baseball.hitter_ros.features import ERA_MODES
@@ -632,6 +649,12 @@ def train(
         raise ValueError(
             f"with heads {config.heads} the last column of x must be each row's head "
             f"index (0..{config.heads - 1})"
+        )
+    if (config.seq != "none") != (batcher is not None and rows is not None):
+        # A sequence model with no plate appearances to read would fail deep in
+        # forward(); a plain net handed them would silently ignore them.
+        raise ValueError(
+            f"seq {config.seq!r} needs rows and a batcher exactly when seq is not 'none'"
         )
     w = loss_weights(w, config, season_time)
     torch.manual_seed(config.seed)
