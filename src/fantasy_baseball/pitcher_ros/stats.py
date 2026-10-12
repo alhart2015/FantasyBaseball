@@ -17,6 +17,10 @@ import pandas as pd
 
 from fantasy_baseball.pitch_data.store import connect
 
+# The date a pitching line counts on (see :func:`load_games`): a suspended game's
+# resume date, else its date. SQL over the store's ``pitching`` view.
+GAME_DATE_SQL = "CAST(COALESCE(resumed_date, game_date) AS DATE)"
+
 # Summed per pitcher over any span of games; ``g`` is games pitched.
 COUNTS = ("g", "gs", "bf", "outs", "k", "bb", "h", "hr", "er", "w", "sv")
 TARGETS = ("k", "w", "sv", "era", "whip")
@@ -49,8 +53,7 @@ def load_games(store: Path) -> pd.DataFrame:
     try:
         games = conn.execute(
             f"""
-            SELECT player_id, CAST(COALESCE(resumed_date, game_date) AS DATE) AS game_date,
-                   1 AS g, {cols}
+            SELECT player_id, {GAME_DATE_SQL} AS game_date, 1 AS g, {cols}
             FROM pitching
             """
         ).df()
