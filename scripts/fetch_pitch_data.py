@@ -31,10 +31,10 @@ from fantasy_baseball.data.mlb_game_logs import _fetch_season_games
 from fantasy_baseball.hitter_ros.table import AS_OF_STEP_DAYS
 from fantasy_baseball.pitch_data.milb import MILB_LEVELS, fetch_milb_season
 from fantasy_baseball.pitch_data.store import (
+    BOXSCORE_KINDS,
     connect,
-    fetch_lineups_season,
+    fetch_boxscore_season,
     fetch_pitches_season,
-    fetch_pitching_season,
     fetch_sprint_speed_season,
     write_season_games,
     write_season_schedule,
@@ -87,20 +87,26 @@ def print_summary(root: Path) -> None:
     if "pitching" in views:
         # Per game: 2 starts and about 2 x 27 outs (fewer when the home team skips the
         # bottom of the 9th, more in extra innings).
+        # A column no file has yet sums to NULL and prints "-", like the lineup totals.
+        have = {r[0] for r in conn.execute("DESCRIBE pitching").fetchall()}
+        sums = ", ".join(
+            f"sum({c})" if c in have else "NULL" for c in ("gs", "outs", "bf", "k", "er")
+        )
         print(
             "\nseason  pitching_rows  games  starts_per_game  outs_per_game"
             "        bf        k       er"
         )
         for season, n, games, gs, outs, bf, k, er in conn.execute(
-            """
-            SELECT year(CAST(game_date AS DATE)), count(*), count(DISTINCT game_pk),
-                   sum(gs), sum(outs), sum(bf), sum(k), sum(er)
+            f"""
+            SELECT year(CAST(game_date AS DATE)), count(*), count(DISTINCT game_pk), {sums}
             FROM pitching GROUP BY 1 ORDER BY 1
             """
         ).fetchall():
+            per_game = [f"{v / games:.2f}" if v is not None else "-" for v in (gs, outs)]
+            totals = [v if v is not None else "-" for v in (bf, k, er)]
             print(
-                f"{season}  {n:>13}  {games:>5}  {gs / games:>15.2f}  {outs / games:>13.1f}"
-                f"  {bf:>8}  {k:>7}  {er:>7}"
+                f"{season}  {n:>13}  {games:>5}  {per_game[0]:>15}  {per_game[1]:>13}"
+                f"  {totals[0]:>8}  {totals[1]:>7}  {totals[2]:>7}"
             )
     if "sprint_speed" in views:
         print("\nseason  sprint_rows")
@@ -167,18 +173,13 @@ def main() -> int:
         except Exception:
             logging.exception("games %s: failed", season)
             failures.append(f"{season} games")
-        if "lineups" in args.only:
+        # Lineups and pitching lines come from the same box scores: one fetch per game.
+        if boxscore_kinds := [k for k in BOXSCORE_KINDS if k in args.only]:
             try:
-                fetch_lineups_season(args.root, season, games=games)
+                fetch_boxscore_season(args.root, season, boxscore_kinds, games=games)
             except Exception:
-                logging.exception("lineups %s: failed", season)
-                failures.append(f"{season} lineups")
-        if "pitching" in args.only:
-            try:
-                fetch_pitching_season(args.root, season, games=games)
-            except Exception:
-                logging.exception("pitching %s: failed", season)
-                failures.append(f"{season} pitching")
+                logging.exception("%s %s: failed", " + ".join(boxscore_kinds), season)
+                failures.append(f"{season} {' + '.join(boxscore_kinds)}")
         if "sprint" in args.only:
             try:
                 fetch_sprint_speed_season(args.root, season, games=games)

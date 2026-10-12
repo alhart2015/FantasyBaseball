@@ -4,11 +4,12 @@ from datetime import date, datetime
 import pandas as pd
 import pytest
 
+from fantasy_baseball.analysis.game_logs import FULL_PITCHER_FIELDS
 from fantasy_baseball.pitch_data import store
 from fantasy_baseball.pitch_data.store import (
     LINEUP_STAT_COLUMNS,
-    PITCHING_STAT_COLUMNS,
     connect,
+    fetch_boxscore_season,
     fetch_lineups_season,
     fetch_pitches_season,
     fetch_pitching_season,
@@ -18,8 +19,8 @@ from fantasy_baseball.pitch_data.store import (
     lineup_path,
     lineup_rows,
     pitch_chunk_path,
-    pitching_mismatches,
     pitching_path,
+    pitching_problems,
     pitching_rows,
     season_window,
     sprint_speed_path,
@@ -402,23 +403,37 @@ def test_pitching_rows_keep_the_order_they_pitched_in_and_the_full_line():
         80,
     )
     assert second["sv"] == 0 and "inningsPitched" not in second  # missing fields are 0
-    assert set(PITCHING_STAT_COLUMNS) <= set(first)
+    assert set(FULL_PITCHER_FIELDS.values()) <= set(first)
 
 
-def test_pitching_mismatches_flag_lines_that_dont_add_up_to_the_team():
+def _problems(lines, team_totals):
+    box = _pitching_box(lines, team_totals)
+    return pitching_problems(box, pitching_rows(box, 99, "2025-04-01"))
+
+
+def test_pitching_problems_flag_stored_lines_that_dont_add_up_to_the_team():
     lines = [(1, {"outs": 18, "strikeOuts": 5}), (2, {"outs": 9, "strikeOuts": 3})]
-    assert pitching_mismatches(_pitching_box(lines, {"outs": 27, "strikeOuts": 8})) == []
-    assert pitching_mismatches(_pitching_box(lines, {"outs": 27, "strikeOuts": 9})) == [
-        "home:strikeOuts"
-    ]
+    assert _problems(lines, {"outs": 27, "strikeOuts": 8}) == []
+    assert _problems(lines, {"outs": 27, "strikeOuts": 9}) == ["home:k"]
     # A total the team line doesn't carry is not checked.
-    assert pitching_mismatches(_pitching_box(lines, {})) == []
+    assert _problems(lines, {}) == []
+
+
+def test_a_listed_pitcher_with_no_line_gets_no_row_and_is_reported():
+    box = _pitching_box([(1, {"outs": 27})])
+    box["teams"]["home"]["pitchers"] = [7, 1]  # 7 is listed first but has no stats
+    rows = pitching_rows(box, 99, "2025-04-01")
+    assert [(r["player_id"], r["appearance"]) for r in rows] == [(1, 2)]  # keeps his place
+    assert pitching_problems(box, rows) == ["home:no line for 7"]
 
 
 def test_pitching_fetch_each_game_once_logs_mismatches_and_skips_when_final(tmp_path, caplog):
+    # A suspended game, as the schedule lists it: twice, one gamePk, the same official date
+    # (the day it started); the first listing carries the day it was finished.
+    suspended = {**_game(5, "2025-04-01"), "resumeGameDate": "2025-05-02"}
     games = [
+        suspended,
         _game(5, "2025-04-01"),
-        _game(5, "2025-04-02"),  # suspended game listed twice
         _game(6, "2025-09-28"),
         _game(8, "2025-09-28", coded="C"),  # cancelled: no box score to fetch
     ]
@@ -433,9 +448,11 @@ def test_pitching_fetch_each_game_once_logs_mismatches_and_skips_when_final(tmp_
         n = fetch_pitching_season(tmp_path, 2025, games=games, fetch_boxscore=fetch_boxscore)
     assert n == 2 and sorted(fetched) == [5, 6]
     assert "6 (home:outs)" in caplog.text and "5 (" not in caplog.text
-    df = pd.read_parquet(pitching_path(tmp_path, 2025))
-    assert df.set_index("game_pk").loc[5, "game_date"] == "2025-04-02"
-    assert list(df.sort_values("game_pk").outs) == [27, 26]  # kept, not dropped
+    df = pd.read_parquet(pitching_path(tmp_path, 2025)).set_index("game_pk")
+    # The suspended game: dated to the day it started, with the day it was finished.
+    assert (df.loc[5, "game_date"], df.loc[5, "resumed_date"]) == ("2025-04-01", "2025-05-02")
+    assert df.loc[6, "game_date"] == "2025-09-28" and pd.isna(df.loc[6, "resumed_date"])
+    assert list(df.sort_index().outs) == [27, 26]  # kept, not dropped
 
     assert fetch_pitching_season(tmp_path, 2025, games=games, fetch_boxscore=fetch_boxscore) is None
     views = {
@@ -452,6 +469,40 @@ def test_pitching_file_missing_new_columns_is_refetched(tmp_path):
     box = _pitching_box([(1, {"outs": 27})])
     assert fetch_pitching_season(tmp_path, 2025, games=games, fetch_boxscore=lambda pk: box) == 1
     assert "irs" in pd.read_parquet(path).columns
+
+
+def test_lineups_and_pitching_share_one_fetch_per_game(tmp_path):
+    games = [_game(5, "2025-04-01"), _game(6, "2025-09-28")]
+    fetched = []
+
+    def fetch_boxscore(pk):
+        fetched.append(pk)
+        box = _pitching_box([(pk * 10, {"gamesStarted": 1, "outs": 27})])
+        box["teams"]["home"]["players"]["b"] = {"person": {"id": pk}, "battingOrder": "100"}
+        return box
+
+    written = fetch_boxscore_season(tmp_path, 2025, games=games, fetch_boxscore=fetch_boxscore)
+    assert written == {"lineups": 2, "pitching": 2}
+    assert sorted(fetched) == [5, 6]  # one box score per game, for both files
+    assert len(pd.read_parquet(lineup_path(tmp_path, 2025))) == 2
+    assert len(pd.read_parquet(pitching_path(tmp_path, 2025))) == 2
+    # Both final now: nothing fetched again.
+    again = fetch_boxscore_season(tmp_path, 2025, games=games, fetch_boxscore=fetch_boxscore)
+    assert again == {"lineups": None, "pitching": None} and len(fetched) == 2
+    with pytest.raises(ValueError, match="kind"):
+        fetch_boxscore_season(tmp_path, 2025, ("batting",), games=games)
+
+
+def test_a_season_with_no_games_played_writes_no_file(tmp_path):
+    games = [_game(5, "2026-03-26", state="Preview"), _game(6, "2026-09-27", state="Preview")]
+
+    def fetch_boxscore(pk):
+        raise AssertionError("no box score to fetch before the season")
+
+    written = fetch_boxscore_season(tmp_path, 2026, games=games, fetch_boxscore=fetch_boxscore)
+    assert written == {"lineups": 0, "pitching": 0}
+    assert not lineup_path(tmp_path, 2026).exists()
+    assert not pitching_path(tmp_path, 2026).exists()
 
 
 def test_pitching_failure_writes_nothing(tmp_path):
