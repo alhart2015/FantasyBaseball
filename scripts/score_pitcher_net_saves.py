@@ -13,8 +13,10 @@ the net's SV. Writes saves-scores-s<seed>.md into the run's folder and prints it
 
 Needs the run and the saves units for the seed (units-pre-s<seed>.parquet,
 units-mid-s<seed>.parquet in data/pitcher_ros/saves/, from compare_pitcher_saves.py).
-The seed is the run's (its config.json); another one is refused. Every snapshot the
-backtest scores must have saves units, or the swaps would carry stale SV there.
+The saves seed defaults to the run's when it trained one seed (its config.json), and
+another one is refused; a run averaged over several seeds needs ``--saves-seed``. Every
+snapshot the backtest scores must have saves units, or the swaps would carry stale SV
+there.
 
 Usage:
     python scripts/score_pitcher_net_saves.py --run 001-plain-s0
@@ -72,7 +74,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", required=True, help="run folder under data/pitcher_ros/runs/")
     parser.add_argument(
-        "--saves-seed", type=int, default=None, help="default: the run's seed (config.json)"
+        "--saves-seed",
+        type=int,
+        default=None,
+        help="default: the run's seed, when it trained only one (config.json)",
     )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -80,9 +85,17 @@ def main() -> int:
     run = RUNS / args.run
     if not (run / "config.json").exists():
         parser.error(f"{run / 'config.json'} not found; train the run first")
-    seed = json.loads((run / "config.json").read_text())["seed"]
-    if args.saves_seed is not None and args.saves_seed != seed:
-        parser.error(f"--saves-seed {args.saves_seed} is not the run's seed ({seed})")
+    cfg = json.loads((run / "config.json").read_text())
+    # Runs before seed averaging recorded one "seed".
+    run_seeds = cfg["seeds"] if "seeds" in cfg else [cfg["seed"]]
+    if len(run_seeds) > 1:
+        if args.saves_seed is None:
+            parser.error(f"the run averages seeds {run_seeds}; pick one with --saves-seed")
+        seed = args.saves_seed
+    else:
+        seed = run_seeds[0]
+        if args.saves_seed is not None and args.saves_seed != seed:
+            parser.error(f"--saves-seed {args.saves_seed} is not the run's seed ({seed})")
     paths = {
         "predictions": run / "predictions.parquet",
         "pre": SAVES / f"units-pre-s{seed}.parquet",
