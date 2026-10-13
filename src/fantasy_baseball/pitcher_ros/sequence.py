@@ -26,7 +26,8 @@ otherwise read their future through. Every pitching line counts (the table's lea
 leaves out position players pitching: under 1% of batters faced). Volume (batters faced,
 outs, pitches), role and velocity stay as they are.
 
-Every feature is on about a 0-1 scale (the centered ones clipped to +/-4). A game with
+Every feature is on about a 0-1 scale (velocity and spin, centered, clipped to +/-4;
+the against-the-league ones are not clipped). A game with
 no pitch tracking has ``tracked`` 0 and its tracking features 0; spin is measured from
 2015 (``spin_tracked``). A game with no league rate known before it (the store's first
 day) has its against-the-league features 0.

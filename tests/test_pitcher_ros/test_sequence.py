@@ -159,3 +159,16 @@ def test_the_sequence_net_trains_and_predicts_every_row(store):
         fit_season(table, x, y, w, 2025, config)
     with pytest.raises(ValueError, match="needs a batcher"):
         fit_season(table, x, y, w, 2025, plain_config(hidden=[8]), batcher=batcher)
+
+
+def test_a_batcher_that_does_not_match_the_config_or_table_is_refused(store):
+    table = build_table(store)
+    x, (y, w) = input_frame(table), answers(table)
+    tokens = build_appearance_tokens(store)
+    config = plain_config(hidden=[8], seq="transformer", seq_len=16, seq_dim=8)
+    longer = SequenceBatcher(tokens, table, 32, device(), TOKEN_FEATURES, TOKEN_ORDER)
+    with pytest.raises(ValueError, match=r"config.seq_len"):
+        fit_season(table, x, y, w, 2025, config, batcher=longer)
+    other = SequenceBatcher(tokens, table.iloc[:-1], 16, device(), TOKEN_FEATURES, TOKEN_ORDER)
+    with pytest.raises(ValueError, match="different table"):
+        fit_season(table, x, y, w, 2025, config, batcher=other)

@@ -77,6 +77,12 @@ def main() -> int:
     parser.add_argument("--test-seasons", type=int, nargs="+", default=list(DEFAULT_TEST_SEASONS))
     parser.add_argument("--table", type=Path, default=TABLE)
     parser.add_argument(
+        "--tokens",
+        type=Path,
+        default=TOKENS,
+        help="appearance tokens (scripts/build_pitcher_ros_tokens.py), with --seq",
+    )
+    parser.add_argument(
         "--per-bf-weight",
         choices=PER_BF_WEIGHTS,
         default="bf",
@@ -112,8 +118,8 @@ def main() -> int:
     run = RUNS / args.name
     if run.exists() and any(run.iterdir()) and not args.overwrite:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
-    if args.seq != "none" and not TOKENS.exists():
-        parser.error(f"{TOKENS} is missing; run scripts/build_pitcher_ros_tokens.py")
+    if args.seq != "none" and not args.tokens.exists():
+        parser.error(f"{args.tokens} is missing; run scripts/build_pitcher_ros_tokens.py")
     configs = {
         seed: net_config(
             seed=seed,
@@ -140,18 +146,25 @@ def main() -> int:
                 parser.error(f"--test-seasons: {err}")
     x = input_frame(table)
     y, w = answers(table, args.per_bf_weight)
-    batcher = (
-        SequenceBatcher(
-            pd.read_parquet(TOKENS),
+    games = load_games(STORE)
+    batcher = None
+    if args.seq != "none":
+        tokens = pd.read_parquet(args.tokens)
+        # Tokens built before the store gained games would silently leave a row's most
+        # recent appearances out of its sequence.
+        stale = pd.to_datetime(tokens["game_date"]).max() < games["game_date"].max()
+        if stale:
+            parser.error(
+                f"{args.tokens} is older than {STORE}; rerun scripts/build_pitcher_ros_tokens.py"
+            )
+        batcher = SequenceBatcher(
+            tokens,
             table,
             args.seq_len,
             device(),
             features=TOKEN_FEATURES,
             order=TOKEN_ORDER,
         )
-        if args.seq != "none"
-        else None
-    )
     # Everything has loaded: only now clear an old run, so a failed start leaves it.
     if run.exists():
         shutil.rmtree(run)
@@ -179,7 +192,7 @@ def main() -> int:
     (run / "info.json").write_text(json.dumps(infos, indent=2))
 
     scores = backtest.score_seasons(
-        load_games(STORE),
+        games,
         seasons,
         PROJECTIONS,
         league_denominators(LEAGUE),

@@ -197,6 +197,15 @@ def fit_season(
     check_week_zero(table)
     if (config.seq != "none") != (batcher is not None):
         raise ValueError(f"seq {config.seq!r} needs a batcher exactly when it is not 'none'")
+    if batcher is not None:
+        # A longer batcher would index past the transformer's position table; a shorter
+        # one would quietly read fewer appearances than the config (and config.json) says.
+        if batcher.max_len != config.seq_len:
+            raise ValueError(
+                f"the batcher reads {batcher.max_len} appearances, config.seq_len {config.seq_len}"
+            )
+        if len(batcher.row_start) != len(table):
+            raise ValueError("the batcher was built on a different table (row count differs)")
     positions = np.arange(len(table))
     cols = list(TARGETS)
     ref = None
