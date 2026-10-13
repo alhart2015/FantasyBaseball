@@ -10,6 +10,15 @@ isn't charged for missing on playing time (that is scored on its own):
 * ERA, WHIP: ``(projected - actual)^2`` in the stat's own units, weighted by the
   innings he actually pitched, the way hitters' AVG is weighted by AB. So a 10-inning
   reliever counts a tenth as much as a 100-inning one.
+
+**Level-free MSE** (:func:`level_free`): the same after scaling each system's
+projections, per season or snapshot and stat, so their weighted mean over the scored
+pitchers matches the actuals'. A league-wide miss (every pitcher's K rate too high in a
+season the league's fell) then costs nothing, so what is left is how well a system
+ranks pitchers against each other. Raw minus level-free is what its league level cost.
+Read SV's with care: a system that projects fewer saves in all than happen (FanGraphs,
+which leaves the saves of closers it doesn't foresee unassigned) gets every projected
+closer scaled up, so its level-free SV can be worse than its raw.
 """
 
 from __future__ import annotations
@@ -178,6 +187,24 @@ def squared_error(scored: pd.DataFrame, keep: list[str]) -> pd.DataFrame:
             w=np.where(per_bf, 1.0, ip),
         )
     )
+
+
+def level_free(scored: pd.DataFrame) -> pd.DataFrame:
+    """``scored`` with each system's ``projected`` scaled, per stat and season or snapshot
+    (``unit_key``'s unit columns), so its mean weighted the way MSE weights it (batters
+    faced for K/W/SV, innings for ERA/WHIP) equals the actuals' over the same pitchers.
+    Scale over everyone scored in the unit, then subset (vets, fantasy-relevant): the
+    level is the league's, not a subgroup's. A unit whose projections average 0 is left
+    as it is."""
+    out = scored.copy()
+    w = np.where(out["stat"].isin(PER_BF), out["bf"], out["ip"]).astype(float)
+    keys = ["system", "stat", *(c for c in unit_key(out) if c != "player_id")]
+    actual = pd.Series(w * out["actual"].to_numpy(float), index=out.index)
+    projected = pd.Series(w * out["projected"].to_numpy(float), index=out.index)
+    num = actual.groupby([out[k] for k in keys]).transform("sum")
+    den = projected.groupby([out[k] for k in keys]).transform("sum")
+    out["projected"] = out["projected"] * (num / den.where(den != 0)).fillna(1.0)
+    return out
 
 
 def mse_table(scored: pd.DataFrame) -> pd.DataFrame:

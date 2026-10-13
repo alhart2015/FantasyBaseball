@@ -5,6 +5,7 @@ import pytest
 
 from fantasy_baseball.pitcher_ros.evaluate import (
     blend,
+    level_free,
     load_fangraphs_pitchers,
     load_systems,
     mse_bootstrap,
@@ -116,3 +117,34 @@ def test_mse_bootstrap_signs():
     b = mse_bootstrap(scored_players({"good": good, "bad": bad}, actual, 100), "good", "bad")
     assert b.loc["k", "diff"] < 0 and b.loc["k", "sure"] > 0.975
     assert b.loc["k", "lo"] <= b.loc["k", "diff"] <= b.loc["k", "hi"]
+
+
+def test_level_free_takes_out_each_season_league_level_and_nothing_else():
+    """A system that is right about every pitcher but the league's level scores 0
+    level-free; one that ranks pitchers wrong keeps its miss."""
+    rows = [
+        {"player_id": p, "k": 0.15 + p / 100, "w": 0.01, "sv": 0.0, "era": 3.0 + p / 10,
+         "whip": 1.3, "bf": 100.0 * p, "ip": 25.0 * p}
+        for p in range(1, 6)
+    ]  # fmt: skip
+    actual = _actual(rows)
+    level = actual[list(TARGETS)] * 1.1  # 10% high on every pitcher
+    flat = pd.DataFrame(  # one rate for everyone, at the right level
+        {s: [actual[s].mean()] * 5 for s in TARGETS}, index=actual.index
+    )
+    scored = pd.concat(
+        [
+            scored_players({"level": level, "flat": flat}, actual, 100).assign(season=y)
+            for y in (2024, 2025)
+        ],
+        ignore_index=True,
+    )
+    raw, lf = mse_table(scored), mse_table(level_free(scored))
+    assert raw.loc["level", "k"] > 0 and lf.loc["level", "k"] == pytest.approx(0)
+    assert lf.loc["level", "era"] == pytest.approx(0)
+    assert lf.loc["flat", "k"] > 0  # a ranking miss stays
+    # Each season and stat is matched on its own weights: BF for K, IP for ERA.
+    k = level_free(scored).query("system == 'flat' and stat == 'k' and season == 2025")
+    assert (k.bf * k.projected).sum() == pytest.approx((k.bf * k.actual).sum())
+    era = level_free(scored).query("system == 'flat' and stat == 'era' and season == 2024")
+    assert (era.ip * era.projected).sum() == pytest.approx((era.ip * era.actual).sum())
