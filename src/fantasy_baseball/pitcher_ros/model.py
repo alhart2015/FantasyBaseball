@@ -2,23 +2,30 @@
 five rest-of-season rates (``features.answers``), on the hitter net's machinery
 (``hitter_ros.net``: the MLP, early stopping, loss weights).
 
-Plain on purpose: weighted squared error on standardized rates, absolute rates (not
-league-relative), no sequence encoder. The hitter net's other options are switched off
-in :func:`plain_config`, and :func:`fit_season` refuses a config that turns one on (it
-would be ignored here); each gets tried for pitchers on its own, against this.
+Plain on purpose: weighted squared error on standardized rates, no sequence encoder.
+The hitter net's other options are switched off in :func:`plain_config`, and
+:func:`fit_season` refuses a config that turns one on (it would be ignored here); each
+gets tried for pitchers on its own, against this. One has been so far, and is applied:
+``relative_target``, learning each rate relative to the league (see
+:func:`fit_season`; :func:`net_config` uses ``DEFAULT_RELATIVE_TARGET``).
 """
 
 from __future__ import annotations
 
 from dataclasses import asdict, replace
-from typing import Any
+from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.net import NetConfig, predict, train
+from fantasy_baseball.pitcher_ros.features import league_answer_rates, league_reference
 from fantasy_baseball.pitcher_ros.stats import TARGETS
-from fantasy_baseball.ros_training import holdout_and_scaler, weighted_moments
+from fantasy_baseball.ros_training import (
+    holdout_and_scaler,
+    usable_league_rates,
+    weighted_moments,
+)
 
 ID_COLS = ["player_id", "season", "week", "as_of"]
 
@@ -35,9 +42,57 @@ APPLIED = (
     "val_frac",
     "seed",
     "weighting",
+    "relative_target",
     "micro_batch",
     "amp",
 )
+
+
+# The relative target the pitcher net uses (see fit_season). "answer", over 5 seeds x
+# 2022-2026 (run 008-rel-answer vs 007-milb-avg; how sure better, 0-100): preseason K
+# MSE 178.0 vs 183.8 (>99%), vets 189.7 vs 198.9 (>99%); mid-season K 61.97 vs 63.68
+# (99%); preseason W (98%), SV on the fantasy-relevant (98%); ERA 1.329 vs 1.321
+# preseason (4%) and 2.410 vs 2.403 mid-season (7%); the rest 36% or more. "known":
+# preseason K 181.2 (90%), ERA 1.337 (<1%). Leaving ERA, or ERA and WHIP, as plain rates
+# gave about the same K gain but traded ERA for WHIP, each version under 1% sure better
+# on one of them somewhere. :func:`plain_config` keeps "none", the plain baseline;
+# :func:`net_config` is the net as trained.
+DEFAULT_RELATIVE_TARGET = "answer"
+
+
+class LeagueRates(NamedTuple):
+    """Each table row's league ``TARGETS`` rates, usable as divisors (0 -> NaN):
+    ``reference``, the forecast known on the date (``features.league_reference``), and
+    ``answer``, the league's actual rates over the answer window
+    (``features.league_answer_rates``, a training denominator only)."""
+
+    reference: pd.DataFrame
+    answer: pd.DataFrame
+
+
+def league_rates(table: pd.DataFrame) -> LeagueRates:
+    """:class:`LeagueRates` for ``table``: built once per table, not per fit."""
+    return LeagueRates(
+        usable_league_rates(league_reference(table)),
+        usable_league_rates(league_answer_rates(table)),
+    )
+
+
+def check_league_forecast(table: pd.DataFrame, league: LeagueRates, season: int) -> None:
+    """Refuse ``season`` when a relative prediction of one of its rows couldn't be scaled
+    back: no forecast (no earlier season in the table) or a league rate of 0."""
+    forecast = league.reference.loc[table["season"] == season, list(TARGETS)]
+    if not (forecast > 0).all().all():  # NaN compares False too
+        raise ValueError(
+            f"{season} has rows with no usable league forecast (no earlier season in the "
+            "table, or a league rate of 0) to scale relative predictions back by"
+        )
+
+
+def net_config(**overrides: Any) -> NetConfig:
+    """The pitcher net as trained: :func:`plain_config` with the applied defaults
+    (``DEFAULT_RELATIVE_TARGET``), then ``overrides``."""
+    return plain_config(**{"relative_target": DEFAULT_RELATIVE_TARGET, **overrides})
 
 
 def plain_config(**overrides: Any) -> NetConfig:
@@ -94,20 +149,42 @@ def fit_season(
     w_all: pd.DataFrame,
     test_season: int,
     config: NetConfig,
+    league: LeagueRates | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Train on complete seasons before ``test_season``; predict every row of it.
 
     A random ``config.val_frac`` of the training pitchers is held out for early
     stopping. Targets are standardized by their loss-weighted mean and SD over the
-    training rows; predictions are put back in rates (never below 0)."""
+    training rows; predictions are put back in rates (never below 0).
+
+    ``config.relative_target`` (as the hitter net's, #421 / #424): "none" learns the
+    rates themselves. Otherwise each rate is learned divided by a league rate -- the
+    league's actual rate over the answer window ("answer": how much better than the
+    league, with no forecast of its level) or the forecast known on the date ("known",
+    ``features.league_reference``) -- and the prediction is multiplied back by the
+    forecast. Learned as rates, the net picks up the league's trend (K rose every season
+    to 2020) and carries it on after it stops: before this it projected too many K in
+    every test season (2022-2026), by 0.4 to 1.7 per 100 batters faced. ``league``:
+    :func:`league_rates` of ``table``, if already built (a run fits many seasons and
+    seeds on one table)."""
     check_plain(config)
     check_week_zero(table)
+    cols = list(TARGETS)
+    ref = None
+    if config.relative_target != "none":
+        if league is None:
+            league = league_rates(table)
+        check_league_forecast(table, league, test_season)
+        ref = league.reference
+        denominator = league.answer if config.relative_target == "answer" else ref
+        y_all = y_all[cols] / denominator[cols]
+        # train() expects weight 0 wherever the target is NaN.
+        w_all = w_all[cols].where(y_all.notna(), 0.0)
     train_rows = (
         table["season_complete"] & (table["season"] < test_season) & (w_all.sum(axis=1) > 0)
     )
     val_mask, scaler = holdout_and_scaler(table, x_all, train_rows, config.val_frac, config.seed)
 
-    cols = list(TARGETS)
     y_train, w_train = y_all.loc[train_rows, cols], w_all.loc[train_rows, cols]
     mu, sd = weighted_moments(y_train, w_train, ~val_mask)
     y_std = np.column_stack([(y_train[c] - mu[c]) / sd[c] for c in cols])
@@ -126,6 +203,8 @@ def fit_season(
         {c: np.clip(z[:, i] * sd[c] + mu[c], 0.0, None) for i, c in enumerate(cols)},
         index=table.index[test_rows],
     )
+    if ref is not None:
+        preds = preds * ref.loc[test_rows, cols]
     preds = pd.concat([table.loc[test_rows, ID_COLS], preds], axis=1)
     info = {
         "test_season": test_season,

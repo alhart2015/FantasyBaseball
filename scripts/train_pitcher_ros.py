@@ -31,15 +31,19 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import league_denominators
+from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
 from fantasy_baseball.pitcher_ros.model import (
+    DEFAULT_RELATIVE_TARGET,
     DEFAULT_SEEDS,
     applied_settings,
     average_seeds,
+    check_league_forecast,
     check_week_zero,
     fit_season,
-    plain_config,
+    league_rates,
+    net_config,
 )
 from fantasy_baseball.pitcher_ros.stats import load_games
 
@@ -71,6 +75,12 @@ def main() -> int:
         default="bf",
         help="K/W/SV loss weight: batters faced, or its square (what the scorer charges)",
     )
+    parser.add_argument(
+        "--relative-target",
+        choices=RELATIVE_TARGETS,
+        default=DEFAULT_RELATIVE_TARGET,
+        help="learn rates relative to the league (model.fit_season, DEFAULT_RELATIVE_TARGET)",
+    )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -80,12 +90,20 @@ def main() -> int:
     run = RUNS / args.name
     if run.exists() and any(run.iterdir()) and not args.overwrite:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
-    configs = {seed: plain_config(seed=seed) for seed in seeds}
+    configs = {seed: net_config(seed=seed, relative_target=args.relative_target) for seed in seeds}
     table = pd.read_parquet(args.table)
     try:
         check_week_zero(table)
     except ValueError as err:
         parser.error(f"{args.table}: {err}")
+    league = league_rates(table) if args.relative_target != "none" else None
+    if league is not None:
+        # Checked here, before an old run of this name is deleted (fit_season checks too).
+        for season in seasons:
+            try:
+                check_league_forecast(table, league, season)
+            except ValueError as err:
+                parser.error(f"--test-seasons: {err}")
     x = input_frame(table)
     y, w = answers(table, args.per_bf_weight)
     # Everything has loaded: only now clear an old run, so a failed start leaves it.
@@ -104,7 +122,7 @@ def main() -> int:
         parts = []
         for season in seasons:
             logging.info("seed %s, test season %s", seed, season)
-            preds, info = fit_season(table, x, y, w, season, config)
+            preds, info = fit_season(table, x, y, w, season, config, league)
             parts.append(preds)
             infos.append({"seed": seed, **info})
         seed_preds = pd.concat(parts, ignore_index=True)
