@@ -35,12 +35,15 @@ from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
 from fantasy_baseball.pitcher_ros.model import (
+    DEFAULT_RELATIVE_TARGET,
     DEFAULT_SEEDS,
     applied_settings,
     average_seeds,
+    check_league_forecast,
     check_week_zero,
     fit_season,
-    plain_config,
+    league_rates,
+    net_config,
 )
 from fantasy_baseball.pitcher_ros.stats import load_games
 
@@ -72,18 +75,11 @@ def main() -> int:
         default="bf",
         help="K/W/SV loss weight: batters faced, or its square (what the scorer charges)",
     )
-    # "answer" (#465, 5 seeds x 2022-2026, run 008-rel-answer vs 007-milb-avg; how sure
-    # better, 0-100): preseason K MSE 178.0 vs 183.8 (>99%), vets 189.7 vs 198.9 (>99%);
-    # mid-season K 61.97 vs 63.68 (99%); preseason W (98%), SV on the fantasy-relevant
-    # (98%); ERA 1.329 vs 1.321 preseason (4%) and 2.410 vs 2.403 mid-season (7%); the
-    # rest 36% or more. "known": preseason K 181.2 (90%), ERA 1.337 (<1%). Leaving ERA, or
-    # ERA and WHIP, as plain rates gave about the same K gain but traded ERA for WHIP,
-    # each version under 1% sure better on one of them somewhere.
     parser.add_argument(
         "--relative-target",
         choices=RELATIVE_TARGETS,
-        default="answer",
-        help="learn rates relative to the league (model.fit_season)",
+        default=DEFAULT_RELATIVE_TARGET,
+        help="learn rates relative to the league (model.fit_season, DEFAULT_RELATIVE_TARGET)",
     )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
@@ -94,14 +90,20 @@ def main() -> int:
     run = RUNS / args.name
     if run.exists() and any(run.iterdir()) and not args.overwrite:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
-    configs = {
-        seed: plain_config(seed=seed, relative_target=args.relative_target) for seed in seeds
-    }
+    configs = {seed: net_config(seed=seed, relative_target=args.relative_target) for seed in seeds}
     table = pd.read_parquet(args.table)
     try:
         check_week_zero(table)
     except ValueError as err:
         parser.error(f"{args.table}: {err}")
+    league = league_rates(table) if args.relative_target != "none" else None
+    if league is not None:
+        # Checked here, before an old run of this name is deleted (fit_season checks too).
+        for season in seasons:
+            try:
+                check_league_forecast(table, league, season)
+            except ValueError as err:
+                parser.error(f"--test-seasons: {err}")
     x = input_frame(table)
     y, w = answers(table, args.per_bf_weight)
     # Everything has loaded: only now clear an old run, so a failed start leaves it.
@@ -120,7 +122,7 @@ def main() -> int:
         parts = []
         for season in seasons:
             logging.info("seed %s, test season %s", seed, season)
-            preds, info = fit_season(table, x, y, w, season, config)
+            preds, info = fit_season(table, x, y, w, season, config, league)
             parts.append(preds)
             infos.append({"seed": seed, **info})
         seed_preds = pd.concat(parts, ignore_index=True)

@@ -1,3 +1,5 @@
+from datetime import date
+
 import numpy as np
 import pandas as pd
 import pytest
@@ -11,18 +13,22 @@ from fantasy_baseball.pitcher_ros.features import (
 )
 from fantasy_baseball.pitcher_ros.model import (
     APPLIED,
+    DEFAULT_RELATIVE_TARGET,
     ID_COLS,
+    LeagueRates,
     applied_settings,
     average_seeds,
     check_plain,
     check_week_zero,
     fit_season,
+    league_rates,
+    net_config,
     plain_config,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS
 from fantasy_baseball.pitcher_ros.table import build_table
 
-from .test_table import RELIEVER, STARTER, _seasons, _write
+from .test_table import RELIEVER, STARTER, _season, _seasons, _write
 
 
 @pytest.fixture(scope="module")
@@ -185,17 +191,69 @@ def test_league_answer_rates_pool_the_rest_of_the_season(table):
     )
 
 
-def test_relative_predictions_are_scaled_back_to_rates(table):
-    x, (y, w) = input_frame(table), answers(table)
-    config = plain_config(
-        hidden=[8], max_epochs=3, patience=1, val_frac=0.34, relative_target="answer"
+def _tiny(relative_target):
+    return plain_config(
+        hidden=[8], max_epochs=3, patience=1, val_frac=0.34, relative_target=relative_target
     )
-    preds, _ = fit_season(table, x, y, w, 2025, config)
-    assert preds[list(TARGETS)].notna().all().all()
-    # Rates, not ratios to the league (which sit near 1): K per batter faced is below 1.
-    assert (preds["k"] < 1).all()
-    with pytest.raises(ValueError, match="no league forecast"):
-        fit_season(table, x, y, w, 2024, config)
+
+
+def test_answer_predictions_are_scaled_back_by_the_forecast(table):
+    """ "answer" learns against the league's actual rates and scales back by the forecast
+    known on the date: doubling the forecast doubles every prediction, and the answers'
+    league rates never reach a prediction."""
+    x, (y, w) = input_frame(table), answers(table)
+    league = league_rates(table)
+    preds, _ = fit_season(table, x, y, w, 2025, _tiny("answer"), league)
+    doubled = LeagueRates(league.reference * 2, league.answer)
+    twice, _ = fit_season(table, x, y, w, 2025, _tiny("answer"), doubled)
+    rates = list(TARGETS)
+    assert preds[rates].notna().all().all()
+    pd.testing.assert_frame_equal(twice[rates], preds[rates] * 2)
+    # Built here when not passed in: the same predictions.
+    again, _ = fit_season(table, x, y, w, 2025, _tiny("answer"))
+    pd.testing.assert_frame_equal(again, preds)
+
+
+@pytest.fixture(scope="module")
+def table3(tmp_path_factory):
+    """Three seasons: "known" can't learn from the first (no forecast), so it needs two
+    before the test season."""
+    root = tmp_path_factory.mktemp("store3")
+    _write(root, {2023: _season(2023, date(2023, 4, 1), 10, k=4), **_seasons()})
+    return build_table(root)
+
+
+def test_known_predictions_learn_and_scale_back_by_the_same_forecast(table3):
+    """With "known", targets are divided by the forecast and predictions multiplied back
+    by it: doubling it leaves the standardized targets, so the predictions, unchanged."""
+    table = table3
+    x, (y, w) = input_frame(table), answers(table)
+    league = league_rates(table)
+    preds, _ = fit_season(table, x, y, w, 2025, _tiny("known"), league)
+    doubled = LeagueRates(league.reference * 2, league.answer)
+    same, _ = fit_season(table, x, y, w, 2025, _tiny("known"), doubled)
+    rates = list(TARGETS)
+    assert preds[rates].notna().all().all()
+    pd.testing.assert_frame_equal(same[rates], preds[rates], rtol=1e-5)
+
+
+def test_a_season_with_no_usable_forecast_is_refused(table):
+    x, (y, w) = input_frame(table), answers(table)
+    # The store's first season has no last season to forecast from.
+    with pytest.raises(ValueError, match="no usable league forecast"):
+        fit_season(table, x, y, w, 2024, _tiny("answer"))
+    # A league rate of 0 can't scale a prediction back: refused, not multiplied by 0.
+    league = league_rates(table)
+    no_saves = LeagueRates(league.reference.assign(sv=0.0), league.answer)
+    with pytest.raises(ValueError, match="no usable league forecast"):
+        fit_season(table, x, y, w, 2025, _tiny("answer"), no_saves)
+
+
+def test_the_net_as_trained_learns_relative_to_the_league():
+    assert DEFAULT_RELATIVE_TARGET == "answer"
+    assert net_config(seed=2).relative_target == "answer" and net_config().seq == "none"
+    assert net_config(relative_target="none").relative_target == "none"
+    assert plain_config().relative_target == "none"  # the plain baseline stays plain
 
 
 def _row_index(table, player, season, week):
