@@ -7,12 +7,15 @@ mid-season snapshots, pitcher_ros.backtest). Writes predictions.parquet (the ave
 predictions-s<N>.parquet (each seed), config.json, info.json, the scored frames and
 scores.md to data/pitcher_ros/runs/<name>/.
 
-Needs the training table (scripts/build_pitcher_ros_table.py) and torch (see
-scripts/train_hitter_ros.py).
+Needs the training table (scripts/build_pitcher_ros_table.py), torch (see
+scripts/train_hitter_ros.py) and, for the default transformer over each pitcher's recent
+appearances (model.DEFAULT_SEQ), the appearance tokens
+(scripts/build_pitcher_ros_tokens.py). --seq none trains the plain net.
 
 Usage:
     python scripts/train_pitcher_ros.py --name 003-avg          # seeds 0-4, averaged
     python scripts/train_pitcher_ros.py --name quick --seeds 0 --test-seasons 2026
+    python scripts/train_pitcher_ros.py --name plain --seq none   # no sequence
     python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
 
@@ -38,6 +41,7 @@ from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input
 from fantasy_baseball.pitcher_ros.model import (
     DEFAULT_RELATIVE_TARGET,
     DEFAULT_SEEDS,
+    DEFAULT_SEQ,
     applied_settings,
     average_seeds,
     check_league_forecast,
@@ -87,14 +91,18 @@ def main() -> int:
     parser.add_argument(
         "--seq",
         choices=["none", "gru", "transformer"],
-        default="none",
-        help="encoder over each pitcher's recent appearances (pitcher_ros/sequence.py)",
+        default=DEFAULT_SEQ["seq"],
+        help="encoder over each pitcher's recent appearances (model.DEFAULT_SEQ); "
+        "none: the plain net",
     )
     parser.add_argument(
-        "--seq-len", type=int, default=150, help="appearances each row reads, newest first"
+        "--seq-len",
+        type=int,
+        default=DEFAULT_SEQ["seq_len"],
+        help="appearances each row reads, newest first",
     )
-    parser.add_argument("--seq-dim", type=int, default=64)
-    parser.add_argument("--seq-layers", type=int, default=1)
+    parser.add_argument("--seq-dim", type=int, default=DEFAULT_SEQ["seq_dim"])
+    parser.add_argument("--seq-layers", type=int, default=DEFAULT_SEQ["seq_layers"])
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

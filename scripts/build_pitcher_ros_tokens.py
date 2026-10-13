@@ -1,8 +1,8 @@
 """Build the pitcher net's appearance tokens (#465): data/pitcher_ros/app_tokens.parquet.
 
 One row per regular-season appearance, from the pitch-data store's box scores and
-pitch tracking (see pitcher_ros/sequence.py). The sequence net (train_pitcher_ros.py
---seq transformer) reads it. Rebuild whenever the store gains games.
+pitch tracking (see pitcher_ros/sequence.py). The pitcher net's default transformer
+(train_pitcher_ros.py) reads it. Rebuild whenever the store gains games.
 
 Usage:
     python scripts/build_pitcher_ros_tokens.py

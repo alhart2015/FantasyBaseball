@@ -64,6 +64,20 @@ APPLIED = (
 # :func:`net_config` is the net as trained.
 DEFAULT_RELATIVE_TARGET = "answer"
 
+# The sequence encoder the pitcher net uses (fit_season; pitcher_ros/sequence.py): a
+# transformer over each pitcher's last 150 appearances, their results against the
+# league. 5 seeds x 2022-2026 (run 014-seq-lgctx vs 008-rel-answer; how sure better,
+# 0-100), preseason: SV 18.28 vs 18.83 (98%), ERA 1.313 vs 1.329 (>99%), WHIP 0.0350
+# vs 0.0354 (>99%), W (66%); K 180.2 vs 178.0 (2%) raw but 173.9 vs 173.9 (50%)
+# level-free -- its K loss is the league level, mostly 2022 (+5.0% vs +3.9%).
+# Mid-season: SV (93%), K 62.5 vs 62.0 (14%), the rest 55-68%.
+DEFAULT_SEQ: dict[str, Any] = {
+    "seq": "transformer",
+    "seq_len": 150,
+    "seq_dim": 64,
+    "seq_layers": 1,
+}
+
 
 class LeagueRates(NamedTuple):
     """Each table row's league ``TARGETS`` rates, usable as divisors (0 -> NaN):
@@ -96,8 +110,8 @@ def check_league_forecast(table: pd.DataFrame, league: LeagueRates, season: int)
 
 def net_config(**overrides: Any) -> NetConfig:
     """The pitcher net as trained: :func:`plain_config` with the applied defaults
-    (``DEFAULT_RELATIVE_TARGET``), then ``overrides``."""
-    return plain_config(**{"relative_target": DEFAULT_RELATIVE_TARGET, **overrides})
+    (``DEFAULT_RELATIVE_TARGET``, ``DEFAULT_SEQ``), then ``overrides``."""
+    return plain_config(**{"relative_target": DEFAULT_RELATIVE_TARGET, **DEFAULT_SEQ, **overrides})
 
 
 def plain_config(**overrides: Any) -> NetConfig:

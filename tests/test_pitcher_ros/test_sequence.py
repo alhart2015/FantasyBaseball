@@ -69,48 +69,45 @@ def _tracked(player, pk, **sums):
     return row
 
 
-def test_tokens_scale_each_outing_and_count_rest_between_them():
+def test_tokens_read_each_outing_against_the_league_known_before_it():
     box = pd.DataFrame(
         [
+            # 2024: the league (one pitcher) struck out 20 of 100, 10 ER in 75 outs.
+            _box(2, "2024-09-01", 1, bf=100, k=20, outs=75, er=10, pitches=400),
             # Out of order on purpose: tokens come back oldest first.
             _box(1, "2025-04-07", 12, bf=4, k=2, outs=3, pitches=15, strikes=10, sv=1, gf=1),
-            _box(1, "2025-04-01", 11, gs=1, bf=24, k=6, outs=18, pitches=90, strikes=60, w=1),
+            _box(1, "2025-04-01", 11, gs=1, bf=24, k=6, outs=18, er=2, pitches=90, strikes=60,
+                 w=1),
+            # Same day as pitcher 1's start: not yet known when he pitched.
+            _box(2, "2025-04-01", 13, bf=10, k=1, outs=6, pitches=40),
         ]
-    )
+    )  # fmt: skip
     tracked = pd.DataFrame(
         [
-            _tracked(
-                1,
-                11,
-                n=90,
-                fb_velo=96.0,
-                fb_velo_max=98.0,
-                fb_spin=2400.0,
-                whiffs=12,
-                called=15,
-                in_zone=45,
-                out_zone=40,
-                chases=12,
-                fb=54,
-                brk=27,
-                off=9,
-            ),
+            _tracked(2, 1, n=400, whiffs=40, called=60),
+            _tracked(1, 11, n=90, fb_velo=96.0, fb_velo_max=98.0, fb_spin=2400.0, whiffs=12,
+                     called=15, in_zone=45, out_zone=40, chases=12, fb=54, brk=27, off=9),
         ]
-    )
+    )  # fmt: skip
     t = appearance_tokens(box, tracked).set_index("game_pk")
     start, relief = t.loc[11], t.loc[12]
     assert (start.started, start.w, start.first_seen, start.rest) == (1, 1, 1, 0)
-    assert start.bf == pytest.approx(24 / 30) and start.k == pytest.approx(6 / 10)
-    assert start.strike_share == pytest.approx(60 / 90)
-    assert start.fb_velo == pytest.approx((96 - 93) / 5)
-    assert start.fb_spin == pytest.approx((2400 - 2250) / 300) and start.spin_tracked == 1
-    assert start.whiff_rate == pytest.approx(12 / 90)
-    assert start.csw_rate == pytest.approx(27 / 90)
+    assert start.bf == pytest.approx(24 / 30) and start.strike_share == pytest.approx(60 / 90)
+    # Against 2024's league only: 6 K where 0.2 x 24 = 4.8 were expected.
+    assert start.k_vs_lg == pytest.approx((6 - 0.2 * 24) / 10)
+    assert start.er_vs_lg == pytest.approx((2 - 18 * 10 / 75) / 7)
+    assert start.whiff_vs_lg == pytest.approx(12 / 90 - 40 / 400)
+    assert start.csw_vs_lg == pytest.approx(27 / 90 - 100 / 400)
+    assert start.fb_velo == pytest.approx((96 - 93) / 5) and start.spin_tracked == 1
     assert start.chase_rate == pytest.approx(12 / 40) and start.fb_share == pytest.approx(0.6)
-    # Six days later, in relief, and not tracked: no tracking features, not a guess.
-    assert (relief.started, relief.finished, relief.sv, relief.first_seen) == (0, 1, 1, 0)
+    # A week later the league also has April 1's games: (20 + 6 + 1) / (100 + 24 + 10).
+    assert relief.k_vs_lg == pytest.approx((2 - 4 * 27 / 134) / 10)
     assert relief.rest == pytest.approx(np.log1p(6) / 5)
-    assert relief.tracked == 0 and relief.fb_velo == 0 and relief.whiff_rate == 0
+    assert (relief.started, relief.finished, relief.sv, relief.first_seen) == (0, 1, 1, 0)
+    # Untracked: no tracking features, not a guess.
+    assert relief.tracked == 0 and relief.fb_velo == 0 and relief.whiff_vs_lg == 0
+    # The store's first day has no league known before it.
+    assert t.loc[1].k_vs_lg == 0 and t.loc[1].whiff_vs_lg == 0
     assert set(TOKEN_FEATURES) <= set(t.columns)
 
 
