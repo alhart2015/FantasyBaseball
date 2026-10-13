@@ -34,7 +34,6 @@ their own.
 
 from __future__ import annotations
 
-import math
 from collections.abc import Iterable
 from datetime import date
 from pathlib import Path
@@ -67,7 +66,7 @@ from fantasy_baseball.hitter_ros.features import (
     rates_from_counts,
 )
 from fantasy_baseball.pitch_data.store import connect
-from fantasy_baseball.projection_eval import SURE_BAR, systems_in_every_unit, top_by_value
+from fantasy_baseball.projection_eval import sure_text, systems_in_every_unit, top_by_value
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import Category
 
@@ -346,20 +345,6 @@ def to_markdown(df: pd.DataFrame, digits: int = 2) -> str:
     return "\n".join(lines)
 
 
-def sure_text(value: float) -> str:
-    """``evaluate.sure`` in words: "96% sure better (real)", "90% sure worse", "no lean".
-    The percent is rounded down, so it reads 95% exactly when it is marked real, and a
-    bootstrap can't print "100% sure": above 99% it reads ">99%"."""
-    if pd.isna(value):
-        return "n/a"
-    if value == 0:
-        return "no lean"
-    size = abs(value)
-    pct = ">99%" if size > 0.99 else f"{math.floor(size * 100 + 1e-9)}%"
-    real = " (real)" if size >= SURE_BAR - 1e-9 else ""
-    return f"{pct} sure {'better' if value > 0 else 'worse'}{real}"
-
-
 def _interval_line(b: pd.DataFrame | None, better: str, name: str = "") -> str:
     """One line of ours-minus-blend intervals per stat, each with how sure ours is better
     or worse; ``better`` names the good sign, ``name`` (if any) the score, as a prefix."""
@@ -604,11 +589,11 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         f"Mid-season: >= {SNAPSHOT_MIN_PA} PA after the snapshot. "
         "`league_avg` and `marcel` are simple floors (see hitter_ros/baselines.py). "
         "Intervals resample players; each line says which sign means ours is better; "
-        'an interval crossing 0 = can\'t tell apart. "N% sure better/worse" means what '
-        "it says: how sure ours really differs, and which way; 95%+ is marked real (the "
-        "interval clears 0). It counts only the luck of which hitters were scored, not seed or "
-        "season swings. Over several seasons or snapshots each hitter is redrawn once "
-        "for all of them."
+        'an interval crossing 0 = can\'t tell apart. "N% sure better" is how sure ours is '
+        "better, 0-100: 100 = sure better, 50 = a coin flip, 0 = sure worse; the 95% interval "
+        "clears 0 from 97.5% up (or 2.5% down). It counts only the luck of which hitters "
+        "were scored, not seed or season swings. Over several seasons or snapshots each "
+        "hitter is redrawn once for all of them."
     ]
     if pre is not None:
         md += ["", "#### Preseason"]

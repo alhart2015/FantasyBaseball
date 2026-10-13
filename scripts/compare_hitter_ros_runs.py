@@ -21,8 +21,8 @@ train_hitter_ros.py writes last):
 * Mid-season: our gap to the blend, averaged over the snapshots where both were scored
   (all of them, or those between --from and --to), with how many snapshots that was.
 * How sure the MSE and pairwise gaps are (evaluate.sure, from resampling the scored hitters,
-  each redrawn once across every season or snapshot): +0.95 = 95% sure ours is better
-  than the blend, -0.90 = 90% sure it is worse, 0 = no lean; +/-0.95 or beyond is real.
+  each redrawn once across every season or snapshot), printed in percent: 95 = 95% sure
+  ours is better than the blend, 50 = a coin flip, 5 = 95% sure it is worse.
   Only the luck of which hitters were scored, not seed swings.
 * Vets and rookies (#433): the MSE and pairwise gaps to the blend for each group on its
   own (pairs only inside a group). Runs scored before the vet/rookie tag lack these rows;
@@ -92,7 +92,7 @@ def _scores(scored: pd.DataFrame, unit: str) -> dict[str, pd.DataFrame]:
 
 
 def _luck(row: dict[str, object], both: pd.DataFrame, prefix: str) -> None:
-    """How sure ours is better (+) or worse (-) than the blend on MSE and on gap-weighted
+    """How sure ours is better than the blend (0-1) on MSE and on gap-weighted
     pairwise, into ``row`` as ``{prefix}_mse_sure_{stat}`` and ``{prefix}_pairw_sure_{stat}``.
     No pairwise for frames scored before #424."""
     _mse_gap(row, both, prefix, gap=False)
@@ -253,6 +253,10 @@ def warnings_for(df: pd.DataFrame) -> list[str]:
     return out
 
 
+# How sure ours is better: stored 0-1, printed in percent like every other report.
+PCT = "(%: 100 = sure better, 50 = a coin flip, 0 = sure worse)"
+
+
 # (title, [(column, label)], digits)
 def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
     def cols(prefix: str) -> list[tuple[str, str]]:
@@ -287,8 +291,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            "MAIN: preseason MSE, how sure ours is better (+) or worse (-) than blend "
-            "(0.95+ = real)",
+            f"MAIN: preseason MSE, how sure ours is better than blend {PCT}",
             cols("pre_mse_sure_"),
             2,
         ),
@@ -298,8 +301,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            "MAIN: mid-season MSE, how sure ours is better (+) or worse (-) than blend "
-            f"(0.95+ = real), {window}",
+            f"MAIN: mid-season MSE, how sure ours is better than blend {PCT}, {window}",
             cols("mid_mse_sure_"),
             2,
         ),
@@ -316,7 +318,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             for prefix, when in (("pre", "preseason"), ("mid", "mid-season"))
             for kind, what in (
                 ("gap", "gap to blend (negative = ours better)"),
-                ("sure", "how sure ours is better (+) or worse (-) than blend (0.95+ = real)"),
+                ("sure", f"how sure ours is better than blend {PCT}"),
             )
         ),
         ("Preseason gap-weighted pairwise % (ours)", cols("pre_pairw_"), 2),
@@ -326,8 +328,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            "Preseason gap-weighted pairwise, how sure ours is better (+) or worse (-) "
-            "than blend (0.95+ = real)",
+            f"Preseason gap-weighted pairwise, how sure ours is better than blend {PCT}",
             cols("pre_pairw_sure_"),
             2,
         ),
@@ -337,8 +338,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            "Mid-season gap-weighted pairwise, how sure ours is better (+) or worse (-) "
-            f"than blend (0.95+ = real), {window}",
+            f"Mid-season gap-weighted pairwise, how sure ours is better than blend {PCT}, {window}",
             cols("mid_pairw_sure_"),
             2,
         ),
@@ -412,8 +412,10 @@ def main() -> int:
         if digits:
             numeric = [label for c, label in present if c != "mid_snapshots"]
             table[numeric] = table[numeric].astype(float)
+        if all("_sure_" in c for c, _ in present):
+            table, digits = table * 100, 0
         print(f"\n**{title}**\n")
-        print(to_markdown(table, digits=digits or 2))
+        print(to_markdown(table, digits=digits))
     return 0
 
 

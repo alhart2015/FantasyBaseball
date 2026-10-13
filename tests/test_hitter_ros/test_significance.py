@@ -18,26 +18,26 @@ from fantasy_baseball.hitter_ros.evaluate import (
 from fantasy_baseball.hitter_ros.features import TARGETS
 
 
-def test_sure_reads_as_is():
-    # 97.5% of draws on one side = the 95% interval just clears 0 = 95% sure.
+def test_sure_is_the_share_of_draws_where_a_wins():
+    # 0-1: 1 = sure a is better, 0.5 = a coin flip, 0 = sure a is worse.
     draws = np.r_[np.ones(975), -np.ones(25)]
-    assert sure(draws) == pytest.approx(0.95)
-    assert sure(-draws) == pytest.approx(-0.95)  # sure it's worse
-    assert sure(np.array([1.0, -1.0])) == 0.0  # no lean
-    assert sure(np.array([1.0, -1.0, 0.0, 2.0])) == pytest.approx(0.25)  # ties count half
+    assert sure(draws) == pytest.approx(0.975)
+    assert sure(-draws) == pytest.approx(0.025)  # sure it's worse
+    assert sure(np.array([1.0, -1.0])) == 0.5  # a coin flip
+    assert sure(np.array([1.0, -1.0, 0.0, 2.0])) == pytest.approx(0.625)  # ties count half
     assert np.isnan(sure(np.array([])))
 
 
 def test_sure_text():
-    from fantasy_baseball.hitter_ros.backtest import sure_text
+    from fantasy_baseball.projection_eval import sure_text
 
-    assert sure_text(0.96) == "96% sure better (real)"
-    assert sure_text(0.95) == "95% sure better (real)"
-    assert sure_text(0.9467) == "94% sure better"  # rounded down: 95% only when real
-    assert sure_text(0.999) == ">99% sure better (real)"
-    assert sure_text(-1.0) == ">99% sure worse (real)"  # 300 draws can't show 100%
-    assert sure_text(-0.9) == "90% sure worse"
-    assert sure_text(0.0) == "no lean"
+    # One scale, one direction: how sure it is better, never a "real" verdict.
+    assert sure_text(0.96) == "96% sure better"
+    assert sure_text(0.9467) == "95% sure better"
+    assert sure_text(0.5) == "50% sure better"  # a coin flip
+    assert sure_text(0.04) == "4% sure better"  # sure it's worse
+    assert sure_text(0.999) == ">99% sure better"  # 300 draws can't show 100%
+    assert sure_text(0.0) == "<1% sure better"
     assert sure_text(float("nan")) == "n/a"
 
 
@@ -65,7 +65,7 @@ def test_pooled_bootstrap_scores_the_mean_over_snapshots():
     boot = pairwise_bootstrap(scored, "a", "b", n_boot=50)
     for s in TARGETS:
         assert boot.loc[s, "diff"] == pytest.approx(table.loc["a", s] - table.loc["b", s])
-    assert (boot["sure"] > 0.9).all()  # the less noisy one
+    assert (boot["sure"] > 0.95).all()  # the less noisy one
 
 
 def test_pooled_bootstrap_redraws_each_player_once_for_every_snapshot():
@@ -124,9 +124,9 @@ def test_summary_shows_how_sure_for_one_snapshot_and_the_mean():
     scored["system"] = scored["system"].map({"a": "ours", "b": "fg_blend"})
     md = "\n".join(summarize(None, scored))
     first, mean = md.split("**Mean over snapshots**")
-    assert "how sure" in first and ">99% sure better (real)" in first
+    assert "how sure" in first and ">99% sure better" in first
     luck = [line for line in mean.splitlines() if line.startswith("ours - fg_blend")]
-    assert len(luck) == 1 and ">99% sure better (real)" in luck[0]  # main score only
+    assert len(luck) == 1 and ">99% sure better" in luck[0]  # main score only
 
 
 def test_summary_mean_has_no_luck_line_without_the_blend():
@@ -221,7 +221,7 @@ def test_mse_bootstrap_matches_the_table_and_favors_the_less_noisy():
         assert boot.loc[s, "diff"] == pytest.approx(table.loc["a", s] - table.loc["b", s])
         assert boot.loc[s, "a"] == pytest.approx(table.loc["a", s])
         assert boot.loc[s, "b"] == pytest.approx(table.loc["b", s])
-    assert (boot["diff"] < 0).all() and (boot["sure"] > 0.95).all()  # lower = better
+    assert (boot["diff"] < 0).all() and (boot["sure"] > 0.975).all()  # lower = better
 
 
 def test_mse_bootstrap_redraws_each_player_once_for_every_snapshot():
@@ -253,4 +253,4 @@ def test_summary_leads_with_mse():
     # The pooled pairwise gap keeps its own luck line, named so it can't pass for MSE.
     pair = [line for line in mean.splitlines() if line.startswith("Gap-weighted pairwise: ")]
     assert len(pair) == 1 and "(positive = ours better)" in pair[0]
-    assert ">99% sure better (real)" in pair[0]
+    assert ">99% sure better" in pair[0]

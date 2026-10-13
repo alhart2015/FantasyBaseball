@@ -11,9 +11,6 @@ from collections.abc import Iterable, Sequence
 import numpy as np
 import pandas as pd
 
-# A difference counts as real when ``sure`` reaches this (#457).
-SURE_BAR = 0.95
-
 # A scored frame may stack several seasons or snapshots; a player is scored once per
 # unit, so these columns (when present) are part of what identifies a scored row.
 UNIT_COLS = ("season", "snapshot")
@@ -34,17 +31,29 @@ def player_draws(n: int, n_boot: int, rng: np.random.Generator) -> np.ndarray:
 
 
 def sure(draws: np.ndarray) -> float:
-    """How sure bootstrap ``draws`` (a minus b, positive = a better) are that a and b
-    really differ, signed by which is better: +0.95 = 95% sure a is better, -0.90 = 90%
-    sure a is worse, 0 = no lean. It is 1 minus the two-sided p-value: the widest
-    middle slice of the draws that leaves out 0 holds this share of them, so +/-0.95 is
-    exactly where the 95% interval stops crossing 0. Read as is; no halving. Ties at 0
-    count half to each side. It counts only the luck of which players happened to be
-    scored, not seed-to-seed or season-to-season swings."""
+    """How sure bootstrap ``draws`` (a minus b, positive = a better) are that a is
+    better, from 0 to 1: the share of draws where a comes out ahead. 1 = sure a is
+    better, 0 = sure a is worse, 0.5 = a coin flip. Ties at 0 count half. Just the
+    number: no cutoff turns it into a verdict. It counts only the luck of which players
+    happened to be scored, not seed-to-seed or season-to-season swings."""
     if not len(draws):
         return float("nan")
-    a_better = float(np.mean((draws > 0) + 0.5 * (draws == 0)))
-    return 2 * a_better - 1
+    return float(np.mean((draws > 0) + 0.5 * (draws == 0)))
+
+
+def sure_text(value: float) -> str:
+    """``evaluate.sure`` in words, on one 0-100 scale: "96% sure better", "50% sure
+    better" (a coin flip), "4% sure better" (sure it's worse). A bootstrap can't show
+    certainty, so the ends read ">99%" and "<1%"."""
+    if pd.isna(value):
+        return "n/a"
+    if value > 0.99:
+        pct = ">99%"
+    elif value < 0.01:
+        pct = "<1%"
+    else:
+        pct = f"{round(value * 100)}%"
+    return f"{pct} sure better"
 
 
 def common_index(frames: Iterable[pd.DataFrame], targets: Sequence[str]) -> pd.Index:
@@ -75,8 +84,8 @@ def mse_bootstrap(
     seed: int = 0,
 ) -> pd.DataFrame:
     """MSE of ``a`` minus ``b`` per stat (negative = ``a`` better), with ``a``'s and
-    ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower (+) or
-    higher (-)), from resampling players. Paired: both are scored on each draw.
+    ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower, 0-1:
+    :func:`sure`), from resampling players. Paired: both are scored on each draw.
 
     ``parts``: one row per ``key`` (player and season/snapshot) x ``system`` x ``stat``
     with MSE's numerator ``sq`` and weight ``w`` (each side's ``squared_error``), so MSE

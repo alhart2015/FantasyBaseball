@@ -196,8 +196,8 @@ def mse_bootstrap(
     scored: pd.DataFrame, a: str, b: str, *, n_boot: int = 2000, seed: int = 0
 ) -> pd.DataFrame:
     """MSE of ``a`` minus ``b`` per stat (negative = ``a`` better), with ``a``'s and
-    ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower (+) or
-    higher (-)), from resampling pitchers. Paired: both are scored on each draw. Each
+    ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower, 0-1:
+    ``projection_eval.sure``), from resampling pitchers. Paired: both are scored on each draw. Each
     draw redraws a pitcher once for every season or snapshot he is in, so overlapping
     snapshots aren't counted as independent evidence (``projection_eval``)."""
     key = unit_key(scored)

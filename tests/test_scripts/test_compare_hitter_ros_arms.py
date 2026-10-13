@@ -117,7 +117,7 @@ def test_a_better_arm_wins_every_band_on_every_seed(runs):
         out = arms.compare_arm(base, good, 100, score)
         assert list(out.index) == list(arms.BANDS) and list(out.columns) == list(TARGETS)
         for cell in out.to_numpy().ravel():
-            assert cell.startswith(sign) and cell.endswith(" >99% sure better (real), 2/2 seeds")
+            assert cell.startswith(sign) and cell.endswith(" >99% sure better, 2/2 seeds")
     assert arms.compare_arm(base, good, 10).equals(arms.compare_arm(base, good, 10, "mse"))
     with pytest.raises(ValueError, match="unknown score"):
         arms.compare_arm(base, good, 10, "mae")
@@ -146,4 +146,4 @@ def test_seasons_filter_and_mismatched_arms(runs):
 
 def test_unseeded_runs_compare_without_a_seed_count(runs):
     out = arms.compare_arm(arms.load_arm("single", None), arms.load_arm("single2", None), 20)
-    assert out.loc["wk1-6", "r"].endswith("sure better (real)")
+    assert out.loc["wk1-6", "r"].endswith("sure better")

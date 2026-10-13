@@ -40,7 +40,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.backtest import sure_text, to_markdown
+from fantasy_baseball.hitter_ros.backtest import to_markdown
 from fantasy_baseball.pitcher_ros.baselines import baseline_predictions, league_rates
 from fantasy_baseball.pitcher_ros.evaluate import (
     blend,
@@ -51,7 +51,12 @@ from fantasy_baseball.pitcher_ros.evaluate import (
     scored_players,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS, rates_from_counts, totals
-from fantasy_baseball.projection_eval import common_index, systems_in_every_unit, top_by_value
+from fantasy_baseball.projection_eval import (
+    common_index,
+    sure_text,
+    systems_in_every_unit,
+    top_by_value,
+)
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import Category
 
@@ -325,7 +330,7 @@ def score_seasons(
 
 def _vs_blend_lines(frame: pd.DataFrame) -> list[str]:
     """One line per system: its MSE minus the blend's per stat, with a 95% interval and
-    how sure it is better or worse."""
+    how sure it is better (0-100)."""
     systems = list(dict.fromkeys(frame["system"]))
     if BLEND not in systems:
         return []
@@ -430,8 +435,10 @@ def summarize(scores: Scores) -> list[str]:
         f"faced; mid-season, >= {SNAPSHOT_MIN_BF} after the snapshot. `{BLEND}` = plain "
         "average of the FanGraphs systems' rates; `marcel` and `league_avg` are simple "
         "floors (pitcher_ros/baselines.py). Intervals resample pitchers; "
-        '"N% sure better/worse" is how sure the system really differs from the blend; '
-        "95%+ is marked real. It counts only the luck of which pitchers were scored.",
+        '"N% sure better" is how sure the system is better than the blend, 0-100: '
+        "100 = sure better, 50 = a coin flip, 0 = sure worse; the 95% interval clears 0 "
+        "from 97.5% up (or 2.5% down). It counts only the luck of which pitchers were "
+        "scored.",
     ]
     if scores.failures:
         md += ["", "**Not scored:** " + "; ".join(scores.failures)]

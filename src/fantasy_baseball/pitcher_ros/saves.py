@@ -25,8 +25,8 @@ The pitcher net keeps its own SV as ours. ``usage`` (no FanGraphs saves or share
 it; swapped in as a rate over FanGraphs' playing time, the volume projections run on)
 doesn't beat it in the backtest's SV score (scripts/score_pitcher_net_saves.py, 3
 seeds, paired against the net): preseason 2022-2026 MSE 19.98-20.19 vs 18.75-19.57,
-worse on every seed (41-85% sure; fantasy-relevant pitchers 73-96%, real on 1 of 3);
-2026 snapshots 5.31-5.54 vs 5.35-5.52, a tie. Both lose to FanGraphs' saves.
+worse on every seed (7-29% sure better; fantasy-relevant pitchers 2-13%);
+2026 snapshots 5.31-5.54 vs 5.35-5.52 (32-59%). Both lose to FanGraphs' saves.
 ``mix`` (the average of the two shares) beats FanGraphs' own saves, but it carries
 FanGraphs' closer calls, so it belongs to the step that blends ours with FanGraphs,
 not to ours. Weights fit by non-negative least squares didn't beat the plain average:
