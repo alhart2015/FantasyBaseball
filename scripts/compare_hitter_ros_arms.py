@@ -16,8 +16,8 @@ Two tables per arm. First the main score, MSE (``evaluate``: R/HR/RBI/SB on tota
 the PA each hitter actually got, AVG in points weighted by AB), pooled over every scored
 hitter-week in a band, so a week with more hitters and more PA left weighs more. Each
 cell: arm minus base (negative = the arm is better), that as a % of the base's MSE, the
-95% interval and how sure the arm is better or worse (``evaluate.sure``: "96% sure
-better" means what it says; 95%+ is marked real), both from resampling hitters
+95% interval and how sure the arm is better (``evaluate.sure``, 0-100: 100 = sure
+better, 50 = a coin flip, 0 = sure worse), both from resampling hitters
 (``evaluate.mse_bootstrap``: each hitter redrawn once across every season-week, so
 overlapping weeks aren't counted as independent), then how many seeds were better on
 their own (seeds paired by number). How sure counts only which hitters were scored; the

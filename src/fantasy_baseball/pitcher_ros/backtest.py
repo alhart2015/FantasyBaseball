@@ -430,8 +430,9 @@ def summarize(scores: Scores) -> list[str]:
         f"faced; mid-season, >= {SNAPSHOT_MIN_BF} after the snapshot. `{BLEND}` = plain "
         "average of the FanGraphs systems' rates; `marcel` and `league_avg` are simple "
         "floors (pitcher_ros/baselines.py). Intervals resample pitchers; "
-        '"N% sure better/worse" is how sure the system really differs from the blend; '
-        "95%+ is marked real. It counts only the luck of which pitchers were scored.",
+        '"N% sure better" is how sure the system is better than the blend, 0-100: '
+        "100 = sure better, 50 = a coin flip, 0 = sure worse. It counts only the luck of "
+        "which pitchers were scored.",
     ]
     if scores.failures:
         md += ["", "**Not scored:** " + "; ".join(scores.failures)]

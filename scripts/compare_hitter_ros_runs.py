@@ -21,8 +21,8 @@ train_hitter_ros.py writes last):
 * Mid-season: our gap to the blend, averaged over the snapshots where both were scored
   (all of them, or those between --from and --to), with how many snapshots that was.
 * How sure the MSE and pairwise gaps are (evaluate.sure, from resampling the scored hitters,
-  each redrawn once across every season or snapshot): +0.95 = 95% sure ours is better
-  than the blend, -0.90 = 90% sure it is worse, 0 = no lean; +/-0.95 or beyond is real.
+  each redrawn once across every season or snapshot), 0-1: 0.95 = 95% sure ours is
+  better than the blend, 0.5 = a coin flip, 0.05 = 95% sure it is worse.
   Only the luck of which hitters were scored, not seed swings.
 * Vets and rookies (#433): the MSE and pairwise gaps to the blend for each group on its
   own (pairs only inside a group). Runs scored before the vet/rookie tag lack these rows;
@@ -287,8 +287,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            "MAIN: preseason MSE, how sure ours is better (+) or worse (-) than blend "
-            "(0.95+ = real)",
+            "MAIN: preseason MSE, how sure ours is better than blend (0-1)",
             cols("pre_mse_sure_"),
             2,
         ),
@@ -298,8 +297,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            "MAIN: mid-season MSE, how sure ours is better (+) or worse (-) than blend "
-            f"(0.95+ = real), {window}",
+            f"MAIN: mid-season MSE, how sure ours is better than blend (0-1), {window}",
             cols("mid_mse_sure_"),
             2,
         ),
@@ -316,7 +314,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             for prefix, when in (("pre", "preseason"), ("mid", "mid-season"))
             for kind, what in (
                 ("gap", "gap to blend (negative = ours better)"),
-                ("sure", "how sure ours is better (+) or worse (-) than blend (0.95+ = real)"),
+                ("sure", "how sure ours is better than blend (0-1)"),
             )
         ),
         ("Preseason gap-weighted pairwise % (ours)", cols("pre_pairw_"), 2),
@@ -326,8 +324,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            "Preseason gap-weighted pairwise, how sure ours is better (+) or worse (-) "
-            "than blend (0.95+ = real)",
+            "Preseason gap-weighted pairwise, how sure ours is better than blend (0-1)",
             cols("pre_pairw_sure_"),
             2,
         ),
@@ -337,8 +334,7 @@ def _groups(window: str) -> list[tuple[str, list[tuple[str, str]], int]]:
             2,
         ),
         (
-            "Mid-season gap-weighted pairwise, how sure ours is better (+) or worse (-) "
-            f"than blend (0.95+ = real), {window}",
+            f"Mid-season gap-weighted pairwise, how sure ours is better than blend (0-1), {window}",
             cols("mid_pairw_sure_"),
             2,
         ),

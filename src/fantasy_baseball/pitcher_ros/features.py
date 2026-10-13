@@ -36,9 +36,10 @@ def div(num: pd.Series, den: pd.Series) -> pd.Series:
 
 
 # K/W/SV loss weight (see answers). "bf" by default: over 3 seeds x 2022-2026, "bf2"
-# (the scorer's own weighting) was worse on K -- preseason +3.1 / +1.1 / +4.3% MSE (real
-# on 2 of 3 seeds), mid-season +1.2 to +1.8% -- and better on preseason W among the
-# fantasy-relevant pitchers (-5.4 / -3.5 / -5.0%, real on all 3), the rest mixed.
+# (the scorer's own weighting) was worse on K -- preseason +3.1 / +1.1 / +4.3% MSE (2%
+# or less sure better on 2 of 3 seeds), mid-season +1.2 to +1.8% -- and better on
+# preseason W among the fantasy-relevant pitchers (-5.4 / -3.5 / -5.0%, 98%+ sure
+# better on all 3), the rest mixed.
 PER_BF_WEIGHTS = ("bf", "bf2")
 
 
@@ -168,8 +169,8 @@ def _team_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
 
 # Minor-league inputs, 3 seeds x 2022-2026, averaged (runs 006-milb vs 001-plain):
 # preseason K MSE 184.7 vs 193.5 (>99% sure better; fantasy-relevant 325.6 vs 336.2,
-# 91%). Per seed 186.7 / 187.8 / 185.6 vs 191.3 / 198.9 / 196.2. Mid-season K and the
-# other stats level (no stat worse at 90% or more). Batters faced that pull a
+# 96%). Per seed 186.7 / 187.8 / 185.6 vs 191.3 / 198.9 / 196.2. Mid-season K and the
+# other stats level (none under 5% sure better). Batters faced that pull a
 # minor-league K-rate gap halfway to 0 (``milb_*_k_rel_shrunk``):
 MILB_SHRINK_BF = 100
 
