@@ -46,6 +46,8 @@ from fantasy_baseball.pitcher_ros.evaluate import (
     blend,
     fantasy_value,
     level_free,
+    level_free_bootstrap,
+    level_free_table,
     load_systems,
     mse_bootstrap,
     mse_table,
@@ -329,17 +331,25 @@ def score_seasons(
     return out
 
 
-def _vs_blend_lines(frame: pd.DataFrame, what: str = "MSE") -> list[str]:
+def _vs_blend_lines(
+    frame: pd.DataFrame, rows: pd.Series | None = None, *, level_free_mse: bool = False
+) -> list[str]:
     """One line per system: its MSE minus the blend's per stat, with a 95% interval and
-    how sure it is better (0-100). ``what`` names the score in the heading."""
+    how sure it is better (0-100), over the rows ``rows`` marks (default: all). With
+    ``level_free_mse``, the level-free MSE, its factors fitted over all of ``frame``."""
     systems = list(dict.fromkeys(frame["system"]))
     if BLEND not in systems:
         return []
+    what = "Level-free MSE" if level_free_mse else "MSE"
     lines = []
     for name in systems:
         if name == BLEND:
             continue
-        b = mse_bootstrap(frame, name, BLEND)
+        b = (
+            level_free_bootstrap(frame, name, BLEND, rows)
+            if level_free_mse
+            else mse_bootstrap(frame if rows is None else frame[rows], name, BLEND)
+        )
         cells = "; ".join(
             f"{s} {r['diff']:+.3g} [{r['lo']:+.3g}, {r['hi']:+.3g}] {sure_text(r['sure'])}"
             for s, r in b.iterrows()
@@ -364,9 +374,11 @@ def _typical_miss(frame: pd.DataFrame) -> str:
     return to_markdown(t[list(TARGETS)] ** 0.5, digits=2)
 
 
-def _pooled_block(frame: pd.DataFrame, flat: pd.DataFrame, unit: str, title: str) -> list[str]:
-    """MSE, typical miss and each system vs. the blend; then the same level-free
-    (``flat``: ``level_free`` of the frame these rows were cut from, same rows)."""
+def _pooled_block(pooled: pd.DataFrame, rows: pd.Series | None, unit: str, title: str) -> list[str]:
+    """MSE, typical miss and each system vs. the blend over the rows ``rows`` marks
+    (default: all of ``pooled``, which has ``level_free``'s ``lf_projected``); then the
+    same level-free, each system's level fitted over all of ``pooled``."""
+    frame = pooled if rows is None else pooled[rows]
     n = frame.drop_duplicates([unit, "player_id"]).groupby(unit).size().mean()
     return [
         "",
@@ -379,38 +391,36 @@ def _pooled_block(frame: pd.DataFrame, flat: pd.DataFrame, unit: str, title: str
         _typical_miss(frame),
         *_vs_blend_lines(frame),
         "",
-        f"Level-free MSE (each system's league level matched to the actuals per {unit}):",
+        f"Level-free MSE (each system's league level fitted per {unit} over everyone scored then):",
         "",
-        _table(flat),
-        *_vs_blend_lines(flat, "Level-free MSE"),
+        to_markdown(level_free_table(frame), digits=3),
+        *_vs_blend_lines(pooled, rows, level_free_mse=True),
     ]
 
 
-def _tag_blocks(frame: pd.DataFrame, flat: pd.DataFrame, unit: str) -> list[str]:
+def _tag_blocks(pooled: pd.DataFrame, unit: str) -> list[str]:
     md = []
-    rel_rows = frame["relevant"].fillna(False).astype(bool)
-    rel = frame[rel_rows]
-    if not rel.empty:
+    rel_rows = pooled["relevant"].fillna(False).astype(bool)
+    if rel_rows.any():
         md += _pooled_block(
-            rel,
-            flat[rel_rows],
+            pooled,
+            rel_rows,
             unit,
             f"Fantasy-relevant pitchers (top {RELEVANT_TOP} by FanGraphs' projected value "
             "or by actual value)",
         )
     for group in GROUPS:
-        rows = frame["group"] == group
-        g = frame[rows]
-        if not g.empty:
+        rows = pooled["group"] == group
+        if rows.any():
             label = (
                 f"{VET_MIN_CAREER_BF}+ MLB batters faced"
                 if group == "vet"
                 else f"under {VET_MIN_CAREER_BF}"
             )
             md += _pooled_block(
-                g, flat[rows], unit, f"{group.capitalize()}s ({label} when projected)"
+                pooled, rows, unit, f"{group.capitalize()}s ({label} when projected)"
             )
-    unknown = frame.loc[frame["group"] == "unknown", [unit, "player_id"]].drop_duplicates()
+    unknown = pooled.loc[pooled["group"] == "unknown", [unit, "player_id"]].drop_duplicates()
     if len(unknown):
         md += [
             "",
@@ -456,10 +466,10 @@ def summarize(scores: Scores) -> list[str]:
         '"N% sure better" is how sure the system is better than the blend, 0-100: '
         "100 = sure better, 50 = a coin flip, 0 = sure worse; the 95% interval clears 0 "
         "from 97.5% up (or 2.5% down). It counts only the luck of which pitchers were "
-        "scored. **Level-free MSE**: the same after scaling each system's projections, per "
-        "season or snapshot and stat, so their league level matches what happened (over "
-        "everyone scored then): how well it ranks pitchers, apart from its guess at the "
-        "league's level.",
+        "scored. **Level-free MSE**: the same after multiplying each system's projections, "
+        "per season or snapshot and stat, by the factor that minimizes it over everyone "
+        "scored then -- its best score with its league level put right; raw minus "
+        "level-free is what the level cost. Its how-sure refits the factors in every draw.",
     ]
     if scores.failures:
         md += ["", "**Not scored:** " + "; ".join(scores.failures)]
@@ -480,7 +490,7 @@ def summarize(scores: Scores) -> list[str]:
             md += ["", f"**{name}**", "", _table(g)]
         if pooled is not None:
             md += ["", _pooled_note(every, pooled, unit, scores.ours)]
-            flat = level_free(pooled)
-            md += _pooled_block(pooled, flat, unit, title)
-            md += _tag_blocks(pooled, flat, unit)
+            pooled = level_free(pooled)
+            md += _pooled_block(pooled, None, unit, title)
+            md += _tag_blocks(pooled, unit)
     return md

@@ -6,6 +6,8 @@ import pytest
 from fantasy_baseball.pitcher_ros.evaluate import (
     blend,
     level_free,
+    level_free_bootstrap,
+    level_free_table,
     load_fangraphs_pitchers,
     load_systems,
     mse_bootstrap,
@@ -119,32 +121,82 @@ def test_mse_bootstrap_signs():
     assert b.loc["k", "lo"] <= b.loc["k", "diff"] <= b.loc["k", "hi"]
 
 
-def test_level_free_takes_out_each_season_league_level_and_nothing_else():
-    """A system that is right about every pitcher but the league's level scores 0
-    level-free; one that ranks pitchers wrong keeps its miss."""
+def _two_seasons(systems, groups=None):
+    """Five pitchers scored by ``systems`` (name -> function of the actual rates) in
+    2024 and 2025; ``groups`` tags each pitcher vet/rookie."""
     rows = [
         {"player_id": p, "k": 0.15 + p / 100, "w": 0.01, "sv": 0.0, "era": 3.0 + p / 10,
          "whip": 1.3, "bf": 100.0 * p, "ip": 25.0 * p}
-        for p in range(1, 6)
+        for p in range(1, 7)
     ]  # fmt: skip
     actual = _actual(rows)
-    level = actual[list(TARGETS)] * 1.1  # 10% high on every pitcher
-    flat = pd.DataFrame(  # one rate for everyone, at the right level
-        {s: [actual[s].mean()] * 5 for s in TARGETS}, index=actual.index
-    )
+    projs = {name: f(actual[list(TARGETS)]) for name, f in systems.items()}
     scored = pd.concat(
-        [
-            scored_players({"level": level, "flat": flat}, actual, 100).assign(season=y)
-            for y in (2024, 2025)
-        ],
+        [scored_players(projs, actual, 100).assign(season=y) for y in (2024, 2025)],
         ignore_index=True,
     )
-    raw, lf = mse_table(scored), mse_table(level_free(scored))
+    if groups is not None:
+        scored["group"] = scored["player_id"].map(groups)
+    return scored
+
+
+def test_level_free_is_the_best_score_with_the_league_level_put_right():
+    scored = level_free(
+        _two_seasons(
+            {
+                "level": lambda a: a * 1.1,  # right about everyone but the league's level
+                "flat": lambda a: a * 0 + a.mean(),  # the same rate for everyone
+                "exact": lambda a: a,
+            }
+        )
+    )
+    raw, lf = mse_table(scored), level_free_table(scored)
     assert raw.loc["level", "k"] > 0 and lf.loc["level", "k"] == pytest.approx(0)
     assert lf.loc["level", "era"] == pytest.approx(0)
     assert lf.loc["flat", "k"] > 0  # a ranking miss stays
-    # Each season and stat is matched on its own weights: BF for K, IP for ERA.
-    k = level_free(scored).query("system == 'flat' and stat == 'k' and season == 2025")
-    assert (k.bf * k.projected).sum() == pytest.approx((k.bf * k.actual).sum())
-    era = level_free(scored).query("system == 'flat' and stat == 'era' and season == 2024")
-    assert (era.ip * era.projected).sum() == pytest.approx((era.ip * era.actual).sum())
+    assert (lf[list(TARGETS)] <= raw[list(TARGETS)] + 1e-12).all().all()  # never above raw
+    # The factor minimizes MSE: nudging it either way scores worse.
+    flat = scored[scored.system == "flat"]
+    for nudge in (0.98, 1.02):
+        worse = mse_table(flat.assign(projected=flat.lf_projected * nudge))
+        assert worse.loc["flat", "k"] > lf.loc["flat", "k"]
+
+
+def test_a_subgroup_level_free_score_keeps_its_own_level_miss():
+    """The level is fitted over everyone scored in a season: vets 10% high and rookies
+    10% low cancel league-wide, so neither group's own miss is taken out."""
+    vets = {1: "vet", 2: "rookie", 3: "vet", 4: "rookie", 5: "vet", 6: "rookie"}
+    scored = level_free(
+        _two_seasons(
+            {"split": lambda a: a.mul([1.1, 0.9, 1.1, 0.9, 1.1, 0.9], axis=0)}, groups=vets
+        )
+    )
+    vet_rows = scored[scored.group == "vet"]
+    assert level_free_table(vet_rows).loc["split", "k"] > 0
+    # Fitted on the vets alone, their level miss would vanish.
+    assert level_free_table(level_free(vet_rows)).loc["split", "k"] == pytest.approx(0)
+
+
+def test_level_free_bootstrap_refits_the_level_and_matches_the_table():
+    scored = level_free(
+        _two_seasons(
+            {
+                "level": lambda a: a * 1.1,
+                "noisy": lambda a: a.mul([1.2, 0.8, 1.1, 0.9, 1.0, 1.05], axis=0),
+            }
+        )
+    )
+    vets = scored["player_id"].isin([1, 3, 5])
+    b = level_free_bootstrap(scored, "level", "noisy", vets, n_boot=200)
+    sub = level_free_table(scored[vets])
+    assert b.loc["k", "a"] == pytest.approx(sub.loc["level", "k"])
+    assert b.loc["k", "b"] == pytest.approx(sub.loc["noisy", "k"])
+    assert b.loc["k", "lo"] <= b.loc["k", "diff"] <= b.loc["k", "hi"]
+    assert b.loc["k", "diff"] < 0 and 0 <= b.loc["k", "sure"] <= 1
+
+
+def test_level_free_refuses_rows_with_no_season():
+    scored = _two_seasons({"exact": lambda a: a})
+    scored.loc[0, "season"] = None
+    with pytest.raises(ValueError, match="no season"):
+        level_free(scored)
