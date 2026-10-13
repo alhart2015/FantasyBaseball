@@ -1,4 +1,5 @@
-"""Fetch and store raw minor-league hitting lines from the MLB Stats API (#435).
+"""Fetch and store raw minor-league hitting (#435) and pitching (#465) lines from the
+MLB Stats API.
 
 Rookies are where our projections trail FanGraphs (#433), because we had no
 minor-league history. This pulls it into the same store as the MLB data, kept raw: every
@@ -10,6 +11,10 @@ Layout (under the store root, read through :func:`store.connect`)::
 
     milb_season/YYYY.parquet                one row per player x level: the season line
     milb_weekly/YYYY/<start>_<end>.parquet  the same, for one window of dates
+
+for hitting, and the same under ``milb_pitching_season/`` and ``milb_pitching_weekly/``
+for pitching (``GROUPS``). Everything below holds for both; pitching lines add up on
+batters faced where hitting lines add up on PA.
 
 Levels are ``MILB_LEVELS``, one ``sportId`` each; the API returns one line per player per
 level per query, with ``team`` / ``league`` the player's last club there and
@@ -42,6 +47,7 @@ import logging
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, timedelta
+from functools import partial
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +64,9 @@ MILB_LEVELS = {11: "AAA", 12: "AA", 13: "A+", 14: "A", 15: "A-", 16: "Rk"}
 NO_MILB_SEASONS = frozenset({2020})
 _WORKERS = 4
 PA = "stat.plateAppearances"
+# The API's stat group -> (the store's folder prefix, the count the weekly lines must add
+# up to the season line on).
+GROUPS = {"hitting": ("milb", PA), "pitching": ("milb_pitching", "stat.battersFaced")}
 
 Window = tuple[date, date]
 Fetch = Callable[[dict[str, str | int]], list[dict[str, Any]]]
@@ -67,12 +76,14 @@ GameLog = Callable[[int, int, int], list[dict[str, Any]]]
 _NOT_COUNTS = frozenset({"stat.age"})
 
 
-def fetch_game_log(player: int, season: int, sport_id: int) -> list[dict[str, Any]]:
+def fetch_game_log(
+    player: int, season: int, sport_id: int, group: str = "hitting"
+) -> list[dict[str, Any]]:
     import requests
 
     params: dict[str, str | int] = {
         "stats": "gameLog",
-        "group": "hitting",
+        "group": group,
         "season": season,
         "sportId": sport_id,
     }
@@ -83,13 +94,14 @@ def fetch_game_log(player: int, season: int, sport_id: int) -> list[dict[str, An
     return splits
 
 
-def milb_season_path(root: Path, season: int) -> Path:
-    return root / "milb_season" / f"{season}.parquet"
+def milb_season_path(root: Path, season: int, group: str = "hitting") -> Path:
+    return root / f"{GROUPS[group][0]}_season" / f"{season}.parquet"
 
 
-def milb_week_path(root: Path, season: int, window: Window) -> Path:
+def milb_week_path(root: Path, season: int, window: Window, group: str = "hitting") -> Path:
     start, end = window
-    return root / "milb_weekly" / str(season) / f"{start.isoformat()}_{end.isoformat()}.parquet"
+    name = f"{start.isoformat()}_{end.isoformat()}.parquet"
+    return root / f"{GROUPS[group][0]}_weekly" / str(season) / name
 
 
 def week_windows(first: date, last: date, step_days: int) -> list[Window]:
@@ -104,13 +116,15 @@ def week_windows(first: date, last: date, step_days: int) -> list[Window]:
     return list(zip(starts, ends, strict=True))
 
 
-def _lines(season: int, fetch: Fetch, window: Window | None = None) -> pd.DataFrame:
-    """Every level's hitting lines for the season, or for ``window`` within it."""
+def _lines(
+    season: int, fetch: Fetch, window: Window | None = None, group: str = "hitting"
+) -> pd.DataFrame:
+    """Every level's ``group`` lines for the season, or for ``window`` within it."""
     frames = []
     for sport_id in MILB_LEVELS:
         params: dict[str, str | int] = {
             "stats": "season" if window is None else "byDateRange",
-            "group": "hitting",
+            "group": group,
             "season": season,
             "sportId": sport_id,
             "playerPool": "all",
@@ -120,8 +134,9 @@ def _lines(season: int, fetch: Fetch, window: Window | None = None) -> pd.DataFr
         splits = fetch(params)
         if splits:
             frames.append(pd.json_normalize(splits).assign(sport_id=sport_id))
+    count = GROUPS[group][1]
     empty = pd.DataFrame(
-        {"player.id": pd.Series(dtype="int64"), "sport_id": pd.Series(dtype="int64"), PA: []}
+        {"player.id": pd.Series(dtype="int64"), "sport_id": pd.Series(dtype="int64"), count: []}
     )
     df = pd.concat(frames, ignore_index=True) if frames else empty
     # The splits carry the season as a string; one int column stacks cleanly.
@@ -131,11 +146,14 @@ def _lines(season: int, fetch: Fetch, window: Window | None = None) -> pd.DataFr
     return df
 
 
-def weekly_mismatches(season_lines: pd.DataFrame, weekly: pd.DataFrame) -> pd.DataFrame:
-    """Player x level rows whose window PA don't add up to the season line's PA."""
+def weekly_mismatches(
+    season_lines: pd.DataFrame, weekly: pd.DataFrame, count: str = PA
+) -> pd.DataFrame:
+    """Player x level rows whose window ``count`` (PA; batters faced for pitching)
+    doesn't add up to the season line's."""
     keys = ["player.id", "sport_id"]
-    whole = season_lines.groupby(keys)[PA].sum()
-    parts = weekly.groupby(keys)[PA].sum() if len(weekly) else pd.Series(dtype=float)
+    whole = season_lines.groupby(keys)[count].sum()
+    parts = weekly.groupby(keys)[count].sum() if len(weekly) else pd.Series(dtype=float)
     both = pd.concat({"season_pa": whole, "weekly_pa": parts}, axis=1).fillna(0)
     return both[both["season_pa"] != both["weekly_pa"]].reset_index()
 
@@ -148,21 +166,27 @@ def fetch_milb_season(
     *,
     step_days: int,
     today: date,
+    group: str = "hitting",
     fetch: Fetch = fetch_stats_splits,
-    game_log: GameLog = fetch_game_log,
+    game_log: GameLog | None = None,
 ) -> dict[str, int]:
     """Fetch what is missing or still changing for ``season``: the season lines and each
-    weekly window that has started. ``first`` / ``last``: the MLB regular season's first
-    and last dates. Returns counts of files written, skipped as final and failed."""
+    weekly window that has started, for one stat ``group`` (``GROUPS``). ``first`` /
+    ``last``: the MLB regular season's first and last dates. ``game_log`` defaults to
+    :func:`fetch_game_log` for the group. Returns counts of files written, skipped as
+    final and failed."""
     result = {"written": 0, "final": 0, "failed": 0}
     if season in NO_MILB_SEASONS:
         return result
-    season_path = milb_season_path(root, season)
+    if game_log is None:
+        game_log = partial(fetch_game_log, group=group)
+    count = GROUPS[group][1]
+    season_path = milb_season_path(root, season, group)
     season_fetched = False
     if is_final(season_path, last):
         result["final"] += 1
     elif first <= today:
-        _write_season_lines(season, fetch, season_path)
+        _write_season_lines(season, fetch, season_path, group)
         result["written"] += 1
         season_fetched = True
 
@@ -170,68 +194,80 @@ def fetch_milb_season(
     for window in week_windows(first, last, step_days):
         if window[0] > today:
             break
-        if is_final(milb_week_path(root, season, window), window[1]):
+        if is_final(milb_week_path(root, season, window, group), window[1]):
             result["final"] += 1
         else:
             todo.append(window)
 
     def one(window: Window) -> bool:
         try:
-            _write_parquet(_lines(season, fetch, window), milb_week_path(root, season, window))
+            _write_parquet(
+                _lines(season, fetch, window, group), milb_week_path(root, season, window, group)
+            )
             return True
         except Exception:
-            logger.exception("milb %s %s..%s: failed", season, *window)
+            logger.exception("milb %s %s %s..%s: failed", group, season, *window)
             return False
 
     with ThreadPoolExecutor(_WORKERS) as pool:
         for ok in pool.map(one, todo):
             result["written" if ok else "failed"] += 1
-    logger.info("milb %s weekly: %s", season, result)
+    logger.info("milb %s %s weekly: %s", group, season, result)
 
     # Once the season has settled and every window is on disk (final, or fetched just
     # now), the windows must add up to the season line.
     if is_settled(last, today) and not result["failed"]:
         windows = week_windows(first, last, step_days)
         if not season_fetched and len(
-            weekly_mismatches(pd.read_parquet(season_path), _read_weekly(root, season, windows))
+            weekly_mismatches(
+                pd.read_parquet(season_path), _read_weekly(root, season, windows, group), count
+            )
         ):
             # A short season page from an earlier run would otherwise stay final for good.
             logger.info(
-                "milb %s: weekly lines don't add up; fetching the season lines again", season
+                "milb %s %s: weekly lines don't add up; fetching the season lines again",
+                group,
+                season,
             )
-            _write_season_lines(season, fetch, season_path)
+            _write_season_lines(season, fetch, season_path, group)
             result["written"] += 1
-        check_season(root, season, windows, game_log)
+        check_season(root, season, windows, game_log, group)
     return result
 
 
-def _write_season_lines(season: int, fetch: Fetch, path: Path) -> None:
-    df = _lines(season, fetch)
+def _write_season_lines(season: int, fetch: Fetch, path: Path, group: str) -> None:
+    df = _lines(season, fetch, group=group)
     if df.empty:
-        raise ValueError(f"milb {season}: the API returned no lines at any level")
+        raise ValueError(f"milb {group} {season}: the API returned no lines at any level")
     _write_parquet(df, path)
-    logger.info("milb %s season: %d lines", season, len(df))
+    logger.info("milb %s %s season: %d lines", group, season, len(df))
 
 
-def _read_weekly(root: Path, season: int, windows: list[Window]) -> pd.DataFrame:
+def _read_weekly(root: Path, season: int, windows: list[Window], group: str) -> pd.DataFrame:
     return pd.concat(
-        [pd.read_parquet(milb_week_path(root, season, w)) for w in windows], ignore_index=True
+        [pd.read_parquet(milb_week_path(root, season, w, group)) for w in windows],
+        ignore_index=True,
     )
 
 
-def check_season(root: Path, season: int, windows: list[Window], game_log: GameLog) -> None:
+def check_season(
+    root: Path, season: int, windows: list[Window], game_log: GameLog, group: str = "hitting"
+) -> None:
     """Make the weekly lines add up to the season lines: rebuild any player-level that
     doesn't from his game log, then raise if any still doesn't."""
-    season_lines = pd.read_parquet(milb_season_path(root, season))
-    bad = weekly_mismatches(season_lines, _read_weekly(root, season, windows))
+    count = GROUPS[group][1]
+    season_lines = pd.read_parquet(milb_season_path(root, season, group))
+    bad = weekly_mismatches(season_lines, _read_weekly(root, season, windows, group), count)
     if len(bad):
-        logger.info("milb %s: %d player-levels don't add up; using game logs", season, len(bad))
-        _rebuild_from_game_logs(root, season, windows, season_lines, bad, game_log)
-        bad = weekly_mismatches(season_lines, _read_weekly(root, season, windows))
+        logger.info(
+            "milb %s %s: %d player-levels don't add up; using game logs", group, season, len(bad)
+        )
+        _rebuild_from_game_logs(root, season, windows, season_lines, bad, game_log, group)
+        bad = weekly_mismatches(season_lines, _read_weekly(root, season, windows, group), count)
     if len(bad):
         raise ValueError(
-            f"milb {season}: weekly PA don't add up to the season line for {len(bad)} "
-            f"player-levels, e.g. {bad.head().to_dict('records')}"
+            f"milb {group} {season}: weekly {count} totals don't add up to the season line for "
+            f"{len(bad)} player-levels, e.g. {bad.head().to_dict('records')}"
         )
 
 
@@ -242,6 +278,7 @@ def _rebuild_from_game_logs(
     season_lines: pd.DataFrame,
     bad: pd.DataFrame,
     game_log: GameLog,
+    group: str,
 ) -> None:
     """Replace each ``bad`` player-level's weekly rows with sums of his game log.
 
@@ -251,6 +288,7 @@ def _rebuild_from_game_logs(
     (the rewritten files are final) or, with no season line to compare against, make
     the check pass on nothing."""
     keys = ["player.id", "sport_id"]
+    count = GROUPS[group][1]
     rebuilt: list[pd.DataFrame] = []
     fixed_keys: list[tuple[int, int]] = []
     for player, sport_id in bad[keys].itertuples(index=False):
@@ -295,8 +333,8 @@ def _rebuild_from_game_logs(
                     from_game_log=True,
                 )
             )
-        rebuilt_pa = sum(r[PA].sum() for r in rows if PA in r.columns)
-        if rebuilt_pa != line[PA].iloc[0]:
+        rebuilt_n = sum(r[count].sum() for r in rows if count in r.columns)
+        if rebuilt_n != line[count].iloc[0]:
             continue
         rebuilt.extend(rows)
         fixed_keys.append((player, sport_id))
@@ -305,7 +343,7 @@ def _rebuild_from_game_logs(
     fixed = pd.DataFrame(fixed_keys, columns=keys).assign(_drop=True)
     new = pd.concat(rebuilt, ignore_index=True)
     for window in windows:
-        path = milb_week_path(root, season, window)
+        path = milb_week_path(root, season, window, group)
         old = pd.read_parquet(path).merge(fixed, on=keys, how="left")
         keep = old["_drop"].isna()
         add = new[new["window_start"] == window[0]]
