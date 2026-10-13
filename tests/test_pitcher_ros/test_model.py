@@ -1,23 +1,34 @@
+from datetime import date
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from fantasy_baseball.pitcher_ros import backtest
-from fantasy_baseball.pitcher_ros.features import answers, input_frame
+from fantasy_baseball.pitcher_ros.features import (
+    answers,
+    input_frame,
+    league_answer_rates,
+    league_reference,
+)
 from fantasy_baseball.pitcher_ros.model import (
     APPLIED,
+    DEFAULT_RELATIVE_TARGET,
     ID_COLS,
+    LeagueRates,
     applied_settings,
     average_seeds,
     check_plain,
     check_week_zero,
     fit_season,
+    league_rates,
+    net_config,
     plain_config,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS
 from fantasy_baseball.pitcher_ros.table import build_table
 
-from .test_table import RELIEVER, STARTER, _seasons, _write
+from .test_table import RELIEVER, STARTER, _season, _seasons, _write
 
 
 @pytest.fixture(scope="module")
@@ -159,3 +170,95 @@ def test_a_repeated_row_is_refused_not_merged():
     twice = _seed_preds([row, row], [0.2, 0.3])
     with pytest.raises(ValueError, match="repeated a row"):
         average_seeds([twice, twice])
+
+
+def test_league_reference_pools_last_season_and_this_one_before_the_date(table):
+    ref = league_reference(table)
+    # 2024: 10 games of STARTER (24 BF, 5 K) and RELIEVER (4 BF, 1 K), plus TWOWAY's
+    # 20-BF start (MOPUP, a first baseman, isn't a pitcher-season). 2025 week 1: the
+    # first 7 days of the same, with TWOWAY's start on day one.
+    k, bf = 10 * 6 + 7 * 6, (10 * 28 + 20) + (7 * 28 + 20)
+    assert ref.loc[_row_index(table, STARTER, 2025, 1), "k"] == pytest.approx(k / bf)
+    # The store's first season has no last season to forecast from.
+    assert ref.loc[_row_index(table, STARTER, 2024, 0)].isna().all()
+
+
+def test_league_answer_rates_pool_the_rest_of_the_season(table):
+    ans = league_answer_rates(table)
+    # 2025 from opening day: 21 games of STARTER and RELIEVER, and TWOWAY's start.
+    assert ans.loc[_row_index(table, RELIEVER, 2025, 0), "k"] == pytest.approx(
+        21 * 6 / (21 * 28 + 20)
+    )
+
+
+def _tiny(relative_target):
+    return plain_config(
+        hidden=[8], max_epochs=3, patience=1, val_frac=0.34, relative_target=relative_target
+    )
+
+
+def test_answer_predictions_are_scaled_back_by_the_forecast(table):
+    """ "answer" learns against the league's actual rates and scales back by the forecast
+    known on the date: doubling the forecast doubles every prediction, and the answers'
+    league rates never reach a prediction."""
+    x, (y, w) = input_frame(table), answers(table)
+    league = league_rates(table)
+    preds, _ = fit_season(table, x, y, w, 2025, _tiny("answer"), league)
+    doubled = LeagueRates(league.reference * 2, league.answer)
+    twice, _ = fit_season(table, x, y, w, 2025, _tiny("answer"), doubled)
+    rates = list(TARGETS)
+    assert preds[rates].notna().all().all()
+    pd.testing.assert_frame_equal(twice[rates], preds[rates] * 2)
+    # Built here when not passed in: the same predictions.
+    again, _ = fit_season(table, x, y, w, 2025, _tiny("answer"))
+    pd.testing.assert_frame_equal(again, preds)
+
+
+@pytest.fixture(scope="module")
+def table3(tmp_path_factory):
+    """Three seasons: "known" can't learn from the first (no forecast), so it needs two
+    before the test season."""
+    root = tmp_path_factory.mktemp("store3")
+    _write(root, {2023: _season(2023, date(2023, 4, 1), 10, k=4), **_seasons()})
+    return build_table(root)
+
+
+def test_known_predictions_learn_and_scale_back_by_the_same_forecast(table3):
+    """With "known", targets are divided by the forecast and predictions multiplied back
+    by it: doubling it leaves the standardized targets, so the predictions, unchanged."""
+    table = table3
+    x, (y, w) = input_frame(table), answers(table)
+    league = league_rates(table)
+    preds, _ = fit_season(table, x, y, w, 2025, _tiny("known"), league)
+    doubled = LeagueRates(league.reference * 2, league.answer)
+    same, _ = fit_season(table, x, y, w, 2025, _tiny("known"), doubled)
+    rates = list(TARGETS)
+    assert preds[rates].notna().all().all()
+    pd.testing.assert_frame_equal(same[rates], preds[rates], rtol=1e-5)
+
+
+def test_a_season_with_no_usable_forecast_is_refused(table):
+    x, (y, w) = input_frame(table), answers(table)
+    # The store's first season has no last season to forecast from.
+    with pytest.raises(ValueError, match="no usable league forecast"):
+        fit_season(table, x, y, w, 2024, _tiny("answer"))
+    # A league rate of 0 can't scale a prediction back: refused, not multiplied by 0.
+    league = league_rates(table)
+    no_saves = LeagueRates(league.reference.assign(sv=0.0), league.answer)
+    with pytest.raises(ValueError, match="no usable league forecast"):
+        fit_season(table, x, y, w, 2025, _tiny("answer"), no_saves)
+
+
+def test_the_net_as_trained_learns_relative_to_the_league():
+    assert DEFAULT_RELATIVE_TARGET == "answer"
+    assert net_config(seed=2).relative_target == "answer" and net_config().seq == "none"
+    assert net_config(relative_target="none").relative_target == "none"
+    assert plain_config().relative_target == "none"  # the plain baseline stays plain
+
+
+def _row_index(table, player, season, week):
+    match = table.index[
+        (table.player_id == player) & (table.season == season) & (table.week == week)
+    ]
+    assert len(match) == 1
+    return match[0]

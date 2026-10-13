@@ -63,6 +63,37 @@ def answers(t: pd.DataFrame, per_bf_weight: str = "bf") -> tuple[pd.DataFrame, p
     return y, w.where(y.notna(), 0.0)
 
 
+def league_reference(t: pd.DataFrame) -> pd.DataFrame:
+    """Each row's league ``TARGETS`` rates known on its as-of date: last season plus this
+    season before the date, pooled. The net predicts a pitcher relative to his league
+    and is scaled back by this (``NetConfig.relative_target``). Across 2011-2026 last
+    season missed the next season's league K rate by 0.43 K per 100 batters faced on
+    average, the last three seasons pooled by 0.76 (the rate rose every season to 2020,
+    which a longer pool lags); mid-season, with this season so far, 0.59 vs 0.83. NaN
+    for a row with no last season in the store."""
+    counts = pd.DataFrame(
+        {c: t[f"lg_p1_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in _ANSWER_COUNTS},
+        index=t.index,
+    )
+    out: pd.DataFrame = rates_from_counts(counts)[list(TARGETS)]
+    return out.where(t["lg_p1_bf"].astype(float) > 0)
+
+
+def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
+    """Each row's league ``TARGETS`` rates over its answer window: the ``ros_*`` counts of
+    every table row of the same season and as-of week pooled. The table has a row for
+    every pitcher-season pitching on or after the date, so this is the league's rest of
+    the season (the ``lg_*`` columns' population). Uses the answers: a **training target
+    denominator only**, never an input or a way back to rates."""
+    keys = [t["season"], t["week"]]
+    counts = pd.DataFrame(
+        {c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum") for c in _ANSWER_COUNTS},
+        index=t.index,
+    )
+    out: pd.DataFrame = rates_from_counts(counts)[list(TARGETS)]
+    return out
+
+
 def _box_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
     def c(name: str) -> pd.Series:
         return t[f"{w}_{name}"].astype(float)

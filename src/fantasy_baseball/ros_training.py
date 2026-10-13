@@ -11,6 +11,18 @@ import pandas as pd
 from fantasy_baseball.hitter_ros.features import Standardizer
 
 
+def usable_league_rates(rates: pd.DataFrame, binomial: tuple[str, ...] = ()) -> pd.DataFrame:
+    """League rates (one column per stat) usable as a divisor or a log-odds offset: NaN
+    unless above 0, and for a ``binomial`` stat also below 1. A late-season window with
+    no steal attempts league-wide, or with every attempt successful, would otherwise give
+    an infinite target or offset (#413)."""
+    ok = rates > 0
+    for s in binomial:
+        if s in rates.columns:
+            ok[s] &= rates[s] < 1
+    return rates.where(ok)
+
+
 def holdout_players(
     table: pd.DataFrame, train_rows: pd.Series, val_frac: float, seed: int
 ) -> np.ndarray:

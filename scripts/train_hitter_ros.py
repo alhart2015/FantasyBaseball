@@ -107,7 +107,11 @@ from fantasy_baseball.hitter_ros.probes import (
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.hitter_ros.table import HORIZONS
 from fantasy_baseball.hitter_ros.table import build_options as table_build_options
-from fantasy_baseball.ros_training import holdout_and_scaler, weighted_moments
+from fantasy_baseball.ros_training import (
+    holdout_and_scaler,
+    usable_league_rates,
+    weighted_moments,
+)
 
 TABLE = PROJECT_ROOT / "data" / "hitter_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
@@ -316,18 +320,6 @@ def with_sb_from(preds: pd.DataFrame, sb_preds: pd.DataFrame) -> pd.DataFrame:
         if target_stat(c) in ("sb", *SB_PIECES):
             out[c] = sb_preds[c]
     return out
-
-
-def usable_league_rates(rates: pd.DataFrame, binomial: tuple[str, ...]) -> pd.DataFrame:
-    """League rates (one column per stat) usable as a divisor or a log-odds offset: NaN
-    unless above 0, and for a ``binomial`` stat also below 1. A late-season window with
-    no steal attempts league-wide, or with every attempt successful, would otherwise give
-    an infinite target or offset (#413)."""
-    ok = rates > 0
-    for s in binomial:
-        if s in rates.columns:
-            ok[s] &= rates[s] < 1
-    return rates.where(ok)
 
 
 def by_stat(frame: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
