@@ -31,7 +31,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import league_denominators
-from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS
+from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS, device
+from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
 from fantasy_baseball.pitcher_ros.model import (
@@ -45,9 +46,11 @@ from fantasy_baseball.pitcher_ros.model import (
     league_rates,
     net_config,
 )
+from fantasy_baseball.pitcher_ros.sequence import TOKEN_FEATURES, TOKEN_ORDER
 from fantasy_baseball.pitcher_ros.stats import load_games
 
 TABLE = PROJECT_ROOT / "data" / "pitcher_ros" / "table.parquet"
+TOKENS = PROJECT_ROOT / "data" / "pitcher_ros" / "app_tokens.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 LEAGUE = PROJECT_ROOT / "config" / "league.yaml"
@@ -81,6 +84,17 @@ def main() -> int:
         default=DEFAULT_RELATIVE_TARGET,
         help="learn rates relative to the league (model.fit_season, DEFAULT_RELATIVE_TARGET)",
     )
+    parser.add_argument(
+        "--seq",
+        choices=["none", "gru", "transformer"],
+        default="none",
+        help="encoder over each pitcher's recent appearances (pitcher_ros/sequence.py)",
+    )
+    parser.add_argument(
+        "--seq-len", type=int, default=150, help="appearances each row reads, newest first"
+    )
+    parser.add_argument("--seq-dim", type=int, default=64)
+    parser.add_argument("--seq-layers", type=int, default=1)
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -90,7 +104,19 @@ def main() -> int:
     run = RUNS / args.name
     if run.exists() and any(run.iterdir()) and not args.overwrite:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
-    configs = {seed: net_config(seed=seed, relative_target=args.relative_target) for seed in seeds}
+    if args.seq != "none" and not TOKENS.exists():
+        parser.error(f"{TOKENS} is missing; run scripts/build_pitcher_ros_tokens.py")
+    configs = {
+        seed: net_config(
+            seed=seed,
+            relative_target=args.relative_target,
+            seq=args.seq,
+            seq_len=args.seq_len,
+            seq_dim=args.seq_dim,
+            seq_layers=args.seq_layers,
+        )
+        for seed in seeds
+    }
     table = pd.read_parquet(args.table)
     try:
         check_week_zero(table)
@@ -106,6 +132,18 @@ def main() -> int:
                 parser.error(f"--test-seasons: {err}")
     x = input_frame(table)
     y, w = answers(table, args.per_bf_weight)
+    batcher = (
+        SequenceBatcher(
+            pd.read_parquet(TOKENS),
+            table,
+            args.seq_len,
+            device(),
+            features=TOKEN_FEATURES,
+            order=TOKEN_ORDER,
+        )
+        if args.seq != "none"
+        else None
+    )
     # Everything has loaded: only now clear an old run, so a failed start leaves it.
     if run.exists():
         shutil.rmtree(run)
@@ -122,7 +160,7 @@ def main() -> int:
         parts = []
         for season in seasons:
             logging.info("seed %s, test season %s", seed, season)
-            preds, info = fit_season(table, x, y, w, season, config, league)
+            preds, info = fit_season(table, x, y, w, season, config, league, batcher)
             parts.append(preds)
             infos.append({"seed": seed, **info})
         seed_preds = pd.concat(parts, ignore_index=True)

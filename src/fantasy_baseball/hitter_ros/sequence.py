@@ -88,6 +88,8 @@ STORED_FEATURES = (
 # Added per batch row: log1p(days before the as-of date) / 5, and same-season flag.
 BATCH_FEATURES = ("days_ago", "same_season")
 N_TOKEN_FEATURES = len(STORED_FEATURES) + len(BATCH_FEATURES)
+# How a hitter's PAs are ordered within a day (see build_pa_tokens).
+PA_ORDER = ("game_date", "game_pk", "at_bat_number")
 
 
 def build_pa_tokens(store: Path) -> pd.DataFrame:
@@ -150,10 +152,13 @@ def build_pa_tokens(store: Path) -> pd.DataFrame:
 
 
 class SequenceBatcher:
-    """Every PA token on one device, plus per-table-row slice bounds.
+    """Every token on one device, plus per-table-row slice bounds.
 
     ``rows`` is the training table (needs ``player_id``, ``as_of``, ``season``). Row ``i``
-    owns the tokens ``[start[i], end[i])``: that hitter's PAs strictly before ``as_of``.
+    owns the tokens ``[start[i], end[i])``: that player's tokens strictly before ``as_of``.
+    ``features`` are the token columns read (each on about a 0-1 scale) and ``order`` how
+    one player's tokens sort (``game_date`` first); both default to the hitter's PAs. The
+    pitcher net passes its appearance tokens (``pitcher_ros.sequence``).
     """
 
     def __init__(
@@ -162,9 +167,16 @@ class SequenceBatcher:
         rows: pd.DataFrame,
         max_len: int,
         device: torch.device,
+        features: tuple[str, ...] = STORED_FEATURES,
+        order: tuple[str, ...] = PA_ORDER,
     ) -> None:
-        tokens = tokens.sort_values(["player_id", "game_date", "game_pk", "at_bat_number"])
+        if order[0] != "game_date":
+            raise ValueError("tokens must be ordered by game_date first")
+        tokens = tokens.sort_values(["player_id", *order])
         self.max_len = max_len
+        # Each token's width as the encoder sees it: the stored features plus the two
+        # added per row (BATCH_FEATURES).
+        self.n_features = len(features) + len(BATCH_FEATURES)
         self.device = device
         tok_days = to_days(tokens["game_date"])
         row_days = to_days(rows["as_of"])
@@ -174,9 +186,7 @@ class SequenceBatcher:
         def as_t(a: np.ndarray) -> torch.Tensor:
             return torch.as_tensor(a, dtype=torch.long, device=device)
 
-        self.feats = torch.as_tensor(
-            tokens[list(STORED_FEATURES)].to_numpy(np.float32), device=device
-        )
+        self.feats = torch.as_tensor(tokens[list(features)].to_numpy(np.float32), device=device)
         self.tok_days = as_t(tok_days)
         self.tok_season = as_t(tokens["season"].to_numpy())
         self.row_start = as_t(start)
@@ -190,9 +200,9 @@ class SequenceBatcher:
     def batch(
         self, rows: torch.Tensor, *, shuffle_order: bool = False
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        """(tokens [B, max_len, N_TOKEN_FEATURES], lengths [B]) for table positions ``rows``.
+        """(tokens [B, max_len, n_features], lengths [B]) for table positions ``rows``.
 
-        ``shuffle_order`` scrambles each row's PAs (a check: if scores don't drop, the
+        ``shuffle_order`` scrambles each row's tokens (a check: if scores don't drop, the
         net isn't using order).
         """
         n = self.lengths(rows)
@@ -304,10 +314,17 @@ class HybridNet(nn.Module):
 
 
 def make_encoder(
-    kind: str, dim: int, layers: int, max_len: int, dropout: float
+    kind: str,
+    dim: int,
+    layers: int,
+    max_len: int,
+    dropout: float,
+    n_in: int = N_TOKEN_FEATURES,
 ) -> GRUEncoder | TransformerEncoder:
+    """The sequence encoder; ``n_in``: each token's width (the batcher's
+    ``n_features``; the hitter's PAs by default)."""
     if kind == "gru":
-        return GRUEncoder(N_TOKEN_FEATURES, dim, layers)
+        return GRUEncoder(n_in, dim, layers)
     if kind == "transformer":
-        return TransformerEncoder(N_TOKEN_FEATURES, dim, layers, max_len, dropout)
+        return TransformerEncoder(n_in, dim, layers, max_len, dropout)
     raise ValueError(f"unknown sequence encoder {kind!r}")

@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.net import NetConfig, predict, train
+from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros.features import league_answer_rates, league_reference
 from fantasy_baseball.pitcher_ros.stats import TARGETS
 from fantasy_baseball.ros_training import (
@@ -43,6 +44,10 @@ APPLIED = (
     "seed",
     "weighting",
     "relative_target",
+    "seq",
+    "seq_len",
+    "seq_dim",
+    "seq_layers",
     "micro_batch",
     "amp",
 )
@@ -150,6 +155,7 @@ def fit_season(
     test_season: int,
     config: NetConfig,
     league: LeagueRates | None = None,
+    batcher: SequenceBatcher | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Train on complete seasons before ``test_season``; predict every row of it.
 
@@ -166,9 +172,18 @@ def fit_season(
     to 2020) and carries it on after it stops: before this it projected too many K in
     every test season (2022-2026), by 0.4 to 1.7 per 100 batters faced. ``league``:
     :func:`league_rates` of ``table``, if already built (a run fits many seasons and
-    seeds on one table)."""
+    seeds on one table).
+
+    ``config.seq`` (as the hitter net's, #414): "none", or an encoder ("gru",
+    "transformer") over each pitcher's last ``seq_len`` appearances before the row's
+    date, whose summary joins the inputs. ``batcher`` reads them: a
+    ``hitter_ros.sequence.SequenceBatcher`` built on ``table``'s rows, in order, from
+    ``pitcher_ros.sequence``'s tokens."""
     check_plain(config)
     check_week_zero(table)
+    if (config.seq != "none") != (batcher is not None):
+        raise ValueError(f"seq {config.seq!r} needs a batcher exactly when it is not 'none'")
+    positions = np.arange(len(table))
     cols = list(TARGETS)
     ref = None
     if config.relative_target != "none":
@@ -196,9 +211,17 @@ def fit_season(
         config,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
         target_stats=cols,
+        rows=positions[train_rows.to_numpy()] if batcher else None,
+        batcher=batcher,
     )
     test_rows = table["season"] == test_season
-    z = predict(result.model, scaler.transform(x_all[test_rows]))
+    z = predict(
+        result.model,
+        scaler.transform(x_all[test_rows]),
+        rows=positions[test_rows.to_numpy()] if batcher else None,
+        batcher=batcher,
+        amp=config.amp,
+    )
     preds = pd.DataFrame(
         {c: np.clip(z[:, i] * sd[c] + mu[c], 0.0, None) for i, c in enumerate(cols)},
         index=table.index[test_rows],
