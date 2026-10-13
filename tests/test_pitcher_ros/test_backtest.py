@@ -138,6 +138,9 @@ def test_score_seasons_pools_only_systems_on_file_every_season(tmp_path):
     assert BLEND in set(scores.pre_pooled["system"])
     md = "\n".join(backtest.summarize(scores))
     assert "Left out: atc (on file for 1 of 2)" in md
+    # Every pooled table is also scored level-free, with its own lines vs the blend.
+    assert "Level-free MSE (each system's league level fitted per season" in md
+    assert "Level-free MSE minus the blend's" in md
 
 
 def test_score_seasons_reports_a_failed_season_and_scores_the_rest(tmp_path):
