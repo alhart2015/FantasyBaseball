@@ -251,7 +251,9 @@ def test_a_season_with_no_usable_forecast_is_refused(table):
 
 def test_the_net_as_trained_learns_relative_to_the_league():
     assert DEFAULT_RELATIVE_TARGET == "answer"
-    assert net_config(seed=2).relative_target == "answer" and net_config().seq == "none"
+    assert net_config(seed=2).relative_target == "answer"
+    assert net_config().seq == "transformer" and net_config(seq="none").seq == "none"
+    assert plain_config().seq == "none"  # the plain baseline stays plain
     assert net_config(relative_target="none").relative_target == "none"
     assert plain_config().relative_target == "none"  # the plain baseline stays plain
 

@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.net import NetConfig, predict, train
+from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros.features import league_answer_rates, league_reference
 from fantasy_baseball.pitcher_ros.stats import TARGETS
 from fantasy_baseball.ros_training import (
@@ -43,6 +44,10 @@ APPLIED = (
     "seed",
     "weighting",
     "relative_target",
+    "seq",
+    "seq_len",
+    "seq_dim",
+    "seq_layers",
     "micro_batch",
     "amp",
 )
@@ -58,6 +63,20 @@ APPLIED = (
 # on one of them somewhere. :func:`plain_config` keeps "none", the plain baseline;
 # :func:`net_config` is the net as trained.
 DEFAULT_RELATIVE_TARGET = "answer"
+
+# The sequence encoder the pitcher net uses (fit_season; pitcher_ros/sequence.py): a
+# transformer over each pitcher's last 150 appearances, their results against the
+# league. 5 seeds x 2022-2026 (run 014-seq-lgctx vs 008-rel-answer; how sure better,
+# 0-100), preseason: SV 18.28 vs 18.83 (98%), ERA 1.313 vs 1.329 (>99%), WHIP 0.0350
+# vs 0.0354 (>99%), W (66%); K 180.2 vs 178.0 (2%) raw but 173.9 vs 173.9 (50%)
+# level-free -- its K loss is the league level, mostly 2022 (+5.0% vs +3.9%).
+# Mid-season: SV (93%), K 62.5 vs 62.0 (14%), the rest 55-68%.
+DEFAULT_SEQ: dict[str, Any] = {
+    "seq": "transformer",
+    "seq_len": 150,
+    "seq_dim": 64,
+    "seq_layers": 1,
+}
 
 
 class LeagueRates(NamedTuple):
@@ -91,8 +110,8 @@ def check_league_forecast(table: pd.DataFrame, league: LeagueRates, season: int)
 
 def net_config(**overrides: Any) -> NetConfig:
     """The pitcher net as trained: :func:`plain_config` with the applied defaults
-    (``DEFAULT_RELATIVE_TARGET``), then ``overrides``."""
-    return plain_config(**{"relative_target": DEFAULT_RELATIVE_TARGET, **overrides})
+    (``DEFAULT_RELATIVE_TARGET``, ``DEFAULT_SEQ``), then ``overrides``."""
+    return plain_config(**{"relative_target": DEFAULT_RELATIVE_TARGET, **DEFAULT_SEQ, **overrides})
 
 
 def plain_config(**overrides: Any) -> NetConfig:
@@ -150,6 +169,7 @@ def fit_season(
     test_season: int,
     config: NetConfig,
     league: LeagueRates | None = None,
+    batcher: SequenceBatcher | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Train on complete seasons before ``test_season``; predict every row of it.
 
@@ -166,9 +186,27 @@ def fit_season(
     to 2020) and carries it on after it stops: before this it projected too many K in
     every test season (2022-2026), by 0.4 to 1.7 per 100 batters faced. ``league``:
     :func:`league_rates` of ``table``, if already built (a run fits many seasons and
-    seeds on one table)."""
+    seeds on one table).
+
+    ``config.seq`` (as the hitter net's, #414): "none", or an encoder ("gru",
+    "transformer") over each pitcher's last ``seq_len`` appearances before the row's
+    date, whose summary joins the inputs. ``batcher`` reads them: a
+    ``hitter_ros.sequence.SequenceBatcher`` built on ``table``'s rows, in order, from
+    ``pitcher_ros.sequence``'s tokens."""
     check_plain(config)
     check_week_zero(table)
+    if (config.seq != "none") != (batcher is not None):
+        raise ValueError(f"seq {config.seq!r} needs a batcher exactly when it is not 'none'")
+    if batcher is not None:
+        # A longer batcher would index past the transformer's position table; a shorter
+        # one would quietly read fewer appearances than the config (and config.json) says.
+        if batcher.max_len != config.seq_len:
+            raise ValueError(
+                f"the batcher reads {batcher.max_len} appearances, config.seq_len {config.seq_len}"
+            )
+        if len(batcher.row_start) != len(table):
+            raise ValueError("the batcher was built on a different table (row count differs)")
+    positions = np.arange(len(table))
     cols = list(TARGETS)
     ref = None
     if config.relative_target != "none":
@@ -196,9 +234,17 @@ def fit_season(
         config,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
         target_stats=cols,
+        rows=positions[train_rows.to_numpy()] if batcher else None,
+        batcher=batcher,
     )
     test_rows = table["season"] == test_season
-    z = predict(result.model, scaler.transform(x_all[test_rows]))
+    z = predict(
+        result.model,
+        scaler.transform(x_all[test_rows]),
+        rows=positions[test_rows.to_numpy()] if batcher else None,
+        batcher=batcher,
+        amp=config.amp,
+    )
     preds = pd.DataFrame(
         {c: np.clip(z[:, i] * sd[c] + mu[c], 0.0, None) for i, c in enumerate(cols)},
         index=table.index[test_rows],

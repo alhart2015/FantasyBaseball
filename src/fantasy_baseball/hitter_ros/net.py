@@ -429,17 +429,26 @@ class HorizonHeadsMLP(nn.Module):
         return torch.cat([h(z) for h in self.heads], dim=1)
 
 
-def build_model(n_in: int, n_out: int, config: NetConfig) -> nn.Module:
+def build_model(
+    n_in: int, n_out: int, config: NetConfig, n_token_features: int | None = None
+) -> nn.Module:
+    """The net for ``config``. ``n_token_features``: each sequence token's width (the
+    batcher's ``n_features``); the hitter's PAs when not given."""
     if config.head_layers:
         return HorizonHeadsMLP(n_in, n_out, config.hidden, config.dropout, config.head_layers)
     if config.heads > 1:  # the last input column is the head index, not a feature
         return MultiHeadMLP(n_in - 1, n_out, config.hidden, config.dropout, config.heads)
     if config.seq == "none":
         return MLP(n_in, n_out, config.hidden, config.dropout)
-    from fantasy_baseball.hitter_ros.sequence import HybridNet, make_encoder
+    from fantasy_baseball.hitter_ros.sequence import N_TOKEN_FEATURES, HybridNet, make_encoder
 
     encoder = make_encoder(
-        config.seq, config.seq_dim, config.seq_layers, config.seq_len, config.dropout
+        config.seq,
+        config.seq_dim,
+        config.seq_layers,
+        config.seq_len,
+        config.dropout,
+        N_TOKEN_FEATURES if n_token_features is None else n_token_features,
     )
     return HybridNet(n_in, n_out, config.hidden, config.dropout, encoder)
 
@@ -678,7 +687,9 @@ def train(
     if rows is not None:
         rt = torch.as_tensor(rows[~val_mask], dtype=torch.long, device=dev)
         rv = torch.as_tensor(rows[val_mask], dtype=torch.long, device=dev)
-    model = build_model(x.shape[1], y.shape[1], config).to(dev)
+    model = build_model(
+        x.shape[1], y.shape[1], config, None if batcher is None else batcher.n_features
+    ).to(dev)
     count = count_loss(config, y[~val_mask], w[~val_mask], dev, target_stats, target_weights)
     opt = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
     gen = torch.Generator(device=dev).manual_seed(config.seed)

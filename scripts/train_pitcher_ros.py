@@ -7,12 +7,15 @@ mid-season snapshots, pitcher_ros.backtest). Writes predictions.parquet (the ave
 predictions-s<N>.parquet (each seed), config.json, info.json, the scored frames and
 scores.md to data/pitcher_ros/runs/<name>/.
 
-Needs the training table (scripts/build_pitcher_ros_table.py) and torch (see
-scripts/train_hitter_ros.py).
+Needs the training table (scripts/build_pitcher_ros_table.py), torch (see
+scripts/train_hitter_ros.py) and, for the default transformer over each pitcher's recent
+appearances (model.DEFAULT_SEQ), the appearance tokens
+(scripts/build_pitcher_ros_tokens.py). --seq none trains the plain net.
 
 Usage:
     python scripts/train_pitcher_ros.py --name 003-avg          # seeds 0-4, averaged
     python scripts/train_pitcher_ros.py --name quick --seeds 0 --test-seasons 2026
+    python scripts/train_pitcher_ros.py --name plain --seq none   # no sequence
     python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
 
@@ -31,12 +34,14 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import league_denominators
-from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS
+from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS, device
+from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
 from fantasy_baseball.pitcher_ros.model import (
     DEFAULT_RELATIVE_TARGET,
     DEFAULT_SEEDS,
+    DEFAULT_SEQ,
     applied_settings,
     average_seeds,
     check_league_forecast,
@@ -45,9 +50,11 @@ from fantasy_baseball.pitcher_ros.model import (
     league_rates,
     net_config,
 )
+from fantasy_baseball.pitcher_ros.sequence import TOKEN_FEATURES, TOKEN_ORDER
 from fantasy_baseball.pitcher_ros.stats import load_games
 
 TABLE = PROJECT_ROOT / "data" / "pitcher_ros" / "table.parquet"
+TOKENS = PROJECT_ROOT / "data" / "pitcher_ros" / "app_tokens.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 LEAGUE = PROJECT_ROOT / "config" / "league.yaml"
@@ -70,6 +77,12 @@ def main() -> int:
     parser.add_argument("--test-seasons", type=int, nargs="+", default=list(DEFAULT_TEST_SEASONS))
     parser.add_argument("--table", type=Path, default=TABLE)
     parser.add_argument(
+        "--tokens",
+        type=Path,
+        default=TOKENS,
+        help="appearance tokens (scripts/build_pitcher_ros_tokens.py), with --seq",
+    )
+    parser.add_argument(
         "--per-bf-weight",
         choices=PER_BF_WEIGHTS,
         default="bf",
@@ -81,6 +94,21 @@ def main() -> int:
         default=DEFAULT_RELATIVE_TARGET,
         help="learn rates relative to the league (model.fit_season, DEFAULT_RELATIVE_TARGET)",
     )
+    parser.add_argument(
+        "--seq",
+        choices=["none", "gru", "transformer"],
+        default=DEFAULT_SEQ["seq"],
+        help="encoder over each pitcher's recent appearances (model.DEFAULT_SEQ); "
+        "none: the plain net",
+    )
+    parser.add_argument(
+        "--seq-len",
+        type=int,
+        default=DEFAULT_SEQ["seq_len"],
+        help="appearances each row reads, newest first",
+    )
+    parser.add_argument("--seq-dim", type=int, default=DEFAULT_SEQ["seq_dim"])
+    parser.add_argument("--seq-layers", type=int, default=DEFAULT_SEQ["seq_layers"])
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -90,7 +118,19 @@ def main() -> int:
     run = RUNS / args.name
     if run.exists() and any(run.iterdir()) and not args.overwrite:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
-    configs = {seed: net_config(seed=seed, relative_target=args.relative_target) for seed in seeds}
+    if args.seq != "none" and not args.tokens.exists():
+        parser.error(f"{args.tokens} is missing; run scripts/build_pitcher_ros_tokens.py")
+    configs = {
+        seed: net_config(
+            seed=seed,
+            relative_target=args.relative_target,
+            seq=args.seq,
+            seq_len=args.seq_len,
+            seq_dim=args.seq_dim,
+            seq_layers=args.seq_layers,
+        )
+        for seed in seeds
+    }
     table = pd.read_parquet(args.table)
     try:
         check_week_zero(table)
@@ -106,6 +146,25 @@ def main() -> int:
                 parser.error(f"--test-seasons: {err}")
     x = input_frame(table)
     y, w = answers(table, args.per_bf_weight)
+    games = load_games(STORE)
+    batcher = None
+    if args.seq != "none":
+        tokens = pd.read_parquet(args.tokens)
+        # Tokens built before the store gained games would silently leave a row's most
+        # recent appearances out of its sequence.
+        stale = pd.to_datetime(tokens["game_date"]).max() < games["game_date"].max()
+        if stale:
+            parser.error(
+                f"{args.tokens} is older than {STORE}; rerun scripts/build_pitcher_ros_tokens.py"
+            )
+        batcher = SequenceBatcher(
+            tokens,
+            table,
+            args.seq_len,
+            device(),
+            features=TOKEN_FEATURES,
+            order=TOKEN_ORDER,
+        )
     # Everything has loaded: only now clear an old run, so a failed start leaves it.
     if run.exists():
         shutil.rmtree(run)
@@ -122,7 +181,7 @@ def main() -> int:
         parts = []
         for season in seasons:
             logging.info("seed %s, test season %s", seed, season)
-            preds, info = fit_season(table, x, y, w, season, config, league)
+            preds, info = fit_season(table, x, y, w, season, config, league, batcher)
             parts.append(preds)
             infos.append({"seed": seed, **info})
         seed_preds = pd.concat(parts, ignore_index=True)
@@ -133,7 +192,7 @@ def main() -> int:
     (run / "info.json").write_text(json.dumps(infos, indent=2))
 
     scores = backtest.score_seasons(
-        load_games(STORE),
+        games,
         seasons,
         PROJECTIONS,
         league_denominators(LEAGUE),
