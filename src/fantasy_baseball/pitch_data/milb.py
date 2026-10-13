@@ -218,9 +218,10 @@ def fetch_milb_season(
     # now), the windows must add up to the season line.
     if is_settled(last, today) and not result["failed"]:
         windows = week_windows(first, last, step_days)
-        weekly = _read_weekly(root, season, windows, group)
         if not season_fetched and len(
-            weekly_mismatches(pd.read_parquet(season_path), weekly, count)
+            weekly_mismatches(
+                pd.read_parquet(season_path), _read_weekly(root, season, windows, group), count
+            )
         ):
             # A short season page from an earlier run would otherwise stay final for good.
             logger.info(

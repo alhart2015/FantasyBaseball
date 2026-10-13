@@ -25,8 +25,8 @@ finished. Everything is stored as **counts**:
 * ``p3_*``   the previous three seasons combined.
 * ``car_*``  every earlier season in the store.
 * ``milb_p1_*``, ``milb_p3_*``  minor-league pitching (``MILB_COUNTS``), the previous
-  season and the previous three, every level summed with each line's level-expected
-  counts beside it, so a rate can be read against its level's. ``milb_p1_in_store`` and
+  season and the previous three, every level summed with each line's league-expected
+  counts beside it, so a rate can be read against his leagues' (``_stage_milb``). ``milb_p1_in_store`` and
   ``milb_p3_seasons_in_store`` say how much of each window the store covers (there was
   no minor-league season in 2020), so "no minor-league line" can be told from "not
   stored".
@@ -64,15 +64,16 @@ yet.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import duckdb
 import pandas as pd
 
 from fantasy_baseball.analysis.game_logs import FULL_PITCHER_FIELDS
-from fantasy_baseball.hitter_ros.milb_grade import EXCLUDED_LEAGUES
+from fantasy_baseball.hitter_ros.milb_features import LEVEL_RANK
+from fantasy_baseball.hitter_ros.milb_grade import EXCLUDED_LEAGUES, MIN_LEAGUE_PA
 from fantasy_baseball.hitter_ros.statcast_sql import CONTACT_SQL, SWING_SQL, WHIFF_SQL, sql_in
-from fantasy_baseball.pitch_data.milb import MILB_LEVELS
 from fantasy_baseball.pitch_data.store import connect
 from fantasy_baseball.pitcher_ros.stats import GAME_DATE_SQL
 from fantasy_baseball.ros_table import (
@@ -233,10 +234,17 @@ MILB_COUNTS = (
     "age_bf",
     "age_gap_bf",
 )
-MILB_RANK = {sport_id: rank for rank, sport_id in enumerate(MILB_LEVELS, start=1)}
+# A league smaller than this that season (a few stray lines filed under the wrong
+# league) is read against its level's pooled rates instead; the hitters' threshold, a
+# batter faced being a plate appearance from the other side.
+MILB_MIN_LEAGUE_BF = MIN_LEAGUE_PA
+# Lines of these position types are position players pitching, left out like their
+# major-league mop-up outings (the table's pitcher-seasons).
+MILB_NOT_PITCHERS = ("Infielder", "Outfielder", "Catcher", "Hitter")
 MILB_WINDOWS = {"p1": P1, "p3": P3}
 
 _REQUIRED_VIEWS = ("pitching", "lineups", "schedule")
+logger = logging.getLogger(__name__)
 # The team going forward is the team of his next game only when it is at most this many
 # days off (ros_table.stage_current_team).
 TEAM_LOOKAHEAD_DAYS = 14
@@ -343,9 +351,14 @@ def _stage(conn: duckdb.DuckDBPyConnection, *, has_pitches: bool) -> None:
 
 def _stage_milb(conn: duckdb.DuckDBPyConnection, *, has_milb: bool) -> None:
     """``milb_player_season``: per player-season minor-league pitching totals
-    (``MILB_COUNTS``), every level summed (``EXCLUDED_LEAGUES`` left out); empty with no
-    minor-league pitching files. ``milb_cover``: per season, whether last season's
-    minor-league lines are stored and how many of the last three are."""
+    (``MILB_COUNTS``), every level summed; empty with no minor-league pitching files.
+    Read from the weekly lines, whose league is the window's club, so a pitcher who
+    changed leagues at a level has each stretch read against its own league (and his
+    ``EXCLUDED_LEAGUES`` stretches left out, not his whole level). Expected counts use
+    each league's rates that season (its level's below ``MILB_MIN_LEAGUE_BF``); ages come
+    from the season lines, and the age gap is to the level's mean. Position players
+    pitching (``MILB_NOT_PITCHERS``) are left out. ``milb_cover``: per season, whether
+    last season's minor-league lines are stored and how many of the last three are."""
     if not has_milb:
         cols = ", ".join(f"CAST(NULL AS DOUBLE) AS {c}" for c in MILB_COUNTS)
         conn.execute(
@@ -353,32 +366,55 @@ def _stage_milb(conn: duckdb.DuckDBPyConnection, *, has_milb: bool) -> None:
             f"CAST(NULL AS INTEGER) AS season, {cols} WHERE false"
         )
     else:
-        line = ", ".join(f'sum("stat.{v}") AS {k}' for k, v in MILB_LINE.items())
+        line = ", ".join(f'sum(w."stat.{v}") AS {k}' for k, v in MILB_LINE.items())
         excluded = ", ".join(str(i) for i in EXCLUDED_LEAGUES)
         conn.execute(
             f"""
             CREATE TEMP TABLE milb_lines AS
-            SELECT CAST("player.id" AS BIGINT) AS player_id, CAST(season AS INTEGER) AS season,
-                   CAST(sport_id AS INTEGER) AS sport_id, {line},
-                   max(CAST("stat.age" AS DOUBLE)) AS age
-            FROM milb_pitching_season
-            WHERE coalesce("league.id", 0) NOT IN ({excluded}) AND "stat.battersFaced" > 0
-            GROUP BY 1, 2, 3
+            WITH age AS (
+                SELECT CAST(season AS INTEGER) AS season,
+                       CAST("player.id" AS BIGINT) AS player_id,
+                       CAST(sport_id AS INTEGER) AS sport_id,
+                       max(CAST("stat.age" AS DOUBLE)) AS age
+                FROM milb_pitching_season GROUP BY ALL
+            )
+            SELECT CAST(w."player.id" AS BIGINT) AS player_id,
+                   CAST(w.season AS INTEGER) AS season, CAST(w.sport_id AS INTEGER) AS sport_id,
+                   coalesce(w."league.id", 0) AS league_id, {line}, any_value(age.age) AS age
+            FROM milb_pitching_weekly w
+            LEFT JOIN age ON age.season = w.season AND age.player_id = w."player.id"
+                         AND age.sport_id = w.sport_id
+            WHERE coalesce(w."position.type", '') NOT IN {sql_in(MILB_NOT_PITCHERS)}
+              AND coalesce(w."league.id", 0) NOT IN ({excluded})
+            GROUP BY 1, 2, 3, 4
+            HAVING sum(w."stat.battersFaced") > 0
             """
         )
+
+        def den(stat: str) -> str:
+            return "outs" if stat == "er" else "bf"
+
+        totals = ", ".join(f"sum({c}) AS {c}" for c in ("bf", "outs", *MILB_EXPECTED))
+
+        def pick(c: str) -> str:
+            return f"CASE WHEN g.bf >= {MILB_MIN_LEAGUE_BF} THEN g.{c} ELSE v.{c} END"
+
         rates = ", ".join(
-            f"sum({s}) / nullif(sum({'outs' if s == 'er' else 'bf'}), 0) AS lg_{s}"
-            for s in MILB_EXPECTED
+            f"({pick(s)}) / nullif({pick(den(s))}, 0) AS lg_{s}" for s in MILB_EXPECTED
         )
-        expected = ", ".join(
-            f"sum(l.lg_{s} * m.{'outs' if s == 'er' else 'bf'}) AS x{s}" for s in MILB_EXPECTED
-        )
-        rank = " ".join(f"WHEN {s} THEN {r}" for s, r in MILB_RANK.items())
+        expected = ", ".join(f"sum(r.lg_{s} * m.{den(s)}) AS x{s}" for s in MILB_EXPECTED)
+        rank = " ".join(f"WHEN {s} THEN {r}" for s, r in LEVEL_RANK.items())
         conn.execute(
             f"""
             CREATE TEMP TABLE milb_player_season AS
-            WITH levels AS (
-                SELECT season, sport_id, {rates},
+            WITH lv AS (SELECT season, sport_id, {totals} FROM milb_lines GROUP BY 1, 2),
+            lg AS (SELECT season, sport_id, league_id, {totals} FROM milb_lines GROUP BY 1, 2, 3),
+            ref AS (
+                SELECT g.season, g.sport_id, g.league_id, {rates}
+                FROM lg g JOIN lv v USING (season, sport_id)
+            ),
+            ages AS (
+                SELECT season, sport_id,
                        sum(age * bf) / nullif(sum(bf) FILTER (WHERE age IS NOT NULL), 0)
                            AS lg_age
                 FROM milb_lines GROUP BY 1, 2
@@ -387,8 +423,10 @@ def _stage_milb(conn: duckdb.DuckDBPyConnection, *, has_milb: bool) -> None:
                    {expected},
                    sum((CASE m.sport_id {rank} END) * m.bf) AS level_bf,
                    coalesce(sum(m.bf) FILTER (WHERE m.age IS NOT NULL), 0) AS age_bf,
-                   coalesce(sum((m.age - l.lg_age) * m.bf), 0) AS age_gap_bf
-            FROM milb_lines m JOIN levels l USING (season, sport_id)
+                   coalesce(sum((m.age - a.lg_age) * m.bf), 0) AS age_gap_bf
+            FROM milb_lines m
+            JOIN ref r USING (season, sport_id, league_id)
+            JOIN ages a USING (season, sport_id)
             GROUP BY 1, 2
             """
         )
@@ -406,6 +444,19 @@ def _stage_milb(conn: duckdb.DuckDBPyConnection, *, has_milb: bool) -> None:
     )
 
 
+def _has_milb(views: set[str], root: Path) -> bool:
+    """Whether the store has minor-league pitching lines (season and weekly). Without
+    them every ``milb_*`` input is blank, so say so: the net would train without them."""
+    if {"milb_pitching_season", "milb_pitching_weekly"} <= views:
+        return True
+    logger.warning(
+        "pitch-data store %s has no minor-league pitching lines; the milb_* inputs will be "
+        "blank. Fill them with scripts/fetch_pitch_data.py --only milb_pitching",
+        root,
+    )
+    return False
+
+
 def build_table(root: Path) -> pd.DataFrame:
     """Build the full pitcher training table from the pitch-data store at ``root``."""
     conn = connect(root)
@@ -421,7 +472,7 @@ def build_table(root: Path) -> pd.DataFrame:
             conn,
             has_pitches="pitches" in views,
             has_games="games" in views,
-            has_milb="milb_pitching_season" in views,
+            has_milb=_has_milb(views, root),
         )
     finally:
         conn.close()

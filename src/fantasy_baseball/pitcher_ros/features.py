@@ -6,7 +6,7 @@ weight (see :func:`answers` for how they compare with the scorer's).
 
 Inputs (``input_frame``): rates per window (season to date, last 30 days, last season,
 last three, career), box-score and pitch-tracking, minor-league pitching (last season,
-last three; raw and against the level), plus context (age, how much of the season is
+last three; raw and against his leagues), plus context (age, how much of the season is
 left, how much history the store covers, team run support and save chances, league
 rates). NaN = unknown (no batters faced, or not measured that season);
 ``hitter_ros.features.Standardizer`` turns it into 0 plus a missing flag.
@@ -166,17 +166,17 @@ def _team_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
     }
 
 
-# Minor-league inputs, 3 seeds x 2022-2026 (runs 003-milb vs 001-plain): preseason K MSE
-# 186.7 / 187.9 / 185.4 vs 191.3 / 198.9 / 196.2 (90%, >99%, >99% sure better); fantasy-
-# relevant 13%, 96%, 97%. Mid-season K and the other stats within seed noise (no stat
-# worse on more than one seed). Batters faced that pull a minor-league K-rate gap
-# halfway to 0 (``milb_*_k_rel_shrunk``):
+# Minor-league inputs, 3 seeds x 2022-2026, averaged (runs 006-milb vs 001-plain):
+# preseason K MSE 184.7 vs 193.5 (>99% sure better; fantasy-relevant 325.6 vs 336.2,
+# 91%). Per seed 186.7 / 187.8 / 185.6 vs 191.3 / 198.9 / 196.2. Mid-season K and the
+# other stats level (no stat worse at 90% or more). Batters faced that pull a
+# minor-league K-rate gap halfway to 0 (``milb_*_k_rel_shrunk``):
 MILB_SHRINK_BF = 100
 
 
 def _milb_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
     """Minor-league pitching rates for window ``w`` (``table.MILB_WINDOWS``), each line
-    also read against its level (``*_rel``: what he allowed minus what his levels
+    also read against its league (``*_rel``: what he allowed minus what his leagues
     allowed, per batter faced, or per 27 outs for ERA). All NaN, log batters faced
     included, where the store has none of the window's seasons: "not stored", not
     "pitched nowhere"."""
@@ -218,7 +218,13 @@ COVERAGE = (
 
 
 def input_frame(t: pd.DataFrame) -> pd.DataFrame:
-    """Model inputs for every table row. NaN = unknown."""
+    """Model inputs for every table row. NaN = unknown. Refuses a table built before the
+    minor-league inputs (#465), which would otherwise fail on a bare missing column."""
+    if "milb_p1_in_store" not in t.columns:
+        raise ValueError(
+            "the pitcher table has no minor-league columns (milb_*); rebuild it with "
+            "scripts/build_pitcher_ros_table.py"
+        )
     cols: dict[str, pd.Series] = {}
     for w in (*WINDOWS, *INPUT_RECENT):
         cols.update(_box_rates(t, w))

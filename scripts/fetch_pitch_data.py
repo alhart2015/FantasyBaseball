@@ -118,19 +118,18 @@ def print_summary(root: Path) -> None:
         ).fetchall():
             print(f"{season}  {n:>11}")
     if "milb_season" in views:
-        print_milb_summary(conn, "milb", "stat.plateAppearances", "PA")
+        print_milb_summary(conn, views, "milb", "stat.plateAppearances", "PA")
     if "milb_pitching_season" in views:
-        print_milb_summary(conn, "milb_pitching", "stat.battersFaced", "BF")
+        print_milb_summary(conn, views, "milb_pitching", "stat.battersFaced", "BF")
     print(f"\ntotal on disk: {_dir_mb(root):.1f} MB")
 
 
 def print_milb_summary(
-    conn: duckdb.DuckDBPyConnection, prefix: str, count: str, label: str
+    conn: duckdb.DuckDBPyConnection, views: set[str], prefix: str, count: str, label: str
 ) -> None:
     """Players per level and season, and the total ``count`` (PA, or batters faced) in
     the season lines vs. the weekly lines (equal once a season is complete). ``prefix``:
-    the views' name before ``_season`` / ``_weekly``."""
-    views = {r[0] for r in conn.execute("SELECT view_name FROM duckdb_views()").fetchall()}
+    the views' name before ``_season`` / ``_weekly``; ``views``: the store's views."""
     pa = f'"{count}"'
     weekly = (
         dict(conn.execute(f"SELECT season, sum({pa}) FROM {prefix}_weekly GROUP BY 1").fetchall())
