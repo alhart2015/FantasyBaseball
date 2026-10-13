@@ -10,6 +10,17 @@ isn't charged for missing on playing time (that is scored on its own):
 * ERA, WHIP: ``(projected - actual)^2`` in the stat's own units, weighted by the
   innings he actually pitched, the way hitters' AVG is weighted by AB. So a 10-inning
   reliever counts a tenth as much as a 100-inning one.
+
+**Level-free MSE** (:func:`level_free`, :func:`level_free_bootstrap`): MSE after each
+system's projections are multiplied, per season or snapshot and stat, by the one factor
+that minimizes that MSE over everyone scored then -- its best score with its league
+level put right. A league-wide miss (every pitcher's K rate too high in a season the
+league's fell) then costs almost nothing, so what is left is mostly how well it ranks
+and spreads pitchers. It is never above the raw MSE, and raw minus level-free is what
+its league level cost. A factor rather than a shift, because the league's level moves
+rates in proportion (the net is scaled back by a league rate the same way). The hitter
+backtest's level-free MAE is a different score (absolute error, mean-matched by PA), so
+the two don't share code.
 """
 
 from __future__ import annotations
@@ -178,6 +189,116 @@ def squared_error(scored: pd.DataFrame, keep: list[str]) -> pd.DataFrame:
             w=np.where(per_bf, 1.0, ip),
         )
     )
+
+
+def _error_weight(scored: pd.DataFrame) -> np.ndarray:
+    """Each row's weight on its squared rate error in MSE's numerator: ``bf^2`` for
+    K/W/SV (``(bf x err)^2``), ``ip`` for ERA/WHIP (``ip x err^2``)."""
+    per_bf = scored["stat"].isin(PER_BF).to_numpy()
+    bf, ip = scored["bf"].to_numpy(float), scored["ip"].to_numpy(float)
+    weight: np.ndarray = np.where(per_bf, bf**2, ip)
+    return weight
+
+
+def _units(scored: pd.DataFrame) -> list[str]:
+    """The season / snapshot columns a level is fitted per; refuses a blank one (a row
+    with no unit would be left out of every fit)."""
+    cols = [c for c in unit_key(scored) if c != "player_id"]
+    if scored[cols].isna().to_numpy().any():
+        raise ValueError(f"scored rows with no {' / '.join(cols)}: can't fit their level")
+    return cols
+
+
+def level_free(scored: pd.DataFrame) -> pd.DataFrame:
+    """``scored`` plus ``lf_projected``: each system's projection times its level-free
+    factor (module doc), fitted per stat and season or snapshot over **every** row of
+    the unit, ``sum(W p a) / sum(W p^2)`` with MSE's error weights ``W``. Cut subsets
+    (vets, fantasy-relevant) from the result: their level is the league's, not their
+    own. A unit whose projections are all 0 keeps factor 1."""
+    out = scored.copy()
+    keys = ["system", "stat", *_units(out)]
+    w = _error_weight(out)
+    p, a = out["projected"].to_numpy(float), out["actual"].to_numpy(float)
+    groups = [out[k] for k in keys]
+    num = pd.Series(w * p * a, index=out.index).groupby(groups).transform("sum")
+    den = pd.Series(w * p * p, index=out.index).groupby(groups).transform("sum")
+    out["lf_projected"] = out["projected"] * (num / den.where(den > 0)).fillna(1.0)
+    return out
+
+
+def level_free_table(scored: pd.DataFrame) -> pd.DataFrame:
+    """:func:`mse_table` of :func:`level_free`'s projections (``scored`` must have
+    ``lf_projected``)."""
+    return mse_table(scored.assign(projected=scored["lf_projected"]))
+
+
+def level_free_bootstrap(
+    scored: pd.DataFrame,
+    a: str,
+    b: str,
+    rows: pd.Series | None = None,
+    *,
+    n_boot: int = 2000,
+    seed: int = 0,
+) -> pd.DataFrame:
+    """Level-free MSE of ``a`` minus ``b`` per stat, as :func:`mse_bootstrap` lays it out
+    (``diff``, ``lo``, ``hi``, ``sure``, ``a``, ``b``), over the rows ``rows`` marks
+    (default: all). Each system's factor is fitted again in every draw over every row of
+    its unit in that draw, not held at the full sample's, so the interval and how sure
+    count the luck in the fit too. Closed form: per unit and draw, with count-weighted
+    sums, MSE numerator = f^2 sum(W p^2) - 2 f sum(W p a) + sum(W a^2) over ``rows``,
+    f = sum(W p a) / sum(W p^2) over the unit."""
+    rng = np.random.default_rng(seed)
+    units = _units(scored)
+    sub = scored[scored["system"].isin([a, b])].copy()
+    mark = (
+        pd.Series(True, index=sub.index)
+        if rows is None
+        else rows.reindex(sub.index).fillna(False).astype(bool)
+    )
+    sub["W"] = _error_weight(sub)
+    sub["mse_w"] = np.where(sub["stat"].isin(PER_BF), 1.0, sub["ip"].to_numpy(float))
+    p, act = sub["projected"].to_numpy(float), sub["actual"].to_numpy(float)
+    sub["fit_pa"], sub["fit_pp"] = sub["W"] * p * act, sub["W"] * p * p
+    on = mark.to_numpy(float)
+    sub["pp"], sub["pa"] = sub["fit_pp"] * on, sub["fit_pa"] * on
+    sub["aa"], sub["n"] = sub["W"] * act * act * on, sub["mse_w"] * on
+    players = pd.Index(sorted(sub["player_id"].unique()))
+    counts = projection_eval.player_draws(len(players), n_boot, rng)
+    sums = ["fit_pa", "fit_pp", "pp", "pa", "aa", "n"]
+    out = {}
+    for s in TARGETS:
+        mse = {}
+        for system in (a, b):
+            g = sub[(sub["stat"] == s) & (sub["system"] == system)]
+            if g.empty:
+                raise ValueError(f"{s}: {a} and {b} must both be scored")
+            # Per unit, each player's sums (a player has one row per unit).
+            per = g.groupby([*units, "player_id"])[sums].sum()
+            num = np.zeros(len(counts))
+            den = np.zeros(len(counts))
+            for _, u in per.groupby(level=list(range(len(units)))):
+                v = u.droplevel(list(range(len(units)))).reindex(players, fill_value=0.0)
+                c = {k: counts @ v[k].to_numpy() for k in sums}
+                # The draw's factor; 1 where it drew no projection to fit.
+                fit = c["fit_pp"] > 0
+                f = np.divide(c["fit_pa"], c["fit_pp"], out=np.ones(len(counts)), where=fit)
+                num += f**2 * c["pp"] - 2 * f * c["pa"] + c["aa"]
+                den += c["n"]
+            with np.errstate(invalid="ignore", divide="ignore"):
+                mse[system] = np.where(den > 0, num / np.where(den > 0, den, 1), np.nan)
+        d = mse[a] - mse[b]
+        # A draw that picked none of ``rows``' pitchers has nothing to score.
+        boot = d[1:][~np.isnan(d[1:])]
+        out[s] = {
+            "diff": float(d[0]),
+            "lo": float(np.percentile(boot, 2.5)) if len(boot) else float("nan"),
+            "hi": float(np.percentile(boot, 97.5)) if len(boot) else float("nan"),
+            "sure": projection_eval.sure(-boot),
+            "a": float(mse[a][0]),
+            "b": float(mse[b][0]),
+        }
+    return pd.DataFrame(out).T
 
 
 def mse_table(scored: pd.DataFrame) -> pd.DataFrame:
