@@ -72,12 +72,13 @@ def main() -> int:
         default="bf",
         help="K/W/SV loss weight: batters faced, or its square (what the scorer charges)",
     )
-    # "answer" (#465, 5 seeds x 2022-2026, run 008-rel-answer vs 007-milb-avg): preseason
-    # K MSE 178.0 vs 183.8 (>99% sure better), vets 189.7 vs 198.9; mid-season K 61.97 vs
-    # 63.68 (97%); preseason W better (95%), SV better on the fantasy-relevant (95%); ERA
-    # leans worse (91% preseason, 85% mid-season), nothing else near. "known": preseason K
-    # 181.2 (80%). Leaving ERA, or ERA and WHIP, as plain rates traded ERA for WHIP, each
-    # way real somewhere, around the same K gain.
+    # "answer" (#465, 5 seeds x 2022-2026, run 008-rel-answer vs 007-milb-avg; how sure
+    # better, 0-100): preseason K MSE 178.0 vs 183.8 (>99%), vets 189.7 vs 198.9 (>99%);
+    # mid-season K 61.97 vs 63.68 (99%); preseason W (98%), SV on the fantasy-relevant
+    # (98%); ERA 1.329 vs 1.321 preseason (4%) and 2.410 vs 2.403 mid-season (7%); the
+    # rest 36% or more. "known": preseason K 181.2 (90%), ERA 1.337 (<1%). Leaving ERA, or
+    # ERA and WHIP, as plain rates gave about the same K gain but traded ERA for WHIP,
+    # each version under 1% sure better on one of them somewhere.
     parser.add_argument(
         "--relative-target",
         choices=RELATIVE_TARGETS,
