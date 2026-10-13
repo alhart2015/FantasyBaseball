@@ -5,9 +5,10 @@ reads them (``stats``): K, W and SV per batter faced, ERA and WHIP, each with a 
 weight (see :func:`answers` for how they compare with the scorer's).
 
 Inputs (``input_frame``): rates per window (season to date, last 30 days, last season,
-last three, career), box-score and pitch-tracking, plus context (age, how much of the
-season is left, how much history the store covers, team run support and save chances,
-league rates). NaN = unknown (no batters faced, or not measured that season);
+last three, career), box-score and pitch-tracking, minor-league pitching (last season,
+last three; raw and against his leagues), plus context (age, how much of the season is
+left, how much history the store covers, team run support and save chances, league
+rates). NaN = unknown (no batters faced, or not measured that season);
 ``hitter_ros.features.Standardizer`` turns it into 0 plus a missing flag.
 """
 
@@ -17,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.pitcher_ros.stats import PER_BF, TARGETS, rates_from_counts
-from fantasy_baseball.pitcher_ros.table import RECENT_WINDOWS
+from fantasy_baseball.pitcher_ros.table import MILB_WINDOWS, RECENT_WINDOWS
 
 WINDOWS = ("std", "p1", "p3", "car")
 # The recent window used as input (l14 is in the table too).
@@ -165,15 +166,65 @@ def _team_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
     }
 
 
-COVERAGE = tuple(
-    f"{kind}{c}"
-    for kind in ("", "pitchtrack_", "battedtrack_")
-    for c in ("p1_in_store", "p3_seasons_in_store", "car_seasons_in_store")
+# Minor-league inputs, 3 seeds x 2022-2026, averaged (runs 006-milb vs 001-plain):
+# preseason K MSE 184.7 vs 193.5 (>99% sure better; fantasy-relevant 325.6 vs 336.2,
+# 91%). Per seed 186.7 / 187.8 / 185.6 vs 191.3 / 198.9 / 196.2. Mid-season K and the
+# other stats level (no stat worse at 90% or more). Batters faced that pull a
+# minor-league K-rate gap halfway to 0 (``milb_*_k_rel_shrunk``):
+MILB_SHRINK_BF = 100
+
+
+def _milb_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
+    """Minor-league pitching rates for window ``w`` (``table.MILB_WINDOWS``), each line
+    also read against its league (``*_rel``: what he allowed minus what his leagues
+    allowed, per batter faced, or per 27 outs for ERA). All NaN, log batters faced
+    included, where the store has none of the window's seasons: "not stored", not
+    "pitched nowhere"."""
+
+    def c(name: str) -> pd.Series:
+        return t[f"milb_{w}_{name}"].astype(float)
+
+    bf, outs = c("bf"), c("outs")
+    out = {
+        "log_bf": np.log1p(bf),
+        **{f"{s}_bf": div(c(s), bf) for s in ("k", "bb", "hr", "h")},
+        **{f"{s}_rel": div(c(s) - c(f"x{s}"), bf) for s in ("k", "bb", "hr", "h")},
+        "k_rel_shrunk": (c("k") - c("xk")) / (bf + MILB_SHRINK_BF),
+        "era": 27 * div(c("er"), outs),
+        "era_rel": 27 * div(c("er") - c("xer"), outs),
+        "whip": 3 * div(c("h") + c("bb"), outs),
+        "gs_share": div(c("gs"), c("g")),
+        "outs_per_g": div(outs, c("g")),
+        "level": div(c("level_bf"), bf),
+        "age_vs_level": div(c("age_gap_bf"), c("age_bf")),
+    }
+    stored = (
+        t["milb_p1_in_store"].astype(bool)
+        if w == "p1"
+        else t["milb_p3_seasons_in_store"].astype(float) > 0
+    )
+    return {f"milb_{w}_{k}": v.where(stored) for k, v in out.items()}
+
+
+COVERAGE = (
+    *(
+        f"{kind}{c}"
+        for kind in ("", "pitchtrack_", "battedtrack_")
+        for c in ("p1_in_store", "p3_seasons_in_store", "car_seasons_in_store")
+    ),
+    "milb_p1_in_store",
+    "milb_p3_seasons_in_store",
 )
 
 
 def input_frame(t: pd.DataFrame) -> pd.DataFrame:
-    """Model inputs for every table row. NaN = unknown."""
+    """Model inputs for every table row. NaN = unknown. Refuses a table built before the
+    minor-league inputs (#465), which would otherwise fail on a bare missing column."""
+    if "milb_p1_in_store" not in t.columns:
+        raise ValueError(
+            "the pitcher table has no minor-league columns (milb_*); rebuild it with "
+            "scripts/build_pitcher_ros_table.py"
+        )
     cols: dict[str, pd.Series] = {}
     for w in (*WINDOWS, *INPUT_RECENT):
         cols.update(_box_rates(t, w))
@@ -182,6 +233,8 @@ def input_frame(t: pd.DataFrame) -> pd.DataFrame:
         cols.update(_league_rates(t, w))
     for w in ("std", "p1"):
         cols.update(_team_rates(t, w))
+    for w in MILB_WINDOWS:
+        cols.update(_milb_rates(t, w))
     cols.update(
         {
             "age": t["age"].astype(float),
