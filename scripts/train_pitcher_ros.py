@@ -31,6 +31,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import league_denominators
+from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
 from fantasy_baseball.pitcher_ros.model import (
@@ -71,6 +72,18 @@ def main() -> int:
         default="bf",
         help="K/W/SV loss weight: batters faced, or its square (what the scorer charges)",
     )
+    # "answer" (#465, 5 seeds x 2022-2026, run 008-rel-answer vs 007-milb-avg): preseason
+    # K MSE 178.0 vs 183.8 (>99% sure better), vets 189.7 vs 198.9; mid-season K 61.97 vs
+    # 63.68 (97%); preseason W better (95%), SV better on the fantasy-relevant (95%); ERA
+    # leans worse (91% preseason, 85% mid-season), nothing else near. "known": preseason K
+    # 181.2 (80%). Leaving ERA, or ERA and WHIP, as plain rates traded ERA for WHIP, each
+    # way real somewhere, around the same K gain.
+    parser.add_argument(
+        "--relative-target",
+        choices=RELATIVE_TARGETS,
+        default="answer",
+        help="learn rates relative to the league (model.fit_season)",
+    )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -80,7 +93,9 @@ def main() -> int:
     run = RUNS / args.name
     if run.exists() and any(run.iterdir()) and not args.overwrite:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
-    configs = {seed: plain_config(seed=seed) for seed in seeds}
+    configs = {
+        seed: plain_config(seed=seed, relative_target=args.relative_target) for seed in seeds
+    }
     table = pd.read_parquet(args.table)
     try:
         check_week_zero(table)

@@ -2,10 +2,12 @@
 five rest-of-season rates (``features.answers``), on the hitter net's machinery
 (``hitter_ros.net``: the MLP, early stopping, loss weights).
 
-Plain on purpose: weighted squared error on standardized rates, absolute rates (not
-league-relative), no sequence encoder. The hitter net's other options are switched off
-in :func:`plain_config`, and :func:`fit_season` refuses a config that turns one on (it
-would be ignored here); each gets tried for pitchers on its own, against this.
+Plain on purpose: weighted squared error on standardized rates, no sequence encoder.
+The hitter net's other options are switched off in :func:`plain_config`, and
+:func:`fit_season` refuses a config that turns one on (it would be ignored here); each
+gets tried for pitchers on its own, against this. One has been so far, and is applied:
+``relative_target``, learning each rate relative to the league (see
+:func:`fit_season`; train_pitcher_ros.py uses "answer" by default).
 """
 
 from __future__ import annotations
@@ -17,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.net import NetConfig, predict, train
+from fantasy_baseball.pitcher_ros.features import league_answer_rates, league_reference
 from fantasy_baseball.pitcher_ros.stats import TARGETS
 from fantasy_baseball.ros_training import holdout_and_scaler, weighted_moments
 
@@ -35,6 +38,7 @@ APPLIED = (
     "val_frac",
     "seed",
     "weighting",
+    "relative_target",
     "micro_batch",
     "amp",
 )
@@ -99,15 +103,38 @@ def fit_season(
 
     A random ``config.val_frac`` of the training pitchers is held out for early
     stopping. Targets are standardized by their loss-weighted mean and SD over the
-    training rows; predictions are put back in rates (never below 0)."""
+    training rows; predictions are put back in rates (never below 0).
+
+    ``config.relative_target`` (as the hitter net's, #421 / #424): "none" learns the
+    rates themselves. Otherwise each rate is learned divided by a league rate -- the
+    league's actual rate over the answer window ("answer": how much better than the
+    league, with no forecast of its level) or the forecast known on the date ("known",
+    ``features.league_reference``) -- and the prediction is multiplied back by the
+    forecast. Learned as rates, the net picks up the league's trend (K rose every season
+    to 2020) and carries it on after it stops: before this it projected too many K in
+    every test season (2022-2026), by 0.4 to 1.7 per 100 batters faced."""
     check_plain(config)
     check_week_zero(table)
+    cols = list(TARGETS)
+    ref = denominator = None
+    if config.relative_target != "none":
+        ref = league_reference(table)
+        if ref.loc[table["season"] == test_season, cols].isna().any().any():
+            raise ValueError(
+                f"{test_season} has rows with no league forecast (no earlier season in the "
+                "table) to scale relative predictions back by"
+            )
+        denominator = league_answer_rates(table) if config.relative_target == "answer" else ref
+        # A league rate of 0 (no saves league-wide in a late window) can't divide.
+        denominator = denominator.where(denominator > 0)
+        y_all = y_all[cols] / denominator[cols]
+        # train() expects weight 0 wherever the target is NaN.
+        w_all = w_all[cols].where(y_all.notna(), 0.0)
     train_rows = (
         table["season_complete"] & (table["season"] < test_season) & (w_all.sum(axis=1) > 0)
     )
     val_mask, scaler = holdout_and_scaler(table, x_all, train_rows, config.val_frac, config.seed)
 
-    cols = list(TARGETS)
     y_train, w_train = y_all.loc[train_rows, cols], w_all.loc[train_rows, cols]
     mu, sd = weighted_moments(y_train, w_train, ~val_mask)
     y_std = np.column_stack([(y_train[c] - mu[c]) / sd[c] for c in cols])
@@ -126,6 +153,8 @@ def fit_season(
         {c: np.clip(z[:, i] * sd[c] + mu[c], 0.0, None) for i, c in enumerate(cols)},
         index=table.index[test_rows],
     )
+    if ref is not None:
+        preds = preds * ref.loc[test_rows, cols]
     preds = pd.concat([table.loc[test_rows, ID_COLS], preds], axis=1)
     info = {
         "test_season": test_season,

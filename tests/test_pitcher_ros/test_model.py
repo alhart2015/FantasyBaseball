@@ -3,7 +3,12 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.pitcher_ros import backtest
-from fantasy_baseball.pitcher_ros.features import answers, input_frame
+from fantasy_baseball.pitcher_ros.features import (
+    answers,
+    input_frame,
+    league_answer_rates,
+    league_reference,
+)
 from fantasy_baseball.pitcher_ros.model import (
     APPLIED,
     ID_COLS,
@@ -159,3 +164,43 @@ def test_a_repeated_row_is_refused_not_merged():
     twice = _seed_preds([row, row], [0.2, 0.3])
     with pytest.raises(ValueError, match="repeated a row"):
         average_seeds([twice, twice])
+
+
+def test_league_reference_pools_last_season_and_this_one_before_the_date(table):
+    ref = league_reference(table)
+    # 2024: 10 games of STARTER (24 BF, 5 K) and RELIEVER (4 BF, 1 K), plus TWOWAY's
+    # 20-BF start (MOPUP, a first baseman, isn't a pitcher-season). 2025 week 1: the
+    # first 7 days of the same, with TWOWAY's start on day one.
+    k, bf = 10 * 6 + 7 * 6, (10 * 28 + 20) + (7 * 28 + 20)
+    assert ref.loc[_row_index(table, STARTER, 2025, 1), "k"] == pytest.approx(k / bf)
+    # The store's first season has no last season to forecast from.
+    assert ref.loc[_row_index(table, STARTER, 2024, 0)].isna().all()
+
+
+def test_league_answer_rates_pool_the_rest_of_the_season(table):
+    ans = league_answer_rates(table)
+    # 2025 from opening day: 21 games of STARTER and RELIEVER, and TWOWAY's start.
+    assert ans.loc[_row_index(table, RELIEVER, 2025, 0), "k"] == pytest.approx(
+        21 * 6 / (21 * 28 + 20)
+    )
+
+
+def test_relative_predictions_are_scaled_back_to_rates(table):
+    x, (y, w) = input_frame(table), answers(table)
+    config = plain_config(
+        hidden=[8], max_epochs=3, patience=1, val_frac=0.34, relative_target="answer"
+    )
+    preds, _ = fit_season(table, x, y, w, 2025, config)
+    assert preds[list(TARGETS)].notna().all().all()
+    # Rates, not ratios to the league (which sit near 1): K per batter faced is below 1.
+    assert (preds["k"] < 1).all()
+    with pytest.raises(ValueError, match="no league forecast"):
+        fit_season(table, x, y, w, 2024, config)
+
+
+def _row_index(table, player, season, week):
+    match = table.index[
+        (table.player_id == player) & (table.season == season) & (table.week == week)
+    ]
+    assert len(match) == 1
+    return match[0]
