@@ -114,5 +114,5 @@ def test_mse_bootstrap_signs():
     good = actual[list(TARGETS)] + 0.001
     bad = actual[list(TARGETS)] + 0.05
     b = mse_bootstrap(scored_players({"good": good, "bad": bad}, actual, 100), "good", "bad")
-    assert b.loc["k", "diff"] < 0 and b.loc["k", "sure"] > 0.95
+    assert b.loc["k", "diff"] < 0 and b.loc["k", "sure"] > 0.975
     assert b.loc["k", "lo"] <= b.loc["k", "diff"] <= b.loc["k", "hi"]

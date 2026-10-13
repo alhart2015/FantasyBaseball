@@ -49,7 +49,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.backtest import sure_text, to_markdown
+from fantasy_baseball.hitter_ros.backtest import to_markdown
 from fantasy_baseball.hitter_ros.evaluate import (
     mse_bootstrap,
     mse_table,
@@ -57,6 +57,7 @@ from fantasy_baseball.hitter_ros.evaluate import (
     pairwise_bootstrap,
 )
 from fantasy_baseball.hitter_ros.features import TARGETS
+from fantasy_baseball.projection_eval import sure_text
 
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 FINISHED_MARKER = "summary.md"

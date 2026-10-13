@@ -76,8 +76,8 @@ class NetConfig:
     # by default (#414 re-test, 6 seeds, MSE vs the plain net, SB net plain in both):
     # mid-season R/HR/RBI better (>99% sure) in weeks 14-20 (-0.9% / -1.6% / -1.4%)
     # and 21+ (-1.5% / -2.2% / -1.4%), HR and RBI also in weeks 7-13; AVG -0.1% to -0.4%
-    # (under 98% sure better); preseason flat. About 17x slower to train (~54 vs ~3 min a seed on an
-    # RTX 5090); --seq none for quick screens.
+    # (under 97.5% sure better); preseason flat. About 17x slower to train (~54 vs ~3 min
+    # a seed on an RTX 5090); --seq none for quick screens.
     seq: str = "transformer"
     seq_len: int = 600
     seq_dim: int = 64
@@ -173,13 +173,13 @@ class NetConfig:
     # multiplied by the new league rate too, projecting 2024-2026 at 13.5-14.8 SB/600
     # vs 10.8-12.3 actual. Over 6 seeds x 2022-2026, SB MSE (season totals) vs "box":
     # preseason 43.4 -> 37.0 [-8.8, -4.0], weeks 1-6 -15%, 7-13 -16% (both >99% sure),
-    # 14-20 -7% (97%), 21+ -4% (88%), better on 6/6 seeds everywhere; ordering unchanged.
+    # 14-20 -7% (97%), 21+ -4% (88-89%), better on 6/6 seeds everywhere; ordering unchanged.
     sb_inputs: str = "box_relative"
     # sb_seq (#414 re-test): with a sequence encoder (seq) and a second SB net (sb_inputs
     # box / box_relative), whether the SB net reads the plate-appearance sequence too.
     # False (default) keeps it the box-score-only net #451 measured; the main net still
-    # gets it. With it, over 6 seeds: SB weeks 21+ -2.9% (98% sure better) and 14-20
-    # -1.8% (97%), but preseason +1.3% (5% sure better, 1/6 seeds better) and weeks 1-6
+    # gets it. With it, over 6 seeds: SB weeks 21+ -2.9% (98-99% sure better) and 14-20
+    # -1.8% (97%), but preseason +1.3% (about 5% sure better, 1/6 seeds better) and weeks 1-6
     # +0.7%; preseason is what we draft on.
     sb_seq: bool = False
     head_layers: int = 0

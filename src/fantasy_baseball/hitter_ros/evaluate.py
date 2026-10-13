@@ -221,7 +221,7 @@ def pairwise_bootstrap(
     seed: int = 0,
 ) -> pd.DataFrame:
     """Pairwise accuracy (%) of ``a`` minus ``b`` per stat, with a 95% interval and
-    ``sure`` (how sure ``a`` orders better (+) or worse (-)), from resampling players.
+    ``sure`` (how sure ``a`` orders better, 0-1: ``sure``), from resampling players.
     Positive = ``a`` orders better. Paired: both systems are scored on each draw.
 
     ``scored`` may stack several seasons or snapshots (``UNIT_COLS``): the score is then
@@ -342,8 +342,8 @@ def mse_bootstrap(
     scored: pd.DataFrame, a: str, b: str, *, n_boot: int = 2000, seed: int = 0
 ) -> pd.DataFrame:
     """MSE of ``a`` minus ``b`` per stat (negative = ``a`` better), with ``a``'s and
-    ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower (+) or
-    higher (-)), from resampling players. Paired: both are scored on each draw. As in
+    ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower, 0-1:
+    ``sure``), from resampling players. Paired: both are scored on each draw. As in
     ``pairwise_bootstrap``, each draw redraws a player once for every season or snapshot
     he is in, so overlapping snapshots aren't independent evidence. Both systems must be
     scored on every player-unit either is."""
@@ -400,7 +400,7 @@ def paired_bootstrap(
     value: str = "abs_err",
 ) -> pd.DataFrame:
     """MAE(a) - MAE(b) per stat, with a 95% interval and ``sure`` (how sure ``a``'s MAE
-    is lower (+) or higher (-)), from resampling scored player-units.
+    is lower, 0-1: ``sure``), from resampling scored player-units.
     ``value``: ``abs_err`` (raw MAE) or ``lf_err`` (level-free MAE).
 
     Negative = ``a`` is better. Paired: each resample draws player-units (a player in a

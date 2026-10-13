@@ -41,6 +41,21 @@ def sure(draws: np.ndarray) -> float:
     return float(np.mean((draws > 0) + 0.5 * (draws == 0)))
 
 
+def sure_text(value: float) -> str:
+    """``evaluate.sure`` in words, on one 0-100 scale: "96% sure better", "50% sure
+    better" (a coin flip), "4% sure better" (sure it's worse). A bootstrap can't show
+    certainty, so the ends read ">99%" and "<1%"."""
+    if pd.isna(value):
+        return "n/a"
+    if value > 0.99:
+        pct = ">99%"
+    elif value < 0.01:
+        pct = "<1%"
+    else:
+        pct = f"{round(value * 100)}%"
+    return f"{pct} sure better"
+
+
 def common_index(frames: Iterable[pd.DataFrame], targets: Sequence[str]) -> pd.Index:
     """Players every frame has a value for, on every one of ``targets``."""
     common: pd.Index | None = None
@@ -69,8 +84,8 @@ def mse_bootstrap(
     seed: int = 0,
 ) -> pd.DataFrame:
     """MSE of ``a`` minus ``b`` per stat (negative = ``a`` better), with ``a``'s and
-    ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower (+) or
-    higher (-)), from resampling players. Paired: both are scored on each draw.
+    ``b``'s own MSE, a 95% interval and ``sure`` (how sure ``a``'s MSE is lower, 0-1:
+    :func:`sure`), from resampling players. Paired: both are scored on each draw.
 
     ``parts``: one row per ``key`` (player and season/snapshot) x ``system`` x ``stat``
     with MSE's numerator ``sq`` and weight ``w`` (each side's ``squared_error``), so MSE

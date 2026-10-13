@@ -37,7 +37,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.backtest import sure_text, to_markdown
+from fantasy_baseball.hitter_ros.backtest import to_markdown
 from fantasy_baseball.pitch_data.store import connect
 from fantasy_baseball.pitcher_ros.features import input_frame
 from fantasy_baseball.pitcher_ros.saves import (
@@ -53,6 +53,7 @@ from fantasy_baseball.pitcher_ros.saves import (
     usage_inputs,
 )
 from fantasy_baseball.pitcher_ros.stats import load_games
+from fantasy_baseball.projection_eval import sure_text
 
 TABLE = PROJECT_ROOT / "data" / "pitcher_ros" / "table.parquet"
 STORE = PROJECT_ROOT / "data" / "pitch_data"

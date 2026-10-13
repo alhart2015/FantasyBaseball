@@ -259,7 +259,7 @@ def test_run_row_reports_vets_and_rookies_separately(runs):
     assert row["mid_rookie_pairw_gap_hr"] == pytest.approx(-100.0)
     # Over everyone the two cancel out: a coin flip, whatever the luck of the draw.
     assert row["mid_pairw_gap_hr"] == pytest.approx(0.0)
-    assert -1.0 < row["mid_pairw_sure_hr"] < 1.0
+    assert 0.0 < row["mid_pairw_sure_hr"] < 1.0
     # A run scored before the tag has no group rows.
     _run(runs, "old", pre=pre.drop(columns="group"))
     assert "pre_vet_pairw_gap_hr" not in cmp.compare(["old"], None, None).columns

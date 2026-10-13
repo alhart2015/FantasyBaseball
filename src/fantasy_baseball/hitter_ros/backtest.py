@@ -66,7 +66,7 @@ from fantasy_baseball.hitter_ros.features import (
     rates_from_counts,
 )
 from fantasy_baseball.pitch_data.store import connect
-from fantasy_baseball.projection_eval import systems_in_every_unit, top_by_value
+from fantasy_baseball.projection_eval import sure_text, systems_in_every_unit, top_by_value
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.utils.constants import Category
 
@@ -345,21 +345,6 @@ def to_markdown(df: pd.DataFrame, digits: int = 2) -> str:
     return "\n".join(lines)
 
 
-def sure_text(value: float) -> str:
-    """``evaluate.sure`` in words, on one 0-100 scale: "96% sure better", "50% sure
-    better" (a coin flip), "4% sure better" (sure it's worse). A bootstrap can't show
-    certainty, so the ends read ">99%" and "<1%"."""
-    if pd.isna(value):
-        return "n/a"
-    if value > 0.99:
-        pct = ">99%"
-    elif value < 0.01:
-        pct = "<1%"
-    else:
-        pct = f"{round(value * 100)}%"
-    return f"{pct} sure better"
-
-
 def _interval_line(b: pd.DataFrame | None, better: str, name: str = "") -> str:
     """One line of ours-minus-blend intervals per stat, each with how sure ours is better
     or worse; ``better`` names the good sign, ``name`` (if any) the score, as a prefix."""
@@ -605,9 +590,10 @@ def summarize(pre: pd.DataFrame | None, snap: pd.DataFrame | None) -> list[str]:
         "`league_avg` and `marcel` are simple floors (see hitter_ros/baselines.py). "
         "Intervals resample players; each line says which sign means ours is better; "
         'an interval crossing 0 = can\'t tell apart. "N% sure better" is how sure ours is '
-        "better, 0-100: 100 = sure better, 50 = a coin flip, 0 = sure worse. It counts "
-        "only the luck of which hitters were scored, not seed or season swings. Over "
-        "several seasons or snapshots each hitter is redrawn once for all of them."
+        "better, 0-100: 100 = sure better, 50 = a coin flip, 0 = sure worse; the 95% interval "
+        "clears 0 from 97.5% up (or 2.5% down). It counts only the luck of which hitters "
+        "were scored, not seed or season swings. Over several seasons or snapshots each "
+        "hitter is redrawn once for all of them."
     ]
     if pre is not None:
         md += ["", "#### Preseason"]

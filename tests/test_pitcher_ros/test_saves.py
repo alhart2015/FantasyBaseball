@@ -152,7 +152,7 @@ def test_score_methods_ranks_the_closer_projection():
     assert table.loc["good", "typical_miss"] == pytest.approx(1.0)
     r = pairs.iloc[0]
     assert (r["a"], r["b"]) == ("good", "bad") and r["diff"] == pytest.approx(1 - 64)
-    assert r["sure"] > 0.95 and r["mse_a"] == pytest.approx(1.0)
+    assert r["sure"] > 0.975 and r["mse_a"] == pytest.approx(1.0)
     only, none = score_methods(units, ["good"], ["player_id", "season"], pairs=False)
     assert none is None and list(only.columns) == ["mse", "typical_miss"]
     with pytest.raises(ValueError, match="missing"):

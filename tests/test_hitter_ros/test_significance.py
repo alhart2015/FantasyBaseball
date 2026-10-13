@@ -29,7 +29,7 @@ def test_sure_is_the_share_of_draws_where_a_wins():
 
 
 def test_sure_text():
-    from fantasy_baseball.hitter_ros.backtest import sure_text
+    from fantasy_baseball.projection_eval import sure_text
 
     # One scale, one direction: how sure it is better, never a "real" verdict.
     assert sure_text(0.96) == "96% sure better"
@@ -65,7 +65,7 @@ def test_pooled_bootstrap_scores_the_mean_over_snapshots():
     boot = pairwise_bootstrap(scored, "a", "b", n_boot=50)
     for s in TARGETS:
         assert boot.loc[s, "diff"] == pytest.approx(table.loc["a", s] - table.loc["b", s])
-    assert (boot["sure"] > 0.9).all()  # the less noisy one
+    assert (boot["sure"] > 0.95).all()  # the less noisy one
 
 
 def test_pooled_bootstrap_redraws_each_player_once_for_every_snapshot():
@@ -221,7 +221,7 @@ def test_mse_bootstrap_matches_the_table_and_favors_the_less_noisy():
         assert boot.loc[s, "diff"] == pytest.approx(table.loc["a", s] - table.loc["b", s])
         assert boot.loc[s, "a"] == pytest.approx(table.loc["a", s])
         assert boot.loc[s, "b"] == pytest.approx(table.loc["b", s])
-    assert (boot["diff"] < 0).all() and (boot["sure"] > 0.95).all()  # lower = better
+    assert (boot["diff"] < 0).all() and (boot["sure"] > 0.975).all()  # lower = better
 
 
 def test_mse_bootstrap_redraws_each_player_once_for_every_snapshot():

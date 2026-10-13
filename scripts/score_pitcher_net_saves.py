@@ -35,11 +35,12 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.backtest import league_denominators, sure_text
+from fantasy_baseball.hitter_ros.backtest import league_denominators
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.evaluate import mse_bootstrap
 from fantasy_baseball.pitcher_ros.saves import average_units, net_with_saves
 from fantasy_baseball.pitcher_ros.stats import load_games
+from fantasy_baseball.projection_eval import sure_text
 
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
