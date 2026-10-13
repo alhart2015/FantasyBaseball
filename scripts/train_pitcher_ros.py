@@ -130,7 +130,8 @@ def main() -> int:
         if frame is not None:
             frame.to_parquet(run / f"{name}.parquet")
     md = [
-        f"### Scores for pitcher run `{args.name}` (seeds {seeds}, averaged)",
+        f"### Scores for pitcher run `{args.name}` "
+        + (f"(seeds {seeds}, averaged)" if len(seeds) > 1 else f"(one seed, {seeds[0]})"),
         "",
         *backtest.summarize(scores),
     ]

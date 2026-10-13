@@ -152,3 +152,10 @@ def test_seeds_that_predicted_different_rows_are_refused():
         average_seeds([a, b])
     with pytest.raises(ValueError, match="no predictions"):
         average_seeds([])
+
+
+def test_a_repeated_row_is_refused_not_merged():
+    row = (1, 2025, 0, "2025-03-27")
+    twice = _seed_preds([row, row], [0.2, 0.3])
+    with pytest.raises(ValueError, match="repeated a row"):
+        average_seeds([twice, twice])

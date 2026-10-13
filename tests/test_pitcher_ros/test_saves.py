@@ -6,6 +6,7 @@ from fantasy_baseball.pitcher_ros.backtest import _ours_at
 from fantasy_baseball.pitcher_ros.saves import (
     SNAPSHOT_WEEK,
     TEAM_COLUMNS,
+    average_units,
     fangraphs_shares,
     fangraphs_team_ids,
     fit_team_saves,
@@ -210,3 +211,14 @@ def test_backtest_reads_each_snapshots_swapped_rows():
     assert tie["sv"] == pytest.approx(0.08) and tie["k"] == 0.22
     later = at(pd.Timestamp("2025-04-07"))  # no units: week 1's stats, 04-05's SV
     assert later["k"] == 0.21 and later["sv"] == pytest.approx(0.1)
+
+
+def test_saves_units_are_averaged_over_the_seeds_per_pitcher():
+    key = ["player_id", "season"]
+    a = pd.DataFrame({"player_id": [1, 2], "season": 2025, "bf_fg": 250.0, "usage": [20.0, 2.0]})
+    b = pd.DataFrame({"player_id": [2, 1], "season": 2025, "bf_fg": 250.0, "usage": [4.0, 30.0]})
+    out = average_units([a, b], key, ["bf_fg", "usage"]).set_index("player_id")
+    assert out.loc[1, "usage"] == 25.0 and out.loc[2, "usage"] == 3.0
+    assert (out["bf_fg"] == 250.0).all()
+    with pytest.raises(ValueError, match="one row each"):
+        average_units([a, b.iloc[:1]], key, ["usage"])

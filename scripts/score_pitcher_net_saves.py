@@ -9,17 +9,17 @@ it) and ``mix`` (also FanGraphs' share: a blend with FanGraphs, not ours). All a
 scored in one pass beside FanGraphs and the baselines (pitcher_ros.backtest), on the
 same pitchers and the seasons the saves units cover, plus each swap's SV paired
 against ``ours``. A pitcher with no saves units (FanGraphs doesn't project him) keeps
-the net's SV. Writes saves-scores-s<seed>.md into the run's folder and prints it.
+the net's SV. Writes saves-scores.md into the run's folder and prints it.
 
-Needs the run and the saves units for the seed (units-pre-s<seed>.parquet,
-units-mid-s<seed>.parquet in data/pitcher_ros/saves/, from compare_pitcher_saves.py).
-The saves seed defaults to the run's when it trained one seed (its config.json), and
-another one is refused; a run averaged over several seeds needs ``--saves-seed``. Every
-snapshot the backtest scores must have saves units, or the swaps would carry stale SV
-there.
+The saves projections are averaged over the run's seeds (its config.json), as the
+net's predictions are, so neither side gets the steadier average alone
+(saves.average_units). Needs the run and the saves units for each of its seeds
+(units-pre-s<seed>.parquet, units-mid-s<seed>.parquet in data/pitcher_ros/saves/, from
+compare_pitcher_saves.py --seed <seed>). Every snapshot the backtest scores must have
+saves units, or the swaps would carry stale SV there.
 
 Usage:
-    python scripts/score_pitcher_net_saves.py --run 001-plain-s0
+    python scripts/score_pitcher_net_saves.py --run 005-plain-avg
 """
 
 from __future__ import annotations
@@ -38,7 +38,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 from fantasy_baseball.hitter_ros.backtest import league_denominators, sure_text
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.evaluate import mse_bootstrap
-from fantasy_baseball.pitcher_ros.saves import net_with_saves
+from fantasy_baseball.pitcher_ros.saves import average_units, net_with_saves
 from fantasy_baseball.pitcher_ros.stats import load_games
 
 STORE = PROJECT_ROOT / "data" / "pitch_data"
@@ -48,6 +48,8 @@ RUNS = PROJECT_ROOT / "data" / "pitcher_ros" / "runs"
 SAVES = PROJECT_ROOT / "data" / "pitcher_ros" / "saves"
 # The saves units' columns swapped in (compare_pitcher_saves.METHODS).
 METHODS = ("usage", "mix")
+# Saves units span -> its key, one row per seed.
+SPANS = {"pre": ["player_id", "season"], "mid": ["player_id", "season", "snapshot"]}
 
 
 def _paired_lines(frame: pd.DataFrame | None, title: str) -> list[str]:
@@ -73,12 +75,6 @@ def _paired_lines(frame: pd.DataFrame | None, title: str) -> list[str]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--run", required=True, help="run folder under data/pitcher_ros/runs/")
-    parser.add_argument(
-        "--saves-seed",
-        type=int,
-        default=None,
-        help="default: the run's seed, when it trained only one (config.json)",
-    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 
@@ -87,29 +83,29 @@ def main() -> int:
         parser.error(f"{run / 'config.json'} not found; train the run first")
     cfg = json.loads((run / "config.json").read_text())
     # Runs before seed averaging recorded one "seed".
-    run_seeds = cfg["seeds"] if "seeds" in cfg else [cfg["seed"]]
-    if len(run_seeds) > 1:
-        if args.saves_seed is None:
-            parser.error(f"the run averages seeds {run_seeds}; pick one with --saves-seed")
-        seed = args.saves_seed
-    else:
-        seed = run_seeds[0]
-        if args.saves_seed is not None and args.saves_seed != seed:
-            parser.error(f"--saves-seed {args.saves_seed} is not the run's seed ({seed})")
-    paths = {
-        "predictions": run / "predictions.parquet",
-        "pre": SAVES / f"units-pre-s{seed}.parquet",
-        "mid": SAVES / f"units-mid-s{seed}.parquet",
-    }
-    missing = [str(p) for p in paths.values() if not p.exists()]
+    seeds = cfg["seeds"] if "seeds" in cfg else [cfg["seed"]]
+    paths = {span: [SAVES / f"units-{span}-s{seed}.parquet" for seed in seeds] for span in SPANS}
+    needed = [run / "predictions.parquet", *paths["pre"], *paths["mid"]]
+    missing = [str(p) for p in needed if not p.exists()]
     if missing:
-        parser.error(f"missing {missing}; run train_pitcher_ros.py / compare_pitcher_saves.py")
-    preds = pd.read_parquet(paths["predictions"])
-    pre, mid = pd.read_parquet(paths["pre"]), pd.read_parquet(paths["mid"])
-    for name, units in (("pre", pre), ("mid", mid)):
-        absent = {"bf_fg", *METHODS} - set(units.columns)
-        if absent:
-            parser.error(f"{paths[name]} has no {sorted(absent)}; rerun compare_pitcher_saves.py")
+        parser.error(
+            f"missing {missing}; run train_pitcher_ros.py / compare_pitcher_saves.py "
+            "--seed <seed> for each of the run's seeds"
+        )
+    preds = pd.read_parquet(run / "predictions.parquet")
+    columns = ["bf_fg", *METHODS]
+    averaged = {}
+    for span, key in SPANS.items():
+        frames = [pd.read_parquet(p) for p in paths[span]]
+        for path, units in zip(paths[span], frames, strict=True):
+            absent = set(columns) - set(units.columns)
+            if absent:
+                parser.error(f"{path} has no {sorted(absent)}; rerun compare_pitcher_saves.py")
+        try:
+            averaged[span] = average_units(frames, key, columns)
+        except ValueError as err:
+            parser.error(f"{span} saves units for seeds {seeds}: {err}")
+    pre, mid = averaged["pre"], averaged["mid"]
 
     seasons = sorted(set(preds["season"]) & set(pre["season"]))
     preds = preds[preds["season"].isin(seasons)]
@@ -125,7 +121,7 @@ def main() -> int:
                 "scripts/compare_pitcher_saves.py"
             )
     md = [
-        f"### Pitcher run `{args.run}` with SV from the saves model (seed {seed})",
+        f"### Pitcher run `{args.run}` with SV from the saves model (seeds {seeds}, averaged)",
         "",
         "`ours_<method>` = `ours` with SV from the saves model's `<method>`; every other "
         "stat is the same.",
@@ -134,7 +130,7 @@ def main() -> int:
         "",
         *backtest.summarize(scores),
     ]
-    (run / f"saves-scores-s{seed}.md").write_text("\n".join(md) + "\n")
+    (run / "saves-scores.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return 1 if scores.failures else 0
 
