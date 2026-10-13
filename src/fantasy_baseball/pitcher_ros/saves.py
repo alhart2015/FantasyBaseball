@@ -319,6 +319,20 @@ def _swap_sv(rows: pd.DataFrame, units: pd.DataFrame, column: str) -> pd.DataFra
     return rows.assign(sv=rows["player_id"].map(rate).fillna(rows["sv"]))
 
 
+def average_units(units: list[pd.DataFrame], key: list[str], columns: list[str]) -> pd.DataFrame:
+    """``columns`` of several seeds' saves units averaged per ``key`` (one row per
+    pitcher and season, or and snapshot), so a seed-averaged net run is paired with a
+    saves projection averaged over the same seeds, not one seed's noisier fit. Refuses
+    units whose rows differ between seeds, or repeat a key within one."""
+    if not units:
+        raise ValueError("no saves units to average")
+    stacked = pd.concat([u[key + columns] for u in units], ignore_index=True)
+    sizes = stacked.groupby(key).size()
+    if not (sizes == len(units)).all():
+        raise ValueError(f"the seeds' saves units don't have one row each per {key}")
+    return stacked.groupby(key, as_index=False)[columns].mean()
+
+
 def net_with_saves(
     preds: pd.DataFrame, pre: pd.DataFrame, mid: pd.DataFrame, column: str
 ) -> pd.DataFrame:

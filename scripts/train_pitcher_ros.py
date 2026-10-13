@@ -1,17 +1,18 @@
 """Train the pitcher rest-of-season net and score it against FanGraphs (#465).
 
-For each test season: train on every complete season before it, predict its rows, then
-score the predictions as ``ours`` beside FanGraphs and the baselines (preseason and the
-mid-season snapshots, pitcher_ros.backtest). Writes predictions.parquet, config.json,
-info.json, the scored frames and scores.md to data/pitcher_ros/runs/<name>/.
+For each seed and test season: train on every complete season before it and predict
+its rows. ``ours`` is the seeds' predictions averaged (model.average_seeds; one seed
+alone is noisy), scored beside FanGraphs and the baselines (preseason and the
+mid-season snapshots, pitcher_ros.backtest). Writes predictions.parquet (the average),
+predictions-s<N>.parquet (each seed), config.json, info.json, the scored frames and
+scores.md to data/pitcher_ros/runs/<name>/.
 
 Needs the training table (scripts/build_pitcher_ros_table.py) and torch (see
 scripts/train_hitter_ros.py).
 
 Usage:
-    python scripts/train_pitcher_ros.py --name 001-plain
-    python scripts/train_pitcher_ros.py --name 001-plain-s1 --seed 1
-    python scripts/train_pitcher_ros.py --name quick --test-seasons 2026
+    python scripts/train_pitcher_ros.py --name 003-avg          # seeds 0-4, averaged
+    python scripts/train_pitcher_ros.py --name quick --seeds 0 --test-seasons 2026
     python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
 
@@ -33,7 +34,9 @@ from fantasy_baseball.hitter_ros.backtest import league_denominators
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
 from fantasy_baseball.pitcher_ros.model import (
+    DEFAULT_SEEDS,
     applied_settings,
+    average_seeds,
     check_week_zero,
     fit_season,
     plain_config,
@@ -53,7 +56,13 @@ OURS = "ours"
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--name", required=True, help="run folder under data/pitcher_ros/runs/")
-    parser.add_argument("--seed", type=int, default=0)
+    parser.add_argument(
+        "--seeds",
+        type=int,
+        nargs="+",
+        default=list(DEFAULT_SEEDS),
+        help="seeds to train; ours is their average",
+    )
     parser.add_argument("--test-seasons", type=int, nargs="+", default=list(DEFAULT_TEST_SEASONS))
     parser.add_argument("--table", type=Path, default=TABLE)
     parser.add_argument(
@@ -66,11 +75,12 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     seasons = sorted(set(args.test_seasons))
+    seeds = sorted(set(args.seeds))
 
     run = RUNS / args.name
     if run.exists() and any(run.iterdir()) and not args.overwrite:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
-    config = plain_config(seed=args.seed)
+    configs = {seed: plain_config(seed=seed) for seed in seeds}
     table = pd.read_parquet(args.table)
     try:
         check_week_zero(table)
@@ -82,16 +92,25 @@ def main() -> int:
     if run.exists():
         shutil.rmtree(run)
     run.mkdir(parents=True)
-    settings = {**applied_settings(config), "per_bf_weight": args.per_bf_weight}
+    settings = {
+        **{k: v for k, v in applied_settings(configs[seeds[0]]).items() if k != "seed"},
+        "seeds": seeds,
+        "per_bf_weight": args.per_bf_weight,
+    }
     (run / "config.json").write_text(json.dumps(settings, indent=2))
 
-    parts, infos = [], []
-    for season in seasons:
-        logging.info("test season %s", season)
-        preds, info = fit_season(table, x, y, w, season, config)
-        parts.append(preds)
-        infos.append(info)
-    preds = pd.concat(parts, ignore_index=True)
+    by_seed, infos = [], []
+    for seed, config in configs.items():
+        parts = []
+        for season in seasons:
+            logging.info("seed %s, test season %s", seed, season)
+            preds, info = fit_season(table, x, y, w, season, config)
+            parts.append(preds)
+            infos.append({"seed": seed, **info})
+        seed_preds = pd.concat(parts, ignore_index=True)
+        seed_preds.to_parquet(run / f"predictions-s{seed}.parquet", index=False)
+        by_seed.append(seed_preds)
+    preds = average_seeds(by_seed)
     preds.to_parquet(run / "predictions.parquet", index=False)
     (run / "info.json").write_text(json.dumps(infos, indent=2))
 
@@ -110,7 +129,12 @@ def main() -> int:
     ):
         if frame is not None:
             frame.to_parquet(run / f"{name}.parquet")
-    md = [f"### Scores for pitcher run `{args.name}`", "", *backtest.summarize(scores)]
+    md = [
+        f"### Scores for pitcher run `{args.name}` "
+        + (f"(seeds {seeds}, averaged)" if len(seeds) > 1 else f"(one seed, {seeds[0]})"),
+        "",
+        *backtest.summarize(scores),
+    ]
     (run / "scores.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return 1 if scores.failures else 0

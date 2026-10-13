@@ -137,3 +137,24 @@ def fit_season(
         "val_loss": result.val_loss,
     }
     return preds, info
+
+
+# Seeds a run trains and averages by default. Run 005-plain-avg (these seeds, before the
+# minor-league inputs), 2022-2026: the average beat 5 of 5 single seeds on preseason W,
+# ERA and WHIP, 4 of 5 on SV and 3 of 5 on K (single seeds 190.5-198.9 K MSE, the
+# average 192.1), 4 of 5 on every mid-season stat, and was never really worse than one.
+DEFAULT_SEEDS = (0, 1, 2, 3, 4)
+
+
+def average_seeds(preds: list[pd.DataFrame]) -> pd.DataFrame:
+    """The ``TARGETS`` rates averaged over seeds' predictions (each ``ID_COLS`` plus
+    rates, as :func:`fit_season` returns them), row for row, sorted by ``ID_COLS``.
+    Refuses unless every row appears exactly once per seed: seeds that predicted
+    different rows would quietly average over fewer seeds there, and a repeated row
+    would be merged into one."""
+    if not preds:
+        raise ValueError("no predictions to average")
+    stacked = pd.concat(preds, ignore_index=True)
+    if not (stacked.groupby(ID_COLS).size() == len(preds)).all():
+        raise ValueError("the seeds predicted different rows, or one repeated a row")
+    return stacked.groupby(ID_COLS, as_index=False)[list(TARGETS)].mean()

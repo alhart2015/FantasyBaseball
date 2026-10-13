@@ -8,6 +8,7 @@ from fantasy_baseball.pitcher_ros.model import (
     APPLIED,
     ID_COLS,
     applied_settings,
+    average_seeds,
     check_plain,
     check_week_zero,
     fit_season,
@@ -126,3 +127,35 @@ def test_ours_must_cover_every_scored_pitcher_and_not_borrow_a_name():
     with pytest.raises(ValueError, match="named like"):
         backtest._check_ours({"marcel": actual[list(TARGETS)]}, systems, actual, 100, "2025")
     backtest._check_ours({"ours": actual[list(TARGETS)]}, systems, actual, 100, "2025")
+
+
+def _seed_preds(rows, k):
+    ids = pd.DataFrame(rows, columns=ID_COLS)
+    return ids.assign(**{t: k if t == "k" else 0.1 for t in TARGETS})
+
+
+def test_seed_average_is_row_for_row_whatever_the_order():
+    rows = [(1, 2025, 0, "2025-03-27"), (2, 2025, 0, "2025-03-27")]
+    a = _seed_preds(rows, [0.20, 0.30])
+    b = _seed_preds(rows[::-1], [0.10, 0.40])  # same rows, other order: player 2 then 1
+    out = average_seeds([a, b]).set_index("player_id")
+    assert out.loc[1, "k"] == pytest.approx(0.30)  # 0.20 and 0.40
+    assert out.loc[2, "k"] == pytest.approx(0.20)  # 0.30 and 0.10
+    assert list(out.columns) == [c for c in ID_COLS if c != "player_id"] + list(TARGETS)
+    assert len(out) == 2
+
+
+def test_seeds_that_predicted_different_rows_are_refused():
+    a = _seed_preds([(1, 2025, 0, "2025-03-27"), (2, 2025, 0, "2025-03-27")], [0.2, 0.3])
+    b = _seed_preds([(1, 2025, 0, "2025-03-27")], [0.2])
+    with pytest.raises(ValueError, match="different rows"):
+        average_seeds([a, b])
+    with pytest.raises(ValueError, match="no predictions"):
+        average_seeds([])
+
+
+def test_a_repeated_row_is_refused_not_merged():
+    row = (1, 2025, 0, "2025-03-27")
+    twice = _seed_preds([row, row], [0.2, 0.3])
+    with pytest.raises(ValueError, match="repeated a row"):
+        average_seeds([twice, twice])
