@@ -1,9 +1,11 @@
+from dataclasses import replace
 from datetime import date
 
 import numpy as np
 import pandas as pd
 import pytest
 
+from fantasy_baseball.hitter_ros.parks import PARK_FEATURES
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import (
     answers,
@@ -191,6 +193,22 @@ def test_league_answer_rates_pool_the_rest_of_the_season(table):
     )
 
 
+def test_park_inputs_are_trained_on_only_when_the_config_says_so(table):
+    """A run is never credited to park inputs it didn't have, or the reverse."""
+    x, (y, w) = input_frame(table), answers(table)
+    with_parks = pd.concat([x, pd.DataFrame(1.0, index=x.index, columns=PARK_FEATURES)], axis=1)
+    tiny = plain_config(hidden=[8], max_epochs=3, patience=1, val_frac=0.34)
+    with pytest.raises(ValueError, match="park inputs"):
+        fit_season(table, x, y, w, 2025, replace(tiny, parks="p3"))
+    with pytest.raises(ValueError, match="park inputs"):
+        fit_season(table, with_parks, y, w, 2025, tiny)
+    _, info = fit_season(table, with_parks, y, w, 2025, replace(tiny, parks="p3"))
+    assert info["n_features"] == fit_season(table, x, y, w, 2025, tiny)[1]["n_features"] + len(
+        PARK_FEATURES
+    )
+    assert applied_settings(replace(tiny, parks="p3"))["parks"] == "p3"
+
+
 def _tiny(relative_target):
     return plain_config(
         hidden=[8], max_epochs=3, patience=1, val_frac=0.34, relative_target=relative_target
@@ -256,6 +274,11 @@ def test_the_net_as_trained_learns_relative_to_the_league():
     assert plain_config().seq == "none"  # the plain baseline stays plain
     assert net_config(relative_target="none").relative_target == "none"
     assert plain_config().relative_target == "none"  # the plain baseline stays plain
+
+
+def test_the_net_as_trained_reads_park_inputs():
+    assert net_config().parks == "p3" and net_config(parks="none").parks == "none"
+    assert plain_config().parks == "none"  # the plain baseline stays plain
 
 
 def _row_index(table, player, season, week):
