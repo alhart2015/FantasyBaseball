@@ -20,10 +20,14 @@ from typing import Any, NamedTuple
 import numpy as np
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.net import NetConfig, predict, train
+from fantasy_baseball.hitter_ros.net import PIECE_LOSS_WEIGHT, NetConfig, predict, train
 from fantasy_baseball.hitter_ros.parks import PARK_FEATURES
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
-from fantasy_baseball.pitcher_ros.features import league_answer_rates, league_reference
+from fantasy_baseball.pitcher_ros.features import (
+    ERA_PIECES,
+    league_answer_rates,
+    league_reference,
+)
 from fantasy_baseball.pitcher_ros.stats import TARGETS
 from fantasy_baseball.ros_training import (
     holdout_and_scaler,
@@ -92,6 +96,16 @@ DEFAULT_SEQ: dict[str, Any] = {
 # 5.25-5.41), so mostly training noise. Top-25 starters' ERA unchanged (0.687 vs 0.688):
 # the gap to FanGraphs there is not the park (#486).
 DEFAULT_PARKS = "p3"
+
+# Whether the pitcher net also predicts ERA's pieces (features.ERA_PIECES: BB, HBP, HR per
+# batter faced) as extra outputs, ERA still its own (features.answers era_pieces). 5 seeds
+# x 2022-2026 (run 017-era-pieces vs 016-parks; how sure better, 0-100), preseason on the
+# fantasy-relevant: ERA MSE 1.051 vs 1.058 (99%), W 6.583 vs 6.562 (8%), the rest 47-76%;
+# mid-season ERA 2.395 vs 2.405 (97%). In roto points (squared SGP miss per pitcher,
+# preseason fantasy-relevant): ERA -1.0% (100%), W +0.3% (10%), the whole pitcher -0.07%
+# (61%), and never worse in any view (52-78%). The pieces also showed where the top-25
+# starters' ERA gap to FanGraphs is: home runs, then strikeouts (#486).
+DEFAULT_ERA_PIECES = True
 
 
 class LeagueRates(NamedTuple):
@@ -216,6 +230,9 @@ def fit_season(
     ``hitter_ros.sequence.SequenceBatcher`` built on ``table``'s rows, in order, from
     ``pitcher_ros.sequence``'s tokens.
 
+    ``y_all`` / ``w_all``: ``features.answers``, the ``TARGETS`` and, with its
+    ``era_pieces``, ERA's pieces as extra outputs (predicted and returned beside them).
+
     ``config.parks``: "none", or the park file whose inputs (``pitcher_ros.parks``)
     ``x_all`` carries; refused when the two disagree, so a run is never credited to
     park inputs it didn't have (or the reverse)."""
@@ -238,7 +255,12 @@ def fit_season(
         if len(batcher.row_start) != len(table):
             raise ValueError("the batcher was built on a different table (row count differs)")
     positions = np.arange(len(table))
-    cols = list(TARGETS)
+    cols = list(y_all.columns)
+    if cols[: len(TARGETS)] != list(TARGETS) or not set(cols[len(TARGETS) :]) <= set(ERA_PIECES):
+        raise ValueError(f"targets must be TARGETS then any of ERA_PIECES, got {cols}")
+    # ERA's pieces (features.answers era_pieces) are extra outputs: each weighs a third
+    # of a target, as the hitter net's AVG pieces do (#433).
+    target_weights = np.array([1.0 if c in TARGETS else PIECE_LOSS_WEIGHT for c in cols])
     ref = None
     if config.relative_target != "none":
         if league is None:
@@ -255,6 +277,12 @@ def fit_season(
     val_mask, scaler = holdout_and_scaler(table, x_all, train_rows, config.val_frac, config.seed)
 
     y_train, w_train = y_all.loc[train_rows, cols], w_all.loc[train_rows, cols]
+    unweighted = [c for c in cols if not (w_train.loc[~val_mask, c] > 0).any()]
+    if unweighted:
+        raise ValueError(
+            f"no training row has an answer for {', '.join(unweighted)} (with a relative "
+            "target: no league rate to divide by)"
+        )
     mu, sd = weighted_moments(y_train, w_train, ~val_mask)
     y_std = np.column_stack([(y_train[c] - mu[c]) / sd[c] for c in cols])
     result = train(
@@ -265,6 +293,7 @@ def fit_season(
         config,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
         target_stats=cols,
+        target_weights=target_weights if len(cols) > len(TARGETS) else None,
         rows=positions[train_rows.to_numpy()] if batcher else None,
         batcher=batcher,
     )
@@ -303,8 +332,9 @@ DEFAULT_SEEDS = (0, 1, 2, 3, 4)
 
 
 def average_seeds(preds: list[pd.DataFrame]) -> pd.DataFrame:
-    """The ``TARGETS`` rates averaged over seeds' predictions (each ``ID_COLS`` plus
-    rates, as :func:`fit_season` returns them), row for row, sorted by ``ID_COLS``.
+    """The rates (``TARGETS``, and ERA's pieces when predicted) averaged over seeds'
+    predictions (each ``ID_COLS`` plus rates, as :func:`fit_season` returns them), row
+    for row, sorted by ``ID_COLS``.
     Refuses unless every row appears exactly once per seed: seeds that predicted
     different rows would quietly average over fewer seeds there, and a repeated row
     would be merged into one."""
@@ -313,4 +343,10 @@ def average_seeds(preds: list[pd.DataFrame]) -> pd.DataFrame:
     stacked = pd.concat(preds, ignore_index=True)
     if not (stacked.groupby(ID_COLS).size() == len(preds)).all():
         raise ValueError("the seeds predicted different rows, or one repeated a row")
-    return stacked.groupby(ID_COLS, as_index=False)[list(TARGETS)].mean()
+    rates = [c for c in stacked.columns if c not in ID_COLS]
+    # A rate one seed left blank (NaN) where another predicted it would be averaged
+    # over fewer seeds there; blank in every seed (no league rate to scale by) is fine.
+    known = stacked.groupby(ID_COLS)[rates].count()
+    if not known.isin([0, len(preds)]).all().all():
+        raise ValueError("a seed left a rate blank where another seed predicted it")
+    return stacked.groupby(ID_COLS, as_index=False)[rates].mean()

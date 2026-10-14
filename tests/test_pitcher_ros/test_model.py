@@ -8,6 +8,7 @@ import pytest
 from fantasy_baseball.hitter_ros.parks import PARK_FEATURES
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import (
+    ERA_PIECES,
     answers,
     input_frame,
     league_answer_rates,
@@ -15,6 +16,7 @@ from fantasy_baseball.pitcher_ros.features import (
 )
 from fantasy_baseball.pitcher_ros.model import (
     APPLIED,
+    DEFAULT_ERA_PIECES,
     DEFAULT_RELATIVE_TARGET,
     ID_COLS,
     LeagueRates,
@@ -57,6 +59,39 @@ def test_answers_and_their_weights(table):
     assert w2.loc[row, "k"] == (21 * 24) ** 2 and w2.loc[row, "era"] == w.loc[row, "era"]
     with pytest.raises(ValueError, match="per_bf_weight"):
         answers(table, "pa")
+
+
+def test_era_pieces_are_extra_answers_weighted_as_k(table):
+    y, w = answers(table, era_pieces=True)
+    row = _starter_week0(table)
+    assert list(y.columns) == [*TARGETS, *ERA_PIECES]
+    # 21 starts of 24 BF, 2 BB, no HBP or HR each.
+    assert y.loc[row, "bb_bf"] == pytest.approx(2 / 24)
+    assert y.loc[row, "hbp_bf"] == 0 and y.loc[row, "hr_bf"] == 0
+    assert (w.loc[row, list(ERA_PIECES)] == w.loc[row, "k"]).all()
+    plain_y, plain_w = answers(table)
+    assert list(plain_y.columns) == list(TARGETS)
+    pd.testing.assert_frame_equal(y[list(TARGETS)], plain_y)
+    pd.testing.assert_frame_equal(w[list(TARGETS)], plain_w)
+
+
+def test_fit_season_predicts_era_pieces_beside_the_targets(table):
+    x, (y, w) = input_frame(table), answers(table, era_pieces=True)
+    config = plain_config(hidden=[8], max_epochs=3, patience=1, val_frac=0.34)
+    preds, _ = fit_season(table, x, y, w, 2025, config)
+    assert list(preds.columns) == [*ID_COLS, *TARGETS, *ERA_PIECES]
+    assert (preds[list(ERA_PIECES)] >= 0).all().all()
+    # Relative to the league: the fixture's league walks people but never hits one or
+    # gives up a home run, so only BB has a league rate to learn against.
+    with_bb = [*TARGETS, "bb_bf"]
+    relative, _ = fit_season(
+        table, x, y[with_bb], w[with_bb], 2025, replace(config, relative_target="answer")
+    )
+    assert relative["bb_bf"].notna().all()
+    with pytest.raises(ValueError, match="hbp_bf"):
+        fit_season(table, x, y, w, 2025, replace(config, relative_target="answer"))
+    with pytest.raises(ValueError, match="TARGETS then"):
+        fit_season(table, x, y[["era", *TARGETS[1:]]].join(y["k"]), w, 2025, config)
 
 
 def test_a_row_with_no_answer_has_no_weight(table):
@@ -167,6 +202,18 @@ def test_seeds_that_predicted_different_rows_are_refused():
         average_seeds([])
 
 
+def test_seed_average_carries_era_pieces_and_refuses_a_blank_in_one_seed():
+    rows = [(1, 2025, 0, "2025-03-27")]
+    a = _seed_preds(rows, [0.2]).assign(bb_bf=0.08)
+    b = _seed_preds(rows, [0.4]).assign(bb_bf=0.10)
+    assert average_seeds([a, b])["bb_bf"].iloc[0] == pytest.approx(0.09)
+    # Blank in every seed (no league rate to scale it back by) stays blank.
+    blank = average_seeds([a.assign(bb_bf=np.nan), b.assign(bb_bf=np.nan)])
+    assert blank["bb_bf"].isna().all()
+    with pytest.raises(ValueError, match="blank"):
+        average_seeds([a, b.assign(bb_bf=np.nan)])
+
+
 def test_a_repeated_row_is_refused_not_merged():
     row = (1, 2025, 0, "2025-03-27")
     twice = _seed_preds([row, row], [0.2, 0.3])
@@ -183,6 +230,15 @@ def test_league_reference_pools_last_season_and_this_one_before_the_date(table):
     assert ref.loc[_row_index(table, STARTER, 2025, 1), "k"] == pytest.approx(k / bf)
     # The store's first season has no last season to forecast from.
     assert ref.loc[_row_index(table, STARTER, 2024, 0)].isna().all()
+
+
+def test_league_rates_include_era_pieces(table):
+    row = _row_index(table, STARTER, 2025, 1)
+    for frame in (league_reference(table), league_answer_rates(table)):
+        assert set(ERA_PIECES) <= set(frame.columns)
+    # Last season plus this one before the date, as for K: only STARTER walks anyone.
+    bb, bf = 10 * 2 + 7 * 2, (10 * 28 + 20) + (7 * 28 + 20)
+    assert league_reference(table).loc[row, "bb_bf"] == pytest.approx(bb / bf)
 
 
 def test_league_answer_rates_pool_the_rest_of_the_season(table):
@@ -274,6 +330,10 @@ def test_the_net_as_trained_learns_relative_to_the_league():
     assert plain_config().seq == "none"  # the plain baseline stays plain
     assert net_config(relative_target="none").relative_target == "none"
     assert plain_config().relative_target == "none"  # the plain baseline stays plain
+
+
+def test_the_net_as_trained_predicts_era_pieces():
+    assert DEFAULT_ERA_PIECES is True
 
 
 def test_the_net_as_trained_reads_park_inputs():
