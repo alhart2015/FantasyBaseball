@@ -109,10 +109,10 @@ DEFAULT_ERA_PIECES = True
 
 
 class LeagueRates(NamedTuple):
-    """Each table row's league ``TARGETS`` rates, usable as divisors (0 -> NaN):
-    ``reference``, the forecast known on the date (``features.league_reference``), and
-    ``answer``, the league's actual rates over the answer window
-    (``features.league_answer_rates``, a training denominator only)."""
+    """Each table row's league ``TARGETS`` (and ``features.ERA_PIECES``) rates, usable as
+    divisors (0 -> NaN): ``reference``, the forecast known on the date
+    (``features.league_reference``), and ``answer``, the league's actual rates over the
+    answer window (``features.league_answer_rates``, a training denominator only)."""
 
     reference: pd.DataFrame
     answer: pd.DataFrame
@@ -293,7 +293,7 @@ def fit_season(
         config,
         season_time=table.loc[train_rows, "frac_season_left"].to_numpy(),
         target_stats=cols,
-        target_weights=target_weights if len(cols) > len(TARGETS) else None,
+        target_weights=target_weights,
         rows=positions[train_rows.to_numpy()] if batcher else None,
         batcher=batcher,
     )
@@ -341,12 +341,15 @@ def average_seeds(preds: list[pd.DataFrame]) -> pd.DataFrame:
     if not preds:
         raise ValueError("no predictions to average")
     stacked = pd.concat(preds, ignore_index=True)
-    if not (stacked.groupby(ID_COLS).size() == len(preds)).all():
-        raise ValueError("the seeds predicted different rows, or one repeated a row")
     rates = [c for c in stacked.columns if c not in ID_COLS]
+    missing = [s for s in TARGETS if s not in rates]
+    if missing:
+        raise ValueError(f"the predictions have no {', '.join(missing)}")
+    by_row = stacked.groupby(ID_COLS)
+    if not (by_row.size() == len(preds)).all():
+        raise ValueError("the seeds predicted different rows, or one repeated a row")
     # A rate one seed left blank (NaN) where another predicted it would be averaged
     # over fewer seeds there; blank in every seed (no league rate to scale by) is fine.
-    known = stacked.groupby(ID_COLS)[rates].count()
-    if not known.isin([0, len(preds)]).all().all():
+    if not by_row[rates].count().isin([0, len(preds)]).all().all():
         raise ValueError("a seed left a rate blank where another seed predicted it")
-    return stacked.groupby(ID_COLS, as_index=False)[rates].mean()
+    return by_row[rates].mean().reset_index()

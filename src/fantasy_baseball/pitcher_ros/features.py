@@ -34,15 +34,21 @@ _ANSWER_COUNTS = ("bf", "outs", "k", "w", "sv", "er", "h", "bb")
 # what FIP is built from, so their errors show which piece an ERA miss comes from.
 ERA_PIECES = ("bb_bf", "hbp_bf", "hr_bf")
 _PIECE_COUNTS = ("bb", "hbp", "hr")
+# Every count the targets and the pieces are built from, each once.
+_RATE_COUNTS = tuple(dict.fromkeys((*_ANSWER_COUNTS, *_PIECE_COUNTS)))
 
 
 def piece_rates(counts: pd.DataFrame) -> pd.DataFrame:
     """``ERA_PIECES`` from summed counts (``bf``, ``bb``, ``hbp``, ``hr``); NaN where no
     batters were faced."""
-    bf = counts["bf"].astype(float).where(counts["bf"] > 0)
     return pd.DataFrame(
-        {f"{c}_bf": counts[c].astype(float) / bf for c in _PIECE_COUNTS}, index=counts.index
+        {f"{c}_bf": div(counts[c], counts["bf"]) for c in _PIECE_COUNTS}, index=counts.index
     )
+
+
+def _target_and_piece_rates(counts: pd.DataFrame) -> pd.DataFrame:
+    """``TARGETS`` then ``ERA_PIECES`` from summed ``_RATE_COUNTS``."""
+    return pd.concat([rates_from_counts(counts)[list(TARGETS)], piece_rates(counts)], axis=1)
 
 
 def div(num: pd.Series, den: pd.Series) -> pd.Series:
@@ -75,11 +81,9 @@ def answers(
     ``era_pieces``: also ``ERA_PIECES`` (after the targets), weighted as K is."""
     if per_bf_weight not in PER_BF_WEIGHTS:
         raise ValueError(f"unknown per_bf_weight {per_bf_weight!r}; one of {PER_BF_WEIGHTS}")
-    names = (*_ANSWER_COUNTS, *(("hbp", "hr") if era_pieces else ()))
+    names = _RATE_COUNTS if era_pieces else _ANSWER_COUNTS
     counts = pd.DataFrame({c: t[f"ros_{c}"].astype(float) for c in names})
-    y = rates_from_counts(counts)[list(TARGETS)]
-    if era_pieces:
-        y = pd.concat([y, piece_rates(counts)], axis=1)
+    y = _target_and_piece_rates(counts) if era_pieces else rates_from_counts(counts)[list(TARGETS)]
     bf = counts["bf"] ** (2 if per_bf_weight == "bf2" else 1)
     ip = counts["outs"] / 3
     w = pd.DataFrame(
@@ -97,14 +101,10 @@ def league_reference(t: pd.DataFrame) -> pd.DataFrame:
     which a longer pool lags); mid-season, with this season so far, 0.59 vs 0.83. NaN
     for a row with no last season in the store. Also the ``ERA_PIECES``' rates."""
     counts = pd.DataFrame(
-        {
-            c: t[f"lg_p1_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float)
-            for c in (*_ANSWER_COUNTS, *_PIECE_COUNTS)
-        },
+        {c: t[f"lg_p1_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in _RATE_COUNTS},
         index=t.index,
     )
-    out = pd.concat([rates_from_counts(counts)[list(TARGETS)], piece_rates(counts)], axis=1)
-    return out.where(t["lg_p1_bf"].astype(float) > 0)
+    return _target_and_piece_rates(counts).where(t["lg_p1_bf"].astype(float) > 0)
 
 
 def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
@@ -115,13 +115,10 @@ def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
     denominator only**, never an input or a way back to rates."""
     keys = [t["season"], t["week"]]
     counts = pd.DataFrame(
-        {
-            c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum")
-            for c in (*_ANSWER_COUNTS, *_PIECE_COUNTS)
-        },
+        {c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum") for c in _RATE_COUNTS},
         index=t.index,
     )
-    return pd.concat([rates_from_counts(counts)[list(TARGETS)], piece_rates(counts)], axis=1)
+    return _target_and_piece_rates(counts)
 
 
 def _box_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
