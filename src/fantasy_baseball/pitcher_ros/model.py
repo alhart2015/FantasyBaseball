@@ -1,13 +1,15 @@
-"""The first pitcher net (#465 Stage 4): a plain MLP from ``features.input_frame`` to the
-five rest-of-season rates (``features.answers``), on the hitter net's machinery
+"""The pitcher net (#465 Stage 4): an MLP from ``features.input_frame`` to the five
+rest-of-season rates (``features.answers``), on the hitter net's machinery
 (``hitter_ros.net``: the MLP, early stopping, loss weights).
 
-Plain on purpose: weighted squared error on standardized rates, no sequence encoder.
-The hitter net's other options are switched off in :func:`plain_config`, and
+:func:`plain_config` is the plain baseline: weighted squared error on standardized
+rates, no sequence encoder, no feature files. The hitter net's other options are
+switched off there, and
 :func:`fit_season` refuses a config that turns one on (it would be ignored here); each
-gets tried for pitchers on its own, against this. One has been so far, and is applied:
-``relative_target``, learning each rate relative to the league (see
-:func:`fit_season`; :func:`net_config` uses ``DEFAULT_RELATIVE_TARGET``).
+gets tried for pitchers on its own, against this. Applied so far (:func:`net_config`):
+``relative_target``, learning each rate relative to the league
+(``DEFAULT_RELATIVE_TARGET``); ``seq``, a transformer over recent appearances
+(``DEFAULT_SEQ``); and ``parks``, park inputs (``DEFAULT_PARKS``).
 """
 
 from __future__ import annotations
@@ -19,6 +21,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.net import NetConfig, predict, train
+from fantasy_baseball.hitter_ros.parks import PARK_FEATURES
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros.features import league_answer_rates, league_reference
 from fantasy_baseball.pitcher_ros.stats import TARGETS
@@ -50,6 +53,7 @@ APPLIED = (
     "seq_layers",
     "micro_batch",
     "amp",
+    "parks",
 )
 
 
@@ -77,6 +81,17 @@ DEFAULT_SEQ: dict[str, Any] = {
     "seq_dim": 64,
     "seq_layers": 1,
 }
+
+
+# The park inputs the pitcher net uses (pitcher_ros/parks.py): "none" (off), or the name
+# of a data/pitcher_ros/parks_<name>.parquet file (scripts/build_pitcher_ros_parks.py).
+# 5 seeds x 2022-2026 (run 016-parks vs 014-seq-lgctx; how sure better, 0-100),
+# preseason: K 177.4 vs 180.2 (99%, better in 5/5 seeds), level-free ERA 1.241 vs 1.247
+# (97%) and WHIP 0.0338 vs 0.0340 (95%); raw ERA/WHIP and W even. Mid-season K, W, ERA,
+# WHIP 58-82%; SV 5.38 vs 5.24 (0%), but the single seeds overlap (5.29-5.42 vs
+# 5.25-5.41), so mostly training noise. Top-25 starters' ERA unchanged (0.687 vs 0.688):
+# the gap to FanGraphs there is not the park (#486).
+DEFAULT_PARKS = "p3"
 
 
 class LeagueRates(NamedTuple):
@@ -110,8 +125,15 @@ def check_league_forecast(table: pd.DataFrame, league: LeagueRates, season: int)
 
 def net_config(**overrides: Any) -> NetConfig:
     """The pitcher net as trained: :func:`plain_config` with the applied defaults
-    (``DEFAULT_RELATIVE_TARGET``, ``DEFAULT_SEQ``), then ``overrides``."""
-    return plain_config(**{"relative_target": DEFAULT_RELATIVE_TARGET, **DEFAULT_SEQ, **overrides})
+    (``DEFAULT_RELATIVE_TARGET``, ``DEFAULT_SEQ``, ``DEFAULT_PARKS``), then ``overrides``."""
+    return plain_config(
+        **{
+            "relative_target": DEFAULT_RELATIVE_TARGET,
+            **DEFAULT_SEQ,
+            "parks": DEFAULT_PARKS,
+            **overrides,
+        }
+    )
 
 
 def plain_config(**overrides: Any) -> NetConfig:
@@ -192,9 +214,18 @@ def fit_season(
     "transformer") over each pitcher's last ``seq_len`` appearances before the row's
     date, whose summary joins the inputs. ``batcher`` reads them: a
     ``hitter_ros.sequence.SequenceBatcher`` built on ``table``'s rows, in order, from
-    ``pitcher_ros.sequence``'s tokens."""
+    ``pitcher_ros.sequence``'s tokens.
+
+    ``config.parks``: "none", or the park file whose inputs (``pitcher_ros.parks``)
+    ``x_all`` carries; refused when the two disagree, so a run is never credited to
+    park inputs it didn't have (or the reverse)."""
     check_plain(config)
     check_week_zero(table)
+    has_parks = set(PARK_FEATURES) <= set(x_all.columns)
+    if (config.parks != "none") != has_parks:
+        raise ValueError(
+            f"parks {config.parks!r} needs the park inputs in x_all exactly when it is not 'none'"
+        )
     if (config.seq != "none") != (batcher is not None):
         raise ValueError(f"seq {config.seq!r} needs a batcher exactly when it is not 'none'")
     if batcher is not None:

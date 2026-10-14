@@ -8,14 +8,17 @@ predictions-s<N>.parquet (each seed), config.json, info.json, the scored frames 
 scores.md to data/pitcher_ros/runs/<name>/.
 
 Needs the training table (scripts/build_pitcher_ros_table.py), torch (see
-scripts/train_hitter_ros.py) and, for the default transformer over each pitcher's recent
+scripts/train_hitter_ros.py), for the default transformer over each pitcher's recent
 appearances (model.DEFAULT_SEQ), the appearance tokens
-(scripts/build_pitcher_ros_tokens.py). --seq none trains the plain net.
+(scripts/build_pitcher_ros_tokens.py), and for the default park inputs
+(model.DEFAULT_PARKS), the park file (scripts/build_pitcher_ros_parks.py --name p3).
+--seq none drops only the sequence encoder (parks and the relative target stay on).
 
 Usage:
     python scripts/train_pitcher_ros.py --name 003-avg          # seeds 0-4, averaged
     python scripts/train_pitcher_ros.py --name quick --seeds 0 --test-seasons 2026
     python scripts/train_pitcher_ros.py --name plain --seq none   # no sequence
+    python scripts/train_pitcher_ros.py --name noparks --parks none   # no park inputs
     python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
 
@@ -39,6 +42,7 @@ from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
 from fantasy_baseball.pitcher_ros.model import (
+    DEFAULT_PARKS,
     DEFAULT_RELATIVE_TARGET,
     DEFAULT_SEEDS,
     DEFAULT_SEQ,
@@ -50,6 +54,7 @@ from fantasy_baseball.pitcher_ros.model import (
     league_rates,
     net_config,
 )
+from fantasy_baseball.pitcher_ros.parks import load_park_inputs
 from fantasy_baseball.pitcher_ros.sequence import TOKEN_FEATURES, TOKEN_ORDER
 from fantasy_baseball.pitcher_ros.stats import load_games
 
@@ -109,6 +114,12 @@ def main() -> int:
     )
     parser.add_argument("--seq-dim", type=int, default=DEFAULT_SEQ["seq_dim"])
     parser.add_argument("--seq-layers", type=int, default=DEFAULT_SEQ["seq_layers"])
+    parser.add_argument(
+        "--parks",
+        default=DEFAULT_PARKS,
+        help="park inputs from data/pitcher_ros/parks_<name>.parquet (build them with "
+        "scripts/build_pitcher_ros_parks.py --name <name>; none = off; model.DEFAULT_PARKS)",
+    )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -128,6 +139,7 @@ def main() -> int:
             seq_len=args.seq_len,
             seq_dim=args.seq_dim,
             seq_layers=args.seq_layers,
+            parks=args.parks,
         )
         for seed in seeds
     }
@@ -145,6 +157,14 @@ def main() -> int:
             except ValueError as err:
                 parser.error(f"--test-seasons: {err}")
     x = input_frame(table)
+    parks_build = None
+    if args.parks != "none":
+        try:
+            park_inputs, parks_build = load_park_inputs(table, args.table.parent, args.parks)
+        except ValueError as err:
+            parser.error(str(err))
+        x = pd.concat([x, park_inputs], axis=1)
+        logging.info("added %d park inputs (%s)", park_inputs.shape[1], args.parks)
     y, w = answers(table, args.per_bf_weight)
     games = load_games(STORE)
     batcher = None
@@ -173,6 +193,7 @@ def main() -> int:
         **{k: v for k, v in applied_settings(configs[seeds[0]]).items() if k != "seed"},
         "seeds": seeds,
         "per_bf_weight": args.per_bf_weight,
+        "parks_build": parks_build,
     }
     (run / "config.json").write_text(json.dumps(settings, indent=2))
 
