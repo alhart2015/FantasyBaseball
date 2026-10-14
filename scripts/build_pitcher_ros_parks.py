@@ -41,14 +41,21 @@ STORE = PROJECT_ROOT / "data" / "pitch_data"
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--name", required=True, help="names the file: parks_<name>.parquet")
+    parser.add_argument(
+        "--table",
+        type=Path,
+        default=TABLE,
+        help="the pitcher table; the file is written next to it, where "
+        "train_pitcher_ros.py --table looks for it",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
-    table = pd.read_parquet(TABLE, columns=[*ROW_KEYS, "as_of", "team_id"])
+    table = pd.read_parquet(args.table, columns=[*ROW_KEYS, "as_of", "team_id"])
     conn = connect(STORE)
     features = build_park_features(
         table, load_team_games(conn), load_pitcher_games(conn), load_schedule(conn)
     )
-    out = parks_path(TABLE.parent, args.name)
+    out = parks_path(args.table.parent, args.name)
     features.to_parquet(out, index=False)
     out.with_suffix(".json").write_text(json.dumps(build_options(), indent=2))
     known = features[PARK_FEATURES].notna().mean().round(3)

@@ -12,7 +12,7 @@ scripts/train_hitter_ros.py), for the default transformer over each pitcher's re
 appearances (model.DEFAULT_SEQ), the appearance tokens
 (scripts/build_pitcher_ros_tokens.py), and for the default park inputs
 (model.DEFAULT_PARKS), the park file (scripts/build_pitcher_ros_parks.py --name p3).
---seq none trains the plain net.
+--seq none drops only the sequence encoder (parks and the relative target stay on).
 
 Usage:
     python scripts/train_pitcher_ros.py --name 003-avg          # seeds 0-4, averaged

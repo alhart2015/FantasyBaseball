@@ -1,9 +1,10 @@
-"""The first pitcher net (#465 Stage 4): a plain MLP from ``features.input_frame`` to the
-five rest-of-season rates (``features.answers``), on the hitter net's machinery
+"""The pitcher net (#465 Stage 4): an MLP from ``features.input_frame`` to the five
+rest-of-season rates (``features.answers``), on the hitter net's machinery
 (``hitter_ros.net``: the MLP, early stopping, loss weights).
 
-Plain on purpose: weighted squared error on standardized rates, no sequence encoder.
-The hitter net's other options are switched off in :func:`plain_config`, and
+:func:`plain_config` is the plain baseline: weighted squared error on standardized
+rates, no sequence encoder, no feature files. The hitter net's other options are
+switched off there, and
 :func:`fit_season` refuses a config that turns one on (it would be ignored here); each
 gets tried for pitchers on its own, against this. Applied so far (:func:`net_config`):
 ``relative_target``, learning each rate relative to the league

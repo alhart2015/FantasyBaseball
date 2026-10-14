@@ -119,3 +119,13 @@ def test_a_missing_park_file_says_how_to_build_the_pitcher_one(tmp_path):
     )
     with pytest.raises(ValueError, match=r"build_pitcher_ros_parks.py --name p3"):
         load_park_inputs(table, tmp_path, "p3")
+
+
+def test_a_pitching_season_without_a_games_file_is_an_error(tmp_path):
+    """The join would silently drop that season's batters faced from p1/p3."""
+    _store(tmp_path, [_game(1, 1)], [_line(1, 1, bf=12)])
+    older = pd.DataFrame([_line(9, 1, bf=20)]).assign(game_date="2023-05-01")
+    _write(tmp_path / "pitching" / "2023.parquet", older)
+    conn = connect(tmp_path)
+    with pytest.raises(ValueError, match=r"no games file for seasons \[2023\] with pitching"):
+        load_pitcher_games(conn)

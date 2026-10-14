@@ -26,13 +26,30 @@ from fantasy_baseball.hitter_ros.parks import (
     PARK_FEATURES,
     build_options,
     check_games_cover_lineups,
+    parks_path,
 )
 from fantasy_baseball.pitcher_ros.stats import GAME_DATE_SQL
 
 
-def parks_path(root: Path, name: str) -> Path:
-    """Where ``scripts/build_pitcher_ros_parks.py --name <name>`` writes the features."""
-    return root / f"parks_{name}.parquet"
+def check_games_cover_pitching(conn: duckdb.DuckDBPyConnection) -> None:
+    """ValueError unless every season with pitching lines has its ``games`` file:
+    :func:`load_pitcher_games` joins the two, so a missing season would silently drop
+    his batters faced there (``check_games_cover_lineups`` covers the batting side)."""
+    check_games_cover_lineups(conn)
+    missing = [
+        r[0]
+        for r in conn.execute(
+            """
+            SELECT DISTINCT year(CAST(game_date AS DATE)) AS season FROM pitching
+            EXCEPT SELECT DISTINCT season FROM games ORDER BY 1
+            """
+        ).fetchall()
+    ]
+    if missing:
+        raise ValueError(
+            f"no games file for seasons {missing} with pitching lines; run "
+            "scripts/fetch_pitch_data.py --start <first> --end <last> --only pitching"
+        )
 
 
 def load_pitcher_games(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
@@ -40,7 +57,7 @@ def load_pitcher_games(conn: duckdb.DuckDBPyConnection) -> pd.DataFrame:
     ballpark and his batters faced as ``pa``. Dated like ``stats.load_games`` (a
     suspended game on the day it was finished), so a row's history cuts off where its
     other inputs do."""
-    check_games_cover_lineups(conn)
+    check_games_cover_pitching(conn)
     return conn.execute(
         f"""
         SELECT g.season, p.player_id, p.line_date AS game_date, g.venue_id, sum(p.bf) AS pa
