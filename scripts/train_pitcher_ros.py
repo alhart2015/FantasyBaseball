@@ -19,6 +19,7 @@ Usage:
     python scripts/train_pitcher_ros.py --name quick --seeds 0 --test-seasons 2026
     python scripts/train_pitcher_ros.py --name plain --seq none   # no sequence
     python scripts/train_pitcher_ros.py --name noparks --parks none   # no park inputs
+    python scripts/train_pitcher_ros.py --name nopieces --no-era-pieces   # 5 outputs only
     python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
 
@@ -42,6 +43,7 @@ from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
 from fantasy_baseball.pitcher_ros.model import (
+    DEFAULT_ERA_PIECES,
     DEFAULT_PARKS,
     DEFAULT_RELATIVE_TARGET,
     DEFAULT_SEEDS,
@@ -120,6 +122,13 @@ def main() -> int:
         help="park inputs from data/pitcher_ros/parks_<name>.parquet (build them with "
         "scripts/build_pitcher_ros_parks.py --name <name>; none = off; model.DEFAULT_PARKS)",
     )
+    parser.add_argument(
+        "--era-pieces",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_ERA_PIECES,
+        help="also predict ERA's pieces (BB, HBP, HR per batter faced) as extra outputs "
+        "(model.DEFAULT_ERA_PIECES)",
+    )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -165,7 +174,7 @@ def main() -> int:
             parser.error(str(err))
         x = pd.concat([x, park_inputs], axis=1)
         logging.info("added %d park inputs (%s)", park_inputs.shape[1], args.parks)
-    y, w = answers(table, args.per_bf_weight)
+    y, w = answers(table, args.per_bf_weight, era_pieces=args.era_pieces)
     games = load_games(STORE)
     batcher = None
     if args.seq != "none":
@@ -194,6 +203,7 @@ def main() -> int:
         "seeds": seeds,
         "per_bf_weight": args.per_bf_weight,
         "parks_build": parks_build,
+        "era_pieces": args.era_pieces,
     }
     (run / "config.json").write_text(json.dumps(settings, indent=2))
 

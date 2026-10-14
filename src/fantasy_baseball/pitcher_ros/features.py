@@ -28,6 +28,28 @@ PITCH_GROUPS = ("fb", "fc", "brk", "off")
 # The answer counts ``rates_from_counts`` needs, read from the table's ros_ columns.
 _ANSWER_COUNTS = ("bf", "outs", "k", "w", "sv", "er", "h", "bb")
 
+# ERA's fielding-independent pieces (#486): walks, hit batters and home runs per batter
+# faced (K per batter faced is already a target). With ``era_pieces`` the net predicts
+# them as extra outputs beside the five targets; ERA is still its own output. They are
+# what FIP is built from, so their errors show which piece an ERA miss comes from.
+ERA_PIECES = ("bb_bf", "hbp_bf", "hr_bf")
+_PIECE_COUNTS = ("bb", "hbp", "hr")
+# Every count the targets and the pieces are built from, each once.
+_RATE_COUNTS = tuple(dict.fromkeys((*_ANSWER_COUNTS, *_PIECE_COUNTS)))
+
+
+def piece_rates(counts: pd.DataFrame) -> pd.DataFrame:
+    """``ERA_PIECES`` from summed counts (``bf``, ``bb``, ``hbp``, ``hr``); NaN where no
+    batters were faced."""
+    return pd.DataFrame(
+        {f"{c}_bf": div(counts[c], counts["bf"]) for c in _PIECE_COUNTS}, index=counts.index
+    )
+
+
+def _target_and_piece_rates(counts: pd.DataFrame) -> pd.DataFrame:
+    """``TARGETS`` then ``ERA_PIECES`` from summed ``_RATE_COUNTS``."""
+    return pd.concat([rates_from_counts(counts)[list(TARGETS)], piece_rates(counts)], axis=1)
+
 
 def div(num: pd.Series, den: pd.Series) -> pd.Series:
     """num / den, NaN where den is 0."""
@@ -43,7 +65,9 @@ def div(num: pd.Series, den: pd.Series) -> pd.Series:
 PER_BF_WEIGHTS = ("bf", "bf2")
 
 
-def answers(t: pd.DataFrame, per_bf_weight: str = "bf") -> tuple[pd.DataFrame, pd.DataFrame]:
+def answers(
+    t: pd.DataFrame, per_bf_weight: str = "bf", *, era_pieces: bool = False
+) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Rest-of-season ``TARGETS`` rates per table row (NaN where there is nothing to
     divide by: no batters faced, or no outs) and each one's loss weight (0 where the
     rate is NaN).
@@ -52,14 +76,19 @@ def answers(t: pd.DataFrame, per_bf_weight: str = "bf") -> tuple[pd.DataFrame, p
     (``ip x err^2``). K/W/SV: the scorer charges a rate's error on his actual batters
     faced, ``(bf x err)^2``, so per row its weight is ``bf^2``: ``per_bf_weight`` "bf2"
     matches it; "bf" weights by batters faced, which leans further toward low-volume
-    pitchers than the score does."""
+    pitchers than the score does.
+
+    ``era_pieces``: also ``ERA_PIECES`` (after the targets), weighted as K is."""
     if per_bf_weight not in PER_BF_WEIGHTS:
         raise ValueError(f"unknown per_bf_weight {per_bf_weight!r}; one of {PER_BF_WEIGHTS}")
-    counts = pd.DataFrame({c: t[f"ros_{c}"].astype(float) for c in _ANSWER_COUNTS})
-    y = rates_from_counts(counts)[list(TARGETS)]
+    names = _RATE_COUNTS if era_pieces else _ANSWER_COUNTS
+    counts = pd.DataFrame({c: t[f"ros_{c}"].astype(float) for c in names})
+    y = _target_and_piece_rates(counts) if era_pieces else rates_from_counts(counts)[list(TARGETS)]
     bf = counts["bf"] ** (2 if per_bf_weight == "bf2" else 1)
     ip = counts["outs"] / 3
-    w = pd.DataFrame({s: bf if s in PER_BF else ip for s in TARGETS}, index=t.index)
+    w = pd.DataFrame(
+        {s: bf if s in PER_BF or s in ERA_PIECES else ip for s in y.columns}, index=t.index
+    )
     return y, w.where(y.notna(), 0.0)
 
 
@@ -70,28 +99,26 @@ def league_reference(t: pd.DataFrame) -> pd.DataFrame:
     season missed the next season's league K rate by 0.43 K per 100 batters faced on
     average, the last three seasons pooled by 0.76 (the rate rose every season to 2020,
     which a longer pool lags); mid-season, with this season so far, 0.59 vs 0.83. NaN
-    for a row with no last season in the store."""
+    for a row with no last season in the store. Also the ``ERA_PIECES``' rates."""
     counts = pd.DataFrame(
-        {c: t[f"lg_p1_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in _ANSWER_COUNTS},
+        {c: t[f"lg_p1_{c}"].astype(float) + t[f"lg_std_{c}"].astype(float) for c in _RATE_COUNTS},
         index=t.index,
     )
-    out: pd.DataFrame = rates_from_counts(counts)[list(TARGETS)]
-    return out.where(t["lg_p1_bf"].astype(float) > 0)
+    return _target_and_piece_rates(counts).where(t["lg_p1_bf"].astype(float) > 0)
 
 
 def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
-    """Each row's league ``TARGETS`` rates over its answer window: the ``ros_*`` counts of
+    """Each row's league ``TARGETS`` (and ``ERA_PIECES``) rates over its answer window: the ``ros_*`` counts of
     every table row of the same season and as-of week pooled. The table has a row for
     every pitcher-season pitching on or after the date, so this is the league's rest of
     the season (the ``lg_*`` columns' population). Uses the answers: a **training target
     denominator only**, never an input or a way back to rates."""
     keys = [t["season"], t["week"]]
     counts = pd.DataFrame(
-        {c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum") for c in _ANSWER_COUNTS},
+        {c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum") for c in _RATE_COUNTS},
         index=t.index,
     )
-    out: pd.DataFrame = rates_from_counts(counts)[list(TARGETS)]
-    return out
+    return _target_and_piece_rates(counts)
 
 
 def _box_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
