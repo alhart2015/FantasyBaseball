@@ -23,6 +23,7 @@ Usage:
     python scripts/train_pitcher_ros.py --name noparks --parks none   # no park inputs
     python scripts/train_pitcher_ros.py --name nopieces --no-era-pieces   # 5 outputs only
     python scripts/train_pitcher_ros.py --name nostuff --stuff none   # no stuff inputs
+    python scripts/train_pitcher_ros.py --name proj-2027 --test-seasons 2027 --predict-only
     python scripts/train_pitcher_ros.py --name allstuff --stuff-rates all   # all 60
     python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
@@ -151,6 +152,11 @@ def main() -> int:
         "model.DEFAULT_STUFF_RATES)",
     )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
+    parser.add_argument(
+        "--predict-only",
+        action="store_true",
+        help="write the predictions without scoring them (a season not played yet)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     seasons = sorted(set(args.test_seasons))
@@ -178,6 +184,11 @@ def main() -> int:
         check_week_zero(table)
     except ValueError as err:
         parser.error(f"{args.table}: {err}")
+    # A season with rows but no batter faced yet (next season's preseason rows).
+    ros_bf = table.loc[table["season"].isin(seasons)].groupby("season")["ros_bf"].sum()
+    unplayed = sorted(int(season) for season, bf in ros_bf.items() if bf == 0)
+    if unplayed and not args.predict_only:
+        parser.error(f"no games played yet in {unplayed} to score; add --predict-only")
     league = league_rates(table) if args.relative_target != "none" else None
     if league is not None:
         # Checked here, before an old run of this name is deleted (fit_season checks too).
@@ -265,6 +276,9 @@ def main() -> int:
     preds = average_seeds(by_seed)
     preds.to_parquet(run / "predictions.parquet", index=False)
     (run / "info.json").write_text(json.dumps(infos, indent=2))
+    if args.predict_only:
+        logging.info("predictions only, not scored: %s", run / "predictions.parquet")
+        return 0
 
     scores = backtest.score_seasons(
         games,
