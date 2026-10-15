@@ -7,6 +7,10 @@ mid-season snapshots, pitcher_ros.backtest). Writes predictions.parquet (the ave
 predictions-s<N>.parquet (each seed), config.json, info.json, the scored frames and
 scores.md to data/pitcher_ros/runs/<name>/.
 
+--predict-only skips the scoring: for a season with nothing to score yet (next season's
+preseason rows, once its schedule is in the store and the table is rebuilt). The run
+then has the predictions, config.json, info.json and a short summary.md only.
+
 Needs the training table (scripts/build_pitcher_ros_table.py), torch (see
 scripts/train_hitter_ros.py), for the default transformer over each pitcher's recent
 appearances (model.DEFAULT_SEQ), the appearance tokens
@@ -23,6 +27,7 @@ Usage:
     python scripts/train_pitcher_ros.py --name noparks --parks none   # no park inputs
     python scripts/train_pitcher_ros.py --name nopieces --no-era-pieces   # 5 outputs only
     python scripts/train_pitcher_ros.py --name nostuff --stuff none   # no stuff inputs
+    python scripts/train_pitcher_ros.py --name proj-2027 --test-seasons 2027 --predict-only
     python scripts/train_pitcher_ros.py --name allstuff --stuff-rates all   # all 60
     python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
@@ -41,7 +46,7 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.hitter_ros.backtest import league_denominators
+from fantasy_baseball.hitter_ros.backtest import league_denominators, unplayed_seasons
 from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS, device
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros import backtest
@@ -151,6 +156,11 @@ def main() -> int:
         "model.DEFAULT_STUFF_RATES)",
     )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
+    parser.add_argument(
+        "--predict-only",
+        action="store_true",
+        help="write the predictions without scoring them (a season not played yet)",
+    )
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     seasons = sorted(set(args.test_seasons))
@@ -178,6 +188,15 @@ def main() -> int:
         check_week_zero(table)
     except ValueError as err:
         parser.error(f"{args.table}: {err}")
+    absent = sorted(set(seasons) - set(table["season"].unique()))
+    if absent:
+        parser.error(
+            f"{args.table} has no rows for {absent}; for next season, store its schedule "
+            "(fetch_pitch_data.py) and rebuild the table (build_pitcher_ros_table.py)"
+        )
+    unplayed = unplayed_seasons(table, seasons, count="ros_bf")
+    if unplayed and not args.predict_only:
+        parser.error(f"no games played yet in {unplayed} to score; add --predict-only")
     league = league_rates(table) if args.relative_target != "none" else None
     if league is not None:
         # Checked here, before an old run of this name is deleted (fit_season checks too).
@@ -265,6 +284,18 @@ def main() -> int:
     preds = average_seeds(by_seed)
     preds.to_parquet(run / "predictions.parquet", index=False)
     (run / "info.json").write_text(json.dumps(infos, indent=2))
+    if args.predict_only:
+        epochs = ", ".join(f"s{i['seed']} {i['test_season']}: {i['best_epoch']}" for i in infos)
+        md = [
+            f"### Pitcher run `{args.name}` (predictions only, not scored)",
+            "",
+            f"Config: `{json.dumps(settings)}`",
+            "",
+            f"Best epoch per seed and test season: {epochs}. Inputs: {infos[0]['n_features']}.",
+        ]
+        (run / "summary.md").write_text("\n".join(md) + "\n")
+        print("\n".join(md))
+        return 0
 
     scores = backtest.score_seasons(
         games,

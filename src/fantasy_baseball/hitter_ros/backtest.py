@@ -274,12 +274,15 @@ def tag_experience(scored: pd.DataFrame, table: pd.DataFrame) -> pd.DataFrame:
     return tagged.drop(columns="car_seasons_in_store").assign(group=group)
 
 
-def unplayed_seasons(table: pd.DataFrame, seasons: Iterable[int]) -> list[int]:
-    """The ``seasons`` with rows in ``table`` but no game played yet (every answer
-    empty): next season's preseason rows, with nothing to score them against."""
+def unplayed_seasons(
+    table: pd.DataFrame, seasons: Iterable[int], count: str = "ros_pa"
+) -> list[int]:
+    """The ``seasons`` with rows in ``table`` but no game played yet (``count``, the
+    rest-of-season plate appearances or the pitcher table's ``ros_bf``, sums to 0):
+    next season's preseason rows, with nothing to score them against."""
     rows = table.loc[table["season"].isin(list(seasons))]
-    ros_pa = rows.groupby("season")["ros_pa"].sum()
-    return sorted(int(season) for season, pa in ros_pa.items() if pa == 0)
+    played = rows.groupby("season")[count].sum()
+    return sorted(int(season) for season, n in played.items() if n == 0)
 
 
 def score_predictions(
