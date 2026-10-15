@@ -207,6 +207,17 @@ def main() -> int:
         logging.info("added %d stuff inputs (%s)", stuff_inputs.shape[1], args.stuff)
     y, w = answers(table, args.per_bf_weight, era_pieces=args.era_pieces)
     games = load_games(STORE)
+    if stuff_build is not None:
+        # Stuff inputs read from pitches older than the store would leave a row's newest
+        # pitches out of its this-season window, with nothing else to flag it.
+        through = stuff_build.get("pitches_through")
+        if through is None or pd.Timestamp(str(through)) < games["game_date"].max():
+            parser.error(
+                f"stuff_{args.stuff}.parquet read pitches through {through}, the store has "
+                f"games through {games['game_date'].max().date()}; rerun "
+                "scripts/build_pitcher_stuff.py --build, then --features-file "
+                f"{args.stuff} --run <stuff run>"
+            )
     batcher = None
     if args.seq != "none":
         tokens = pd.read_parquet(args.tokens)

@@ -145,6 +145,7 @@ def test_the_model_learns_what_the_pitch_type_alone_cannot(tmp_path):
             "features": list(STUFF_FEATURES),
             "config": config.to_dict(),
             "season": 2025,
+            "graded_contact": fit.graded_contact,
         },
         tmp_path / "model-2025.pt",
     )
@@ -161,3 +162,34 @@ def test_predictions_are_read_as_graded_contact_era_pitches():
     fit = fit_stuff(frame, STUFF_FEATURES, config)
     old = frame.assign(graded_contact=np.float32(0))
     pd.testing.assert_frame_equal(predict_stuff(fit, frame), predict_stuff(fit, old))
+
+
+def test_a_model_that_never_saw_graded_contact_is_read_as_it_was_trained(tmp_path):
+    frame = _synthetic(800).assign(season=2012, graded_contact=np.float32(0))
+    config = StuffConfig(hidden=(8,), max_epochs=2, patience=1, batch_size=256)
+    fit = fit_stuff(frame, STUFF_FEATURES, config)
+    assert not fit.graded_contact
+    # Its graded_contact weights are untrained: reading a pitch as graded would add them.
+    # Read as trained (0), even when the pitch itself is from the graded era.
+    modern = frame.assign(graded_contact=np.float32(1))
+    dev = next(fit.model.parameters()).device
+    with torch.no_grad():
+        logits, _, _ = fit.model(
+            torch.as_tensor(frame[list(STUFF_FEATURES)].to_numpy(np.float32), device=dev)
+        )
+    expected = torch.softmax(logits, -1).cpu().numpy()
+    got = predict_stuff(fit, modern)[[f"p_{o}" for o in OUTCOMES]].to_numpy()
+    assert np.allclose(got, expected, atol=1e-6)
+    # A model saved without the flag: model-2015 trained on 2014 and before, model-2016 not.
+    for season in (2015, 2016):
+        torch.save(
+            {
+                "state_dict": fit.model.state_dict(),
+                "features": list(STUFF_FEATURES),
+                "config": config.to_dict(),
+                "season": season,
+            },
+            tmp_path / f"model-{season}.pt",
+        )
+    assert not load_stuff(tmp_path / "model-2015.pt").graded_contact
+    assert load_stuff(tmp_path / "model-2016.pt").graded_contact

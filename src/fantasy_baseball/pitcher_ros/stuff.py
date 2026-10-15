@@ -43,12 +43,13 @@ from fantasy_baseball.hitter_ros.features import FIXED_ZONE
 from fantasy_baseball.hitter_ros.net import device
 from fantasy_baseball.hitter_ros.pitch_tokens import OUTCOMES, PITCH_GROUPS, outcome_index
 from fantasy_baseball.pitch_data.store import connect
+from fantasy_baseball.pitcher_ros.stats import GAME_DATE_SQL
 
 logger = logging.getLogger(__name__)
 
 GROUPS = (*PITCH_GROUPS, "other")
 GRADED_CONTACT_FROM = 2015
-FASTBALLS = ("ff", "si")
+FB_GROUPS = ("ff", "si")  # PITCH_GROUPS names, not Statcast codes
 BB_TYPES = ("ground_ball", "line_drive", "fly_ball", "popup")
 
 STUFF_FEATURES = (
@@ -75,7 +76,7 @@ STUFF_FEATURES = (
     "fb_up_gap",  # move_up - his fastball's, feet
     "same_side",  # pitcher and batter throw / bat from the same side
     # Statcast grades contact (weak / flare / solid / barrel) from 2015 on; before, every
-    # ball in play is "bip_other". The model learns both eras; read it with this at 1
+    # ball in play is "bip_other". A model trained on both eras is read with this at 1
     # (:func:`predict_stuff`) to get the modern answer for every pitch.
     "graded_contact",
 )
@@ -115,16 +116,23 @@ def build_stuff_pitches(store: Path) -> pd.DataFrame:
 
 
 def _season_pitches(conn: duckdb.DuckDBPyConnection, season: int) -> pd.DataFrame:
+    # Dated as the pitcher table dates the game (table.py: the pitching lines' date, a
+    # suspended game's resume date), so a row's as-of cutoff sees the same games here.
     return conn.execute(
-        """
-        SELECT pitcher, CAST(season AS INTEGER) AS season, CAST(game_date AS DATE) AS game_date,
+        f"""
+        WITH game_dates AS (
+            SELECT game_pk, max({GAME_DATE_SQL}) AS line_date FROM pitching GROUP BY 1
+        )
+        SELECT pitcher, CAST(season AS INTEGER) AS season,
+               COALESCE(line_date, CAST(game_date AS DATE)) AS game_date,
                game_pk, at_bat_number, pitch_number, pitch_type, p_throws, stand,
                release_speed, pfx_x, pfx_z, release_spin_rate, spin_axis,
                release_pos_x, release_pos_z, release_extension, arm_angle,
                plate_x, plate_z, balls, strikes,
                description, type, launch_speed_angle, bb_type,
                estimated_woba_using_speedangle AS xwoba
-        FROM pitches WHERE game_type = 'R' AND season = ?
+        FROM pitches LEFT JOIN game_dates USING (game_pk)
+        WHERE game_type = 'R' AND season = ?
         ORDER BY pitcher, game_date, game_pk, at_bat_number, pitch_number
         """,
         [season],
@@ -169,7 +177,7 @@ def stuff_frame(df: pd.DataFrame) -> pd.DataFrame:
     out["arm_angle"] = (df["arm_angle"] / 45).fillna(0).astype(f32)
 
     # His fastball this game: the average of his tracked ff / si pitches.
-    is_fb = group.isin(FASTBALLS) & df["release_speed"].notna() & df["pfx_x"].notna()
+    is_fb = group.isin(FB_GROUPS) & df["release_speed"].notna() & df["pfx_x"].notna()
     fb = (
         pd.DataFrame(
             {
@@ -271,6 +279,9 @@ class StuffFit:
     features: tuple[str, ...]
     best_epoch: int
     val_loss: list[float]
+    # Whether training saw graded-contact pitches (``graded_contact`` 1): only then has
+    # the model learned what that input means (see :func:`predict_stuff`).
+    graded_contact: bool
 
 
 def pitch_tensors(
@@ -328,7 +339,14 @@ def fit_stuff(
             break
     assert best[2] is not None
     model.load_state_dict(best[2])
-    return StuffFit(model=model, features=features, best_epoch=best[1], val_loss=history)
+    graded = "graded_contact" in features and bool((pitches["graded_contact"] > 0).any())
+    return StuffFit(
+        model=model,
+        features=features,
+        best_epoch=best[1],
+        val_loss=history,
+        graded_contact=graded,
+    )
 
 
 @torch.no_grad()
@@ -366,10 +384,12 @@ def evaluate(
 def predict_stuff(fit: StuffFit, pitches: pd.DataFrame, chunk: int = 262144) -> pd.DataFrame:
     """Predicted outcome probabilities (``p_<outcome>``), batted-ball-type probabilities
     (``p_<bb type>``, given a ball in play) and xwOBA given a ball in play, per pitch, as
-    a pitch thrown in the graded-contact era (``graded_contact`` set to 1)."""
+    a pitch thrown in the graded-contact era (``graded_contact`` set to 1) when ``fit``
+    was trained on any; a model that only saw earlier pitches never learned that input,
+    so it reads every pitch as it was trained (0)."""
     model = fit.model.eval()
     dev = next(model.parameters()).device
-    frame = pitches[list(fit.features)].assign(graded_contact=np.float32(1))
+    frame = pitches[list(fit.features)].assign(graded_contact=np.float32(fit.graded_contact))
     x = torch.as_tensor(frame.to_numpy(np.float32), device=dev)
     parts = []
     for s in range(0, len(x), chunk):
@@ -423,4 +443,13 @@ def load_stuff(path: Path) -> StuffFit:
     features = tuple(saved["features"])
     model = StuffNet(len(features), config).to(device())
     model.load_state_dict(saved["state_dict"])
-    return StuffFit(model=model.eval(), features=features, best_epoch=-1, val_loss=[])
+    # Models saved before this was recorded: model-<season> trained on earlier seasons
+    # only, so it saw graded contact exactly when an earlier season had it.
+    graded = saved.get("graded_contact", saved["season"] > GRADED_CONTACT_FROM)
+    return StuffFit(
+        model=model.eval(),
+        features=features,
+        best_epoch=-1,
+        val_loss=[],
+        graded_contact=bool(graded),
+    )

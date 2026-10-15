@@ -215,7 +215,7 @@ def build_stuff_features(
 
 
 def load_stuff_inputs(
-    table: pd.DataFrame, root: Path, name: str, rate_set: str = "all"
+    table: pd.DataFrame, root: Path, name: str, rate_set: str
 ) -> tuple[pd.DataFrame, dict[str, object]]:
     """The ``stuff_inputs(rate_set)`` from ``stuff_<name>.parquet`` under ``root``,
     aligned to ``table``'s rows, and the file's build options."""
