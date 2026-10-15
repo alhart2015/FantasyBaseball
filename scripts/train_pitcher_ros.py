@@ -11,7 +11,9 @@ Needs the training table (scripts/build_pitcher_ros_table.py), torch (see
 scripts/train_hitter_ros.py), for the default transformer over each pitcher's recent
 appearances (model.DEFAULT_SEQ), the appearance tokens
 (scripts/build_pitcher_ros_tokens.py), and for the default park inputs
-(model.DEFAULT_PARKS), the park file (scripts/build_pitcher_ros_parks.py --name p3).
+(model.DEFAULT_PARKS), the park file (scripts/build_pitcher_ros_parks.py --name p3),
+and for the default stuff inputs (model.DEFAULT_STUFF), the stuff file
+(scripts/build_pitcher_stuff.py --features-file s2-located --run s2-located).
 --seq none drops only the sequence encoder (parks and the relative target stay on).
 
 Usage:
@@ -20,6 +22,8 @@ Usage:
     python scripts/train_pitcher_ros.py --name plain --seq none   # no sequence
     python scripts/train_pitcher_ros.py --name noparks --parks none   # no park inputs
     python scripts/train_pitcher_ros.py --name nopieces --no-era-pieces   # 5 outputs only
+    python scripts/train_pitcher_ros.py --name nostuff --stuff none   # no stuff inputs
+    python scripts/train_pitcher_ros.py --name allstuff --stuff-rates all   # all 60
     python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
 
@@ -48,6 +52,8 @@ from fantasy_baseball.pitcher_ros.model import (
     DEFAULT_RELATIVE_TARGET,
     DEFAULT_SEEDS,
     DEFAULT_SEQ,
+    DEFAULT_STUFF,
+    DEFAULT_STUFF_RATES,
     applied_settings,
     average_seeds,
     check_league_forecast,
@@ -59,6 +65,7 @@ from fantasy_baseball.pitcher_ros.model import (
 from fantasy_baseball.pitcher_ros.parks import load_park_inputs
 from fantasy_baseball.pitcher_ros.sequence import TOKEN_FEATURES, TOKEN_ORDER
 from fantasy_baseball.pitcher_ros.stats import load_games
+from fantasy_baseball.pitcher_ros.stuff_features import STUFF_RATE_SETS, load_stuff_inputs
 
 TABLE = PROJECT_ROOT / "data" / "pitcher_ros" / "table.parquet"
 TOKENS = PROJECT_ROOT / "data" / "pitcher_ros" / "app_tokens.parquet"
@@ -129,6 +136,20 @@ def main() -> int:
         help="also predict ERA's pieces (BB, HBP, HR per batter faced) as extra outputs "
         "(model.DEFAULT_ERA_PIECES)",
     )
+    parser.add_argument(
+        "--stuff",
+        default=DEFAULT_STUFF,
+        help="stuff inputs from data/pitcher_ros/stuff_<name>.parquet (build them with "
+        "scripts/build_pitcher_stuff.py --features-file <name>; none = off; "
+        "model.DEFAULT_STUFF)",
+    )
+    parser.add_argument(
+        "--stuff-rates",
+        choices=sorted(STUFF_RATE_SETS),
+        default=DEFAULT_STUFF_RATES,
+        help="which stuff rates to read (stuff_features.STUFF_RATE_SETS; "
+        "model.DEFAULT_STUFF_RATES)",
+    )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -174,6 +195,16 @@ def main() -> int:
             parser.error(str(err))
         x = pd.concat([x, park_inputs], axis=1)
         logging.info("added %d park inputs (%s)", park_inputs.shape[1], args.parks)
+    stuff_build = None
+    if args.stuff != "none":
+        try:
+            stuff_inputs, stuff_build = load_stuff_inputs(
+                table, args.table.parent, args.stuff, args.stuff_rates
+            )
+        except ValueError as err:
+            parser.error(str(err))
+        x = pd.concat([x, stuff_inputs], axis=1)
+        logging.info("added %d stuff inputs (%s)", stuff_inputs.shape[1], args.stuff)
     y, w = answers(table, args.per_bf_weight, era_pieces=args.era_pieces)
     games = load_games(STORE)
     batcher = None
@@ -203,6 +234,8 @@ def main() -> int:
         "seeds": seeds,
         "per_bf_weight": args.per_bf_weight,
         "parks_build": parks_build,
+        "stuff_build": stuff_build,
+        "stuff_rates": args.stuff_rates if args.stuff != "none" else None,
         "era_pieces": args.era_pieces,
     }
     (run / "config.json").write_text(json.dumps(settings, indent=2))

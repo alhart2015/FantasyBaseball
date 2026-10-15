@@ -314,9 +314,11 @@ def fit_stuff(
             opt.zero_grad()
             (lo + lb + XWOBA_LOSS_WEIGHT * lx).backward()
             opt.step()
-        val_loss = sum(
-            w * v
-            for w, v in zip((1, 1, XWOBA_LOSS_WEIGHT), evaluate(model, xv, ov, bv, wv), strict=True)
+        # A head with nothing to score (no xwOBA before 2015) adds nothing.
+        val_loss = float(
+            np.nansum(
+                np.array((1, 1, XWOBA_LOSS_WEIGHT)) * np.array(evaluate(model, xv, ov, bv, wv))
+            )
         )
         history.append(val_loss)
         logger.info("epoch %d: val %.4f", epoch, val_loss)
@@ -339,7 +341,8 @@ def evaluate(
     chunk: int = 262144,
 ) -> tuple[float, float, float]:
     """Mean outcome cross-entropy, batted-ball-type cross-entropy (balls in play) and
-    xwOBA squared error (balls in play with one), over chunks."""
+    xwOBA squared error (balls in play with one), over chunks; NaN for a head with
+    nothing to score."""
     model.eval()
     sums = np.zeros(3)
     counts = np.zeros(3)

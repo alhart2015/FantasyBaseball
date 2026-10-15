@@ -9,7 +9,9 @@ switched off there, and
 gets tried for pitchers on its own, against this. Applied so far (:func:`net_config`):
 ``relative_target``, learning each rate relative to the league
 (``DEFAULT_RELATIVE_TARGET``); ``seq``, a transformer over recent appearances
-(``DEFAULT_SEQ``); and ``parks``, park inputs (``DEFAULT_PARKS``).
+(``DEFAULT_SEQ``); and ``parks``, park inputs (``DEFAULT_PARKS``). Applied by
+scripts/train_pitcher_ros.py, as extra inputs and outputs: ERA's pieces
+(``DEFAULT_ERA_PIECES``) and stuff inputs (``DEFAULT_STUFF``, ``DEFAULT_STUFF_RATES``).
 """
 
 from __future__ import annotations
@@ -106,6 +108,21 @@ DEFAULT_PARKS = "p3"
 # (61%), and never worse in any view (52-78%). The pieces also showed where the top-25
 # starters' ERA gap to FanGraphs is: home runs, then strikeouts (#486).
 DEFAULT_ERA_PIECES = True
+
+# The stuff inputs the pitcher net reads (pitcher_ros/stuff_features.py, #489): "none"
+# (off), or the name of a data/pitcher_ros/stuff_<name>.parquet file
+# (scripts/build_pitcher_stuff.py --features-file), and which of its rates
+# (stuff_features.STUFF_RATE_SETS). "s2-located" (the per-pitch models that also see
+# location and count), "overall" rates (no per-pitch-family ones). 5 seeds x 2022-2026
+# (run 021-overall vs 017-era-pieces; how sure better, 0-100), roto points (squared SGP
+# miss per pitcher), preseason: the top 100 starters by FanGraphs value (the ones on
+# rosters; SV left out) -1.4% (94%), top 25 -2.9% (94%), 26-60 -2.2% (96%), 61-100
+# +0.8% (34%); every pitcher -0.4% (80%); the fantasy-relevant -0.4% (77%), ERA +1.0%
+# (3%) but WHIP -0.9% (93%) and W -0.7% (97%). Mid-season fantasy-relevant -1.3% (94%).
+# All 60 rates (020-located): top 100 starters -0.6% (74%); the core 5 (022-core): -1.2%
+# (93%), fantasy-relevant preseason +0.1% (40%).
+DEFAULT_STUFF = "s2-located"
+DEFAULT_STUFF_RATES = "overall"
 
 
 class LeagueRates(NamedTuple):
