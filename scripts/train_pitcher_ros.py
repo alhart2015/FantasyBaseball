@@ -19,6 +19,18 @@ appearances (model.DEFAULT_SEQ), the appearance tokens
 and for the default stuff inputs (model.DEFAULT_STUFF), the stuff file
 (scripts/build_pitcher_stuff.py --features-file s2-located --run s2-located).
 --seq none drops only the sequence encoder (parks and the relative target stay on).
+--probes <run> adds the pitcher probe features (#492) from data/pitcher_ros/probes_<run>.parquet
+(scripts/build_pitcher_ros_probes.py --run <run>); off by default. Probes from a run
+pretrained on one half (--half) need --train-half for the other half.
+--finetune <run> joins the pitcher pretraining run's pitch encoder (model T for test
+season T) to the net and trains it on the projection loss (pitcher_ros/finetune.py,
+#492); needs data/pitcher_ros/pitch_tokens.parquet (build_hitter_ros_pitch_tokens.py
+--side pitcher), the token file the run was pretrained on. Off by default.
+--train-half 0|1 trains on that half of the pitchers only (pretrain.player_half); every
+test row is still predicted. A --finetune run pretrained on one half (--half) must be
+fine-tuned on the other: then the encoder has never read the pitchers it trains on.
+--finetune-cross <run> adds a run pretrained on the other half: every pitcher trains,
+each read by the encoder of the half he is not in (finetune.cross_encoders).
 
 Usage:
     python scripts/train_pitcher_ros.py --name 003-avg          # seeds 0-4, averaged
@@ -29,6 +41,11 @@ Usage:
     python scripts/train_pitcher_ros.py --name nostuff --stuff none   # no stuff inputs
     python scripts/train_pitcher_ros.py --name proj-2027 --test-seasons 2027 --predict-only
     python scripts/train_pitcher_ros.py --name allstuff --stuff-rates all   # all 60
+    python scripts/train_pitcher_ros.py --name probes --probes q001   # + probe features
+    python scripts/train_pitcher_ros.py --name ft --finetune q001 --micro-batch 256
+    python scripts/train_pitcher_ros.py --name ftB --finetune q002 --micro-batch 256 --train-half 1
+    python scripts/train_pitcher_ros.py --name ftX --finetune q002 --finetune-cross q003 \
+        --micro-batch 256
     python scripts/train_pitcher_ros.py --name 001-plain --overwrite
 """
 
@@ -47,10 +64,26 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import league_denominators, unplayed_seasons
-from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS, device
+from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS, build_model, device
+from fantasy_baseball.hitter_ros.pitch_tokens import recorded_token_options, token_side
+from fantasy_baseball.hitter_ros.pretrain import (
+    PitchStore,
+    player_half,
+    run_token_options,
+    tokens_fingerprint,
+)
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
+from fantasy_baseball.pitcher_ros.finetune import (
+    FinetuneBatcher,
+    FinetuneConfig,
+    PretrainRun,
+    check_cross,
+    check_length,
+    cross_encoders,
+    model_maker,
+)
 from fantasy_baseball.pitcher_ros.model import (
     DEFAULT_ERA_PIECES,
     DEFAULT_PARKS,
@@ -68,12 +101,15 @@ from fantasy_baseball.pitcher_ros.model import (
     net_config,
 )
 from fantasy_baseball.pitcher_ros.parks import load_park_inputs
+from fantasy_baseball.pitcher_ros.probes import load_probe_inputs
 from fantasy_baseball.pitcher_ros.sequence import TOKEN_FEATURES, TOKEN_ORDER
 from fantasy_baseball.pitcher_ros.stats import load_games
 from fantasy_baseball.pitcher_ros.stuff_features import STUFF_RATE_SETS, load_stuff_inputs
 
 TABLE = PROJECT_ROOT / "data" / "pitcher_ros" / "table.parquet"
 TOKENS = PROJECT_ROOT / "data" / "pitcher_ros" / "app_tokens.parquet"
+PITCH_TOKENS = PROJECT_ROOT / "data" / "pitcher_ros" / "pitch_tokens.parquet"
+PRETRAIN = PROJECT_ROOT / "data" / "pitcher_ros" / "pretrain"
 STORE = PROJECT_ROOT / "data" / "pitch_data"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 LEAGUE = PROJECT_ROOT / "config" / "league.yaml"
@@ -155,6 +191,52 @@ def main() -> int:
         help="which stuff rates to read (stuff_features.STUFF_RATE_SETS; "
         "model.DEFAULT_STUFF_RATES)",
     )
+    parser.add_argument(
+        "--probes",
+        default="none",
+        help="probe features from data/pitcher_ros/probes_<run>.parquet (build them with "
+        "scripts/build_pitcher_ros_probes.py --run <run>; none = off)",
+    )
+    d_ft = FinetuneConfig(run="")
+    parser.add_argument(
+        "--finetune",
+        default="none",
+        help="pitcher pretraining run whose encoder joins the net and is fine-tuned "
+        "(data/pitcher_ros/pretrain/<run>; none = off)",
+    )
+    parser.add_argument(
+        "--finetune-len",
+        type=int,
+        default=d_ft.length,
+        help="pitches of history each row's encoder reads",
+    )
+    parser.add_argument(
+        "--finetune-lr-scale",
+        type=float,
+        default=d_ft.lr_scale,
+        help="the encoder's learning rate as a share of --lr's",
+    )
+    parser.add_argument(
+        "--finetune-dim", type=int, default=d_ft.out_dim, help="encoder summary width"
+    )
+    parser.add_argument(
+        "--finetune-cross",
+        help="a run pretrained on the other half of the pitchers than --finetune's: "
+        "cross-fit, every pitcher read by the encoder that never saw him",
+    )
+    parser.add_argument(
+        "--micro-batch",
+        type=int,
+        default=0,
+        help="rows per forward pass within a batch (0 = the whole batch); "
+        "fine-tuning needs one, e.g. 256",
+    )
+    parser.add_argument(
+        "--train-half",
+        type=int,
+        choices=(0, 1),
+        help="train on this half of the pitchers only (pretrain.player_half; default all)",
+    )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
     parser.add_argument(
         "--predict-only",
@@ -180,9 +262,64 @@ def main() -> int:
             seq_dim=args.seq_dim,
             seq_layers=args.seq_layers,
             parks=args.parks,
+            micro_batch=args.micro_batch,
         )
         for seed in seeds
     }
+    finetune = pretrain_run = cross_run = None
+    if args.finetune_cross is not None and args.finetune == "none":
+        parser.error("--finetune-cross needs --finetune")
+    if args.finetune != "none":
+        if args.seq == "none":
+            parser.error("--finetune joins the appearance encoder; it needs --seq")
+        if args.micro_batch == 0:
+            parser.error("--finetune needs --micro-batch (e.g. 256): a whole batch won't fit")
+        try:
+            finetune = FinetuneConfig(
+                run=args.finetune,
+                length=args.finetune_len,
+                lr_scale=args.finetune_lr_scale,
+                out_dim=args.finetune_dim,
+                cross=args.finetune_cross,
+            )
+            pretrain_run = PretrainRun(PRETRAIN, args.finetune)
+            check_length(finetune, pretrain_run)
+            if args.finetune_cross is not None:
+                cross_run = PretrainRun(PRETRAIN, args.finetune_cross)
+                check_cross(pretrain_run, cross_run)
+        except ValueError as err:
+            parser.error(f"--finetune: {err}")
+        encoder_half = pretrain_run.meta.get("half")
+        if cross_run is not None:
+            if args.train_half is not None:
+                parser.error("--finetune-cross trains every pitcher; drop --train-half")
+        elif encoder_half is not None and args.train_half != 1 - encoder_half:
+            # Training on pitchers the encoder read would bring back the leak the split is for.
+            parser.error(
+                f"--finetune {args.finetune} was pretrained on half {encoder_half}: "
+                f"pass --train-half {1 - encoder_half} (or cross-fit, --finetune-cross)"
+            )
+        for r in (pretrain_run, cross_run):
+            if r is None:
+                continue
+            missing = [s for s in seasons if s not in r.meta["seasons"]]
+            if missing:
+                parser.error(f"pretraining run {r.dir.name} has no model for {missing}")
+        if not PITCH_TOKENS.exists():
+            parser.error(
+                f"{PITCH_TOKENS} is missing; run scripts/build_hitter_ros_pitch_tokens.py "
+                "--side pitcher"
+            )
+        # The fingerprint (checked once the file is read) can't tell the sides apart.
+        recorded = recorded_token_options(PITCH_TOKENS)
+        if token_side(recorded) != "pitcher":
+            parser.error(f"{PITCH_TOKENS} holds {token_side(recorded)}-side tokens")
+        for r in (pretrain_run, cross_run):
+            if r is not None and run_token_options(r.meta) != recorded:
+                parser.error(
+                    f"{PITCH_TOKENS} was built with {recorded}; {r.dir.name} was pretrained "
+                    f"on {run_token_options(r.meta)}"
+                )
     table = pd.read_parquet(args.table)
     try:
         check_week_zero(table)
@@ -197,6 +334,9 @@ def main() -> int:
     unplayed = unplayed_seasons(table, seasons, count="ros_bf")
     if unplayed and not args.predict_only:
         parser.error(f"no games played yet in {unplayed} to score; add --predict-only")
+    train_on = None
+    if args.train_half is not None:
+        train_on = pd.Series(player_half(table["player_id"]) == args.train_half, index=table.index)
     league = league_rates(table) if args.relative_target != "none" else None
     if league is not None:
         # Checked here, before an old run of this name is deleted (fit_season checks too).
@@ -224,6 +364,21 @@ def main() -> int:
             parser.error(str(err))
         x = pd.concat([x, stuff_inputs], axis=1)
         logging.info("added %d stuff inputs (%s)", stuff_inputs.shape[1], args.stuff)
+    probes_build = None
+    if args.probes != "none":
+        try:
+            probe_inputs, probes_build = load_probe_inputs(table, args.table.parent, args.probes)
+        except ValueError as err:
+            parser.error(str(err))
+        probe_half = probes_build.get("half")
+        if probe_half is not None and args.train_half != 1 - probe_half:
+            # As --finetune: training on pitchers the encoder read brings the leak back.
+            parser.error(
+                f"probes_{args.probes} came from a run pretrained on half {probe_half}: "
+                f"pass --train-half {1 - probe_half}"
+            )
+        x = pd.concat([x, probe_inputs], axis=1)
+        logging.info("added %d probe inputs (%s)", probe_inputs.shape[1], args.probes)
     y, w = answers(table, args.per_bf_weight, era_pieces=args.era_pieces)
     games = load_games(STORE)
     if stuff_build is not None:
@@ -236,6 +391,17 @@ def main() -> int:
                 f"games through {games['game_date'].max().date()}; rerun "
                 "scripts/build_pitcher_stuff.py --build, then --features-file "
                 f"{args.stuff} --run <stuff run>"
+            )
+    if probes_build is not None:
+        # Probes read from tokens older than the store would leave a row's newest pitches
+        # out of its history.
+        through = probes_build.get("pitches_through")
+        if through is None or pd.Timestamp(str(through)) < games["game_date"].max():
+            parser.error(
+                f"probes_{args.probes}.parquet read pitches through {through}, the store has "
+                f"games through {games['game_date'].max().date()}; rerun "
+                "scripts/build_hitter_ros_pitch_tokens.py --side pitcher, pretrain, and "
+                f"scripts/build_pitcher_ros_probes.py --run {args.probes}"
             )
     batcher = None
     if args.seq != "none":
@@ -255,6 +421,24 @@ def main() -> int:
             features=TOKEN_FEATURES,
             order=TOKEN_ORDER,
         )
+    pitch_store = None
+    if finetune is not None and pretrain_run is not None and batcher is not None:
+        pitch_tokens = pd.read_parquet(PITCH_TOKENS)
+        if tokens_fingerprint(pitch_tokens) != pretrain_run.meta["tokens"]:
+            parser.error(f"{PITCH_TOKENS} is not the token file {args.finetune} was pretrained on")
+        # As the appearance tokens: an older file would leave a row's newest pitches out.
+        if pd.to_datetime(pitch_tokens["game_date"]).max() < games["game_date"].max():
+            parser.error(
+                f"{PITCH_TOKENS} is older than {STORE}; rebuild it, pretrain a new run and "
+                "fine-tune that"
+            )
+        # In the precision the run was pretrained in (check_cross: both runs alike).
+        pitch_store = PitchStore(pitch_tokens, device(), pretrain_run.dtype)
+        del pitch_tokens
+        encoder = (
+            cross_encoders(table["player_id"], pretrain_run) if cross_run is not None else None
+        )
+        batcher = FinetuneBatcher(batcher, pitch_store, table, finetune.length, encoder)
     # Everything has loaded: only now clear an old run, so a failed start leaves it.
     if run.exists():
         shutil.rmtree(run)
@@ -266,6 +450,9 @@ def main() -> int:
         "parks_build": parks_build,
         "stuff_build": stuff_build,
         "stuff_rates": args.stuff_rates if args.stuff != "none" else None,
+        "probes_build": probes_build,
+        "finetune": finetune.to_dict() if finetune is not None else None,
+        "train_half": args.train_half,
         "era_pieces": args.era_pieces,
     }
     (run / "config.json").write_text(json.dumps(settings, indent=2))
@@ -275,7 +462,14 @@ def main() -> int:
         parts = []
         for season in seasons:
             logging.info("seed %s, test season %s", seed, season)
-            preds, info = fit_season(table, x, y, w, season, config, league, batcher)
+            make = (
+                model_maker(pretrain_run, season, finetune, device(), cross_run)
+                if finetune is not None and pretrain_run is not None
+                else build_model
+            )
+            preds, info = fit_season(
+                table, x, y, w, season, config, league, batcher, make, train_on
+            )
             parts.append(preds)
             infos.append({"seed": seed, **info})
         seed_preds = pd.concat(parts, ignore_index=True)

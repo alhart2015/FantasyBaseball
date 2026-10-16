@@ -203,6 +203,18 @@ def tokens_fingerprint(tokens: pd.DataFrame) -> dict[str, Any]:
     }
 
 
+def player_half(player_ids: np.ndarray | pd.Series) -> np.ndarray:
+    """Each player's half (0 or 1) of a fixed random split of the players (#492).
+
+    A run pretrained on one half's pitches only (``pretrain_hitter_ros.py --half``) has
+    never read the other half's: a net fine-tuned on the other half's rows can't learn
+    to lean on what the encoder memorized of their futures. A multiplicative hash of the
+    id, so the split is the same in every script and unrelated to when ids were issued.
+    """
+    ids = np.asarray(player_ids).astype(np.uint64)
+    return ((ids * np.uint64(0x9E3779B97F4A7C15)) >> np.uint64(63)).astype(np.int8)
+
+
 def run_token_options(run_meta: dict[str, Any]) -> dict[str, Any]:
     """The token build options a pretraining run recorded (``run.json``). Runs from
     before #433 recorded none; they were all pretrained on Savant-zone tokens."""
