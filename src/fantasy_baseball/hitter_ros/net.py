@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import copy
 import logging
+from collections.abc import Callable
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -639,6 +640,7 @@ def train(
     target_stats: list[str] | None = None,
     target_weights: np.ndarray | None = None,
     offset: np.ndarray | None = None,
+    make_model: Callable[[int, int, NetConfig, int | None], nn.Module] = build_model,
 ) -> TrainResult:
     """Fit the net. ``y`` is standardized targets, except the ``count_loss`` targets,
     which are rates (the net predicts their log), and the ``avg_loss`` binomial targets,
@@ -651,6 +653,11 @@ def train(
     ``w`` is rescaled here by ``loss_weights`` (``season_time`` is each row's
     ``frac_season_left``). With ``config.heads > 1`` the last column of ``x`` is each
     row's head index.
+
+    ``make_model`` builds the net (``build_model``'s arguments; e.g. the pitcher net
+    with a pretrained pitch encoder, #492). A net with an ``optimizer_groups(lr)``
+    method sets its own parameter groups (e.g. a lower learning rate for a pretrained
+    part); otherwise every parameter learns at ``config.lr``.
     """
     if config.heads > 1 and not np.isin(x[:, -1], np.arange(config.heads)).all():
         # A missing head column would otherwise be read silently: .long() truncates the
@@ -687,11 +694,13 @@ def train(
     if rows is not None:
         rt = torch.as_tensor(rows[~val_mask], dtype=torch.long, device=dev)
         rv = torch.as_tensor(rows[val_mask], dtype=torch.long, device=dev)
-    model = build_model(
+    model = make_model(
         x.shape[1], y.shape[1], config, None if batcher is None else batcher.n_features
     ).to(dev)
     count = count_loss(config, y[~val_mask], w[~val_mask], dev, target_stats, target_weights)
-    opt = torch.optim.AdamW(model.parameters(), lr=config.lr, weight_decay=config.weight_decay)
+    groups = getattr(model, "optimizer_groups", None)
+    params = groups(config.lr) if groups is not None else model.parameters()
+    opt = torch.optim.AdamW(params, lr=config.lr, weight_decay=config.weight_decay)
     gen = torch.Generator(device=dev).manual_seed(config.seed)
 
     best = (float("inf"), -1, copy.deepcopy(model.state_dict()))

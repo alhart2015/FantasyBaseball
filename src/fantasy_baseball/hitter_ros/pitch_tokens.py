@@ -1,6 +1,7 @@
 """Pitch tokens for self-supervised pretraining (#415, stage 2 of the sequence track).
 
-One row per regular-season pitch a hitter saw, in order, split into two parts:
+One row per regular-season pitch a hitter saw (or, with ``side="pitcher"``, a pitcher
+threw: #492), in order, split into two parts:
 
 * **Context** -- what is known before the hitter decides: pitch type, speed, movement,
   spin, location (relative to the hitter and his strike zone), count, outs, runners,
@@ -14,9 +15,12 @@ Movement is mirrored for left-handed pitchers and location for left-handed hitte
 "arm side" and "inside" mean the same thing for everyone. Missing tracking numbers are
 0 with a flag.
 
-``gap`` is log1p(days since the hitter's previous pitch) / 5: a purely backward-looking
+``gap`` is log1p(days since the player's previous pitch) / 5: a purely backward-looking
 sense of time (long layoffs, new seasons) that is the same in pretraining and when the
-encoder later reads a hitter's history before an as-of date.
+encoder later reads a player's history before an as-of date.
+
+The token columns are the same for both sides; only whose pitches make up a sequence
+(``player_id``) differs, so the pretraining code (``pretrain.py``) serves both.
 """
 
 from __future__ import annotations
@@ -157,20 +161,27 @@ def outcome_index(description: pd.Series, bb_class: pd.Series, pitch_type: pd.Se
     return idx
 
 
-def build_pitch_tokens(store: Path, zone: str = "statcast") -> pd.DataFrame:
-    """One row per regular-season pitch, sorted by hitter, then game, PA and pitch.
+# Whose pitches a token sequence follows -> the store's column for that player.
+SIDES = {"hitter": "batter", "pitcher": "pitcher"}
+
+
+def build_pitch_tokens(store: Path, zone: str = "statcast", side: str = "hitter") -> pd.DataFrame:
+    """One row per regular-season pitch, sorted by player (``side``: the hitter who saw
+    it or the pitcher who threw it), then game, PA and pitch.
 
     Built a season at a time to keep memory down; ``gap`` is recomputed over the whole
     frame at the end so a hitter's first pitch of a season sees the offseason. ``zone``:
     see :func:`tokens_from_pitches`.
     """
+    if side not in SIDES:
+        raise ValueError(f"unknown side {side!r}; expected one of {sorted(SIDES)}")
     conn = connect(store)
     try:
         seasons = [
             int(r[0])
             for r in conn.execute("SELECT DISTINCT season FROM pitches ORDER BY 1").fetchall()
         ]
-        parts = [tokens_from_pitches(_season_pitches(conn, s), zone) for s in seasons]
+        parts = [tokens_from_pitches(_season_pitches(conn, s, side), zone) for s in seasons]
     finally:
         conn.close()
     tokens = pd.concat(parts, ignore_index=True)
@@ -182,10 +193,10 @@ def build_pitch_tokens(store: Path, zone: str = "statcast") -> pd.DataFrame:
     return tokens
 
 
-def _season_pitches(conn: duckdb.DuckDBPyConnection, season: int) -> pd.DataFrame:
+def _season_pitches(conn: duckdb.DuckDBPyConnection, season: int, side: str) -> pd.DataFrame:
     return conn.execute(
-        """
-            SELECT batter AS player_id, CAST(game_date AS DATE) AS game_date,
+        f"""
+            SELECT {SIDES[side]} AS player_id, CAST(game_date AS DATE) AS game_date,
                    CAST(season AS INTEGER) AS season, game_pk, at_bat_number, pitch_number,
                    pitch_type, release_speed, pfx_x, pfx_z, release_spin_rate,
                    plate_x, plate_z, sz_top, sz_bot, balls, strikes, outs_when_up,
@@ -200,7 +211,7 @@ def _season_pitches(conn: duckdb.DuckDBPyConnection, season: int) -> pd.DataFram
 
 
 def _gap(player: np.ndarray, dates: pd.Series) -> np.ndarray:
-    """log1p(days since the same hitter's previous pitch) / 5; 0 for his first pitch."""
+    """log1p(days since the same player's previous pitch) / 5; 0 for his first pitch."""
     days = pd.to_datetime(dates).to_numpy().astype("datetime64[D]").astype(np.int64)
     prev = np.r_[days[:1], days[:-1]]
     first = np.r_[True, player[1:] != player[:-1]]

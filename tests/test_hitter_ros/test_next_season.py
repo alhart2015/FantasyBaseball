@@ -96,6 +96,7 @@ def test_pretrain_add_keeps_the_run_settings(tmp_path, monkeypatch, capsys):
         (["--add", "--seasons", "2026"], "already has [2026]"),
         (["--add", "--seasons", "2027", "--lr", str(lr * 2)], "drop lr"),
         (["--add", "--seasons", "2027", "--zone", "fixed"], "drop zone"),
+        (["--add", "--seasons", "2027", "--half", "1"], "drop half"),
         (["--add", "--seasons", "2027", "--overwrite"], "can't also --overwrite"),
     ):
         assert message in _refused(script, monkeypatch, capsys, "--name", "p9", *argv), argv

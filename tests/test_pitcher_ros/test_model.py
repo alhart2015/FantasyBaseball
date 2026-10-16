@@ -347,3 +347,18 @@ def _row_index(table, player, season, week):
     ]
     assert len(match) == 1
     return match[0]
+
+
+def test_train_on_limits_the_training_rows_not_the_predictions(table):
+    x, (y, w) = input_frame(table), answers(table)
+    config = plain_config(hidden=[8], max_epochs=2, patience=1, val_frac=0.34)
+    keep = pd.Series(table["player_id"] != RELIEVER, index=table.index)
+    preds, info = fit_season(table, x, y, w, 2025, config, train_on=keep)
+    eligible = table["season_complete"] & (table["season"] < 2025) & (w.sum(axis=1) > 0)
+    assert info["train_rows"] + info["val_rows"] == (eligible & keep).sum()
+    assert (eligible & ~keep).any()  # the reliever had rows it could have trained on
+    # Every test row is predicted, the reliever's included.
+    assert len(preds) == (table["season"] == 2025).sum()
+    assert RELIEVER in set(preds["player_id"])
+    with pytest.raises(ValueError, match="one entry per table row"):
+        fit_season(table, x, y, w, 2025, config, train_on=keep.iloc[1:])

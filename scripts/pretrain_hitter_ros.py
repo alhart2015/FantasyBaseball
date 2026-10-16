@@ -8,7 +8,8 @@ data/hitter_ros/pretrain/<name>/<S>/:
     model.pt       PretrainModel weights (encoder + prediction head)
     metrics.json   config, train/val CE per epoch, count-only baseline CE, minutes
 
-and <name>/run.json listing the seasons and config. With --overwrite the whole <name>
+and <name>/run.json listing the seasons and config. With --side pitcher, the sequences
+are the pitches each pitcher threw (#492): tokens and runs under data/pitcher_ros/. With --overwrite the whole <name>
 folder is replaced, but only after the inputs are found; each season is written to a
 temporary folder and moved into place when it finishes, so a crash never leaves a
 half-written season behind. With --add, --seasons are added to an existing run with its
@@ -16,13 +17,18 @@ own settings and strike zone, and only if the token file is exactly the one it w
 pretrained on (the same fingerprint: e.g. next season's model for a run pretrained after
 the last season was complete). A run pretrained on an older token file can't be
 extended: its seasons' models would have read different pitches. Pretrain a new run.
+With --half 0|1, only that half of the players' pitches are read (``pretrain.player_half``;
+recorded in run.json): a net fine-tuned on the other half's rows never sees players the
+encoder memorized (#492). --add keeps the run's half.
 
-Setup (once): python scripts/build_hitter_ros_pitch_tokens.py
+Setup (once): python scripts/build_hitter_ros_pitch_tokens.py [--side pitcher]
 Usage:
     python scripts/pretrain_hitter_ros.py --name p002
     python scripts/pretrain_hitter_ros.py --name smoke --seasons 2026 --max-epochs 1
     python scripts/pretrain_hitter_ros.py --name p005 --zone fixed
     python scripts/pretrain_hitter_ros.py --name p004 --add --seasons 2027
+    python scripts/pretrain_hitter_ros.py --side pitcher --name q001 --seasons 2016 2026
+    python scripts/pretrain_hitter_ros.py --side pitcher --name q002 --half 0 --seasons 2022 2026
 """
 
 from __future__ import annotations
@@ -44,10 +50,11 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.features import ZONES
 from fantasy_baseball.hitter_ros.net import device
-from fantasy_baseball.hitter_ros.pitch_tokens import recorded_token_options, token_path
+from fantasy_baseball.hitter_ros.pitch_tokens import SIDES, recorded_token_options, token_path
 from fantasy_baseball.hitter_ros.pretrain import (
     PitchStore,
     PretrainConfig,
+    player_half,
     pretrain,
     run_token_options,
     tokens_fingerprint,
@@ -55,6 +62,9 @@ from fantasy_baseball.hitter_ros.pretrain import (
 
 TOKEN_DIR = PROJECT_ROOT / "data" / "hitter_ros"
 PRETRAIN = PROJECT_ROOT / "data" / "hitter_ros" / "pretrain"
+# --side pitcher (#492): its token file, and where its pretraining runs go.
+PITCHER_TOKEN_DIR = PROJECT_ROOT / "data" / "pitcher_ros"
+PITCHER_PRETRAIN = PROJECT_ROOT / "data" / "pitcher_ros" / "pretrain"
 
 logger = logging.getLogger("pretrain_hitter_ros")
 
@@ -76,6 +86,12 @@ def main() -> int:
     d = PretrainConfig()
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--name", required=True)
+    parser.add_argument(
+        "--side",
+        choices=sorted(SIDES),
+        default="hitter",
+        help="whose pitch sequences to pretrain on (build_hitter_ros_pitch_tokens --side)",
+    )
     parser.add_argument(
         "--seasons",
         type=int,
@@ -99,6 +115,13 @@ def main() -> int:
         "default statcast, or with --add the run's",
     )
     parser.add_argument("--no-amp", action="store_true", help="float32 instead of bfloat16")
+    parser.add_argument(
+        "--half",
+        type=int,
+        choices=(0, 1),
+        help="read only this half of the players' pitches (pretrain.player_half); "
+        "default all, or with --add the run's",
+    )
     parser.add_argument("--overwrite", action="store_true")
     parser.add_argument(
         "--add",
@@ -108,7 +131,9 @@ def main() -> int:
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 
-    out_root = PRETRAIN / args.name
+    pitcher = args.side == "pitcher"
+    token_dir = PITCHER_TOKEN_DIR if pitcher else TOKEN_DIR
+    out_root = (PITCHER_PRETRAIN if pitcher else PRETRAIN) / args.name
     settings = (*_INT_FIELDS, *_FLOAT_FIELDS)
     added_to: dict | None = None
     zone = args.zone or "statcast"
@@ -136,6 +161,8 @@ def main() -> int:
         zone = run_token_options(added_to)["zone"]
         if args.zone is not None and args.zone != zone:
             changed.append("zone")
+        if args.half is not None and args.half != added_to.get("half"):
+            changed.append("half")
         if changed:
             parser.error(f"--add uses the run's own settings; drop {', '.join(changed)}")
         already = sorted(set(args.seasons) & set(added_to["seasons"]))
@@ -162,10 +189,11 @@ def main() -> int:
             config = PretrainConfig(**values, amp=not args.no_amp)
     except (TypeError, ValueError) as err:
         parser.error(str(err))
-    tokens_path = token_path(TOKEN_DIR, zone)
+    tokens_path = token_path(token_dir, zone)
     if not tokens_path.exists():
         parser.error(
-            f"{tokens_path} is missing; run scripts/build_hitter_ros_pitch_tokens.py --zone {zone}"
+            f"{tokens_path} is missing; run scripts/build_hitter_ros_pitch_tokens.py "
+            f"--zone {zone} --side {args.side}"
         )
     # Checked before the (large) token file is read.
     if added_to is not None and run_token_options(added_to) != recorded_token_options(tokens_path):
@@ -179,8 +207,14 @@ def main() -> int:
     too_early = [s for s in seasons if s <= all_seasons[0]]
     if too_early:
         parser.error(f"no earlier season to pretrain on for {too_early}")
-    store = PitchStore(tokens, device(), torch.bfloat16 if config.amp else torch.float32)
+    # The whole file's fingerprint: what fine-tuning feeds the run's models is checked
+    # against it.
     fingerprint = tokens_fingerprint(tokens)
+    half = added_to.get("half") if added_to is not None else args.half
+    if half is not None:
+        tokens = tokens[player_half(tokens["player_id"]) == half].reset_index(drop=True)
+        logger.info("half %d: %d players' pitches", half, tokens["player_id"].nunique())
+    store = PitchStore(tokens, device(), torch.bfloat16 if config.amp else torch.float32)
     del tokens
 
     if added_to is not None:
@@ -200,6 +234,7 @@ def main() -> int:
             "config": config.to_dict(),
             "tokens": fingerprint,
             "token_options": recorded_token_options(tokens_path),
+            "half": half,
             "seasons": [],
             "complete": False,
         }

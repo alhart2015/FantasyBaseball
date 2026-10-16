@@ -16,13 +16,21 @@ scripts/train_pitcher_ros.py, as extra inputs and outputs: ERA's pieces
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import asdict, replace
 from typing import Any, NamedTuple
 
 import numpy as np
 import pandas as pd
 
-from fantasy_baseball.hitter_ros.net import PIECE_LOSS_WEIGHT, NetConfig, predict, train
+from fantasy_baseball.hitter_ros.net import (
+    EVAL_BATCH,
+    PIECE_LOSS_WEIGHT,
+    NetConfig,
+    build_model,
+    predict,
+    train,
+)
 from fantasy_baseball.hitter_ros.parks import PARK_FEATURES
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros.features import (
@@ -223,7 +231,9 @@ def fit_season(
     test_season: int,
     config: NetConfig,
     league: LeagueRates | None = None,
-    batcher: SequenceBatcher | None = None,
+    batcher: SequenceBatcher | Any | None = None,
+    make_model: Callable[..., Any] = build_model,
+    train_on: pd.Series | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Train on complete seasons before ``test_season``; predict every row of it.
 
@@ -253,7 +263,14 @@ def fit_season(
 
     ``config.parks``: "none", or the park file whose inputs (``pitcher_ros.parks``)
     ``x_all`` carries; refused when the two disagree, so a run is never credited to
-    park inputs it didn't have (or the reverse)."""
+    park inputs it didn't have (or the reverse).
+
+    ``make_model``: as ``hitter_ros.net.train``'s, e.g. ``finetune.model_maker`` (with a
+    ``finetune.FinetuneBatcher``) to fine-tune a pretrained pitch encoder (#492).
+
+    ``train_on``: a boolean per ``table`` row; only rows marked True can train (e.g. one
+    half of the pitchers, ``pretrain.player_half``). Every test-season row is still
+    predicted."""
     check_plain(config)
     check_week_zero(table)
     has_parks = set(PARK_FEATURES) <= set(x_all.columns)
@@ -292,6 +309,10 @@ def fit_season(
     train_rows = (
         table["season_complete"] & (table["season"] < test_season) & (w_all.sum(axis=1) > 0)
     )
+    if train_on is not None:
+        if not train_on.index.equals(table.index):
+            raise ValueError("train_on must have one entry per table row, on its index")
+        train_rows &= train_on.astype(bool)
     val_mask, scaler = holdout_and_scaler(table, x_all, train_rows, config.val_frac, config.seed)
 
     y_train, w_train = y_all.loc[train_rows, cols], w_all.loc[train_rows, cols]
@@ -314,6 +335,7 @@ def fit_season(
         target_weights=target_weights,
         rows=positions[train_rows.to_numpy()] if batcher else None,
         batcher=batcher,
+        make_model=make_model,
     )
     test_rows = table["season"] == test_season
     z = predict(
@@ -321,6 +343,9 @@ def fit_season(
         scaler.transform(x_all[test_rows]),
         rows=positions[test_rows.to_numpy()] if batcher else None,
         batcher=batcher,
+        # As training's own evaluation: a 4096-row chunk of the fine-tuned net's
+        # 1023-pitch histories leaves ~29 GB reserved, and the next season spills (#492).
+        chunk=config.micro_batch or EVAL_BATCH,
         amp=config.amp,
     )
     preds = pd.DataFrame(
