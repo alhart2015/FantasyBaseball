@@ -47,6 +47,7 @@ from fantasy_baseball.hitter_ros.pretrain import (
     PretrainConfig,
     PretrainModel,
     player_half,
+    run_token_options,
 )
 from fantasy_baseball.hitter_ros.sequence import (
     GRUEncoder,
@@ -85,7 +86,18 @@ class PretrainRun:
         if not meta_path.exists():
             raise ValueError(f"{self.dir} has no run.json; is the pretraining run name right?")
         self.meta: dict[str, Any] = json.loads(meta_path.read_text())
-        self.config = PretrainConfig(**self.meta["config"])
+        try:
+            self.config = PretrainConfig(**self.meta["config"])
+        except TypeError as err:  # a setting added to or dropped from PretrainConfig since
+            raise ValueError(
+                f"{self.dir}'s settings don't match today's PretrainConfig ({err}); "
+                "pretrain a new run"
+            ) from err
+
+    @property
+    def dtype(self) -> torch.dtype:
+        """The precision the run read pitches in: what fine-tuning must feed it."""
+        return torch.bfloat16 if self.config.amp else torch.float32
 
     def encoder(self, season: int, device: torch.device) -> PitchEncoder:
         """Model ``season``'s encoder (pretrained on seasons before it), on ``device``."""
@@ -266,11 +278,16 @@ def cross_encoders(player_ids: np.ndarray | pd.Series, run: PretrainRun) -> np.n
 
 
 def check_cross(run: PretrainRun, cross: PretrainRun) -> None:
-    """Two runs that can cross-fit: opposite halves, one token file, one window."""
+    """Two runs that can cross-fit: opposite halves, one token file, one window, one
+    precision (the pitches are read once, for both)."""
     halves = (run.meta.get("half"), cross.meta.get("half"))
     if None in halves or halves[0] == halves[1]:
         raise ValueError(f"the runs must be pretrained on opposite halves; got {halves}")
-    if run.meta["tokens"] != cross.meta["tokens"]:
+    if run.meta["tokens"] != cross.meta["tokens"] or run_token_options(
+        run.meta
+    ) != run_token_options(cross.meta):
         raise ValueError("the runs were pretrained on different token files")
     if run.config.window != cross.config.window:
         raise ValueError("the runs have different pretraining windows")
+    if run.config.amp != cross.config.amp:
+        raise ValueError("one run was pretrained in bfloat16 (amp), the other not")

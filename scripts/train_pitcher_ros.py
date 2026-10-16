@@ -20,7 +20,8 @@ and for the default stuff inputs (model.DEFAULT_STUFF), the stuff file
 (scripts/build_pitcher_stuff.py --features-file s2-located --run s2-located).
 --seq none drops only the sequence encoder (parks and the relative target stay on).
 --probes <run> adds the pitcher probe features (#492) from data/pitcher_ros/probes_<run>.parquet
-(scripts/build_pitcher_ros_probes.py --run <run>); off by default.
+(scripts/build_pitcher_ros_probes.py --run <run>); off by default. Probes from a run
+pretrained on one half (--half) need --train-half for the other half.
 --finetune <run> joins the pitcher pretraining run's pitch encoder (model T for test
 season T) to the net and trains it on the projection loss (pitcher_ros/finetune.py,
 #492); needs data/pitcher_ros/pitch_tokens.parquet (build_hitter_ros_pitch_tokens.py
@@ -64,7 +65,13 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.backtest import league_denominators, unplayed_seasons
 from fantasy_baseball.hitter_ros.net import RELATIVE_TARGETS, build_model, device
-from fantasy_baseball.hitter_ros.pretrain import PitchStore, player_half, tokens_fingerprint
+from fantasy_baseball.hitter_ros.pitch_tokens import recorded_token_options, token_side
+from fantasy_baseball.hitter_ros.pretrain import (
+    PitchStore,
+    player_half,
+    run_token_options,
+    tokens_fingerprint,
+)
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros import backtest
 from fantasy_baseball.pitcher_ros.features import PER_BF_WEIGHTS, answers, input_frame
@@ -303,6 +310,16 @@ def main() -> int:
                 f"{PITCH_TOKENS} is missing; run scripts/build_hitter_ros_pitch_tokens.py "
                 "--side pitcher"
             )
+        # The fingerprint (checked once the file is read) can't tell the sides apart.
+        recorded = recorded_token_options(PITCH_TOKENS)
+        if token_side(recorded) != "pitcher":
+            parser.error(f"{PITCH_TOKENS} holds {token_side(recorded)}-side tokens")
+        for r in (pretrain_run, cross_run):
+            if r is not None and run_token_options(r.meta) != recorded:
+                parser.error(
+                    f"{PITCH_TOKENS} was built with {recorded}; {r.dir.name} was pretrained "
+                    f"on {run_token_options(r.meta)}"
+                )
     table = pd.read_parquet(args.table)
     try:
         check_week_zero(table)
@@ -353,6 +370,13 @@ def main() -> int:
             probe_inputs, probes_build = load_probe_inputs(table, args.table.parent, args.probes)
         except ValueError as err:
             parser.error(str(err))
+        probe_half = probes_build.get("half")
+        if probe_half is not None and args.train_half != 1 - probe_half:
+            # As --finetune: training on pitchers the encoder read brings the leak back.
+            parser.error(
+                f"probes_{args.probes} came from a run pretrained on half {probe_half}: "
+                f"pass --train-half {1 - probe_half}"
+            )
         x = pd.concat([x, probe_inputs], axis=1)
         logging.info("added %d probe inputs (%s)", probe_inputs.shape[1], args.probes)
     y, w = answers(table, args.per_bf_weight, era_pieces=args.era_pieces)
@@ -408,7 +432,8 @@ def main() -> int:
                 f"{PITCH_TOKENS} is older than {STORE}; rebuild it, pretrain a new run and "
                 "fine-tune that"
             )
-        pitch_store = PitchStore(pitch_tokens, device())
+        # In the precision the run was pretrained in (check_cross: both runs alike).
+        pitch_store = PitchStore(pitch_tokens, device(), pretrain_run.dtype)
         del pitch_tokens
         encoder = (
             cross_encoders(table["player_id"], pretrain_run) if cross_run is not None else None

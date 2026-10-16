@@ -90,3 +90,16 @@ def test_players_split_into_two_fixed_halves():
     np.testing.assert_array_equal(player_half(ids[::-1]), half[::-1])
     # Neighbouring ids are not split by parity or by blocks.
     assert 0.3 < (half[1:] != half[:-1]).mean() < 0.7
+
+
+def test_the_side_is_recorded_so_the_two_files_are_told_apart():
+    from fantasy_baseball.hitter_ros.pitch_tokens import token_options, token_side
+
+    # Same pitches, same layout: only the recorded side tells a pitcher file from a hitter's.
+    assert token_options("statcast") == {"zone": "statcast"}  # hitter files, as before
+    pitcher = token_options("statcast", "pitcher")
+    assert pitcher != token_options("statcast")
+    assert token_side(pitcher) == "pitcher"
+    assert token_side(token_options("fixed")) == token_side({}) == "hitter"
+    with pytest.raises(ValueError, match="unknown side"):
+        token_options("statcast", "catcher")

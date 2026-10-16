@@ -50,7 +50,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.hitter_ros.features import ZONES
 from fantasy_baseball.hitter_ros.net import device
-from fantasy_baseball.hitter_ros.pitch_tokens import SIDES, recorded_token_options, token_path
+from fantasy_baseball.hitter_ros.pitch_tokens import (
+    SIDES,
+    recorded_token_options,
+    token_path,
+    token_side,
+)
 from fantasy_baseball.hitter_ros.pretrain import (
     PitchStore,
     PretrainConfig,
@@ -196,7 +201,10 @@ def main() -> int:
             f"--zone {zone} --side {args.side}"
         )
     # Checked before the (large) token file is read.
-    if added_to is not None and run_token_options(added_to) != recorded_token_options(tokens_path):
+    recorded = recorded_token_options(tokens_path)
+    if token_side(recorded) != args.side:
+        parser.error(f"{tokens_path} holds {token_side(recorded)}-side tokens, not {args.side}")
+    if added_to is not None and run_token_options(added_to) != recorded:
         parser.error(f"{tokens_path}'s build options differ from {args.name}'s")
     if added_to is None and out_root.exists() and not args.overwrite:
         parser.error(f"{out_root} exists; pick another --name or pass --overwrite")
@@ -233,7 +241,7 @@ def main() -> int:
         run_meta = {
             "config": config.to_dict(),
             "tokens": fingerprint,
-            "token_options": recorded_token_options(tokens_path),
+            "token_options": recorded,
             "half": half,
             "seasons": [],
             "complete": False,

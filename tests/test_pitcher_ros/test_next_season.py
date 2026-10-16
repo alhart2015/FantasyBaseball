@@ -132,3 +132,50 @@ def test_cross_fitting_trains_every_pitcher(store, tmp_path, monkeypatch, capsys
         with pytest.raises(SystemExit):
             _train(monkeypatch, store, tmp_path, *ft, *argv)
         assert message in capsys.readouterr().err, argv
+
+
+def test_probes_from_a_half_run_train_only_on_the_other_half(store, tmp_path, monkeypatch, capsys):
+    from fantasy_baseball.hitter_ros.features import ROW_KEYS
+    from fantasy_baseball.pitcher_ros.probes import PROBE_FEATURES, probe_path
+
+    table = pd.read_parquet(store / "table.parquet")
+    probes = table[[*ROW_KEYS, "as_of"]].assign(**dict.fromkeys(PROBE_FEATURES, 0.0))
+    path = probe_path(store, "h0")
+    probes.to_parquet(path)
+    path.with_suffix(".json").write_text(json.dumps({"pitches_through": "2030-01-01", "half": 0}))
+    for half in ([], ["--train-half", "0"]):
+        with pytest.raises(SystemExit):
+            _train(monkeypatch, store, tmp_path, "--test-seasons", "2025", "--probes", "h0", *half)
+        assert "pass --train-half 1" in capsys.readouterr().err, half
+    assert not (tmp_path / "runs" / "x").exists()
+
+
+def test_finetuning_reads_the_pitcher_token_file_its_run_was_pretrained_on(
+    store, tmp_path, monkeypatch, capsys
+):
+    pytest.importorskip("torch")
+    from fantasy_baseball.hitter_ros.pitch_tokens import token_options
+    from scripts import train_pitcher_ros
+    from tests.test_hitter_ros.test_pretrain import _small
+
+    run = tmp_path / "pretrain" / "q"
+    run.mkdir(parents=True)
+    meta = {"config": _small(window=8).to_dict(), "seasons": [2025], "tokens": {}}
+    meta["token_options"] = token_options("statcast", "pitcher")
+    (run / "run.json").write_text(json.dumps(meta))
+    monkeypatch.setattr(train_pitcher_ros, "PRETRAIN", tmp_path / "pretrain")
+    pitch_tokens = tmp_path / "pitch_tokens.parquet"
+    pitch_tokens.touch()  # its recorded options are checked before it is read
+    monkeypatch.setattr(train_pitcher_ros, "PITCH_TOKENS", pitch_tokens)
+    tokens = tmp_path / "tokens.parquet"
+    tokens.touch()
+    ft = ["--seq", "transformer", "--tokens", str(tokens), "--finetune", "q"]
+    ft += ["--finetune-len", "7", "--micro-batch", "4", "--test-seasons", "2025"]
+    for options, message in (
+        (token_options("statcast"), "holds hitter-side tokens"),
+        (token_options("fixed", "pitcher"), "q was pretrained on"),
+    ):
+        pitch_tokens.with_suffix(".json").write_text(json.dumps(options))
+        with pytest.raises(SystemExit):
+            _train(monkeypatch, store, tmp_path, *ft)
+        assert message in capsys.readouterr().err, options

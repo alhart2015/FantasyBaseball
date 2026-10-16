@@ -257,3 +257,27 @@ def test_the_cross_fitted_net_trains_every_pitcher_and_predicts(setup, cross_run
     preds, _ = fit_season(table, x, y, w, 2025, config, batcher=batcher, make_model=make)
     assert len(preds) == (table.season == 2025).sum()
     assert np.isfinite(preds[list(TARGETS)].to_numpy()).all()
+
+
+def test_a_cross_run_must_read_pitches_in_the_same_precision(tmp_path, cross_runs):
+    h0, _ = cross_runs
+    meta = {**h0.meta, "config": _small(window=LENGTH + 1, amp=True).to_dict(), "half": 1}
+    (tmp_path / "amp1").mkdir()
+    (tmp_path / "amp1" / "run.json").write_text(json.dumps(meta))
+    amp1 = PretrainRun(tmp_path, "amp1")
+    assert h0.dtype == torch.float32 and amp1.dtype == torch.bfloat16
+    with pytest.raises(ValueError, match="bfloat16"):
+        check_cross(h0, amp1)
+    side = {**meta, "config": h0.meta["config"], "token_options": {"zone": "fixed"}}
+    (tmp_path / "fixed1").mkdir()
+    (tmp_path / "fixed1" / "run.json").write_text(json.dumps(side))
+    with pytest.raises(ValueError, match="different token files"):
+        check_cross(h0, PretrainRun(tmp_path, "fixed1"))
+
+
+def test_a_run_with_other_settings_than_today_is_refused_plainly(tmp_path, cross_runs):
+    config = {**cross_runs[0].meta["config"], "retired": 1}  # a setting since dropped
+    (tmp_path / "old").mkdir()
+    (tmp_path / "old" / "run.json").write_text(json.dumps({"config": config}))
+    with pytest.raises(ValueError, match="pretrain a new run"):
+        PretrainRun(tmp_path, "old")

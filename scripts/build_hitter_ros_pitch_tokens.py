@@ -58,7 +58,7 @@ def main() -> int:
     out = token_path(OUT_DIRS[args.side], args.zone)
     out.parent.mkdir(parents=True, exist_ok=True)
     tokens.to_parquet(out, index=False)
-    out.with_suffix(".json").write_text(json.dumps(token_options(args.zone), indent=2))
+    out.with_suffix(".json").write_text(json.dumps(token_options(args.zone, args.side), indent=2))
     print(f"{len(tokens)} pitches, {tokens['player_id'].nunique()} {args.side}s -> {out}")
     print("\nseason  pitches")
     for season, n in tokens.groupby("season").size().items():

@@ -10,8 +10,10 @@ Writes data/pitcher_ros/probes_<run>.parquet: player_id, season, week, as_of + t
 features (with --seasons, probes_<run>_partial.parquet). Then train with:
     python scripts/train_pitcher_ros.py --probes <run> ...
 
-The token file must be the one the run was pretrained on, with Savant's strike zone:
-the probe pitches' heights (hitter_ros.probes.LOCATIONS) are in it.
+The token file must be the one the run was pretrained on, pitcher-side, with Savant's
+strike zone: the probe pitches' heights (hitter_ros.probes.LOCATIONS) are in it. A run
+pretrained on one half of the pitchers (--half) is recorded as such; train_pitcher_ros.py
+then trains only on the other half.
 
 Usage:
     python scripts/build_pitcher_ros_probes.py --run q001
@@ -81,9 +83,10 @@ def main() -> int:
         parser.error(
             f"{args.tokens} was built with {given}; {args.run} was pretrained on {trained_on}"
         )
-    if trained_on != token_options("statcast"):
+    if trained_on != token_options("statcast", "pitcher"):
         parser.error(
-            f"probe pitch heights are in Savant's strike zone; {args.run} has {trained_on}"
+            f"probes need pitcher-side tokens in Savant's strike zone (probe pitch heights "
+            f"are in it); {args.run} has {trained_on}"
         )
     table = pd.read_parquet(TABLE, columns=[*PROBE_KEYS, "as_of"])
     seasons = sorted(args.seasons or table["season"].unique())
@@ -152,6 +155,9 @@ def main() -> int:
         "run": args.run,
         "seasons": [int(s) for s in seasons],
         "tokens": run_meta["tokens"],
+        # A run pretrained on one half memorized those pitchers' futures: train_pitcher_ros
+        # trains on the other half only.
+        "half": run_meta.get("half"),
         "pitches_through": pitches_through,
     }
     path.with_suffix(".json").write_text(json.dumps(options, indent=2))

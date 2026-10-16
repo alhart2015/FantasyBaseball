@@ -125,9 +125,19 @@ def token_path(root: Path, zone: str) -> Path:
     return root / ("pitch_tokens.parquet" if zone == "statcast" else f"pitch_tokens_{zone}.parquet")
 
 
-def token_options(zone: str) -> dict[str, Any]:
-    """The build options a token file records (``<file>.json``): its strike zone."""
-    return zone_options(zone)
+def token_options(zone: str, side: str = "hitter") -> dict[str, Any]:
+    """The build options a token file records (``<file>.json``): its strike zone and, for
+    a pitcher-side file, its side (#492). The two sides hold the same pitches, so nothing
+    else tells them apart. Hitter-side files record no side, as before sides existed."""
+    if side not in SIDES:
+        raise ValueError(f"unknown side {side!r}; expected one of {sorted(SIDES)}")
+    return {**zone_options(zone), **({"side": side} if side != "hitter" else {})}
+
+
+def token_side(options: dict[str, Any]) -> str:
+    """The side recorded build options are for (:func:`token_options`)."""
+    side: str = options.get("side", "hitter")
+    return side
 
 
 def recorded_token_options(path: Path) -> dict[str, Any]:

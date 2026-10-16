@@ -152,3 +152,18 @@ def test_rescoring_refuses_an_unplayed_season(table_path, tmp_path, monkeypatch,
     with pytest.raises(SystemExit):
         score_hitter_ros_run.main()
     assert "no games played yet in [2026]" in capsys.readouterr().err
+
+
+def test_pretraining_refuses_the_other_sides_token_file(tmp_path, monkeypatch, capsys):
+    from fantasy_baseball.hitter_ros.pitch_tokens import token_options
+
+    script, _ = _pretrain_run(tmp_path, monkeypatch)
+    for side, other in (("pitcher", "hitter"), ("hitter", "pitcher")):
+        tokens = tmp_path / f"{side}-dir" / "pitch_tokens.parquet"
+        tokens.parent.mkdir()
+        tokens.touch()  # the recorded options are checked before the file is read
+        tokens.with_suffix(".json").write_text(json.dumps(token_options("statcast", other)))
+        dir_attr = "PITCHER_TOKEN_DIR" if side == "pitcher" else "TOKEN_DIR"
+        monkeypatch.setattr(script, dir_attr, tokens.parent)
+        err = _refused(script, monkeypatch, capsys, "--name", "new", "--side", side)
+        assert f"holds {other}-side tokens" in err, side
