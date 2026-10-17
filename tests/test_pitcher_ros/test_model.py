@@ -94,6 +94,56 @@ def test_fit_season_predicts_era_pieces_beside_the_targets(table):
         fit_season(table, x, y[["era", *TARGETS[1:]]].join(y["k"]), w, 2025, config)
 
 
+def test_short_horizons_are_the_targets_over_the_next_days(table):
+    from fantasy_baseball.pitcher_ros.features import column_horizon, target_stat
+
+    y, w = answers(table, era_pieces=True, horizons=(7, 30))
+    short = [f"d{n}_{s}" for n in (7, 30) for s in TARGETS]
+    assert list(y.columns) == [*TARGETS, *ERA_PIECES, *short]
+    row = _starter_week0(table)
+    # Daily starts of 24 BF: 7 in the next 7 days; the 21-day season ends inside 30.
+    assert w.loc[row, "d7_k"] == 7 * 24 and w.loc[row, "d30_k"] == 21 * 24
+    assert w.loc[row, "d7_era"] == pytest.approx(7 * 6)
+    assert y.loc[row, "d7_k"] == pytest.approx(5 / 24)
+    plain_y, plain_w = answers(table, era_pieces=True)
+    pd.testing.assert_frame_equal(y[list(plain_y.columns)], plain_y)
+    pd.testing.assert_frame_equal(w[list(plain_w.columns)], plain_w)
+    assert [column_horizon(c) for c in ("d7_k", "d30_whip", "k", "bb_bf")] == [
+        "d7",
+        "d30",
+        "ros",
+        "ros",
+    ]
+    assert target_stat("d30_whip") == "whip" and target_stat("hr_bf") == "hr_bf"
+    with pytest.raises(ValueError, match="horizons"):
+        answers(table, horizons=(14,))
+
+
+def test_short_horizon_league_rates_are_the_leagues_over_those_days(table):
+    league = league_rates(table, (7,))
+    pooled = table.groupby(["season", "week"])[["ros_d7_k", "ros_d7_bf"]].transform("sum")
+    expected = pooled["ros_d7_k"] / pooled["ros_d7_bf"]
+    pd.testing.assert_series_equal(league.answer["d7_k"], expected, check_names=False)
+    # Forecast: nothing known on the date tells next week's league rate from the season's.
+    pd.testing.assert_series_equal(
+        league.reference["d7_k"], league.reference["k"], check_names=False
+    )
+
+
+def test_fit_season_predicts_the_short_horizons_beside_the_targets(table):
+    x, (y, w) = input_frame(table), answers(table, horizons=(7, 30))
+    config = plain_config(hidden=[8], max_epochs=3, patience=1, val_frac=0.34)
+    short = [f"d{n}_{s}" for n in (7, 30) for s in TARGETS]
+    relative = replace(config, relative_target="answer")
+    preds, _ = fit_season(table, x, y, w, 2025, relative, league_rates(table, (7, 30)))
+    assert list(preds.columns) == [*ID_COLS, *TARGETS, *short]
+    assert np.isfinite(preds[short].to_numpy()).all() and (preds[short] >= 0).all().all()
+    with pytest.raises(ValueError, match="same horizons"):
+        fit_season(table, x, y, w, 2025, relative, league_rates(table))
+    with pytest.raises(ValueError, match="TARGETS then"):  # a horizon before the targets
+        fit_season(table, x, y[[short[0], *TARGETS]], w[[short[0], *TARGETS]], 2025, config)
+
+
 def test_a_row_with_no_answer_has_no_weight(table):
     empty = table.copy()
     row = _starter_week0(table)
@@ -111,6 +161,23 @@ def test_inputs_never_read_the_answer(table):
         scrambled[c] = rng.permutation(table[c].to_numpy())
     pd.testing.assert_frame_equal(input_frame(table), input_frame(scrambled))
     assert not (input_frame(table) == np.inf).any().any()
+
+
+def test_without_his_own_windows_only_those_inputs_go(table):
+    from fantasy_baseball.pitcher_ros.features import COVERAGE, INPUT_RECENT, WINDOWS
+
+    full, lean = input_frame(table), input_frame(table, own_windows=False)
+    prefixes = tuple(f"{w}_" for w in (*WINDOWS, *INPUT_RECENT))
+
+    def own(c):
+        return c.startswith(prefixes) and "_team_" not in c and c not in COVERAGE
+
+    gone = set(full.columns) - set(lean.columns)
+    assert gone and all(own(c) for c in gone)
+    assert not any(own(c) for c in lean.columns)
+    # Minor leagues, team, league and context stay, unchanged.
+    for c in ("milb_p1_k_bf", "std_team_r_per_g", "lg_p1_k_bf", "age", "p1_in_store"):
+        pd.testing.assert_series_equal(lean[c], full[c])
 
 
 def test_fit_season_predicts_every_test_row_as_rates(table):

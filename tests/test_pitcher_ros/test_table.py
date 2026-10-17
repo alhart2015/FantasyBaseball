@@ -459,3 +459,21 @@ def test_a_table_from_before_the_minor_league_inputs_says_to_rebuild(store):
     old = df.drop(columns=[c for c in df.columns if c.startswith("milb_")])
     with pytest.raises(ValueError, match="build_pitcher_ros_table"):
         input_frame(old)
+
+
+def test_short_horizon_answers_count_the_next_7_and_30_days(tmp_path):
+    # A 40-day season: the next 30 days end before the season does for the early rows.
+    _write(tmp_path, {**_seasons(), 2025: _season(2025, date(2025, 4, 1), 40)})
+    t = build_table(tmp_path).sort_values(["player_id", "season", "week"])
+    by = t.groupby(["player_id", "season"])
+    following = by["week"].shift(-1) == t["week"] + 1
+    # As-of dates are 7 days apart: the next 7 days are the rest of the season less the
+    # next row's rest of the season.
+    for c in ("bf", "k", "outs"):
+        nxt = by[f"ros_{c}"].shift(-1)
+        assert (t.loc[following, f"ros_d7_{c}"] == (t[f"ros_{c}"] - nxt)[following]).all()
+    assert following.sum() > 0
+    assert (t["ros_d7_bf"] <= t["ros_d30_bf"]).all() and (t["ros_d30_bf"] <= t["ros_bf"]).all()
+    early = (t["season"] == 2025) & (t["week"] == 0) & (t["player_id"] == STARTER)
+    assert (t.loc[early, "ros_d30_bf"] == 30 * 24).all()  # 30 daily starts of 24 batters
+    assert (t.loc[early, "ros_bf"] == 40 * 24).all()

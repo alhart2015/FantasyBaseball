@@ -179,3 +179,9 @@ def test_finetuning_reads_the_pitcher_token_file_its_run_was_pretrained_on(
         with pytest.raises(SystemExit):
             _train(monkeypatch, store, tmp_path, *ft)
         assert message in capsys.readouterr().err, options
+
+
+def test_no_own_windows_needs_the_sequence(store, tmp_path, monkeypatch, capsys):
+    with pytest.raises(SystemExit):
+        _train(monkeypatch, store, tmp_path, "--test-seasons", "2025", "--no-own-windows")
+    assert "it needs --seq" in capsys.readouterr().err
