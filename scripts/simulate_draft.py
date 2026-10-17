@@ -531,16 +531,17 @@ def _load_pick_order(config):
     return pick_order
 
 
-def build_board_and_context(config_path=None):
+def build_board_and_context(config_path=None, db_path=None):
     """Build the draft board and all reusable context. Call once.
 
+    *db_path*: the projections database (default ``data.db.DB_PATH``).
     Returns a dict with keys: config, full_board, board, scarcity_order,
     pick_order.
     """
     if config_path is None:
         config_path = CONFIG_PATH
     config = load_config(config_path)
-    conn = get_connection()
+    conn = get_connection(db_path)
     full_board = build_draft_board(
         conn=conn,
         sgp_overrides=config.sgp_overrides,

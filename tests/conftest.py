@@ -95,6 +95,46 @@ def _isolate_kv_from_prod(monkeypatch):
     kv_store._reset_singleton()
 
 
+@pytest.fixture(autouse=True)
+def _isolate_local_files(request, tmp_path, monkeypatch):
+    """No test reads or writes the machine's own data files (#496).
+
+    ``data/fantasy.db`` (``data.db.DB_PATH``) and ``data/local.db`` (the local
+    KV) hold whatever this machine last built or synced, so a test reading them
+    passes or fails by machine, and a test writing them clobbers real state. Both
+    are pointed into this test's own temp folder: empty there, so a test that
+    needs projections asks for the ``fantasy_db`` fixture (seeded from committed
+    fixture data) or seeds its own KV. Kept in a subfolder so a test listing its
+    ``tmp_path`` doesn't see them; created up front so it is there before and after.
+    A test about the real files themselves (read-only) opts out with
+    ``@pytest.mark.real_local_files``.
+    """
+    from fantasy_baseball.data import db, kv_store
+
+    if request.node.get_closest_marker("real_local_files"):
+        return
+
+    own = tmp_path / "_local_files"
+    own.mkdir()
+    monkeypatch.setattr(db, "DB_PATH", own / "fantasy.db")
+    monkeypatch.setenv(kv_store.LOCAL_KV_PATH_ENV, str(own / "local.db"))
+    # The default too: code that clears the variable (manual-mode deactivate) or
+    # resolves the default itself must not fall back to the real file.
+    monkeypatch.setattr(kv_store, "_DEFAULT_LOCAL_DB", own / "local.db")
+    kv_store._reset_singleton()
+
+
+@pytest.fixture
+def fantasy_db():
+    """This test's ``fantasy.db`` (``data.db.DB_PATH``, in its temp folder), seeded
+    with the committed fixture players (tests/_fantasy_db.py); returns its path."""
+    from fantasy_baseball.data import db
+
+    from ._fantasy_db import seed_fantasy_db
+
+    return seed_fantasy_db(db.DB_PATH)
+
+
 #: Env vars that select the KV backing file / disable Yahoo. Production code --
 #: not just tests -- assigns these (``scripts/run_manual_refresh.py`` sets both
 #: in ``_activate_manual_environment``), so any test that drives such a code

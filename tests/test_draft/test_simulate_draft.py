@@ -17,14 +17,14 @@ therefore different available pools for the user, producing different user roste
 from scripts.simulate_draft import build_board_and_context, run_simulation, run_user_pick_sequence
 
 
-def test_deltaroto_immediate_draft_completes():
+def test_deltaroto_immediate_draft_completes(fantasy_db):
     """A deltaroto_immediate draft runs end-to-end and populates all rosters.
 
     Task 14: uses the consolidated harness directly -- no sim_deltaroto strategy
     injection needed.  The recommend() seam handles the deltaRoto path natively
     (RecInputs per pick, scoring_mode="deltaroto_immediate").
     """
-    ctx = build_board_and_context()
+    ctx = build_board_and_context(db_path=fantasy_db)
     config = ctx["config"]
 
     result = run_simulation(
@@ -55,9 +55,9 @@ def test_deltaroto_immediate_draft_completes():
     assert result["pts"] > 0, f"User points {result['pts']} <= 0"
 
 
-def test_var_draft_completes():
+def test_var_draft_completes(fantasy_db):
     """A var-mode draft runs end-to-end and populates all rosters."""
-    ctx = build_board_and_context()
+    ctx = build_board_and_context(db_path=fantasy_db)
     config = ctx["config"]
 
     result = run_simulation(
@@ -81,7 +81,7 @@ def test_var_draft_completes():
     assert result["pts"] > 0
 
 
-def test_noise_off_is_fully_deterministic():
+def test_noise_off_is_fully_deterministic(fantasy_db):
     """With all noise off, different seeds produce identical pick sequences.
 
     This pins the variance model: adp_noise=0.0, strategy_noise=0.0,
@@ -108,7 +108,7 @@ def test_noise_off_is_fully_deterministic():
     )
 
 
-def test_adp_noise_on_different_seeds_diverge():
+def test_adp_noise_on_different_seeds_diverge(fantasy_db):
     """With adp_noise enabled, different seeds produce different user rosters.
 
     Each team draws its own per-player ADP jitter from the seeded RNG, so
@@ -116,7 +116,7 @@ def test_adp_noise_on_different_seeds_diverge():
     accordingly, producing a different pick sequence.  This pins the variance
     model: noise ON + different seeds -> different outcomes.
     """
-    ctx = build_board_and_context()
+    ctx = build_board_and_context(db_path=fantasy_db)
 
     r42 = run_simulation(
         ctx,
@@ -145,7 +145,7 @@ def test_adp_noise_on_different_seeds_diverge():
     )
 
 
-def test_deltaroto_immediate_with_strategic_opponents_completes():
+def test_deltaroto_immediate_with_strategic_opponents_completes(fantasy_db):
     """A deltaroto_immediate draft with strategic opponents runs without raising.
 
     Regression test for the opponent reroute crash: when scoring_mode is a
@@ -154,7 +154,7 @@ def test_deltaroto_immediate_with_strategic_opponents_completes():
     raises ValueError: requires inputs).  Uses a minimal opponent string that
     assigns two_closers strategy to one opponent team (team 1).
     """
-    ctx = build_board_and_context()
+    ctx = build_board_and_context(db_path=fantasy_db)
     config = ctx["config"]
 
     # Route one opponent team through the strategy path so the deltaRoto

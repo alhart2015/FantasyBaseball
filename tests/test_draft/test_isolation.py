@@ -89,7 +89,7 @@ def test_live_draft_modules_do_not_import_redis_or_kv():
     assert not leaked_walk, f"Attribute walk found banned module reference: {sorted(leaked_walk)}"
 
 
-def test_draft_flow_touches_only_draft_state_files(tmp_path: Path, monkeypatch):
+def test_draft_flow_touches_only_draft_state_files(tmp_path: Path, monkeypatch, fantasy_db):
     """Run a synthetic draft sequence and verify no other files change."""
     from fantasy_baseball.web.app import create_app
 
