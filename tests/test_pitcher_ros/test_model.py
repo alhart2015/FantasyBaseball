@@ -17,6 +17,7 @@ from fantasy_baseball.pitcher_ros.features import (
 from fantasy_baseball.pitcher_ros.model import (
     APPLIED,
     DEFAULT_ERA_PIECES,
+    DEFAULT_HORIZONS,
     DEFAULT_RELATIVE_TARGET,
     ID_COLS,
     LeagueRates,
@@ -401,6 +402,10 @@ def test_the_net_as_trained_learns_relative_to_the_league():
 
 def test_the_net_as_trained_predicts_era_pieces():
     assert DEFAULT_ERA_PIECES is True
+
+
+def test_the_net_as_trained_predicts_the_next_week_and_month():
+    assert DEFAULT_HORIZONS is True
 
 
 def test_the_net_as_trained_reads_park_inputs():

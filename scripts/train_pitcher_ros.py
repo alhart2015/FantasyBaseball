@@ -38,6 +38,7 @@ Usage:
     python scripts/train_pitcher_ros.py --name plain --seq none   # no sequence
     python scripts/train_pitcher_ros.py --name noparks --parks none   # no park inputs
     python scripts/train_pitcher_ros.py --name nopieces --no-era-pieces   # 5 outputs only
+    python scripts/train_pitcher_ros.py --name nohz --no-horizons   # no 7- / 30-day outputs
     python scripts/train_pitcher_ros.py --name nostuff --stuff none   # no stuff inputs
     python scripts/train_pitcher_ros.py --name proj-2027 --test-seasons 2027 --predict-only
     python scripts/train_pitcher_ros.py --name allstuff --stuff-rates all   # all 60
@@ -86,6 +87,7 @@ from fantasy_baseball.pitcher_ros.finetune import (
 )
 from fantasy_baseball.pitcher_ros.model import (
     DEFAULT_ERA_PIECES,
+    DEFAULT_HORIZONS,
     DEFAULT_PARKS,
     DEFAULT_RELATIVE_TARGET,
     DEFAULT_SEEDS,
@@ -235,9 +237,9 @@ def main() -> int:
     parser.add_argument(
         "--horizons",
         action=argparse.BooleanOptionalAction,
-        default=False,
+        default=DEFAULT_HORIZONS,
         help="also predict the next 7 and 30 days (table.HORIZON_DAYS) as extra outputs "
-        "(model.HORIZON_WEIGHTS); off by default",
+        "(model.HORIZON_WEIGHTS; model.DEFAULT_HORIZONS)",
     )
     parser.add_argument(
         "--no-own-windows",

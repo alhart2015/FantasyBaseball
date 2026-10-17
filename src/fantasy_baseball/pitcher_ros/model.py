@@ -11,7 +11,8 @@ gets tried for pitchers on its own, against this. Applied so far (:func:`net_con
 (``DEFAULT_RELATIVE_TARGET``); ``seq``, a transformer over recent appearances
 (``DEFAULT_SEQ``); and ``parks``, park inputs (``DEFAULT_PARKS``). Applied by
 scripts/train_pitcher_ros.py, as extra inputs and outputs: ERA's pieces
-(``DEFAULT_ERA_PIECES``) and stuff inputs (``DEFAULT_STUFF``, ``DEFAULT_STUFF_RATES``).
+(``DEFAULT_ERA_PIECES``), the next 7 and 30 days (``DEFAULT_HORIZONS``) and stuff
+inputs (``DEFAULT_STUFF``, ``DEFAULT_STUFF_RATES``).
 """
 
 from __future__ import annotations
@@ -125,6 +126,15 @@ DEFAULT_ERA_PIECES = True
 # loss weight of each horizon's outputs, as the hitter net's next 25 / 100 PA (about a
 # week and a month of a regular's PA, NetConfig.horizon_weights); rest of season 1.
 HORIZON_WEIGHTS = {"d7": 0.25, "d30": 0.5}
+
+# Whether the pitcher net predicts the short horizons (scripts/train_pitcher_ros.py
+# --horizons). 5 seeds x 2022-2026 (run 031-horizons vs 023; how sure better, 0-100),
+# preseason on the fantasy-relevant: K MSE 308.5 vs 313.9 (100%), ERA 1.044 vs 1.056
+# (100%), W and WHIP 81%, SV 37.47 vs 36.99 (19%); mid-season on all pitchers W, SV, ERA,
+# WHIP 87-92%, K 43%. In roto points (squared SGP miss, top-100 starters) -0.6% (81%).
+# The 7- and 30-day outputs beat the rest-of-season rate over those days on K and SV
+# (97-100%); W, ERA and WHIP about level.
+DEFAULT_HORIZONS = True
 
 # The stuff inputs the pitcher net reads (pitcher_ros/stuff_features.py, #489): "none"
 # (off), or the name of a data/pitcher_ros/stuff_<name>.parquet file
