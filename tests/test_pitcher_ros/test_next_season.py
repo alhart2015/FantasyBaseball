@@ -6,7 +6,8 @@ from datetime import date
 import pandas as pd
 import pytest
 
-from fantasy_baseball.pitcher_ros.table import build_table
+from fantasy_baseball.pitcher_ros.model import HORIZON_WEIGHTS
+from fantasy_baseball.pitcher_ros.table import HORIZON_DAYS, build_table
 
 from .test_table import _schedule, _seasons, _write
 
@@ -68,6 +69,11 @@ def test_predict_only_projects_next_season(store, tmp_path, monkeypatch):
     # Trained on the complete seasons before: both earlier seasons.
     info = json.loads((run / "info.json").read_text())
     assert [i["test_season"] for i in info] == [2026] and info[0]["train_rows"] > 0
+    # The short horizons are on, and their loss weights are recorded with the run.
+    config = json.loads((run / "config.json").read_text())
+    assert config["horizons"] == list(HORIZON_DAYS)
+    assert config["horizon_weights"] == HORIZON_WEIGHTS
+    assert {f"d{n}_k" for n in HORIZON_DAYS} <= set(preds.columns)
 
 
 def test_probes_read_from_older_pitches_than_the_store_are_refused(
@@ -179,3 +185,26 @@ def test_finetuning_reads_the_pitcher_token_file_its_run_was_pretrained_on(
         with pytest.raises(SystemExit):
             _train(monkeypatch, store, tmp_path, *ft)
         assert message in capsys.readouterr().err, options
+
+
+def test_no_own_windows_needs_the_sequence(store, tmp_path, monkeypatch, capsys):
+    with pytest.raises(SystemExit):
+        _train(monkeypatch, store, tmp_path, "--test-seasons", "2025", "--no-own-windows")
+    assert "it needs --seq" in capsys.readouterr().err
+
+
+def test_no_own_windows_also_leaves_out_the_stuff_windows(store, tmp_path, monkeypatch, capsys):
+    with pytest.raises(SystemExit):
+        _train(
+            monkeypatch,
+            store,
+            tmp_path,
+            "--test-seasons",
+            "2025",
+            "--seq",
+            "transformer",
+            "--stuff",
+            "s2-located",
+            "--no-own-windows",
+        )
+    assert "add --stuff none" in capsys.readouterr().err

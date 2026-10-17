@@ -18,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.pitcher_ros.stats import PER_BF, TARGETS, rates_from_counts
-from fantasy_baseball.pitcher_ros.table import MILB_WINDOWS, RECENT_WINDOWS
+from fantasy_baseball.pitcher_ros.table import HORIZON_DAYS, MILB_WINDOWS, RECENT_WINDOWS
 
 WINDOWS = ("std", "p1", "p3", "car")
 # The recent window used as input (l14 is in the table too).
@@ -36,6 +36,26 @@ ERA_PIECES = ("bb_bf", "hbp_bf", "hr_bf")
 _PIECE_COUNTS = ("bb", "hbp", "hr")
 # Every count the targets and the pieces are built from, each once.
 _RATE_COUNTS = tuple(dict.fromkeys((*_ANSWER_COUNTS, *_PIECE_COUNTS)))
+
+
+def horizon_columns(horizons: tuple[int, ...] = ()) -> list[str]:
+    """The short-horizon output columns: ``d{N}_{stat}`` for each of the ``TARGETS``, per
+    horizon of N days (``table.HORIZON_DAYS``)."""
+    unknown = sorted(set(horizons) - set(HORIZON_DAYS))
+    if unknown:
+        raise ValueError(f"no answers for horizons {unknown} days; the table has {HORIZON_DAYS}")
+    return [f"d{n}_{s}" for n in horizons for s in TARGETS]
+
+
+def column_horizon(column: str) -> str:
+    """The horizon of an output column: ``d7_k_bf`` -> ``d7``; ``k_bf`` -> ``ros``."""
+    head = column.split("_", 1)[0]
+    return head if head[:1] == "d" and head[1:].isdigit() else "ros"
+
+
+def target_stat(column: str) -> str:
+    """The stat of an output column: ``d7_k_bf`` -> ``k_bf``; ``k_bf`` -> ``k_bf``."""
+    return column if column_horizon(column) == "ros" else column.split("_", 1)[1]
 
 
 def piece_rates(counts: pd.DataFrame) -> pd.DataFrame:
@@ -66,7 +86,11 @@ PER_BF_WEIGHTS = ("bf", "bf2")
 
 
 def answers(
-    t: pd.DataFrame, per_bf_weight: str = "bf", *, era_pieces: bool = False
+    t: pd.DataFrame,
+    per_bf_weight: str = "bf",
+    *,
+    era_pieces: bool = False,
+    horizons: tuple[int, ...] = (),
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Rest-of-season ``TARGETS`` rates per table row (NaN where there is nothing to
     divide by: no batters faced, or no outs) and each one's loss weight (0 where the
@@ -78,18 +102,30 @@ def answers(
     matches it; "bf" weights by batters faced, which leans further toward low-volume
     pitchers than the score does.
 
-    ``era_pieces``: also ``ERA_PIECES`` (after the targets), weighted as K is."""
+    ``era_pieces``: also ``ERA_PIECES`` (after the targets), weighted as K is.
+    ``horizons``: also the ``TARGETS`` over his next N days (:func:`horizon_columns`,
+    after those), weighted the same way over that window's batters and innings."""
     if per_bf_weight not in PER_BF_WEIGHTS:
         raise ValueError(f"unknown per_bf_weight {per_bf_weight!r}; one of {PER_BF_WEIGHTS}")
+    horizon_columns(horizons)  # validates
     names = _RATE_COUNTS if era_pieces else _ANSWER_COUNTS
-    counts = pd.DataFrame({c: t[f"ros_{c}"].astype(float) for c in names})
-    y = _target_and_piece_rates(counts) if era_pieces else rates_from_counts(counts)[list(TARGETS)]
-    bf = counts["bf"] ** (2 if per_bf_weight == "bf2" else 1)
-    ip = counts["outs"] / 3
-    w = pd.DataFrame(
-        {s: bf if s in PER_BF or s in ERA_PIECES else ip for s in y.columns}, index=t.index
-    )
-    return y, w.where(y.notna(), 0.0)
+    windows = [("ros_", "", names), *((f"ros_d{n}_", f"d{n}_", _ANSWER_COUNTS) for n in horizons)]
+    ys, ws = [], []
+    for prefix, tag, cols in windows:
+        counts = pd.DataFrame({c: t[f"{prefix}{c}"].astype(float) for c in cols})
+        y = (
+            _target_and_piece_rates(counts)
+            if cols == _RATE_COUNTS
+            else rates_from_counts(counts)[list(TARGETS)]
+        )
+        bf = counts["bf"] ** (2 if per_bf_weight == "bf2" else 1)
+        ip = counts["outs"] / 3
+        w = pd.DataFrame(
+            {s: bf if s in PER_BF or s in ERA_PIECES else ip for s in y.columns}, index=t.index
+        )
+        ys.append(y.add_prefix(tag))
+        ws.append(w.where(y.notna(), 0.0).add_prefix(tag))
+    return pd.concat(ys, axis=1), pd.concat(ws, axis=1)
 
 
 def league_reference(t: pd.DataFrame) -> pd.DataFrame:
@@ -107,18 +143,34 @@ def league_reference(t: pd.DataFrame) -> pd.DataFrame:
     return _target_and_piece_rates(counts).where(t["lg_p1_bf"].astype(float) > 0)
 
 
-def league_answer_rates(t: pd.DataFrame) -> pd.DataFrame:
+def league_answer_rates(t: pd.DataFrame, horizons: tuple[int, ...] = ()) -> pd.DataFrame:
     """Each row's league ``TARGETS`` (and ``ERA_PIECES``) rates over its answer window: the ``ros_*`` counts of
     every table row of the same season and as-of week pooled. The table has a row for
     every pitcher-season pitching on or after the date, so this is the league's rest of
     the season (the ``lg_*`` columns' population). Uses the answers: a **training target
-    denominator only**, never an input or a way back to rates."""
+    denominator only**, never an input or a way back to rates. ``horizons``: also the
+    league's ``TARGETS`` over the next N days (:func:`horizon_columns`), the same way."""
     keys = [t["season"], t["week"]]
-    counts = pd.DataFrame(
-        {c: t[f"ros_{c}"].astype(float).groupby(keys).transform("sum") for c in _RATE_COUNTS},
-        index=t.index,
+
+    def pooled(prefix: str, cols: tuple[str, ...]) -> pd.DataFrame:
+        return pd.DataFrame(
+            {c: t[f"{prefix}{c}"].astype(float).groupby(keys).transform("sum") for c in cols},
+            index=t.index,
+        )
+
+    horizon_columns(horizons)  # validates
+    return pd.concat(
+        [
+            _target_and_piece_rates(pooled("ros_", _RATE_COUNTS)),
+            *(
+                rates_from_counts(pooled(f"ros_d{n}_", _ANSWER_COUNTS))[list(TARGETS)].add_prefix(
+                    f"d{n}_"
+                )
+                for n in horizons
+            ),
+        ],
+        axis=1,
     )
-    return _target_and_piece_rates(counts)
 
 
 def _box_rates(t: pd.DataFrame, w: str) -> dict[str, pd.Series]:
@@ -277,16 +329,23 @@ COVERAGE = (
 )
 
 
-def input_frame(t: pd.DataFrame) -> pd.DataFrame:
+def input_frame(t: pd.DataFrame, own_windows: bool = True) -> pd.DataFrame:
     """Model inputs for every table row. NaN = unknown. Refuses a table built before the
-    minor-league inputs (#465), which would otherwise fail on a bare missing column."""
+    minor-league inputs (#465), which would otherwise fail on a bare missing column.
+
+    ``own_windows=False`` leaves out his own big-league rates per window (box score and
+    pitch tracking: season to date, last 30 days, last season, last three, career), for
+    a net that reads his history only as the appearance sequence. Minor-league, team,
+    league and context inputs stay: the sequence holds none of them. The stuff inputs
+    (``stuff_features``) are his own windows too: scripts/train_pitcher_ros.py
+    --no-own-windows requires --stuff none."""
     if "milb_p1_in_store" not in t.columns:
         raise ValueError(
             "the pitcher table has no minor-league columns (milb_*); rebuild it with "
             "scripts/build_pitcher_ros_table.py"
         )
     cols: dict[str, pd.Series] = {}
-    for w in (*WINDOWS, *INPUT_RECENT):
+    for w in (*WINDOWS, *INPUT_RECENT) if own_windows else ():
         cols.update(_box_rates(t, w))
         cols.update(_tracking_rates(t, w))
     for w in ("std", "p1", "p3"):

@@ -38,6 +38,7 @@ Usage:
     python scripts/train_pitcher_ros.py --name plain --seq none   # no sequence
     python scripts/train_pitcher_ros.py --name noparks --parks none   # no park inputs
     python scripts/train_pitcher_ros.py --name nopieces --no-era-pieces   # 5 outputs only
+    python scripts/train_pitcher_ros.py --name nohz --no-horizons   # no 7- / 30-day outputs
     python scripts/train_pitcher_ros.py --name nostuff --stuff none   # no stuff inputs
     python scripts/train_pitcher_ros.py --name proj-2027 --test-seasons 2027 --predict-only
     python scripts/train_pitcher_ros.py --name allstuff --stuff-rates all   # all 60
@@ -84,14 +85,17 @@ from fantasy_baseball.pitcher_ros.finetune import (
     cross_encoders,
     model_maker,
 )
+from fantasy_baseball.pitcher_ros.horizons import horizon_summary, score_horizons
 from fantasy_baseball.pitcher_ros.model import (
     DEFAULT_ERA_PIECES,
+    DEFAULT_HORIZONS,
     DEFAULT_PARKS,
     DEFAULT_RELATIVE_TARGET,
     DEFAULT_SEEDS,
     DEFAULT_SEQ,
     DEFAULT_STUFF,
     DEFAULT_STUFF_RATES,
+    HORIZON_WEIGHTS,
     applied_settings,
     average_seeds,
     check_league_forecast,
@@ -105,6 +109,7 @@ from fantasy_baseball.pitcher_ros.probes import load_probe_inputs
 from fantasy_baseball.pitcher_ros.sequence import TOKEN_FEATURES, TOKEN_ORDER
 from fantasy_baseball.pitcher_ros.stats import load_games
 from fantasy_baseball.pitcher_ros.stuff_features import STUFF_RATE_SETS, load_stuff_inputs
+from fantasy_baseball.pitcher_ros.table import HORIZON_DAYS
 
 TABLE = PROJECT_ROOT / "data" / "pitcher_ros" / "table.parquet"
 TOKENS = PROJECT_ROOT / "data" / "pitcher_ros" / "app_tokens.parquet"
@@ -232,6 +237,20 @@ def main() -> int:
         "fine-tuning needs one, e.g. 256",
     )
     parser.add_argument(
+        "--horizons",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_HORIZONS,
+        help="also predict the next 7 and 30 days (table.HORIZON_DAYS) as extra outputs "
+        "(model.HORIZON_WEIGHTS; model.DEFAULT_HORIZONS)",
+    )
+    parser.add_argument(
+        "--no-own-windows",
+        action="store_true",
+        help="leave out his own big-league rates per window (features.input_frame "
+        "own_windows): his history only as the appearance sequence; needs --seq and "
+        "--stuff none (the stuff inputs are per window too)",
+    )
+    parser.add_argument(
         "--train-half",
         type=int,
         choices=(0, 1),
@@ -251,6 +270,11 @@ def main() -> int:
     run = RUNS / args.name
     if run.exists() and any(run.iterdir()) and not args.overwrite:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
+    if args.no_own_windows and args.seq == "none":
+        parser.error("--no-own-windows reads his history from the sequence: it needs --seq")
+    if args.no_own_windows and args.stuff != "none":
+        # The stuff inputs are his own rates per window too (stuff_features.WINDOWS).
+        parser.error("--no-own-windows: the stuff inputs are his own windows too; add --stuff none")
     if args.seq != "none" and not args.tokens.exists():
         parser.error(f"{args.tokens} is missing; run scripts/build_pitcher_ros_tokens.py")
     configs = {
@@ -337,7 +361,14 @@ def main() -> int:
     train_on = None
     if args.train_half is not None:
         train_on = pd.Series(player_half(table["player_id"]) == args.train_half, index=table.index)
-    league = league_rates(table) if args.relative_target != "none" else None
+    horizons = HORIZON_DAYS if args.horizons else ()
+    absent_answers = [f"ros_d{n}_bf" for n in horizons if f"ros_d{n}_bf" not in table.columns]
+    if absent_answers:
+        parser.error(
+            f"{args.table} predates the short-horizon answers {absent_answers}; rebuild it "
+            "with scripts/build_pitcher_ros_table.py"
+        )
+    league = league_rates(table, horizons) if args.relative_target != "none" else None
     if league is not None:
         # Checked here, before an old run of this name is deleted (fit_season checks too).
         for season in seasons:
@@ -345,7 +376,7 @@ def main() -> int:
                 check_league_forecast(table, league, season)
             except ValueError as err:
                 parser.error(f"--test-seasons: {err}")
-    x = input_frame(table)
+    x = input_frame(table, own_windows=not args.no_own_windows)
     parks_build = None
     if args.parks != "none":
         try:
@@ -379,7 +410,7 @@ def main() -> int:
             )
         x = pd.concat([x, probe_inputs], axis=1)
         logging.info("added %d probe inputs (%s)", probe_inputs.shape[1], args.probes)
-    y, w = answers(table, args.per_bf_weight, era_pieces=args.era_pieces)
+    y, w = answers(table, args.per_bf_weight, era_pieces=args.era_pieces, horizons=horizons)
     games = load_games(STORE)
     if stuff_build is not None:
         # Stuff inputs read from pitches older than the store would leave a row's newest
@@ -453,7 +484,10 @@ def main() -> int:
         "probes_build": probes_build,
         "finetune": finetune.to_dict() if finetune is not None else None,
         "train_half": args.train_half,
+        "own_windows": not args.no_own_windows,
         "era_pieces": args.era_pieces,
+        "horizons": list(horizons),
+        "horizon_weights": HORIZON_WEIGHTS if horizons else None,
     }
     (run / "config.json").write_text(json.dumps(settings, indent=2))
 
@@ -512,6 +546,10 @@ def main() -> int:
         "",
         *backtest.summarize(scores),
     ]
+    horizon_scores = score_horizons(table, preds)
+    if horizon_scores is not None:
+        horizon_scores.to_parquet(run / "scored_horizons.parquet")
+        md += ["", *horizon_summary(horizon_scores)]
     (run / "scores.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return 1 if scores.failures else 0

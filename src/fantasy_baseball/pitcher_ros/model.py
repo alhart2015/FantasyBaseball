@@ -11,7 +11,8 @@ gets tried for pitchers on its own, against this. Applied so far (:func:`net_con
 (``DEFAULT_RELATIVE_TARGET``); ``seq``, a transformer over recent appearances
 (``DEFAULT_SEQ``); and ``parks``, park inputs (``DEFAULT_PARKS``). Applied by
 scripts/train_pitcher_ros.py, as extra inputs and outputs: ERA's pieces
-(``DEFAULT_ERA_PIECES``) and stuff inputs (``DEFAULT_STUFF``, ``DEFAULT_STUFF_RATES``).
+(``DEFAULT_ERA_PIECES``), the next 7 and 30 days (``DEFAULT_HORIZONS``) and stuff
+inputs (``DEFAULT_STUFF``, ``DEFAULT_STUFF_RATES``).
 """
 
 from __future__ import annotations
@@ -35,10 +36,14 @@ from fantasy_baseball.hitter_ros.parks import PARK_FEATURES
 from fantasy_baseball.hitter_ros.sequence import SequenceBatcher
 from fantasy_baseball.pitcher_ros.features import (
     ERA_PIECES,
+    column_horizon,
+    horizon_columns,
     league_answer_rates,
     league_reference,
+    target_stat,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS
+from fantasy_baseball.pitcher_ros.table import HORIZON_DAYS
 from fantasy_baseball.ros_training import (
     holdout_and_scaler,
     usable_league_rates,
@@ -117,6 +122,25 @@ DEFAULT_PARKS = "p3"
 # starters' ERA gap to FanGraphs is: home runs, then strikeouts (#486).
 DEFAULT_ERA_PIECES = True
 
+# Short horizons: with ``features.answers`` horizons, the net also predicts each target
+# over the next 7 and 30 days (table.HORIZON_DAYS), extra outputs on the same body. The
+# loss weight of each horizon's outputs, as the hitter net's next 25 / 100 PA (about a
+# week and a month of a regular's PA, NetConfig.horizon_weights); rest of season 1.
+HORIZON_WEIGHTS = {"d7": 0.25, "d30": 0.5}
+# One weight per horizon the table has answers for: a horizon added to one and not the
+# other would fail every default training run.
+assert set(HORIZON_WEIGHTS) == {f"d{n}" for n in HORIZON_DAYS}, (HORIZON_WEIGHTS, HORIZON_DAYS)
+
+# Whether the pitcher net predicts the short horizons (scripts/train_pitcher_ros.py
+# --horizons). 5 seeds x 2022-2026 (run 031-horizons vs 023; how sure better, 0-100),
+# preseason on the fantasy-relevant: K MSE 308.5 vs 313.9 (100%), ERA 1.044 vs 1.056
+# (100%), W and WHIP 81%, SV 37.47 vs 36.99 (19%); mid-season on all pitchers W, SV, ERA,
+# WHIP 87-92%, K 43%. In roto points (squared SGP miss, top-100 starters) -0.6% (81%).
+# The 7- and 30-day outputs vs the rest-of-season rate over those days, mid-season
+# (pitcher_ros/horizons.py): K and SV better (98% to >99%); W, ERA and WHIP within 0.1%
+# of it but a shade worse (3-45%), so for those the ROS rate is as good a weekly guess.
+DEFAULT_HORIZONS = True
+
 # The stuff inputs the pitcher net reads (pitcher_ros/stuff_features.py, #489): "none"
 # (off), or the name of a data/pitcher_ros/stuff_<name>.parquet file
 # (scripts/build_pitcher_stuff.py --features-file), and which of its rates
@@ -144,11 +168,16 @@ class LeagueRates(NamedTuple):
     answer: pd.DataFrame
 
 
-def league_rates(table: pd.DataFrame) -> LeagueRates:
-    """:class:`LeagueRates` for ``table``: built once per table, not per fit."""
+def league_rates(table: pd.DataFrame, horizons: tuple[int, ...] = ()) -> LeagueRates:
+    """:class:`LeagueRates` for ``table``: built once per table, not per fit. With
+    ``horizons``, also their columns (``features.horizon_columns``): the league's actual
+    rates over each horizon's days, and as the forecast the rest-of-season one (nothing
+    known on the date tells the next week's league rate from the season's)."""
+    reference = league_reference(table)
+    extra = {c: reference[target_stat(c)] for c in horizon_columns(horizons)}
     return LeagueRates(
-        usable_league_rates(league_reference(table)),
-        usable_league_rates(league_answer_rates(table)),
+        usable_league_rates(pd.concat([reference, pd.DataFrame(extra, index=table.index)], axis=1)),
+        usable_league_rates(league_answer_rates(table, horizons)),
     )
 
 
@@ -259,7 +288,9 @@ def fit_season(
     ``pitcher_ros.sequence``'s tokens.
 
     ``y_all`` / ``w_all``: ``features.answers``, the ``TARGETS`` and, with its
-    ``era_pieces``, ERA's pieces as extra outputs (predicted and returned beside them).
+    ``era_pieces``, ERA's pieces as extra outputs (predicted and returned beside them);
+    with its ``horizons``, the targets over the next N days too (``HORIZON_WEIGHTS``).
+    ``league`` must then be built with the same horizons.
 
     ``config.parks``: "none", or the park file whose inputs (``pitcher_ros.parks``)
     ``x_all`` carries; refused when the two disagree, so a run is never credited to
@@ -291,15 +322,34 @@ def fit_season(
             raise ValueError("the batcher was built on a different table (row count differs)")
     positions = np.arange(len(table))
     cols = list(y_all.columns)
-    if cols[: len(TARGETS)] != list(TARGETS) or not set(cols[len(TARGETS) :]) <= set(ERA_PIECES):
-        raise ValueError(f"targets must be TARGETS then any of ERA_PIECES, got {cols}")
+    ros = [c for c in cols if column_horizon(c) == "ros"]
+    short = cols[len(ros) :]
+    if (
+        cols[: len(TARGETS)] != list(TARGETS)
+        or not set(ros[len(TARGETS) :]) <= set(ERA_PIECES)
+        or any(column_horizon(c) not in HORIZON_WEIGHTS for c in short)
+        or [c for c in short if target_stat(c) in TARGETS] != short
+    ):
+        raise ValueError(
+            f"targets must be TARGETS then any of ERA_PIECES, then short-horizon TARGETS; got {cols}"
+        )
     # ERA's pieces (features.answers era_pieces) are extra outputs: each weighs a third
-    # of a target, as the hitter net's AVG pieces do (#433).
-    target_weights = np.array([1.0 if c in TARGETS else PIECE_LOSS_WEIGHT for c in cols])
+    # of a target, as the hitter net's AVG pieces do (#433). Short horizons: HORIZON_WEIGHTS.
+    target_weights = np.array(
+        [
+            HORIZON_WEIGHTS.get(column_horizon(c), 1.0)
+            * (1.0 if target_stat(c) in TARGETS else PIECE_LOSS_WEIGHT)
+            for c in cols
+        ]
+    )
     ref = None
     if config.relative_target != "none":
         if league is None:
-            league = league_rates(table)
+            days = sorted({int(column_horizon(c)[1:]) for c in short})
+            league = league_rates(table, tuple(days))
+        missing = [c for c in cols if c not in league.answer or c not in league.reference]
+        if missing:
+            raise ValueError(f"league has no rates for {missing}: build it with the same horizons")
         check_league_forecast(table, league, test_season)
         ref = league.reference
         denominator = league.answer if config.relative_target == "answer" else ref
@@ -375,7 +425,8 @@ DEFAULT_SEEDS = (0, 1, 2, 3, 4)
 
 
 def average_seeds(preds: list[pd.DataFrame]) -> pd.DataFrame:
-    """The rates (``TARGETS``, and ERA's pieces when predicted) averaged over seeds'
+    """The rates (``TARGETS``, then ERA's pieces and the short horizons' ``d{N}_`` rates
+    when predicted) averaged over seeds'
     predictions (each ``ID_COLS`` plus rates, as :func:`fit_season` returns them), row
     for row, sorted by ``ID_COLS``.
     Refuses unless every row appears exactly once per seed: seeds that predicted

@@ -31,6 +31,8 @@ finished. Everything is stored as **counts**:
   no minor-league season in 2020), so "no minor-league line" can be told from "not
   stored".
 * ``ros_*``  the answer: games **on or after** the as-of date. Never an input.
+* ``ros_d7_*``, ``ros_d30_*``  short-horizon answers (``HORIZON_DAYS``): the games in
+  the 7 and 30 days from the as-of date, same season. Never inputs.
 
 Counts: the box-score pitching line (``FULL_PITCHER_FIELDS``), ``g`` (games pitched)
 and ``rel_outs`` / ``rel_bf`` (the outs and batters in games he didn't start), so
@@ -98,6 +100,9 @@ from fantasy_baseball.ros_table import (
 LINE_COUNTS = tuple(FULL_PITCHER_FIELDS.values())
 BOX_COUNTS = (*LINE_COUNTS, "g", "rel_outs", "rel_bf")
 RECENT_WINDOWS = {"l14": 14, "l30": 30}
+# Short-horizon answers: his next N days from the as-of date (``ros_d{N}_*``), same
+# season only, so a window running past the season's end counts the games up to it.
+HORIZON_DAYS = (7, 30)
 TARGET_COUNTS = (
     "g",
     "gs",
@@ -524,6 +529,12 @@ def _build(
             for w, cond in MILB_WINDOWS.items()
         },
         "ros": window_sql("box_daily", TARGET_COUNTS, "ros_", ROS),
+        **{
+            f"ros_d{n}": window_sql(
+                "box_daily", TARGET_COUNTS, f"ros_d{n}_", f"{ROS} AND d.game_date < pop.as_of + {n}"
+            )
+            for n in HORIZON_DAYS
+        },
     }
     for name, sql in parts.items():
         conn.execute(f"CREATE TEMP TABLE {name} AS {sql}")
