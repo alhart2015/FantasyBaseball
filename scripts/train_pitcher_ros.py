@@ -85,6 +85,7 @@ from fantasy_baseball.pitcher_ros.finetune import (
     cross_encoders,
     model_maker,
 )
+from fantasy_baseball.pitcher_ros.horizons import horizon_summary, score_horizons
 from fantasy_baseball.pitcher_ros.model import (
     DEFAULT_ERA_PIECES,
     DEFAULT_HORIZONS,
@@ -94,6 +95,7 @@ from fantasy_baseball.pitcher_ros.model import (
     DEFAULT_SEQ,
     DEFAULT_STUFF,
     DEFAULT_STUFF_RATES,
+    HORIZON_WEIGHTS,
     applied_settings,
     average_seeds,
     check_league_forecast,
@@ -245,7 +247,8 @@ def main() -> int:
         "--no-own-windows",
         action="store_true",
         help="leave out his own big-league rates per window (features.input_frame "
-        "own_windows): his history only as the appearance sequence; needs --seq",
+        "own_windows): his history only as the appearance sequence; needs --seq and "
+        "--stuff none (the stuff inputs are per window too)",
     )
     parser.add_argument(
         "--train-half",
@@ -269,6 +272,9 @@ def main() -> int:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
     if args.no_own_windows and args.seq == "none":
         parser.error("--no-own-windows reads his history from the sequence: it needs --seq")
+    if args.no_own_windows and args.stuff != "none":
+        # The stuff inputs are his own rates per window too (stuff_features.WINDOWS).
+        parser.error("--no-own-windows: the stuff inputs are his own windows too; add --stuff none")
     if args.seq != "none" and not args.tokens.exists():
         parser.error(f"{args.tokens} is missing; run scripts/build_pitcher_ros_tokens.py")
     configs = {
@@ -481,6 +487,7 @@ def main() -> int:
         "own_windows": not args.no_own_windows,
         "era_pieces": args.era_pieces,
         "horizons": list(horizons),
+        "horizon_weights": HORIZON_WEIGHTS if horizons else None,
     }
     (run / "config.json").write_text(json.dumps(settings, indent=2))
 
@@ -539,6 +546,10 @@ def main() -> int:
         "",
         *backtest.summarize(scores),
     ]
+    horizon_scores = score_horizons(table, preds)
+    if horizon_scores is not None:
+        horizon_scores.to_parquet(run / "scored_horizons.parquet")
+        md += ["", *horizon_summary(horizon_scores)]
     (run / "scores.md").write_text("\n".join(md) + "\n")
     print("\n".join(md))
     return 1 if scores.failures else 0

@@ -336,7 +336,9 @@ def input_frame(t: pd.DataFrame, own_windows: bool = True) -> pd.DataFrame:
     ``own_windows=False`` leaves out his own big-league rates per window (box score and
     pitch tracking: season to date, last 30 days, last season, last three, career), for
     a net that reads his history only as the appearance sequence. Minor-league, team,
-    league and context inputs stay: the sequence holds none of them."""
+    league and context inputs stay: the sequence holds none of them. The stuff inputs
+    (``stuff_features``) are his own windows too: scripts/train_pitcher_ros.py
+    --no-own-windows requires --stuff none."""
     if "milb_p1_in_store" not in t.columns:
         raise ValueError(
             "the pitcher table has no minor-league columns (milb_*); rebuild it with "

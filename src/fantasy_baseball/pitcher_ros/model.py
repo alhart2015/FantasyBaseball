@@ -43,6 +43,7 @@ from fantasy_baseball.pitcher_ros.features import (
     target_stat,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS
+from fantasy_baseball.pitcher_ros.table import HORIZON_DAYS
 from fantasy_baseball.ros_training import (
     holdout_and_scaler,
     usable_league_rates,
@@ -126,14 +127,18 @@ DEFAULT_ERA_PIECES = True
 # loss weight of each horizon's outputs, as the hitter net's next 25 / 100 PA (about a
 # week and a month of a regular's PA, NetConfig.horizon_weights); rest of season 1.
 HORIZON_WEIGHTS = {"d7": 0.25, "d30": 0.5}
+# One weight per horizon the table has answers for: a horizon added to one and not the
+# other would fail every default training run.
+assert set(HORIZON_WEIGHTS) == {f"d{n}" for n in HORIZON_DAYS}, (HORIZON_WEIGHTS, HORIZON_DAYS)
 
 # Whether the pitcher net predicts the short horizons (scripts/train_pitcher_ros.py
 # --horizons). 5 seeds x 2022-2026 (run 031-horizons vs 023; how sure better, 0-100),
 # preseason on the fantasy-relevant: K MSE 308.5 vs 313.9 (100%), ERA 1.044 vs 1.056
 # (100%), W and WHIP 81%, SV 37.47 vs 36.99 (19%); mid-season on all pitchers W, SV, ERA,
 # WHIP 87-92%, K 43%. In roto points (squared SGP miss, top-100 starters) -0.6% (81%).
-# The 7- and 30-day outputs beat the rest-of-season rate over those days on K and SV
-# (97-100%); W, ERA and WHIP about level.
+# The 7- and 30-day outputs vs the rest-of-season rate over those days, mid-season
+# (pitcher_ros/horizons.py): K and SV better (98% to >99%); W, ERA and WHIP within 0.1%
+# of it but a shade worse (3-45%), so for those the ROS rate is as good a weekly guess.
 DEFAULT_HORIZONS = True
 
 # The stuff inputs the pitcher net reads (pitcher_ros/stuff_features.py, #489): "none"
@@ -420,7 +425,8 @@ DEFAULT_SEEDS = (0, 1, 2, 3, 4)
 
 
 def average_seeds(preds: list[pd.DataFrame]) -> pd.DataFrame:
-    """The rates (``TARGETS``, and ERA's pieces when predicted) averaged over seeds'
+    """The rates (``TARGETS``, then ERA's pieces and the short horizons' ``d{N}_`` rates
+    when predicted) averaged over seeds'
     predictions (each ``ID_COLS`` plus rates, as :func:`fit_season` returns them), row
     for row, sorted by ``ID_COLS``.
     Refuses unless every row appears exactly once per seed: seeds that predicted
