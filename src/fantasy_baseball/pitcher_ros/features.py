@@ -333,8 +333,10 @@ COVERAGE = (
 # start and relief shares): with ``role_windows=False`` the net reads his role from
 # the appearance sequence only, where a role change shows as soon as it happens.
 # Tried (run 034-norole vs 031, 5 seeds): mid-season SV MSE 8.57 vs 8.54 (49% sure
-# better) on the fantasy-relevant, the rest a shade worse; the net still reads the role
-# from his other per-window rates. The saves net (model.DEFAULT_SAVES_NET) does it.
+# better) on the fantasy-relevant, the rest a shade worse. This list leaves in rates
+# that still tell role apart (irs_share, outs_per_g, log_g, w_per_gs), so it shows only
+# that dropping these didn't help, not that no one-net version can. The saves net
+# (model.DEFAULT_SAVES_NET) gets the gain.
 ROLE_RATES = (
     "gs_share",
     "relief_out_share",

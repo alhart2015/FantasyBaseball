@@ -231,20 +231,24 @@ def test_ours_takes_its_saves_from_the_saves_net(store, tmp_path, monkeypatch):
     tokens = tmp_path / "app_tokens.parquet"
     build_appearance_tokens(store).to_parquet(tokens, index=False)
     seq = ["--seq", "transformer", "--tokens", str(tokens), "--seq-len", "8"]
-    seq += ["--seq-dim", "8", "--seq-layers", "1", "--saves-net"]
+    seq += ["--seq-dim", "8", "--seq-layers", "1", "--saves-net", "--train-half", "0"]
     assert (
         _train(monkeypatch, store, tmp_path, *seq, "--test-seasons", "2026", "--predict-only") == 0
     )
     run = tmp_path / "runs" / "x"
     ours = pd.read_parquet(run / "predictions.parquet")
-    main = pd.read_parquet(run / "predictions-s0.parquet")
+    seed0 = pd.read_parquet(run / "predictions-s0.parquet").sort_values(ID_COLS, ignore_index=True)
+    main = pd.read_parquet(run / "predictions-main-s0.parquet")
+    main = main.sort_values(ID_COLS, ignore_index=True)
     saves = pd.read_parquet(run / "predictions-saves.parquet")
     sv = saves_columns(ours.columns)
     assert sv == ["sv", *(f"d{n}_sv" for n in HORIZON_DAYS)]
     pd.testing.assert_frame_equal(ours[ID_COLS + sv], saves[ID_COLS + sv])
     rest = [c for c in ours.columns if c not in sv]
-    pd.testing.assert_frame_equal(ours[rest], main.sort_values(ID_COLS, ignore_index=True)[rest])
-    assert not ours[sv].equals(main.sort_values(ID_COLS, ignore_index=True)[sv])
+    pd.testing.assert_frame_equal(ours[rest], main[rest])
+    assert not ours[sv].equals(main[sv])
+    # One seed: ours per seed is ours, its saves included.
+    pd.testing.assert_frame_equal(seed0, ours)
     assert (run / "predictions-saves-s0.parquet").exists()
     config = json.loads((run / "config.json").read_text())
     assert config["saves_net"] is True
@@ -252,3 +256,20 @@ def test_ours_takes_its_saves_from_the_saves_net(store, tmp_path, monkeypatch):
     assert [i["net"] for i in info] == ["main", "saves"]
     # The saves net reads none of his own per-window rates.
     assert info[1]["n_features"] < info[0]["n_features"]
+    # --train-half limits the main net only: the saves net trains on every pitcher.
+    assert info[1]["train_rows"] > info[0]["train_rows"]
+
+
+def test_no_own_windows_and_the_saves_net_would_be_the_same_net(
+    store, tmp_path, monkeypatch, capsys
+):
+    tokens = tmp_path / "tokens.parquet"
+    tokens.touch()
+    args = ["--seq", "transformer", "--tokens", str(tokens), "--test-seasons", "2025"]
+    for extra, message in (
+        (["--no-own-windows", "--saves-net"], "add --no-saves-net"),
+        (["--no-own-windows", "--no-role-windows"], "drop --no-role-windows"),
+    ):
+        with pytest.raises(SystemExit):
+            _train(monkeypatch, store, tmp_path, *args, *extra)
+        assert message in capsys.readouterr().err, extra

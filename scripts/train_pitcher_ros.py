@@ -10,9 +10,12 @@ scores.md to data/pitcher_ros/runs/<name>/.
 --saves-net (on by default, model.DEFAULT_SAVES_NET) trains a second net per seed and
 test season, reading his history only as the appearance sequence (no per-window rates
 of his own, no stuff, probe or fine-tuning inputs; parks as the main net), and takes
-ours' saves outputs from it (model.swap_saves). predictions-s<N>.parquet stay the main
-net's; predictions-saves-s<N>.parquet and predictions-saves.parquet are the saves net's.
-It doubles the training time; --no-saves-net skips it.
+ours' saves outputs from it (model.swap_saves), seed by seed: predictions-s<N>.parquet
+are ours per seed (their average is predictions.parquet), predictions-main-s<N>.parquet
+the main net's own, predictions-saves-s<N>.parquet and predictions-saves.parquet the
+saves net's. It trains on every pitcher even with --train-half (it reads no encoder or
+probes to leak). It doubles the training time; --no-saves-net skips it (needed with
+--seq none, and with --no-own-windows, where the main net already is the saves net).
 
 --predict-only skips the scoring: for a season with nothing to score yet (next season's
 preseason rows, once its schedule is in the store and the table is rebuilt). The run
@@ -25,7 +28,8 @@ appearances (model.DEFAULT_SEQ), the appearance tokens
 (model.DEFAULT_PARKS), the park file (scripts/build_pitcher_ros_parks.py --name p3),
 and for the default stuff inputs (model.DEFAULT_STUFF), the stuff file
 (scripts/build_pitcher_stuff.py --features-file s2-located --run s2-located).
---seq none drops only the sequence encoder (parks and the relative target stay on).
+--seq none --no-saves-net drops the sequence encoder and with it the saves net (parks
+and the relative target stay on).
 --probes <run> adds the pitcher probe features (#492) from data/pitcher_ros/probes_<run>.parquet
 (scripts/build_pitcher_ros_probes.py --run <run>); off by default. Probes from a run
 pretrained on one half (--half) need --train-half for the other half.
@@ -42,7 +46,7 @@ each read by the encoder of the half he is not in (finetune.cross_encoders).
 Usage:
     python scripts/train_pitcher_ros.py --name 003-avg          # seeds 0-4, averaged
     python scripts/train_pitcher_ros.py --name quick --seeds 0 --test-seasons 2026
-    python scripts/train_pitcher_ros.py --name plain --seq none   # no sequence
+    python scripts/train_pitcher_ros.py --name plain --seq none --no-saves-net   # no sequence
     python scripts/train_pitcher_ros.py --name noparks --parks none   # no park inputs
     python scripts/train_pitcher_ros.py --name nopieces --no-era-pieces   # 5 outputs only
     python scripts/train_pitcher_ros.py --name nohz --no-horizons   # no 7- / 30-day outputs
@@ -302,6 +306,13 @@ def main() -> int:
             "--saves-net reads his history from the sequence: it needs --seq "
             "(or pass --no-saves-net)"
         )
+    if args.no_own_windows and args.saves_net:
+        parser.error(
+            "--no-own-windows: the main net already reads his history only as the "
+            "sequence, so the saves net would be the same net; add --no-saves-net"
+        )
+    if args.no_own_windows and args.no_role_windows:
+        parser.error("--no-own-windows already leaves out the role rates; drop --no-role-windows")
     if args.no_own_windows and args.stuff != "none":
         # The stuff inputs are his own rates per window too (stuff_features.WINDOWS).
         parser.error("--no-own-windows: the stuff inputs are his own windows too; add --stuff none")
@@ -532,10 +543,12 @@ def main() -> int:
 
     infos: list[dict] = []
 
-    def train_net(net: str, x_net: pd.DataFrame, batcher_net, fine_tuned: bool) -> pd.DataFrame:
-        """Every seed x test season of one net, written per seed; the seeds' average."""
+    def train_net(
+        net: str, x_net: pd.DataFrame, batcher_net, fine_tuned: bool, rows: pd.Series | None
+    ) -> list[pd.DataFrame]:
+        """Every seed x test season of one net, trained on ``rows`` (None: every row);
+        one frame per seed, in ``configs``' order."""
         by_seed = []
-        tag = "" if net == "main" else f"-{net}"
         for seed, config in configs.items():
             parts = []
             for season in seasons:
@@ -546,20 +559,26 @@ def main() -> int:
                     else build_model
                 )
                 preds, info = fit_season(
-                    table, x_net, y, w, season, config, league, batcher_net, make, train_on
+                    table, x_net, y, w, season, config, league, batcher_net, make, rows
                 )
                 parts.append(preds)
                 infos.append({"net": net, "seed": seed, **info})
-            seed_preds = pd.concat(parts, ignore_index=True)
-            seed_preds.to_parquet(run / f"predictions{tag}-s{seed}.parquet", index=False)
-            by_seed.append(seed_preds)
-        return average_seeds(by_seed)
+            by_seed.append(pd.concat(parts, ignore_index=True))
+        return by_seed
 
-    preds = train_net("main", x, batcher, fine_tuned=True)
+    ours = train_net("main", x, batcher, fine_tuned=True, rows=train_on)
     if x_saves is not None:
-        saves_preds = train_net("saves", x_saves, saves_batcher, fine_tuned=False)
-        saves_preds.to_parquet(run / "predictions-saves.parquet", index=False)
-        preds = swap_saves(preds, saves_preds)
+        # The half split guards the encoder and probes against a leak; the saves net
+        # reads neither, so it trains on every pitcher.
+        saves = train_net("saves", x_saves, saves_batcher, fine_tuned=False, rows=None)
+        for seed, main_preds, saves_preds in zip(configs, ours, saves, strict=True):
+            main_preds.to_parquet(run / f"predictions-main-s{seed}.parquet", index=False)
+            saves_preds.to_parquet(run / f"predictions-saves-s{seed}.parquet", index=False)
+        average_seeds(saves).to_parquet(run / "predictions-saves.parquet", index=False)
+        ours = [swap_saves(m, s) for m, s in zip(ours, saves, strict=True)]
+    for seed, seed_preds in zip(configs, ours, strict=True):
+        seed_preds.to_parquet(run / f"predictions-s{seed}.parquet", index=False)
+    preds = average_seeds(ours)
     preds.to_parquet(run / "predictions.parquet", index=False)
     (run / "info.json").write_text(json.dumps(infos, indent=2))
     if args.predict_only:
