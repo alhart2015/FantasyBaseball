@@ -181,6 +181,16 @@ def test_without_his_own_windows_only_those_inputs_go(table):
         pd.testing.assert_series_equal(lean[c], full[c])
 
 
+def test_without_his_role_windows_only_the_role_rates_go(table):
+    from fantasy_baseball.pitcher_ros.features import INPUT_RECENT, ROLE_RATES, WINDOWS
+
+    full, lean = input_frame(table), input_frame(table, role_windows=False)
+    role = {f"{w}_{r}" for w in (*WINDOWS, *INPUT_RECENT) for r in ROLE_RATES}
+    assert role <= set(full.columns)
+    assert set(full.columns) - set(lean.columns) == role
+    pd.testing.assert_frame_equal(lean, full.drop(columns=sorted(role)))
+
+
 def test_fit_season_predicts_every_test_row_as_rates(table):
     x, (y, w) = input_frame(table), answers(table)
     config = plain_config(hidden=[8], max_epochs=3, patience=1, val_frac=0.34)
@@ -434,3 +444,23 @@ def test_train_on_limits_the_training_rows_not_the_predictions(table):
     assert RELIEVER in set(preds["player_id"])
     with pytest.raises(ValueError, match="one entry per table row"):
         fit_season(table, x, y, w, 2025, config, train_on=keep.iloc[1:])
+
+
+def test_swap_saves_takes_only_the_saves_outputs():
+    from fantasy_baseball.pitcher_ros.model import DEFAULT_SAVES_NET, ID_COLS, swap_saves
+
+    assert DEFAULT_SAVES_NET is True
+    ids = pd.DataFrame({"player_id": [1, 2], "season": 2025, "week": 0, "as_of": "2025-03-27"})
+    main = ids.assign(k=[0.2, 0.3], sv=[0.0, 0.01], d7_sv=[0.0, 0.02], d7_k=[0.25, 0.3])
+    saves = ids.assign(k=[9.0, 9.0], sv=[0.05, 0.06], d7_sv=[0.07, 0.08], d7_k=[9.0, 9.0])
+    out = swap_saves(main, saves)
+    assert out["sv"].tolist() == [0.05, 0.06] and out["d7_sv"].tolist() == [0.07, 0.08]
+    assert out["k"].tolist() == [0.2, 0.3] and out["d7_k"].tolist() == [0.25, 0.3]
+    assert main["sv"].tolist() == [0.0, 0.01]  # not changed in place
+    with pytest.raises(ValueError, match="different rows"):
+        swap_saves(main, saves.iloc[::-1])
+    with pytest.raises(ValueError, match="different rows"):
+        swap_saves(main, saves.iloc[:1])
+    with pytest.raises(ValueError, match="saves outputs differ"):
+        swap_saves(main, saves.drop(columns="d7_sv"))
+    assert list(out.columns) == list(main.columns) and out[ID_COLS].equals(main[ID_COLS])

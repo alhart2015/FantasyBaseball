@@ -7,6 +7,13 @@ mid-season snapshots, pitcher_ros.backtest). Writes predictions.parquet (the ave
 predictions-s<N>.parquet (each seed), config.json, info.json, the scored frames and
 scores.md to data/pitcher_ros/runs/<name>/.
 
+--saves-net (on by default, model.DEFAULT_SAVES_NET) trains a second net per seed and
+test season, reading his history only as the appearance sequence (no per-window rates
+of his own, no stuff, probe or fine-tuning inputs; parks as the main net), and takes
+ours' saves outputs from it (model.swap_saves). predictions-s<N>.parquet stay the main
+net's; predictions-saves-s<N>.parquet and predictions-saves.parquet are the saves net's.
+It doubles the training time; --no-saves-net skips it.
+
 --predict-only skips the scoring: for a season with nothing to score yet (next season's
 preseason rows, once its schedule is in the store and the table is rebuilt). The run
 then has the predictions, config.json, info.json and a short summary.md only.
@@ -40,6 +47,7 @@ Usage:
     python scripts/train_pitcher_ros.py --name nopieces --no-era-pieces   # 5 outputs only
     python scripts/train_pitcher_ros.py --name nohz --no-horizons   # no 7- / 30-day outputs
     python scripts/train_pitcher_ros.py --name nostuff --stuff none   # no stuff inputs
+    python scripts/train_pitcher_ros.py --name one --no-saves-net   # main net's own saves
     python scripts/train_pitcher_ros.py --name proj-2027 --test-seasons 2027 --predict-only
     python scripts/train_pitcher_ros.py --name allstuff --stuff-rates all   # all 60
     python scripts/train_pitcher_ros.py --name probes --probes q001   # + probe features
@@ -91,6 +99,7 @@ from fantasy_baseball.pitcher_ros.model import (
     DEFAULT_HORIZONS,
     DEFAULT_PARKS,
     DEFAULT_RELATIVE_TARGET,
+    DEFAULT_SAVES_NET,
     DEFAULT_SEEDS,
     DEFAULT_SEQ,
     DEFAULT_STUFF,
@@ -103,6 +112,7 @@ from fantasy_baseball.pitcher_ros.model import (
     fit_season,
     league_rates,
     net_config,
+    swap_saves,
 )
 from fantasy_baseball.pitcher_ros.parks import load_park_inputs
 from fantasy_baseball.pitcher_ros.probes import load_probe_inputs
@@ -251,6 +261,19 @@ def main() -> int:
         "--stuff none (the stuff inputs are per window too)",
     )
     parser.add_argument(
+        "--saves-net",
+        action=argparse.BooleanOptionalAction,
+        default=DEFAULT_SAVES_NET,
+        help="take the saves outputs from a second net that reads his history only as "
+        "the appearance sequence (model.DEFAULT_SAVES_NET); needs --seq",
+    )
+    parser.add_argument(
+        "--no-role-windows",
+        action="store_true",
+        help="leave out only his role rates per window (features.ROLE_RATES: saves, "
+        "holds, games finished, start share...): his role from the sequence; needs --seq",
+    )
+    parser.add_argument(
         "--train-half",
         type=int,
         choices=(0, 1),
@@ -272,6 +295,13 @@ def main() -> int:
         parser.error(f"{run} already has a run; pick another --name or pass --overwrite")
     if args.no_own_windows and args.seq == "none":
         parser.error("--no-own-windows reads his history from the sequence: it needs --seq")
+    if args.no_role_windows and args.seq == "none":
+        parser.error("--no-role-windows reads his role from the sequence: it needs --seq")
+    if args.saves_net and args.seq == "none":
+        parser.error(
+            "--saves-net reads his history from the sequence: it needs --seq "
+            "(or pass --no-saves-net)"
+        )
     if args.no_own_windows and args.stuff != "none":
         # The stuff inputs are his own rates per window too (stuff_features.WINDOWS).
         parser.error("--no-own-windows: the stuff inputs are his own windows too; add --stuff none")
@@ -376,7 +406,10 @@ def main() -> int:
                 check_league_forecast(table, league, season)
             except ValueError as err:
                 parser.error(f"--test-seasons: {err}")
-    x = input_frame(table, own_windows=not args.no_own_windows)
+    x = input_frame(
+        table, own_windows=not args.no_own_windows, role_windows=not args.no_role_windows
+    )
+    x_saves = input_frame(table, own_windows=False) if args.saves_net else None
     parks_build = None
     if args.parks != "none":
         try:
@@ -384,6 +417,8 @@ def main() -> int:
         except ValueError as err:
             parser.error(str(err))
         x = pd.concat([x, park_inputs], axis=1)
+        if x_saves is not None:
+            x_saves = pd.concat([x_saves, park_inputs], axis=1)
         logging.info("added %d park inputs (%s)", park_inputs.shape[1], args.parks)
     stuff_build = None
     if args.stuff != "none":
@@ -452,6 +487,8 @@ def main() -> int:
             features=TOKEN_FEATURES,
             order=TOKEN_ORDER,
         )
+    # The saves net reads the plain appearance sequence, never a fine-tuned encoder.
+    saves_batcher = batcher
     pitch_store = None
     if finetune is not None and pretrain_run is not None and batcher is not None:
         pitch_tokens = pd.read_parquet(PITCH_TOKENS)
@@ -485,35 +522,50 @@ def main() -> int:
         "finetune": finetune.to_dict() if finetune is not None else None,
         "train_half": args.train_half,
         "own_windows": not args.no_own_windows,
+        "role_windows": not args.no_role_windows,
         "era_pieces": args.era_pieces,
         "horizons": list(horizons),
         "horizon_weights": HORIZON_WEIGHTS if horizons else None,
+        "saves_net": args.saves_net,
     }
     (run / "config.json").write_text(json.dumps(settings, indent=2))
 
-    by_seed, infos = [], []
-    for seed, config in configs.items():
-        parts = []
-        for season in seasons:
-            logging.info("seed %s, test season %s", seed, season)
-            make = (
-                model_maker(pretrain_run, season, finetune, device(), cross_run)
-                if finetune is not None and pretrain_run is not None
-                else build_model
-            )
-            preds, info = fit_season(
-                table, x, y, w, season, config, league, batcher, make, train_on
-            )
-            parts.append(preds)
-            infos.append({"seed": seed, **info})
-        seed_preds = pd.concat(parts, ignore_index=True)
-        seed_preds.to_parquet(run / f"predictions-s{seed}.parquet", index=False)
-        by_seed.append(seed_preds)
-    preds = average_seeds(by_seed)
+    infos: list[dict] = []
+
+    def train_net(net: str, x_net: pd.DataFrame, batcher_net, fine_tuned: bool) -> pd.DataFrame:
+        """Every seed x test season of one net, written per seed; the seeds' average."""
+        by_seed = []
+        tag = "" if net == "main" else f"-{net}"
+        for seed, config in configs.items():
+            parts = []
+            for season in seasons:
+                logging.info("%s net, seed %s, test season %s", net, seed, season)
+                make = (
+                    model_maker(pretrain_run, season, finetune, device(), cross_run)
+                    if fine_tuned and finetune is not None and pretrain_run is not None
+                    else build_model
+                )
+                preds, info = fit_season(
+                    table, x_net, y, w, season, config, league, batcher_net, make, train_on
+                )
+                parts.append(preds)
+                infos.append({"net": net, "seed": seed, **info})
+            seed_preds = pd.concat(parts, ignore_index=True)
+            seed_preds.to_parquet(run / f"predictions{tag}-s{seed}.parquet", index=False)
+            by_seed.append(seed_preds)
+        return average_seeds(by_seed)
+
+    preds = train_net("main", x, batcher, fine_tuned=True)
+    if x_saves is not None:
+        saves_preds = train_net("saves", x_saves, saves_batcher, fine_tuned=False)
+        saves_preds.to_parquet(run / "predictions-saves.parquet", index=False)
+        preds = swap_saves(preds, saves_preds)
     preds.to_parquet(run / "predictions.parquet", index=False)
     (run / "info.json").write_text(json.dumps(infos, indent=2))
     if args.predict_only:
-        epochs = ", ".join(f"s{i['seed']} {i['test_season']}: {i['best_epoch']}" for i in infos)
+        epochs = ", ".join(
+            f"{i['net']} s{i['seed']} {i['test_season']}: {i['best_epoch']}" for i in infos
+        )
         md = [
             f"### Pitcher run `{args.name}` (predictions only, not scored)",
             "",

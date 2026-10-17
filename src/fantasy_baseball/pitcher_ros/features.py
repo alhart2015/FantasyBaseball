@@ -329,7 +329,27 @@ COVERAGE = (
 )
 
 
-def input_frame(t: pd.DataFrame, own_windows: bool = True) -> pd.DataFrame:
+# His role per window (saves and save chances, holds, blown saves, games finished,
+# start and relief shares): with ``role_windows=False`` the net reads his role from
+# the appearance sequence only, where a role change shows as soon as it happens.
+# Tried (run 034-norole vs 031, 5 seeds): mid-season SV MSE 8.57 vs 8.54 (49% sure
+# better) on the fantasy-relevant, the rest a shade worse; the net still reads the role
+# from his other per-window rates. The saves net (model.DEFAULT_SAVES_NET) does it.
+ROLE_RATES = (
+    "gs_share",
+    "relief_out_share",
+    "sv_bf",
+    "svo_per_g",
+    "hld_per_g",
+    "bs_per_g",
+    "gf_per_g",
+    "sv_per_svo",
+)
+
+
+def input_frame(
+    t: pd.DataFrame, own_windows: bool = True, role_windows: bool = True
+) -> pd.DataFrame:
     """Model inputs for every table row. NaN = unknown. Refuses a table built before the
     minor-league inputs (#465), which would otherwise fail on a bare missing column.
 
@@ -338,7 +358,9 @@ def input_frame(t: pd.DataFrame, own_windows: bool = True) -> pd.DataFrame:
     a net that reads his history only as the appearance sequence. Minor-league, team,
     league and context inputs stay: the sequence holds none of them. The stuff inputs
     (``stuff_features``) are his own windows too: scripts/train_pitcher_ros.py
-    --no-own-windows requires --stuff none."""
+    --no-own-windows requires --stuff none.
+
+    ``role_windows=False`` leaves out only his role rates per window (``ROLE_RATES``)."""
     if "milb_p1_in_store" not in t.columns:
         raise ValueError(
             "the pitcher table has no minor-league columns (milb_*); rebuild it with "
@@ -346,7 +368,10 @@ def input_frame(t: pd.DataFrame, own_windows: bool = True) -> pd.DataFrame:
         )
     cols: dict[str, pd.Series] = {}
     for w in (*WINDOWS, *INPUT_RECENT) if own_windows else ():
-        cols.update(_box_rates(t, w))
+        box = _box_rates(t, w)
+        if not role_windows:
+            box = {k: v for k, v in box.items() if k.removeprefix(f"{w}_") not in ROLE_RATES}
+        cols.update(box)
         cols.update(_tracking_rates(t, w))
     for w in ("std", "p1", "p3"):
         cols.update(_league_rates(t, w))

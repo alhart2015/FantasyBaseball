@@ -424,6 +424,40 @@ def fit_season(
 DEFAULT_SEEDS = (0, 1, 2, 3, 4)
 
 
+# The saves net (scripts/train_pitcher_ros.py --saves-net): a second net reading his
+# history only as the appearance sequence (features.input_frame own_windows=False, no
+# stuff inputs), whose saves outputs (:func:`swap_saves`) replace the main net's. Saves
+# follow a role, and a role change shows in his last few appearances long before his
+# per-window rates move; dropping only the role rates (ROLE_RATES, run 034) didn't get
+# it. 5 seeds x 2022-2026 (run 035-saves-net vs 031-horizons; how sure better, 0-100),
+# SV MSE: mid-season, fantasy-relevant 7.32 vs 8.54 (100), all 4.45 vs 5.29 (100), now
+# ahead of the FanGraphs blend (7.69 / 4.69) where the one net trailed it; preseason
+# 36.27 vs 37.47 (83), all 17.78 vs 18.56 (92). Next 30 days, mid-season: 0.520 vs 0.545.
+# The other stats are the main net's, unchanged. The saves net alone (run 033) is worse
+# on K, ERA and WHIP (0-1% sure better), so it supplies saves only.
+DEFAULT_SAVES_NET = True
+
+
+def saves_columns(columns: list[str] | pd.Index) -> list[str]:
+    """The saves outputs among ``columns``: ``sv`` and each short horizon's ``d{N}_sv``."""
+    return [c for c in columns if c not in ID_COLS and target_stat(c) == "sv"]
+
+
+def swap_saves(preds: pd.DataFrame, saves: pd.DataFrame) -> pd.DataFrame:
+    """``preds`` with its saves outputs (:func:`saves_columns`) taken from ``saves``, the
+    saves net's predictions. Refuses unless both predicted exactly the same rows and
+    the same saves outputs: a row missing from one would be left with no saves."""
+    cols = saves_columns(preds.columns)
+    if not cols or cols != saves_columns(saves.columns):
+        raise ValueError(f"saves outputs differ: {cols} vs {saves_columns(saves.columns)}")
+    keys = preds[ID_COLS].reset_index(drop=True)
+    if len(saves) != len(preds) or not keys.equals(saves[ID_COLS].reset_index(drop=True)):
+        raise ValueError("the saves net predicted different rows from the main net")
+    out = preds.copy()
+    out[cols] = saves[cols].to_numpy()
+    return out
+
+
 def average_seeds(preds: list[pd.DataFrame]) -> pd.DataFrame:
     """The rates (``TARGETS``, then ERA's pieces and the short horizons' ``d{N}_`` rates
     when predicted) averaged over seeds'
