@@ -1,7 +1,8 @@
 """Experiment: score the pitcher net with its SV taken from the saves model (#474).
 
 ``ours`` is a pitcher net run's predictions (scripts/train_pitcher_ros.py), and stays
-our projection (the net's own SV; see pitcher_ros/saves.py). ``ours_<method>`` is the
+our projection (ours' SV: the saves net's for a run with one, config.json saves_net,
+else the net's own; see pitcher_ros/saves.py). ``ours_<method>`` is the
 same with SV from one of the saves model's projections (scripts/compare_pitcher_saves.py),
 as a rate over FanGraphs' projected batters faced (the playing time projections run
 on): ``usage`` (our usage share x our team projection; no FanGraphs saves or shares in
@@ -9,7 +10,7 @@ it) and ``mix`` (also FanGraphs' share: a blend with FanGraphs, not ours). All a
 scored in one pass beside FanGraphs and the baselines (pitcher_ros.backtest), on the
 same pitchers and the seasons the saves units cover, plus each swap's SV paired
 against ``ours``. A pitcher with no saves units (FanGraphs doesn't project him) keeps
-the net's SV. Writes saves-scores.md into the run's folder and prints it.
+ours' SV. Writes saves-scores.md into the run's folder and prints it.
 
 The saves projections are averaged over the run's seeds (its config.json), as the
 net's predictions are, so neither side gets the steadier average alone
@@ -60,7 +61,7 @@ def _paired_lines(frame: pd.DataFrame | None, title: str) -> list[str]:
         return []
     md = [
         "",
-        f"**{title}: SV swapped in vs the net's own SV** (a minus b; negative = a better)",
+        f"**{title}: SV swapped in vs ours' SV** (a minus b; negative = a better)",
         "",
     ]
     for label, sub in (("all", frame), ("fantasy-relevant", frame[frame["relevant"] == True])):  # noqa: E712
