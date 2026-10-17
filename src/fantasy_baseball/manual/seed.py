@@ -46,16 +46,13 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from fantasy_baseball.data import kv_store
 from fantasy_baseball.data.cache_keys import (
     MANUAL_PROVENANCE_KEY,
     CacheKey,
     redis_key,
 )
-
-# ``_DEFAULT_LOCAL_DB`` is the single definition of the Yahoo baseline store's
-# location. Re-deriving it here would let the two drift, and the refusal below
-# is only worth having if it points at the same file ``kv_store`` does.
-from fantasy_baseball.data.kv_store import _DEFAULT_LOCAL_DB, KVStore
+from fantasy_baseball.data.kv_store import KVStore
 from fantasy_baseball.data.redis_store import write_roster_snapshot, write_standings_snapshot
 from fantasy_baseball.manual.transcripts import ManualRosterSnapshot
 from fantasy_baseball.models.standings import Standings
@@ -157,7 +154,10 @@ def assert_isolated_store(client: KVStore) -> Path:
             "fantasy_baseball import."
         )
 
-    if path.name.lower() == BASELINE_DB_NAME or path == _DEFAULT_LOCAL_DB.resolve():
+    # ``kv_store._DEFAULT_LOCAL_DB`` is the single definition of the Yahoo baseline
+    # store's location: re-deriving it would let the two drift. Read at call time,
+    # so a relocated default (as the tests do) is seen too.
+    if path.name.lower() == BASELINE_DB_NAME or path == kv_store._DEFAULT_LOCAL_DB.resolve():
         raise ManualSeedRefused(
             f"Refusing to seed {path}: that is the Yahoo baseline KV store. "
             "Hand-transcribed rosters and standings written there would overwrite "

@@ -24,7 +24,7 @@ def test_deltaroto_immediate_draft_completes(fantasy_db):
     injection needed.  The recommend() seam handles the deltaRoto path natively
     (RecInputs per pick, scoring_mode="deltaroto_immediate").
     """
-    ctx = build_board_and_context(db_path=fantasy_db)
+    ctx = build_board_and_context()
     config = ctx["config"]
 
     result = run_simulation(
@@ -57,7 +57,7 @@ def test_deltaroto_immediate_draft_completes(fantasy_db):
 
 def test_var_draft_completes(fantasy_db):
     """A var-mode draft runs end-to-end and populates all rosters."""
-    ctx = build_board_and_context(db_path=fantasy_db)
+    ctx = build_board_and_context()
     config = ctx["config"]
 
     result = run_simulation(
@@ -116,7 +116,7 @@ def test_adp_noise_on_different_seeds_diverge(fantasy_db):
     accordingly, producing a different pick sequence.  This pins the variance
     model: noise ON + different seeds -> different outcomes.
     """
-    ctx = build_board_and_context(db_path=fantasy_db)
+    ctx = build_board_and_context()
 
     r42 = run_simulation(
         ctx,
@@ -154,7 +154,7 @@ def test_deltaroto_immediate_with_strategic_opponents_completes(fantasy_db):
     raises ValueError: requires inputs).  Uses a minimal opponent string that
     assigns two_closers strategy to one opponent team (team 1).
     """
-    ctx = build_board_and_context(db_path=fantasy_db)
+    ctx = build_board_and_context()
     config = ctx["config"]
 
     # Route one opponent team through the strategy path so the deltaRoto

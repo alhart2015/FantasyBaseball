@@ -15,13 +15,21 @@ def _hitter_line(**kw):
 
 @pytest.fixture(scope="module")
 def _season_payloads():
-    """Live-season KV payloads built from committed data (#496): the full-season
-    projections as the draft-day blend of data/projections/<season>/ (every player,
-    with mlbam ids), and season-to-date game-log totals as 60% of each line. Never the
-    machine's own KV store, which holds whatever it last synced."""
-    import math
+    """Live-season KV payloads built from committed data (#496), never the machine's
+    own KV store, which holds whatever it last synced.
 
-    from fantasy_baseball.data.projections import blend_projections
+    The draft-day blend of data/projections/<season>/ (every player, with mlbam ids)
+    is split 60/40: season-to-date game-log totals are 60% of each counting line, and
+    the rest-of-season projection is the other 40%. The full-season payload is then
+    made the way the ROS job makes it (ros_pipeline.derive_full_season, then
+    ``to_dict(orient="records")``), so it has production's shape.
+    """
+    from fantasy_baseball.data.projections import (
+        HITTING_COUNTING_COLS,
+        PITCHING_COUNTING_COLS,
+        blend_projections,
+    )
+    from fantasy_baseball.data.ros_pipeline import derive_full_season
 
     config = dv.load_config(dv._CONFIG)
     hitters, pitchers, _ = blend_projections(
@@ -30,26 +38,32 @@ def _season_payloads():
         config.projection_weights,
     )
 
-    def records(frame):
-        return [
-            {k: (None if isinstance(v, float) and math.isnan(v) else v) for k, v in r.items()}
-            for r in frame.to_dict("records")
-        ]
-
-    full = {"hitters": records(hitters), "pitchers": records(pitchers)}
-    counts = {
-        "hitters": ("r", "hr", "rbi", "sb", "h", "ab"),
-        "pitchers": ("w", "k", "sv", "ip", "er", "bb", "h_allowed"),
-    }
-    to_date = {
-        kind: {
-            str(int(r["mlbam_id"])): {"name": r["name"], **{c: 0.6 * (r[c] or 0) for c in cols}}
-            for r in full[kind]
-            if r["mlbam_id"] is not None
+    def split(frame, cols):
+        cols = [c for c in cols if c in frame.columns]
+        ros = frame.copy()
+        ros[cols] = frame[cols].astype("float64") * 0.4
+        played = frame[frame["mlbam_id"].notna()]
+        to_date = {
+            str(int(mid)): {"name": name, **{c: 0.6 * float(v) for c, v in line.items()}}
+            for mid, name, line in zip(
+                played["mlbam_id"],
+                played["name"],
+                played[cols].fillna(0).to_dict("records"),
+                strict=True,
+            )
         }
-        for kind, cols in counts.items()
+        return ros, to_date
+
+    hitters_ros, hitter_totals = split(hitters, HITTING_COUNTING_COLS)
+    pitchers_ros, pitcher_totals = split(pitchers, PITCHING_COUNTING_COLS)
+    full_hitters, full_pitchers = derive_full_season(
+        hitters_ros, pitchers_ros, hitter_totals, pitcher_totals
+    )
+    full = {
+        "hitters": full_hitters.to_dict(orient="records"),
+        "pitchers": full_pitchers.to_dict(orient="records"),
     }
-    return full, to_date
+    return full, {"hitters": hitter_totals, "pitchers": pitcher_totals}
 
 
 @pytest.fixture

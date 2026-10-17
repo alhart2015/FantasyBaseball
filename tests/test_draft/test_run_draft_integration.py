@@ -114,7 +114,7 @@ class TestDraftSimulationRoundtrip:
     @pytest.fixture(scope="class")
     def sim_result(self, tmp_path_factory):
         """Run the simulation once and share the result across all tests."""
-        # Class-scoped, so it runs before the per-test temp files exist: its own db.
+        # Class-scoped, so it runs before the per-test fantasy_db exists: its own db.
         db_path = seed_fantasy_db(tmp_path_factory.mktemp("fantasy_db") / "fantasy.db")
         ctx = build_board_and_context(db_path=db_path)
         result = run_simulation(

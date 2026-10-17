@@ -30,9 +30,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from fantasy_baseball.data import kv_store
 from fantasy_baseball.data.cache_keys import MANUAL_PROVENANCE_KEY, CacheKey, redis_key
 from fantasy_baseball.data.kv_store import (
-    _DEFAULT_LOCAL_DB,
     LOCAL_KV_PATH_ENV,
     KVStore,
     SqliteKVStore,
@@ -103,9 +103,13 @@ def local_destination() -> Path | None:
     Returns None only when the resolved path cannot be parsed, which is not a state
     the guards need to distinguish from "not the baseline".
     """
+    # ``kv_store._DEFAULT_LOCAL_DB`` is read off the module at CALL time here and
+    # below, never from-imported: relocating the baseline is how the tests keep the
+    # real data/local.db out of a test run, and a from-import would freeze the real
+    # path.
     raw = os.environ.get(LOCAL_KV_PATH_ENV)
     try:
-        return Path(raw).resolve() if raw else _DEFAULT_LOCAL_DB.resolve()
+        return Path(raw).resolve() if raw else kv_store._DEFAULT_LOCAL_DB.resolve()
     except (TypeError, ValueError):  # pragma: no cover - defensive
         return None
 
@@ -160,11 +164,6 @@ def sync_destination_refusal(
         recovery: the caller's own next-step lines. What gets you out of it
             differs per script; the hazard does not.
     """
-    # Read off the module at CALL time, not bound at import: relocating the
-    # baseline is how the tests keep the real data/local.db out of a test run,
-    # and a from-import here would freeze the real path into this function.
-    from fantasy_baseball.data import kv_store
-
     baseline = kv_store._DEFAULT_LOCAL_DB.resolve()
     if kv_path == baseline:
         return None

@@ -1,3 +1,4 @@
+import itertools
 import os
 from pathlib import Path
 
@@ -95,44 +96,123 @@ def _isolate_kv_from_prod(monkeypatch):
     kv_store._reset_singleton()
 
 
-@pytest.fixture(autouse=True)
-def _isolate_local_files(request, tmp_path, monkeypatch):
-    """No test reads or writes the machine's own data files (#496).
+#: The real paths, saved before ``_local_files_root`` replaces them, for tests
+#: marked ``real_local_files``.
+_REAL_LOCAL_FILES: dict = {}
 
-    ``data/fantasy.db`` (``data.db.DB_PATH``) and ``data/local.db`` (the local
-    KV) hold whatever this machine last built or synced, so a test reading them
-    passes or fails by machine, and a test writing them clobbers real state. Both
-    are pointed into this test's own temp folder: empty there, so a test that
-    needs projections asks for the ``fantasy_db`` fixture (seeded from committed
-    fixture data) or seeds its own KV. Kept in a subfolder so a test listing its
-    ``tmp_path`` doesn't see them; created up front so it is there before and after.
-    A test about the real files themselves (read-only) opts out with
-    ``@pytest.mark.real_local_files``.
+
+#: Numbers each test's own folder for the pair of files.
+_TEST_NUMBER = itertools.count()
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _local_files_root(tmp_path_factory):
+    """Point the machine's own data files into a temp folder for the whole session.
+
+    ``data/fantasy.db`` (``data.db.DB_PATH``) and ``data/local.db`` (the local KV)
+    hold whatever this machine last built or synced, so a test reading them passes
+    or fails by machine, and a test writing them clobbers real state (#496). Done
+    once per session so that fixtures scoped wider than one test -- set up before
+    any per-test fixture -- never see the real files either; ``_isolate_local_files``
+    then gives each test its own pair. Yields the folder.
+    """
+    from fantasy_baseball.data import db, kv_store
+
+    _REAL_LOCAL_FILES.update(
+        db_path=db.DB_PATH,
+        default_kv=kv_store._DEFAULT_LOCAL_DB,
+        kv_env=os.environ.get(kv_store.LOCAL_KV_PATH_ENV),
+    )
+    root = tmp_path_factory.mktemp("local_files")
+    with pytest.MonkeyPatch.context() as mp:
+        (root / "session").mkdir()
+        _point_local_files(mp, root / "session" / "fantasy.db", root / "session" / "local.db")
+        yield root
+    kv_store._reset_singleton()
+
+
+def _point_local_files(mp, fantasy_db, local_db):
+    from fantasy_baseball.data import db, kv_store
+
+    mp.setattr(db, "DB_PATH", fantasy_db)
+    mp.setenv(kv_store.LOCAL_KV_PATH_ENV, str(local_db))
+    # The default too: code that clears the variable (manual-mode deactivate) or
+    # resolves the default itself must not fall back to the real file.
+    mp.setattr(kv_store, "_DEFAULT_LOCAL_DB", local_db)
+    kv_store._reset_singleton()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_local_files(request, _local_files_root, monkeypatch):
+    """This test's own ``fantasy.db`` and local KV, empty, in the session folder.
+
+    A numbered subfolder of the session folder rather than ``tmp_path``, so the
+    ~4,000 tests that never touch either file don't each set up pytest's temp
+    folder, and a test listing its ``tmp_path`` doesn't see them. A
+    test that needs projections asks for the ``fantasy_db`` fixture (seeded from
+    committed fixture data) or seeds its own KV. A test about the real files
+    themselves (read-only) opts out with ``@pytest.mark.real_local_files`` and
+    gets the real paths back.
     """
     from fantasy_baseball.data import db, kv_store
 
     if request.node.get_closest_marker("real_local_files"):
-        return
-
-    own = tmp_path / "_local_files"
-    own.mkdir()
-    monkeypatch.setattr(db, "DB_PATH", own / "fantasy.db")
-    monkeypatch.setenv(kv_store.LOCAL_KV_PATH_ENV, str(own / "local.db"))
-    # The default too: code that clears the variable (manual-mode deactivate) or
-    # resolves the default itself must not fall back to the real file.
-    monkeypatch.setattr(kv_store, "_DEFAULT_LOCAL_DB", own / "local.db")
+        monkeypatch.setattr(db, "DB_PATH", _REAL_LOCAL_FILES["db_path"])
+        monkeypatch.setattr(kv_store, "_DEFAULT_LOCAL_DB", _REAL_LOCAL_FILES["default_kv"])
+        if _REAL_LOCAL_FILES["kv_env"] is None:
+            monkeypatch.delenv(kv_store.LOCAL_KV_PATH_ENV)
+        else:
+            monkeypatch.setenv(kv_store.LOCAL_KV_PATH_ENV, _REAL_LOCAL_FILES["kv_env"])
+        kv_store._reset_singleton()
+    else:
+        # The real names: guards under test refuse a file by its name.
+        own = _local_files_root / f"t{next(_TEST_NUMBER)}"
+        own.mkdir()
+        _point_local_files(monkeypatch, own / "fantasy.db", own / "local.db")
+    yield
+    # The next test (or a wider fixture) must not reuse a store built on this
+    # test's paths.
     kv_store._reset_singleton()
 
 
-@pytest.fixture
-def fantasy_db():
-    """This test's ``fantasy.db`` (``data.db.DB_PATH``, in its temp folder), seeded
-    with the committed fixture players (tests/_fantasy_db.py); returns its path."""
-    from fantasy_baseball.data import db
+def own_fantasy_db_path(path, root):
+    """``path``, if it is a test's own ``fantasy.db`` under ``root``; else raises.
 
+    The ``fantasy_db`` fixture writes, so it refuses anything else -- for one, the
+    real ``data/fantasy.db`` a ``real_local_files`` test sees.
+    """
+    if not path.is_relative_to(root):
+        raise RuntimeError(
+            f"fantasy_db would seed {path}, which is not a test's own file under {root}"
+            " (a real_local_files test cannot also use fantasy_db)"
+        )
+    return path
+
+
+@pytest.fixture(scope="session")
+def _seeded_fantasy_db(_local_files_root):
+    """The committed fixture players (tests/_fantasy_db.py), seeded once per session."""
     from ._fantasy_db import seed_fantasy_db
 
-    return seed_fantasy_db(db.DB_PATH)
+    return seed_fantasy_db(_local_files_root / "seeded-fantasy.db")
+
+
+@pytest.fixture
+def fantasy_db(_seeded_fantasy_db, _local_files_root):
+    """This test's ``fantasy.db`` (``data.db.DB_PATH``), a copy of the seeded one;
+    returns its path."""
+    import sqlite3
+
+    from fantasy_baseball.data import db
+
+    path = own_fantasy_db_path(db.DB_PATH, _local_files_root)
+    src, dst = sqlite3.connect(_seeded_fantasy_db), sqlite3.connect(path)
+    try:
+        src.backup(dst)
+    finally:
+        src.close()
+        dst.close()
+    return path
 
 
 #: Env vars that select the KV backing file / disable Yahoo. Production code --

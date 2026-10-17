@@ -91,6 +91,7 @@ def test_live_draft_modules_do_not_import_redis_or_kv():
 
 def test_draft_flow_touches_only_draft_state_files(tmp_path: Path, monkeypatch, fantasy_db):
     """Run a synthetic draft sequence and verify no other files change."""
+    from fantasy_baseball.data.kv_sync import local_destination
     from fantasy_baseball.web.app import create_app
 
     # Seed a minimal league.yaml stub in tmp_path.
@@ -106,6 +107,10 @@ def test_draft_flow_touches_only_draft_state_files(tmp_path: Path, monkeypatch, 
     app.config["TESTING"] = True
 
     snapshot_before = {p.name for p in tmp_path.iterdir()}
+    # The guard keeps this test's fantasy.db and local KV outside tmp_path, so the
+    # listing above can't see them: check them directly.
+    fantasy_before = fantasy_db.read_bytes()
+    kv_path = local_destination()  # resolves the path without opening the store
 
     with app.test_client() as client:
         r = client.post("/api/new-draft")
@@ -126,3 +131,5 @@ def test_draft_flow_touches_only_draft_state_files(tmp_path: Path, monkeypatch, 
     allowed = {"draft_state.json", "draft_state_board.json", "draft_state_delta.json"}
     unexpected = new_files - allowed
     assert not unexpected, f"draft flow created unexpected files: {unexpected}"
+    assert fantasy_db.read_bytes() == fantasy_before, "draft flow wrote fantasy.db"
+    assert not kv_path.exists(), f"draft flow created the KV store {kv_path}"
