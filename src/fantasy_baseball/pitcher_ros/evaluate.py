@@ -191,7 +191,7 @@ def squared_error(scored: pd.DataFrame, keep: list[str]) -> pd.DataFrame:
     )
 
 
-def _error_weight(scored: pd.DataFrame) -> np.ndarray:
+def error_weight(scored: pd.DataFrame) -> np.ndarray:
     """Each row's weight on its squared rate error in MSE's numerator: ``bf^2`` for
     K/W/SV (``(bf x err)^2``), ``ip`` for ERA/WHIP (``ip x err^2``)."""
     per_bf = scored["stat"].isin(PER_BF).to_numpy()
@@ -217,7 +217,7 @@ def level_free(scored: pd.DataFrame) -> pd.DataFrame:
     own. A unit whose projections are all 0 keeps factor 1."""
     out = scored.copy()
     keys = ["system", "stat", *_units(out)]
-    w = _error_weight(out)
+    w = error_weight(out)
     p, a = out["projected"].to_numpy(float), out["actual"].to_numpy(float)
     groups = [out[k] for k in keys]
     num = pd.Series(w * p * a, index=out.index).groupby(groups).transform("sum")
@@ -256,7 +256,7 @@ def level_free_bootstrap(
         if rows is None
         else rows.reindex(sub.index).fillna(False).astype(bool)
     )
-    sub["W"] = _error_weight(sub)
+    sub["W"] = error_weight(sub)
     sub["mse_w"] = np.where(sub["stat"].isin(PER_BF), 1.0, sub["ip"].to_numpy(float))
     p, act = sub["projected"].to_numpy(float), sub["actual"].to_numpy(float)
     sub["fit_pa"], sub["fit_pp"] = sub["W"] * p * act, sub["W"] * p * p
