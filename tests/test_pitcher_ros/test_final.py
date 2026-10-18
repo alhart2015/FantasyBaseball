@@ -1,13 +1,21 @@
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 import pytest
 
 from fantasy_baseball.pitcher_ros.final import (
     GRID,
+    SYSTEMS,
     WEIGHTS,
+    _mse,
+    _wide,
     best_weights,
     blend_rates,
     blended_scored,
+    fg_average,
+    final_rates,
     held_out_weights,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS
@@ -110,3 +118,94 @@ def test_blended_scored_adds_the_blend_as_its_own_system():
         blended_scored(scored, weights.drop("sv"))
     with pytest.raises(ValueError, match="no \\['fg_blend'\\]"):
         blended_scored(scored[scored.system != "fg_blend"], weights)
+
+
+def test_best_weights_matches_scoring_every_grid_point():
+    # Noisy actuals, so the best weight falls between grid points: the shortcut (score
+    # only the two grid points around the parabola's low point) must agree with a full
+    # search of the grid.
+    scored = _scored(dict.fromkeys(TARGETS, 0.37), n=60, seed=3)
+    rng = np.random.default_rng(4)
+    scored["actual"] = scored["actual"] * rng.uniform(0.6, 1.4, len(scored))
+    scored["actual"] = scored.groupby(["player_id", "season", "stat"])["actual"].transform("first")
+    wide = _wide(scored)
+    for stat, rows in wide.groupby("stat"):
+        scores = {w: _mse(rows, w) for w in GRID}
+        assert best_weights(scored)[stat] == min(GRID, key=lambda w: (scores[w], -w))
+
+
+def test_best_weights_takes_the_ends_and_ties_to_ours():
+    # Actuals beyond ours (weight > 1) clip to 1; ours = FanGraphs ties every weight -> 1.
+    scored = _scored(dict.fromkeys(TARGETS, 1.6))
+    assert set(best_weights(scored)) == {1.0}
+    same = scored.copy()
+    fg = same["system"] == "fg_blend"
+    same.loc[fg, "projected"] = same.loc[same["system"] == "ours", "projected"].to_numpy()
+    assert set(best_weights(same)) == {1.0}
+
+
+def test_a_unit_fangraphs_lacks_is_refused_not_dropped():
+    scored = _scored(dict.fromkeys(TARGETS, 0.5))
+    gone = scored[~((scored.system == "fg_blend") & (scored.player_id == 3))]
+    with pytest.raises(ValueError, match="no projection from"):
+        best_weights(gone)
+    blank = scored.copy()
+    blank.loc[(blank.system == "fg_blend") & (blank.player_id == 3), "projected"] = np.nan
+    with pytest.raises(ValueError, match="no projection from"):
+        best_weights(blank)
+
+
+def test_held_out_weights_refuses_blank_groups_and_keeps_any_name():
+    scored = _scored(dict.fromkeys(TARGETS, 0.5))
+    by = scored["season"].astype(float)
+    by.iloc[0] = np.nan
+    with pytest.raises(ValueError, match="blank"):
+        held_out_weights(scored, by)
+    named_zero = scored["season"].rename(0)
+    assert held_out_weights(scored, named_zero).index.names == [0, "stat"]
+    assert held_out_weights(scored, scored["season"].rename(None)).index.names == ["group", "stat"]
+
+
+def test_fg_average_averages_whichever_systems_project_him():
+    steamer = _rates([1, 2], k=0.20, sv=0.04)
+    zips = _rates([1, 3], k=0.30, sv=0.00)
+    avg = fg_average({"steamer": steamer, "zips": zips})
+    assert list(avg.index) == [1, 2, 3]
+    assert avg.loc[1].k == pytest.approx(0.25) and avg.loc[1].sv == pytest.approx(0.02)
+    # One system only: that system's rates, not dropped.
+    assert avg.loc[2].sv == pytest.approx(0.04) and avg.loc[3].k == pytest.approx(0.30)
+    with pytest.raises(ValueError, match="no FanGraphs"):
+        fg_average({})
+
+
+def test_final_rates_needs_the_systems_the_weights_were_fitted_with():
+    ours = _rates([1], k=0.30)
+    systems = {s: _rates([1], k=0.20) for s in SYSTEMS["preseason"]}
+    out = final_rates(ours, systems, "preseason")
+    w = WEIGHTS["preseason"]["k"]
+    assert out.loc[1].k == pytest.approx(w * 0.30 + (1 - w) * 0.20)
+    with pytest.raises(ValueError, match="fitted with"):
+        final_rates(ours, {**systems, "atc": _rates([1])}, "preseason")
+    with pytest.raises(ValueError, match="span"):
+        final_rates(ours, systems, "playoffs")
+
+
+def _script():
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "scripts"))
+    import fit_pitcher_blend
+
+    return fit_pitcher_blend
+
+
+def test_the_script_scores_one_season_in_sample_and_says_so():
+    md = "\n".join(
+        _script().span_lines(_scored(dict.fromkeys(TARGETS, 0.5), seasons=(2026,)), "midseason")
+    )
+    assert "Not validated" in md and "without" not in md
+    # The scored frame has no FanGraphs systems by name, so it warns about SYSTEMS.
+    assert "Warning" in md
+
+
+def test_the_script_holds_out_each_season_when_there_are_several():
+    md = "\n".join(_script().span_lines(_scored(dict.fromkeys(TARGETS, 0.5)), "preseason"))
+    assert "without 2024" in md and "without 2025" in md and "Not validated" not in md
