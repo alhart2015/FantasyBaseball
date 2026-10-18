@@ -17,7 +17,7 @@ therefore different available pools for the user, producing different user roste
 from scripts.simulate_draft import build_board_and_context, run_simulation, run_user_pick_sequence
 
 
-def test_deltaroto_immediate_draft_completes():
+def test_deltaroto_immediate_draft_completes(fantasy_db):
     """A deltaroto_immediate draft runs end-to-end and populates all rosters.
 
     Task 14: uses the consolidated harness directly -- no sim_deltaroto strategy
@@ -55,7 +55,7 @@ def test_deltaroto_immediate_draft_completes():
     assert result["pts"] > 0, f"User points {result['pts']} <= 0"
 
 
-def test_var_draft_completes():
+def test_var_draft_completes(fantasy_db):
     """A var-mode draft runs end-to-end and populates all rosters."""
     ctx = build_board_and_context()
     config = ctx["config"]
@@ -81,7 +81,7 @@ def test_var_draft_completes():
     assert result["pts"] > 0
 
 
-def test_noise_off_is_fully_deterministic():
+def test_noise_off_is_fully_deterministic(fantasy_db):
     """With all noise off, different seeds produce identical pick sequences.
 
     This pins the variance model: adp_noise=0.0, strategy_noise=0.0,
@@ -108,7 +108,7 @@ def test_noise_off_is_fully_deterministic():
     )
 
 
-def test_adp_noise_on_different_seeds_diverge():
+def test_adp_noise_on_different_seeds_diverge(fantasy_db):
     """With adp_noise enabled, different seeds produce different user rosters.
 
     Each team draws its own per-player ADP jitter from the seeded RNG, so
@@ -145,7 +145,7 @@ def test_adp_noise_on_different_seeds_diverge():
     )
 
 
-def test_deltaroto_immediate_with_strategic_opponents_completes():
+def test_deltaroto_immediate_with_strategic_opponents_completes(fantasy_db):
     """A deltaroto_immediate draft with strategic opponents runs without raising.
 
     Regression test for the opponent reroute crash: when scoring_mode is a

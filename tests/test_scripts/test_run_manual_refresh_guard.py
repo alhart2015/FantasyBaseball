@@ -271,12 +271,14 @@ def _assert_refused_and_untouched(path: Path) -> None:
     assert _sidecars(path.parent) == sidecars_before
 
 
+@pytest.mark.real_local_files
 def test_the_real_application_database_is_refused_and_untouched():
     from fantasy_baseball.data.db import DB_PATH
 
     _assert_refused_and_untouched(DB_PATH)
 
 
+@pytest.mark.real_local_files
 def test_the_real_baseline_store_is_refused_and_untouched():
     from fantasy_baseball.data.kv_store import _DEFAULT_LOCAL_DB
 

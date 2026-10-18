@@ -49,13 +49,13 @@ def _assert_golden(seq, name):
     )
 
 
-def test_sim_var_picks_match_golden():
+def test_sim_var_picks_match_golden(fantasy_db):
     """Pin the VAR-mode user pick sequence."""
     seq = run_user_pick_sequence(scoring_mode="var", strategy="default", seed=SEED)
     _assert_golden(seq, "sim_golden_var.json")
 
 
-def test_sim_deltaroto_picks_match_golden():
+def test_sim_deltaroto_picks_match_golden(fantasy_db):
     """Pin the deltaRoto-immediate user pick sequence via the consolidated harness.
 
     Task 14: simulate_draft.run_user_pick_sequence now serves all four scoring

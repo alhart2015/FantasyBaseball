@@ -14,6 +14,73 @@ def _hitter_line(**kw):
 
 
 @pytest.fixture(scope="module")
+def _season_payloads():
+    """Live-season KV payloads built from committed data (#496), never the machine's
+    own KV store, which holds whatever it last synced.
+
+    The draft-day blend of data/projections/<season>/ (every player, with mlbam ids)
+    is split 60/40: season-to-date game-log totals are 60% of each counting line, and
+    the rest-of-season projection is the other 40%. The full-season payload is then
+    made the way the ROS job makes it (ros_pipeline.derive_full_season, then
+    ``to_dict(orient="records")``), so it has production's shape.
+    """
+    from fantasy_baseball.data.projections import (
+        HITTING_COUNTING_COLS,
+        PITCHING_COUNTING_COLS,
+        blend_projections,
+    )
+    from fantasy_baseball.data.ros_pipeline import derive_full_season
+
+    config = dv.load_config(dv._CONFIG)
+    hitters, pitchers, _ = blend_projections(
+        dv._REPO_ROOT / "data" / "projections" / str(config.season_year),
+        config.projection_systems,
+        config.projection_weights,
+    )
+
+    def split(frame, cols):
+        cols = [c for c in cols if c in frame.columns]
+        ros = frame.copy()
+        ros[cols] = frame[cols].astype("float64") * 0.4
+        played = frame[frame["mlbam_id"].notna()]
+        to_date = {
+            str(int(mid)): {"name": name, **{c: 0.6 * float(v) for c, v in line.items()}}
+            for mid, name, line in zip(
+                played["mlbam_id"],
+                played["name"],
+                played[cols].fillna(0).to_dict("records"),
+                strict=True,
+            )
+        }
+        return ros, to_date
+
+    hitters_ros, hitter_totals = split(hitters, HITTING_COUNTING_COLS)
+    pitchers_ros, pitcher_totals = split(pitchers, PITCHING_COUNTING_COLS)
+    full_hitters, full_pitchers = derive_full_season(
+        hitters_ros, pitchers_ros, hitter_totals, pitcher_totals
+    )
+    full = {
+        "hitters": full_hitters.to_dict(orient="records"),
+        "pitchers": full_pitchers.to_dict(orient="records"),
+    }
+    return full, {"hitters": hitter_totals, "pitchers": pitcher_totals}
+
+
+@pytest.fixture
+def season_kv(_season_payloads):
+    """This test's own local KV (tests/conftest.py) seeded with the season payloads."""
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.data.kv_store import get_kv
+    from fantasy_baseball.data.redis_store import set_game_log_totals
+    from fantasy_baseball.web.season_data import write_cache
+
+    full, to_date = _season_payloads
+    write_cache(CacheKey.FULL_SEASON_PROJECTIONS, full)
+    for kind, totals in to_date.items():
+        set_game_log_totals(get_kv(), kind, totals)
+
+
+@pytest.fixture(scope="module")
 def synthetic_scale():
     # build the real board/scale once for all oracle tests in this module
     _board, scale = dv.reproduce_draft_day_board()
@@ -124,10 +191,10 @@ def test_par_curve_is_descending_and_keeper_mean():
     assert curve.keeper_par == curve.keeper_par
 
 
-def test_full_season_and_actual_loaders_shape():
+def test_full_season_and_actual_loaders_shape(season_kv):
     full_by_mlbam, full_by_name = dv.load_full_season_lines()
-    assert full_by_name, "no full-season lines (KV store not synced?)"
-    assert full_by_mlbam, "no mlbam-keyed full-season lines (KV store not synced?)"
+    assert full_by_name, "no full-season lines"
+    assert full_by_mlbam, "no mlbam-keyed full-season lines"
     # name map is keyed name_normalized::player_type; mlbam map is keyed
     # (int mlbam id, player_type) so a two-way player's hitter and pitcher
     # records do not collide under one id.
@@ -140,7 +207,7 @@ def test_full_season_and_actual_loaders_shape():
     assert any(s in full_by_mlbam[mk] for s in ("hr", "k"))
     # actual-to-date loader has the same tuple shape
     td_by_mlbam, td_by_name = dv.load_actual_to_date_lines()
-    assert td_by_mlbam and td_by_name, "no game-log lines (KV store not synced?)"
+    assert td_by_mlbam and td_by_name, "no game-log lines"
     assert "::" in next(iter(td_by_name))
     tk = next(iter(td_by_mlbam))
     assert isinstance(tk, tuple) and isinstance(tk[0], int) and tk[1] in ("hitter", "pitcher")
@@ -328,7 +395,7 @@ def test_config_and_season_year_threading():
         dv.reproduce_draft_day_board(bogus)
 
 
-def test_run_draft_value_end_to_end_and_known_pick():
+def test_run_draft_value_end_to_end_and_known_pick(season_kv):
     from fantasy_baseball.utils.name_utils import normalize_name
 
     players, teams = dv.run_draft_value()

@@ -173,6 +173,12 @@ timeout_method = "thread"
 # in whichever test happened to be running (#364).
 # Override with `-n0` for a single test or when reading a traceback.
 addopts = "-n auto"
+markers = [
+    # tests/conftest.py points every test at its own empty fantasy.db and local.db
+    # (#496); this marker lets a test see the machine's real ones. Only for tests that
+    # are about those files, read-only, and skip when they are absent.
+    "real_local_files: sees the machine's real data/fantasy.db and data/local.db",
+]
 
 [tool.ruff]
 line-length = 100

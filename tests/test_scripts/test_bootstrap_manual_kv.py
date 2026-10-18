@@ -310,6 +310,7 @@ def test_refuses_a_missing_source(tmp_path, capsys):
 # --------------------------------------------------------------------------
 
 
+@pytest.mark.real_local_files  # compares the real default path; opens nothing
 def test_defaults_match_the_kv_store_default_path():
     """Drift guard: the default source IS the store ``get_kv()`` builds off Render."""
     from fantasy_baseball.data import kv_store
