@@ -103,7 +103,12 @@ class Spec:
     ranked-volume bands. ``headroom``: :class:`QuantilePT`'s ceiling over the most
     volume. ``min_rate_volume``: a past season's volume for its rate miss to count.
     ``player_specific``: whether its ranges use :class:`QuantilePT` (else the one-size
-    :class:`BandPT`, where his history added nothing held out); :func:`pt_model`."""
+    :class:`BandPT`, where his history added nothing held out); :func:`pt_model`.
+    ``role``: the job within the type (pitchers: ``starter``, ``reliever``).
+    ``luck_by`` / ``luck_bands``: draw a player's luck only from past seasons in his band
+    of that projected rate, the bands cut at those quantiles of the past seasons' own
+    (relievers by saves: a setup man's lucky saves replayed on a closer gave ceilings
+    above any real season)."""
 
     name: str
     volume: str
@@ -117,6 +122,9 @@ class Spec:
     headroom: float
     min_rate_volume: float
     player_specific: bool
+    role: str | None = None
+    luck_by: str | None = None
+    luck_bands: tuple[float, ...] = ()
 
     @property
     def rank_col(self) -> str:
@@ -137,7 +145,8 @@ class Spec:
 def top_ranked(proj: pd.Series, top_n: int) -> pd.Series:
     """Rank (1 = most projected volume) of the ``top_n`` players in ``proj``; ties go
     to the lower id, so a rerun ranks the same."""
-    order = proj.dropna().sort_index().sort_values(ascending=False, kind="stable")
+    # Only a positive projection ranks: 0 projected volume has no per-volume rates.
+    order = proj[proj > 0].sort_index().sort_values(ascending=False, kind="stable")
     top = order.head(top_n)
     return pd.Series(np.arange(1, len(top) + 1), index=top.index, name="proj_rank")
 
@@ -355,6 +364,8 @@ class LuckPool:
 
     u: np.ndarray
     z: Mapping[str, np.ndarray]
+    # Each past season's projected ``Spec.luck_by`` rate (None without one).
+    by: np.ndarray | None = None
 
     @classmethod
     def from_rows(
@@ -381,7 +392,20 @@ class LuckPool:
         for s in spec.stats:
             p = rows[f"p_{s.name}"].to_numpy(dtype=float)
             z[s.name] = rate_miss(s, act[s.name], p, _trials(rows, s))[donor]
-        return cls(u=u, z=z)
+        by = None if spec.luck_by is None else rows[f"p_{spec.luck_by}"].to_numpy(dtype=float)
+        return cls(u=u, z=z, by=by)
+
+    def bands(self, spec: Spec, projected: np.ndarray) -> tuple[np.ndarray, list[np.ndarray]]:
+        """(each projected value's band, the pool rows in each band) for
+        ``spec.luck_by``; one band of everyone without it."""
+        everyone = np.arange(len(self.u))
+        if spec.luck_by is None or self.by is None:
+            return np.zeros(len(projected), dtype=int), [everyone]
+        edges = np.quantile(self.by, spec.luck_bands)
+        members = [np.flatnonzero(np.digitize(self.by, edges) == b) for b in range(len(edges) + 1)]
+        # A band with no past seasons (tied cut points) draws from everyone.
+        members = [m if len(m) else everyone for m in members]
+        return np.digitize(projected, edges), members
 
 
 def simulate(
@@ -393,20 +417,25 @@ def simulate(
     spec: Spec,
     n_draws: int = 2000,
     cap: float = np.inf,
+    stat_caps: Mapping[str, float] | None = None,
 ) -> dict[str, np.ndarray]:
     """Each row's season totals at ``levels`` (rows x levels), by stat, plus the volume.
     ``rows``: the ranked volume, ``spec.trials``' per-volume columns and the projected
     rates (``p_<stat>``); ``q``: the rows' PT quantiles on ``GRID``. ``cap``: no draw
     plays more (QuantilePT's saturating ceiling sits at ``headroom`` x the most volume,
     and BandPT's ratio quantiles have no ceiling, so either can run past what anyone
-    has had)."""
+    has had). ``stat_caps``: no counting total beats these (the best season in the
+    training rows: a closer's saves are bounded by his chances, which aren't drawn)."""
+    stat_caps = {} if stat_caps is None else stat_caps
     n_rows = len(rows)
     out = {c: np.empty((n_rows, len(levels))) for c in (*spec.stat_names, spec.volume)}
     ranked = rows[spec.rank_col].to_numpy(dtype=float)
     per_volume = {t: rows[col].to_numpy(dtype=float) for t, col in spec.trials.items()}
     proj = {s.name: rows[f"p_{s.name}"].to_numpy(dtype=float) for s in spec.stats}
+    band, members = pool.bands(spec, proj[spec.luck_by] if spec.luck_by else np.zeros(n_rows))
     for i in range(n_rows):
-        j = rng.integers(0, len(pool.u), n_draws)
+        near = members[band[i]]
+        j = near[rng.integers(0, len(near), n_draws)]
         volume = np.minimum(np.interp(pool.u[j], GRID, q[i]) * ranked[i], cap)
         trials = {spec.volume: volume, **{t: volume * per_volume[t][i] for t in spec.trials}}
         out[spec.volume][i] = np.quantile(volume, levels)
@@ -415,7 +444,7 @@ def simulate(
             rate = drawn_rate(s, proj[s.name][i], pool.z[s.name][j], n)
             if s.counting:
                 # The rate carries the scale (actual_rates), so the total is rate x n.
-                total = rate * n
+                total = np.minimum(rate * n, stat_caps.get(s.name, np.inf))
             else:
                 enough = n >= s.min_trials
                 total = (
@@ -436,6 +465,7 @@ class Ranges:
     by_rank: np.ndarray
     pool: LuckPool
     cap: float
+    stat_caps: Mapping[str, float]
 
     def predict(
         self,
@@ -448,7 +478,9 @@ class Ranges:
         check_rows(rows, self.spec, actuals=False)
         ranked = with_rank(rows, self.by_rank, self.spec)
         q = self.model.predict(ranked)
-        return ranked, simulate(ranked, q, self.pool, levels, rng, self.spec, n_draws, self.cap)
+        return ranked, simulate(
+            ranked, q, self.pool, levels, rng, self.spec, n_draws, self.cap, self.stat_caps
+        )
 
 
 def check_rows(rows: pd.DataFrame, spec: Spec, *, actuals: bool) -> None:
@@ -466,6 +498,11 @@ def check_rows(rows: pd.DataFrame, spec: Spec, *, actuals: bool) -> None:
         raise ValueError(f"rows lack {missing}")
     if rows[[f"p_{s}" for s in spec.stat_names]].isna().any().any():
         raise ValueError("every row needs projected rates")
+    for col in spec.trials.values():
+        v = rows[col].to_numpy(dtype=float)
+        bad = ~(np.isfinite(v) & (v > 0))
+        if bad.any():
+            raise ValueError(f"{int(bad.sum())} rows have no usable {col} (missing, 0 or infinite)")
 
 
 def fit(
@@ -498,8 +535,15 @@ def fit(
         q[held] = fitted.predict(ranked)
         ratio[held] = ranked["ratio"].to_numpy()
     pool = LuckPool.from_rows(rows.assign(ratio=ratio), q, rng, spec)
-    cap = max(float(np.max(actual_volume[season])) for season in seasons)
-    return Ranges(spec=spec, model=model, by_rank=by_rank, pool=pool, cap=cap)
+    # The most anyone had: in the rank map's seasons, or in these rows (a projected
+    # reliever who moved to the rotation is in the reliever rows, not the reliever IP).
+    cap = max(
+        max(float(np.max(actual_volume[season])) for season in seasons),
+        float(rows[f"a_{spec.volume}"].max()),
+    )
+    totals = actual_totals(rows, spec)
+    stat_caps = {st.name: float(np.nanmax(totals[st.name])) for st in spec.stats if st.counting}
+    return Ranges(spec=spec, model=model, by_rank=by_rank, pool=pool, cap=cap, stat_caps=stat_caps)
 
 
 def backtest(

@@ -45,14 +45,20 @@ HITTER = Spec(
 )
 
 
-def _pitcher(name: str, top_n: int, bands: tuple[float, ...], player_specific: bool) -> Spec:
+def _pitcher(
+    role: str,
+    top_n: int,
+    bands: tuple[float, ...],
+    player_specific: bool,
+    luck_bands: tuple[float, ...] = (),
+) -> Spec:
     """A pitcher role (#505). Playing time is innings; K, W and SV are per batter faced
     (BF from IP by ``bf_ip``, the PT source's), ERA and WHIP per inning, their misses
     shrinking as 1/sqrt(IP). Ranked and fit within the role: a starter's 180 IP and a
     reliever's 65 are different jobs, and saves come from the role (their misses
     persist season to season, +0.26, where K, W, ERA and WHIP's don't)."""
     return Spec(
-        name=name,
+        name=role,
         volume="ip",
         trials={"bf": "bf_ip"},
         stats=(
@@ -86,6 +92,9 @@ def _pitcher(name: str, top_n: int, bands: tuple[float, ...], player_specific: b
         # A past season needs 15 IP for its rate miss to join the luck pool.
         min_rate_volume=15.0,
         player_specific=player_specific,
+        role=role,
+        luck_by="sv" if luck_bands else None,
+        luck_bands=luck_bands,
     )
 
 
@@ -101,11 +110,24 @@ def _pitcher(name: str, top_n: int, bands: tuple[float, ...], player_specific: b
 STARTER = _pitcher(
     "starter", top_n=150, bands=(0.0, 100.0, 140.0, 170.0, float("inf")), player_specific=False
 )
-# Relievers' are player-specific: Steamer PT, IP -6.9%, K -7.0%, W -3.4%, SV -2.1%,
-# WHIP -0.8% (100 sure), ERA -0.3% (88); last season's line, IP -10.4%, K -7.9%, W
-# -2.0%, ERA +0.9%.
+# Relievers' are player-specific: held out 2022-2026, Steamer PT, quantile loss vs
+# one-size IP -5.7%, K -5.6%, W -3.8%, SV -1.7%, WHIP -0.8% (100 sure), ERA -0.1% (63);
+# last season's line, IP -9.5%, K -7.4%, W -2.9%, SV +0.0%, ERA +0.8%, WHIP +0.7%.
+# Their luck is drawn within bands of projected saves (cut at the 50th, 75th and 90th
+# percentile of the past relievers'): a setup man's 10 lucky saves are ~13 coin flips
+# at his projected rate, and replayed on a closer gave seasons of 100. Steamer PT: SV
+# loss -2.0% vs no bands (97 sure), IP -0.6%, the rest within 0.4%; seasons of
+# projected 5-15 SV relievers under their P10 11%, not 31%. Bands at 60/85, 75/90 or
+# 50/80/93 scored within noise of these. The projected 25+ SV closers' P90 still runs
+# high (1 of 18 seasons above it, with ranges.fit's per-stat cap at the most saves in
+# the training rows, 49; none without): save chances come from the team and aren't
+# drawn.
 RELIEVER = _pitcher(
-    "reliever", top_n=400, bands=(0.0, 35.0, 50.0, 65.0, float("inf")), player_specific=True
+    "reliever",
+    top_n=400,
+    bands=(0.0, 35.0, 50.0, 65.0, float("inf")),
+    player_specific=True,
+    luck_bands=(0.5, 0.75, 0.9),
 )
 # A projected starter: GS / G at least this.
 STARTER_SHARE = 0.5

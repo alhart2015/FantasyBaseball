@@ -49,9 +49,9 @@ logger = logging.getLogger(__name__)
 PRESEASON_MIN_TOP_IP = 150
 
 
-def load_fangraphs_pitchers(path: Path) -> pd.DataFrame:
-    """One FanGraphs pitcher CSV -> ``TARGETS`` rates plus projected ``bf`` (TBF) and
-    ``ip``, indexed by MLBAM id. ERA and WHIP are the file's own."""
+def read_fangraphs_pitchers(path: Path) -> pd.DataFrame:
+    """One FanGraphs pitcher CSV as it is, rows with an MLBAM id (int), the first of
+    any repeated id."""
     raw = pd.read_csv(path, encoding="utf-8-sig")
     raw = raw.assign(MLBAMID=pd.to_numeric(raw["MLBAMID"], errors="coerce"))
     raw = raw[raw["MLBAMID"].notna()]
@@ -60,6 +60,14 @@ def load_fangraphs_pitchers(path: Path) -> pd.DataFrame:
     if dupes.any():
         logger.warning("%s: %d duplicate MLBAM ids, keeping the first", path.name, dupes.sum())
         raw = raw[~dupes]
+    return raw
+
+
+def load_fangraphs_pitchers(path: Path, raw: pd.DataFrame | None = None) -> pd.DataFrame:
+    """One FanGraphs pitcher CSV -> ``TARGETS`` rates plus projected ``bf`` (TBF) and
+    ``ip``, indexed by MLBAM id. ERA and WHIP are the file's own. ``raw``: the file
+    already read (:func:`read_fangraphs_pitchers`)."""
+    raw = read_fangraphs_pitchers(path) if raw is None else raw
     bf = raw["TBF"].astype(float).where(raw["TBF"] > 0)
     out = pd.DataFrame(
         {

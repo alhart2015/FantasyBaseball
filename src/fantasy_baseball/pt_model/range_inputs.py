@@ -29,7 +29,7 @@ import pandas as pd
 from fantasy_baseball.hitter_ros.evaluate import load_fangraphs_hitters
 from fantasy_baseball.keepers.actuals import coerce_numeric, index_by_mlbam, innings_to_float
 from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
-from fantasy_baseball.pitcher_ros.evaluate import load_fangraphs_pitchers
+from fantasy_baseball.pitcher_ros.evaluate import load_fangraphs_pitchers, read_fangraphs_pitchers
 from fantasy_baseball.pt_model.panel import FULL_SEASON_GAMES, SHORTENED_SEASONS
 from fantasy_baseball.pt_model.range_specs import HITTER, STARTER, STARTER_SHARE
 from fantasy_baseball.pt_model.ranges import HISTORY_SEASONS, Spec, history, top_ranked
@@ -186,13 +186,11 @@ def load_pt(path: Path) -> pd.DataFrame:
 def load_pitcher_pt(path: Path) -> pd.DataFrame:
     """A FanGraphs pitcher projection's ``ip``, ``bf`` and ``gs_share`` (GS / G) by
     MLBAM id."""
-    pt = load_fangraphs_pitchers(path)[["ip", "bf"]]
-    raw = pd.read_csv(path, encoding="utf-8-sig")
-    raw = raw.assign(MLBAMID=pd.to_numeric(raw["MLBAMID"], errors="coerce"))
-    raw = raw[raw["MLBAMID"].notna()].drop_duplicates("MLBAMID", keep="first")
-    raw = raw.set_index(raw["MLBAMID"].astype(int))
-    share = raw["GS"].astype(float) / raw["G"].astype(float).where(raw["G"] > 0)
-    return pt.assign(gs_share=share.reindex(pt.index))
+    raw = read_fangraphs_pitchers(path)
+    pt = load_fangraphs_pitchers(path, raw)[["ip", "bf"]]
+    games = raw["G"].astype(float)
+    share = raw["GS"].astype(float) / games.where(games > 0)
+    return pt.assign(gs_share=share.to_numpy())
 
 
 def last_season_pitcher_pt(seasons: Mapping[int, pd.DataFrame], season: int) -> pd.DataFrame:
@@ -282,6 +280,13 @@ def build_rows(
     )
 
 
+def _starter(spec: Spec) -> bool:
+    """Whether a pitcher spec is the starter role (else the reliever)."""
+    if spec.role not in ("starter", "reliever"):
+        raise ValueError(f"{spec.name}: not a pitcher role ({spec.role!r})")
+    return spec.role == "starter"
+
+
 def build_pitcher_rows(
     season: int,
     spec: Spec,
@@ -298,7 +303,7 @@ def build_pitcher_rows(
     ``spec.top_n`` in the role by IP are ranked. ``seasons``:
     :func:`load_pitching_seasons`; ``rates``: :func:`load_pitcher_rates`."""
     starts = pt["gs_share"] >= STARTER_SHARE
-    in_role = pt[starts] if spec is STARTER else pt[~starts & pt["gs_share"].notna()]
+    in_role = pt[starts] if _starter(spec) else pt[~starts & pt["gs_share"].notna()]
     return _rows(
         season,
         spec,
@@ -332,5 +337,5 @@ def actual_ip(
     for y in years:
         s = seasons[y]
         starts = s["gs"] / s["g"].where(s["g"] > 0) >= STARTER_SHARE
-        out[y] = s.loc[starts if spec is STARTER else ~starts, "ip"].to_numpy()
+        out[y] = s.loc[starts if _starter(spec) else ~starts, "ip"].to_numpy()
     return out

@@ -246,3 +246,83 @@ def test_pitcher_backtest_covers_about_ten_percent_each_side():
         s = scored[(scored["stat"] == stat) & (scored["trials"] >= 20)]
         below, above = (s["actual"] < s["q10"]).mean(), (s["actual"] > s["q90"]).mean()
         assert 0.04 < below < 0.17 and 0.04 < above < 0.17, (stat, below, above)
+
+
+def test_reliever_luck_is_drawn_from_his_saves_band():
+    # Pool: half setup men (tiny projected SV, a big lucky saves miss), half closers.
+    n = 40
+    by = np.r_[np.full(n // 2, 0.002), np.full(n // 2, 0.12)]
+    z = {c: np.zeros(n) for c in RELIEVER.stat_names}
+    z["sv"] = np.r_[np.full(n // 2, 13.5), np.zeros(n // 2)]
+    pool = LuckPool(u=np.full(n, 0.5), z=z, by=by)
+    band, members = pool.bands(RELIEVER, np.array([0.12, 0.002]))
+    assert set(members[band[0]]) <= set(range(n // 2, n))  # a closer draws closers only
+    rows = pd.DataFrame(
+        {
+            "rank_ip": [65.0],
+            "bf_ip": [4.1],
+            "p_k": [0.3],
+            "p_w": [0.04],
+            "p_sv": [0.12],
+            "p_era": [3.0],
+            "p_whip": [1.1],
+        }
+    )
+    q = np.tile(np.linspace(0.5, 1.5, len(GRID)), (1, 1))
+    out = simulate(rows, q, pool, (0.9,), np.random.default_rng(0), RELIEVER, n_draws=200)
+    assert out["sv"][0, 0] < 40  # no 100-save seasons from setup men's luck
+
+
+def test_the_cap_covers_a_reliever_who_moved_to_the_rotation():
+    rng = np.random.default_rng(7)
+    parts, ip = [], {}
+    for season in (2025, 2026):
+        rows, season_ip = _synthetic(rng, 60, season)
+        parts.append(rows)
+        ip[season] = season_ip * 0.5  # the role's own IP, all lower than these rows
+    from fantasy_baseball.pt_model.ranges import fit
+
+    ranges = fit(pd.concat(parts), ip, pt_model, rng, STARTER)
+    assert ranges.cap == max(r["a_ip"].max() for r in parts)
+
+
+def test_rows_need_a_usable_per_volume_rate_and_a_pitcher_role():
+    seasons, info, pt, rates = _setup()
+    rows, _ = ri.build_pitcher_rows(2026, STARTER, pt, rates, seasons, info, with_actuals=True)
+    from fantasy_baseball.pt_model.ranges import check_rows
+
+    with pytest.raises(ValueError, match="bf_ip"):
+        check_rows(rows.assign(bf_ip=np.inf), STARTER, actuals=True)
+    with pytest.raises(ValueError, match="not a pitcher role"):
+        ri.build_pitcher_rows(2026, HITTER, pt, rates, seasons, info, with_actuals=True)
+    # A 0-IP projection isn't ranked (it has no BF per inning).
+    rows0, _ = ri.build_pitcher_rows(
+        2026,
+        STARTER,
+        pt.assign(ip=[0.0, 65.0, 120.0, 40.0]),
+        rates,
+        seasons,
+        info,
+        with_actuals=True,
+    )
+    assert rows0.index.tolist() == [3]
+
+
+def test_no_counting_total_beats_the_best_training_season():
+    pool = LuckPool(u=np.full(10, 0.5), z={c: np.full(10, 5.0) for c in RELIEVER.stat_names})
+    rows = pd.DataFrame(
+        {
+            "rank_ip": [70.0],
+            "bf_ip": [4.1],
+            "p_k": [0.3],
+            "p_w": [0.04],
+            "p_sv": [0.15],
+            "p_era": [3.0],
+            "p_whip": [1.1],
+        }
+    )
+    q = np.tile(np.linspace(0.5, 1.5, len(GRID)), (1, 1))
+    out = simulate(
+        rows, q, pool, (0.9,), np.random.default_rng(0), RELIEVER, 50, stat_caps={"sv": 49.0}
+    )
+    assert out["sv"][0, 0] == 49.0 and out["k"][0, 0] > 49.0  # only the capped stat

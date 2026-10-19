@@ -105,7 +105,7 @@ def report(scored: pd.DataFrame, spec: Spec, seed: int) -> list[str]:
         regular=REGULAR_IP[spec.name],
         median_bins=MEDIAN_BINS[spec.name],
         min_scored={"era": MIN_SCORED_IP, "whip": MIN_SCORED_IP},
-        by_season=("k", "era", "whip") if spec is STARTER else ("k", "sv", "era"),
+        by_season=("k", "era", "whip") if spec.role == "starter" else ("k", "sv", "era"),
     )
 
 
