@@ -6,7 +6,13 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from fantasy_baseball.hitter_ros.net import NetConfig, device, predict, train  # noqa: E402
+from fantasy_baseball.hitter_ros.net import (  # noqa: E402
+    NetConfig,
+    device,
+    predict,
+    predict_many,
+    train,
+)
 from fantasy_baseball.hitter_ros.sequence import (  # noqa: E402
     N_TOKEN_FEATURES,
     STORED_FEATURES,
@@ -183,6 +189,16 @@ def test_hybrid_net_learns_from_the_sequence(kind):
     assert min(seq.val_loss) < 0.5 * min(plain.val_loss)
     out = predict(seq.model, x, rows=positions, batcher=batcher)
     assert out.shape == (n_players, 1)
+    # Several inputs on the same rows: each chunk's sequences read once, the same
+    # outputs as predicting each alone.
+    other = x + 1.0
+    both = predict_many(seq.model, [x, other], rows=positions, batcher=batcher, chunk=7)
+    np.testing.assert_allclose(both[0], out, rtol=1e-5, atol=1e-6)
+    np.testing.assert_allclose(
+        both[1], predict(seq.model, other, rows=positions, batcher=batcher), rtol=1e-5, atol=1e-6
+    )
+    with pytest.raises(ValueError, match="same shape"):
+        predict_many(seq.model, [x, other[:-1]], rows=positions, batcher=batcher)
 
 
 def test_bf16_forward_stays_close_to_float32():
