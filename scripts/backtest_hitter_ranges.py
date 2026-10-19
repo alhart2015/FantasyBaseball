@@ -32,13 +32,9 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.pt_model import range_inputs as ri
-from fantasy_baseball.pt_model.ranges import (
-    STATS,
-    BandPT,
-    QuantilePT,
-    backtest,
-    pinball,
-)
+from fantasy_baseball.pt_model.range_report import summarize
+from fantasy_baseball.pt_model.range_specs import HITTER
+from fantasy_baseball.pt_model.ranges import BandPT, QuantilePT, backtest
 
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
@@ -51,18 +47,18 @@ MEDIAN_BINS = (0, 300, 450, 550, 620, 660, 700, 800)
 REGULAR_PA = 450
 # AVG is scored where he had this many AB.
 MIN_SCORED_AB = 100
-BOOTSTRAPS = 4000
 
 
 # --pt-system that ranks hitters by last season's actual PA instead of a projection.
 LAST_SEASON = "last-season"
 
 
-def pt_file(system: str, season: int) -> Path:
-    found = sorted((PROJECTIONS / str(season)).glob(f"{system}-hitters*.csv"))
+def pt_file(system: str, season: int, kind: str = "hitters") -> Path:
+    """The PT system's preseason ``<system>-<kind>*.csv`` for ``season`` (exactly one)."""
+    found = sorted((PROJECTIONS / str(season)).glob(f"{system}-{kind}*.csv"))
     if len(found) != 1:
         raise SystemExit(
-            f"want one {system}-hitters*.csv in {PROJECTIONS / str(season)}, found {len(found)}"
+            f"want one {system}-{kind}*.csv in {PROJECTIONS / str(season)}, found {len(found)}"
         )
     return found[0]
 
@@ -103,84 +99,6 @@ def training_rows(
     return pd.concat(parts), ri.actual_pa(loaded, seasons)
 
 
-def sure_better(
-    loss_a: pd.Series, loss_b: pd.Series, players: pd.Series, rng: np.random.Generator
-) -> float:
-    """How sure (0-100) a's loss is lower than b's, resampling players."""
-    gain = (loss_b - loss_a).groupby(players.to_numpy()).sum().to_numpy()
-    draws = rng.integers(0, len(gain), (BOOTSTRAPS, len(gain)))
-    return float((gain[draws].sum(axis=1) > 0).mean() * 100)
-
-
-def middle(scored: pd.DataFrame) -> str:
-    p = scored[(scored["stat"] == "pa") & (scored["model"] == "player-specific")]
-    bins = pd.cut(p["q50"], MEDIAN_BINS)
-    t = p.groupby(bins, observed=True).apply(
-        lambda g: pd.Series(
-            {
-                "n": len(g),
-                "predicted": g["q50"].median(),
-                "real": g["actual"].median(),
-                "below %": (g["actual"] < g["q50"]).mean() * 100,
-            }
-        ),
-        include_groups=False,
-    )
-    return t.round(1).to_string()
-
-
-def summarize(scored: pd.DataFrame, rng: np.random.Generator) -> list[str]:
-    s = scored[~((scored["stat"] == "avg") & (scored["ab"] < MIN_SCORED_AB))].copy()
-    s["below"], s["above"] = s["actual"] < s["q10"], s["actual"] > s["q90"]
-    s["loss"] = pinball(s["actual"].to_numpy(), s["q10"].to_numpy(), 0.1) + pinball(
-        s["actual"].to_numpy(), s["q90"].to_numpy(), 0.9
-    )
-    order = ["pa", *STATS]
-
-    def cover(df: pd.DataFrame) -> str:
-        t = df.groupby(["stat", "model"])[["below", "above"]].mean().unstack("model").reindex(order)
-        return (t * 100).round(1).to_string()
-
-    md = [
-        "Share of seasons below P10 / above P90, % (target 10 / 10):",
-        cover(s),
-        "",
-        f"Expected regulars (rank PA {REGULAR_PA}+):",
-        cover(s[s["rank_pa"] >= REGULAR_PA]),
-        "",
-        "R, HR and RBI by season:",
-        (
-            s[s["stat"].isin(["r", "hr", "rbi"])]
-            .groupby(["season", "model"])[["below", "above"]]
-            .mean()
-            .unstack("model")
-            * 100
-        )
-        .round(1)
-        .to_string(),
-        "",
-        "PA middle, player-specific: share of real PA below the predicted median, % (50 is",
-        "right), by predicted median:",
-        middle(scored),
-        "",
-        "Quantile loss (P10 + P90), player-specific vs one-size:",
-    ]
-    wide = s.pivot_table(
-        index=["player_id", "season", "stat"], columns="model", values="loss"
-    ).dropna()
-    for stat in order:
-        w = wide.xs(stat, level="stat")
-        sure = sure_better(
-            w["player-specific"],
-            w["one-size"],
-            w.index.get_level_values("player_id").to_series(),
-            rng,
-        )
-        change = w["player-specific"].mean() / w["one-size"].mean() - 1
-        md.append(f"  {stat:4s} {change:+.1%}  (how sure better: {sure:.0f})")
-    return md
-
-
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--name", required=True)
@@ -200,7 +118,7 @@ def main() -> int:
     scored = []
     for label, make in (("player-specific", QuantilePT), ("one-size", BandPT)):
         rng = np.random.default_rng(args.seed)
-        scored.append(backtest(rows, pa, make, rng, LEVELS, args.draws).assign(model=label))
+        scored.append(backtest(rows, pa, make, rng, HITTER, LEVELS, args.draws).assign(model=label))
         print(f"{label} done")
     all_scored = pd.concat(scored, ignore_index=True)
     all_scored.to_parquet(out / "scored.parquet", index=False)
@@ -211,7 +129,15 @@ def main() -> int:
         f"{args.draws} draws, seed {args.seed}.",
         "",
         "```",
-        *summarize(all_scored, np.random.default_rng(args.seed)),
+        *summarize(
+            all_scored,
+            HITTER,
+            np.random.default_rng(args.seed),
+            regular=REGULAR_PA,
+            median_bins=MEDIAN_BINS,
+            min_scored={"avg": MIN_SCORED_AB},
+            by_season=("r", "hr", "rbi"),
+        ),
         "```",
     ]
     (out / "summary.md").write_text("\n".join(md) + "\n")

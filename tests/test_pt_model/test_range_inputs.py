@@ -3,7 +3,9 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.pt_model import range_inputs as ri
-from fantasy_baseball.pt_model.ranges import STATS
+from fantasy_baseball.pt_model.range_specs import HITTER
+
+STATS = HITTER.stat_names
 
 
 def _leaderboard(rows):
