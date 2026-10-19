@@ -92,3 +92,7 @@ data/hitter_ros/
 # Pitcher ROS scores and (later) training table (#465), rebuilt from data/pitch_data/
 # by scripts/score_pitcher_baselines.py.
 data/pitcher_ros/
+
+# Hitter outcome ranges (#505): backtests and season ranges from
+# scripts/backtest_hitter_ranges.py and scripts/hitter_ranges.py.
+data/hitter_ranges/
