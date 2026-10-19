@@ -84,6 +84,13 @@ class Stat:
     scale: float = 1.0
     min_trials: float = 0.0
 
+    def __post_init__(self) -> None:
+        # A binomial rate is a per-trial probability (drawn in 0-1, its luck a coin
+        # flip at the projected rate), so a scale would put the actual rate and the
+        # projection in different units.
+        if self.binomial and self.scale != 1.0:
+            raise ValueError(f"{self.name}: a binomial stat can't be scaled")
+
 
 @dataclass(frozen=True)
 class Spec:
@@ -407,7 +414,8 @@ def simulate(
             n = trials[s.trials]
             rate = drawn_rate(s, proj[s.name][i], pool.z[s.name][j], n)
             if s.counting:
-                total = s.scale * rate * n if s.binomial else rate * n
+                # The rate carries the scale (actual_rates), so the total is rate x n.
+                total = rate * n
             else:
                 enough = n >= s.min_trials
                 total = (
@@ -437,6 +445,7 @@ class Ranges:
         n_draws: int = 2000,
     ) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
         """(rows with the ranked volume, their totals at ``levels`` by stat and volume)."""
+        check_rows(rows, self.spec, actuals=False)
         ranked = with_rank(rows, self.by_rank, self.spec)
         q = self.model.predict(ranked)
         return ranked, simulate(ranked, q, self.pool, levels, rng, self.spec, n_draws, self.cap)
@@ -473,7 +482,9 @@ def fit(
     seasons = sorted(rows["season"].unique())
     if len(seasons) < 2:
         raise ValueError("fit needs 2+ seasons (the luck pool is cross-fitted by season)")
-    n = int(rows["proj_rank"].max())
+    # Every rank the spec ranks, not just the most seen here: a new season's last-ranked
+    # player may have had no rates (so no row) in every training season.
+    n = max(spec.top_n, int(rows["proj_rank"].max()))
     by_rank = volume_by_rank(actual_volume, seasons, n)
     model = make_model(spec).fit(with_rank(rows, by_rank, spec))
     q = np.empty((len(rows), len(GRID)))

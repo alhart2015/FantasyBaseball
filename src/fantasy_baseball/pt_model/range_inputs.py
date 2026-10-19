@@ -47,7 +47,6 @@ SEASON_COLUMNS = {
     "rbi": "rbi",
     "stolenBases": "sb",
 }
-COUNTS = tuple(SEASON_COLUMNS.values())
 PITCHING_COLUMNS = {
     "gamesPitched": "g",
     "gamesStarted": "gs",
@@ -63,7 +62,7 @@ PITCHING_COLUMNS = {
 
 def season_frame(raw: pd.DataFrame) -> pd.DataFrame:
     """A raw hitting leaderboard (``fetch_mlb_season(..., "hitting")``) by MLBAM id: the
-    ``COUNTS`` as floats and ``pos``, the season's position abbreviation."""
+    ``SEASON_COLUMNS`` as floats and ``pos``, the season's position abbreviation."""
     frame = index_by_mlbam(raw, "player.id")
     if not frame.index.is_unique:
         raise ValueError("the hitting leaderboard repeats a player")
@@ -269,8 +268,7 @@ def build_rows(
     ``rates``: :func:`load_rates`. ``seasons``: :func:`load_seasons` with the
     ``HISTORY_SEASONS`` before ``season`` and, ``with_actuals``, ``season`` itself.
     ``info``: :func:`player_info`."""
-    ids = top_ranked(pt["pa"], HITTER.top_n).index
-    pos = position_before(seasons, season, ids)
+    pos = position_before(seasons, season, pt.index)  # _rows keeps the ranked ones
     return _rows(
         season,
         HITTER,
