@@ -43,7 +43,7 @@ from backtest_hitter_ranges import (
 
 from fantasy_baseball.pt_model import range_inputs as ri
 from fantasy_baseball.pt_model.range_specs import HITTER
-from fantasy_baseball.pt_model.ranges import QuantilePT, fit
+from fantasy_baseball.pt_model.ranges import fit, pt_model
 
 STATS = HITTER.stat_names
 
@@ -82,7 +82,7 @@ def main() -> int:
         sorted(args.train_seasons), args.pt_system, args.train_run, args.seeds
     )
     rng = np.random.default_rng(args.seed)
-    ranges = fit(train, train_pa, QuantilePT, rng, HITTER)
+    ranges = fit(train, train_pa, pt_model, rng, HITTER)
 
     loaded, info = load_inputs([args.season], args.pt_system, with_actuals=False)
     rows, dropped = ri.build_rows(

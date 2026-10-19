@@ -94,7 +94,9 @@ class Spec:
     ``history_columns``: :func:`history`'s per-season columns, the first marking that
     he played. ``top_n``: players ranked per season. ``bands``: :class:`BandPT`'s
     ranked-volume bands. ``headroom``: :class:`QuantilePT`'s ceiling over the most
-    volume. ``min_rate_volume``: a past season's volume for its rate miss to count."""
+    volume. ``min_rate_volume``: a past season's volume for its rate miss to count.
+    ``player_specific``: whether its ranges use :class:`QuantilePT` (else the one-size
+    :class:`BandPT`, where his history added nothing held out); :func:`pt_model`."""
 
     name: str
     volume: str
@@ -107,6 +109,7 @@ class Spec:
     bands: tuple[float, ...]
     headroom: float
     min_rate_volume: float
+    player_specific: bool
 
     @property
     def rank_col(self) -> str:
@@ -278,6 +281,11 @@ class BandPT:
 
     def predict(self, rows: pd.DataFrame) -> np.ndarray:
         return _ordered(self.table[self._band(rows)])
+
+
+def pt_model(spec: Spec) -> PTModel:
+    """The PT range ``spec``'s ranges use (``Spec.player_specific``)."""
+    return QuantilePT(spec) if spec.player_specific else BandPT(spec)
 
 
 def coinflip_sd(rate: np.ndarray | float, n: np.ndarray) -> np.ndarray:

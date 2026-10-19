@@ -93,6 +93,7 @@ data/hitter_ros/
 # by scripts/score_pitcher_baselines.py.
 data/pitcher_ros/
 
-# Hitter outcome ranges (#505): backtests and season ranges from
-# scripts/backtest_hitter_ranges.py and scripts/hitter_ranges.py.
+# Outcome ranges (#505): backtests and season ranges from scripts/backtest_*_ranges.py
+# and scripts/*_ranges.py.
 data/hitter_ranges/
+data/pitcher_ranges/

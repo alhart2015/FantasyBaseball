@@ -39,4 +39,73 @@ HITTER = Spec(
     headroom=2.0,
     # A past season needs 50 PA for its rate miss to join the luck pool.
     min_rate_volume=50.0,
+    # Held out 2022-2026 (Steamer PT), quantile loss vs one-size: PA -4.0%, R -2.1%, HR
+    # -2.0%, RBI -2.7% (100 sure).
+    player_specific=True,
 )
+
+
+def _pitcher(name: str, top_n: int, bands: tuple[float, ...], player_specific: bool) -> Spec:
+    """A pitcher role (#505). Playing time is innings; K, W and SV are per batter faced
+    (BF from IP by ``bf_ip``, the PT source's), ERA and WHIP per inning, their misses
+    shrinking as 1/sqrt(IP). Ranked and fit within the role: a starter's 180 IP and a
+    reliever's 65 are different jobs, and saves come from the role (their misses
+    persist season to season, +0.26, where K, W, ERA and WHIP's don't)."""
+    return Spec(
+        name=name,
+        volume="ip",
+        trials={"bf": "bf_ip"},
+        stats=(
+            Stat("k", "bf", binomial=True, counting=True, numerator=("k",)),
+            Stat("w", "bf", binomial=True, counting=True, numerator=("w",)),
+            Stat("sv", "bf", binomial=True, counting=True, numerator=("sv",)),
+            # An ERA or WHIP draw needs 10 IP.
+            Stat(
+                "era",
+                "ip",
+                binomial=False,
+                counting=False,
+                numerator=("er",),
+                scale=9.0,
+                min_trials=10.0,
+            ),
+            Stat(
+                "whip", "ip", binomial=False, counting=False, numerator=("h", "bb"), min_trials=10.0
+            ),
+        ),
+        features=(
+            "rank_ip",
+            "age",
+            *(f"{c}{k}" for k in range(1, HISTORY_SEASONS + 1) for c in ("g", "ip", "gs")),
+        ),
+        never_blank=("rank_ip",),
+        history_columns=("g", "ip", "gs"),
+        top_n=top_n,
+        bands=bands,
+        headroom=2.0,
+        # A past season needs 15 IP for its rate miss to join the luck pool.
+        min_rate_volume=15.0,
+        player_specific=player_specific,
+    )
+
+
+# Steamer's preseason files, 2022-2026: about 150-165 projected starters (GS/G >= 0.5)
+# with 60+ IP and 360-450 relievers with 30+ IP a season.
+# Starters' ranges are one-size in playing time: held out 2022-2026 (Steamer PT, run
+# 035-saves-net rates), quantile loss vs one-size, the player-specific range was IP
+# -0.9% (83 sure), K and W -0.0%, ERA +1.1% and WHIP +0.7% (one-size 97-98 sure
+# better); fewer inputs or more L1 (alpha 0.01-0.03) got IP to -1.4% but ERA stayed
+# +0.5% and K/W/WHIP even. Steamer's starter innings already carry what his history
+# says (season-to-season persistence +0.06). With last season's line as the PT
+# source (2022-2026): IP -0.7%, the rest within 0.3%.
+STARTER = _pitcher(
+    "starter", top_n=150, bands=(0.0, 100.0, 140.0, 170.0, float("inf")), player_specific=False
+)
+# Relievers' are player-specific: Steamer PT, IP -6.9%, K -7.0%, W -3.4%, SV -2.1%,
+# WHIP -0.8% (100 sure), ERA -0.3% (88); last season's line, IP -10.4%, K -7.9%, W
+# -2.0%, ERA +0.9%.
+RELIEVER = _pitcher(
+    "reliever", top_n=400, bands=(0.0, 35.0, 50.0, 65.0, float("inf")), player_specific=True
+)
+# A projected starter: GS / G at least this.
+STARTER_SHARE = 0.5
