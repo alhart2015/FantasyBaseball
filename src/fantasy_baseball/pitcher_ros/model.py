@@ -29,7 +29,7 @@ from fantasy_baseball.hitter_ros.net import (
     PIECE_LOSS_WEIGHT,
     NetConfig,
     build_model,
-    predict,
+    predict_many,
     train,
 )
 from fantasy_baseball.hitter_ros.parks import PARK_FEATURES
@@ -43,7 +43,7 @@ from fantasy_baseball.pitcher_ros.features import (
     target_stat,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS
-from fantasy_baseball.pitcher_ros.table import HORIZON_DAYS
+from fantasy_baseball.pitcher_ros.table import HORIZON_DAYS, MILB_WINDOWS
 from fantasy_baseball.ros_training import (
     holdout_and_scaler,
     usable_league_rates,
@@ -263,7 +263,6 @@ def fit_season(
     batcher: SequenceBatcher | Any | None = None,
     make_model: Callable[..., Any] = build_model,
     train_on: pd.Series | None = None,
-    what_if: Mapping[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Train on complete seasons before ``test_season``; predict every row of it.
 
@@ -304,10 +303,66 @@ def fit_season(
     half of the pitchers, ``pretrain.player_half``). Every test-season row is still
     predicted.
 
-    ``what_if``: named copies of ``x_all`` with some inputs changed (e.g.
-    :func:`with_age`). The same trained net predicts the test rows from each too, and
-    ``info["what_if"]`` holds those predictions by name, framed like the returned ones
-    (the caller takes them out before writing ``info`` as JSON)."""
+    :func:`fit_season_what_if` also predicts the test rows with some inputs changed."""
+    preds, info, _ = _fit_season(
+        table, x_all, y_all, w_all, test_season, config, league, batcher, make_model, train_on, {}
+    )
+    return preds, info
+
+
+def fit_season_what_if(
+    table: pd.DataFrame,
+    x_all: pd.DataFrame,
+    y_all: pd.DataFrame,
+    w_all: pd.DataFrame,
+    test_season: int,
+    config: NetConfig,
+    what_if: Mapping[str, pd.DataFrame],
+    league: LeagueRates | None = None,
+    batcher: SequenceBatcher | Any | None = None,
+    make_model: Callable[..., Any] = build_model,
+    train_on: pd.Series | None = None,
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, pd.DataFrame]]:
+    """:func:`fit_season`, and the same trained net's predictions of the test rows with
+    some inputs changed. ``what_if``: by name, the inputs to change -- a frame on
+    ``x_all``'s index with some of its columns (e.g. :func:`with_age`); every other
+    input stays as in ``x_all``. Returns the predictions, info, and the what-if
+    predictions by name, framed like the first. Checked before training."""
+    if not what_if:
+        raise ValueError("what_if is empty: use fit_season")
+    return _fit_season(
+        table,
+        x_all,
+        y_all,
+        w_all,
+        test_season,
+        config,
+        league,
+        batcher,
+        make_model,
+        train_on,
+        what_if,
+    )
+
+
+def _fit_season(
+    table: pd.DataFrame,
+    x_all: pd.DataFrame,
+    y_all: pd.DataFrame,
+    w_all: pd.DataFrame,
+    test_season: int,
+    config: NetConfig,
+    league: LeagueRates | None,
+    batcher: SequenceBatcher | Any | None,
+    make_model: Callable[..., Any],
+    train_on: pd.Series | None,
+    what_if: Mapping[str, pd.DataFrame],
+) -> tuple[pd.DataFrame, dict[str, Any], dict[str, pd.DataFrame]]:
+    for name, changed in what_if.items():
+        if not changed.index.equals(x_all.index):
+            raise ValueError(f"what_if {name!r} must be on x_all's index")
+        if changed.columns.empty or not set(changed.columns) <= set(x_all.columns):
+            raise ValueError(f"what_if {name!r} must change some of x_all's columns, no others")
     check_plain(config)
     check_week_zero(table)
     has_parks = set(PARK_FEATURES) <= set(x_all.columns)
@@ -394,18 +449,21 @@ def fit_season(
         make_model=make_model,
     )
     test_rows = table["season"] == test_season
+    x_test = x_all[test_rows]
+    # Only the test rows are copied, each with its changed columns.
+    inputs = [x_test, *(x_test.assign(**c.loc[test_rows]) for c in what_if.values())]
+    zs = predict_many(
+        result.model,
+        [scaler.transform(x) for x in inputs],
+        rows=positions[test_rows.to_numpy()] if batcher else None,
+        batcher=batcher,
+        # As training's own evaluation: a 4096-row chunk of the fine-tuned net's
+        # 1023-pitch histories leaves ~29 GB reserved, and the next season spills (#492).
+        chunk=config.micro_batch or EVAL_BATCH,
+        amp=config.amp,
+    )
 
-    def predicted(x: pd.DataFrame) -> pd.DataFrame:
-        z = predict(
-            result.model,
-            scaler.transform(x[test_rows]),
-            rows=positions[test_rows.to_numpy()] if batcher else None,
-            batcher=batcher,
-            # As training's own evaluation: a 4096-row chunk of the fine-tuned net's
-            # 1023-pitch histories leaves ~29 GB reserved, and the next season spills (#492).
-            chunk=config.micro_batch or EVAL_BATCH,
-            amp=config.amp,
-        )
+    def framed(z: np.ndarray) -> pd.DataFrame:
         out = pd.DataFrame(
             {c: np.clip(z[:, i] * sd[c] + mu[c], 0.0, None) for i, c in enumerate(cols)},
             index=table.index[test_rows],
@@ -414,10 +472,7 @@ def fit_season(
             out = out * ref.loc[test_rows, cols]
         return pd.concat([table.loc[test_rows, ID_COLS], out], axis=1)
 
-    for name, x in (what_if or {}).items():
-        if not (x.index.equals(x_all.index) and list(x.columns) == list(x_all.columns)):
-            raise ValueError(f"what_if {name!r} must have x_all's rows and columns")
-    preds = predicted(x_all)
+    preds = framed(zs[0])
     info: dict[str, Any] = {
         "test_season": test_season,
         "train_rows": int(train_rows.sum() - val_mask.sum()),
@@ -427,18 +482,37 @@ def fit_season(
         "train_loss": result.train_loss,
         "val_loss": result.val_loss,
     }
-    if what_if:
-        info["what_if"] = {name: predicted(x) for name, x in what_if.items()}
-    return preds, info
+    return preds, info, {name: framed(z) for name, z in zip(what_if, zs[1:], strict=True)}
+
+
+# The inputs that carry a pitcher's age (features.input_frame): his age, and how much
+# older he was than his minor-league levels (features._milb_rates).
+AGE_VS_LEVEL = tuple(f"milb_{w}_age_vs_level" for w in MILB_WINDOWS)
+# Ages a what-if may set (scripts/train_pitcher_ros.py --what-if-age).
+WHAT_IF_AGES = (16.0, 50.0)
 
 
 def with_age(x: pd.DataFrame, age: float) -> pd.DataFrame:
-    """``x`` (``features.input_frame``) with every row's ``age`` set to ``age``, for a
-    ``fit_season`` what-if: the same pitchers' histories, read as if he were that age.
-    Rows with no age (no pitch files) keep theirs blank, so only a known age moves."""
-    if "age" not in x.columns:
-        raise ValueError("the inputs have no age column")
-    return x.assign(age=x["age"].where(x["age"].isna(), float(age)))
+    """The age inputs of ``x`` (``features.input_frame``) as if every pitcher were
+    ``age``, for :func:`fit_season_what_if`: ``age`` itself, and his minor-league
+    ``AGE_VS_LEVEL`` moved by the same years (he'd have been that much older or younger
+    at each level). Rows with no age (no pitch files) keep theirs, so only a known age
+    moves. Only these columns come back."""
+    lo, hi = WHAT_IF_AGES
+    if not lo <= age <= hi:
+        raise ValueError(f"age {age} is outside {lo:g}-{hi:g}")
+    missing = [c for c in ("age", *AGE_VS_LEVEL) if c not in x.columns]
+    if missing:
+        raise ValueError(f"the inputs have no {', '.join(missing)} column")
+    known = x["age"].notna()
+    shift = age - x["age"]
+    return pd.DataFrame(
+        {
+            "age": x["age"].where(~known, float(age)),
+            **{c: x[c].where(~known, x[c] + shift) for c in AGE_VS_LEVEL},
+        },
+        index=x.index,
+    )
 
 
 # Seeds a run trains and averages by default. Run 005-plain-avg (these seeds, before the

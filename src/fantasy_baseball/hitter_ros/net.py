@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import copy
 import logging
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import asdict, dataclass, field
 from typing import TYPE_CHECKING, Any
 
@@ -762,21 +762,50 @@ def predict(
     amp: bool = False,
 ) -> np.ndarray:
     """Model outputs for ``x`` (and, for a sequence model, table positions ``rows``)."""
+    return predict_many(
+        model,
+        [x],
+        rows=rows,
+        batcher=batcher,
+        shuffle_order=shuffle_order,
+        chunk=chunk,
+        amp=amp,
+    )[0]
+
+
+def predict_many(
+    model: nn.Module,
+    xs: Sequence[np.ndarray],
+    *,
+    rows: np.ndarray | None = None,
+    batcher: SequenceBatcher | None = None,
+    shuffle_order: bool = False,
+    chunk: int = EVAL_BATCH,
+    amp: bool = False,
+) -> list[np.ndarray]:
+    """:func:`predict` for several inputs on the same rows (e.g. the real inputs and a
+    what-if): each chunk's sequences are read once and run with every input."""
+    if not xs or any(x.shape != xs[0].shape for x in xs):
+        raise ValueError("predict_many needs one or more inputs, all the same shape")
     model.eval()
     dev = device()
-    xt = torch.tensor(x, dtype=torch.float32, device=dev)
+    xts = [torch.tensor(x, dtype=torch.float32, device=dev) for x in xs]
     rt = None if rows is None else torch.as_tensor(rows, dtype=torch.long, device=dev)
-    parts = []
+    parts: list[list[np.ndarray]] = [[] for _ in xs]
     with torch.no_grad():
-        for start in range(0, len(xt), chunk):
+        for start in range(0, len(xts[0]), chunk):
             sl = slice(start, start + chunk)
-            out = _forward(
-                model, xt[sl], None if rt is None else rt[sl], batcher, shuffle_order, amp
-            )
-            parts.append(out.cpu().numpy())
-    if not parts:
-        return np.zeros((0, _n_outputs(model)), dtype=np.float32)
-    return np.concatenate(parts)
+            if batcher is None:
+                for part, xt in zip(parts, xts, strict=True):
+                    part.append(model(xt[sl]).cpu().numpy())
+                continue
+            assert rt is not None, "a sequence model needs table row positions"
+            seq, lengths = batcher.batch(rt[sl], shuffle_order=shuffle_order)
+            for part, xt in zip(parts, xts, strict=True):
+                part.append(model(xt[sl], seq, lengths, amp=amp).cpu().numpy())
+    if not parts[0]:
+        return [np.zeros((0, _n_outputs(model)), dtype=np.float32) for _ in xs]
+    return [np.concatenate(part) for part in parts]
 
 
 def _n_outputs(model: nn.Module) -> int:

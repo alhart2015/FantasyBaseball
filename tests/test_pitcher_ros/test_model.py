@@ -15,6 +15,7 @@ from fantasy_baseball.pitcher_ros.features import (
     league_reference,
 )
 from fantasy_baseball.pitcher_ros.model import (
+    AGE_VS_LEVEL,
     APPLIED,
     DEFAULT_ERA_PIECES,
     DEFAULT_HORIZONS,
@@ -26,6 +27,7 @@ from fantasy_baseball.pitcher_ros.model import (
     check_plain,
     check_week_zero,
     fit_season,
+    fit_season_what_if,
     league_rates,
     net_config,
     plain_config,
@@ -205,24 +207,63 @@ def test_fit_season_predicts_every_test_row_as_rates(table):
 def test_what_if_inputs_are_predicted_by_the_same_trained_net(table):
     x, (y, w) = input_frame(table), answers(table)
     config = plain_config(hidden=[8], max_epochs=3, patience=1, val_frac=0.34)
-    older = with_age(x, 45)
-    preds, info = fit_season(table, x, y, w, 2025, config, what_if={"same": x, "old": older})
+    what_if = {"same": x[["age"]], "old": with_age(x, 45)}
+    preds, info, changed = fit_season_what_if(table, x, y, w, 2025, config, what_if)
     # Unchanged inputs through the same net give the same predictions; only age moved.
-    pd.testing.assert_frame_equal(info["what_if"]["same"], preds)
-    assert list(info["what_if"]["old"].columns) == list(preds.columns)
-    assert not np.allclose(info["what_if"]["old"][list(TARGETS)], preds[list(TARGETS)])
-    assert "what_if" not in fit_season(table, x, y, w, 2025, config)[1]
-    with pytest.raises(ValueError, match="rows and columns"):
-        fit_season(table, x, y, w, 2025, config, what_if={"bad": x.drop(columns="age")})
+    pd.testing.assert_frame_equal(changed["same"], preds)
+    assert list(changed["old"].columns) == list(preds.columns)
+    assert not np.allclose(changed["old"][list(TARGETS)], preds[list(TARGETS)])
+    # The same seed without a what-if trains the same net.
+    plain_preds, plain_info = fit_season(table, x, y, w, 2025, config)
+    pd.testing.assert_frame_equal(plain_preds, preds)
+    assert set(plain_info) == set(info)
 
 
-def test_with_age_sets_only_the_known_ages():
-    x = pd.DataFrame({"age": [24.0, np.nan, 37.0], "k": [0.2, 0.3, 0.25]})
+def test_a_bad_what_if_is_refused_before_training(table, monkeypatch):
+    x, (y, w) = input_frame(table), answers(table)
+    config = plain_config(hidden=[8], max_epochs=3, patience=1, val_frac=0.34)
+
+    def no_training(*args, **kwargs):
+        raise AssertionError("trained before checking the what-if")
+
+    monkeypatch.setattr("fantasy_baseball.pitcher_ros.model.train", no_training)
+    bad = [
+        ("on x_all's index", x[["age"]].iloc[1:]),
+        ("no others", x[["age"]].assign(nope=1.0)),
+        ("no others", x[[]]),
+    ]
+    for match, frame in bad:
+        with pytest.raises(ValueError, match=match):
+            fit_season_what_if(table, x, y, w, 2025, config, {"bad": frame})
+    with pytest.raises(ValueError, match="empty"):
+        fit_season_what_if(table, x, y, w, 2025, config, {})
+
+
+def test_with_age_moves_age_and_age_vs_level_for_known_ages():
+    x = pd.DataFrame(
+        {
+            "age": [24.0, np.nan, 37.0],
+            "k": [0.2, 0.3, 0.25],
+            AGE_VS_LEVEL[0]: [-2.0, 1.0, np.nan],
+            AGE_VS_LEVEL[1]: [-1.5, 0.5, 3.0],
+        }
+    )
     out = with_age(x, 27)
+    # Only the age inputs come back.
+    assert list(out.columns) == ["age", *AGE_VS_LEVEL] and out.index.equals(x.index)
     assert out["age"].tolist()[0::2] == [27.0, 27.0] and np.isnan(out["age"].iloc[1])
-    pd.testing.assert_series_equal(out["k"], x["k"])
+    # Three years older at every level for the 24-year-old, ten younger for the
+    # 37-year-old; no age: unchanged; no minor-league line: still blank.
+    assert out[AGE_VS_LEVEL[0]].tolist()[:2] == [1.0, 1.0] and np.isnan(
+        out[AGE_VS_LEVEL[0]].iloc[2]
+    )
+    assert out[AGE_VS_LEVEL[1]].tolist() == [1.5, 0.5, -7.0]
     with pytest.raises(ValueError, match="no age"):
         with_age(x.drop(columns="age"), 27)
+    with pytest.raises(ValueError, match="age_vs_level"):
+        with_age(x.drop(columns=AGE_VS_LEVEL[1]), 27)
+    with pytest.raises(ValueError, match="outside"):
+        with_age(x, 270)
 
 
 def test_only_settings_the_pitcher_net_uses_are_accepted_and_recorded():
