@@ -45,7 +45,9 @@ PANEL = PROJECT_ROOT / "data" / "playing_time" / "hitter_pt_panel_2010_2026.csv"
 PEOPLE = PROJECT_ROOT / "data" / "cache" / "keeper_skills" / "mlb_people_all_2000_2026.csv"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 OUT = PROJECT_ROOT / "data" / "hitter_ranges"
-LEVELS = (0.1, 0.9)
+LEVELS = (0.1, 0.5, 0.9)
+# The PA middle check: predicted-median PA bins.
+MEDIAN_BINS = (0, 300, 450, 550, 620, 660, 700, 800)
 REGULAR_PA = 450
 # AVG is scored where he had this many AB.
 MIN_SCORED_AB = 100
@@ -103,6 +105,23 @@ def sure_better(
     return float((gain[draws].sum(axis=1) > 0).mean() * 100)
 
 
+def middle(scored: pd.DataFrame) -> str:
+    p = scored[(scored["stat"] == "pa") & (scored["model"] == "player-specific")]
+    bins = pd.cut(p["q50"], MEDIAN_BINS)
+    t = p.groupby(bins, observed=True).apply(
+        lambda g: pd.Series(
+            {
+                "n": len(g),
+                "predicted": g["q50"].median(),
+                "real": g["actual"].median(),
+                "below %": (g["actual"] < g["q50"]).mean() * 100,
+            }
+        ),
+        include_groups=False,
+    )
+    return t.round(1).to_string()
+
+
 def summarize(scored: pd.DataFrame, rng: np.random.Generator) -> list[str]:
     s = scored[~((scored["stat"] == "avg") & (scored["ab"] < MIN_SCORED_AB))].copy()
     s["below"], s["above"] = s["actual"] < s["q10"], s["actual"] > s["q90"]
@@ -132,6 +151,10 @@ def summarize(scored: pd.DataFrame, rng: np.random.Generator) -> list[str]:
         )
         .round(1)
         .to_string(),
+        "",
+        "PA middle, player-specific: share of real PA below the predicted median, % (50 is",
+        "right), by predicted median:",
+        middle(scored),
         "",
         "Quantile loss (P10 + P90), player-specific vs one-size:",
     ]

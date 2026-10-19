@@ -18,9 +18,16 @@ the source's projected PA among its top ``TOP_N``, and :func:`with_rank_pa` maps
 rank to the PA that rank actually got in the training seasons (``rank_pa``). The PT
 target is ``ratio`` = actual PA / ``rank_pa``.
 
-**PT range** (:class:`QuantilePT`): linear quantile regression of ``ratio`` on
-``FEATURES``, one fit per level of ``GRID``. :class:`BandPT` is the one-size baseline
-(quantiles by ``rank_pa`` band) that the player-specific one has to beat.
+**PT range** (:class:`QuantilePT`): linear quantile regression on ``FEATURES``, one
+fit per level of ``GRID``, of his PA on a saturating scale, ``-log(1 - PA / C)`` with
+``C`` = ``HEADROOM`` x the most PA in the training rows. Quantiles carry through a
+monotone transform, so each level's PA is ``C (1 - exp(-y))``: it nears ``C`` with
+ever smaller gains and never passes it. Real PA tops out around 650-680 however good a
+hitter's situation (rest days); fit straight on PA / ``rank_pa``, a young, durable,
+top-ranked hitter was given a median of 700-750 PA, and held out the real PA came in
+under it 86-100% of the time (2023-2026, 14 with Steamer PT, 33 with last season's).
+:class:`BandPT` is the one-size baseline (quantiles by ``rank_pa`` band) that the
+player-specific one has to beat.
 
 **Luck** (:class:`LuckPool`): whole past player-seasons, each a pair -- ``u``, where his
 PA landed in his own predicted PT range (0-1, cross-fitted by season so it is the
@@ -68,6 +75,13 @@ MIN_AVG_AB = 30
 MIN_AVG_DRAWS = 20
 # QuantileRegressor's L1 penalty, on standardized inputs.
 ALPHA = 0.001
+# The saturating PT scale's ceiling, over the most PA in the training rows. Held out
+# 2023-2026 (PA pinball loss, P10 / P50 / P90; predictions of a 700+ median and the real
+# PA's share under them): straight 28.6 / 59.6 / 23.0, 14 at 86% (Steamer PT) and 28.8 /
+# 64.4 / 25.4, 33 at 100% (last season's PA); 2.0: 28.6 / 59.6 / 21.7, 2 and 28.9 / 63.4
+# / 23.7, 7. 1.02-1.5 squeezed the 620-660 PA medians low (37-46% under); 3.0 scored as
+# 2.0 but let 700+ medians back (4 and 13, 85-100% under).
+HEADROOM = 2.0
 ACTUALS = ("a_pa", "a_ab", "a_h", "a_r", "a_hr", "a_rbi", "a_sb")
 
 
@@ -140,11 +154,21 @@ def _ordered(q: np.ndarray) -> np.ndarray:
 
 class QuantilePT:
     """The player-specific PT range: per level of ``GRID``, a linear quantile regression
-    of ``ratio`` on ``FEATURES``. A missing input is filled with the training median and
-    flagged (its own input), standardized on the training rows."""
+    of his PA on the saturating scale (module docstring) on ``FEATURES``, returned as
+    ``ratio`` quantiles (PA / ``rank_pa``). A missing input is filled with the training
+    median and flagged (its own input), standardized on the training rows."""
 
-    def __init__(self, alpha: float = ALPHA) -> None:
+    def __init__(self, alpha: float = ALPHA, headroom: float = HEADROOM) -> None:
+        if headroom <= 1:
+            raise ValueError("headroom must be above 1 (the ceiling sits above every PA)")
         self.alpha = alpha
+        self.headroom = headroom
+
+    def _scale(self, pa: np.ndarray) -> np.ndarray:
+        return np.asarray(-np.log1p(-pa / self.ceiling))
+
+    def _unscale(self, y: np.ndarray) -> np.ndarray:
+        return np.asarray(self.ceiling * -np.expm1(-np.clip(y, 0.0, None)))
 
     def _design(self, rows: pd.DataFrame) -> pd.DataFrame:
         x = rows[list(FEATURES)].astype(float)
@@ -167,7 +191,9 @@ class QuantilePT:
         )
         self.mu, self.sd = raw.mean(), raw.std().replace(0.0, 1.0).fillna(1.0)
         design = (raw - self.mu) / self.sd
-        y = rows["ratio"].to_numpy(dtype=float)
+        pa = rows["a_pa"].to_numpy(dtype=float)
+        self.ceiling = self.headroom * float(pa.max())
+        y = self._scale(pa)
         self.models = [
             QuantileRegressor(quantile=float(t), alpha=self.alpha, solver="highs").fit(design, y)
             for t in GRID
@@ -176,7 +202,8 @@ class QuantilePT:
 
     def predict(self, rows: pd.DataFrame) -> np.ndarray:
         design = self._design(rows)
-        return _ordered(np.column_stack([m.predict(design) for m in self.models]))
+        pa = self._unscale(np.column_stack([m.predict(design) for m in self.models]))
+        return _ordered(pa / rows["rank_pa"].to_numpy(dtype=float)[:, None])
 
 
 # rank_pa bands for the one-size baseline.

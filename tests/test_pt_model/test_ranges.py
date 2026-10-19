@@ -108,6 +108,22 @@ def test_quantile_pt_gives_the_frail_a_lower_floor_and_ordered_quantiles():
     assert np.isfinite(QuantilePT().fit(rows).predict(blank)).all()
 
 
+def test_quantile_pt_never_reaches_its_ceiling_and_flattens_near_it():
+    rng = np.random.default_rng(4)
+    rows, _ = _rows(rng, 400, 2025)
+    rows = rows.assign(rank_pa=np.linspace(700, 200, 400)[rows["proj_rank"] - 1])
+    model = QuantilePT(headroom=1.2).fit(rows)
+    assert model.ceiling == pytest.approx(1.2 * rows["a_pa"].max())
+    # Far past anyone in training: still under the ceiling.
+    extreme = rows.head(1).assign(
+        rank_pa=700.0, g1=3.0, pa1=12.0, g2=3.0, pa2=12.0, g3=3.0, pa3=12.0
+    )
+    pa = model.predict(extreme) * 700.0
+    assert (pa < model.ceiling).all()
+    with pytest.raises(ValueError, match="headroom"):
+        QuantilePT(headroom=1.0)
+
+
 def test_band_pt_is_the_same_range_for_everyone_in_a_band():
     rows = pd.DataFrame({"rank_pa": [600.0, 620.0, 200.0, 210.0], "ratio": [1.0, 0.5, 0.2, 0.4]})
     q = BandPT().fit(rows).predict(rows)
