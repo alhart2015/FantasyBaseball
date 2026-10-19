@@ -105,8 +105,8 @@ _AGE_MONTH = 6
 _AGE_DAY = 30
 
 # Scheduled games per team, where the season was not the standard 162.
-_FULL_SEASON_GAMES = 162
-_SHORTENED_SEASONS = {2020: 60}  # COVID
+FULL_SEASON_GAMES = 162
+SHORTENED_SEASONS = {2020: 60}  # COVID
 
 
 def _age_on_june_30(birth: pd.Series, season: pd.Series) -> pd.Series:
@@ -281,7 +281,7 @@ def _build_panel(
     panel["observed"] = panel[volume].notna()
     panel["partial_season"] = panel["season"].isin(set(partial_seasons))
     panel["scheduled_games"] = (
-        panel["season"].map(_SHORTENED_SEASONS).fillna(_FULL_SEASON_GAMES).astype(int)
+        panel["season"].map(SHORTENED_SEASONS).fillna(FULL_SEASON_GAMES).astype(int)
     )
 
     covariates = _people_frame(people)

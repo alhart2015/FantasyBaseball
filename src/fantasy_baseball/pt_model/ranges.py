@@ -170,25 +170,22 @@ class QuantilePT:
     def _unscale(self, y: np.ndarray) -> np.ndarray:
         return np.asarray(self.ceiling * -np.expm1(-np.clip(y, 0.0, None)))
 
-    def _design(self, rows: pd.DataFrame) -> pd.DataFrame:
+    def _raw(self, rows: pd.DataFrame) -> pd.DataFrame:
+        """The inputs, blanks filled with the training median, plus the blank flags."""
         x = rows[list(FEATURES)].astype(float)
         cols = {c: x[c].fillna(self.medians[c]) for c in FEATURES}
         cols.update({f"{c}_na": x[c].isna().astype(float) for c in self.flagged})
-        return (pd.DataFrame(cols, index=rows.index) - self.mu) / self.sd
+        return pd.DataFrame(cols, index=rows.index)
+
+    def _design(self, rows: pd.DataFrame) -> pd.DataFrame:
+        return (self._raw(rows) - self.mu) / self.sd
 
     def fit(self, rows: pd.DataFrame) -> QuantilePT:
-        x = rows[list(FEATURES)].astype(float)
-        self.medians = x.median()
+        self.medians = rows[list(FEATURES)].astype(float).median()
         # Flag every input that can be missing, not just those missing here, so a
         # prediction row with a blank the training rows never had still has its flag.
         self.flagged = [c for c in FEATURES if c not in ("rank_pa", "catcher", "dh")]
-        raw = pd.DataFrame(
-            {
-                **{c: x[c].fillna(self.medians[c]) for c in FEATURES},
-                **{f"{c}_na": x[c].isna().astype(float) for c in self.flagged},
-            },
-            index=rows.index,
-        )
+        raw = self._raw(rows)
         self.mu, self.sd = raw.mean(), raw.std().replace(0.0, 1.0).fillna(1.0)
         design = (raw - self.mu) / self.sd
         pa = rows["a_pa"].to_numpy(dtype=float)
@@ -301,8 +298,9 @@ def simulate(
 ) -> dict[str, np.ndarray]:
     """Each row's season totals at ``levels`` (rows x levels), by stat, plus ``pa``.
     ``rows``: ``rank_pa``, ``ab_pa`` and the projected rates (``p_<stat>``); ``q``: the
-    rows' PT quantiles on ``GRID``. ``pa_cap``: no draw plays more (the linear PT range
-    can run past what any hitter has had, e.g. 818 PA for a mid-ranked regular)."""
+    rows' PT quantiles on ``GRID``. ``pa_cap``: no draw plays more (QuantilePT's
+    saturating ceiling sits at ``HEADROOM`` x the most PA, and BandPT's ratio quantiles
+    have no ceiling, so either can run past what any hitter has had)."""
     n_rows = len(rows)
     out = {c: np.empty((n_rows, len(levels))) for c in (*STATS, "pa")}
     rank_pa = rows["rank_pa"].to_numpy(dtype=float)

@@ -70,6 +70,11 @@ def pt_file(system: str, season: int) -> Path:
 def pt_projection(system: str, season: int) -> pd.DataFrame:
     """The PT source's ``pa``/``ab`` for ``season``."""
     if system == LAST_SEASON:
+        if not (STATS_DIR / f"hitters-{season - 1}.csv").exists():
+            raise SystemExit(
+                f"--pt-system {LAST_SEASON} for {season} needs {STATS_DIR / f'hitters-{season - 1}.csv'}"
+                " (pass --seasons / --train-seasons from the first season after a stats file)"
+            )
         return ri.load_season_stats(STATS_DIR, season - 1)[["pa", "ab"]]
     return ri.load_pt(pt_file(system, season))
 

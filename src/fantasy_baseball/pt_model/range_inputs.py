@@ -19,6 +19,7 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.hitter_ros.evaluate import load_fangraphs_hitters
+from fantasy_baseball.pt_model.panel import FULL_SEASON_GAMES, SHORTENED_SEASONS
 from fantasy_baseball.pt_model.ranges import HISTORY_SEASONS, STATS, history, top_ranked
 
 # Columns read from a season stats file (data/stats/hitters-<y>.csv).
@@ -32,7 +33,6 @@ STAT_COLUMNS = {
     "RBI": "rbi",
     "SB": "sb",
 }
-SCHEDULED_GAMES = 162
 
 
 def load_season_stats(stats_dir: Path, season: int) -> pd.DataFrame:
@@ -52,7 +52,8 @@ def season_lines(
     for season in seasons:
         if (stats_dir / f"hitters-{season}.csv").exists():
             s = load_season_stats(stats_dir, season)
-            out[season] = pd.DataFrame({"g": s["g"], "pa": s["pa"]}) / SCHEDULED_GAMES
+            games = SHORTENED_SEASONS.get(season, FULL_SEASON_GAMES)
+            out[season] = pd.DataFrame({"g": s["g"], "pa": s["pa"]}) / games
             continue
         p = panel[(panel["season"] == season) & panel["observed"] & ~panel["is_pitcher"]]
         if p.empty:
