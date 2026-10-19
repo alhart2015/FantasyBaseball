@@ -2,23 +2,23 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from fantasy_baseball.pt_model.range_specs import HITTER
 from fantasy_baseball.pt_model.ranges import (
-    FEATURES,
     GRID,
-    MIN_RATE_PA,
-    STATS,
     BandPT,
     LuckPool,
     QuantilePT,
     backtest,
     fit,
     history,
-    pa_by_rank,
     pinball,
     simulate,
     top_ranked,
-    with_rank_pa,
+    volume_by_rank,
+    with_rank,
 )
+
+STATS = HITTER.stat_names
 
 
 def test_top_ranked_takes_the_most_projected_pa_ties_to_the_lower_id():
@@ -27,24 +27,24 @@ def test_top_ranked_takes_the_most_projected_pa_ties_to_the_lower_id():
     assert rank.to_dict() == {3: 1, 5: 2, 7: 3}
 
 
-def test_pa_by_rank_averages_each_seasons_sorted_pa_padded_with_zero():
-    by_rank = pa_by_rank(
+def test_volume_by_rank_averages_each_seasons_sorted_volume_padded_with_zero():
+    by_rank = volume_by_rank(
         {2024: np.array([500.0, 700.0]), 2025: np.array([600.0, 650.0, 100.0])}, [2024, 2025], 3
     )
     np.testing.assert_allclose(by_rank, [(700 + 650) / 2, (500 + 600) / 2, (0 + 100) / 2])
     with pytest.raises(ValueError, match="no seasons"):
-        pa_by_rank({}, [], 3)
+        volume_by_rank({}, [], 3)
 
 
-def test_with_rank_pa_maps_ranks_and_the_ratio_to_actual():
+def test_with_rank_maps_ranks_and_the_ratio_to_actual():
     rows = pd.DataFrame({"proj_rank": [1, 2], "a_pa": [350.0, 600.0]})
-    out = with_rank_pa(rows, np.array([700.0, 600.0]))
+    out = with_rank(rows, np.array([700.0, 600.0]), HITTER)
     assert out["rank_pa"].tolist() == [700.0, 600.0] and out["ratio"].tolist() == [0.5, 1.0]
-    assert "ratio" not in with_rank_pa(rows.drop(columns="a_pa"), np.array([700.0, 600.0]))
+    assert "ratio" not in with_rank(rows.drop(columns="a_pa"), np.array([700.0, 600.0]), HITTER)
     with pytest.raises(ValueError, match="proj_rank must be"):
-        with_rank_pa(rows, np.array([700.0]))
-    with pytest.raises(ValueError, match="0 PA"):
-        with_rank_pa(rows, np.array([700.0, 0.0]))
+        with_rank(rows, np.array([700.0]), HITTER)
+    with pytest.raises(ValueError, match="0 pa"):
+        with_rank(rows, np.array([700.0, 0.0]), HITTER)
 
 
 def test_history_is_zero_after_his_debut_and_unknown_before_it():
@@ -98,21 +98,21 @@ def test_quantile_pt_gives_the_frail_a_lower_floor_and_ordered_quantiles():
     rows, _ = _rows(rng, 600, 2025)
     rows = rows.assign(rank_pa=np.linspace(700, 200, 600)[rows["proj_rank"] - 1])
     rows["ratio"] = rows["a_pa"] / rows["rank_pa"]
-    q = QuantilePT().fit(rows).predict(rows)
+    q = QuantilePT(HITTER).fit(rows).predict(rows)
     assert q.shape == (600, len(GRID)) and (np.diff(q, axis=1) >= 0).all() and (q >= 0).all()
     frail = rows["g1"].to_numpy() < 0.6
     p10 = q[:, list(GRID).index(0.1)]
     assert p10[frail].mean() < 0.35 < 0.8 < p10[~frail].mean()
     # A blank input (no history) still predicts, with its flag.
     blank = rows.head(3).assign(g1=np.nan, pa1=np.nan)
-    assert np.isfinite(QuantilePT().fit(rows).predict(blank)).all()
+    assert np.isfinite(QuantilePT(HITTER).fit(rows).predict(blank)).all()
 
 
 def test_quantile_pt_never_reaches_its_ceiling_and_flattens_near_it():
     rng = np.random.default_rng(4)
     rows, _ = _rows(rng, 400, 2025)
     rows = rows.assign(rank_pa=np.linspace(700, 200, 400)[rows["proj_rank"] - 1])
-    model = QuantilePT(headroom=1.2).fit(rows)
+    model = QuantilePT(HITTER, headroom=1.2).fit(rows)
     assert model.ceiling == pytest.approx(1.2 * rows["a_pa"].max())
     # Far past anyone in training: still under the ceiling.
     extreme = rows.head(1).assign(
@@ -121,19 +121,19 @@ def test_quantile_pt_never_reaches_its_ceiling_and_flattens_near_it():
     pa = model.predict(extreme) * 700.0
     assert (pa < model.ceiling).all()
     with pytest.raises(ValueError, match="headroom"):
-        QuantilePT(headroom=1.0)
+        QuantilePT(HITTER, headroom=1.0)
 
 
 def test_band_pt_is_the_same_range_for_everyone_in_a_band():
     rows = pd.DataFrame({"rank_pa": [600.0, 620.0, 200.0, 210.0], "ratio": [1.0, 0.5, 0.2, 0.4]})
-    q = BandPT().fit(rows).predict(rows)
+    q = BandPT(HITTER).fit(rows).predict(rows)
     np.testing.assert_allclose(q[0], q[1])
     np.testing.assert_allclose(q[2], q[3])
     assert not np.allclose(q[0], q[2])
 
 
 def _past(n_short):
-    """Past seasons for a luck pool: 4 full seasons, then n_short under MIN_RATE_PA."""
+    """Past seasons for a luck pool: 4 full seasons, then n_short under the minimum PA."""
     pa = np.array([600.0, 600.0, 600.0, 600.0, *([10.0] * n_short)])
     rows = pd.DataFrame(
         {
@@ -153,13 +153,13 @@ def _past(n_short):
 def test_luck_pool_keeps_every_seasons_pt_and_lends_short_ones_a_rate_miss():
     rows, q = _past(n_short=3)
     rows.loc[0, "a_hr"] = 66.0  # one full season that beat its projection
-    pool = LuckPool.from_rows(rows, q, np.random.default_rng(0))
+    pool = LuckPool.from_rows(rows, q, np.random.default_rng(0), HITTER)
     assert len(pool.u) == len(rows)  # the short seasons' PT stays in the pool
     assert pool.u[4:].max() < pool.u[:4].min()
     full = pool.z["hr"][:4]
     assert set(np.round(pool.z["hr"][4:], 9)) <= set(np.round(full, 9))  # borrowed, not their own
-    with pytest.raises(ValueError, match=f"{MIN_RATE_PA}"):
-        LuckPool.from_rows(rows.iloc[4:], q[4:], np.random.default_rng(0))
+    with pytest.raises(ValueError, match=f"{HITTER.min_rate_volume:g}"):
+        LuckPool.from_rows(rows.iloc[4:], q[4:], np.random.default_rng(0), HITTER)
 
 
 def test_simulate_with_no_luck_is_rate_times_his_pt_quantile():
@@ -167,13 +167,13 @@ def test_simulate_with_no_luck_is_rate_times_his_pt_quantile():
     rows = pd.DataFrame({"rank_pa": [600.0], "ab_pa": [0.9], **{f"p_{c}": [0.1] for c in STATS}})
     q = np.tile(np.linspace(0.5, 1.5, len(GRID)), (1, 1))
     median_ratio = np.interp(0.5, GRID, q[0])
-    out = simulate(rows, q, pool, (0.1, 0.9), np.random.default_rng(0), n_draws=50)
+    out = simulate(rows, q, pool, (0.1, 0.9), np.random.default_rng(0), HITTER, n_draws=50)
     np.testing.assert_allclose(out["pa"][0], 600 * median_ratio)
     np.testing.assert_allclose(out["hr"][0], 0.1 * 600 * median_ratio)
     np.testing.assert_allclose(out["avg"][0], 0.1)
     # Next to no at-bats: AVG is his projected AVG, not a draw over a handful of AB.
     tiny = simulate(
-        rows.assign(rank_pa=20.0), q, pool, (0.1, 0.9), np.random.default_rng(0), n_draws=50
+        rows.assign(rank_pa=20.0), q, pool, (0.1, 0.9), np.random.default_rng(0), HITTER, n_draws=50
     )
     np.testing.assert_allclose(tiny["avg"][0], 0.1)
 
@@ -186,10 +186,11 @@ def test_backtest_covers_about_ten_percent_each_side_on_a_known_generator():
         parts.append(rows)
         pa[season] = season_pa
     rows = pd.concat(parts)
-    scored = backtest(rows, pa, QuantilePT, np.random.default_rng(2), (0.1, 0.9), n_draws=300)
-    assert set(scored["stat"]) == {*STATS, "pa"} and {"q10", "q90", "actual", "rank_pa"} <= set(
-        scored
+    scored = backtest(
+        rows, pa, QuantilePT, np.random.default_rng(2), HITTER, (0.1, 0.9), n_draws=300
     )
+    assert set(scored["stat"]) == {*STATS, "pa"}
+    assert {"q10", "q90", "actual", "ranked", "trials"} <= set(scored)
     s = scored[scored["stat"].isin(["pa", "hr", "r"])]
     below, above = (s["actual"] < s["q10"]).mean(), (s["actual"] > s["q90"]).mean()
     assert 0.05 < below < 0.16 and 0.05 < above < 0.16, (below, above)
@@ -199,7 +200,7 @@ def test_no_draw_plays_more_than_the_cap():
     pool = LuckPool(u=np.full(10, 0.98), z={c: np.zeros(10) for c in STATS})
     rows = pd.DataFrame({"rank_pa": [600.0], "ab_pa": [0.9], **{f"p_{c}": [0.1] for c in STATS}})
     q = np.tile(np.linspace(0.5, 1.5, len(GRID)), (1, 1))  # his top draws: 900 PA
-    out = simulate(rows, q, pool, (0.5,), np.random.default_rng(0), n_draws=20, pa_cap=750.0)
+    out = simulate(rows, q, pool, (0.5,), np.random.default_rng(0), HITTER, n_draws=20, cap=750.0)
     assert out["pa"][0, 0] == 750.0 and out["hr"][0, 0] == pytest.approx(75.0)
 
 
@@ -210,19 +211,19 @@ def test_fit_caps_pa_at_the_most_any_training_hitter_had():
         rows, season_pa = _rows(rng, 120, season)
         parts.append(rows)
         pa[season] = season_pa
-    ranges = fit(pd.concat(parts), pa, QuantilePT, rng)
-    assert ranges.pa_cap == max(pa[2024].max(), pa[2025].max())
+    ranges = fit(pd.concat(parts), pa, QuantilePT, rng, HITTER)
+    assert ranges.cap == max(pa[2024].max(), pa[2025].max())
 
 
 def test_fit_needs_two_seasons_and_the_rows_it_reads():
     rng = np.random.default_rng(0)
     rows, pa = _rows(rng, 50, 2025)
     with pytest.raises(ValueError, match="2\\+ seasons"):
-        fit(rows, {2025: pa}, QuantilePT, rng)
+        fit(rows, {2025: pa}, QuantilePT, rng, HITTER)
     with pytest.raises(ValueError, match="lack"):
-        fit(rows.drop(columns="g1"), {2025: pa}, QuantilePT, rng)
+        fit(rows.drop(columns="g1"), {2025: pa}, QuantilePT, rng, HITTER)
     with pytest.raises(ValueError, match="projected rates"):
-        fit(rows.assign(p_hr=np.nan), {2025: pa}, QuantilePT, rng)
+        fit(rows.assign(p_hr=np.nan), {2025: pa}, QuantilePT, rng, HITTER)
 
 
 def test_pinball_charges_misses_by_their_side():
@@ -232,4 +233,4 @@ def test_pinball_charges_misses_by_their_side():
 
 
 def test_every_feature_is_built_by_history_or_the_rows():
-    assert {f"{c}{k}" for k in (1, 2, 3) for c in ("g", "pa")} <= set(FEATURES)
+    assert {f"{c}{k}" for k in (1, 2, 3) for c in ("g", "pa")} <= set(HITTER.features)

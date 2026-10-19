@@ -27,7 +27,10 @@ from fantasy_baseball.hitter_ros.evaluate import load_fangraphs_hitters
 from fantasy_baseball.keepers.actuals import coerce_numeric, index_by_mlbam
 from fantasy_baseball.keepers.mlb_stats import fetch_mlb_season
 from fantasy_baseball.pt_model.panel import FULL_SEASON_GAMES, SHORTENED_SEASONS
-from fantasy_baseball.pt_model.ranges import HISTORY_SEASONS, STATS, history, top_ranked
+from fantasy_baseball.pt_model.range_specs import HITTER
+from fantasy_baseball.pt_model.ranges import HISTORY_SEASONS, history, top_ranked
+
+STATS = HITTER.stat_names
 
 # Leaderboard stat columns (``stat.<name>``) read, and what they're called here.
 SEASON_COLUMNS = {
@@ -140,12 +143,12 @@ def build_rows(
     """One season's rows for ``ranges``, indexed by MLBAM id, and how many ranked
     hitters were dropped for having no projected rates.
 
-    ``pt``: the PT source's ``pa``/``ab``; its top ``ranges.TOP_N`` by PA are ranked
+    ``pt``: the PT source's ``pa``/``ab``; its top ``HITTER.top_n`` by PA are ranked
     (before anyone is dropped, so a rank means the same as in training). ``rates``:
     :func:`load_rates`. ``seasons``: :func:`load_seasons` with the ``HISTORY_SEASONS``
     before ``season`` and, ``with_actuals``, ``season`` itself (a ranked hitter missing
     from it batted 0 times). ``info``: :func:`player_info`."""
-    rank = top_ranked(pt["pa"])
+    rank = top_ranked(pt["pa"], HITTER.top_n)
     ids = rank.index
     i = info.reindex(ids)
     pos = position_before(seasons, season, ids)

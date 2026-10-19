@@ -32,8 +32,8 @@ import numpy as np
 import pandas as pd
 
 from fantasy_baseball.pt_model import range_inputs as ri
+from fantasy_baseball.pt_model.range_specs import HITTER
 from fantasy_baseball.pt_model.ranges import (
-    STATS,
     BandPT,
     QuantilePT,
     backtest,
@@ -130,12 +130,12 @@ def middle(scored: pd.DataFrame) -> str:
 
 
 def summarize(scored: pd.DataFrame, rng: np.random.Generator) -> list[str]:
-    s = scored[~((scored["stat"] == "avg") & (scored["ab"] < MIN_SCORED_AB))].copy()
+    s = scored[~((scored["stat"] == "avg") & (scored["trials"] < MIN_SCORED_AB))].copy()
     s["below"], s["above"] = s["actual"] < s["q10"], s["actual"] > s["q90"]
     s["loss"] = pinball(s["actual"].to_numpy(), s["q10"].to_numpy(), 0.1) + pinball(
         s["actual"].to_numpy(), s["q90"].to_numpy(), 0.9
     )
-    order = ["pa", *STATS]
+    order = ["pa", *HITTER.stat_names]
 
     def cover(df: pd.DataFrame) -> str:
         t = df.groupby(["stat", "model"])[["below", "above"]].mean().unstack("model").reindex(order)
@@ -146,7 +146,7 @@ def summarize(scored: pd.DataFrame, rng: np.random.Generator) -> list[str]:
         cover(s),
         "",
         f"Expected regulars (rank PA {REGULAR_PA}+):",
-        cover(s[s["rank_pa"] >= REGULAR_PA]),
+        cover(s[s["ranked"] >= REGULAR_PA]),
         "",
         "R, HR and RBI by season:",
         (
@@ -200,7 +200,7 @@ def main() -> int:
     scored = []
     for label, make in (("player-specific", QuantilePT), ("one-size", BandPT)):
         rng = np.random.default_rng(args.seed)
-        scored.append(backtest(rows, pa, make, rng, LEVELS, args.draws).assign(model=label))
+        scored.append(backtest(rows, pa, make, rng, HITTER, LEVELS, args.draws).assign(model=label))
         print(f"{label} done")
     all_scored = pd.concat(scored, ignore_index=True)
     all_scored.to_parquet(out / "scored.parquet", index=False)
