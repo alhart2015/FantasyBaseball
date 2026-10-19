@@ -17,7 +17,7 @@ inputs (``DEFAULT_STUFF``, ``DEFAULT_STUFF_RATES``).
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, replace
 from typing import Any, NamedTuple
 
@@ -263,6 +263,7 @@ def fit_season(
     batcher: SequenceBatcher | Any | None = None,
     make_model: Callable[..., Any] = build_model,
     train_on: pd.Series | None = None,
+    what_if: Mapping[str, pd.DataFrame] | None = None,
 ) -> tuple[pd.DataFrame, dict[str, Any]]:
     """Train on complete seasons before ``test_season``; predict every row of it.
 
@@ -301,7 +302,12 @@ def fit_season(
 
     ``train_on``: a boolean per ``table`` row; only rows marked True can train (e.g. one
     half of the pitchers, ``pretrain.player_half``). Every test-season row is still
-    predicted."""
+    predicted.
+
+    ``what_if``: named copies of ``x_all`` with some inputs changed (e.g.
+    :func:`with_age`). The same trained net predicts the test rows from each too, and
+    ``info["what_if"]`` holds those predictions by name, framed like the returned ones
+    (the caller takes them out before writing ``info`` as JSON)."""
     check_plain(config)
     check_week_zero(table)
     has_parks = set(PARK_FEATURES) <= set(x_all.columns)
@@ -388,24 +394,31 @@ def fit_season(
         make_model=make_model,
     )
     test_rows = table["season"] == test_season
-    z = predict(
-        result.model,
-        scaler.transform(x_all[test_rows]),
-        rows=positions[test_rows.to_numpy()] if batcher else None,
-        batcher=batcher,
-        # As training's own evaluation: a 4096-row chunk of the fine-tuned net's
-        # 1023-pitch histories leaves ~29 GB reserved, and the next season spills (#492).
-        chunk=config.micro_batch or EVAL_BATCH,
-        amp=config.amp,
-    )
-    preds = pd.DataFrame(
-        {c: np.clip(z[:, i] * sd[c] + mu[c], 0.0, None) for i, c in enumerate(cols)},
-        index=table.index[test_rows],
-    )
-    if ref is not None:
-        preds = preds * ref.loc[test_rows, cols]
-    preds = pd.concat([table.loc[test_rows, ID_COLS], preds], axis=1)
-    info = {
+
+    def predicted(x: pd.DataFrame) -> pd.DataFrame:
+        z = predict(
+            result.model,
+            scaler.transform(x[test_rows]),
+            rows=positions[test_rows.to_numpy()] if batcher else None,
+            batcher=batcher,
+            # As training's own evaluation: a 4096-row chunk of the fine-tuned net's
+            # 1023-pitch histories leaves ~29 GB reserved, and the next season spills (#492).
+            chunk=config.micro_batch or EVAL_BATCH,
+            amp=config.amp,
+        )
+        out = pd.DataFrame(
+            {c: np.clip(z[:, i] * sd[c] + mu[c], 0.0, None) for i, c in enumerate(cols)},
+            index=table.index[test_rows],
+        )
+        if ref is not None:
+            out = out * ref.loc[test_rows, cols]
+        return pd.concat([table.loc[test_rows, ID_COLS], out], axis=1)
+
+    for name, x in (what_if or {}).items():
+        if not (x.index.equals(x_all.index) and list(x.columns) == list(x_all.columns)):
+            raise ValueError(f"what_if {name!r} must have x_all's rows and columns")
+    preds = predicted(x_all)
+    info: dict[str, Any] = {
         "test_season": test_season,
         "train_rows": int(train_rows.sum() - val_mask.sum()),
         "val_rows": int(val_mask.sum()),
@@ -414,7 +427,18 @@ def fit_season(
         "train_loss": result.train_loss,
         "val_loss": result.val_loss,
     }
+    if what_if:
+        info["what_if"] = {name: predicted(x) for name, x in what_if.items()}
     return preds, info
+
+
+def with_age(x: pd.DataFrame, age: float) -> pd.DataFrame:
+    """``x`` (``features.input_frame``) with every row's ``age`` set to ``age``, for a
+    ``fit_season`` what-if: the same pitchers' histories, read as if he were that age.
+    Rows with no age (no pitch files) keep theirs blank, so only a known age moves."""
+    if "age" not in x.columns:
+        raise ValueError("the inputs have no age column")
+    return x.assign(age=x["age"].where(x["age"].isna(), float(age)))
 
 
 # Seeds a run trains and averages by default. Run 005-plain-avg (these seeds, before the

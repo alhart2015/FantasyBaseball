@@ -29,6 +29,7 @@ from fantasy_baseball.pitcher_ros.model import (
     league_rates,
     net_config,
     plain_config,
+    with_age,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS
 from fantasy_baseball.pitcher_ros.table import build_table
@@ -199,6 +200,29 @@ def test_fit_season_predicts_every_test_row_as_rates(table):
     assert len(preds) == (table.season == 2025).sum()
     assert (preds[list(TARGETS)] >= 0).all().all() and preds[list(TARGETS)].notna().all().all()
     assert info["test_season"] == 2025 and info["train_rows"] > 0
+
+
+def test_what_if_inputs_are_predicted_by_the_same_trained_net(table):
+    x, (y, w) = input_frame(table), answers(table)
+    config = plain_config(hidden=[8], max_epochs=3, patience=1, val_frac=0.34)
+    older = with_age(x, 45)
+    preds, info = fit_season(table, x, y, w, 2025, config, what_if={"same": x, "old": older})
+    # Unchanged inputs through the same net give the same predictions; only age moved.
+    pd.testing.assert_frame_equal(info["what_if"]["same"], preds)
+    assert list(info["what_if"]["old"].columns) == list(preds.columns)
+    assert not np.allclose(info["what_if"]["old"][list(TARGETS)], preds[list(TARGETS)])
+    assert "what_if" not in fit_season(table, x, y, w, 2025, config)[1]
+    with pytest.raises(ValueError, match="rows and columns"):
+        fit_season(table, x, y, w, 2025, config, what_if={"bad": x.drop(columns="age")})
+
+
+def test_with_age_sets_only_the_known_ages():
+    x = pd.DataFrame({"age": [24.0, np.nan, 37.0], "k": [0.2, 0.3, 0.25]})
+    out = with_age(x, 27)
+    assert out["age"].tolist()[0::2] == [27.0, 27.0] and np.isnan(out["age"].iloc[1])
+    pd.testing.assert_series_equal(out["k"], x["k"])
+    with pytest.raises(ValueError, match="no age"):
+        with_age(x.drop(columns="age"), 27)
 
 
 def test_only_settings_the_pitcher_net_uses_are_accepted_and_recorded():

@@ -17,6 +17,11 @@ saves net's. It trains on every pitcher even with --train-half (it reads no enco
 probes to leak). It doubles the training time; --no-saves-net skips it (needed with
 --seq none, and with --no-own-windows, where the main net already is the saves net).
 
+--what-if-age A also predicts every test row as if the pitcher were A years old (the
+same trained main nets, model.with_age): predictions-age<A>-s<N>.parquet per seed and
+predictions-age<A>.parquet averaged, beside the real-age ones. Their gap is what the net
+reads into age. Main net only: those files' saves are the main net's. Off by default.
+
 --predict-only skips the scoring: for a season with nothing to score yet (next season's
 preseason rows, once its schedule is in the store and the table is rebuilt). The run
 then has the predictions, config.json, info.json and a short summary.md only.
@@ -117,6 +122,7 @@ from fantasy_baseball.pitcher_ros.model import (
     league_rates,
     net_config,
     swap_saves,
+    with_age,
 )
 from fantasy_baseball.pitcher_ros.parks import load_park_inputs
 from fantasy_baseball.pitcher_ros.probes import load_probe_inputs
@@ -284,6 +290,12 @@ def main() -> int:
         help="train on this half of the pitchers only (pretrain.player_half; default all)",
     )
     parser.add_argument("--overwrite", action="store_true", help="replace a run with this name")
+    parser.add_argument(
+        "--what-if-age",
+        type=int,
+        default=None,
+        help="also predict every test row as if the pitcher were this age (main net)",
+    )
     parser.add_argument(
         "--predict-only",
         action="store_true",
@@ -538,19 +550,28 @@ def main() -> int:
         "horizons": list(horizons),
         "horizon_weights": HORIZON_WEIGHTS if horizons else None,
         "saves_net": args.saves_net,
+        "what_if_age": args.what_if_age,
     }
     (run / "config.json").write_text(json.dumps(settings, indent=2))
 
     infos: list[dict] = []
+    # The --what-if-age predictions, per seed (main net only).
+    aged: list[pd.DataFrame] = []
+    age_name = f"age{args.what_if_age}"
 
     def train_net(
         net: str, x_net: pd.DataFrame, batcher_net, fine_tuned: bool, rows: pd.Series | None
     ) -> list[pd.DataFrame]:
         """Every seed x test season of one net, trained on ``rows`` (None: every row);
         one frame per seed, in ``configs``' order."""
+        what_if = (
+            {age_name: with_age(x_net, args.what_if_age)}
+            if net == "main" and args.what_if_age is not None
+            else None
+        )
         by_seed = []
         for seed, config in configs.items():
-            parts = []
+            parts, aged_parts = [], []
             for season in seasons:
                 logging.info("%s net, seed %s, test season %s", net, seed, season)
                 make = (
@@ -559,11 +580,15 @@ def main() -> int:
                     else build_model
                 )
                 preds, info = fit_season(
-                    table, x_net, y, w, season, config, league, batcher_net, make, rows
+                    table, x_net, y, w, season, config, league, batcher_net, make, rows, what_if
                 )
                 parts.append(preds)
+                if what_if is not None:
+                    aged_parts.append(info.pop("what_if")[age_name])
                 infos.append({"net": net, "seed": seed, **info})
             by_seed.append(pd.concat(parts, ignore_index=True))
+            if aged_parts:
+                aged.append(pd.concat(aged_parts, ignore_index=True))
         return by_seed
 
     ours = train_net("main", x, batcher, fine_tuned=True, rows=train_on)
@@ -580,6 +605,10 @@ def main() -> int:
         seed_preds.to_parquet(run / f"predictions-s{seed}.parquet", index=False)
     preds = average_seeds(ours)
     preds.to_parquet(run / "predictions.parquet", index=False)
+    if aged:
+        for seed, seed_aged in zip(configs, aged, strict=True):
+            seed_aged.to_parquet(run / f"predictions-{age_name}-s{seed}.parquet", index=False)
+        average_seeds(aged).to_parquet(run / f"predictions-{age_name}.parquet", index=False)
     (run / "info.json").write_text(json.dumps(infos, indent=2))
     if args.predict_only:
         epochs = ", ".join(
