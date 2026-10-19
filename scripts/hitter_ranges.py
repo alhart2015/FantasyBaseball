@@ -34,10 +34,9 @@ import pandas as pd
 from backtest_hitter_ranges import (
     LAST_SEASON,
     OUT,
-    PANEL,
     PEOPLE,
     RUNS,
-    STATS_DIR,
+    load_inputs,
     pt_projection,
     training_rows,
 )
@@ -76,27 +75,30 @@ def main() -> int:
     if (args.pt_system == LAST_SEASON) == (args.pt_file is not None):
         parser.error("pass --pt-file exactly when --pt-system is a projection system")
 
-    train = training_rows(sorted(args.train_seasons), args.pt_system, args.train_run, args.seeds)
+    train, train_pa = training_rows(
+        sorted(args.train_seasons), args.pt_system, args.train_run, args.seeds
+    )
     rng = np.random.default_rng(args.seed)
-    ranges = fit(train, ri.actual_pa(STATS_DIR, args.train_seasons), QuantilePT, rng)
+    ranges = fit(train, train_pa, QuantilePT, rng)
 
-    panel = pd.read_csv(PANEL)
-    people = pd.read_csv(PEOPLE, usecols=["id", "fullName", "birthDate"])
+    loaded, info = load_inputs([args.season], args.pt_system, with_actuals=False)
     rows, dropped = ri.build_rows(
         args.season,
-        pt_projection(args.pt_system, args.season)
+        pt_projection(args.pt_system, args.season, loaded)
         if args.pt_file is None
         else ri.load_pt(args.pt_file),
         ri.load_rates(RUNS / f"{args.rates_run}-s{s}" for s in args.seeds),
-        ri.season_lines(panel, STATS_DIR, ri.history_seasons([args.season])),
-        ri.player_info(panel, people),
+        loaded,
+        info,
+        with_actuals=False,
     )
+    names = pd.read_csv(PEOPLE, usecols=["id", "fullName"]).set_index("id")["fullName"]
     print(f"{args.season}: {len(rows)} hitters ({dropped} ranked but without our rates, left out)")
     ranked, sims = ranges.predict(rows, LEVELS, rng, args.draws)
     out = pd.DataFrame(
         {
             "player_id": ranked.index,
-            "name": people.set_index("id")["fullName"].reindex(ranked.index).to_numpy(),
+            "name": names.reindex(ranked.index).to_numpy(),
             "season": args.season,
             "age": ranked["age"].to_numpy(),
             "proj_rank": ranked["proj_rank"].to_numpy(),

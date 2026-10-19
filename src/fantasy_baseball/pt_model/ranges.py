@@ -25,7 +25,7 @@ monotone transform, so each level's PA is ``C (1 - exp(-y))``: it nears ``C`` wi
 ever smaller gains and never passes it. Real PA tops out around 650-680 however good a
 hitter's situation (rest days); fit straight on PA / ``rank_pa``, a young, durable,
 top-ranked hitter was given a median of 700-750 PA, and held out the real PA came in
-under it 86-100% of the time (2023-2026, 14 with Steamer PT, 33 with last season's).
+under it 92-94% of the time (2023-2026, 13 with Steamer PT, 33 with last season's).
 :class:`BandPT` is the one-size baseline (quantiles by ``rank_pa`` band) that the
 player-specific one has to beat.
 
@@ -77,10 +77,10 @@ MIN_AVG_DRAWS = 20
 ALPHA = 0.001
 # The saturating PT scale's ceiling, over the most PA in the training rows. Held out
 # 2023-2026 (PA pinball loss, P10 / P50 / P90; predictions of a 700+ median and the real
-# PA's share under them): straight 28.6 / 59.6 / 23.0, 14 at 86% (Steamer PT) and 28.8 /
-# 64.4 / 25.4, 33 at 100% (last season's PA); 2.0: 28.6 / 59.6 / 21.7, 2 and 28.9 / 63.4
-# / 23.7, 7. 1.02-1.5 squeezed the 620-660 PA medians low (37-46% under); 3.0 scored as
-# 2.0 but let 700+ medians back (4 and 13, 85-100% under).
+# PA's share under them): straight 27.5 / 59.3 / 22.9, 13 at 92% (Steamer PT) and 28.0 /
+# 64.0 / 25.6, 33 at 94% (last season's PA); 2.0: 27.9 / 59.3 / 21.7, 2 and 28.5 / 63.1
+# / 23.7, 8. 1.02-1.5 squeezed the 620-660 PA medians low (37-46% under); 3.0 scored as
+# 2.0 but let 700+ medians back (6 and 15, 83-87% under).
 HEADROOM = 2.0
 ACTUALS = ("a_pa", "a_ab", "a_h", "a_r", "a_hr", "a_rbi", "a_sb")
 

@@ -6,9 +6,10 @@ with the player-specific PT range (QuantilePT) and the one-size baseline (BandPT
 
 Projected playing time: the PT system's preseason file per season,
 data/projections/<y>/<system>-hitters*.csv (one file per folder), or with
---pt-system last-season, his PA the season before (data/stats; from 2023, the first
-season with a stats file before it). Our rates: the
---rates-run seeds' preseason rows (data/hitter_ros/runs/<run>-s<N>/).
+--pt-system last-season, his PA the season before. Seasons, history and actuals: the
+MLB Stats API hitting leaderboards (pt_model.range_inputs), cached in
+data/cache/keeper_skills/. Our rates: the --rates-run seeds' preseason rows
+(data/hitter_ros/runs/<run>-s<N>/).
 
 Writes data/hitter_ranges/backtest-<name>/scored.parquet and summary.md, and prints
 the summary: share of seasons below P10 and above P90 (target 10% each), overall and
@@ -40,9 +41,8 @@ from fantasy_baseball.pt_model.ranges import (
 )
 
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
-STATS_DIR = PROJECT_ROOT / "data" / "stats"
-PANEL = PROJECT_ROOT / "data" / "playing_time" / "hitter_pt_panel_2010_2026.csv"
-PEOPLE = PROJECT_ROOT / "data" / "cache" / "keeper_skills" / "mlb_people_all_2000_2026.csv"
+CACHE = PROJECT_ROOT / "data" / "cache" / "keeper_skills"
+PEOPLE = CACHE / "mlb_people_all_2000_2026.csv"
 RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 OUT = PROJECT_ROOT / "data" / "hitter_ranges"
 LEVELS = (0.1, 0.5, 0.9)
@@ -67,38 +67,40 @@ def pt_file(system: str, season: int) -> Path:
     return found[0]
 
 
-def pt_projection(system: str, season: int) -> pd.DataFrame:
-    """The PT source's ``pa``/``ab`` for ``season``."""
+def pt_projection(system: str, season: int, seasons: dict[int, pd.DataFrame]) -> pd.DataFrame:
+    """The PT source's ``pa``/``ab`` for ``season``; last-season reads ``seasons``."""
     if system == LAST_SEASON:
-        if not (STATS_DIR / f"hitters-{season - 1}.csv").exists():
-            raise SystemExit(
-                f"--pt-system {LAST_SEASON} for {season} needs {STATS_DIR / f'hitters-{season - 1}.csv'}"
-                " (pass --seasons / --train-seasons from the first season after a stats file)"
-            )
-        return ri.load_season_stats(STATS_DIR, season - 1)[["pa", "ab"]]
+        return seasons[season - 1][["pa", "ab"]]
     return ri.load_pt(pt_file(system, season))
 
 
-def training_rows(seasons: list[int], system: str, run: str, seeds: list[int]) -> pd.DataFrame:
-    """Every season's rows, with actuals (shared with scripts/hitter_ranges.py)."""
-    panel = pd.read_csv(PANEL)
-    people = pd.read_csv(PEOPLE, usecols=["id", "birthDate"])
-    info = ri.player_info(panel, people)
-    lines = ri.season_lines(panel, STATS_DIR, ri.history_seasons(seasons))
+def load_inputs(
+    seasons: list[int], system: str, *, with_actuals: bool = True
+) -> tuple[dict[int, pd.DataFrame], pd.DataFrame]:
+    """(every season the rows for ``seasons`` read, by year -- ``seasons`` themselves
+    only ``with_actuals``; the people info)."""
+    years = set(ri.history_seasons(seasons)) | (set(seasons) if with_actuals else set())
+    if system == LAST_SEASON:
+        years |= {s - 1 for s in seasons}
+    people = pd.read_csv(PEOPLE, usecols=["id", "birthDate", "mlbDebutDate"])
+    return ri.load_seasons(CACHE, years), ri.player_info(people)
+
+
+def training_rows(
+    seasons: list[int], system: str, run: str, seeds: list[int]
+) -> tuple[pd.DataFrame, dict[int, np.ndarray]]:
+    """Every season's rows, with actuals, and every hitter's PA by season (shared with
+    scripts/hitter_ranges.py)."""
+    loaded, info = load_inputs(seasons, system)
     rates = ri.load_rates(RUNS / f"{run}-s{s}" for s in seeds)
     parts = []
     for season in seasons:
         rows, dropped = ri.build_rows(
-            season,
-            pt_projection(system, season),
-            rates,
-            lines,
-            info,
-            actual=ri.load_season_stats(STATS_DIR, season),
+            season, pt_projection(system, season, loaded), rates, loaded, info, with_actuals=True
         )
         print(f"{season}: {len(rows)} hitters ({dropped} ranked but without our rates, left out)")
         parts.append(rows)
-    return pd.concat(parts)
+    return pd.concat(parts), ri.actual_pa(loaded, seasons)
 
 
 def sure_better(
@@ -194,8 +196,7 @@ def main() -> int:
     out = OUT / f"backtest-{args.name}"
     out.mkdir(parents=True, exist_ok=True)
 
-    rows = training_rows(sorted(args.seasons), args.pt_system, args.rates_run, args.seeds)
-    pa = ri.actual_pa(STATS_DIR, args.seasons)
+    rows, pa = training_rows(sorted(args.seasons), args.pt_system, args.rates_run, args.seeds)
     scored = []
     for label, make in (("player-specific", QuantilePT), ("one-size", BandPT)):
         rng = np.random.default_rng(args.seed)
