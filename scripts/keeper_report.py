@@ -9,8 +9,9 @@ source: it gives minor leaguers full playing time, which lifts replacement level
 its 2027 file is a March 2026 snapshot. Our old starters' rates are corrected for
 age (pitcher_ros.aging, #503; fit on --aging-seasons -- default every season from 2022
 before --season -- with --aging-run's held-out projections, role from the --pitcher-pt
-system's past files; --no-aging to skip). The playing time is the PT file's as
-published: FanGraphs' numbers aren't edited, so its old pitchers' innings aren't cut.
+system's past files, or Steamer's when that system has none; --no-aging to skip). The
+playing time is the PT file's as published -- its old pitchers' innings aren't cut --
+except that a reliever's innings are capped (keeper_board.RP_IP_CAP).
 Rosters: the live store on Upstash
 (cache:roster, cache:opp_rosters, plus anyone else on the latest weekly_rosters_history
 snapshot they were built from; creds from .env).
@@ -198,8 +199,12 @@ def main() -> int:
         # Fitting on --season or later would read the actuals being projected.
         if len(seasons) < 2 or seasons[-1] >= args.season:
             parser.error(f"--aging-seasons: want 2+ seasons, all before --season {args.season}")
-        # Role is read the way it is applied: from the PT system's GS / G.
+        # Role is read the way it is applied: from the PT system's GS / G -- or, when
+        # that system has no past files (Depth Charts), from Steamer's, the role the
+        # backtest scored; role is all the fit reads from them.
         system = pit_pt.name.split("-pitchers")[0]
+        if not all(any((PROJECTIONS / str(s)).glob(f"{system}-pitchers*.csv")) for s in seasons):
+            system = "steamer"
         birth = ri.player_info(people)["birth"]
         rows = aging_rows(seasons, args.aging_run, system, birth)
         rate_fit = aging.fit_rates(rows)
