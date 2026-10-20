@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS blended_projections (
     ip REAL, er REAL, bb REAL, h_allowed REAL,
     era REAL, whip REAL,
     adp REAL,
+    bf REAL,
     PRIMARY KEY (year, fg_id)
 );
 
@@ -148,6 +149,8 @@ def create_tables(conn):
     # Idempotent column additions for tables that predate later schema bumps.
     _add_column_if_missing(conn, "weekly_rosters", "status", "TEXT")
     _add_column_if_missing(conn, "weekly_rosters", "yahoo_id", "TEXT")
+    # FanGraphs' batters faced (TBF), for the draft board's pitcher blend.
+    _add_column_if_missing(conn, "blended_projections", "bf", "REAL")
 
 
 # FanGraphs CSV column → DB column, for hitters
@@ -497,6 +500,7 @@ _BLENDED_TABLE_COLS = [
     "era",
     "whip",
     "adp",
+    "bf",
 ]
 
 
@@ -591,6 +595,22 @@ def load_blended_projections(
     conn.commit()
 
 
+def latest_blended_year(conn) -> int:
+    """The newest season in ``blended_projections`` (0 when it is empty)."""
+    row = conn.execute("SELECT MAX(year) as y FROM blended_projections").fetchone()
+    return int(row["y"]) if row and row["y"] is not None else 0
+
+
+def get_pitcher_id_pairs(conn, year: int) -> pd.DataFrame:
+    """Every (fg_id, mlbam_id) pair the ``year`` raw pitcher projections carry."""
+    return pd.read_sql_query(
+        "SELECT DISTINCT fg_id, mlbam_id FROM raw_projections "
+        "WHERE year = ? AND player_type = 'pitcher'",
+        conn,
+        params=(year,),
+    )
+
+
 def get_blended_projections(
     conn,
     year: int | None = None,
@@ -603,8 +623,7 @@ def get_blended_projections(
     If *year* is None, uses the maximum year in the table (current season).
     """
     if year is None:
-        row = conn.execute("SELECT MAX(year) as y FROM blended_projections").fetchone()
-        year = row["y"] if row and row["y"] is not None else 0
+        year = latest_blended_year(conn)
 
     hitters = pd.read_sql_query(
         "SELECT * FROM blended_projections WHERE year = ? AND player_type = 'hitter'",

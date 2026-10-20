@@ -6,6 +6,7 @@ import pandas as pd
 import pytest
 
 from fantasy_baseball.pitcher_ros.final import (
+    BOARD,
     GRID,
     SYSTEMS,
     WEIGHTS,
@@ -14,6 +15,7 @@ from fantasy_baseball.pitcher_ros.final import (
     best_weights,
     blend_rates,
     blended_scored,
+    board_rates,
     fg_average,
     final_rates,
     held_out_weights,
@@ -188,6 +190,17 @@ def test_final_rates_needs_the_systems_the_weights_were_fitted_with():
         final_rates(ours, {**systems, "atc": _rates([1])}, "preseason")
     with pytest.raises(ValueError, match="span"):
         final_rates(ours, systems, "playoffs")
+    with pytest.raises(ValueError, match="span"):  # its FanGraphs side is the board's blend
+        final_rates(ours, systems, BOARD)
+
+
+def test_board_rates_mixes_ours_with_the_board_blend_at_the_board_weights():
+    ours = _rates([1, 2], k=0.30, era=3.0)
+    out = board_rates(ours, _rates([1, 3], k=0.20, era=5.0))
+    w = WEIGHTS[BOARD]
+    assert out.loc[1].k == pytest.approx(w["k"] * 0.30 + (1 - w["k"]) * 0.20)
+    assert out.loc[1].era == pytest.approx(w["era"] * 3.0 + (1 - w["era"]) * 5.0)
+    assert out.loc[2].k == pytest.approx(0.30) and out.loc[3].era == pytest.approx(5.0)
 
 
 def _script():
