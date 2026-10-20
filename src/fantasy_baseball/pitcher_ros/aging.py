@@ -17,8 +17,11 @@ so this corrects aging and nothing else.
   for K and W, per inning for ERA and WHIP) on the hinge, weighted by batters faced or
   innings. Applied as ours + slope x hinge.
 * **Innings** (:func:`fit_innings`): actual / projected IP (0 if he didn't pitch, capped
-  at ``RATIO_CAP``) on the hinge. Applied as projected IP x (1 + slope / level x hinge),
-  the share of his projection he loses for being that old.
+  at ``RATIO_CAP``) on the hinge, as projected IP x (1 + slope / level x hinge), the
+  share of his projection he loses for being that old. **Measured, not applied**: the
+  projected IP is FanGraphs' (Steamer, Depth Charts), and FanGraphs' numbers are used
+  as published -- corrections go to ours only. It is here for scoring a PT source and
+  for a playing-time projection of our own.
 
 Pure and I/O-free; ``scripts/backtest_pitcher_aging.py`` builds the rows and scores the
 corrections held out.
@@ -44,8 +47,9 @@ RATE_WEIGHT = {"k": "a_bf", "w": "a_bf", "era": "a_ip", "whip": "a_ip"}
 # moves the 36+ K miss (-8.0 per 180 IP) toward the others' (-6.2) on a gap 95 sure
 # real; the 36+ ERA miss goes +0.31 -> +0.05. Relievers' weren't kept: K +0.6% (4) /
 # +11.8% (0), W +0.2% (24), ERA and WHIP within 0.1% overall.
-# Innings (both roles): starters IP -2.4% (100) / -16.9% (100), relievers -0.9% (100) /
-# -19.0% (100); 36+ starters' share of projected IP 0.69 -> 0.77 (ages 27-35: 0.74-0.82).
+# Innings (measured on Steamer's IP, not applied -- see the module docstring): starters
+# IP -2.4% (100) / -16.9% (100), relievers -0.9% (100) / -19.0% (100); 36+ starters'
+# share of projected IP 0.69 -> 0.77 (ages 27-35: 0.74-0.82).
 CORRECTED = frozenset({("starter", "k"), ("starter", "w"), ("starter", "era"), ("starter", "whip")})
 KNOTS: tuple[float | None, ...] = (None, 32.0, 34.0, 36.0)
 # An actual / projected IP ratio counts up to this (a reliever thrown into the rotation
