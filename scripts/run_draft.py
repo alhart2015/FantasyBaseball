@@ -293,6 +293,7 @@ def main():
         sgp_overrides=config.sgp_overrides,
         roster_slots=config.roster_slots or None,
         num_teams=num_teams,
+        with_ours=True,
     )
     conn.close()
     board = apply_keepers(full_board, keepers)

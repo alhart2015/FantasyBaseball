@@ -19,6 +19,7 @@ from fantasy_baseball.data.db import (
     DB_PATH,
     create_tables,
     get_connection,
+    load_blended_projections,
     load_draft_results,
     load_positions,
     load_raw_projections,
@@ -116,6 +117,16 @@ def main():
         set_blended_projections(client, "hitters", hitters_df.to_dict(orient="records"))
         set_blended_projections(client, "pitchers", pitchers_df.to_dict(orient="records"))
         print(f"  Loaded {len(hitters_df)} hitters + {len(pitchers_df)} pitchers to Redis")
+        # The draft board reads its FanGraphs blend from SQLite (draft.board).
+        load_blended_projections(
+            conn,
+            PROJECTIONS_DIR,
+            config.projection_systems,
+            config.projection_weights,
+            roster_names=roster_names,
+        )
+        years = [r[0] for r in conn.execute("SELECT DISTINCT year FROM blended_projections")]
+        print(f"  Loaded the blend to SQLite for the draft board ({sorted(years)})")
     else:
         raise FileNotFoundError(
             f"Preseason projections directory not found: {year_dir}. "

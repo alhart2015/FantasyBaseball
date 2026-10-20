@@ -49,6 +49,7 @@ CREATE TABLE IF NOT EXISTS blended_projections (
     ip REAL, er REAL, bb REAL, h_allowed REAL,
     era REAL, whip REAL,
     adp REAL,
+    bf REAL,
     PRIMARY KEY (year, fg_id)
 );
 
@@ -148,6 +149,8 @@ def create_tables(conn):
     # Idempotent column additions for tables that predate later schema bumps.
     _add_column_if_missing(conn, "weekly_rosters", "status", "TEXT")
     _add_column_if_missing(conn, "weekly_rosters", "yahoo_id", "TEXT")
+    # FanGraphs' batters faced (TBF), for the draft board's pitcher blend.
+    _add_column_if_missing(conn, "blended_projections", "bf", "REAL")
 
 
 # FanGraphs CSV column → DB column, for hitters
@@ -497,6 +500,7 @@ _BLENDED_TABLE_COLS = [
     "era",
     "whip",
     "adp",
+    "bf",
 ]
 
 

@@ -547,6 +547,7 @@ def build_board_and_context(config_path=None, db_path=None):
         sgp_overrides=config.sgp_overrides,
         roster_slots=config.roster_slots or None,
         num_teams=config.num_teams,
+        with_ours=True,
     )
     conn.close()
     board = apply_keepers(full_board, config.keepers)

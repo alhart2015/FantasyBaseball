@@ -7,8 +7,8 @@ age-corrected) by ``pitcher_ros.final.board_rates``, and rebuilds the counting s
 on the FanGraphs blend's own playing time (its IP and batters faced): playing time
 stays FanGraphs Depth-Charts-style, the rates are the blend.
 
-Batters faced is ``3 x IP + H + BB`` (the FanGraphs blend has no BF), the same
-definition the board blend's weights were fitted on (``scripts/fit_board_blend.py``).
+Batters faced is the FanGraphs blend's own (its systems' TBF, blended), what ours'
+rates are per: :func:`batters_faced`, shared with the fit (``scripts/fit_board_blend.py``).
 A pitcher ours doesn't project keeps the FanGraphs blend's line as is.
 """
 
@@ -47,11 +47,28 @@ def load_ours(season: int) -> pd.DataFrame | None:
     return pd.read_parquet(path).set_index("player_id")
 
 
-def pseudo_bf(fg: pd.DataFrame) -> pd.Series:
-    """Batters faced off a FanGraphs blend line (it has none): ``3 x IP + H + BB``. The
-    board blend's weights were fitted on this definition (``scripts/fit_board_blend.py``),
-    so the fit and the board must share it."""
-    return 3 * fg["ip"] + fg["h_allowed"] + fg["bb"]
+def batters_faced(fg: pd.DataFrame) -> pd.Series:
+    """A FanGraphs blend line's batters faced: its ``bf`` (the systems' TBF, blended).
+    Ours' K, W and SV rates are per true batter faced, so this is what they multiply.
+    The board blend's weights were fitted on it (``scripts/fit_board_blend.py``), so the
+    fit and the board share it. A line without one (a blend built before ``bf`` was
+    stored: rebuild with python scripts/build_db.py) falls back to ``3 x IP + H + BB``,
+    which runs about 1% high, with a warning."""
+    pseudo = 3 * fg["ip"].astype(float) + fg["h_allowed"].astype(float) + fg["bb"].astype(float)
+    if "bf" not in fg.columns:
+        logger.warning(
+            "FanGraphs blend has no bf (TBF) column: batters faced = 3 x IP + H + BB for "
+            "every pitcher. Rebuild it: python scripts/build_db.py"
+        )
+        return pseudo
+    bf = pd.to_numeric(fg["bf"], errors="coerce")
+    lacking = ~(bf > 0) & (pseudo > 0)
+    if lacking.any():
+        logger.warning(
+            "%d FanGraphs blend lines have no bf (TBF): 3 x IP + H + BB for those",
+            int(lacking.sum()),
+        )
+    return bf.where(bf > 0, pseudo)
 
 
 def fg_to_mlbam(raw: pd.DataFrame) -> pd.Series:
@@ -76,7 +93,7 @@ def blend_board_pitchers(
     lines = ["ip", "k", "w", "sv", "era", "whip", "er", "h_allowed", "bb"]
     out[lines] = out[lines].astype(float)
     ids = out["fg_id"].astype(str).map(mlbam)
-    bf = pseudo_bf(out)
+    bf = batters_faced(out)
     keep = ids.notna() & ids.isin(ours.index) & (bf > 0)
     if not keep.any():
         logger.warning("no board pitcher matched ours: the board's pitchers are FanGraphs only")

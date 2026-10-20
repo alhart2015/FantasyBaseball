@@ -28,10 +28,11 @@ MSE over every scored pitcher on a 0.05 grid, with FanGraphs = the average of
   (``aging``, its fit leaving the season out) against the draft board's own FanGraphs
   blend -- ``data.projections.blend_projections`` of the league's systems on file that
   season, at the league's weights (Steamer + ZiPS 2022-2025, all five 2026) -- which
-  enters as published. 2022-2026, 100+ BF: weights picked leaving each season out
-  moved at most 0.15 from these, and with them the blend beat the FanGraphs blend on
-  every stat (K 165.8 vs 173.5, W, ERA, WHIP 100 sure; SV 13.1 vs 13.6, 93) and ours on
-  K, SV, ERA (100) with W 85, WHIP 89. :func:`board_rates`.
+  enters as published, its K, W, SV per its systems' batters faced (TBF). 2022-2026,
+  100+ BF: weights picked leaving each season out moved at most 0.10 from these, and
+  with them the blend beat the FanGraphs blend on every stat (K 165.7 vs 172.7, W, ERA,
+  WHIP 100 sure; SV 13.1 vs 13.6, 94) and ours on K, SV, ERA (100) with W 90, WHIP 89.
+  :func:`board_rates`.
 
 The backtest scores only pitchers every system projects, so the weights were picked
 on those. ``final_rates`` blends every pitcher anyone projects: FanGraphs is the
@@ -60,7 +61,7 @@ BOARD = "board"
 WEIGHTS: dict[str, dict[str, float]] = {
     PRESEASON: {"k": 0.50, "w": 0.70, "sv": 0.30, "era": 0.50, "whip": 0.75},
     MIDSEASON: {"k": 0.85, "w": 1.00, "sv": 0.55, "era": 0.90, "whip": 0.95},
-    BOARD: {"k": 0.50, "w": 0.75, "sv": 0.30, "era": 0.55, "whip": 0.80},
+    BOARD: {"k": 0.50, "w": 0.70, "sv": 0.30, "era": 0.55, "whip": 0.80},
 }
 # The FanGraphs systems each span's WEIGHTS were fitted with (their average).
 SYSTEMS: dict[str, tuple[str, ...]] = {

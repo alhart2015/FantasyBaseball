@@ -37,6 +37,7 @@ PITCHING_COLUMN_MAP: dict[str, str] = {
     "ER": "er",
     "BB": "bb",
     "H": "h_allowed",
+    "TBF": "bf",
     "playerid": "fg_id",
     "PlayerId": "fg_id",
     "MLBAMID": "mlbam_id",

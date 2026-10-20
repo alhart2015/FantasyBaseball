@@ -66,6 +66,17 @@ class TestBlendProjections:
         clase = pitchers[pitchers["name"] == "Emmanuel Clase"].iloc[0]
         assert clase["gs"] == 0
 
+    def test_blend_carries_batters_faced(self, fixtures_dir, tmp_path):
+        """FanGraphs' TBF rides through the blend as ``bf``: the draft board's
+        pitcher blend multiplies ours' per-batter rates by it (draft.our_pitchers)."""
+        for csv in fixtures_dir.glob("*.csv"):
+            df = pd.read_csv(csv)
+            if "pitchers" in csv.name:
+                df["TBF"] = 800 if "steamer" in csv.name else 760
+            df.to_csv(tmp_path / csv.name, index=False)
+        _hitters, pitchers, _ = blend_projections(tmp_path, systems=["steamer", "zips"])
+        assert pitchers["bf"].tolist() == pytest.approx([780.0] * len(pitchers))
+
     def test_blended_whip_recomputed_from_components(self, fixtures_dir):
         _hitters, pitchers, _ = blend_projections(
             fixtures_dir,

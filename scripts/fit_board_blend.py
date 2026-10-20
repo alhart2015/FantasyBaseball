@@ -9,7 +9,7 @@ pitcher backtest scores) that ours and the board's blend both project.
   other seasons (role from Steamer's GS / G, as scripts/backtest_pitcher_aging.py).
 * board: data.projections.blend_projections of the league's systems on file that season
   at the league's weights -- what the board ranks -- as published, its K, W, SV per
-  batter faced (3 per inning plus hits and walks: the blend has no BF).
+  batter faced (its systems' TBF, blended: draft.our_pitchers.batters_faced).
 
 Weights: per stat, picked leaving each season out (final.held_out_weights) and scored
 with those, so no weight is picked on the rows it is scored on; also fit on every
@@ -37,7 +37,7 @@ from backtest_pitcher_aging import RUNS, aging_rows, births
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.projections import blend_projections
-from fantasy_baseball.draft.our_pitchers import pseudo_bf
+from fantasy_baseball.draft.our_pitchers import batters_faced
 from fantasy_baseball.pitcher_ros import aging, final
 from fantasy_baseball.pitcher_ros.evaluate import mse_bootstrap
 from fantasy_baseball.pt_model import range_inputs as ri
@@ -60,7 +60,7 @@ def board_fg(season: int) -> tuple[pd.DataFrame, list[str]]:
     )
     fg = fg[fg["mlbam_id"].notna()].drop_duplicates("mlbam_id")
     fg.index = pd.Index(fg["mlbam_id"].astype(int), name="player_id")
-    bf = pseudo_bf(fg)
+    bf = batters_faced(fg)
     rates = pd.DataFrame(
         {
             "k": fg["k"] / bf,
