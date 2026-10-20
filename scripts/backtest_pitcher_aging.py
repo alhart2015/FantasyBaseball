@@ -34,32 +34,36 @@ RUNS = PROJECT_ROOT / "data" / "pitcher_ros" / "runs"
 # Rows: pitchers with this many IP the season before (known before the season).
 MIN_PRIOR_IP = 50.0
 OLD = 36.0
-AGE_BINS = (0.0, 26.99, 29.99, 32.99, 35.99, 99.0)
+# Left-closed bins on fractional ages, so "36+" is exactly ``age >= OLD``.
+AGE_BINS = (0.0, 27.0, 30.0, 33.0, 36.0, 99.0)
 AGE_LABELS = ("<=26", "27-29", "30-32", "33-35", "36+")
 BOOTSTRAPS = 2000
 
 
-def season_age(birth: pd.Series, season: int) -> pd.Series:
-    """Age on June 30 of ``season``."""
-    return (pd.Timestamp(f"{season}-06-30") - birth).dt.days / 365.25
+def births() -> pd.Series:
+    """Birth dates by MLBAM id, from the people file (refuses a repeated id)."""
+    people = pd.read_csv(PEOPLE, usecols=["id", "birthDate", "mlbDebutDate"])
+    return ri.player_info(people)["birth"]
 
 
-def aging_rows(seasons: list[int], run: str) -> pd.DataFrame:
-    """One row per pitcher-season (shared with scripts/keeper_report.py): season, age,
-    role, our rates (p_*), Steamer's projected IP and the actuals (a_*; 0 if he didn't
-    pitch)."""
+def aging_rows(
+    seasons: list[int], run: str, pt_system: str = "steamer", birth: pd.Series | None = None
+) -> pd.DataFrame:
+    """One row per pitcher-season with an age and a role (shared with
+    scripts/keeper_report.py): season, age, role, our rates (p_*), the ``pt_system``'s
+    projected IP and the actuals (a_*; 0 if he didn't pitch). ``birth``:
+    :func:`births` (read when not given)."""
     pitching = ri.load_pitching_seasons(CACHE, {s - 1 for s in seasons} | set(seasons))
     rates = ri.load_pitcher_rates(RUNS / run)
-    people = pd.read_csv(PEOPLE, usecols=["id", "birthDate"]).set_index("id")
-    birth = pd.to_datetime(people["birthDate"])
+    birth = births() if birth is None else birth
     parts = []
     for season in seasons:
         prev = pitching[season - 1]
         ids = prev.index[prev["ip"] >= MIN_PRIOR_IP]
-        pt = ri.load_pitcher_pt(pt_file("steamer", season, "pitchers")).reindex(ids)
+        pt = ri.load_pitcher_pt(pt_file(pt_system, season, "pitchers")).reindex(ids)
         d = pd.DataFrame(index=ids)
         d["season"] = season
-        d["age"] = season_age(birth.reindex(ids), season).to_numpy()
+        d["age"] = ri.season_age(birth.reindex(ids), season).to_numpy()
         d["role"] = aging.role(pt["gs_share"])
         d["proj_ip"] = pt["ip"]
         actual = pitching[season].reindex(ids).fillna(0.0)
@@ -73,7 +77,8 @@ def aging_rows(seasons: list[int], run: str) -> pd.DataFrame:
         for c in ("k", "w", "era", "whip"):
             d[f"p_{c}"] = own[f"p_{c}"] if own is not None else np.nan
         parts.append(d.reset_index(names="player_id"))
-    return pd.concat(parts, ignore_index=True)
+    rows = pd.concat(parts, ignore_index=True)
+    return rows[rows["age"].notna() & rows["role"].notna()].reset_index(drop=True)
 
 
 def sure_better(
@@ -91,7 +96,6 @@ def main() -> int:
     args = parser.parse_args()
     seasons = sorted(args.seasons)
     rows = aging_rows(seasons, args.rates_run)
-    rows = rows[rows["age"].notna() & rows["role"].notna()].reset_index(drop=True)
     print(f"rows: {len(rows)} pitcher-seasons, 36+: {int((rows['age'] >= OLD).sum())}")
 
     # Held out: each season corrected by fits on the others.
@@ -142,7 +146,7 @@ def main() -> int:
             parts.append(f"{label} {change:+.2%} ({sure:.0f})")
         print(f"  {r:8s} IP   " + " | ".join(parts))
 
-    held["grp"] = pd.cut(held["age"], list(AGE_BINS), labels=list(AGE_LABELS))
+    held["grp"] = pd.cut(held["age"], list(AGE_BINS), labels=list(AGE_LABELS), right=False)
     print("\nmean miss by age, actual minus projection: ours -> corrected (K per 180 IP)")
     for r in aging.ROLES:
         g = held[held["role"] == r]

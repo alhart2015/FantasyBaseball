@@ -103,3 +103,15 @@ def test_rates_never_go_below_zero():
         pd.DataFrame({"k": [0.2]}, index=[1]), pd.Series({1: 40.0}), pd.Series({1: "starter"}), fit
     )
     assert out.loc[1, "k"] == 0.0
+
+
+def test_one_season_is_refused_not_read_as_no_correction():
+    # With one season every knot's held-out loss is 0, so "none" would win silently.
+    with pytest.raises(ValueError, match=r"2\+ seasons"):
+        aging.fit_rates(_rows(np.random.default_rng(3), seasons=(2024,)))
+
+
+def test_a_role_with_nothing_to_fit_on_is_refused():
+    rows = _rows(np.random.default_rng(4)).assign(p_era=np.nan)
+    with pytest.raises(ValueError, match="no starter rows with our era"):
+        aging.fit_rates(rows)

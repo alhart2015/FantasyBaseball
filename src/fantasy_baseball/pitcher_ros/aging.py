@@ -111,6 +111,11 @@ def _choose(
     """The knot with the lowest leave-one-season-out weighted squared error of
     ``y - (level + hinge)``, refit on every season."""
     seasons = np.unique(season)
+    # With one season every knot's loss is 0 and "no correction" would win by default.
+    if len(seasons) < 2:
+        raise ValueError(
+            f"choosing a knot needs rows from 2+ seasons, got {len(seasons)} ({len(y)} rows)"
+        )
     best, best_loss = None, np.inf
     for knot in knots:
         loss = 0.0
@@ -159,6 +164,8 @@ def fit_rates(
                 continue
             w = rows[weight].to_numpy(dtype=float)
             ok = in_role & np.isfinite(miss[stat]) & (w > 0) & rows["age"].notna().to_numpy()
+            if not ok.any():
+                raise ValueError(f"no {r} rows with our {stat} and an actual to fit on")
             out[(r, stat)] = _choose(
                 rows["age"].to_numpy(dtype=float)[ok],
                 miss[stat][ok],
@@ -184,6 +191,8 @@ def fit_innings(rows: pd.DataFrame, knots: Sequence[float | None] = KNOTS) -> di
     out = {}
     for r in ROLES:
         ok = (rows["role"] == r).to_numpy() & np.isfinite(ratio) & rows["age"].notna().to_numpy()
+        if not ok.any():
+            raise ValueError(f"no {r} rows with a projected IP ratio to fit on")
         out[r] = _choose(
             rows["age"].to_numpy(dtype=float)[ok],
             ratio[ok],

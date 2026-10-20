@@ -8,7 +8,9 @@ season: default data/projections/<season>/steamer-*.csv). ZiPS works but is a we
 source: it gives minor leaguers full playing time, which lifts replacement level, and
 its 2027 file is a March 2026 snapshot. Old pitchers are corrected for age
 (pitcher_ros.aging, #503: starters' rates and every pitcher's innings, fit on
---aging-seasons with --aging-run's held-out projections; --no-aging to skip).
+--aging-seasons -- default every season from 2022 before --season -- with --aging-run's
+held-out projections and the --pitcher-pt system's past files for innings and role;
+--no-aging to skip).
 Rosters: the live store on Upstash
 (cache:roster, cache:opp_rosters, plus anyone else on the latest weekly_rosters_history
 snapshot they were built from; creds from .env).
@@ -35,7 +37,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 os.environ["RENDER"] = "true"
 
 import pandas as pd
-from backtest_pitcher_aging import aging_rows, season_age
+from backtest_pitcher_aging import aging_rows
 
 from fantasy_baseball.analysis import keeper_board as kb
 from fantasy_baseball.config import load_config
@@ -59,6 +61,8 @@ HITTER_RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 PITCHER_RUNS = PROJECT_ROOT / "data" / "pitcher_ros" / "runs"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 OUT = PROJECT_ROOT / "data" / "keeper_reports"
+# The first season with held-out pitcher projections to fit the age corrections on.
+FIRST_AGING_SEASON = 2022
 
 
 def fangraphs_teams(path: Path) -> pd.Series:
@@ -157,7 +161,9 @@ def main() -> int:
     parser.add_argument("--top", type=int, default=5)
     parser.add_argument("--no-aging", action="store_true", help="skip the pitcher age corrections")
     parser.add_argument("--aging-run", default="035-saves-net")
-    parser.add_argument("--aging-seasons", type=int, nargs="+", default=list(range(2022, 2027)))
+    parser.add_argument(
+        "--aging-seasons", type=int, nargs="+", help="default: 2022 through --season - 1"
+    )
     args = parser.parse_args()
     hit_pt = args.hitter_pt or PROJECTIONS / str(args.season) / "steamer-hitters.csv"
     pit_pt = args.pitcher_pt or PROJECTIONS / str(args.season) / "steamer-pitchers.csv"
@@ -170,7 +176,8 @@ def main() -> int:
     config = load_config(CONFIG)
     denoms = league_denominators(CONFIG)
     starters = compute_starters_per_position(config.roster_slots, config.num_teams)
-    names = pd.read_csv(PEOPLE, usecols=["id", "fullName"]).set_index("id")["fullName"]
+    people = pd.read_csv(PEOPLE, usecols=["id", "fullName", "birthDate", "mlbDebutDate"])
+    names = people.set_index("id")["fullName"]
     slots = load_positions()
     hit_rates = ri.load_rates(HITTER_RUNS / f"{args.hitter_run}-s{s}" for s in args.seeds)
     pit_rates = ri.load_pitcher_rates(PITCHER_RUNS / args.pitcher_run)
@@ -186,21 +193,28 @@ def main() -> int:
     pit_pt_frame = ri.load_pitcher_pt(pit_pt)
     aging_note = "no age corrections"
     if not args.no_aging:
-        rows = aging_rows(sorted(args.aging_seasons), args.aging_run)
-        rows = rows[rows["age"].notna() & rows["role"].notna()]
+        given = args.aging_seasons
+        seasons = sorted(given if given is not None else range(FIRST_AGING_SEASON, args.season))
+        # Fitting on --season or later would read the actuals being projected.
+        if len(seasons) < 2 or seasons[-1] >= args.season:
+            parser.error(f"--aging-seasons: want 2+ seasons, all before --season {args.season}")
+        # The innings (and role) are fit on the same PT system they're applied to.
+        system = pit_pt.name.split("-pitchers")[0]
+        birth = ri.player_info(people)["birth"]
+        rows = aging_rows(seasons, args.aging_run, system, birth)
         rate_fit, ip_fit = aging.fit_rates(rows), aging.fit_innings(rows)
-        birth = pd.to_datetime(
-            pd.read_csv(PEOPLE, usecols=["id", "birthDate"]).set_index("id")["birthDate"]
-        )
-        age = season_age(birth, args.season)
+        age = ri.season_age(birth, args.season)
         roles = aging.role(pit_pt_frame["gs_share"])
         pit_season = aging.adjust_rates(pit_season, age, roles, rate_fit)
         new_ip = aging.adjust_innings(pit_pt_frame["ip"], age, roles, ip_fit)
         share = (new_ip / pit_pt_frame["ip"]).where(pit_pt_frame["ip"] > 0, 1.0)
         pit_pt_frame = pit_pt_frame.assign(ip=new_ip, bf=pit_pt_frame["bf"] * share)
-        aging_note = "age-corrected pitchers: " + "; ".join(
-            aging.describe(rate_fit, [(r, st) for (r, st) in sorted(aging.CORRECTED)])
-            + aging.describe(ip_fit, aging.ROLES)
+        aging_note = (
+            f"age-corrected pitchers (fit on {seasons[0]}-{seasons[-1]}, {system} IP): "
+            + "; ".join(
+                aging.describe(rate_fit, sorted(aging.CORRECTED))
+                + aging.describe(ip_fit, aging.ROLES)
+            )
         )
     hit_ids = hit_rates.xs(args.season, level="season").index
     positions = {int(i): slots.get(normalize_name(str(names.get(i, ""))), []) for i in hit_ids}
