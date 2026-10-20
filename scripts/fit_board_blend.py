@@ -32,11 +32,12 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 import numpy as np
 import pandas as pd
-from backtest_hitter_ranges import CACHE
+from backtest_hitter_ranges import CACHE, pt_file
 from backtest_pitcher_aging import RUNS, aging_rows, births
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.projections import blend_projections
+from fantasy_baseball.draft.our_pitchers import pseudo_bf
 from fantasy_baseball.pitcher_ros import aging, final
 from fantasy_baseball.pitcher_ros.evaluate import mse_bootstrap
 from fantasy_baseball.pt_model import range_inputs as ri
@@ -59,7 +60,7 @@ def board_fg(season: int) -> tuple[pd.DataFrame, list[str]]:
     )
     fg = fg[fg["mlbam_id"].notna()].drop_duplicates("mlbam_id")
     fg.index = pd.Index(fg["mlbam_id"].astype(int), name="player_id")
-    bf = 3 * fg["ip"] + fg["h_allowed"] + fg["bb"]
+    bf = pseudo_bf(fg)
     rates = pd.DataFrame(
         {
             "k": fg["k"] / bf,
@@ -76,17 +77,15 @@ def scored_rows(seasons: list[int], run: str) -> pd.DataFrame:
     """Scored-frame rows (pitcher_ros.evaluate's shape): systems ``ours`` (age-corrected),
     ``ours_raw`` and ``fg_blend`` (the board's), per pitcher, season and stat."""
     pitching = ri.load_pitching_seasons(CACHE, seasons)
-    preds = pd.read_parquet(RUNS / run / "predictions.parquet")
-    preds = preds[preds["week"] == 0].set_index(["player_id", "season"])[list(STATS)]
+    preds = ri.load_pitcher_rates(RUNS / run).rename(columns=lambda c: c.removeprefix("p_"))
+    preds = preds[list(STATS)]
     birth = births()
     arows = aging_rows(seasons, run, "steamer", birth)
     parts = []
     for season in seasons:
         fg, systems = board_fg(season)
         raw = preds.xs(season, level="season")
-        pt = ri.load_pitcher_pt(
-            sorted((PROJECTIONS / str(season)).glob("steamer-pitchers*.csv"))[0]
-        )
+        pt = ri.load_pitcher_pt(pt_file("steamer", season, "pitchers"))
         fit = aging.fit_rates(arows[arows["season"] != season])
         aged = aging.adjust_rates(
             raw, ri.season_age(birth, season), aging.role(pt["gs_share"]), fit

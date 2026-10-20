@@ -47,6 +47,13 @@ def load_ours(season: int) -> pd.DataFrame | None:
     return pd.read_parquet(path).set_index("player_id")
 
 
+def pseudo_bf(fg: pd.DataFrame) -> pd.Series:
+    """Batters faced off a FanGraphs blend line (it has none): ``3 x IP + H + BB``. The
+    board blend's weights were fitted on this definition (``scripts/fit_board_blend.py``),
+    so the fit and the board must share it."""
+    return 3 * fg["ip"] + fg["h_allowed"] + fg["bb"]
+
+
 def fg_to_mlbam(raw: pd.DataFrame) -> pd.Series:
     """FanGraphs id -> MLBAM id from raw projection rows (``fg_id``, ``mlbam_id``).
     An id that maps to more than one of the other is dropped, never guessed."""
@@ -69,7 +76,7 @@ def blend_board_pitchers(
     lines = ["ip", "k", "w", "sv", "era", "whip", "er", "h_allowed", "bb"]
     out[lines] = out[lines].astype(float)
     ids = out["fg_id"].astype(str).map(mlbam)
-    bf = 3 * out["ip"] + out["h_allowed"] + out["bb"]
+    bf = pseudo_bf(out)
     keep = ids.notna() & ids.isin(ours.index) & (bf > 0)
     if not keep.any():
         logger.warning("no board pitcher matched ours: the board's pitchers are FanGraphs only")
