@@ -6,7 +6,10 @@ averaged; pitchers: --pitcher-run's seed-averaged predictions). Playing time:
 --hitter-pt / --pitcher-pt, FanGraphs projection CSVs (Depth Charts or Steamer for the
 season: default data/projections/<season>/steamer-*.csv). ZiPS works but is a weak PT
 source: it gives minor leaguers full playing time, which lifts replacement level, and
-its 2027 file is a March 2026 snapshot. Rosters: the live store on Upstash
+its 2027 file is a March 2026 snapshot. Old pitchers are corrected for age
+(pitcher_ros.aging, #503: starters' rates and every pitcher's innings, fit on
+--aging-seasons with --aging-run's held-out projections; --no-aging to skip).
+Rosters: the live store on Upstash
 (cache:roster, cache:opp_rosters, plus anyone else on the latest weekly_rosters_history
 snapshot they were built from; creds from .env).
 
@@ -27,10 +30,12 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
+sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 # Read the live store (Upstash), not the local mirror; set before any KV read.
 os.environ["RENDER"] = "true"
 
 import pandas as pd
+from backtest_pitcher_aging import aging_rows, season_age
 
 from fantasy_baseball.analysis import keeper_board as kb
 from fantasy_baseball.config import load_config
@@ -41,6 +46,7 @@ from fantasy_baseball.hitter_ros.backtest import league_denominators
 from fantasy_baseball.hitter_ros.evaluate import load_fangraphs_hitters
 from fantasy_baseball.keepers.positions import load_positions
 from fantasy_baseball.models.positions import Position, UnknownPositions, player_type_for_positions
+from fantasy_baseball.pitcher_ros import aging
 from fantasy_baseball.pitcher_ros.evaluate import read_fangraphs_pitchers
 from fantasy_baseball.pt_model import range_inputs as ri
 from fantasy_baseball.utils.constants import compute_starters_per_position
@@ -149,6 +155,9 @@ def main() -> int:
     parser.add_argument("--seeds", type=int, nargs="+", default=list(range(6)))
     parser.add_argument("--pitcher-run", default="proj-2027-sv")
     parser.add_argument("--top", type=int, default=5)
+    parser.add_argument("--no-aging", action="store_true", help="skip the pitcher age corrections")
+    parser.add_argument("--aging-run", default="035-saves-net")
+    parser.add_argument("--aging-seasons", type=int, nargs="+", default=list(range(2022, 2027)))
     args = parser.parse_args()
     hit_pt = args.hitter_pt or PROJECTIONS / str(args.season) / "steamer-hitters.csv"
     pit_pt = args.pitcher_pt or PROJECTIONS / str(args.season) / "steamer-pitchers.csv"
@@ -173,6 +182,26 @@ def main() -> int:
         r = rates.xs(args.season, level="season")
         return r.rename(columns={c: c.removeprefix("p_") for c in r.columns})
 
+    pit_season = season_rates(pit_rates)
+    pit_pt_frame = ri.load_pitcher_pt(pit_pt)
+    aging_note = "no age corrections"
+    if not args.no_aging:
+        rows = aging_rows(sorted(args.aging_seasons), args.aging_run)
+        rows = rows[rows["age"].notna() & rows["role"].notna()]
+        rate_fit, ip_fit = aging.fit_rates(rows), aging.fit_innings(rows)
+        birth = pd.to_datetime(
+            pd.read_csv(PEOPLE, usecols=["id", "birthDate"]).set_index("id")["birthDate"]
+        )
+        age = season_age(birth, args.season)
+        roles = aging.role(pit_pt_frame["gs_share"])
+        pit_season = aging.adjust_rates(pit_season, age, roles, rate_fit)
+        new_ip = aging.adjust_innings(pit_pt_frame["ip"], age, roles, ip_fit)
+        share = (new_ip / pit_pt_frame["ip"]).where(pit_pt_frame["ip"] > 0, 1.0)
+        pit_pt_frame = pit_pt_frame.assign(ip=new_ip, bf=pit_pt_frame["bf"] * share)
+        aging_note = "age-corrected pitchers: " + "; ".join(
+            aging.describe(rate_fit, [(r, st) for (r, st) in sorted(aging.CORRECTED)])
+            + aging.describe(ip_fit, aging.ROLES)
+        )
     hit_ids = hit_rates.xs(args.season, level="season").index
     positions = {int(i): slots.get(normalize_name(str(names.get(i, ""))), []) for i in hit_ids}
     board = pd.concat(
@@ -180,7 +209,7 @@ def main() -> int:
             kb.hitter_board(
                 season_rates(hit_rates), load_fangraphs_hitters(hit_pt), positions, denoms
             ),
-            kb.pitcher_board(season_rates(pit_rates), ri.load_pitcher_pt(pit_pt), denoms),
+            kb.pitcher_board(pit_season, pit_pt_frame, denoms),
         ]
     )
     board["name"] = names.reindex(board.index).fillna("?").to_numpy()
@@ -210,6 +239,8 @@ def main() -> int:
         f"Rates: hitters {args.hitter_run} (seeds {args.seeds}), pitchers {args.pitcher_run}. "
         f"Playing time: {hit_pt.name}, {pit_pt.name} (relievers capped at {kb.RP_IP_CAP:g} IP). "
         f"Rosters written {written}.",
+        "",
+        f"Pitchers: {aging_note}.",
         "",
         "Replacement (first player past the starting slots):",
         "",
