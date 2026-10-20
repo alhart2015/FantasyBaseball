@@ -72,7 +72,10 @@ def test_matching_finds_both_halves_of_a_two_way_player_and_settles_shared_names
         kb.Rostered("C", "Max Muncy", "hitter", ("SS",), "NYM"),  # neither is a Met
         kb.Rostered("C", "Nobody", "pitcher", ("P",), "SEA"),
     ]
-    matched, problems = kb.match_rostered(rostered, _board(), names, {20: "LAD", 21: "ATH"})
+    matched, problems, team_checks = kb.match_rostered(
+        rostered, _board(), names, {20: "LAD", 21: "ATH"}
+    )
+    assert team_checks == []
     assert matched["sgp"].tolist() == [15.0, 12.0, 9.0]
     assert matched["team"].tolist() == ["A", "A", "B"] and matched["player_id"].tolist() == [
         10,
@@ -86,6 +89,30 @@ def test_matching_finds_both_halves_of_a_two_way_player_and_settles_shared_names
         and "no unique MLB-team match" in problems[0]
         and "no projection" in problems[1]
     )
+
+
+def test_matching_strips_the_two_way_suffix_and_names_a_lone_match_on_another_team():
+    names = {10: "Shohei Ohtani", 20: "Max Muncy", 21: "Max Muncy"}
+    rostered = [
+        kb.Rostered("A", "Shohei Ohtani (Pitcher)", "pitcher", ("P",), "LAD"),
+        kb.Rostered("B", "Shohei Ohtani", "hitter", ("UTIL",), "NYY"),
+    ]
+    matched, problems, team_checks = kb.match_rostered(rostered, _board(), names, {10: "LAD"})
+    assert matched["sgp"].tolist() == [12.0, 15.0]  # both kept
+    assert (
+        problems == [] and len(team_checks) == 1 and "roster NYY, projection LAD" in team_checks[0]
+    )
+
+
+def test_a_dh_only_bat_is_valued_at_util_and_an_unknown_one_in_the_outfield():
+    assert kb.hitting_slots(["UTIL"]) == ["UTIL"] and kb.hitting_slots(["DH"]) == ["UTIL"]
+    assert kb.hitting_slots(["OF", "UTIL"]) == ["OF"] and kb.hitting_slots([]) == ["OF"]
+    pt = pd.DataFrame({"pa": [650.0], "ab": [580.0]}, index=[9])
+    board = kb.hitter_board(_hit_rates([9]), pt, {9: ["UTIL"]}, DENOMS)
+    levels = {"OF": 12.0, "UTIL": 10.0}
+    assert kb.var(board["sgp"], board["positions"], levels) == [
+        pytest.approx(board.loc[9, "sgp"] - 10.0)
+    ]
 
 
 def test_var_is_sgp_over_the_replacement_at_his_best_position():

@@ -22,6 +22,7 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from fantasy_baseball.data.redis_store import _PLAYER_SUFFIX_RE
 from fantasy_baseball.hitter_ros.evaluate import fantasy_value as hitter_value
 from fantasy_baseball.pitcher_ros.evaluate import fantasy_value as pitcher_value
 from fantasy_baseball.pt_model.range_specs import STARTER_SHARE
@@ -53,6 +54,18 @@ class Rostered:
     mlb_team: str
 
 
+def hitting_slots(slots: Sequence[str]) -> list[str]:
+    """A hitter's slots for VAR: his fielding positions; UTIL alone for a DH-only bat
+    (Ohtani: valued against the UTIL replacement, not an outfielder's); none known,
+    ``DEFAULT_HIT_SLOT``."""
+    fielding = [s for s in slots if s in HIT_SLOTS]
+    if fielding:
+        return fielding
+    if any(s in ("UTIL", "DH") for s in slots):
+        return ["UTIL"]
+    return [DEFAULT_HIT_SLOT]
+
+
 def hitter_board(
     rates: pd.DataFrame,
     pt: pd.DataFrame,
@@ -60,8 +73,8 @@ def hitter_board(
     denoms: Mapping[Category, float],
 ) -> pd.DataFrame:
     """Hitters with a projected line, by MLBAM id: ``rates`` (r, hr, rbi, sb per PA, avg)
-    times ``pt``'s ``pa``/``ab``; ``positions`` their eligible slots (hitting slots
-    only, ``DEFAULT_HIT_SLOT`` if none). Columns: kind, positions, pa, the stats as
+    times ``pt``'s ``pa``/``ab``; ``positions`` their eligible slots (as
+    :func:`hitting_slots`). Columns: kind, positions, pa, the stats as
     season totals (avg as a rate), sgp."""
     ids = rates.index.intersection(pt.index[pt["pa"] > 0])
     r, p = rates.loc[ids], pt.loc[ids]
@@ -70,10 +83,7 @@ def hitter_board(
     out = pd.DataFrame(
         {
             "kind": HITTER,
-            "positions": [
-                [s for s in positions.get(i, ()) if s in HIT_SLOTS] or [DEFAULT_HIT_SLOT]
-                for i in ids
-            ],
+            "positions": [hitting_slots(positions.get(i, ())) for i in ids],
             "pa": line["pa"],
             **{c: line[c] * line["pa"] for c in ("r", "hr", "rbi", "sb")},
             "avg": line["avg"],
@@ -138,20 +148,33 @@ def match_rostered(
     board: pd.DataFrame,
     names: Mapping[int, str],
     mlb_teams: Mapping[int, str],
-) -> tuple[pd.DataFrame, list[str]]:
+) -> tuple[pd.DataFrame, list[str], list[str]]:
     """Each rostered player's board row (by normalized name within player type, a
     shared name settled by ``mlb_teams``), with his ``team`` and roster ``positions``
-    (VAR against his own eligible slots). Rows that can't be matched are left out
-    and described in the returned problems. ``board`` is keyed by MLBAM id, which a
+    (VAR against his own eligible slots); the rows that couldn't be matched (left
+    out); and the lone name matches whose MLB team disagrees with the roster's (kept:
+    usually a trade since the PT file was made, but possibly another player by that
+    name with no projection). ``board`` is keyed by MLBAM id, which a
     two-way player has twice (a hitter row and a pitcher row), so rows are found by
     position."""
     ids = board.index.to_numpy()
     by_name: dict[tuple[str, str], list[int]] = {}
     for k, (pid, kind) in enumerate(zip(ids, board["kind"], strict=True)):
         by_name.setdefault((normalize_name(names.get(pid, "")), kind), []).append(k)
-    rows, problems = [], []
+    rows: list[dict[str, Any]] = []
+    problems: list[str] = []
+    team_checks: list[str] = []
     for p in rostered:
-        hits = by_name.get((normalize_name(p.name), p.player_type), [])
+        # Yahoo tags a two-way player's halves "Name (Batter)" / "Name (Pitcher)".
+        key = (normalize_name(_PLAYER_SUFFIX_RE.sub("", p.name)), p.player_type)
+        hits = by_name.get(key, [])
+        if len(hits) == 1 and p.mlb_team:
+            # One projected player by that name, but the rostered one may be someone
+            # else with no projection: the board only holds projected players. A team
+            # change also lands here, so he's kept, and named so it can be checked.
+            team = mlb_teams.get(ids[hits[0]])
+            if team and team != p.mlb_team:
+                team_checks.append(f"{p.name} ({p.team}): roster {p.mlb_team}, projection {team}")
         if len(hits) > 1:
             same = [k for k in hits if mlb_teams.get(ids[k]) == p.mlb_team]
             if len(same) != 1:
@@ -169,4 +192,4 @@ def match_rostered(
             own = [s for s in p.positions if s in HIT_SLOTS]
             row["positions"] = own or row["positions"]
         rows.append({"player_id": ids[hits[0]], **row, "team": p.team, "name": p.name})
-    return pd.DataFrame(rows), problems
+    return pd.DataFrame(rows), problems, team_checks

@@ -7,7 +7,8 @@ averaged; pitchers: --pitcher-run's seed-averaged predictions). Playing time:
 season: default data/projections/<season>/steamer-*.csv). ZiPS works but is a weak PT
 source: it gives minor leaguers full playing time, which lifts replacement level, and
 its 2027 file is a March 2026 snapshot. Rosters: the live store on Upstash
-(cache:roster, cache:opp_rosters; creds from .env).
+(cache:roster, cache:opp_rosters, plus anyone else on the latest weekly_rosters_history
+snapshot they were built from; creds from .env).
 
 Writes data/keeper_reports/<season>-<name>.md and prints it.
 
@@ -34,9 +35,12 @@ import pandas as pd
 from fantasy_baseball.analysis import keeper_board as kb
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.cache_keys import CacheKey
+from fantasy_baseball.data.kv_store import get_kv
+from fantasy_baseball.data.redis_store import _PLAYER_SUFFIX_RE, get_latest_weekly_rosters
 from fantasy_baseball.hitter_ros.backtest import league_denominators
 from fantasy_baseball.hitter_ros.evaluate import load_fangraphs_hitters
 from fantasy_baseball.keepers.positions import load_positions
+from fantasy_baseball.models.positions import Position, UnknownPositions, player_type_for_positions
 from fantasy_baseball.pitcher_ros.evaluate import read_fangraphs_pitchers
 from fantasy_baseball.pt_model import range_inputs as ri
 from fantasy_baseball.utils.constants import compute_starters_per_position
@@ -52,20 +56,26 @@ OUT = PROJECT_ROOT / "data" / "keeper_reports"
 
 
 def fangraphs_teams(path: Path) -> pd.Series:
-    """A FanGraphs CSV's MLB team code by MLBAM id (first of a repeated id)."""
-    raw = pd.read_csv(path, encoding="utf-8-sig")
-    raw = raw.assign(MLBAMID=pd.to_numeric(raw["MLBAMID"], errors="coerce"))
-    raw = raw[raw["MLBAMID"].notna()].drop_duplicates("MLBAMID", keep="first")
-    return raw.set_index(raw["MLBAMID"].astype(int))["Team"]
+    """A FanGraphs CSV's MLB team code by MLBAM id (first of a repeated id).
+    ``read_fangraphs_pitchers`` reads any FanGraphs CSV that way, hitters' too."""
+    raw = read_fangraphs_pitchers(path)
+    return raw.set_index("MLBAMID")["Team"]
 
 
-def rosters() -> tuple[list[kb.Rostered], str]:
-    """Every rostered player, and when the rosters were written."""
+def _roster_key(name: str, player_type: str) -> tuple[str, str]:
+    return normalize_name(_PLAYER_SUFFIX_RE.sub("", name)), str(player_type)
+
+
+def rosters(team: str) -> tuple[list[kb.Rostered], str, list[str]]:
+    """Every rostered player, when the rosters were written, and rows that couldn't
+    be read. cache:opp_rosters keeps only the players the last refresh could project
+    (prospects and the season-long injured fall out), so anyone else on the latest
+    roster snapshot -- the one those blobs were built from -- is added from it, with
+    no MLB team."""
     mine, mine_meta = read_cache_with_meta(CacheKey.ROSTER)
     opp, opp_meta = read_cache_with_meta(CacheKey.OPP_ROSTERS)
     if not isinstance(mine, list) or not isinstance(opp, dict):
         raise SystemExit("no rosters in the live store (cache:roster, cache:opp_rosters)")
-    team = load_config(CONFIG).team_name
     entries = [(team, p) for p in mine] + [(t, p) for t, ps in opp.items() for p in ps]
     out = [
         kb.Rostered(
@@ -77,8 +87,35 @@ def rosters() -> tuple[list[kb.Rostered], str]:
         )
         for t, p in entries
     ]
-    written = f"{mine_meta.get('_written_at', '?')[:10]} / {opp_meta.get('_written_at', '?')[:10]}"
-    return out, written
+    seen = {_roster_key(r.name, r.player_type) for r in out}
+    unread = []
+    for row in get_latest_weekly_rosters(get_kv()):
+        name, owner = row.get("player_name"), row.get("team")
+        if not name or not owner:
+            continue
+        try:
+            player_type = player_type_for_positions(str(row.get("positions", "")))
+        except UnknownPositions:
+            unread.append(f"{name} ({owner}): positions {row.get('positions')!r} unreadable")
+            continue
+        key = _roster_key(str(name), player_type)
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(
+            kb.Rostered(
+                team=str(owner),
+                name=_PLAYER_SUFFIX_RE.sub("", str(name)),
+                player_type=str(player_type),
+                positions=tuple(p.value for p in Position.parse_list(str(row["positions"]))),
+                mlb_team="",
+            )
+        )
+
+    def stamp(meta: dict) -> str:
+        return str(meta.get("_written_at") or "?")[:10]
+
+    return out, f"{stamp(mine_meta)} / {stamp(opp_meta)}", unread
 
 
 def line(r: pd.Series) -> str:
@@ -150,9 +187,22 @@ def main() -> int:
     levels, repl = kb.replacement(board, starters)
     teams = pd.concat([fangraphs_teams(hit_pt), fangraphs_teams(pit_pt)])
     teams = teams[~teams.index.duplicated()]
-    rostered, written = rosters()
-    matched, problems = kb.match_rostered(rostered, board, names.to_dict(), teams.to_dict())
+    rostered, written, unread = rosters(config.team_name)
+    matched, problems, team_checks = kb.match_rostered(
+        rostered, board, names.to_dict(), teams.to_dict()
+    )
+    problems = unread + problems
+    if matched.empty:
+        raise SystemExit("no rostered player matched the board:\n" + "\n".join(problems))
     matched["var"] = kb.var(matched["sgp"], matched["positions"], levels)
+
+    def depth(pos: str) -> str:
+        # find_replacement_players' UTIL is the marginal hitter overall, past every
+        # positional and UTIL slot (IF not counted), not the (UTIL slots + 1)-th.
+        if pos != "UTIL":
+            return f"{pos} #{starters[pos] + 1}"
+        positional = sum(n for p, n in starters.items() if p not in ("P", "IF", "UTIL"))
+        return f"{pos} (hitter #{positional + starters[pos] + 1})"
 
     md = [
         f"## {args.season} keeper report ({args.name})",
@@ -164,12 +214,20 @@ def main() -> int:
         "Replacement (first player past the starting slots):",
         "",
         *[
-            f"- {pos} #{starters[pos] + 1}: {row['name']}, {row['total_sgp']:.1f} SGP"
+            f"- {depth(pos)}: {row['name']}, {row['total_sgp']:.1f} SGP"
             for pos, row in repl.items()
         ],
     ]
     if problems:
-        md += ["", "Not matched:", "", *[f"- {p}" for p in problems]]
+        md += ["", "Left out:", "", *[f"- {p}" for p in problems]]
+    if team_checks:
+        md += [
+            "",
+            f"Matched by name, MLB team differs from {hit_pt.name} / {pit_pt.name} (usually a "
+            "trade since the file was made; check any you don't recognize):",
+            "",
+            "- " + "; ".join(team_checks),
+        ]
     me = config.team_name
     md += ["", f"### {me}: everyone, by VAR", ""]
     md += table(matched[matched["team"] == me].sort_values("var", ascending=False))
