@@ -192,6 +192,7 @@ def main() -> int:
     pit_season = season_rates(pit_rates)
     pit_pt_frame = ri.load_pitcher_pt(pit_pt)
     aging_note = "no age corrections"
+    ip_share = None
     if not args.no_aging:
         given = args.aging_seasons
         seasons = sorted(given if given is not None else range(FIRST_AGING_SEASON, args.season))
@@ -207,8 +208,7 @@ def main() -> int:
         roles = aging.role(pit_pt_frame["gs_share"])
         pit_season = aging.adjust_rates(pit_season, age, roles, rate_fit)
         new_ip = aging.adjust_innings(pit_pt_frame["ip"], age, roles, ip_fit)
-        share = (new_ip / pit_pt_frame["ip"]).where(pit_pt_frame["ip"] > 0, 1.0)
-        pit_pt_frame = pit_pt_frame.assign(ip=new_ip, bf=pit_pt_frame["bf"] * share)
+        ip_share = (new_ip / pit_pt_frame["ip"]).where(pit_pt_frame["ip"] > 0, 1.0)
         aging_note = (
             f"age-corrected pitchers (fit on {seasons[0]}-{seasons[-1]}, {system} IP): "
             + "; ".join(
@@ -223,7 +223,7 @@ def main() -> int:
             kb.hitter_board(
                 season_rates(hit_rates), load_fangraphs_hitters(hit_pt), positions, denoms
             ),
-            kb.pitcher_board(pit_season, pit_pt_frame, denoms),
+            kb.pitcher_board(pit_season, pit_pt_frame, denoms, ip_share),
         ]
     )
     board["name"] = names.reindex(board.index).fillna("?").to_numpy()
