@@ -151,6 +151,11 @@ def player_info(people: pd.DataFrame) -> pd.DataFrame:
     )
 
 
+def season_age(birth: pd.Series, season: int) -> pd.Series:
+    """Age on June 30 of ``season`` (fractional years), from birth dates."""
+    return (pd.Timestamp(f"{season}-06-30") - birth).dt.days / 365.25
+
+
 def _week0(preds: pd.DataFrame, stats: Iterable[str], where: object) -> pd.DataFrame:
     week0 = preds[preds["week"] == 0]
     if week0.duplicated(["player_id", "season"]).any():
@@ -227,7 +232,7 @@ def _rows(
             "season": season,
             "proj_rank": rank,
             **{col: v.reindex(ids) for col, v in per_volume.items()},
-            "age": (pd.Timestamp(f"{season}-06-30") - i["birth"]).dt.days / 365.25,
+            "age": season_age(i["birth"], season),
             **{col: v.reindex(ids) for col, v in extra.items()},
         },
         index=ids,

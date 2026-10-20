@@ -95,17 +95,24 @@ def hitter_board(
 
 
 def pitcher_board(
-    rates: pd.DataFrame, pt: pd.DataFrame, denoms: Mapping[Category, float]
+    rates: pd.DataFrame,
+    pt: pd.DataFrame,
+    denoms: Mapping[Category, float],
+    ip_share: pd.Series | None = None,
 ) -> pd.DataFrame:
     """Pitchers with a projected line, by MLBAM id: ``rates`` (k, w, sv per batter
     faced, era, whip) over ``pt``'s ``ip``/``bf``, a reliever's (``gs_share`` under
-    ``STARTER_SHARE``) capped at ``RP_IP_CAP`` innings. Columns: kind, role, positions,
+    ``STARTER_SHARE``) capped at ``RP_IP_CAP`` innings. ``ip_share``: each pitcher's
+    share of those innings kept (an age correction), applied after the cap -- before
+    it, the cap would take back an old reliever's cut. Columns: kind, role, positions,
     ip, the stats as season totals (era, whip as rates), sgp."""
     ok = (pt["ip"] > 0) & (pt["bf"] > 0) & pt["gs_share"].notna()
     ids = rates.index.intersection(pt.index[ok])
     r, p = rates.loc[ids], pt.loc[ids]
     starter = p["gs_share"] >= STARTER_SHARE
     scale = np.where(~starter & (p["ip"] > RP_IP_CAP), RP_IP_CAP / p["ip"], 1.0)
+    if ip_share is not None:
+        scale = scale * ip_share.reindex(ids).fillna(1.0).to_numpy(dtype=float)
     line = r[list(PITCHER_STATS)].assign(ip=p["ip"] * scale, bf=p["bf"] * scale)
     sgp = pitcher_value(line, dict(denoms))
     out = pd.DataFrame(
