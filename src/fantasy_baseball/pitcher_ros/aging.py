@@ -17,8 +17,11 @@ so this corrects aging and nothing else.
   for K and W, per inning for ERA and WHIP) on the hinge, weighted by batters faced or
   innings. Applied as ours + slope x hinge.
 * **Innings** (:func:`fit_innings`): actual / projected IP (0 if he didn't pitch, capped
-  at ``RATIO_CAP``) on the hinge. Applied as projected IP x (1 + slope / level x hinge),
-  the share of his projection he loses for being that old.
+  at ``RATIO_CAP``) on the hinge, as projected IP x (1 + slope / level x hinge), the
+  share of his projection he loses for being that old. **Measured, not applied**: the
+  projected IP is FanGraphs' (Steamer, Depth Charts), and FanGraphs' numbers are used
+  as published -- corrections go to ours only. It is here for scoring a PT source and
+  for a playing-time projection of our own.
 
 Pure and I/O-free; ``scripts/backtest_pitcher_aging.py`` builds the rows and scores the
 corrections held out.

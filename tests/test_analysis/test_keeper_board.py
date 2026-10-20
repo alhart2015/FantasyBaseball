@@ -52,15 +52,6 @@ def test_relievers_are_capped_at_70_innings_and_starters_are_not():
     assert board.loc[2, "role"] == "SP" and board.loc[2, "ip"] == 180.0
 
 
-def test_an_age_cut_is_taken_after_the_reliever_cap():
-    rates = pd.DataFrame(
-        {"k": 0.28, "w": 0.04, "sv": 0.1, "era": 3.0, "whip": 1.1}, index=pd.Index([1])
-    )
-    pt = pd.DataFrame({"ip": [85.0], "bf": [350.0], "gs_share": [0.0]}, index=[1])
-    board = kb.pitcher_board(rates, pt, DENOMS, ip_share=pd.Series({1: 0.85}))
-    assert board.loc[1, "ip"] == pytest.approx(70.0 * 0.85)  # not swallowed by the 70 IP cap
-
-
 def _board():
     return pd.DataFrame(
         {
