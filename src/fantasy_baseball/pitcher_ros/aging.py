@@ -47,6 +47,11 @@ RATE_WEIGHT = {"k": "a_bf", "w": "a_bf", "era": "a_ip", "whip": "a_ip"}
 # Innings (both roles): starters IP -2.4% (100) / -16.9% (100), relievers -0.9% (100) /
 # -19.0% (100); 36+ starters' share of projected IP 0.69 -> 0.77 (ages 27-35: 0.74-0.82).
 CORRECTED = frozenset({("starter", "k"), ("starter", "w"), ("starter", "era"), ("starter", "whip")})
+# The same for the draft board's FanGraphs blend (scripts/backtest_pitcher_aging.py
+# --projection fg-blend; role by projected IP, 100+ a starter), 36+: starters ERA -3.4%
+# (73), WHIP -6.7% (80); K +8.4% (11) and W -0.0% (46) weren't kept, nor relievers'.
+# Its innings: starters none (the knot choice), relievers -3.8% (100) / -36.4% (100).
+CORRECTED_FG_BLEND = frozenset({("starter", "era"), ("starter", "whip")})
 KNOTS: tuple[float | None, ...] = (None, 32.0, 34.0, 36.0)
 # An actual / projected IP ratio counts up to this (a reliever thrown into the rotation
 # can pitch 5x his projection).
@@ -250,3 +255,98 @@ def describe(fit: Mapping[object, Hinge], per: Iterable[object]) -> list[str]:
                 f"{key}: from age {h.knot:g} to {h.top:.1f}, {h.slope:+.4g} a year (level {h.level:.4g})"
             )
     return lines
+
+
+def role_from_projected_ip(ip: pd.Series) -> pd.Series:
+    """Each pitcher's role from projected innings, the draft board's rule
+    (``utils.constants.role_from_ip``: 100+ IP is a starter)."""
+    from fantasy_baseball.utils.constants import role_from_ip
+
+    return ip.map(lambda v: "starter" if role_from_ip(v) == "SP" else "reliever")
+
+
+def batters_faced(ip: pd.Series, hits: pd.Series, walks: pd.Series) -> pd.Series:
+    """Batters faced from a line with no BF: 3 per inning plus the hits and walks."""
+    return 3 * ip + hits + walks
+
+
+def adjust_totals(
+    pitchers: pd.DataFrame,
+    age: pd.Series,
+    roles: pd.Series,
+    rate_fit: Mapping[tuple[str, str], Hinge],
+    ip_fit: Mapping[str, Hinge],
+) -> pd.DataFrame:
+    """A projection of season totals (``ip``, ``k``, ``w``, ``sv``, ``er``, ``bb``,
+    ``h_allowed``, ``era``, ``whip``: the draft board's) with the age corrections: K and
+    W per batter faced and ERA/WHIP corrected, then every count scaled by the innings
+    kept. Hits and walks keep their split. A pitcher with no age or role, or no
+    innings, is left as he is."""
+    out = pitchers.copy()
+    ip = out["ip"].astype(float)
+    ok = ip > 0
+    bf = batters_faced(ip, out["h_allowed"].astype(float), out["bb"].astype(float))
+    rates = pd.DataFrame(
+        {
+            "k": (out["k"] / bf).where(ok, 0.0),
+            "w": (out["w"] / bf).where(ok, 0.0),
+            "era": out["era"].astype(float),
+            "whip": out["whip"].astype(float),
+        },
+        index=out.index,
+    )
+    new = adjust_rates(rates, age, roles, rate_fit)
+    share = (adjust_innings(ip, age, roles, ip_fit) / ip).where(ok, 1.0)
+    new_ip, new_bf = ip * share, bf * share
+    on_base = out["h_allowed"].astype(float) + out["bb"].astype(float)
+    h_part = (out["h_allowed"] / on_base).where(on_base > 0, 0.5)
+    runners = new["whip"] * new_ip
+    adjusted = out.assign(
+        ip=new_ip,
+        k=new["k"] * new_bf,
+        w=new["w"] * new_bf,
+        sv=out["sv"] * share,
+        era=new["era"],
+        er=new["era"] * new_ip / 9,
+        whip=new["whip"],
+        h_allowed=runners * h_part,
+        bb=runners * (1 - h_part),
+    )
+    adjusted.loc[~ok] = pitchers.loc[~ok]
+    return adjusted
+
+
+def fit_to_dict(
+    rate_fit: Mapping[tuple[str, str], Hinge], ip_fit: Mapping[str, Hinge]
+) -> dict[str, object]:
+    """The fits as JSON-ready data (``fit_from_dict`` reads it back)."""
+
+    def h(x: Hinge) -> dict[str, float | None]:
+        return {
+            "knot": x.knot,
+            "slope": x.slope,
+            "level": x.level,
+            "top": None if np.isinf(x.top) else x.top,
+        }
+
+    return {
+        "rates": [{"role": r, "stat": s, **h(x)} for (r, s), x in rate_fit.items()],
+        "innings": [{"role": r, **h(x)} for r, x in ip_fit.items()],
+    }
+
+
+def fit_from_dict(
+    data: Mapping[str, object],
+) -> tuple[dict[tuple[str, str], Hinge], dict[str, Hinge]]:
+    def h(d: Mapping[str, object]) -> Hinge:
+        top = d.get("top")
+        return Hinge(
+            knot=None if d["knot"] is None else float(d["knot"]),  # type: ignore[arg-type]
+            slope=float(d["slope"]),  # type: ignore[arg-type]
+            level=float(d["level"]),  # type: ignore[arg-type]
+            top=np.inf if top is None else float(top),  # type: ignore[arg-type]
+        )
+
+    rates = {(str(d["role"]), str(d["stat"])): h(d) for d in data["rates"]}  # type: ignore[attr-defined]
+    innings = {str(d["role"]): h(d) for d in data["innings"]}  # type: ignore[attr-defined]
+    return rates, innings

@@ -24,6 +24,15 @@ from fantasy_baseball.utils.name_utils import normalize_name
 
 logger = logging.getLogger(__name__)
 
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
+# The pitcher age correction fit on the board's own FanGraphs blend (#503); made by
+# scripts/backtest_pitcher_aging.py --projection fg-blend --write <this>. Refit it once a
+# season ends (its actuals join the fit), before that offseason's board rebuild.
+AGING_FIT = _PROJECT_ROOT / "data" / "pitcher_aging" / "fg-blend.json"
+# Birth dates by MLBAM id: every keeper-skills people pull there, together (their
+# spans differ -- mlb_people_all_2025_2025.csv holds one season's players).
+PEOPLE_DIR = _PROJECT_ROOT / "data" / "cache" / "keeper_skills"
+
 
 @dataclass(frozen=True)
 class ScaleInputs:
@@ -42,9 +51,16 @@ def build_draft_board(
     sgp_overrides: SgpOverrides | None = None,
     roster_slots: dict[str, int] | None = None,
     num_teams: int | None = None,
+    aging_fit: Path | None = None,
 ) -> pd.DataFrame:
-    """Build a ranked draft board from projections and position data in SQLite."""
+    """Build a ranked draft board from projections and position data in SQLite.
+
+    ``aging_fit``: a pitcher age correction (``pitcher_ros.aging`` JSON, e.g.
+    ``AGING_FIT``) applied to the blended pitchers first; None (the default) for none,
+    as a backtest of a past season needs (the fit has seen later seasons)."""
     hitters, pitchers = get_blended_projections(conn)
+    if aging_fit is not None:
+        pitchers = age_correct_pitchers(conn, pitchers, aging_fit)
     positions = get_positions(conn)
     board, _scale = build_board_from_frames(
         hitters, pitchers, positions, roster_slots, num_teams, sgp_overrides=sgp_overrides
@@ -148,6 +164,60 @@ def build_board_from_frames(
     return board, scale
 
 
+def birth_dates(folder: Path) -> pd.Series:
+    """Birth dates by MLBAM id from every ``mlb_people_all_*.csv`` in ``folder`` (empty
+    if none)."""
+    files = sorted(folder.glob("mlb_people_all_*.csv"))
+    if not files:
+        return pd.Series(dtype="datetime64[ns]")
+    people = pd.concat(pd.read_csv(f, usecols=["id", "birthDate"]) for f in files)
+    people = people.dropna(subset=["birthDate"]).drop_duplicates("id")
+    return pd.to_datetime(people.set_index("id")["birthDate"])
+
+
+def age_correct_pitchers(conn, pitchers: pd.DataFrame, fit_path: Path) -> pd.DataFrame:
+    """``pitchers`` (the blended board rows) with ``pitcher_ros.aging``'s correction
+    from ``fit_path``: each pitcher's age on June 30 of the board's season, from his
+    MLBAM id (the season's raw projections, by fg_id) and the people files; role by
+    projected IP (the board's rule). Left as they are, with a warning, when the fit,
+    the people file or the ids are missing."""
+    if not fit_path.is_file():
+        logger.warning("no pitcher age correction at %s; pitchers left uncorrected", fit_path)
+        return pitchers
+    births = birth_dates(PEOPLE_DIR)
+    if births.empty:
+        logger.warning("no people file in %s for ages; pitchers left uncorrected", PEOPLE_DIR)
+        return pitchers
+    import json
+
+    # Here, not at the top: it reaches scikit-learn (pt_model), which the web app that
+    # imports this module otherwise never loads.
+    from fantasy_baseball.pitcher_ros import aging
+
+    rate_fit, ip_fit = aging.fit_from_dict(json.loads(fit_path.read_text()))
+    year = conn.execute("SELECT MAX(year) AS y FROM blended_projections").fetchone()["y"]
+    ids = pd.read_sql_query(
+        "SELECT fg_id, mlbam_id FROM raw_projections WHERE year = ? AND player_type = 'pitcher'"
+        " AND mlbam_id IS NOT NULL",
+        conn,
+        params=(year,),
+    ).drop_duplicates("fg_id")
+    mlbam = ids.set_index(ids["fg_id"].astype(str))["mlbam_id"].astype(int)
+    born = pd.Series(
+        births.reindex(pitchers["fg_id"].astype(str).map(mlbam)).to_numpy(), index=pitchers.index
+    )
+    age_s = (pd.Timestamp(f"{year}-06-30") - born).dt.days / 365.25
+    roles = aging.role_from_projected_ip(pitchers["ip"])
+    out = aging.adjust_totals(pitchers, age_s, roles, rate_fit, ip_fit)
+    logger.info(
+        "pitcher age correction from %s: %d of %d pitchers with an age",
+        fit_path.name,
+        int(age_s.notna().sum()),
+        len(pitchers),
+    )
+    return out
+
+
 def rebuild_board(config_path: Path, board_path: Path) -> int:
     """Build the draft board from SQLite projections and write to JSON.
 
@@ -168,6 +238,7 @@ def rebuild_board(config_path: Path, board_path: Path) -> int:
             sgp_overrides=config.sgp_overrides,
             roster_slots=config.roster_slots or None,
             num_teams=config.num_teams,
+            aging_fit=AGING_FIT,
         )
     finally:
         conn.close()

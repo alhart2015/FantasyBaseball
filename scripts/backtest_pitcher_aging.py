@@ -6,16 +6,25 @@ role: Steamer's preseason file (projected IP and GS / G). Actuals: the MLB pitch
 leaderboards. For each season, the corrections are fit on the other seasons (their
 knots chosen leave-one-season-out within those), then applied to it.
 
+--projection fg-blend scores the draft board's projection instead: each past season's
+FanGraphs blend, built as the board builds it (data.projections.blend_projections, the
+league's systems and weights, those on file that season), its rates and innings both
+corrected, role by projected IP (utils.constants.role_from_ip, the board's rule).
+--write saves the fit on every season as JSON (what the board reads,
+data/pitcher_aging/fg-blend.json).
+
 Prints, per role and stat, the held-out weighted squared error with and without the
 correction (all pitchers, and 36+) with how sure the corrected one is better (0-100,
 bootstrap over pitchers), and the mean miss by age group after the correction.
 
     python scripts/backtest_pitcher_aging.py
+    python scripts/backtest_pitcher_aging.py --projection fg-blend --write data/pitcher_aging/fg-blend.json
 """
 
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 
@@ -27,10 +36,14 @@ import numpy as np
 import pandas as pd
 from backtest_hitter_ranges import CACHE, PEOPLE, pt_file
 
+from fantasy_baseball.config import load_config
+from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.pitcher_ros import aging
 from fantasy_baseball.pt_model import range_inputs as ri
 
 RUNS = PROJECT_ROOT / "data" / "pitcher_ros" / "runs"
+PROJECTIONS = PROJECT_ROOT / "data" / "projections"
+CONFIG = PROJECT_ROOT / "config" / "league.yaml"
 # Rows: pitchers with this many IP the season before (known before the season).
 MIN_PRIOR_IP = 50.0
 OLD = 36.0
@@ -81,6 +94,43 @@ def aging_rows(
     return rows[rows["age"].notna() & rows["role"].notna()].reset_index(drop=True)
 
 
+def board_rows(seasons: list[int], birth: pd.Series | None = None) -> pd.DataFrame:
+    """As :func:`aging_rows`, for the draft board's projection: each season's FanGraphs
+    blend (the league's systems and weights, those on file), p_* its K and W per batter
+    faced (``aging.batters_faced``) and ERA/WHIP, proj_ip its IP, role by projected IP."""
+    config = load_config(CONFIG)
+    pitching = ri.load_pitching_seasons(CACHE, {s - 1 for s in seasons} | set(seasons))
+    birth = births() if birth is None else birth
+    parts = []
+    for season in seasons:
+        folder = PROJECTIONS / str(season)
+        systems = [x for x in config.projection_systems if list(folder.glob(f"{x}-pitchers*.csv"))]
+        if not systems:
+            raise SystemExit(f"no league projection system on file for {season} in {folder}")
+        weights = {x: config.projection_weights.get(x, 1.0) for x in systems}
+        _, blend, _ = blend_projections(folder, systems, weights)
+        blend = blend[blend["mlbam_id"].notna()].drop_duplicates("mlbam_id")
+        blend = blend.set_index(blend["mlbam_id"].astype(int))
+        prev = pitching[season - 1]
+        ids = prev.index[prev["ip"] >= MIN_PRIOR_IP].intersection(blend.index)
+        b = blend.loc[ids]
+        bf = aging.batters_faced(b["ip"], b["h_allowed"], b["bb"])
+        d = pd.DataFrame(index=ids)
+        d["season"] = season
+        d["age"] = ri.season_age(birth.reindex(ids), season).to_numpy()
+        d["role"] = aging.role_from_projected_ip(b["ip"])
+        d["proj_ip"] = b["ip"]
+        actual = pitching[season].reindex(ids).fillna(0.0)
+        for c in ("ip", "bf", "k", "w", "er", "h", "bb"):
+            d[f"a_{c}"] = actual[c]
+        d["p_k"], d["p_w"] = b["k"] / bf, b["w"] / bf
+        d["p_era"], d["p_whip"] = b["era"], b["whip"]
+        d["systems"] = ",".join(systems)
+        parts.append(d.reset_index(names="player_id"))
+    rows = pd.concat(parts, ignore_index=True)
+    return rows[rows["age"].notna() & rows["role"].notna()].reset_index(drop=True)
+
+
 def sure_better(
     err_new: np.ndarray, err_old: np.ndarray, players: np.ndarray, rng: np.random.Generator
 ) -> float:
@@ -93,16 +143,19 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--seasons", type=int, nargs="+", default=list(range(2022, 2027)))
     parser.add_argument("--rates-run", default="035-saves-net")
+    parser.add_argument("--projection", choices=("ours", "fg-blend"), default="ours")
+    parser.add_argument("--write", type=Path, help="save the fit on every season as JSON")
     args = parser.parse_args()
     seasons = sorted(args.seasons)
-    rows = aging_rows(seasons, args.rates_run)
+    rows = aging_rows(seasons, args.rates_run) if args.projection == "ours" else board_rows(seasons)
+    corrected = aging.CORRECTED if args.projection == "ours" else aging.CORRECTED_FG_BLEND
     print(f"rows: {len(rows)} pitcher-seasons, 36+: {int((rows['age'] >= OLD).sum())}")
 
     # Held out: each season corrected by fits on the others.
     adj_rates, adj_ip = [], []
     for s in seasons:
         train, test = rows[rows["season"] != s], rows[rows["season"] == s]
-        rfit, ifit = aging.fit_rates(train), aging.fit_innings(train)
+        rfit, ifit = aging.fit_rates(train, corrected=corrected), aging.fit_innings(train)
         r = test[["p_k", "p_w", "p_era", "p_whip"]].rename(columns=lambda c: c[2:])
         adj = aging.adjust_rates(r, test["age"], test["role"], rfit)
         adj_rates.append(adj.add_prefix("q_"))
@@ -173,11 +226,26 @@ def main() -> int:
         "\n".join(
             "  " + x
             for x in aging.describe(
-                aging.fit_rates(rows), [(r, s) for r in aging.ROLES for s in aging.RATE_WEIGHT]
+                aging.fit_rates(rows, corrected=corrected),
+                [(r, s) for r in aging.ROLES for s in aging.RATE_WEIGHT],
             )
         )
     )
     print("\n".join("  " + x for x in aging.describe(aging.fit_innings(rows), aging.ROLES)))
+    if args.write:
+        data = aging.fit_to_dict(
+            aging.fit_rates(rows, corrected=corrected), aging.fit_innings(rows)
+        )
+        data["meta"] = {
+            "projection": args.projection,
+            "seasons": seasons,
+            "rows": len(rows),
+            "systems": sorted(set(rows["systems"])) if "systems" in rows else None,
+            "made_by": "scripts/backtest_pitcher_aging.py",
+        }
+        args.write.parent.mkdir(parents=True, exist_ok=True)
+        args.write.write_text(json.dumps(data, indent=2) + "\n")
+        print(f"\nwrote {args.write}")
     return 0
 
 

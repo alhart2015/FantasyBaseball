@@ -1,0 +1,100 @@
+{
+  "rates": [
+    {
+      "role": "starter",
+      "stat": "k",
+      "knot": null,
+      "slope": 0.0,
+      "level": 0.0,
+      "top": null
+    },
+    {
+      "role": "starter",
+      "stat": "w",
+      "knot": null,
+      "slope": 0.0,
+      "level": 0.0,
+      "top": null
+    },
+    {
+      "role": "starter",
+      "stat": "era",
+      "knot": 34.0,
+      "slope": 0.08021996798242773,
+      "level": -0.08007637015620786,
+      "top": 41.78165639972622
+    },
+    {
+      "role": "starter",
+      "stat": "whip",
+      "knot": 36.0,
+      "slope": 0.02755746883510399,
+      "level": -0.024429630172466382,
+      "top": 42.338124572210816
+    },
+    {
+      "role": "reliever",
+      "stat": "k",
+      "knot": null,
+      "slope": 0.0,
+      "level": 0.0,
+      "top": null
+    },
+    {
+      "role": "reliever",
+      "stat": "w",
+      "knot": null,
+      "slope": 0.0,
+      "level": 0.0,
+      "top": null
+    },
+    {
+      "role": "reliever",
+      "stat": "era",
+      "knot": null,
+      "slope": 0.0,
+      "level": 0.0,
+      "top": null
+    },
+    {
+      "role": "reliever",
+      "stat": "whip",
+      "knot": null,
+      "slope": 0.0,
+      "level": 0.0,
+      "top": null
+    }
+  ],
+  "innings": [
+    {
+      "role": "starter",
+      "knot": null,
+      "slope": 0.0,
+      "level": 0.8420595032692887,
+      "top": null
+    },
+    {
+      "role": "reliever",
+      "knot": 36.0,
+      "slope": -0.088841221655485,
+      "level": 0.6642232888102112,
+      "top": 40.50540725530458
+    }
+  ],
+  "meta": {
+    "projection": "fg-blend",
+    "seasons": [
+      2022,
+      2023,
+      2024,
+      2025,
+      2026
+    ],
+    "rows": 1732,
+    "systems": [
+      "steamer,zips",
+      "steamer,zips,atc,the-bat-x,oopsy"
+    ],
+    "made_by": "scripts/backtest_pitcher_aging.py"
+  }
+}
