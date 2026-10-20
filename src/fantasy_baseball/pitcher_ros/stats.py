@@ -15,8 +15,6 @@ from pathlib import Path
 
 import pandas as pd
 
-from fantasy_baseball.pitch_data.store import connect
-
 # The date a pitching line counts on (see :func:`load_games`): a suspended game's
 # resume date, else its date. SQL over the store's ``pitching`` view.
 GAME_DATE_SQL = "CAST(COALESCE(resumed_date, game_date) AS DATE)"
@@ -48,6 +46,11 @@ def load_games(store: Path) -> pd.DataFrame:
     known. So a projection dated between the two never sees the line as history, and a
     pitcher who worked only the first day counts in the actuals after it.
     """
+    # Here, not at the top: the store reaches the Redis client (data.mlb_game_logs), and
+    # the draft board imports this module's TARGETS (draft.our_pitchers via final), so
+    # the live draft must not (tests/test_draft/test_isolation.py).
+    from fantasy_baseball.pitch_data.store import connect
+
     cols = ", ".join(c for c in COUNTS if c != "g")
     conn = connect(store)
     try:

@@ -24,6 +24,15 @@ MSE over every scored pitcher on a 0.05 grid, with FanGraphs = the average of
   In-sample, SV moved most (0.55); the rest are near all ours. Provisional: refit with
   a season held out once a second season of snapshots is stored.
 
+* Board (``BOARD``, ``scripts/fit_board_blend.py``): ours **age-corrected**
+  (``aging``, its fit leaving the season out) against the draft board's own FanGraphs
+  blend -- ``data.projections.blend_projections`` of the league's systems on file that
+  season, at the league's weights (Steamer + ZiPS 2022-2025, all five 2026) -- which
+  enters as published. 2022-2026, 100+ BF: weights picked leaving each season out
+  moved at most 0.15 from these, and with them the blend beat the FanGraphs blend on
+  every stat (K 165.8 vs 173.5, W, ERA, WHIP 100 sure; SV 13.1 vs 13.6, 93) and ours on
+  K, SV, ERA (100) with W 85, WHIP 89. :func:`board_rates`.
+
 The backtest scores only pitchers every system projects, so the weights were picked
 on those. ``final_rates`` blends every pitcher anyone projects: FanGraphs is the
 average of the systems that project him (``fg_average``), and a pitcher only one side
@@ -46,10 +55,12 @@ from fantasy_baseball.projection_eval import unit_key
 
 PRESEASON = "preseason"
 MIDSEASON = "midseason"
+BOARD = "board"
 # Weight on ours per stat (1 = all ours, 0 = all FanGraphs).
 WEIGHTS: dict[str, dict[str, float]] = {
     PRESEASON: {"k": 0.50, "w": 0.70, "sv": 0.30, "era": 0.50, "whip": 0.75},
     MIDSEASON: {"k": 0.85, "w": 1.00, "sv": 0.55, "era": 0.90, "whip": 0.95},
+    BOARD: {"k": 0.50, "w": 0.75, "sv": 0.30, "era": 0.55, "whip": 0.80},
 }
 # The FanGraphs systems each span's WEIGHTS were fitted with (their average).
 SYSTEMS: dict[str, tuple[str, ...]] = {
@@ -96,14 +107,20 @@ def final_rates(ours: pd.DataFrame, systems: Mapping[str, pd.DataFrame], span: s
     """The final projection: ``blend_rates`` of ours with ``fg_average(systems)`` at
     ``WEIGHTS[span]``. ``systems`` must be ``SYSTEMS[span]``, the ones the weights were
     fitted with: a different FanGraphs average needs its own fit."""
-    if span not in WEIGHTS:
-        raise ValueError(f"span must be one of {sorted(WEIGHTS)}, not {span!r}")
+    if span not in SYSTEMS:  # BOARD's FanGraphs side is the board's blend: board_rates
+        raise ValueError(f"span must be one of {sorted(SYSTEMS)}, not {span!r}")
     if set(systems) != set(SYSTEMS[span]):
         raise ValueError(
             f"{span} weights were fitted with FanGraphs = {list(SYSTEMS[span])}, "
             f"got {sorted(systems)}; refit (scripts/fit_pitcher_blend.py) first"
         )
     return blend_rates(ours, fg_average(systems), WEIGHTS[span])
+
+
+def board_rates(ours: pd.DataFrame, board_fg: pd.DataFrame) -> pd.DataFrame:
+    """The draft board's final pitcher rates: ``blend_rates`` of ours (age-corrected)
+    with the board's FanGraphs blend (its rates, as published) at ``WEIGHTS[BOARD]``."""
+    return blend_rates(ours, board_fg, WEIGHTS[BOARD])
 
 
 def _wide(scored: pd.DataFrame) -> pd.DataFrame:
