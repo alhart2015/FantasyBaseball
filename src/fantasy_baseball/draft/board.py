@@ -55,8 +55,8 @@ def build_draft_board(
     ``with_ours``: hitters and pitchers are the FanGraphs blend mixed with ours
     (``our_hitters.blend_board_hitters``, ``our_pitchers.blend_board_pitchers``), each
     when ours is built for the season, with each player's big-year line
-    (``board_ranges.attach``: ``p90_<stat>`` columns) when its ranges are built;
-    otherwise (the default, so backtests stay FanGraphs-only) the FanGraphs blend."""
+    (``board_ranges.attach``: ``p90_<stat>`` columns) and his P90 and risk-adjusted VAR
+    (``with_range_var``) when its ranges are built; otherwise (the default, so backtests stay FanGraphs-only) the FanGraphs blend."""
     year = latest_blended_year(conn)
     hitters, pitchers = get_blended_projections(conn, year)
     if with_ours:
@@ -66,18 +66,31 @@ def build_draft_board(
     board, _scale = build_board_from_frames(
         hitters, pitchers, positions, roster_slots, num_teams, sgp_overrides=sgp_overrides
     )
-    return with_p90_var(board)
+    return with_range_var(board)
 
 
-def with_p90_var(board: pd.DataFrame) -> pd.DataFrame:
-    """``board`` with ``p90_var``, each player's VAR in his P90 whole season: his
-    P90 SGP (``p90_sgp``, from ``board_ranges``) over the same replacement level his VAR
-    uses (``total_sgp - var``, his best position's). NaN without a range; unchanged
-    without ``p90_sgp``."""
-    if "p90_sgp" not in board.columns:
-        return board
-    p90_sgp = pd.to_numeric(board["p90_sgp"], errors="coerce")
-    return board.assign(p90_var=p90_sgp - board["total_sgp"] + board["var"])
+def with_range_var(board: pd.DataFrame) -> pd.DataFrame:
+    """``board`` with VARs read off each player's simulated whole seasons
+    (``board_ranges``), over the same replacement level his VAR uses (``total_sgp -
+    var``, his best position's):
+
+    * ``p90_var``: his P90 season (from ``p90_sgp``).
+    * ``risk_var``: his average season (from ``mean_sgp``), injuries and short seasons
+      included. Held out on 2022-2026 it forecast the real season's SGP better than the
+      board's line (FanGraphs' playing time), which ran ~1.2 SGP high for regulars, and
+      with no bias (scripts/build_board_ranges.py --backtest). Missed time counts as
+      zero, not as a replacement filling in: the same rule ``var`` applies to a short
+      projected line (user's call, 2026-10-21), so the two compare directly.
+
+    NaN without a range; a column is left out when its source is."""
+    replacement = board["total_sgp"] - board["var"]
+    out = board
+    for source, column in (("p90_sgp", "p90_var"), ("mean_sgp", "risk_var")):
+        if source in board.columns:
+            out = out.assign(
+                **{column: pd.to_numeric(board[source], errors="coerce") - replacement}
+            )
+    return out
 
 
 def mix_ours(

@@ -120,3 +120,23 @@ class TestBoardSgpIntegration:
         fragile_sgp = calculate_player_sgp(fragile)
         durable_sgp = calculate_player_sgp(durable)
         assert durable_sgp > fragile_sgp
+
+
+def test_range_vars_use_each_players_own_replacement_and_skip_a_missing_source():
+    import pandas as pd
+
+    from fantasy_baseball.draft.board import with_range_var
+
+    board = pd.DataFrame(
+        {"total_sgp": [12.0, 5.0], "var": [8.0, 1.0], "p90_sgp": [18.0, float("nan")]}
+    )
+    # Ranges built before risk-adjusted VAR: P90 VAR only, no risk_var column.
+    out = with_range_var(board)
+    assert out["p90_var"].tolist()[0] == pytest.approx(18.0 - 4.0)
+    assert pd.isna(out["p90_var"].iloc[1])
+    assert "risk_var" not in out.columns
+    # Neither source: the board is unchanged.
+    assert list(with_range_var(board[["total_sgp", "var"]]).columns) == ["total_sgp", "var"]
+    # Each player's average season over his own replacement level (total_sgp - var).
+    out = with_range_var(board.assign(mean_sgp=[10.0, 3.0]))
+    assert out["risk_var"].tolist() == pytest.approx([10.0 - 4.0, 3.0 - 4.0])
