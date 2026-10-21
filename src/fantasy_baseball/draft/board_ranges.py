@@ -71,11 +71,13 @@ def attach(
                 season,
             )
     ranges = pd.read_parquet(path)
-    if "sgp_p90" not in ranges.columns:
+    missing = [c for c in ("sgp_p90", "sgp_mean") if c not in ranges.columns]
+    if missing:
         logger.warning(
-            "%s has no sgp_p90 (built before P90 VAR): rebuild it with "
+            "%s has no %s (built before P90 / risk-adjusted VAR): rebuild it with "
             "python scripts/build_board_ranges.py --season %d",
             path,
+            ", ".join(missing),
             season,
         )
     out = []
@@ -90,10 +92,12 @@ def attach(
         frame = frame.copy()
         for stat in stats:
             frame[f"p90_{stat}"] = ids.map(mine[big_year_column(stat)]).to_numpy()
-        # His P90 season's SGP (whole seasons: build_board_ranges.py); the board turns it
-        # into P90 VAR with his own replacement level (board.with_p90_var).
-        if "sgp_p90" in mine.columns:
-            frame["p90_sgp"] = ids.map(mine["sgp_p90"]).to_numpy()
+        # His P90 season's SGP and his average season's (whole seasons:
+        # build_board_ranges.py); the board turns them into P90 VAR and risk-adjusted VAR
+        # with his own replacement level (board.with_range_var).
+        for source, column in (("sgp_p90", "p90_sgp"), ("sgp_mean", "mean_sgp")):
+            if source in mine.columns:
+                frame[column] = ids.map(mine[source]).to_numpy()
         out.append(frame)
     return out[0], out[1]
 

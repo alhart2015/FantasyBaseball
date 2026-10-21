@@ -17,7 +17,7 @@ const ROTO_CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "SV", "K", "ERA", "
 
 // Available-players panel sort + filter state.
 // playerSort=null means "use board order" (var-desc as written by build_draft_board).
-let playerSort = null;        // null | "name" | "adp" | "sgp" | "var" | "p90_var"
+let playerSort = null;        // null | "name" | "adp" | "sgp" | "var" | "risk_var" | "p90_var"
 let playerSortDir = "desc";   // "asc" | "desc"
 let playerNameFilter = "";    // case-insensitive substring of player.name
 let playerPosFilter = "";     // canonical position string, "" means no filter
@@ -115,6 +115,7 @@ function playerSortValue(player, key) {
   if (key === "sgp") return player.total_sgp ?? null;
   if (key === "var") return player.var ?? null;
   if (key === "p90_var") return player.p90_var ?? null;
+  if (key === "risk_var") return player.risk_var ?? null;
   return 0;
 }
 
@@ -180,6 +181,7 @@ function renderAvailablePlayers(state) {
       <span class="adp">${fmtAdp(p.adp)}</span>
       <span class="sgp">${fmtSgp(p.total_sgp)}</span>
       <span class="var">${fmtVar(p.var)}</span>
+      <span class="riskvar">${fmtVar(p.risk_var)}</span>
       <span class="p90var">${fmtVar(p.p90_var)}</span>
     </li>
   `).join("");
@@ -520,7 +522,7 @@ async function refreshInspectorPanel() {
         playerSortDir = playerSortDir === "asc" ? "desc" : "asc";
       } else {
         playerSort = key;
-        playerSortDir = ["sgp", "var", "p90_var"].includes(key) ? "desc" : "asc";
+        playerSortDir = ["sgp", "var", "risk_var", "p90_var"].includes(key) ? "desc" : "asc";
       }
       rerenderAvailablePlayers();
     });

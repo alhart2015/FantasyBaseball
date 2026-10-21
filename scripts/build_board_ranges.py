@@ -16,7 +16,9 @@ the real season landed above P90 and below P10 (want ~10% each).
 
 Each simulated whole season is also scored in SGP the way the board scores a line (its
 denominators and the pool's replacement rates: draft.board_ranges.season_sgp), giving
-sgp_p10/p50/p90; the board turns sgp_p90 into P90 VAR (board.with_p90_var).
+sgp_p10/p50/p90 and sgp_mean; the board turns them into P90 VAR and risk-adjusted VAR
+(board.with_range_var). --backtest also scores sgp_mean as a forecast against the board's
+line.
 
 Writes data/board_ranges/<season>.parquet (player_id = MLBAM id); the board picks it
 up on its next build (python scripts/run_draft_dashboard.py --rebuild-board).
@@ -126,6 +128,21 @@ def actual_season(rows: pd.DataFrame, spec) -> dict[str, np.ndarray]:
     for s in spec.stats:
         if not s.counting:
             out[f"{s.name}_trials"] = rows[f"a_{s.trials}"].to_numpy(dtype=float)[:, None]
+    return out
+
+
+def line_season(rows: pd.DataFrame, volume: np.ndarray, spec) -> dict[str, np.ndarray]:
+    """The board's own line for ``rows`` in ``ranges.draw``'s shape (one draw each): the
+    projected rates at the board blend's ``volume`` (PA / IP), for ``season_sgp``."""
+    trials = {spec.volume: volume}
+    trials |= {t: volume * rows[col].to_numpy(dtype=float) for t, col in spec.trials.items()}
+    out = {}
+    for st in spec.stats:
+        rate = rows[f"p_{st.name}"].to_numpy(dtype=float)
+        n = trials[st.trials]
+        out[st.name] = (rate * n if st.counting else rate)[:, None]
+        if not st.counting:
+            out[f"{st.name}_trials"] = n[:, None]
     return out
 
 
@@ -242,6 +259,7 @@ def main() -> int:
                 lo = (g["actual"] < g["q10"]).mean()
                 print(f"    {stat:5s} above P90 {hi:5.1%}  below P10 {lo:5.1%}  ({len(g)})")
         print("\nWhole-season SGP (the board's P90 VAR = P90 SGP over replacement):")
+        points = []
         for kind, spec in specs:
             rows, volume = fits[spec.name]
             name = spec.name if kind == "pitcher" else "hitter"
@@ -250,13 +268,40 @@ def main() -> int:
                 test = rows[rows["season"] == season]
                 ranges = fit(rows[rows["season"] != season], volume, pt_model, rng, spec)
                 ranked, draws = ranges.draws(test, rng, args.draws)
-                q10, q90 = np.quantile(season_sgp(draws, kind, scales[season]), (0.1, 0.9), axis=1)
+                sims = season_sgp(draws, kind, scales[season])
+                q10, q90 = np.quantile(sims, (0.1, 0.9), axis=1)
                 actual = season_sgp(actual_season(test, spec), kind, scales[season])[:, 0]
+                pt = inputs[season][kind][0][spec.volume].reindex(test.index).to_numpy(dtype=float)
+                line = season_sgp(line_season(test, pt, spec), kind, scales[season])[:, 0]
                 keep = ranked[spec.rank_col].to_numpy(dtype=float) >= REGULAR[name]
                 hit += int((actual[keep] > q90[keep]).sum())
                 lo_n += int((actual[keep] < q10[keep]).sum())
                 n += int(keep.sum())
+                points.append(
+                    pd.DataFrame(
+                        {
+                            "who": name,
+                            "actual": actual[keep],
+                            "line": line[keep],
+                            "mean": sims.mean(axis=1)[keep],
+                        }
+                    )
+                )
             print(f"  {name}s: above P90 {hit / n:5.1%}  below P10 {lo_n / n:5.1%}  ({n})")
+        # Risk-adjusted VAR = the mean simulated season's SGP over replacement: is that a
+        # better forecast of the real season than the board's line (FanGraphs' PT)?
+        print("\nOne number per player, vs the real season's SGP (bias = forecast - actual):")
+        boot = np.random.default_rng(args.seed)
+        for name, g in pd.concat(points).groupby("who", sort=False):
+            miss = {c: g[c].to_numpy() - g["actual"].to_numpy() for c in ("line", "mean")}
+            sq = {c: m**2 for c, m in miss.items()}
+            draw = boot.integers(0, len(g), size=(2000, len(g)))
+            sure = float(((sq["mean"][draw].mean(axis=1)) < (sq["line"][draw].mean(axis=1))).mean())
+            print(
+                f"  {name}s ({len(g)}): board line MSE {sq['line'].mean():6.2f} "
+                f"(bias {miss['line'].mean():+.2f}) | mean season MSE {sq['mean'].mean():6.2f} "
+                f"(bias {miss['mean'].mean():+.2f}) | sure mean is better {sure * 100:.0f}"
+            )
         return 0
 
     parts = []
@@ -266,7 +311,8 @@ def main() -> int:
         new = rows_for(spec, args.season, *target[kind], False)
         ranked, draws = ranges.draws(new, rng, args.draws)
         sims = quantiles(draws, ranked, LEVELS, spec)
-        sims["sgp"] = np.quantile(season_sgp(draws, kind, scale), LEVELS, axis=1).T
+        seasons = season_sgp(draws, kind, scale)
+        sims["sgp"] = np.quantile(seasons, LEVELS, axis=1).T
         parts.append(
             pd.DataFrame(
                 {
@@ -278,6 +324,8 @@ def main() -> int:
                         for c in (spec.volume, *spec.stat_names, "sgp")
                         for k, lv in enumerate(LEVELS)
                     },
+                    # The risk-adjusted value: the average season, injuries and all.
+                    "sgp_mean": seasons.mean(axis=1),
                 }
             )
         )

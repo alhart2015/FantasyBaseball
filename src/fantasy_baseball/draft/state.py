@@ -204,9 +204,10 @@ def serialize_board(board: pd.DataFrame) -> list[dict[str, Any]]:
         p90 = _serialize_p90(row)
         if p90:
             player["p90"] = p90
-        p90_var = row.get("p90_var")
-        if p90_var is not None and not pd.isna(p90_var):
-            player["p90_var"] = round(float(p90_var), 1)
+        for field in ("p90_var", "risk_var"):
+            value = row.get(field)
+            if value is not None and not pd.isna(value):
+                player[field] = round(float(value), 1)
         players.append(player)
     return players
 

@@ -114,7 +114,7 @@ def test_big_year_lines_ride_along_and_reach_the_dashboard(conn, fixtures_dir):
     # A ranges file has every stat's tails; these two have only a few filled in.
     cols = {f"{s}_p{q}": [np.nan, np.nan] for s in (*HITTING, *PITCHING) for q in (10, 90)}
     cols |= {"hr_p90": [55.0, np.nan], "avg_p90": [0.310, np.nan], "era_p10": [np.nan, 2.4]}
-    cols |= {"sgp_p90": [30.0, np.nan]}
+    cols |= {"sgp_p90": [30.0, np.nan], "sgp_mean": [20.0, np.nan]}
     pd.DataFrame(
         {"player_id": [judge, cole], "player_type": ["hitter", "pitcher"], **cols}
     ).to_parquet(path, index=False)
@@ -130,6 +130,10 @@ def test_big_year_lines_ride_along_and_reach_the_dashboard(conn, fixtures_dir):
     assert j["p90_var"] == pytest.approx(30.0 - j["total_sgp"] + j["var"])
     assert served["Aaron Judge"]["p90_var"] == round(30.0 - j["total_sgp"] + j["var"], 1)
     assert "p90_var" not in served["Gerrit Cole"]  # no P90 SGP: no P90 VAR
+    # Risk-adjusted VAR: his average season's SGP over the same replacement level.
+    assert j["risk_var"] == pytest.approx(20.0 - j["total_sgp"] + j["var"])
+    assert served["Aaron Judge"]["risk_var"] == round(20.0 - j["total_sgp"] + j["var"], 1)
+    assert "risk_var" not in served["Gerrit Cole"]
 
 
 def test_a_season_scores_in_sgp_exactly_as_the_board_scores_a_line(conn):
