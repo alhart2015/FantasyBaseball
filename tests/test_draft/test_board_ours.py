@@ -114,6 +114,7 @@ def test_big_year_lines_ride_along_and_reach_the_dashboard(conn, fixtures_dir):
     # A ranges file has every stat's tails; these two have only a few filled in.
     cols = {f"{s}_p{q}": [np.nan, np.nan] for s in (*HITTING, *PITCHING) for q in (10, 90)}
     cols |= {"hr_p90": [55.0, np.nan], "avg_p90": [0.310, np.nan], "era_p10": [np.nan, 2.4]}
+    cols |= {"sgp_p90": [30.0, np.nan]}
     pd.DataFrame(
         {"player_id": [judge, cole], "player_type": ["hitter", "pitcher"], **cols}
     ).to_parquet(path, index=False)
@@ -125,3 +126,33 @@ def test_big_year_lines_ride_along_and_reach_the_dashboard(conn, fixtures_dir):
     assert served["Aaron Judge"]["p90"] == {"hr": 55.0, "avg": 0.31}
     assert served["Gerrit Cole"]["p90"] == {"era": 2.4}
     assert "p90" not in served["Mookie Betts"]
+    # P90 VAR: his P90 season's SGP over his own replacement level.
+    assert j["p90_var"] == pytest.approx(30.0 - j["total_sgp"] + j["var"])
+    assert served["Aaron Judge"]["p90_var"] == round(30.0 - j["total_sgp"] + j["var"], 1)
+    assert "p90_var" not in served["Gerrit Cole"]  # no P90 SGP: no P90 VAR
+
+
+def test_a_season_scores_in_sgp_exactly_as_the_board_scores_a_line(conn):
+    from fantasy_baseball.data.db import get_blended_projections, get_positions
+    from fantasy_baseball.draft.board import build_board_from_frames
+    from fantasy_baseball.draft.board_ranges import season_sgp
+
+    hitters, pitchers = get_blended_projections(conn, YEAR)
+    board, scale = build_board_from_frames(hitters, pitchers, get_positions(conn))
+    for player_type, rate_trials in (
+        ("hitter", {"avg": "ab"}),
+        ("pitcher", {"era": "ip", "whip": "ip"}),
+    ):
+        rows = board[board["player_type"] == player_type]
+        stats = (
+            ("r", "hr", "rbi", "sb", "avg")
+            if player_type == "hitter"
+            else ("w", "k", "sv", "era", "whip")
+        )
+        one = {s: rows[s].astype(float).to_numpy()[:, None] for s in stats}
+        for s in stats:
+            trials = rate_trials.get(s)
+            if trials:
+                one[f"{s}_trials"] = rows[trials].astype(float).to_numpy()[:, None]
+        got = season_sgp(one, player_type, scale)[:, 0]
+        assert got == pytest.approx(rows["total_sgp"].to_numpy())

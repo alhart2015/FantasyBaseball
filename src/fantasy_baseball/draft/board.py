@@ -66,7 +66,18 @@ def build_draft_board(
     board, _scale = build_board_from_frames(
         hitters, pitchers, positions, roster_slots, num_teams, sgp_overrides=sgp_overrides
     )
-    return board
+    return with_p90_var(board)
+
+
+def with_p90_var(board: pd.DataFrame) -> pd.DataFrame:
+    """``board`` with ``p90_var``, each player's VAR in his P90 whole season: his
+    P90 SGP (``p90_sgp``, from ``board_ranges``) over the same replacement level his VAR
+    uses (``total_sgp - var``, his best position's). NaN without a range; unchanged
+    without ``p90_sgp``."""
+    if "p90_sgp" not in board.columns:
+        return board
+    p90_sgp = pd.to_numeric(board["p90_sgp"], errors="coerce")
+    return board.assign(p90_var=p90_sgp - board["total_sgp"] + board["var"])
 
 
 def mix_ours(
