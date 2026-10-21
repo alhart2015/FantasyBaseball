@@ -47,6 +47,16 @@ def attach(
             season,
         )
         return hitters, pitchers
+    for player_type in ("hitter", "pitcher"):
+        ours = our_players.ours_path(player_type, season)
+        if ours.exists() and ours.stat().st_mtime > path.stat().st_mtime:
+            logger.warning(
+                "%s is newer than %s: the big-year lines are around an older board. "
+                "Rebuild them with python scripts/build_board_ranges.py --season %d",
+                ours,
+                path,
+                season,
+            )
     ranges = pd.read_parquet(path)
     out = []
     for frame, player_type, stats in (

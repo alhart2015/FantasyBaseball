@@ -62,6 +62,10 @@ def main() -> int:
         ours[list(RATES)], ri.season_age(birth, args.season), aging.role(pt["gs_share"]), fit
     )
     path = ours_path("pitcher", args.season)
+    # A --role-file outside the repo is recorded as is (relative_to would raise).
+    season_roles = roles.resolve()
+    if season_roles.is_relative_to(PROJECT_ROOT):
+        season_roles = season_roles.relative_to(PROJECT_ROOT)
     aged.rename_axis("player_id").reset_index().to_parquet(path, index=False)
     meta = {
         "season": args.season,
@@ -70,7 +74,7 @@ def main() -> int:
             "run": args.aging_run,
             "seasons": seasons,
             "role_from": args.pt_system,
-            "season_roles": roles.resolve().relative_to(PROJECT_ROOT).as_posix(),
+            "season_roles": season_roles.as_posix(),
             "fit": aging.describe(fit, sorted(aging.CORRECTED)),
         },
         "pitchers": len(aged),

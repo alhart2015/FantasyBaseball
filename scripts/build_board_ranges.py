@@ -34,13 +34,14 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 
 import numpy as np
 import pandas as pd
-from backtest_hitter_ranges import CACHE, PEOPLE
+from backtest_hitter_ranges import CACHE, PEOPLE, pt_file
 from backtest_pitcher_aging import aging_rows, births
 
 from fantasy_baseball.config import load_config
+from fantasy_baseball.data.db import get_connection
 from fantasy_baseball.draft import our_hitters, our_pitchers
 from fantasy_baseball.draft.board_ranges import ranges_path
-from fantasy_baseball.draft.our_players import board_blend, fg_to_mlbam, load_ours
+from fantasy_baseball.draft.our_players import board_blend, load_ours, season_mlbam
 from fantasy_baseball.hitter_ros import final as hitter_final
 from fantasy_baseball.pitcher_ros import aging
 from fantasy_baseball.pitcher_ros import final as pitcher_final
@@ -53,43 +54,48 @@ PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 HITTER_RUNS = PROJECT_ROOT / "data" / "hitter_ros" / "runs"
 PITCHER_RUNS = PROJECT_ROOT / "data" / "pitcher_ros" / "runs"
 LEVELS = (0.1, 0.5, 0.9)
-ROLES = (STARTER, RELIEVER)
 # Scored in --backtest where the projection ranks him at this much volume.
 REGULAR = {"hitter": 400.0, "starter": 120.0, "reliever": 45.0}
 # A rate stat is scored where the season had this many trials (AB, IP).
 RATE_MIN = {"avg": 100.0, "era": 30.0, "whip": 30.0}
 
 
-def by_mlbam(frame: pd.DataFrame) -> pd.DataFrame:
-    """A FanGraphs blend indexed by MLBAM id (its own fg_id -> MLBAM pairs, an id that
-    maps two ways dropped)."""
-    ids = frame["fg_id"].astype(str).map(fg_to_mlbam(frame[["fg_id", "mlbam_id"]]))
+def by_mlbam(frame: pd.DataFrame, mlbam: pd.Series) -> pd.DataFrame:
+    """A FanGraphs blend indexed by MLBAM id, matched the way the board matches it
+    (``mlbam``: ``our_players.season_mlbam``, an id that maps two ways dropped)."""
+    if mlbam.empty:
+        raise SystemExit(
+            "data/fantasy.db has no raw projection ids for a season the ranges read: "
+            "rebuild it (python scripts/build_db.py)"
+        )
+    ids = frame["fg_id"].astype(str).map(mlbam)
     out = frame[ids.notna()].copy()
     out.index = pd.Index(ids[ids.notna()].astype(int).to_numpy(), name="player_id")
     return out[~out.index.duplicated(keep=False)]
 
 
 def season_inputs(
-    season: int, ours_hit: pd.DataFrame | None, ours_pit: pd.DataFrame | None, config
+    season: int, ours_hit: pd.DataFrame | None, ours_pit: pd.DataFrame | None, config, conn
 ) -> dict[str, tuple[pd.DataFrame, pd.DataFrame]]:
     """Per type: (the board blend's playing time, the board's mixed rates as ``p_``
     columns), both by MLBAM id."""
     hitters, pitchers, _ = board_blend(
         PROJECTIONS / str(season), config.projection_systems, config.projection_weights
     )
-    hit = by_mlbam(hitters)
+    hit = by_mlbam(hitters, season_mlbam(conn, season, "hitter"))
     hit = hit[(hit["pa"].astype(float) > 0) & (hit["ab"].astype(float) > 0)]
     hit_pt = hit[["pa", "ab"]].astype(float)
     hit_fg = our_hitters.fg_rates(hit)
     hit_rates = hit_fg if ours_hit is None else hitter_final.board_rates(ours_hit, hit_fg)
-    pit = by_mlbam(pitchers)
+    pit = by_mlbam(pitchers, season_mlbam(conn, season, "pitcher"))
     bf = our_pitchers.batters_faced(pit)
-    pit = pit[(pit["ip"].astype(float) > 0) & (bf > 0)]
+    usable = (pit["ip"].astype(float) > 0) & (bf > 0)
+    pit, bf = pit[usable], bf[usable]
     games = pit["g"].astype(float)
     pit_pt = pd.DataFrame(
         {
             "ip": pit["ip"].astype(float),
-            "bf": our_pitchers.batters_faced(pit),
+            "bf": bf,
             "gs_share": pit["gs"].astype(float) / games.where(games > 0),
         }
     )
@@ -119,9 +125,7 @@ def held_out_ours(
     for season in seasons:
         h = hit.xs(season, level="season").rename(columns=lambda c: c.removeprefix("p_"))
         p = pit.xs(season, level="season").rename(columns=lambda c: c.removeprefix("p_"))
-        roles = ri.load_pitcher_pt(
-            sorted((PROJECTIONS / str(season)).glob("steamer-pitchers*.csv"))[0]
-        )["gs_share"]
+        roles = ri.load_pitcher_pt(pt_file("steamer", season, "pitchers"))["gs_share"]
         fitted = aging.fit_rates(arows[arows["season"] != season])
         p = aging.adjust_rates(p, ri.season_age(birth, season), aging.role(roles), fitted)
         out[season] = (h, p)
@@ -147,7 +151,17 @@ def main() -> int:
     config = load_config(CONFIG)
 
     ours = held_out_ours(train, args.hitter_run, args.seeds, args.pitcher_run)
-    inputs = {s: season_inputs(s, *ours[s], config) for s in train}
+    conn = get_connection()
+    inputs = {s: season_inputs(s, *ours[s], config, conn) for s in train}
+    if not args.backtest:
+        target = season_inputs(
+            args.season,
+            load_ours("hitter", args.season),
+            load_ours("pitcher", args.season),
+            config,
+            conn,
+        )
+    conn.close()
     years = set(ri.history_seasons([*train, args.season])) | set(train)
     hitting = ri.load_seasons(CACHE, years)
     pitching = ri.load_pitching_seasons(CACHE, years)
@@ -188,14 +202,6 @@ def main() -> int:
                 print(f"    {stat:5s} above P90 {hi:5.1%}  below P10 {lo:5.1%}  ({len(g)})")
         return 0
 
-    ours_hit = load_ours("hitter", args.season)
-    ours_pit = load_ours("pitcher", args.season)
-    target = season_inputs(
-        args.season,
-        None if ours_hit is None else ours_hit,
-        None if ours_pit is None else ours_pit,
-        config,
-    )
     parts = []
     for kind, spec in specs:
         rows, volume = fits[spec.name]
