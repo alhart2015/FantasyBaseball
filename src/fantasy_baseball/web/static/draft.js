@@ -130,6 +130,28 @@ function applyPlayerSort(players) {
   });
 }
 
+// "Proj ... / Big year ..." hover text: the board line and its P90 (#505; ERA and
+// WHIP use P10, the good tail). Each stat's big year is its own.
+const LINE_STATS = {
+  hitter: [["r", "R"], ["hr", "HR"], ["rbi", "RBI"], ["sb", "SB"], ["avg", "AVG"]],
+  pitcher: [["w", "W"], ["k", "K"], ["sv", "SV"], ["era", "ERA"], ["whip", "WHIP"]],
+};
+
+function fmtStat(stat, v) {
+  if (v == null) return "-";
+  if (stat === "avg") return Number(v).toFixed(3).replace(/^0/, "");
+  if (stat === "era" || stat === "whip") return Number(v).toFixed(2);
+  return Math.round(v).toString();
+}
+
+function playerLineTitle(p) {
+  const stats = LINE_STATS[p.player_type] || [];
+  const proj = stats.map(([s, label]) => `${fmtStat(s, p[s])} ${label}`).join(", ");
+  if (!p.p90) return `Proj: ${proj}`;
+  const big = stats.map(([s, label]) => `${fmtStat(s, p.p90[s])} ${label}`).join(", ");
+  return `Proj: ${proj}\nBig year (P90): ${big}`;
+}
+
 function renderAvailablePlayers(state) {
   const drafted = new Set([
     ...(state.keepers ?? []).map((p) => p.player_id),
@@ -144,7 +166,7 @@ function renderAvailablePlayers(state) {
   available = applyPlayerSort(available);
   const ul = document.getElementById("player-list");
   ul.innerHTML = available.slice(0, 200).map((p) => `
-    <li data-pid="${p.player_id}" data-pname="${p.name}" data-pos="${p.best_position || p.positions?.[0] || ''}">
+    <li data-pid="${p.player_id}" data-pname="${p.name}" data-pos="${p.best_position || p.positions?.[0] || ''}" title="${playerLineTitle(p)}">
       <span class="name">${p.name}</span>
       <span class="pos">${(p.positions || []).join("/")}</span>
       <span class="adp">${fmtAdp(p.adp)}</span>

@@ -39,6 +39,11 @@ def main() -> int:
     parser.add_argument("--run", required=True, help="the pitcher run with --season's predictions")
     parser.add_argument("--aging-run", default="035-saves-net")
     parser.add_argument("--pt-system", default="steamer", help="role (GS / G) source")
+    parser.add_argument(
+        "--role-file",
+        type=Path,
+        help="--season's role file, when --pt-system's isn't the one file pt_file finds",
+    )
     parser.add_argument("--aging-seasons", type=int, nargs="+")
     args = parser.parse_args()
     seasons = sorted(args.aging_seasons or range(FIRST_AGING_SEASON, args.season))
@@ -51,11 +56,16 @@ def main() -> int:
     ours = rates.xs(args.season, level="season").rename(columns=lambda c: c.removeprefix("p_"))
     birth = births()
     fit = aging.fit_rates(aging_rows(seasons, args.aging_run, args.pt_system, birth))
-    pt = ri.load_pitcher_pt(pt_file(args.pt_system, args.season, "pitchers"))
+    roles = args.role_file or pt_file(args.pt_system, args.season, "pitchers")
+    pt = ri.load_pitcher_pt(roles)
     aged = aging.adjust_rates(
         ours[list(RATES)], ri.season_age(birth, args.season), aging.role(pt["gs_share"]), fit
     )
     path = ours_path("pitcher", args.season)
+    # A --role-file outside the repo is recorded as is (relative_to would raise).
+    season_roles = roles.resolve()
+    if season_roles.is_relative_to(PROJECT_ROOT):
+        season_roles = season_roles.relative_to(PROJECT_ROOT)
     aged.rename_axis("player_id").reset_index().to_parquet(path, index=False)
     meta = {
         "season": args.season,
@@ -64,6 +74,7 @@ def main() -> int:
             "run": args.aging_run,
             "seasons": seasons,
             "role_from": args.pt_system,
+            "season_roles": season_roles.as_posix(),
             "fit": aging.describe(fit, sorted(aging.CORRECTED)),
         },
         "pitchers": len(aged),

@@ -155,6 +155,17 @@ def _serialize_player_stats(player: dict[str, Any], row: pd.Series) -> None:
         player["h_allowed"] = float(row.get("h_allowed", 0))
 
 
+def _serialize_p90(row: pd.Series) -> dict[str, float]:
+    """The player's big-year line (``board_ranges``: P90, P10 for ERA/WHIP), the stats
+    he has one for; empty without ranges."""
+    out = {}
+    for col, value in row.items():
+        if isinstance(col, str) and col.startswith("p90_") and not pd.isna(value):
+            stat = col.removeprefix("p90_")
+            out[stat] = round(float(value), 3 if stat in ("avg", "era", "whip") else 0)
+    return out
+
+
 def serialize_board(board: pd.DataFrame) -> list[dict[str, Any]]:
     """Serialize the full draft board into a JSON-serializable list.
 
@@ -189,6 +200,9 @@ def serialize_board(board: pd.DataFrame) -> list[dict[str, Any]]:
             "player_type": row["player_type"],
         }
         _serialize_player_stats(player, row)
+        p90 = _serialize_p90(row)
+        if p90:
+            player["p90"] = p90
         players.append(player)
     return players
 

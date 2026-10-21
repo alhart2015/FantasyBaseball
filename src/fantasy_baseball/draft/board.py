@@ -10,7 +10,7 @@ from fantasy_baseball.data.db import (
     get_positions,
     latest_blended_year,
 )
-from fantasy_baseball.draft import our_hitters, our_pitchers
+from fantasy_baseball.draft import board_ranges, our_hitters, our_pitchers
 from fantasy_baseball.draft.our_players import load_ours, season_mlbam
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
@@ -54,12 +54,14 @@ def build_draft_board(
 
     ``with_ours``: hitters and pitchers are the FanGraphs blend mixed with ours
     (``our_hitters.blend_board_hitters``, ``our_pitchers.blend_board_pitchers``), each
-    when ours is built for the season; otherwise (the default, so backtests stay
-    FanGraphs-only) the FanGraphs blend."""
+    when ours is built for the season, with each player's big-year line
+    (``board_ranges.attach``: ``p90_<stat>`` columns) when its ranges are built;
+    otherwise (the default, so backtests stay FanGraphs-only) the FanGraphs blend."""
     year = latest_blended_year(conn)
     hitters, pitchers = get_blended_projections(conn, year)
     if with_ours:
         hitters, pitchers = mix_ours(conn, year, hitters, pitchers)
+        hitters, pitchers = board_ranges.attach(conn, year, hitters, pitchers)
     positions = get_positions(conn)
     board, _scale = build_board_from_frames(
         hitters, pitchers, positions, roster_slots, num_teams, sgp_overrides=sgp_overrides
