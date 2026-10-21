@@ -106,7 +106,7 @@ function playerMatchesPosition(player, posFilter) {
 }
 
 // Sort key plucker; null means missing. Missing rows sort last regardless of
-// direction (they're effectively "unranked"): no ADP, SGP, risk VAR or P90 VAR.
+// direction (they're effectively "unranked"): no ADP, VAR, risk VAR or P90 VAR.
 function playerSortValue(player, key) {
   if (key === "name") return (player.name || "").toLowerCase();
   // Treat 999+ as missing — same sentinel fmtAdp handles for display.
@@ -119,8 +119,8 @@ function playerSortValue(player, key) {
 
 function applyPlayerSort(players) {
   if (playerSort == null) return players;  // board order (var-desc)
-  // Numeric default for ADP is asc (lower = earlier pick); SGP and most
-  // others default to desc (higher = better). The dir state overrides.
+  // Numeric default for ADP is asc (lower = earlier pick); the VAR
+  // columns default to desc (higher = better). The dir state overrides.
   const ascending = playerSortDir === "asc";
   return [...players].sort((a, b) => {
     const va = playerSortValue(a, playerSort);
@@ -150,15 +150,18 @@ function fmtStat(stat, v) {
   return Math.round(v).toString();
 }
 
+function statLine(stats, line) {
+  return stats.map(([s, label]) => `${fmtStat(s, line[s])} ${label}`).join(", ");
+}
+
 function playerLineTitle(p) {
   const stats = LINE_STATS[p.player_type] || [];
-  // SGP lives here now: the list shows VAR, risk VAR and P90 VAR instead.
+  // SGP is shown here, not as a list column (the list shows VAR, risk VAR and P90 VAR).
   const sgp = p.total_sgp == null ? "" : ` (SGP ${Number(p.total_sgp).toFixed(2)})`;
-  const proj = stats.map(([s, label]) => `${fmtStat(s, p[s])} ${label}`).join(", ") + sgp;
+  const proj = `${statLine(stats, p)}${sgp}`;
   if (!p.p90) return `Proj: ${proj}`;
-  const big = stats.map(([s, label]) => `${fmtStat(s, p.p90[s])} ${label}`).join(", ");
   const value = p.p90_var == null ? "" : ` (P90 VAR ${fmtVar(p.p90_var)})`;
-  return `Proj: ${proj}\nBig year (P90): ${big}${value}`;
+  return `Proj: ${proj}\nBig year (P90): ${statLine(stats, p.p90)}${value}`;
 }
 
 function renderAvailablePlayers(state) {
@@ -513,7 +516,7 @@ async function refreshInspectorPanel() {
 
   // Column-header sort: clicking the active column flips direction;
   // clicking a different column starts in that column's natural direction
-  // (asc for ADP / name, desc for SGP).
+  // (asc for ADP / name, desc for the VAR columns).
   document.querySelectorAll(".player-list-header [data-sort]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const key = btn.dataset.sort;
