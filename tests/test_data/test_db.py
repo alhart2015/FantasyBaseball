@@ -165,6 +165,30 @@ def test_load_raw_projections_date_suffix(tmp_path):
     conn.close()
 
 
+def test_load_raw_projections_loads_one_copy_of_a_system_the_blend_s(tmp_path, caplog):
+    """Two zips hitter files in a year: only the one the blend reads (the plain name)
+    is loaded, so a stale copy's ids never reach raw_projections."""
+    csv_dir = tmp_path / "2027"
+    csv_dir.mkdir()
+    header = "Name,Team,PA,HR,G,PlayerId,MLBAMID\n"
+    (csv_dir / "zips-hitters.csv").write_text(
+        header + '"Prospect","PIT",600,16,150,"33333",700001\n'
+    )
+    (csv_dir / "zips-hitters-2027-proj-from-2026-03-25.csv").write_text(
+        header + '"Prospect","PIT",600,16,150,"sa999",700001\n'
+    )
+
+    conn = sqlite3.connect(tmp_path / "test.db")
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+    load_raw_projections(conn, tmp_path)
+
+    rows = conn.execute("SELECT fg_id FROM raw_projections").fetchall()
+    assert [r["fg_id"] for r in rows] == ["33333"]
+    assert "skipping ['zips-hitters-2027-proj-from-2026-03-25.csv']" in caplog.text
+    conn.close()
+
+
 def test_load_blended_projections(tmp_path):
     csv_dir = tmp_path / "2026"
     csv_dir.mkdir()
