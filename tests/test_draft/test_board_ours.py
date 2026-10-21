@@ -2,6 +2,7 @@
 
 import shutil
 
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -100,3 +101,27 @@ def test_without_ours_on_file_the_board_is_fangraphs_only(conn):
     plain = build_draft_board(conn)
     mixed = build_draft_board(conn, with_ours=True)
     pd.testing.assert_frame_equal(plain, mixed)
+
+
+def test_big_year_lines_ride_along_and_reach_the_dashboard(conn, fixtures_dir):
+    from fantasy_baseball.draft.board_ranges import HITTING, PITCHING, ranges_path
+    from fantasy_baseball.draft.state import serialize_board
+
+    judge = _ids(fixtures_dir, "hitters")["Aaron Judge"][1]
+    cole = _ids(fixtures_dir, "pitchers")["Gerrit Cole"][1]
+    path = ranges_path(YEAR)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    # A ranges file has every stat's tails; these two have only a few filled in.
+    cols = {f"{s}_p{q}": [np.nan, np.nan] for s in (*HITTING, *PITCHING) for q in (10, 90)}
+    cols |= {"hr_p90": [55.0, np.nan], "avg_p90": [0.310, np.nan], "era_p10": [np.nan, 2.4]}
+    pd.DataFrame(
+        {"player_id": [judge, cole], "player_type": ["hitter", "pitcher"], **cols}
+    ).to_parquet(path, index=False)
+    board = build_draft_board(conn, with_ours=True)
+    j, c = _line(board, "Aaron Judge"), _line(board, "Gerrit Cole")
+    assert j["p90_hr"] == 55.0 and c["p90_era"] == 2.4  # ERA's big year is its low tail
+    assert pd.isna(_line(board, "Mookie Betts")["p90_hr"])  # no range: no big year
+    served = {p["name"]: p for p in serialize_board(board)}
+    assert served["Aaron Judge"]["p90"] == {"hr": 55.0, "avg": 0.31}
+    assert served["Gerrit Cole"]["p90"] == {"era": 2.4}
+    assert "p90" not in served["Mookie Betts"]

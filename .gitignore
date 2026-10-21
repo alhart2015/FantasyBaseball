@@ -97,6 +97,8 @@ data/pitcher_ros/
 # and scripts/*_ranges.py.
 data/hitter_ranges/
 data/pitcher_ranges/
+# The draft board's big-year lines, from scripts/build_board_ranges.py.
+data/board_ranges/
 
 # Keeper reports (scripts/keeper_report.py), rebuilt from the projections and rosters.
 data/keeper_reports/
