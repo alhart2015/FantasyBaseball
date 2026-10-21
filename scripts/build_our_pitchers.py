@@ -25,7 +25,8 @@ sys.path.insert(0, str(PROJECT_ROOT / "scripts"))
 from backtest_hitter_ranges import pt_file
 from backtest_pitcher_aging import RUNS, aging_rows, births
 
-from fantasy_baseball.draft.our_pitchers import RATES, ours_path
+from fantasy_baseball.draft.our_pitchers import RATES
+from fantasy_baseball.draft.our_players import ours_path
 from fantasy_baseball.pitcher_ros import aging
 from fantasy_baseball.pt_model import range_inputs as ri
 
@@ -54,7 +55,7 @@ def main() -> int:
     aged = aging.adjust_rates(
         ours[list(RATES)], ri.season_age(birth, args.season), aging.role(pt["gs_share"]), fit
     )
-    path = ours_path(args.season)
+    path = ours_path("pitcher", args.season)
     aged.rename_axis("player_id").reset_index().to_parquet(path, index=False)
     meta = {
         "season": args.season,

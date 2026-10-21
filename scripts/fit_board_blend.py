@@ -1,17 +1,20 @@
 """Fit and score the draft board's pitcher blend: ours (age-corrected) with the board's
 FanGraphs blend, per stat (pitcher_ros/final.py ``BOARD``).
 
-Seasons --seasons, preseason. Rows: pitchers with 100+ actual batters faced (as the
-pitcher backtest scores) that ours and the board's blend both project.
+Seasons --seasons, preseason. Rows: every pitcher the board would blend -- the board's
+FanGraphs blend projects him for --min-proj-bf+ batters faced and ours projects him --
+who then pitched (picked by projection, not by how his season went; MSE is on totals
+over actual BF and innings-weighted, so a short season weighs little).
 
 * ours: --run's week-0 predictions (each season predicted by a net trained only on
   earlier seasons), starters' rates age-corrected (pitcher_ros.aging) by a fit on the
   other seasons (role from Steamer's GS / G, as scripts/backtest_pitcher_aging.py).
-* board: data.projections.blend_projections of the league's systems on file that season
-  at the league's weights -- what the board ranks -- as published, its K, W, SV per
-  batter faced (its systems' TBF, blended: draft.our_pitchers.batters_faced).
+* board: draft.our_players.board_blend -- the league's systems on file that season at
+  the league's weights, exactly as the board's blend is built -- as published, as rates
+  (draft.our_pitchers.fg_rates: K, W, SV per its systems' TBF, blended), matched to
+  MLBAM ids the way the board matches them (our_players.season_mlbam).
 
-Weights: per stat, picked leaving each season out (final.held_out_weights) and scored
+Weights: per stat, picked leaving each season out (blend_fit.held_out_weights) and scored
 with those, so no weight is picked on the rows it is scored on; also fit on every
 season, next to final.WEIGHTS[BOARD]. Prints the blend's MSE against the board blend and
 against ours with how sure (0-100).
@@ -35,9 +38,11 @@ import pandas as pd
 from backtest_hitter_ranges import CACHE, pt_file
 from backtest_pitcher_aging import RUNS, aging_rows, births
 
+from fantasy_baseball import blend_fit
 from fantasy_baseball.config import load_config
-from fantasy_baseball.data.projections import blend_projections
-from fantasy_baseball.draft.our_pitchers import batters_faced
+from fantasy_baseball.data.db import get_connection
+from fantasy_baseball.draft.our_pitchers import batters_faced, fg_rates
+from fantasy_baseball.draft.our_players import board_blend, match, season_mlbam
 from fantasy_baseball.pitcher_ros import aging, final
 from fantasy_baseball.pitcher_ros.evaluate import mse_bootstrap
 from fantasy_baseball.pt_model import range_inputs as ri
@@ -45,35 +50,9 @@ from fantasy_baseball.pt_model import range_inputs as ri
 CONFIG = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
 STATS = ("k", "w", "sv", "era", "whip")
-MIN_BF = 100
 
 
-def board_fg(season: int) -> tuple[pd.DataFrame, list[str]]:
-    """The board's FanGraphs blend for ``season`` as rates by MLBAM id, and its systems."""
-    config = load_config(CONFIG)
-    folder = PROJECTIONS / str(season)
-    systems = [x for x in config.projection_systems if list(folder.glob(f"{x}-pitchers*.csv"))]
-    if not systems:
-        raise SystemExit(f"no league projection system on file for {season} in {folder}")
-    _, fg, _ = blend_projections(
-        folder, systems, {x: config.projection_weights.get(x, 1.0) for x in systems}
-    )
-    fg = fg[fg["mlbam_id"].notna()].drop_duplicates("mlbam_id")
-    fg.index = pd.Index(fg["mlbam_id"].astype(int), name="player_id")
-    bf = batters_faced(fg)
-    rates = pd.DataFrame(
-        {
-            "k": fg["k"] / bf,
-            "w": fg["w"] / bf,
-            "sv": fg["sv"] / bf,
-            "era": fg["era"],
-            "whip": fg["whip"],
-        }
-    )
-    return rates, systems
-
-
-def scored_rows(seasons: list[int], run: str) -> pd.DataFrame:
+def scored_rows(seasons: list[int], run: str, min_proj_bf: float) -> pd.DataFrame:
     """Scored-frame rows (pitcher_ros.evaluate's shape): systems ``ours`` (age-corrected),
     ``ours_raw`` and ``fg_blend`` (the board's), per pitcher, season and stat."""
     pitching = ri.load_pitching_seasons(CACHE, seasons)
@@ -81,18 +60,24 @@ def scored_rows(seasons: list[int], run: str) -> pd.DataFrame:
     preds = preds[list(STATS)]
     birth = births()
     arows = aging_rows(seasons, run, "steamer", birth)
+    config = load_config(CONFIG)
+    conn = get_connection()
     parts = []
     for season in seasons:
-        fg, systems = board_fg(season)
+        _, pitchers, systems = board_blend(
+            PROJECTIONS / str(season), config.projection_systems, config.projection_weights
+        )
         raw = preds.xs(season, level="season")
+        usable = batters_faced(pitchers) >= min_proj_bf
+        rows, key = match(pitchers, raw.index, season_mlbam(conn, season, "pitcher"), usable)
+        fg = fg_rates(pitchers.loc[rows]).set_axis(key)
         pt = ri.load_pitcher_pt(pt_file("steamer", season, "pitchers"))
         fit = aging.fit_rates(arows[arows["season"] != season])
         aged = aging.adjust_rates(
             raw, ri.season_age(birth, season), aging.role(pt["gs_share"]), fit
         )
-        a = pitching[season]
-        a = a[a["bf"] >= MIN_BF]
-        ids = a.index.intersection(raw.index).intersection(fg.index)
+        a = pitching[season].reindex(key)
+        ids = key[((a["bf"] > 0) & (a["ip"] > 0)).to_numpy()]
         a = a.loc[ids]
         with np.errstate(divide="ignore", invalid="ignore"):
             actual = {
@@ -102,7 +87,7 @@ def scored_rows(seasons: list[int], run: str) -> pd.DataFrame:
                 "era": 9 * a["er"] / a["ip"],
                 "whip": (a["h"] + a["bb"]) / a["ip"],
             }
-        for name, frame in ((final.OURS, aged), ("ours_raw", raw), (final.FG, fg)):
+        for name, frame in ((blend_fit.OURS, aged), ("ours_raw", raw), (blend_fit.FG, fg)):
             for stat in STATS:
                 parts.append(
                     pd.DataFrame(
@@ -118,7 +103,11 @@ def scored_rows(seasons: list[int], run: str) -> pd.DataFrame:
                         }
                     )
                 )
-        print(f"{season}: {len(ids)} pitchers, board blend of {', '.join(systems)}")
+        print(
+            f"{season}: {len(ids)} pitchers ({len(key) - len(ids)} more never pitched), "
+            f"board blend of {', '.join(systems)}"
+        )
+    conn.close()
     return pd.concat(parts, ignore_index=True)
 
 
@@ -127,19 +116,24 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     parser.add_argument("--seasons", type=int, nargs="+", default=list(range(2022, 2027)))
     parser.add_argument("--run", default="035-saves-net")
+    parser.add_argument("--min-proj-bf", type=float, default=100.0)
     args = parser.parse_args()
-    scored = scored_rows(sorted(args.seasons), args.run)
-    pair = scored[scored["system"].isin([final.OURS, final.FG])]
-    held = final.held_out_weights(pair, pair["season"])
+    scored = scored_rows(sorted(args.seasons), args.run, args.min_proj_bf)
+    pair = scored[scored["system"].isin([blend_fit.OURS, blend_fit.FG])]
+    held = blend_fit.held_out_weights(pair, pair["season"], final.SCORING)
     print("\nweight on ours, each season's picked on the others:")
     print(held.unstack("stat")[list(STATS)].to_string())
-    fitted = final.best_weights(pair)
+    fitted = blend_fit.best_weights(pair, final.SCORING)
     print("\nfit on every season vs final.WEIGHTS[BOARD]:")
     for stat in STATS:
         print(f"  {stat:4s} {fitted[stat]:.2f}  (in use {final.WEIGHTS[final.BOARD][stat]:.2f})")
-    blend = final.blended_scored(pair, held.rename_axis(["season", "stat"]))
+    blend = blend_fit.blended_scored(pair, held.rename_axis(["season", "stat"]))
     both = pd.concat([blend, scored[scored["system"] == "ours_raw"]], ignore_index=True)
-    for a, b in (("final", final.FG), ("final", final.OURS), (final.OURS, "ours_raw")):
+    for a, b in (
+        ("final", blend_fit.FG),
+        ("final", blend_fit.OURS),
+        (blend_fit.OURS, "ours_raw"),
+    ):
         r = mse_bootstrap(both, a, b)
         print(f"\n{a} vs {b} (MSE; sure = how sure {a} is lower):")
         for stat, row in r.iterrows():

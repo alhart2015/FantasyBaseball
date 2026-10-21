@@ -26,13 +26,13 @@ MSE over every scored pitcher on a 0.05 grid, with FanGraphs = the average of
 
 * Board (``BOARD``, ``scripts/fit_board_blend.py``): ours **age-corrected**
   (``aging``, its fit leaving the season out) against the draft board's own FanGraphs
-  blend -- ``data.projections.blend_projections`` of the league's systems on file that
-  season, at the league's weights (Steamer + ZiPS 2022-2025, all five 2026) -- which
-  enters as published, its K, W, SV per its systems' batters faced (TBF). 2022-2026,
-  100+ BF: weights picked leaving each season out moved at most 0.10 from these, and
-  with them the blend beat the FanGraphs blend on every stat (K 165.7 vs 172.7, W, ERA,
-  WHIP 100 sure; SV 13.1 vs 13.6, 94) and ours on K, SV, ERA (100) with W 90, WHIP 89.
-  :func:`board_rates`.
+  blend, built and matched exactly as the board's (``draft.our_players.board_blend``:
+  Steamer + ZiPS 2022-2025, all five 2026), as published, its K, W, SV per its systems'
+  batters faced (TBF). 2022-2026, every pitcher the board would blend (projected 100+
+  BF, ~700-750 a season) who pitched: weights picked leaving each season out moved at
+  most 0.15 from these, and with them the blend beat the FanGraphs blend on every stat
+  (K 118.1 vs 122.1, W, ERA, WHIP 100 sure; SV 9.31 vs 9.66, 95) and ours on K, SV,
+  ERA, WHIP (100) with W 91. :func:`board_rates`.
 
 The backtest scores only pitchers every system projects, so the weights were picked
 on those. ``final_rates`` blends every pitcher anyone projects: FanGraphs is the
@@ -47,12 +47,11 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
-import numpy as np
 import pandas as pd
 
-from fantasy_baseball.pitcher_ros.evaluate import error_weight, squared_error
+from fantasy_baseball import blend_fit
+from fantasy_baseball.pitcher_ros.evaluate import squared_error
 from fantasy_baseball.pitcher_ros.stats import TARGETS
-from fantasy_baseball.projection_eval import unit_key
 
 PRESEASON = "preseason"
 MIDSEASON = "midseason"
@@ -61,17 +60,15 @@ BOARD = "board"
 WEIGHTS: dict[str, dict[str, float]] = {
     PRESEASON: {"k": 0.50, "w": 0.70, "sv": 0.30, "era": 0.50, "whip": 0.75},
     MIDSEASON: {"k": 0.85, "w": 1.00, "sv": 0.55, "era": 0.90, "whip": 0.95},
-    BOARD: {"k": 0.50, "w": 0.70, "sv": 0.30, "era": 0.55, "whip": 0.80},
+    BOARD: {"k": 0.45, "w": 0.75, "sv": 0.30, "era": 0.50, "whip": 0.65},
 }
 # The FanGraphs systems each span's WEIGHTS were fitted with (their average).
 SYSTEMS: dict[str, tuple[str, ...]] = {
     PRESEASON: ("steamer", "zips"),
     MIDSEASON: ("atc", "oopsy", "steamer"),
 }
-# The weights a fit picks from.
-STEP = 0.05
-GRID = tuple(round(w, 2) for w in np.arange(0, 1.0001, STEP))
-OURS, FG = "ours", "fg_blend"
+# How pitchers are scored (pitcher_ros.evaluate): the fit's MSE.
+SCORING = blend_fit.Scoring(TARGETS, squared_error)
 
 
 def blend_rates(ours: pd.DataFrame, fg: pd.DataFrame, weights: Mapping[str, float]) -> pd.DataFrame:
@@ -79,18 +76,7 @@ def blend_rates(ours: pd.DataFrame, fg: pd.DataFrame, weights: Mapping[str, floa
     indexed by ``player_id`` with every stat in ``TARGETS`` (K, W, SV per batter faced;
     ERA, WHIP). Every pitcher in either comes back: one only side projects (or projects
     a stat for) gets that side's rate."""
-    missing = sorted(set(TARGETS) - set(weights))
-    if missing:
-        raise ValueError(f"no weight for {missing}")
-    bad = {s: w for s, w in weights.items() if not 0 <= w <= 1}
-    if bad:
-        raise ValueError(f"weights must be 0-1: {bad}")
-    index = ours.index.union(fg.index)
-    a = ours[list(TARGETS)].reindex(index).astype(float)
-    b = fg[list(TARGETS)].reindex(index).astype(float)
-    w = pd.Series(weights)[list(TARGETS)]
-    mixed = a * w + b * (1 - w)
-    return mixed.fillna(a).fillna(b)
+    return blend_fit.blend_rates(ours, fg, weights, TARGETS)
 
 
 def fg_average(systems: Mapping[str, pd.DataFrame]) -> pd.DataFrame:
@@ -122,87 +108,3 @@ def board_rates(ours: pd.DataFrame, board_fg: pd.DataFrame) -> pd.DataFrame:
     """The draft board's final pitcher rates: ``blend_rates`` of ours (age-corrected)
     with the board's FanGraphs blend (its rates, as published) at ``WEIGHTS[BOARD]``."""
     return blend_rates(ours, board_fg, WEIGHTS[BOARD])
-
-
-def _wide(scored: pd.DataFrame) -> pd.DataFrame:
-    """One row per scored unit and stat: ``ours`` and ``fg_blend`` side by side, with
-    the actual, batters faced, innings and tags of the scored rows."""
-    absent = {OURS, FG} - set(scored["system"])
-    if absent:
-        raise ValueError(f"scored frame has no {sorted(absent)} rows")
-    key = [*unit_key(scored), "stat"]
-    pair = scored[scored["system"].isin([OURS, FG])]
-    if pair.duplicated([*key, "system"]).any():
-        raise ValueError(f"more than one row per {key} and system")
-    side = pair.pivot(index=key, columns="system", values="projected")
-    lacking = side[[OURS, FG]].isna().sum()
-    if lacking.any():
-        raise ValueError(
-            f"scored units with no projection from {lacking[lacking > 0].to_dict()}; "
-            "both must score the same pitchers"
-        )
-    rest = pair[pair["system"] == OURS].set_index(key).drop(columns=["system", "projected"])
-    return side.join(rest, how="inner").reset_index()
-
-
-def blended_scored(scored: pd.DataFrame, weights: pd.Series, name: str = "final") -> pd.DataFrame:
-    """``scored`` plus rows for the blend, system ``name``: per row of ``ours``,
-    ``w x ours + (1 - w) x fg_blend`` with ``w`` from ``weights``, indexed like the
-    scored frame's unit key plus ``stat`` (a MultiIndex), or by ``stat`` alone. Ready
-    for ``evaluate.mse_bootstrap`` against ``ours`` or ``fg_blend``."""
-    wide = _wide(scored)
-    key = list(weights.index.names)
-    w = wide.join(weights.rename("w"), on=key)["w"]
-    if w.isna().any():
-        raise ValueError(f"no weight for some rows (weights keyed by {key})")
-    rows = wide.assign(system=name, projected=w * wide[OURS] + (1 - w) * wide[FG])
-    return pd.concat([scored, rows[scored.columns]], ignore_index=True)
-
-
-def _mse(rows: pd.DataFrame, w: float) -> float:
-    s = rows.assign(system="blend", projected=w * rows[OURS] + (1 - w) * rows[FG])
-    sq = squared_error(s, ["stat"])
-    return float(sq["sq"].sum() / sq["w"].sum())
-
-
-def best_weights(scored: pd.DataFrame) -> pd.Series:
-    """Per stat, the weight on ours in ``GRID`` with the lowest MSE over every scored
-    row (``evaluate.squared_error``: K/W/SV in season totals, ERA/WHIP innings-weighted).
-    Ties go to the larger weight on ours.
-
-    MSE is a parabola in the weight: with ``d = ours - fg``, ``e = actual - fg`` and
-    MSE's error weights ``W``, it is lowest at ``sum(W d e) / sum(W d^2)``. So only the
-    two grid points around that (clipped to 0-1) are scored."""
-    wide = _wide(scored)
-    out = {}
-    for stat, rows in wide.groupby("stat", sort=False):
-        d = (rows[OURS] - rows[FG]).to_numpy(float)
-        e = (rows["actual"] - rows[FG]).to_numpy(float)
-        weight = error_weight(rows)
-        denom = float((weight * d * d).sum())
-        if denom == 0:  # ours and FanGraphs agree on every row: every weight ties
-            out[stat] = GRID[-1]
-            continue
-        best = min(max(float((weight * d * e).sum()) / denom, 0.0), 1.0)
-        lo = int(np.floor(best / STEP + 1e-9))
-        near = [GRID[i] for i in (lo, lo + 1) if 0 <= i < len(GRID)]
-        scores = {w: _mse(rows, w) for w in near}
-        out[stat] = min(near, key=lambda w: (scores[w], -w))
-    return pd.Series(out, name="w").rename_axis("stat")
-
-
-def held_out_weights(scored: pd.DataFrame, by: pd.Series) -> pd.Series:
-    """Per group of ``by`` (aligned with ``scored``: a season, a half of a season) and
-    stat, the weights ``best_weights`` picks on the **other** groups' rows -- so scoring
-    the blend with them never picks a weight on the rows it is scored on. Indexed by
-    ``by``'s name and ``stat``."""
-    if not by.index.equals(scored.index):
-        raise ValueError("by must be aligned with scored")
-    if by.isna().any():
-        raise ValueError("by is blank on some rows; every row needs a group")
-    groups = by.unique()
-    if len(groups) < 2:
-        raise ValueError("need two or more groups to hold one out")
-    parts = {g: best_weights(scored[by != g]) for g in groups}
-    out = pd.concat(parts, names=[by.name if by.name is not None else "group", "stat"])
-    return out.rename("w")

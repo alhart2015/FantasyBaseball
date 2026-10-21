@@ -601,13 +601,13 @@ def latest_blended_year(conn) -> int:
     return int(row["y"]) if row and row["y"] is not None else 0
 
 
-def get_pitcher_id_pairs(conn, year: int) -> pd.DataFrame:
-    """Every (fg_id, mlbam_id) pair the ``year`` raw pitcher projections carry."""
+def get_id_pairs(conn, year: int, player_type: str) -> pd.DataFrame:
+    """Every (fg_id, mlbam_id) pair the ``year`` raw projections of ``player_type``
+    ('hitter' / 'pitcher') carry."""
     return pd.read_sql_query(
-        "SELECT DISTINCT fg_id, mlbam_id FROM raw_projections "
-        "WHERE year = ? AND player_type = 'pitcher'",
+        "SELECT DISTINCT fg_id, mlbam_id FROM raw_projections WHERE year = ? AND player_type = ?",
         conn,
-        params=(year,),
+        params=(year, player_type),
     )
 
 

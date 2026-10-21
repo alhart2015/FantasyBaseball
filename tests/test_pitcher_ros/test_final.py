@@ -5,20 +5,23 @@ import numpy as np
 import pandas as pd
 import pytest
 
+from fantasy_baseball.blend_fit import (
+    GRID,
+    best_weights,
+    blended_scored,
+    held_out_weights,
+    mse_at,
+    wide,
+)
 from fantasy_baseball.pitcher_ros.final import (
     BOARD,
-    GRID,
+    SCORING,
     SYSTEMS,
     WEIGHTS,
-    _mse,
-    _wide,
-    best_weights,
     blend_rates,
-    blended_scored,
     board_rates,
     fg_average,
     final_rates,
-    held_out_weights,
 )
 from fantasy_baseball.pitcher_ros.stats import TARGETS
 
@@ -86,21 +89,21 @@ def _scored(true_w: dict[str, float], seasons=(2024, 2025), n=40, seed=0):
 
 def test_best_weights_finds_the_mix_the_actuals_were_made_from():
     true = {"k": 0.3, "w": 0.7, "sv": 0.0, "era": 1.0, "whip": 0.55}
-    got = best_weights(_scored(true))
+    got = best_weights(_scored(true), SCORING)
     assert got.to_dict() == pytest.approx(true)
 
 
 def test_held_out_weights_never_see_the_group_they_score():
     true = {**{(2024, s): 0.2 for s in TARGETS}, **{(2025, s): 0.8 for s in TARGETS}}
     scored = _scored(true)
-    held = held_out_weights(scored, scored["season"])
+    held = held_out_weights(scored, scored["season"], SCORING)
     # 2024's weights come from 2025's rows alone, and the other way round.
     assert held.loc[2024].to_dict() == pytest.approx(dict.fromkeys(TARGETS, 0.8))
     assert held.loc[2025].to_dict() == pytest.approx(dict.fromkeys(TARGETS, 0.2))
     with pytest.raises(ValueError, match="two or more"):
-        held_out_weights(scored, pd.Series(2024, index=scored.index))
+        held_out_weights(scored, pd.Series(2024, index=scored.index), SCORING)
     with pytest.raises(ValueError, match="aligned"):
-        held_out_weights(scored, scored["season"].iloc[1:])
+        held_out_weights(scored, scored["season"].iloc[1:], SCORING)
 
 
 def test_blended_scored_adds_the_blend_as_its_own_system():
@@ -130,31 +133,31 @@ def test_best_weights_matches_scoring_every_grid_point():
     rng = np.random.default_rng(4)
     scored["actual"] = scored["actual"] * rng.uniform(0.6, 1.4, len(scored))
     scored["actual"] = scored.groupby(["player_id", "season", "stat"])["actual"].transform("first")
-    wide = _wide(scored)
-    for stat, rows in wide.groupby("stat"):
-        scores = {w: _mse(rows, w) for w in GRID}
-        assert best_weights(scored)[stat] == min(GRID, key=lambda w: (scores[w], -w))
+    rows_wide = wide(scored)
+    for stat, rows in rows_wide.groupby("stat"):
+        scores = {w: mse_at(rows, w, SCORING) for w in GRID}
+        assert best_weights(scored, SCORING)[stat] == min(GRID, key=lambda w: (scores[w], -w))
 
 
 def test_best_weights_takes_the_ends_and_ties_to_ours():
     # Actuals beyond ours (weight > 1) clip to 1; ours = FanGraphs ties every weight -> 1.
     scored = _scored(dict.fromkeys(TARGETS, 1.6))
-    assert set(best_weights(scored)) == {1.0}
+    assert set(best_weights(scored, SCORING)) == {1.0}
     same = scored.copy()
     fg = same["system"] == "fg_blend"
     same.loc[fg, "projected"] = same.loc[same["system"] == "ours", "projected"].to_numpy()
-    assert set(best_weights(same)) == {1.0}
+    assert set(best_weights(same, SCORING)) == {1.0}
 
 
 def test_a_unit_fangraphs_lacks_is_refused_not_dropped():
     scored = _scored(dict.fromkeys(TARGETS, 0.5))
     gone = scored[~((scored.system == "fg_blend") & (scored.player_id == 3))]
     with pytest.raises(ValueError, match="no projection from"):
-        best_weights(gone)
+        best_weights(gone, SCORING)
     blank = scored.copy()
     blank.loc[(blank.system == "fg_blend") & (blank.player_id == 3), "projected"] = np.nan
     with pytest.raises(ValueError, match="no projection from"):
-        best_weights(blank)
+        best_weights(blank, SCORING)
 
 
 def test_held_out_weights_refuses_blank_groups_and_keeps_any_name():
@@ -162,10 +165,13 @@ def test_held_out_weights_refuses_blank_groups_and_keeps_any_name():
     by = scored["season"].astype(float)
     by.iloc[0] = np.nan
     with pytest.raises(ValueError, match="blank"):
-        held_out_weights(scored, by)
+        held_out_weights(scored, by, SCORING)
     named_zero = scored["season"].rename(0)
-    assert held_out_weights(scored, named_zero).index.names == [0, "stat"]
-    assert held_out_weights(scored, scored["season"].rename(None)).index.names == ["group", "stat"]
+    assert held_out_weights(scored, named_zero, SCORING).index.names == [0, "stat"]
+    assert held_out_weights(scored, scored["season"].rename(None), SCORING).index.names == [
+        "group",
+        "stat",
+    ]
 
 
 def test_fg_average_averages_whichever_systems_project_him():
