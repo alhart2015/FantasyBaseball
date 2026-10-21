@@ -119,12 +119,13 @@ def season_inputs(
 
 def actual_season(rows: pd.DataFrame, spec) -> dict[str, np.ndarray]:
     """``rows``' real seasons in ``ranges.draw``'s shape (one draw each): counting
-    totals, rate stats' rates and each stat's real trials, for ``season_sgp``."""
+    totals, rate stats' rates and their real trials, for ``season_sgp``."""
     totals = actual_totals(rows, spec)
-    out = {s.name: totals[s.name][:, None] for s in spec.stats}
+    # A rate with no trials is NaN; at 0 it weighs nothing in SGP.
+    out = {s.name: np.nan_to_num(totals[s.name])[:, None] for s in spec.stats}
     for s in spec.stats:
-        out[f"{s.name}_trials"] = rows[f"a_{s.trials}"].to_numpy(dtype=float)[:, None]
-        out[s.name] = np.nan_to_num(out[s.name])  # no trials: weighs nothing in SGP
+        if not s.counting:
+            out[f"{s.name}_trials"] = rows[f"a_{s.trials}"].to_numpy(dtype=float)[:, None]
     return out
 
 
@@ -196,22 +197,11 @@ def main() -> int:
     inputs = {s: season_inputs(s, *ours[s], config, conn) for s in train}
     scales = {s: board_scale(s, *ours[s], config, conn) for s in train} if args.backtest else {}
     if not args.backtest:
-        target = season_inputs(
-            args.season,
-            load_ours("hitter", args.season),
-            load_ours("pitcher", args.season),
-            config,
-            conn,
-        )
+        target_ours = (load_ours("hitter", args.season), load_ours("pitcher", args.season))
+        target = season_inputs(args.season, *target_ours, config, conn)
         # The board's scale (SGP denominators, the pool's replacement rates, team
         # volumes), so a season's SGP is the board's.
-        scale = board_scale(
-            args.season,
-            load_ours("hitter", args.season),
-            load_ours("pitcher", args.season),
-            config,
-            conn,
-        )
+        scale = board_scale(args.season, *target_ours, config, conn)
     conn.close()
     years = set(ri.history_seasons([*train, args.season])) | set(train)
     hitting = ri.load_seasons(CACHE, years)

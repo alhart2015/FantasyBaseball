@@ -419,8 +419,9 @@ def draw(
     stat_caps: Mapping[str, float] | None = None,
 ) -> dict[str, np.ndarray]:
     """Each row's ``n_draws`` simulated seasons (rows x draws): the volume, each stat's
-    season total (a rate stat's rate) and, as ``<stat>_trials``, the trials it was
-    drawn on. A draw is one whole season: every stat on it takes the same past season's
+    season total (a rate stat's rate) and, as ``<stat>_trials``, the trials each rate
+    stat was drawn on (a counting stat's are only its total's scale, so not kept). A
+    draw is one whole season: every stat on it takes the same past season's
     playing-time quantile and misses, so the stats move together as they did then.
     Arguments as :func:`simulate`."""
     stat_caps = {} if stat_caps is None else stat_caps
@@ -430,7 +431,7 @@ def draw(
         for c in (
             *spec.stat_names,
             spec.volume,
-            *(f"{s.name}_trials" for s in spec.stats),
+            *(f"{s.name}_trials" for s in spec.stats if not s.counting),
         )
     }
     ranked = rows[spec.rank_col].to_numpy(dtype=float)
@@ -447,10 +448,11 @@ def draw(
             n = trials[s.trials]
             rate = drawn_rate(s, proj[s.name][i], pool.z[s.name][j], n)
             # The rate carries the scale (actual_rates), so a counting total is rate x n.
-            out[s.name][i] = (
-                np.minimum(rate * n, stat_caps.get(s.name, np.inf)) if s.counting else rate
-            )
-            out[f"{s.name}_trials"][i] = n
+            if s.counting:
+                out[s.name][i] = np.minimum(rate * n, stat_caps.get(s.name, np.inf))
+            else:
+                out[s.name][i] = rate
+                out[f"{s.name}_trials"][i] = n
     return out
 
 

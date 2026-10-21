@@ -71,6 +71,13 @@ def attach(
                 season,
             )
     ranges = pd.read_parquet(path)
+    if "sgp_p90" not in ranges.columns:
+        logger.warning(
+            "%s has no sgp_p90 (built before P90 VAR): rebuild it with "
+            "python scripts/build_board_ranges.py --season %d",
+            path,
+            season,
+        )
     out = []
     for frame, player_type, stats in (
         (hitters, "hitter", HITTING),
@@ -87,13 +94,6 @@ def attach(
         # into P90 VAR with his own replacement level (board.with_p90_var).
         if "sgp_p90" in mine.columns:
             frame["p90_sgp"] = ids.map(mine["sgp_p90"]).to_numpy()
-        else:
-            logger.warning(
-                "%s has no sgp_p90 (built before P90 VAR): rebuild it with "
-                "python scripts/build_board_ranges.py --season %d",
-                path,
-                season,
-            )
         out.append(frame)
     return out[0], out[1]
 

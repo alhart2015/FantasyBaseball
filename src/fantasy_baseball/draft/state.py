@@ -28,6 +28,7 @@ from typing import Any, cast
 import pandas as pd
 
 from fantasy_baseball.draft.balance import CategoryBalance
+from fantasy_baseball.draft.board_ranges import HITTING, PITCHING
 from fantasy_baseball.draft.recommender import Recommendation
 from fantasy_baseball.draft.tracker import DraftTracker
 from fantasy_baseball.models.player import PlayerType
@@ -159,11 +160,9 @@ def _serialize_p90(row: pd.Series) -> dict[str, float]:
     """The player's big-year line (``board_ranges``: P90, P10 for ERA/WHIP), the stats
     he has one for; empty without ranges."""
     out = {}
-    for col, value in row.items():
-        if col in ("p90_sgp", "p90_var"):  # value, not a stat: p90_var is its own field
-            continue
-        if isinstance(col, str) and col.startswith("p90_") and not pd.isna(value):
-            stat = col.removeprefix("p90_")
+    for stat in (*HITTING, *PITCHING):
+        value = row.get(f"p90_{stat}")
+        if value is not None and not pd.isna(value):
             out[stat] = round(float(value), 3 if stat in ("avg", "era", "whip") else 0)
     return out
 

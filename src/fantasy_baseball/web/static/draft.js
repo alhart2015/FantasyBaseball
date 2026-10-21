@@ -106,15 +106,15 @@ function playerMatchesPosition(player, posFilter) {
   return positions.includes(posFilter);
 }
 
-// Sort key plucker. ADP-missing rows sort last regardless of direction
-// (they're effectively "unranked"); same for SGP-missing.
+// Sort key plucker; null means missing. Missing rows sort last regardless of
+// direction (they're effectively "unranked"): no ADP, SGP, or P90 VAR.
 function playerSortValue(player, key) {
   if (key === "name") return (player.name || "").toLowerCase();
   // Treat 999+ as missing — same sentinel fmtAdp handles for display.
-  if (key === "adp") return player.adp == null || player.adp >= 999 ? Infinity : player.adp;
-  if (key === "sgp") return player.total_sgp == null ? -Infinity : player.total_sgp;
-  if (key === "var") return player.var == null ? -Infinity : player.var;
-  if (key === "p90_var") return player.p90_var == null ? -Infinity : player.p90_var;
+  if (key === "adp") return player.adp == null || player.adp >= 999 ? null : player.adp;
+  if (key === "sgp") return player.total_sgp ?? null;
+  if (key === "var") return player.var ?? null;
+  if (key === "p90_var") return player.p90_var ?? null;
   return 0;
 }
 
@@ -126,6 +126,7 @@ function applyPlayerSort(players) {
   return [...players].sort((a, b) => {
     const va = playerSortValue(a, playerSort);
     const vb = playerSortValue(b, playerSort);
+    if (va === null || vb === null) return (va === null) - (vb === null);
     if (va < vb) return ascending ? -1 : 1;
     if (va > vb) return ascending ? 1 : -1;
     return 0;
