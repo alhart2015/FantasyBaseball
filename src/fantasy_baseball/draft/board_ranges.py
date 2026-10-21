@@ -10,16 +10,29 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
+from typing import TYPE_CHECKING
 
+import numpy as np
 import pandas as pd
 
 from fantasy_baseball.draft import our_players
+from fantasy_baseball.sgp.player_value import (
+    calculate_counting_sgp,
+    calculate_hitting_rate_sgp,
+    calculate_pitching_rate_sgp,
+)
+from fantasy_baseball.utils.constants import Category
+
+if TYPE_CHECKING:
+    from fantasy_baseball.draft.board import ScaleInputs
 
 logger = logging.getLogger(__name__)
 
 HITTING = ("r", "hr", "rbi", "sb", "avg")
 PITCHING = ("w", "k", "sv", "era", "whip")
 LOWER_IS_BETTER = ("era", "whip")
+COUNTING_HIT = (("r", Category.R), ("hr", Category.HR), ("rbi", Category.RBI), ("sb", Category.SB))
+COUNTING_PIT = (("w", Category.W), ("k", Category.K), ("sv", Category.SV))
 
 
 def ranges_path(season: int) -> Path:
@@ -58,6 +71,13 @@ def attach(
                 season,
             )
     ranges = pd.read_parquet(path)
+    if "sgp_p90" not in ranges.columns:
+        logger.warning(
+            "%s has no sgp_p90 (built before P90 VAR): rebuild it with "
+            "python scripts/build_board_ranges.py --season %d",
+            path,
+            season,
+        )
     out = []
     for frame, player_type, stats in (
         (hitters, "hitter", HITTING),
@@ -70,5 +90,32 @@ def attach(
         frame = frame.copy()
         for stat in stats:
             frame[f"p90_{stat}"] = ids.map(mine[big_year_column(stat)]).to_numpy()
+        # His P90 season's SGP (whole seasons: build_board_ranges.py); the board turns it
+        # into P90 VAR with his own replacement level (board.with_p90_var).
+        if "sgp_p90" in mine.columns:
+            frame["p90_sgp"] = ids.map(mine["sgp_p90"]).to_numpy()
         out.append(frame)
     return out[0], out[1]
+
+
+def season_sgp(draws: dict[str, np.ndarray], player_type: str, scale: ScaleInputs) -> np.ndarray:
+    """Each simulated whole season's SGP (rows x draws, ``pt_model.ranges.draw``), scored
+    exactly as the board scores a line (``sgp.player_value``, the board's ``scale``):
+    counting stats over their denominators, AVG / ERA / WHIP as marginal value over
+    the pool's replacement rates on the season's own AB / IP."""
+    d = scale.denoms
+    rep = scale.repl_rates
+    if player_type == "hitter":
+        sgp = sum(calculate_counting_sgp(draws[s], d[c]) for s, c in COUNTING_HIT)
+        return np.asarray(
+            sgp
+            + calculate_hitting_rate_sgp(
+                draws["avg"], draws["avg_trials"], rep["avg"], d[Category.AVG], scale.team_ab
+            )
+        )
+    sgp = sum(calculate_counting_sgp(draws[s], d[c]) for s, c in COUNTING_PIT)
+    for stat, cat, divisor in (("era", Category.ERA, 9), ("whip", Category.WHIP, 1)):
+        sgp = sgp + calculate_pitching_rate_sgp(
+            draws[stat], draws[f"{stat}_trials"], rep[stat], d[cat], scale.team_ip, divisor
+        )
+    return np.asarray(sgp)

@@ -268,11 +268,11 @@ body {
 .available-players > header > input[type="search"] { flex: 1; min-width: 0; }
 .available-players > header > select { flex: 0 0 auto; }
 
-/* Name / Pos / ADP / SGP grid -- header and rows share the template. */
+/* Name / Pos / ADP / SGP / VAR / P90 VAR grid -- header and rows share the template. */
 .available-players .player-list-header,
 .available-players li {
   display: grid;
-  grid-template-columns: 1fr 4rem 3.5rem 3.5rem;
+  grid-template-columns: 1fr 4rem 3.5rem 3.5rem 3rem 3rem;
   gap: 8px;
   align-items: baseline;
 }
@@ -296,7 +296,9 @@ body {
 .available-players li .name { font-weight: 500; color: var(--ink); }
 .available-players .pos,
 .available-players .adp,
-.available-players .sgp {
+.available-players .sgp,
+.available-players .var,
+.available-players .p90var {
   font-family: var(--font-mono);
   font-size: 12px;
   color: var(--ink-soft);
@@ -319,7 +321,9 @@ body {
   transition: color 0.12s;
 }
 .available-players .player-list-header button.adp,
-.available-players .player-list-header button.sgp { text-align: right; }
+.available-players .player-list-header button.sgp,
+.available-players .player-list-header button.var,
+.available-players .player-list-header button.p90var { text-align: right; }
 .available-players .player-list-header button.name { text-align: left; }
 .available-players .player-list-header button:hover { color: var(--ink-soft); }
 .available-players .player-list-header button.sort-active { color: var(--amber); }

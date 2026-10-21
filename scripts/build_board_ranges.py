@@ -14,6 +14,10 @@ blend's rates, as the board does).
 --backtest instead scores the method on the training seasons, each left out: how often
 the real season landed above P90 and below P10 (want ~10% each).
 
+Each simulated whole season is also scored in SGP the way the board scores a line (its
+denominators and the pool's replacement rates: draft.board_ranges.season_sgp), giving
+sgp_p10/p50/p90; the board turns sgp_p90 into P90 VAR (board.with_p90_var).
+
 Writes data/board_ranges/<season>.parquet (player_id = MLBAM id); the board picks it
 up on its next build (python scripts/run_draft_dashboard.py --rebuild-board).
 
@@ -38,16 +42,17 @@ from backtest_hitter_ranges import CACHE, PEOPLE, pt_file
 from backtest_pitcher_aging import aging_rows, births
 
 from fantasy_baseball.config import load_config
-from fantasy_baseball.data.db import get_connection
+from fantasy_baseball.data.db import get_connection, get_positions
 from fantasy_baseball.draft import our_hitters, our_pitchers
-from fantasy_baseball.draft.board_ranges import ranges_path
+from fantasy_baseball.draft.board import ScaleInputs, build_board_from_frames
+from fantasy_baseball.draft.board_ranges import ranges_path, season_sgp
 from fantasy_baseball.draft.our_players import board_blend, load_ours, season_mlbam
 from fantasy_baseball.hitter_ros import final as hitter_final
 from fantasy_baseball.pitcher_ros import aging
 from fantasy_baseball.pitcher_ros import final as pitcher_final
 from fantasy_baseball.pt_model import range_inputs as ri
 from fantasy_baseball.pt_model.range_specs import HITTER, RELIEVER, STARTER
-from fantasy_baseball.pt_model.ranges import backtest, fit, pt_model
+from fantasy_baseball.pt_model.ranges import actual_totals, backtest, fit, pt_model, quantiles
 
 CONFIG = PROJECT_ROOT / "config" / "league.yaml"
 PROJECTIONS = PROJECT_ROOT / "data" / "projections"
@@ -112,6 +117,43 @@ def season_inputs(
     return {"hitter": (hit_pt, tagged(hit_rates)), "pitcher": (pit_pt, tagged(pit_rates))}
 
 
+def actual_season(rows: pd.DataFrame, spec) -> dict[str, np.ndarray]:
+    """``rows``' real seasons in ``ranges.draw``'s shape (one draw each): counting
+    totals, rate stats' rates and their real trials, for ``season_sgp``."""
+    totals = actual_totals(rows, spec)
+    # A rate with no trials is NaN; at 0 it weighs nothing in SGP.
+    out = {s.name: np.nan_to_num(totals[s.name])[:, None] for s in spec.stats}
+    for s in spec.stats:
+        if not s.counting:
+            out[f"{s.name}_trials"] = rows[f"a_{s.trials}"].to_numpy(dtype=float)[:, None]
+    return out
+
+
+def board_scale(season: int, ours_hit, ours_pit, config, conn) -> ScaleInputs:
+    """The board's scale for ``season``, built as build_draft_board builds it (its
+    blend mixed with ``ours``)."""
+    hitters, pitchers, _ = board_blend(
+        PROJECTIONS / str(season), config.projection_systems, config.projection_weights
+    )
+    if ours_hit is not None:
+        hitters = our_hitters.blend_board_hitters(
+            hitters, ours_hit, season_mlbam(conn, season, "hitter")
+        )
+    if ours_pit is not None:
+        pitchers = our_pitchers.blend_board_pitchers(
+            pitchers, ours_pit, season_mlbam(conn, season, "pitcher")
+        )
+    _, scale = build_board_from_frames(
+        hitters,
+        pitchers,
+        get_positions(conn),
+        config.roster_slots or None,
+        config.num_teams,
+        sgp_overrides=config.sgp_overrides,
+    )
+    return scale
+
+
 def held_out_ours(
     seasons: list[int], hitter_run: str, seeds: list[int], pitcher_run: str
 ) -> dict[int, tuple[pd.DataFrame, pd.DataFrame]]:
@@ -153,14 +195,13 @@ def main() -> int:
     ours = held_out_ours(train, args.hitter_run, args.seeds, args.pitcher_run)
     conn = get_connection()
     inputs = {s: season_inputs(s, *ours[s], config, conn) for s in train}
+    scales = {s: board_scale(s, *ours[s], config, conn) for s in train} if args.backtest else {}
     if not args.backtest:
-        target = season_inputs(
-            args.season,
-            load_ours("hitter", args.season),
-            load_ours("pitcher", args.season),
-            config,
-            conn,
-        )
+        target_ours = (load_ours("hitter", args.season), load_ours("pitcher", args.season))
+        target = season_inputs(args.season, *target_ours, config, conn)
+        # The board's scale (SGP denominators, the pool's replacement rates, team
+        # volumes), so a season's SGP is the board's.
+        scale = board_scale(args.season, *target_ours, config, conn)
     conn.close()
     years = set(ri.history_seasons([*train, args.season])) | set(train)
     hitting = ri.load_seasons(CACHE, years)
@@ -200,6 +241,22 @@ def main() -> int:
                 hi = (g["actual"] > g["q90"]).mean()
                 lo = (g["actual"] < g["q10"]).mean()
                 print(f"    {stat:5s} above P90 {hi:5.1%}  below P10 {lo:5.1%}  ({len(g)})")
+        print("\nWhole-season SGP (the board's P90 VAR = P90 SGP over replacement):")
+        for kind, spec in specs:
+            rows, volume = fits[spec.name]
+            name = spec.name if kind == "pitcher" else "hitter"
+            hit = lo_n = n = 0
+            for season in train:
+                test = rows[rows["season"] == season]
+                ranges = fit(rows[rows["season"] != season], volume, pt_model, rng, spec)
+                ranked, draws = ranges.draws(test, rng, args.draws)
+                q10, q90 = np.quantile(season_sgp(draws, kind, scales[season]), (0.1, 0.9), axis=1)
+                actual = season_sgp(actual_season(test, spec), kind, scales[season])[:, 0]
+                keep = ranked[spec.rank_col].to_numpy(dtype=float) >= REGULAR[name]
+                hit += int((actual[keep] > q90[keep]).sum())
+                lo_n += int((actual[keep] < q10[keep]).sum())
+                n += int(keep.sum())
+            print(f"  {name}s: above P90 {hit / n:5.1%}  below P10 {lo_n / n:5.1%}  ({n})")
         return 0
 
     parts = []
@@ -207,7 +264,9 @@ def main() -> int:
         rows, volume = fits[spec.name]
         ranges = fit(rows, volume, pt_model, rng, spec)
         new = rows_for(spec, args.season, *target[kind], False)
-        ranked, sims = ranges.predict(new, LEVELS, rng, args.draws)
+        ranked, draws = ranges.draws(new, rng, args.draws)
+        sims = quantiles(draws, ranked, LEVELS, spec)
+        sims["sgp"] = np.quantile(season_sgp(draws, kind, scale), LEVELS, axis=1).T
         parts.append(
             pd.DataFrame(
                 {
@@ -216,7 +275,7 @@ def main() -> int:
                     "role": spec.name,
                     **{
                         f"{c}_p{round(lv * 100)}": sims[c][:, k]
-                        for c in (spec.volume, *spec.stat_names)
+                        for c in (spec.volume, *spec.stat_names, "sgp")
                         for k, lv in enumerate(LEVELS)
                     },
                 }

@@ -17,7 +17,7 @@ const ROTO_CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "SV", "K", "ERA", "
 
 // Available-players panel sort + filter state.
 // playerSort=null means "use board order" (var-desc as written by build_draft_board).
-let playerSort = null;        // null | "name" | "adp" | "sgp"
+let playerSort = null;        // null | "name" | "adp" | "sgp" | "var" | "p90_var"
 let playerSortDir = "desc";   // "asc" | "desc"
 let playerNameFilter = "";    // case-insensitive substring of player.name
 let playerPosFilter = "";     // canonical position string, "" means no filter
@@ -106,13 +106,15 @@ function playerMatchesPosition(player, posFilter) {
   return positions.includes(posFilter);
 }
 
-// Sort key plucker. ADP-missing rows sort last regardless of direction
-// (they're effectively "unranked"); same for SGP-missing.
+// Sort key plucker; null means missing. Missing rows sort last regardless of
+// direction (they're effectively "unranked"): no ADP, SGP, or P90 VAR.
 function playerSortValue(player, key) {
   if (key === "name") return (player.name || "").toLowerCase();
   // Treat 999+ as missing — same sentinel fmtAdp handles for display.
-  if (key === "adp") return player.adp == null || player.adp >= 999 ? Infinity : player.adp;
-  if (key === "sgp") return player.total_sgp == null ? -Infinity : player.total_sgp;
+  if (key === "adp") return player.adp == null || player.adp >= 999 ? null : player.adp;
+  if (key === "sgp") return player.total_sgp ?? null;
+  if (key === "var") return player.var ?? null;
+  if (key === "p90_var") return player.p90_var ?? null;
   return 0;
 }
 
@@ -124,6 +126,7 @@ function applyPlayerSort(players) {
   return [...players].sort((a, b) => {
     const va = playerSortValue(a, playerSort);
     const vb = playerSortValue(b, playerSort);
+    if (va === null || vb === null) return (va === null) - (vb === null);
     if (va < vb) return ascending ? -1 : 1;
     if (va > vb) return ascending ? 1 : -1;
     return 0;
@@ -137,6 +140,10 @@ const LINE_STATS = {
   pitcher: [["w", "W"], ["k", "K"], ["sv", "SV"], ["era", "ERA"], ["whip", "WHIP"]],
 };
 
+function fmtVar(v) {
+  return v == null ? "-" : Number(v).toFixed(1);
+}
+
 function fmtStat(stat, v) {
   if (v == null) return "-";
   if (stat === "avg") return Number(v).toFixed(3).replace(/^0/, "");
@@ -149,7 +156,8 @@ function playerLineTitle(p) {
   const proj = stats.map(([s, label]) => `${fmtStat(s, p[s])} ${label}`).join(", ");
   if (!p.p90) return `Proj: ${proj}`;
   const big = stats.map(([s, label]) => `${fmtStat(s, p.p90[s])} ${label}`).join(", ");
-  return `Proj: ${proj}\nBig year (P90): ${big}`;
+  const value = p.p90_var == null ? "" : ` (P90 VAR ${fmtVar(p.p90_var)})`;
+  return `Proj: ${proj}\nBig year (P90): ${big}${value}`;
 }
 
 function renderAvailablePlayers(state) {
@@ -171,6 +179,8 @@ function renderAvailablePlayers(state) {
       <span class="pos">${(p.positions || []).join("/")}</span>
       <span class="adp">${fmtAdp(p.adp)}</span>
       <span class="sgp">${fmtSgp(p.total_sgp)}</span>
+      <span class="var">${fmtVar(p.var)}</span>
+      <span class="p90var">${fmtVar(p.p90_var)}</span>
     </li>
   `).join("");
   ul.onclick = (e) => {
@@ -510,7 +520,7 @@ async function refreshInspectorPanel() {
         playerSortDir = playerSortDir === "asc" ? "desc" : "asc";
       } else {
         playerSort = key;
-        playerSortDir = key === "sgp" ? "desc" : "asc";
+        playerSortDir = ["sgp", "var", "p90_var"].includes(key) ? "desc" : "asc";
       }
       rerenderAvailablePlayers();
     });

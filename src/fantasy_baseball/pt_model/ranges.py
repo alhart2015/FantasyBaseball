@@ -408,6 +408,75 @@ class LuckPool:
         return np.digitize(projected, edges), members
 
 
+def draw(
+    rows: pd.DataFrame,
+    q: np.ndarray,
+    pool: LuckPool,
+    rng: np.random.Generator,
+    spec: Spec,
+    n_draws: int = 2000,
+    cap: float = np.inf,
+    stat_caps: Mapping[str, float] | None = None,
+) -> dict[str, np.ndarray]:
+    """Each row's ``n_draws`` simulated seasons (rows x draws): the volume, each stat's
+    season total (a rate stat's rate) and, as ``<stat>_trials``, the trials each rate
+    stat was drawn on (a counting stat's are only its total's scale, so not kept). A
+    draw is one whole season: every stat on it takes the same past season's
+    playing-time quantile and misses, so the stats move together as they did then.
+    Arguments as :func:`simulate`."""
+    stat_caps = {} if stat_caps is None else stat_caps
+    n_rows = len(rows)
+    out = {
+        c: np.empty((n_rows, n_draws))
+        for c in (
+            *spec.stat_names,
+            spec.volume,
+            *(f"{s.name}_trials" for s in spec.stats if not s.counting),
+        )
+    }
+    ranked = rows[spec.rank_col].to_numpy(dtype=float)
+    per_volume = {t: rows[col].to_numpy(dtype=float) for t, col in spec.trials.items()}
+    proj = {s.name: rows[f"p_{s.name}"].to_numpy(dtype=float) for s in spec.stats}
+    band, members = pool.bands(spec, proj[spec.luck_by] if spec.luck_by else np.zeros(n_rows))
+    for i in range(n_rows):
+        near = members[band[i]]
+        j = near[rng.integers(0, len(near), n_draws)]
+        volume = np.minimum(np.interp(pool.u[j], GRID, q[i]) * ranked[i], cap)
+        trials = {spec.volume: volume, **{t: volume * per_volume[t][i] for t in spec.trials}}
+        out[spec.volume][i] = volume
+        for s in spec.stats:
+            n = trials[s.trials]
+            rate = drawn_rate(s, proj[s.name][i], pool.z[s.name][j], n)
+            # The rate carries the scale (actual_rates), so a counting total is rate x n.
+            if s.counting:
+                out[s.name][i] = np.minimum(rate * n, stat_caps.get(s.name, np.inf))
+            else:
+                out[s.name][i] = rate
+                out[f"{s.name}_trials"][i] = n
+    return out
+
+
+def quantiles(
+    draws: Mapping[str, np.ndarray], rows: pd.DataFrame, levels: Sequence[float], spec: Spec
+) -> dict[str, np.ndarray]:
+    """Each row's totals at ``levels`` (rows x levels), by stat, plus the volume, from
+    :func:`draw`'s seasons. A rate stat counts only draws with ``Stat.min_trials`` (its
+    projection when fewer than ``MIN_RATE_DRAWS`` have them)."""
+    out = {spec.volume: np.quantile(draws[spec.volume], levels, axis=1).T}
+    for s in spec.stats:
+        if s.counting:
+            out[s.name] = np.quantile(draws[s.name], levels, axis=1).T
+            continue
+        proj = rows[f"p_{s.name}"].to_numpy(dtype=float)
+        q = np.empty((len(rows), len(levels)))
+        for i in range(len(rows)):
+            enough = draws[f"{s.name}_trials"][i] >= s.min_trials
+            pick = draws[s.name][i][enough] if enough.sum() >= MIN_RATE_DRAWS else proj[i : i + 1]
+            q[i] = np.quantile(pick, levels)
+        out[s.name] = q
+    return out
+
+
 def simulate(
     rows: pd.DataFrame,
     q: np.ndarray,
@@ -426,32 +495,8 @@ def simulate(
     and BandPT's ratio quantiles have no ceiling, so either can run past what anyone
     has had). ``stat_caps``: no counting total beats these (the best season in the
     training rows: a closer's saves are bounded by his chances, which aren't drawn)."""
-    stat_caps = {} if stat_caps is None else stat_caps
-    n_rows = len(rows)
-    out = {c: np.empty((n_rows, len(levels))) for c in (*spec.stat_names, spec.volume)}
-    ranked = rows[spec.rank_col].to_numpy(dtype=float)
-    per_volume = {t: rows[col].to_numpy(dtype=float) for t, col in spec.trials.items()}
-    proj = {s.name: rows[f"p_{s.name}"].to_numpy(dtype=float) for s in spec.stats}
-    band, members = pool.bands(spec, proj[spec.luck_by] if spec.luck_by else np.zeros(n_rows))
-    for i in range(n_rows):
-        near = members[band[i]]
-        j = near[rng.integers(0, len(near), n_draws)]
-        volume = np.minimum(np.interp(pool.u[j], GRID, q[i]) * ranked[i], cap)
-        trials = {spec.volume: volume, **{t: volume * per_volume[t][i] for t in spec.trials}}
-        out[spec.volume][i] = np.quantile(volume, levels)
-        for s in spec.stats:
-            n = trials[s.trials]
-            rate = drawn_rate(s, proj[s.name][i], pool.z[s.name][j], n)
-            if s.counting:
-                # The rate carries the scale (actual_rates), so the total is rate x n.
-                total = np.minimum(rate * n, stat_caps.get(s.name, np.inf))
-            else:
-                enough = n >= s.min_trials
-                total = (
-                    rate[enough] if enough.sum() >= MIN_RATE_DRAWS else np.array([proj[s.name][i]])
-                )
-            out[s.name][i] = np.quantile(total, levels)
-    return out
+    draws = draw(rows, q, pool, rng, spec, n_draws, cap, stat_caps)
+    return quantiles(draws, rows, levels, spec)
 
 
 @dataclass(frozen=True)
@@ -475,12 +520,17 @@ class Ranges:
         n_draws: int = 2000,
     ) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
         """(rows with the ranked volume, their totals at ``levels`` by stat and volume)."""
+        ranked, draws = self.draws(rows, rng, n_draws)
+        return ranked, quantiles(draws, ranked, levels, self.spec)
+
+    def draws(
+        self, rows: pd.DataFrame, rng: np.random.Generator, n_draws: int = 2000
+    ) -> tuple[pd.DataFrame, dict[str, np.ndarray]]:
+        """(rows with the ranked volume, their simulated whole seasons: :func:`draw`)."""
         check_rows(rows, self.spec, actuals=False)
         ranked = with_rank(rows, self.by_rank, self.spec)
         q = self.model.predict(ranked)
-        return ranked, simulate(
-            ranked, q, self.pool, levels, rng, self.spec, n_draws, self.cap, self.stat_caps
-        )
+        return ranked, draw(ranked, q, self.pool, rng, self.spec, n_draws, self.cap, self.stat_caps)
 
 
 def check_rows(rows: pd.DataFrame, spec: Spec, *, actuals: bool) -> None:
