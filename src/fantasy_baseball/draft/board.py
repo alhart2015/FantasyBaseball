@@ -55,8 +55,8 @@ def build_draft_board(
     ``with_ours``: hitters and pitchers are the FanGraphs blend mixed with ours
     (``our_hitters.blend_board_hitters``, ``our_pitchers.blend_board_pitchers``), each
     when ours is built for the season, with each player's big-year line
-    (``board_ranges.attach``: ``p90_<stat>`` columns) when its ranges are built;
-    otherwise (the default, so backtests stay FanGraphs-only) the FanGraphs blend."""
+    (``board_ranges.attach``: ``p90_<stat>`` columns) and his P90 and risk-adjusted VAR
+    (``with_range_var``) when its ranges are built; otherwise (the default, so backtests stay FanGraphs-only) the FanGraphs blend."""
     year = latest_blended_year(conn)
     hitters, pitchers = get_blended_projections(conn, year)
     if with_ours:

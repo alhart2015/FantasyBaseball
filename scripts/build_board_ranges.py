@@ -53,6 +53,7 @@ from fantasy_baseball.hitter_ros import final as hitter_final
 from fantasy_baseball.pitcher_ros import aging
 from fantasy_baseball.pitcher_ros import final as pitcher_final
 from fantasy_baseball.pt_model import range_inputs as ri
+from fantasy_baseball.pt_model.range_report import sure_better
 from fantasy_baseball.pt_model.range_specs import HITTER, RELIEVER, STARTER
 from fantasy_baseball.pt_model.ranges import actual_totals, backtest, fit, pt_model, quantiles
 
@@ -281,6 +282,7 @@ def main() -> int:
                     pd.DataFrame(
                         {
                             "who": name,
+                            "player_id": test.index.to_numpy()[keep],
                             "actual": actual[keep],
                             "line": line[keep],
                             "mean": sims.mean(axis=1)[keep],
@@ -291,16 +293,17 @@ def main() -> int:
         # Risk-adjusted VAR = the mean simulated season's SGP over replacement: is that a
         # better forecast of the real season than the board's line (FanGraphs' PT)?
         print("\nOne number per player, vs the real season's SGP (bias = forecast - actual):")
+        # Resampling players, each with all his seasons, so one player's five seasons are
+        # not five independent players.
         boot = np.random.default_rng(args.seed)
-        for name, g in pd.concat(points).groupby("who", sort=False):
-            miss = {c: g[c].to_numpy() - g["actual"].to_numpy() for c in ("line", "mean")}
+        for name, g in pd.concat(points, ignore_index=True).groupby("who", sort=False):
+            miss = {c: g[c] - g["actual"] for c in ("line", "mean")}
             sq = {c: m**2 for c, m in miss.items()}
-            draw = boot.integers(0, len(g), size=(2000, len(g)))
-            sure = float(((sq["mean"][draw].mean(axis=1)) < (sq["line"][draw].mean(axis=1))).mean())
+            sure = sure_better(sq["mean"], sq["line"], g["player_id"], boot)
             print(
                 f"  {name}s ({len(g)}): board line MSE {sq['line'].mean():6.2f} "
                 f"(bias {miss['line'].mean():+.2f}) | mean season MSE {sq['mean'].mean():6.2f} "
-                f"(bias {miss['mean'].mean():+.2f}) | sure mean is better {sure * 100:.0f}"
+                f"(bias {miss['mean'].mean():+.2f}) | sure mean is better {sure:.0f}"
             )
         return 0
 

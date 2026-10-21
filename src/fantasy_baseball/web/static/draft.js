@@ -107,7 +107,7 @@ function playerMatchesPosition(player, posFilter) {
 }
 
 // Sort key plucker; null means missing. Missing rows sort last regardless of
-// direction (they're effectively "unranked"): no ADP, SGP, or P90 VAR.
+// direction (they're effectively "unranked"): no ADP, SGP, risk VAR or P90 VAR.
 function playerSortValue(player, key) {
   if (key === "name") return (player.name || "").toLowerCase();
   // Treat 999+ as missing — same sentinel fmtAdp handles for display.

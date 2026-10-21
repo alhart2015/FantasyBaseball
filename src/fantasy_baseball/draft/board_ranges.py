@@ -49,8 +49,9 @@ def attach(
     conn, season: int, hitters: pd.DataFrame, pitchers: pd.DataFrame
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """The board's hitters and pitchers with ``p90_<stat>`` columns (each stat's big
-    year), matched by MLBAM id; NaN for a player without a range. Unchanged, with a
-    warning, when ``season`` has no ranges built."""
+    year) and ``p90_sgp`` / ``mean_sgp`` (his P90 and average whole season's SGP, when
+    the ranges have them), matched by MLBAM id; NaN for a player without a range.
+    Unchanged, with a warning, when ``season`` has no ranges built."""
     path = ranges_path(season)
     if not path.exists():
         logger.warning(
