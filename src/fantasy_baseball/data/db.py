@@ -1,15 +1,19 @@
 """SQLite database for fantasy baseball data."""
 
 import json
+import logging
 import re
 import sqlite3
 from pathlib import Path
 
 import pandas as pd
 
+from fantasy_baseball.data.fangraphs import _find_file
 from fantasy_baseball.data.projections import blend_projections
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.utils.name_utils import normalize_name
+
+logger = logging.getLogger(__name__)
 
 DB_PATH = Path(__file__).resolve().parents[3] / "data" / "fantasy.db"
 
@@ -269,9 +273,48 @@ def _parse_csv_filename(stem: str):
     return system, player_type
 
 
+def _one_file_per_system(year_dir: Path) -> list[tuple[Path, str, PlayerType]]:
+    """The year's projection CSVs as ``(path, system, player_type)``, one per (system,
+    player type): the file the FanGraphs blend reads for it (``fangraphs._find_file``),
+    so the raw rows (and the id pairs the draft board matches on) come from the same
+    file as the blend. Other copies of a system are skipped with a warning -- an older
+    export left beside the current one would otherwise add its stale ids (#517). A
+    system whose blend file is not one this loader recognises (none at all, or an
+    underscore name like ``zips_hitters.csv``) raises rather than loading a file the
+    blend never reads. Unrecognised names are skipped silently."""
+    by_system: dict[tuple[str, PlayerType], list[Path]] = {}
+    for csv_path in sorted(year_dir.glob("*.csv")):
+        system, player_type = _parse_csv_filename(csv_path.stem)
+        if system is not None:
+            by_system.setdefault((system, player_type), []).append(csv_path)
+    chosen = []
+    for (system, player_type), paths in by_system.items():
+        kind = "hitters" if player_type == PlayerType.HITTER else "pitchers"
+        pick = _find_file(year_dir, system, kind)
+        if pick is None or pick not in paths:
+            raise ValueError(
+                f"{year_dir}: the {system} {kind} file the blend reads ({pick}) is not "
+                f"one of {[p.name for p in paths]}"
+            )
+        if len(paths) > 1:
+            logger.warning(
+                "%s: %d %s %s files; loading %s, skipping %s",
+                year_dir,
+                len(paths),
+                system,
+                kind,
+                pick.name,
+                [x.name for x in paths if x != pick],
+            )
+        chosen.append((pick, system, player_type))
+    return sorted(chosen)
+
+
 def load_raw_projections(conn, projections_dir):
     """Scan projections_dir for year subdirectories, read FanGraphs CSVs,
-    and insert rows into raw_projections (INSERT OR IGNORE on duplicates).
+    and insert rows into raw_projections (INSERT OR IGNORE on duplicates within a
+    file). Each year's rows are replaced, not merged: rows a previous load took
+    from a file that is gone, archived, or re-exported never linger (#517).
 
     projections_dir should be a Path-like pointing to the parent of the year
     folders (e.g. ``data/projections/``).
@@ -283,11 +326,9 @@ def load_raw_projections(conn, projections_dir):
             continue
         year = int(year_dir.name)
 
-        for csv_path in sorted(year_dir.glob("*.csv")):
-            system, player_type = _parse_csv_filename(csv_path.stem)
-            if system is None:
-                continue  # unrecognised filename, skip silently
-
+        files = _one_file_per_system(year_dir)
+        conn.execute("DELETE FROM raw_projections WHERE year = ?", (year,))
+        for csv_path, system, player_type in files:
             col_map = _HITTER_COLS if player_type == PlayerType.HITTER else _PITCHER_COLS
 
             try:

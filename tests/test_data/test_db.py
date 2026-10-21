@@ -2,6 +2,8 @@ import json
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from fantasy_baseball.data.db import (
     create_tables,
     get_blended_projections,
@@ -162,6 +164,75 @@ def test_load_raw_projections_date_suffix(tmp_path):
     assert row["system"] == "zips"
     assert row["year"] == 2027
     assert row["player_type"] == "hitter"
+    conn.close()
+
+
+def test_load_raw_projections_loads_only_the_copy_the_blend_reads(tmp_path, caplog):
+    """Two zips hitter files in a year: only the one the blend reads (the plain name)
+    is loaded, so a stale copy's ids never reach raw_projections."""
+    csv_dir = tmp_path / "2027"
+    csv_dir.mkdir()
+    header = "Name,Team,PA,HR,G,PlayerId,MLBAMID\n"
+    (csv_dir / "zips-hitters.csv").write_text(
+        header + '"Prospect","PIT",600,16,150,"33333",700001\n'
+    )
+    (csv_dir / "zips-hitters-2027-proj-from-2026-03-25.csv").write_text(
+        header + '"Prospect","PIT",600,16,150,"sa999",700001\n'
+    )
+
+    conn = sqlite3.connect(tmp_path / "test.db")
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+    load_raw_projections(conn, tmp_path)
+
+    rows = conn.execute("SELECT fg_id FROM raw_projections").fetchall()
+    assert [r["fg_id"] for r in rows] == ["33333"]
+    assert "skipping ['zips-hitters-2027-proj-from-2026-03-25.csv']" in caplog.text
+    conn.close()
+
+
+def test_load_raw_projections_reload_drops_rows_of_a_removed_copy(tmp_path):
+    """Reloading an existing DB after a stale copy is archived drops that copy's ids:
+    the year is replaced, not merged with what an earlier load left behind."""
+    csv_dir = tmp_path / "2027"
+    csv_dir.mkdir()
+    header = "Name,Team,PA,HR,G,PlayerId,MLBAMID\n"
+    stale = csv_dir / "zips-hitters-2027-proj-from-2026-03-25.csv"
+    stale.write_text(header + '"Prospect","PIT",600,16,150,"sa999",700001\n')
+
+    conn = sqlite3.connect(tmp_path / "test.db")
+    conn.row_factory = sqlite3.Row
+    create_tables(conn)
+    load_raw_projections(conn, tmp_path)
+
+    stale.unlink()
+    (csv_dir / "zips-hitters.csv").write_text(
+        header + '"Prospect","PIT",600,16,150,"33333",700001\n'
+    )
+    load_raw_projections(conn, tmp_path)
+
+    rows = conn.execute("SELECT fg_id FROM raw_projections").fetchall()
+    assert [r["fg_id"] for r in rows] == ["33333"]
+    conn.close()
+
+
+def test_load_raw_projections_refuses_a_file_the_blend_does_not_read(tmp_path):
+    """The blend reads zips_hitters.csv (underscore), which this loader can't parse;
+    loading the dash-named copy beside it would bring in ids the blend never saw."""
+    csv_dir = tmp_path / "2027"
+    csv_dir.mkdir()
+    header = "Name,Team,PA,HR,G,PlayerId,MLBAMID\n"
+    (csv_dir / "zips_hitters.csv").write_text(
+        header + '"Prospect","PIT",600,16,150,"33333",700001\n'
+    )
+    (csv_dir / "zips-hitters-old.csv").write_text(
+        header + '"Prospect","PIT",600,16,150,"sa999",700001\n'
+    )
+
+    conn = sqlite3.connect(tmp_path / "test.db")
+    create_tables(conn)
+    with pytest.raises(ValueError, match="zips hitters file the blend reads"):
+        load_raw_projections(conn, tmp_path)
     conn.close()
 
 
