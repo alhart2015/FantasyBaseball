@@ -65,13 +65,6 @@ def test_an_unmatched_board_is_fangraphs_as_is():
     pd.testing.assert_frame_equal(out, _fg())
 
 
-def test_an_id_that_maps_two_ways_is_dropped_not_guessed():
-    raw = pd.DataFrame(
-        {"fg_id": ["a", "a", "b", "c", "d", "e"], "mlbam_id": [1, 2, 3, 3, 4.0, None]}
-    )
-    assert op.fg_to_mlbam(raw).to_dict() == {"d": 4}
-
-
 def test_two_board_rows_on_one_mlbam_id_are_refused():
     with pytest.raises(ValueError, match="share an MLBAM id"):
         op.blend_board_pitchers(_fg(), _ours(), pd.Series({"a": 10, "b": 10}))

@@ -26,13 +26,13 @@ MSE over every scored pitcher on a 0.05 grid, with FanGraphs = the average of
 
 * Board (``BOARD``, ``scripts/fit_board_blend.py``): ours **age-corrected**
   (``aging``, its fit leaving the season out) against the draft board's own FanGraphs
-  blend -- ``data.projections.blend_projections`` of the league's systems on file that
-  season, at the league's weights (Steamer + ZiPS 2022-2025, all five 2026) -- which
-  enters as published, its K, W, SV per its systems' batters faced (TBF). 2022-2026,
-  100+ BF: weights picked leaving each season out moved at most 0.10 from these, and
-  with them the blend beat the FanGraphs blend on every stat (K 165.7 vs 172.7, W, ERA,
-  WHIP 100 sure; SV 13.1 vs 13.6, 94) and ours on K, SV, ERA (100) with W 90, WHIP 89.
-  :func:`board_rates`.
+  blend, built and matched exactly as the board's (``draft.our_players.board_blend``:
+  Steamer + ZiPS 2022-2025, all five 2026), as published, its K, W, SV per its systems'
+  batters faced (TBF). 2022-2026, every pitcher the board would blend (projected 100+
+  BF, ~700-750 a season) who pitched: weights picked leaving each season out moved at
+  most 0.15 from these, and with them the blend beat the FanGraphs blend on every stat
+  (K 118.1 vs 122.1, W, ERA, WHIP 100 sure; SV 9.31 vs 9.66, 95) and ours on K, SV,
+  ERA, WHIP (100) with W 91. :func:`board_rates`.
 
 The backtest scores only pitchers every system projects, so the weights were picked
 on those. ``final_rates`` blends every pitcher anyone projects: FanGraphs is the
@@ -50,8 +50,7 @@ from collections.abc import Mapping
 import pandas as pd
 
 from fantasy_baseball import blend_fit
-from fantasy_baseball.blend_fit import FG, GRID, OURS, STEP  # noqa: F401  (re-exported)
-from fantasy_baseball.pitcher_ros.evaluate import error_weight, squared_error
+from fantasy_baseball.pitcher_ros.evaluate import squared_error
 from fantasy_baseball.pitcher_ros.stats import TARGETS
 
 PRESEASON = "preseason"
@@ -61,7 +60,7 @@ BOARD = "board"
 WEIGHTS: dict[str, dict[str, float]] = {
     PRESEASON: {"k": 0.50, "w": 0.70, "sv": 0.30, "era": 0.50, "whip": 0.75},
     MIDSEASON: {"k": 0.85, "w": 1.00, "sv": 0.55, "era": 0.90, "whip": 0.95},
-    BOARD: {"k": 0.50, "w": 0.70, "sv": 0.30, "era": 0.55, "whip": 0.80},
+    BOARD: {"k": 0.45, "w": 0.75, "sv": 0.30, "era": 0.50, "whip": 0.65},
 }
 # The FanGraphs systems each span's WEIGHTS were fitted with (their average).
 SYSTEMS: dict[str, tuple[str, ...]] = {
@@ -69,7 +68,7 @@ SYSTEMS: dict[str, tuple[str, ...]] = {
     MIDSEASON: ("atc", "oopsy", "steamer"),
 }
 # How pitchers are scored (pitcher_ros.evaluate): the fit's MSE.
-SCORING = blend_fit.Scoring(TARGETS, squared_error, error_weight)
+SCORING = blend_fit.Scoring(TARGETS, squared_error)
 
 
 def blend_rates(ours: pd.DataFrame, fg: pd.DataFrame, weights: Mapping[str, float]) -> pd.DataFrame:
@@ -109,30 +108,3 @@ def board_rates(ours: pd.DataFrame, board_fg: pd.DataFrame) -> pd.DataFrame:
     """The draft board's final pitcher rates: ``blend_rates`` of ours (age-corrected)
     with the board's FanGraphs blend (its rates, as published) at ``WEIGHTS[BOARD]``."""
     return blend_rates(ours, board_fg, WEIGHTS[BOARD])
-
-
-def _wide(scored: pd.DataFrame) -> pd.DataFrame:
-    """``blend_fit.wide``: ``ours`` and ``fg_blend`` side by side per unit and stat."""
-    return blend_fit.wide(scored)
-
-
-def blended_scored(scored: pd.DataFrame, weights: pd.Series, name: str = "final") -> pd.DataFrame:
-    """``blend_fit.blended_scored``: ``scored`` plus the blend's rows, system ``name``.
-    Ready for ``evaluate.mse_bootstrap`` against ``ours`` or ``fg_blend``."""
-    return blend_fit.blended_scored(scored, weights, name)
-
-
-def _mse(rows: pd.DataFrame, w: float) -> float:
-    return blend_fit.mse_at(rows, w, SCORING)
-
-
-def best_weights(scored: pd.DataFrame) -> pd.Series:
-    """``blend_fit.best_weights`` on pitcher MSE (``evaluate.squared_error``: K/W/SV in
-    season totals, ERA/WHIP innings-weighted). Ties go to the larger weight on ours."""
-    return blend_fit.best_weights(scored, SCORING)
-
-
-def held_out_weights(scored: pd.DataFrame, by: pd.Series) -> pd.Series:
-    """``blend_fit.held_out_weights`` on pitcher MSE: per group of ``by`` and stat, the
-    weights picked on the other groups' rows."""
-    return blend_fit.held_out_weights(scored, by, SCORING)

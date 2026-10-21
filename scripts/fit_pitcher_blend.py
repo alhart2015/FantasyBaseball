@@ -34,18 +34,15 @@ import pandas as pd
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from fantasy_baseball.blend_fit import FG, OURS, best_weights, blended_scored, held_out_weights
 from fantasy_baseball.pitcher_ros.backtest import fangraphs_systems
 from fantasy_baseball.pitcher_ros.evaluate import mse_bootstrap
 from fantasy_baseball.pitcher_ros.final import (
-    FG,
     MIDSEASON,
-    OURS,
     PRESEASON,
+    SCORING,
     SYSTEMS,
     WEIGHTS,
-    best_weights,
-    blended_scored,
-    held_out_weights,
 )
 from fantasy_baseball.pitcher_ros.model import DEFAULT_SEEDS
 from fantasy_baseball.pitcher_ros.stats import TARGETS
@@ -98,10 +95,10 @@ def span_lines(scored: pd.DataFrame, span: str) -> list[str]:
             f"**Warning:** FanGraphs here = {used}, but the {span} weights in use were "
             f"fitted with {list(SYSTEMS[span])} (final.SYSTEMS). Update both together.",
         ]
-    fitted = best_weights(scored)
+    fitted = best_weights(scored, SCORING)
     seasons = scored["season"].unique()
     if len(seasons) >= 2:
-        held = held_out_weights(scored, scored["season"])
+        held = held_out_weights(scored, scored["season"], SCORING)
         md += _weights_lines(fitted, held, span)
         md += _paired_lines(
             blended_scored(scored, held), f"{TITLES[span]}, weights picked without the season"

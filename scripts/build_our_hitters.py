@@ -19,7 +19,7 @@ from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from fantasy_baseball.draft.our_hitters import ours_path
+from fantasy_baseball.draft.our_players import ours_path
 from fantasy_baseball.hitter_ros.features import TARGETS
 from fantasy_baseball.pt_model import range_inputs as ri
 
@@ -37,7 +37,7 @@ def main() -> int:
         parser.error(f"{args.run} has no {args.season} preseason rows")
     ours = rates.xs(args.season, level="season").rename(columns=lambda c: c.removeprefix("p_"))
     ours = ours[list(TARGETS)]
-    path = ours_path(args.season)
+    path = ours_path("hitter", args.season)
     ours.rename_axis("player_id").reset_index().to_parquet(path, index=False)
     meta = {
         "season": args.season,

@@ -27,13 +27,19 @@ OURS, FG = "ours", "fg_blend"
 
 @dataclass(frozen=True)
 class Scoring:
-    """How one player type is scored: its ``targets``; ``squared_error(scored, keep)``,
-    MSE's numerator ``sq`` and weight ``w`` per row (MSE = sum(sq) / sum(w)); and
-    ``error_weight(scored)``, each row's weight on its squared rate error in ``sq``."""
+    """How one player type is scored: its ``targets`` and ``squared_error(scored,
+    keep)``, MSE's numerator ``sq`` and weight ``w`` per row (MSE = sum(sq) / sum(w);
+    ``sq`` is a per-row weight times the squared rate miss)."""
 
     targets: Sequence[str]
     squared_error: Callable[[pd.DataFrame, list[str]], pd.DataFrame]
-    error_weight: Callable[[pd.DataFrame], np.ndarray]
+
+    def error_weight(self, rows: pd.DataFrame) -> np.ndarray:
+        """Each row's weight on its squared rate miss in ``sq``: ``sq`` at a miss of
+        exactly 1, so it is ``squared_error``'s own weighting, never a copy of it."""
+        unit = rows.assign(projected=rows["actual"].astype(float) + 1.0)
+        weight: np.ndarray = self.squared_error(unit, ["stat"])["sq"].to_numpy(float)
+        return weight
 
 
 def blend_rates(

@@ -4,8 +4,8 @@ The board's pitchers start as its FanGraphs blend (``blended_projections``), whi
 never edited. This takes their rates (K, W, SV per batter faced; ERA, WHIP), blends
 them with ours (``scripts/build_our_pitchers.py``: the pitcher net, starters
 age-corrected) by ``pitcher_ros.final.board_rates``, and rebuilds the counting stats
-on the FanGraphs blend's own playing time (its IP and batters faced): playing time
-stays FanGraphs Depth-Charts-style, the rates are the blend.
+on the FanGraphs blend's own playing time (its IP and batters faced). Storage and
+matching are shared with hitters: ``our_players``.
 
 Batters faced is the FanGraphs blend's own (its systems' TBF, blended), what ours'
 rates are per: :func:`batters_faced`, shared with the fit (``scripts/fit_board_blend.py``).
@@ -15,36 +15,15 @@ A pitcher ours doesn't project keeps the FanGraphs blend's line as is.
 from __future__ import annotations
 
 import logging
-from pathlib import Path
 
 import pandas as pd
 
+from fantasy_baseball.draft.our_players import match
 from fantasy_baseball.pitcher_ros import final
 
 logger = logging.getLogger(__name__)
 
-OURS_DIR = Path(__file__).resolve().parents[3] / "data" / "pitcher_ros"
 RATES = ("k", "w", "sv", "era", "whip")
-
-
-def ours_path(season: int) -> Path:
-    """Where ``scripts/build_our_pitchers.py`` writes our pitchers for ``season``."""
-    return OURS_DIR / f"ours-{season}.parquet"
-
-
-def load_ours(season: int) -> pd.DataFrame | None:
-    """Our pitcher rates for ``season`` indexed by MLBAM id, or None (with a warning)
-    when they haven't been built."""
-    path = ours_path(season)
-    if not path.exists():
-        logger.warning(
-            "no %s: the board's pitchers are FanGraphs only. Build ours with "
-            "python scripts/build_our_pitchers.py --season %d --run <run>",
-            path,
-            season,
-        )
-        return None
-    return pd.read_parquet(path).set_index("player_id")
 
 
 def batters_faced(fg: pd.DataFrame) -> pd.Series:
@@ -71,15 +50,19 @@ def batters_faced(fg: pd.DataFrame) -> pd.Series:
     return bf.where(bf > 0, pseudo)
 
 
-def fg_to_mlbam(raw: pd.DataFrame) -> pd.Series:
-    """FanGraphs id -> MLBAM id from raw projection rows (``fg_id``, ``mlbam_id``).
-    An id that maps to more than one of the other is dropped, never guessed."""
-    pairs = raw[["fg_id", "mlbam_id"]].dropna().drop_duplicates()
-    pairs = pairs.assign(fg_id=pairs["fg_id"].astype(str), mlbam_id=pairs["mlbam_id"].astype(int))
-    pairs = pairs[
-        ~pairs["fg_id"].duplicated(keep=False) & ~pairs["mlbam_id"].duplicated(keep=False)
-    ]
-    return pairs.set_index("fg_id")["mlbam_id"]
+def fg_rates(fg: pd.DataFrame) -> pd.DataFrame:
+    """A FanGraphs blend's pitcher lines as rates: K, W, SV per :func:`batters_faced`;
+    ERA, WHIP as published. The fit and the board share it."""
+    bf = batters_faced(fg)
+    return pd.DataFrame(
+        {
+            "k": fg["k"].astype(float) / bf,
+            "w": fg["w"].astype(float) / bf,
+            "sv": fg["sv"].astype(float) / bf,
+            "era": fg["era"].astype(float),
+            "whip": fg["whip"].astype(float),
+        }
+    )
 
 
 def blend_board_pitchers(
@@ -92,27 +75,13 @@ def blend_board_pitchers(
     out = pitchers.copy()
     lines = ["ip", "k", "w", "sv", "era", "whip", "er", "h_allowed", "bb"]
     out[lines] = out[lines].astype(float)
-    ids = out["fg_id"].astype(str).map(mlbam)
     bf = batters_faced(out)
-    keep = ids.notna() & ids.isin(ours.index) & (bf > 0)
-    if not keep.any():
+    rows, key = match(out, ours.index, mlbam, bf > 0)
+    if rows.empty:
         logger.warning("no board pitcher matched ours: the board's pitchers are FanGraphs only")
         return out
-    rows = out.index[keep]
-    key = ids[keep].astype(int)
-    if key.duplicated().any():
-        raise ValueError(f"board pitchers share an MLBAM id: {sorted(key[key.duplicated()])}")
-    fg_rates = pd.DataFrame(
-        {
-            "k": out.loc[rows, "k"] / bf[rows],
-            "w": out.loc[rows, "w"] / bf[rows],
-            "sv": out.loc[rows, "sv"] / bf[rows],
-            "era": out.loc[rows, "era"],
-            "whip": out.loc[rows, "whip"],
-        }
-    ).set_index(pd.Index(key.to_numpy(), name="player_id"))
-    mixed = final.board_rates(ours.loc[key.to_numpy(), list(RATES)], fg_rates)
-    mixed = mixed.loc[key.to_numpy()].set_axis(rows)
+    fg = fg_rates(out.loc[rows]).set_axis(key)
+    mixed = final.board_rates(ours.loc[key, list(RATES)], fg).loc[key].set_axis(rows)
     ip = out.loc[rows, "ip"]
     for stat in ("k", "w", "sv"):
         out.loc[rows, stat] = mixed[stat] * bf[rows]

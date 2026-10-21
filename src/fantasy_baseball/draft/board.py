@@ -7,11 +7,11 @@ import pandas as pd
 
 from fantasy_baseball.data.db import (
     get_blended_projections,
-    get_id_pairs,
     get_positions,
     latest_blended_year,
 )
 from fantasy_baseball.draft import our_hitters, our_pitchers
+from fantasy_baseball.draft.our_players import load_ours, season_mlbam
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -59,19 +59,30 @@ def build_draft_board(
     year = latest_blended_year(conn)
     hitters, pitchers = get_blended_projections(conn, year)
     if with_ours:
-        ours_hit = our_hitters.load_ours(year)
-        if ours_hit is not None:
-            mlbam = our_pitchers.fg_to_mlbam(get_id_pairs(conn, year, "hitter"))
-            hitters = our_hitters.blend_board_hitters(hitters, ours_hit, mlbam)
-        ours_pit = our_pitchers.load_ours(year)
-        if ours_pit is not None:
-            mlbam = our_pitchers.fg_to_mlbam(get_id_pairs(conn, year, "pitcher"))
-            pitchers = our_pitchers.blend_board_pitchers(pitchers, ours_pit, mlbam)
+        hitters, pitchers = mix_ours(conn, year, hitters, pitchers)
     positions = get_positions(conn)
     board, _scale = build_board_from_frames(
         hitters, pitchers, positions, roster_slots, num_teams, sgp_overrides=sgp_overrides
     )
     return board
+
+
+def mix_ours(
+    conn, season: int, hitters: pd.DataFrame, pitchers: pd.DataFrame
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """The board's FanGraphs hitters and pitchers with ours mixed in, each type when
+    ours is built for ``season`` (else it stays the FanGraphs blend, with a warning)."""
+    blends = (
+        ("hitter", hitters, our_hitters.blend_board_hitters),
+        ("pitcher", pitchers, our_pitchers.blend_board_pitchers),
+    )
+    out = []
+    for player_type, frame, blend in blends:
+        ours = load_ours(player_type, season)
+        out.append(
+            frame if ours is None else blend(frame, ours, season_mlbam(conn, season, player_type))
+        )
+    return out[0], out[1]
 
 
 def build_board_from_frames(

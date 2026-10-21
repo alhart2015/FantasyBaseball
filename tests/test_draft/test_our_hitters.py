@@ -105,7 +105,7 @@ def test_hitter_error_weight_is_what_squared_error_puts_on_each_squared_miss():
     rows = blend_fit.wide(_scored(dict.fromkeys(("r", "hr", "rbi", "sb", "avg"), 0.5)))
     err = (rows[blend_fit.OURS] - rows["actual"]).to_numpy()
     sq = squared_error(rows.assign(projected=rows[blend_fit.OURS]), ["stat"])["sq"].to_numpy()
-    assert sq == pytest.approx(final.error_weight(rows) * err**2)
+    assert sq == pytest.approx(final.SCORING.error_weight(rows) * err**2)
 
 
 def test_the_weights_in_use_cover_every_stat_on_the_grid():

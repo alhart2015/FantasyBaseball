@@ -117,8 +117,10 @@ def _local_files_root(tmp_path_factory):
     then gives each test its own pair. Yields the folder.
     """
     from fantasy_baseball.data import db, kv_store
+    from fantasy_baseball.draft import our_players
 
     _REAL_LOCAL_FILES.update(
+        ours_data=our_players.DATA,
         db_path=db.DB_PATH,
         default_kv=kv_store._DEFAULT_LOCAL_DB,
         kv_env=os.environ.get(kv_store.LOCAL_KV_PATH_ENV),
@@ -133,8 +135,12 @@ def _local_files_root(tmp_path_factory):
 
 def _point_local_files(mp, fantasy_db, local_db):
     from fantasy_baseball.data import db, kv_store
+    from fantasy_baseball.draft import our_players
 
     mp.setattr(db, "DB_PATH", fantasy_db)
+    # Ours for the draft board (data/hitter_ros/ours-<season>.parquet, ...): gitignored
+    # files this machine may or may not have built.
+    mp.setattr(our_players, "DATA", fantasy_db.parent)
     mp.setenv(kv_store.LOCAL_KV_PATH_ENV, str(local_db))
     # The default too: code that clears the variable (manual-mode deactivate) or
     # resolves the default itself must not fall back to the real file.
@@ -158,6 +164,9 @@ def _isolate_local_files(request, _local_files_root, monkeypatch):
 
     if request.node.get_closest_marker("real_local_files"):
         monkeypatch.setattr(db, "DB_PATH", _REAL_LOCAL_FILES["db_path"])
+        from fantasy_baseball.draft import our_players
+
+        monkeypatch.setattr(our_players, "DATA", _REAL_LOCAL_FILES["ours_data"])
         monkeypatch.setattr(kv_store, "_DEFAULT_LOCAL_DB", _REAL_LOCAL_FILES["default_kv"])
         if _REAL_LOCAL_FILES["kv_env"] is None:
             monkeypatch.delenv(kv_store.LOCAL_KV_PATH_ENV)
