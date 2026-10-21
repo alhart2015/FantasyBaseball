@@ -17,7 +17,7 @@ const ROTO_CATEGORIES = ["R", "HR", "RBI", "SB", "AVG", "W", "SV", "K", "ERA", "
 
 // Available-players panel sort + filter state.
 // playerSort=null means "use board order" (var-desc as written by build_draft_board).
-let playerSort = null;        // null | "name" | "adp" | "sgp" | "var" | "risk_var" | "p90_var"
+let playerSort = null;        // null | "name" | "adp" | "var" | "risk_var" | "p90_var"
 let playerSortDir = "desc";   // "asc" | "desc"
 let playerNameFilter = "";    // case-insensitive substring of player.name
 let playerPosFilter = "";     // canonical position string, "" means no filter
@@ -91,7 +91,6 @@ function picksUntilNext(state) {
 // boards written before the sentinel-normalization fix still render
 // "—" instead of "999.0".
 function fmtAdp(v) { return v == null || v >= 999 ? "—" : v.toFixed(1); }
-function fmtSgp(v) { return v == null ? "—" : v.toFixed(2); }
 
 // Match a player's positions against the dropdown's canonical filter.
 // "P" expands to {P, SP, RP} so "any pitcher" works; everything else is
@@ -107,12 +106,11 @@ function playerMatchesPosition(player, posFilter) {
 }
 
 // Sort key plucker; null means missing. Missing rows sort last regardless of
-// direction (they're effectively "unranked"): no ADP, SGP, risk VAR or P90 VAR.
+// direction (they're effectively "unranked"): no ADP, VAR, risk VAR or P90 VAR.
 function playerSortValue(player, key) {
   if (key === "name") return (player.name || "").toLowerCase();
   // Treat 999+ as missing — same sentinel fmtAdp handles for display.
   if (key === "adp") return player.adp == null || player.adp >= 999 ? null : player.adp;
-  if (key === "sgp") return player.total_sgp ?? null;
   if (key === "var") return player.var ?? null;
   if (key === "p90_var") return player.p90_var ?? null;
   if (key === "risk_var") return player.risk_var ?? null;
@@ -121,8 +119,8 @@ function playerSortValue(player, key) {
 
 function applyPlayerSort(players) {
   if (playerSort == null) return players;  // board order (var-desc)
-  // Numeric default for ADP is asc (lower = earlier pick); SGP and most
-  // others default to desc (higher = better). The dir state overrides.
+  // Numeric default for ADP is asc (lower = earlier pick); the VAR
+  // columns default to desc (higher = better). The dir state overrides.
   const ascending = playerSortDir === "asc";
   return [...players].sort((a, b) => {
     const va = playerSortValue(a, playerSort);
@@ -152,13 +150,18 @@ function fmtStat(stat, v) {
   return Math.round(v).toString();
 }
 
+function statLine(stats, line) {
+  return stats.map(([s, label]) => `${fmtStat(s, line[s])} ${label}`).join(", ");
+}
+
 function playerLineTitle(p) {
   const stats = LINE_STATS[p.player_type] || [];
-  const proj = stats.map(([s, label]) => `${fmtStat(s, p[s])} ${label}`).join(", ");
+  // SGP is shown here, not as a list column (the list shows VAR, risk VAR and P90 VAR).
+  const sgp = p.total_sgp == null ? "" : ` (SGP ${Number(p.total_sgp).toFixed(2)})`;
+  const proj = `${statLine(stats, p)}${sgp}`;
   if (!p.p90) return `Proj: ${proj}`;
-  const big = stats.map(([s, label]) => `${fmtStat(s, p.p90[s])} ${label}`).join(", ");
   const value = p.p90_var == null ? "" : ` (P90 VAR ${fmtVar(p.p90_var)})`;
-  return `Proj: ${proj}\nBig year (P90): ${big}${value}`;
+  return `Proj: ${proj}\nBig year (P90): ${statLine(stats, p.p90)}${value}`;
 }
 
 function renderAvailablePlayers(state) {
@@ -179,7 +182,6 @@ function renderAvailablePlayers(state) {
       <span class="name">${p.name}</span>
       <span class="pos">${(p.positions || []).join("/")}</span>
       <span class="adp">${fmtAdp(p.adp)}</span>
-      <span class="sgp">${fmtSgp(p.total_sgp)}</span>
       <span class="var">${fmtVar(p.var)}</span>
       <span class="riskvar">${fmtVar(p.risk_var)}</span>
       <span class="p90var">${fmtVar(p.p90_var)}</span>
@@ -514,7 +516,7 @@ async function refreshInspectorPanel() {
 
   // Column-header sort: clicking the active column flips direction;
   // clicking a different column starts in that column's natural direction
-  // (asc for ADP / name, desc for SGP).
+  // (asc for ADP / name, desc for the VAR columns).
   document.querySelectorAll(".player-list-header [data-sort]").forEach((btn) => {
     btn.addEventListener("click", () => {
       const key = btn.dataset.sort;
@@ -522,7 +524,7 @@ async function refreshInspectorPanel() {
         playerSortDir = playerSortDir === "asc" ? "desc" : "asc";
       } else {
         playerSort = key;
-        playerSortDir = ["sgp", "var", "risk_var", "p90_var"].includes(key) ? "desc" : "asc";
+        playerSortDir = ["var", "risk_var", "p90_var"].includes(key) ? "desc" : "asc";
       }
       rerenderAvailablePlayers();
     });
