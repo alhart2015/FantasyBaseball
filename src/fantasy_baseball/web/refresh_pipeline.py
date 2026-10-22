@@ -29,14 +29,14 @@ from typing import TYPE_CHECKING, Any
 from fantasy_baseball.models.positions import BENCH_SLOTS
 
 # Streaks imports are deliberately deferred to inside ``_compute_streaks``:
-# ``streaks.dashboard``, ``streaks.data.schema``, and ``streaks.pipeline``
-# all transitively import ``duckdb`` at module load. duckdb is a [dev]
-# extra and is not installed on Render — pulling it in at module import
-# would 500 every route that lazy-imports refresh_pipeline (including the
-# QStash-driven /api/refresh path that's load-bearing for the daily
-# refresh). ``_compute_streaks`` is itself a no-op on Render (see
-# ``is_remote()`` gate there), so the imports never actually need to run
-# in production. See PR #72 for the parallel /lineup fix.
+# ``streaks.data.schema`` and ``streaks.pipeline`` transitively import
+# ``duckdb`` at module load (``streaks.payload`` doesn't, but is deferred
+# with them). duckdb is a [dev] extra and is not installed on Render —
+# pulling it in at module import would 500 every route that lazy-imports
+# refresh_pipeline (including the QStash-driven /api/refresh path that's
+# load-bearing for the daily refresh). ``_compute_streaks`` is itself a
+# no-op on Render (see ``is_remote()`` gate there), so the imports never
+# actually need to run in production. See PR #72 for the parallel /lineup fix.
 from fantasy_baseball.utils.constants import AB_PER_PA, Category, OpportunityStat
 from fantasy_baseball.utils.positions import PITCHER_POSITIONS
 from fantasy_baseball.utils.time_utils import (
@@ -2090,8 +2090,8 @@ class RefreshRun:
 
         # Local-only imports: see the module-level comment about the deferred
         # streaks imports for the full rationale.
-        from fantasy_baseball.streaks.dashboard import serialize_report
         from fantasy_baseball.streaks.data.schema import DEFAULT_DB_PATH, get_connection
+        from fantasy_baseball.streaks.payload import serialize_report
         from fantasy_baseball.streaks.pipeline import compute_streak_report
 
         self._progress("Computing streak scores...")

@@ -1184,8 +1184,7 @@ def test_compute_streaks_writes_cache(monkeypatch, kv_isolation) -> None:
 
     from fantasy_baseball.data import kv_store
     from fantasy_baseball.data.cache_keys import CacheKey, redis_key
-    from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
-    from fantasy_baseball.streaks.reports.sunday import Report, ReportRow
+    from fantasy_baseball.streaks.models import Driver, PlayerCategoryScore, Report, ReportRow
 
     score = PlayerCategoryScore(
         player_id=1,
@@ -1376,8 +1375,7 @@ def test_compute_streaks_mirrors_to_remote_upstash(monkeypatch, kv_isolation) ->
     from datetime import date
 
     from fantasy_baseball.data.cache_keys import CacheKey, redis_key
-    from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
-    from fantasy_baseball.streaks.reports.sunday import Report, ReportRow
+    from fantasy_baseball.streaks.models import Driver, PlayerCategoryScore, Report, ReportRow
 
     score = PlayerCategoryScore(
         player_id=1,
@@ -1455,8 +1453,7 @@ def test_compute_streaks_no_remote_mirror_without_creds(monkeypatch, kv_isolatio
     """
     from datetime import date
 
-    from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
-    from fantasy_baseball.streaks.reports.sunday import Report, ReportRow
+    from fantasy_baseball.streaks.models import Driver, PlayerCategoryScore, Report, ReportRow
 
     score = PlayerCategoryScore(
         player_id=1,

@@ -49,7 +49,9 @@ from fantasy_baseball.streaks.analysis.predictors import (
 from fantasy_baseball.streaks.data.load_model_fits import upsert_model_fits
 from fantasy_baseball.streaks.models import (
     ColdMethod,
+    Driver,
     ModelFit,
+    PlayerCategoryScore,
     StreakCategory,
     StreakDirection,
     StreakLabel,
@@ -77,19 +79,6 @@ _SCALER_STEP_NAME = "scaler"
 
 
 @dataclass(frozen=True)
-class Driver:
-    """One peripheral feature attributed as driving a prediction.
-
-    ``feature`` is the column name from :data:`EXPECTED_FEATURE_COLUMNS`.
-    ``z_score`` is the StandardScaler-transformed feature value — signed,
-    so positive means the player's feature is above the training mean.
-    """
-
-    feature: str
-    z_score: float
-
-
-@dataclass(frozen=True)
 class FittedModel:
     """One fitted Phase 4 pipeline + the metadata needed to score it.
 
@@ -105,39 +94,6 @@ class FittedModel:
     direction: StreakDirection
     cold_method: ColdMethod
     dense_quintile_cutoffs: tuple[float, float, float, float] | None
-
-
-@dataclass(frozen=True)
-class PlayerCategoryScore:
-    """Scored prediction for one (player, category).
-
-    - ``label`` is the empirical/Poisson label for the player's most recent
-      14d window. For sparse cats, we use the ``poisson_p20`` cold partition
-      (matches training).
-    - ``probability`` is ``P(continuation)`` from the model — ``None`` when
-      the label is neutral, OR when the label is non-neutral but no model
-      was trained for that ``(cat, direction)`` (sparse cats are hot-only
-      in Phase 4, so ``sb cold`` ends up here).
-    - ``probability_baserate`` is the stratum base rate for the same event
-      (from ``continuation_rates``, keyed by category/direction/pt_bucket) —
-      the unconditional P(continuation) for *any* player in that stratum.
-      ``probability - probability_baserate`` is the lift the streak adds;
-      raw probabilities are not comparable across categories/directions
-      because base rates range ~0.15-0.81. ``None`` when ``probability``
-      is None or the rates table has no row for the stratum.
-    - ``drivers`` is empty when ``probability`` is ``None``.
-    - ``window_end`` is the date the scored 14d window ends on (most
-      recent in DB). Reports surface this in the header so the reader
-      knows how stale the signal is.
-    """
-
-    player_id: int
-    category: StreakCategory
-    label: StreakLabel
-    probability: float | None
-    drivers: tuple[Driver, ...]
-    window_end: date | None
-    probability_baserate: float | None = None
 
 
 @dataclass(frozen=True)

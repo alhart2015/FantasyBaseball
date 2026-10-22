@@ -3,7 +3,8 @@
 Each builder is a pure function returning a typed section model (or an empty
 list). Builders never raise for "no data" -- that is an empty section. They read
 KV payloads the morning refresh produced, plus (for last night) per-player game
-logs. No builder imports the streaks/dashboard module (it pulls in duckdb).
+logs. No builder imports the streaks DuckDB modules (inference, reports.sunday,
+pipeline, data.schema); only streaks.models / streaks.payload are duckdb-free.
 """
 
 from __future__ import annotations

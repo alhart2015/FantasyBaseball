@@ -15,8 +15,8 @@ import pytest
 
 from fantasy_baseball.data import kv_store
 from fantasy_baseball.data.cache_keys import CacheKey
-from fantasy_baseball.streaks.dashboard import serialize_report
-from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
+from fantasy_baseball.streaks.models import Driver, PlayerCategoryScore
+from fantasy_baseball.streaks.payload import serialize_report
 from fantasy_baseball.streaks.reports.sunday import (
     DriverLine,
     Report,

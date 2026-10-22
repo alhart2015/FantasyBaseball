@@ -748,7 +748,11 @@ def register_routes(app: Flask) -> None:
     @app.route("/streaks")
     def streaks():
         meta = read_meta()
-        payload = read_cache_dict(CacheKey.STREAK_SCORES)
+        # The typed report (streaks.models.Report), not the raw dict: one definition of
+        # the payload's shape on both sides of the cache (#175).
+        from fantasy_baseball.streaks.payload import load_report
+
+        payload = load_report(read_cache_dict(CacheKey.STREAK_SCORES))
         return render_template(
             "season/streaks.html",
             meta=meta,
@@ -766,10 +770,10 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/lineup")
     def lineup():
-        # Import from streaks.indicator (not streaks.dashboard) — dashboard.py
-        # pulls in duckdb-using modules at load time, which Render does not
-        # have installed. The indicator module is intentionally duckdb-free.
+        # streaks.indicator and streaks.payload are duckdb-free (Render has no
+        # duckdb); the report types they read live in streaks.models.
         from fantasy_baseball.streaks.indicator import build_indicator
+        from fantasy_baseball.streaks.payload import load_report
 
         basis = coerce_basis(request.args.get("basis"))
 
@@ -778,7 +782,7 @@ def register_routes(app: Flask) -> None:
         optimal_raw = read_cache_dict(CacheKey.LINEUP_OPTIMAL)
         starters_raw = read_cache_list(CacheKey.PROBABLE_STARTERS)
         pending_moves_raw = read_cache_list(CacheKey.PENDING_MOVES) or []
-        streak_payload = read_cache_dict(CacheKey.STREAK_SCORES)
+        streak_report = load_report(read_cache_dict(CacheKey.STREAK_SCORES))
 
         lineup_data = None
         if roster_raw:
@@ -790,7 +794,7 @@ def register_routes(app: Flask) -> None:
             # Attach per-hitter streak chip data so the tbody partial can
             # render a chip column without re-reading the cache itself.
             for hitter in lineup_data["hitters"]:
-                hitter["streak_indicator"] = build_indicator(hitter["name"], streak_payload)
+                hitter["streak_indicator"] = build_indicator(hitter["name"], streak_report)
 
         # Build teams list for opponent selector dropdown
         from fantasy_baseball.web.season_data import get_teams_list
@@ -823,6 +827,7 @@ def register_routes(app: Flask) -> None:
     @app.route("/lineup/tbodies")
     def lineup_tbodies():
         from fantasy_baseball.streaks.indicator import build_indicator
+        from fantasy_baseball.streaks.payload import load_report
         from fantasy_baseball.web.season_data import format_lineup_for_display
 
         basis = coerce_basis(request.args.get("basis"))
@@ -831,13 +836,13 @@ def register_routes(app: Flask) -> None:
         if not roster_raw:
             return jsonify({"error": "No roster data. Run a refresh first."}), 404
         optimal_raw = read_cache_dict(CacheKey.LINEUP_OPTIMAL)
-        streak_payload = read_cache_dict(CacheKey.STREAK_SCORES)
+        streak_report = load_report(read_cache_dict(CacheKey.STREAK_SCORES))
 
         lineup_data = format_lineup_for_display(
             roster_raw, optimal_raw, basis=basis, denoms=_league_denoms()
         )
         for hitter in lineup_data["hitters"]:
-            hitter["streak_indicator"] = build_indicator(hitter["name"], streak_payload)
+            hitter["streak_indicator"] = build_indicator(hitter["name"], streak_report)
 
         hitters_html = render_template(
             "season/_lineup_hitters_tbody.html",

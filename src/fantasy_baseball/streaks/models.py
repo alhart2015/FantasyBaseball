@@ -1,14 +1,20 @@
-"""Dataclass models for the streaks DuckDB tables.
+"""Dataclass models for the streaks DuckDB tables, and the streak score payload.
 
-Each dataclass corresponds 1:1 to a DuckDB table in `streaks/data/schema.py`.
+Each table dataclass corresponds 1:1 to a DuckDB table in `streaks/data/schema.py`.
 Field declaration order is the table's column order; the loaders derive their
 SQL column tuples from `dataclasses.fields(...)` so this file is the single
 source of truth for column names and order.
+
+The score payload types at the bottom (`Report` and what it holds) are what the
+refresh writes to `CacheKey.STREAK_SCORES` (via `streaks.payload`) and what the
+Render dashboard reads back. They live here, not beside the DuckDB code that
+builds them (`inference`, `reports.sunday`), because this module imports no
+DuckDB: the request path can import the one definition of the payload (#175).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Literal
 
@@ -269,3 +275,111 @@ class ModelFit:
     scaler_mean: tuple[float, ...] | None = None
     scaler_scale: tuple[float, ...] | None = None
     dense_quintile_cutoffs: tuple[float, float, float, float] | None = None
+
+
+# --------------------------------------------------------------------- #
+#     Streak score payload (CacheKey.STREAK_SCORES): see streaks.payload #
+# --------------------------------------------------------------------- #
+
+
+@dataclass(frozen=True)
+class Driver:
+    """One peripheral feature attributed as driving a prediction.
+
+    ``feature`` is the column name from :data:`EXPECTED_FEATURE_COLUMNS`.
+    ``z_score`` is the StandardScaler-transformed feature value — signed,
+    so positive means the player's feature is above the training mean.
+    """
+
+    feature: str
+    z_score: float
+
+
+@dataclass(frozen=True)
+class PlayerCategoryScore:
+    """Scored prediction for one (player, category).
+
+    - ``label`` is the empirical/Poisson label for the player's most recent
+      14d window. For sparse cats, we use the ``poisson_p20`` cold partition
+      (matches training).
+    - ``probability`` is ``P(continuation)`` from the model — ``None`` when
+      the label is neutral, OR when the label is non-neutral but no model
+      was trained for that ``(cat, direction)`` (sparse cats are hot-only
+      in Phase 4, so ``sb cold`` ends up here).
+    - ``probability_baserate`` is the stratum base rate for the same event
+      (from ``continuation_rates``, keyed by category/direction/pt_bucket) —
+      the unconditional P(continuation) for *any* player in that stratum.
+      ``probability - probability_baserate`` is the lift the streak adds;
+      raw probabilities are not comparable across categories/directions
+      because base rates range ~0.15-0.81. ``None`` when ``probability``
+      is None or the rates table has no row for the stratum.
+    - ``drivers`` is empty when ``probability`` is ``None``.
+    - ``window_end`` is the date the scored 14d window ends on (most
+      recent in DB). Reports surface this in the header so the reader
+      knows how stale the signal is.
+    """
+
+    player_id: int
+    category: StreakCategory
+    label: StreakLabel
+    probability: float | None
+    drivers: tuple[Driver, ...]
+    window_end: date | None
+    probability_baserate: float | None = None
+
+
+@dataclass(frozen=True)
+class ReportRow:
+    """One player's row in the rendered report.
+
+    ``scores`` is keyed by category for fast cell lookup in the renderer;
+    missing entries render as ``—``.
+
+    ``days_since_last_game`` is set (an int) only when the player's
+    most-recent window is stale (> STALE_TOLERANCE_DAYS before the run
+    date) -- i.e. he is inactive; ``None`` means active/recent.
+    """
+
+    name: str
+    positions: tuple[str, ...]
+    player_id: int
+    composite: int
+    scores: dict[StreakCategory, PlayerCategoryScore]
+    max_probability: float
+    days_since_last_game: int | None = None
+
+    @property
+    def sort_key(self) -> tuple[float, float, str]:
+        """Roster ordering: composite desc, max_probability desc, name asc."""
+        return (-self.composite, -self.max_probability, self.name.lower())
+
+    @property
+    def fa_sort_key(self) -> tuple[float, float, str]:
+        """FA ordering: |composite| desc, max_probability desc, name asc."""
+        return (-abs(self.composite), -self.max_probability, self.name.lower())
+
+
+@dataclass(frozen=True)
+class DriverLine:
+    """One driver-attribution line under the tables."""
+
+    player_name: str
+    category: StreakCategory
+    label: StreakLabel
+    probability: float
+    drivers: tuple[Driver, ...]
+
+
+@dataclass(frozen=True)
+class Report:
+    """Full Sunday report payload — input to both renderers."""
+
+    report_date: date
+    window_end: date | None
+    team_name: str
+    league_id: int
+    season_set_train: str
+    roster_rows: tuple[ReportRow, ...]
+    fa_rows: tuple[ReportRow, ...]
+    driver_lines: tuple[DriverLine, ...]
+    skipped: tuple[str, ...] = field(default_factory=tuple)

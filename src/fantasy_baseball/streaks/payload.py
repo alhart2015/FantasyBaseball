@@ -1,43 +1,34 @@
-"""Dashboard glue for the hot-streaks pipeline.
+"""The streak score payload: :class:`~fantasy_baseball.streaks.models.Report` to and
+from the JSON-safe dict cached under ``CacheKey.STREAK_SCORES``.
 
-Serialization helpers translate the in-memory :class:`Report` dataclass to
-JSON-safe dicts (and back) for transport through the Redis/SQLite cache.
-These helpers are refresh-side only — they import :mod:`streaks.inference`
-and :mod:`streaks.reports.sunday`, both of which ``import duckdb`` at
-module load. The Render dashboard cannot load this module.
+DuckDB-free, like :mod:`streaks.models`: the refresh (which builds the report with
+DuckDB) writes with :func:`serialize_report`, and the Render dashboard reads with
+:func:`load_report` -- one definition of the shape on both sides, so a renamed field
+fails loudly instead of quietly blanking a chip (#175).
 
-The Lineup-page chip lives in :mod:`streaks.indicator` precisely so the
-Render-side ``/lineup`` import path stays duckdb-free; :class:`Indicator`
-and :func:`build_indicator` are re-exported here so existing tests and
-docs that import them from this module continue to work.
-
-The schema mirrors the dataclass fields 1:1 — round-trip equality holds
-because every dataclass involved is ``frozen=True`` (default-generated
-``__eq__`` compares fields). ``days_since_last_game`` is read with
-``.get()`` so payloads cached before that field existed deserialize to
-``None`` (the field default) rather than raising.
+The schema mirrors the dataclass fields 1:1 -- round-trip equality holds because
+every dataclass involved is ``frozen=True``. ``days_since_last_game`` and
+``probability_baserate`` are read with ``.get()`` so payloads cached before those
+fields existed deserialize to ``None`` rather than raising.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import date
 from typing import Any, cast
 
-from fantasy_baseball.streaks.indicator import Indicator, build_indicator
-from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
-from fantasy_baseball.streaks.models import StreakCategory, StreakLabel
-from fantasy_baseball.streaks.reports.sunday import (
+from fantasy_baseball.streaks.models import (
+    Driver,
     DriverLine,
+    PlayerCategoryScore,
     Report,
     ReportRow,
+    StreakCategory,
+    StreakLabel,
 )
 
-__all__ = [
-    "Indicator",
-    "build_indicator",
-    "deserialize_report",
-    "serialize_report",
-]
+logger = logging.getLogger(__name__)
 
 
 def _serialize_driver(d: Driver) -> dict[str, Any]:
@@ -160,3 +151,16 @@ def deserialize_report(payload: dict[str, Any]) -> Report:
         driver_lines=tuple(_deserialize_driver_line(dl) for dl in payload["driver_lines"]),
         skipped=tuple(payload["skipped"]),
     )
+
+
+def load_report(payload: dict[str, Any] | None) -> Report | None:
+    """The cached payload as a :class:`Report`, for the dashboard. ``None`` when
+    nothing is cached, and also (with a warning) when the payload can't be read --
+    a malformed cache blanks the streak chips rather than taking a page down."""
+    if payload is None:
+        return None
+    try:
+        return deserialize_report(payload)
+    except (KeyError, TypeError, ValueError) as exc:
+        logger.warning("streaks: unreadable STREAK_SCORES payload (%s); no chips", exc)
+        return None

@@ -1489,8 +1489,8 @@ def _seed_streak_cache_for(
     """
     from datetime import date
 
-    from fantasy_baseball.streaks.dashboard import serialize_report
-    from fantasy_baseball.streaks.inference import Driver, PlayerCategoryScore
+    from fantasy_baseball.streaks.models import Driver, PlayerCategoryScore
+    from fantasy_baseball.streaks.payload import serialize_report
     from fantasy_baseball.streaks.reports.sunday import (
         DriverLine,
         Report,
