@@ -18,6 +18,11 @@ StreakLabel = Literal["hot", "cold", "neutral"]
 ColdMethod = Literal["empirical", "poisson_p10", "poisson_p20"]
 StreakDirection = Literal["above", "below"]
 
+# Dense cats get empirical p10/p90 labels; sparse cats (count-poor) get
+# skill-relative Poisson cold thresholds and are modeled hot-only.
+DENSE_CATEGORIES: tuple[StreakCategory, ...] = ("r", "rbi", "avg")
+SPARSE_CATEGORIES: tuple[StreakCategory, ...] = ("hr", "sb")
+
 
 @dataclass(frozen=True, slots=True)
 class QualifiedHitter:

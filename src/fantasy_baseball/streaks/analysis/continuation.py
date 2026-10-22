@@ -35,8 +35,11 @@ import duckdb
 import numpy as np
 import pandas as pd
 
-from fantasy_baseball.streaks.labels import DENSE_CATEGORIES, SPARSE_CATEGORIES
-from fantasy_baseball.streaks.models import StreakCategory
+from fantasy_baseball.streaks.models import (
+    DENSE_CATEGORIES,
+    SPARSE_CATEGORIES,
+    StreakCategory,
+)
 
 logger = logging.getLogger(__name__)
 

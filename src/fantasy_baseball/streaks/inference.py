@@ -38,16 +38,16 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from fantasy_baseball.streaks.analysis.predictors import (
-    DENSE_CATS,
     EXPECTED_FEATURE_COLUMNS,
     PHASE_4_MODELS,
-    SPARSE_CATS,
     SPARSE_HOT_COLD_METHOD,
     build_training_frame,
     fit_one_model,
 )
 from fantasy_baseball.streaks.data.load_model_fits import upsert_model_fits
 from fantasy_baseball.streaks.models import (
+    DENSE_CATEGORIES,
+    SPARSE_CATEGORIES,
     ColdMethod,
     ModelFit,
     StreakCategory,
@@ -261,9 +261,11 @@ def refit_models_for_report(
             continue
 
         fit_result = fit_one_model(X, y, groups)
-        cold_method: ColdMethod = SPARSE_HOT_COLD_METHOD if cat in SPARSE_CATS else "empirical"
+        cold_method: ColdMethod = (
+            SPARSE_HOT_COLD_METHOD if cat in SPARSE_CATEGORIES else "empirical"
+        )
         cutoffs: tuple[float, float, float, float] | None = None
-        if cat in DENSE_CATS:
+        if cat in DENSE_CATEGORIES:
             cutoffs = _dense_quintile_cutoffs(
                 conn,
                 category=cat,
@@ -569,7 +571,7 @@ def _label_cold_method(category: StreakCategory) -> ColdMethod:
     ``empirical``; sparse cats are labeled twice (poisson_p10 and
     poisson_p20) and we read the p20 row to match the training cohort.
     """
-    return SPARSE_HOT_COLD_METHOD if category in SPARSE_CATS else "empirical"
+    return SPARSE_HOT_COLD_METHOD if category in SPARSE_CATEGORIES else "empirical"
 
 
 # Defense-in-depth guard for the label loader: even though ``category``
@@ -886,7 +888,7 @@ def _score_one(
     if model is None or season_rate is None or peripherals_null:
         return base
 
-    if category in DENSE_CATS:
+    if category in DENSE_CATEGORIES:
         assert model.dense_quintile_cutoffs is not None
         strength = _dense_streak_strength(
             value=float(window[category]),
