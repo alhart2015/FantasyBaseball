@@ -58,7 +58,7 @@ class TestRefreshShape:
             CacheKey.ROSTER_AUDIT,
             CacheKey.LEVERAGE,
             CacheKey.MONTE_CARLO,
-            CacheKey.SPOE,
+            CacheKey.LUCK,
             CacheKey.TRANSACTION_ANALYZER,
             CacheKey.DRAFT_VALUE,
             CacheKey.META,
@@ -620,7 +620,7 @@ class TestSkipYahoo:
             CacheKey.LINEUP_OPTIMAL,
             CacheKey.LEVERAGE,
             CacheKey.MONTE_CARLO,
-            CacheKey.SPOE,
+            CacheKey.LUCK,
             CacheKey.PACE_DEVIATIONS,
             CacheKey.META,
         ]:
@@ -1287,6 +1287,25 @@ def test_compute_streaks_swallows_failures(monkeypatch, kv_isolation, caplog) ->
         return bool(r.exc_info and "DuckDB unhappy" in str(r.exc_info[1]))
 
     assert any(_record_carries_boom(r) for r in caplog.records)
+
+
+def test_compute_luck_swallows_failures(monkeypatch, kv_isolation, caplog) -> None:
+    """The luck panel is display-only: a failure logs and the refresh goes on."""
+    from fantasy_baseball.data import kv_store
+    from fantasy_baseball.data.cache_keys import CacheKey, redis_key
+
+    def _boom(*a, **kw):
+        raise FileNotFoundError("no league projection system on file")
+
+    monkeypatch.setattr("fantasy_baseball.analysis.luck.run_luck", _boom)
+    run = _build_refresh_run_for_streak_test()
+    run.league_model = object()
+    run.standings = object()
+    with caplog.at_level("ERROR", logger="fantasy_baseball.web.refresh_pipeline"):
+        run._compute_luck()  # must not raise
+
+    assert kv_store.get_kv().get(redis_key(CacheKey.LUCK)) is None
+    assert any(r.exc_info and "no league projection" in str(r.exc_info[1]) for r in caplog.records)
 
 
 def test_compute_streaks_closes_connection_on_failure(monkeypatch, kv_isolation) -> None:

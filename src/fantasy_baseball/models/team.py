@@ -69,7 +69,7 @@ class Team:
         days — they're scheduled state, not yet owned state. A roster
         that locks today has not played any games under that lineup yet.
 
-        Used by SPoE to scale preseason projections by days-owned.
+        Used by analysis.luck (stints and active-lineup windows) and team_ytd_attribution.
         """
         sorted_rosters = self._sorted()
         if not sorted_rosters:

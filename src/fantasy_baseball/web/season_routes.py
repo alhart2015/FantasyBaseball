@@ -30,7 +30,6 @@ from fantasy_baseball.utils.constants import (
     ALL_CATEGORIES,
     HITTING_CATEGORIES,
     PITCHING_CATEGORIES,
-    RATE_STATS,
     Category,
     OpportunityStat,
 )
@@ -2197,39 +2196,14 @@ def register_routes(app: Flask) -> None:
 
     @app.route("/luck")
     def luck():
-        meta = read_meta()
-        spoe_cache = read_cache_dict(CacheKey.SPOE) or {}
-        latest = spoe_cache.get("snapshot_date")
-        results = spoe_cache.get("results", [])
-
-        spoe_data = []
-        if results:
-            teams = {}
-            for r in results:
-                team = r["team"]
-                if team not in teams:
-                    teams[team] = {"team": team, "categories": {}}
-                if r["category"] == "total":
-                    teams[team]["total_spoe"] = r["spoe"]
-                    teams[team]["projected_pts"] = r["projected_pts"]
-                    teams[team]["actual_pts"] = r["actual_pts"]
-                else:
-                    teams[team]["categories"][r["category"]] = r
-
-            spoe_data = sorted(
-                teams.values(),
-                key=lambda t: t.get("actual_pts", 0),
-                reverse=True,
-            )
-
+        """Luck with each team's decisions held fixed (``analysis.luck``)."""
         return render_template(
             "season/luck.html",
-            meta=meta,
+            meta=read_meta(),
             active_page="luck",
-            spoe_data=spoe_data,
-            snapshot_date=meta.get("last_refresh", latest),
+            luck=read_cache_dict(CacheKey.LUCK),
+            my_team=_load_config().team_name,
             categories=[c.value for c in ALL_CATEGORIES],
-            rate_stats={c.value for c in RATE_STATS},
         )
 
     @app.route("/transactions")

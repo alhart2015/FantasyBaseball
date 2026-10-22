@@ -2781,14 +2781,14 @@ td[style*="--neg"] {
     line-height: 1.5;
 }
 
-.page-luck .spoe-table {
+.page-luck .luck-table {
     width: 100%;
     border-collapse: collapse;
     border-top: 2px solid var(--ink);
     border-bottom: 1px solid var(--ink);
     font-feature-settings: "tnum" 1, "lnum" 1;
 }
-.page-luck .spoe-table th {
+.page-luck .luck-table th {
     text-align: right;
     padding: 10px 10px 8px;
     color: var(--ink-soft) !important;
@@ -2799,7 +2799,7 @@ td[style*="--neg"] {
     text-transform: uppercase;
     border-bottom: 1px solid var(--rule-strong) !important;
 }
-.page-luck .spoe-table td {
+.page-luck .luck-table td {
     text-align: right;
     padding: 10px;
     border-bottom: 1px solid var(--rule);
@@ -2807,25 +2807,28 @@ td[style*="--neg"] {
     font-size: 13px;
     color: var(--ink);
 }
-.page-luck .spoe-table th:first-child,
-.page-luck .spoe-table td:first-child {
+.page-luck .luck-table th:first-child,
+.page-luck .luck-table td:first-child {
     text-align: left;
 }
-.page-luck .spoe-table td:nth-child(2) {
+.page-luck .luck-table td:nth-child(2) {
     text-align: left;
     font-family: 'Newsreader', serif;
     font-weight: 500;
     font-size: 14px;
 }
-.page-luck .spoe-table tr {
+.page-luck .luck-table tr {
     border-bottom: none;
 }
 
-.page-luck .spoe-positive { color: var(--lead-deep) !important; font-weight: 700; }
-.page-luck .spoe-negative { color: var(--trail-deep) !important; font-weight: 700; }
+.page-luck .luck-positive { color: var(--lead-deep) !important; font-weight: 700; }
+.page-luck .luck-negative { color: var(--trail-deep) !important; font-weight: 700; }
 .page-luck .rank-num { color: var(--ink-faint) !important; font-family: 'Newsreader', serif; font-weight: 500; font-size: 15px; }
 
 .page-luck .expandable { cursor: pointer; }
+.page-luck .luck-mine td { font-weight: 600; }
+.page-luck .luck-stale { color: var(--ink-faint); }
+.page-luck .luck-line { font-size: 12px; color: var(--ink-soft); white-space: nowrap; }
 .page-luck .expandable:hover { background: var(--gold-soft); }
 .page-luck .expand-content { display: none; }
 .page-luck .expand-content.open { display: table-row; }

@@ -64,7 +64,7 @@ def check_caches():
     required_dicts = [
         CacheKey.META,
         CacheKey.STANDINGS,
-        CacheKey.SPOE,
+        CacheKey.LUCK,
         CacheKey.LEVERAGE,
         CacheKey.MONTE_CARLO,
     ]
@@ -171,27 +171,22 @@ def check_pending_moves():
         )
 
 
-# -- 5. SPoE --------------------------------------------------
+# -- 5. Luck --------------------------------------------------
 
 
-def check_spoe():
-    section("SPoE")
-    spoe = read_cache_dict(CacheKey.SPOE)
-    if not spoe:
-        check("spoe readable", False, "key missing")
+def check_luck():
+    section("Luck")
+    luck = read_cache_dict(CacheKey.LUCK)
+    if not luck:
+        check("luck readable", False, "key missing")
         return
 
-    check("snapshot_date present", bool(spoe.get("snapshot_date")))
-    check("season_fraction > 0", (spoe.get("season_fraction", 0) or 0) > 0)
-    check("results non-empty", len(spoe.get("results", [])) > 0)
-
-    # Check that at least one team has a total row
-    totals = [r for r in spoe.get("results", []) if r.get("category") == "total"]
-    check(
-        "total rows present for teams",
-        len(totals) >= 2,
-        f"got {len(totals)} total rows",
-    )
+    check("as_of present", bool(luck.get("as_of")))
+    teams = luck.get("teams", [])
+    check("teams present", len(teams) >= 2, f"got {len(teams)} teams")
+    check("players present", len(luck.get("players", [])) > 0)
+    total = sum(t.get("luck_points", 0) for t in teams)
+    check("team luck points sum to zero", abs(total) < 1e-6, f"sum {total}")
 
 
 # -- 6. Standings ----------------------------------------------
@@ -337,7 +332,7 @@ def main():
     check_meta()
     check_audit()
     check_pending_moves()
-    check_spoe()
+    check_luck()
     check_standings()
     check_scoring()
 

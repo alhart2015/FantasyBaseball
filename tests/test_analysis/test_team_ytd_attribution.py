@@ -1,7 +1,7 @@
 """Tests for compute_team_ytd_ab -- derives team YTD AB from
 Team.ownership_periods intersected with per-game logs.
 
-Same attribution model as SPoE (windowed by ownership) but sums actual
+Same ownership walk as analysis.luck (windowed by ownership) but sums actual
 per-game AB rather than scaled preseason projections.
 """
 

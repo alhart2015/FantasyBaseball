@@ -45,7 +45,7 @@ def local_today() -> date:
 
     Equivalent to ``local_now().date()``. Prefer this over
     ``date.today()`` in any code that writes user-visible timestamps,
-    computes day deltas for SPoE / ownership walks, or derives the
+    computes day deltas for luck / ownership walks, or derives the
     current season year near a year boundary.
     """
     return local_now().date()

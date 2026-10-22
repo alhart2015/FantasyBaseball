@@ -22,7 +22,7 @@ class CacheKey(StrEnum):
     META = "meta"
     RANKINGS = "rankings"
     ROSTER_AUDIT = "roster_audit"
-    SPOE = "spoe"
+    LUCK = "luck"
     OPP_ROSTERS = "opp_rosters"
     LEVERAGE = "leverage"
     PENDING_MOVES = "pending_moves"
