@@ -82,3 +82,12 @@ def test_luck_page_without_data_says_so_briefly(client) -> None:
     resp = client.get("/luck")
     assert resp.status_code == 200
     assert "No luck data yet. Run a refresh." in resp.get_data(as_text=True)
+
+
+def test_a_team_with_players_left_out_gets_a_quiet_marker(client) -> None:
+    payload = _payload()
+    payload["teams"][1]["unresolved"] = ["Luis Garcia (hitter)"]
+    write_cache(CacheKey.LUCK, payload)
+    html = client.get("/luck").get_data(as_text=True)
+    assert 'title="Left out, no id match: Luis Garcia (hitter)">*</span>' in html
+    assert html.count("Left out, no id match") == 1  # Alpha has none

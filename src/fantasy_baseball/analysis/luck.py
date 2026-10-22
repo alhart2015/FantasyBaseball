@@ -42,14 +42,12 @@ from pathlib import Path
 from typing import Any
 
 from fantasy_baseball.models.league import League
+from fantasy_baseball.models.positions import BENCH_SLOTS, PITCHER_ELIGIBLE
 from fantasy_baseball.models.standings import Standings
 from fantasy_baseball.scoring import score_roto_dict
 from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP, Category
 from fantasy_baseball.utils.name_utils import normalize_name
 
-# Slots whose games don't count toward a team's stats.
-INACTIVE_SLOTS = frozenset({"BN", "IL", "IL+", "NA"})
-PITCHER_POSITIONS = frozenset({"P", "SP", "RP"})
 HIT_STATS = ("r", "hr", "rbi", "sb", "h")  # h per AB; the rest per PA
 PIT_STATS = ("w", "k", "sv", "er", "bbh")  # per IP; bbh = walks + hits allowed
 # A stint's projection is "stale" when it is this many days older than the day he
@@ -62,11 +60,10 @@ _TWO_WAY_SUFFIXES = (" (Batter)", " (Pitcher)")
 @dataclass(frozen=True)
 class Projection:
     """One player's rates in one snapshot, and his playing time per remaining day.
-    Hitters: R/HR/RBI/SB per PA, H per AB, ``ab_pa``; pitchers: per IP."""
+    Hitters: R/HR/RBI/SB per PA, H per AB; pitchers: per IP."""
 
     rates: Mapping[str, float]
     per_day: float
-    ab_pa: float = 0.0
 
 
 @dataclass(frozen=True)
@@ -74,6 +71,8 @@ class Snapshot:
     as_of: date
     hitters: Mapping[int, Projection]
     pitchers: Mapping[int, Projection]
+    # (normalized name, MLB team) -> MLBAM id, for :class:`IdResolver`.
+    ids: Mapping[tuple[str, str], int] = field(default_factory=dict)
 
     def get(self, kind: str) -> Mapping[int, Projection]:
         return self.hitters if kind == "hitter" else self.pitchers
@@ -95,7 +94,7 @@ def snapshot_from_blend(as_of: date, season_end: date, hitters, pitchers) -> Sna
             continue
         rates = {s: _num(getattr(r, s)) / pa for s in ("r", "hr", "rbi", "sb")}
         rates["h"] = _num(r.h) / ab
-        hit[int(mid)] = Projection(rates=rates, per_day=pa / days, ab_pa=ab / pa)
+        hit[int(mid)] = Projection(rates=rates, per_day=pa / days)
     pit: dict[int, Projection] = {}
     for r in pitchers.itertuples(index=False):
         mid, ip = getattr(r, "mlbam_id", None), _num(r.ip)
@@ -104,7 +103,35 @@ def snapshot_from_blend(as_of: date, season_end: date, hitters, pitchers) -> Sna
         rates = {s: _num(getattr(r, s)) / ip for s in ("w", "k", "sv", "er")}
         rates["bbh"] = (_num(r.bb) + _num(r.h_allowed)) / ip
         pit[int(mid)] = Projection(rates=rates, per_day=ip / days)
-    return Snapshot(as_of=as_of, hitters=hit, pitchers=pit)
+    ids: dict[tuple[str, str], int] = {}
+    for frame in (hitters, pitchers):
+        for r in frame.itertuples(index=False):
+            mid = getattr(r, "mlbam_id", None)
+            if mid is not None and mid == mid:
+                ids[(normalize_name(r.name), str(getattr(r, "team", "") or ""))] = int(mid)
+    return Snapshot(as_of=as_of, hitters=hit, pitchers=pit, ids=ids)
+
+
+# Blended snapshots by (folder, its CSVs' mtimes, systems, weights, season end): a
+# committed snapshot doesn't change, so each refresh re-blends only new or edited ones.
+_SNAPSHOT_CACHE: dict[tuple[Any, ...], Snapshot] = {}
+
+
+def _blend_snapshot(
+    folder: Path,
+    as_of: date,
+    season_end: date,
+    systems: list[str],
+    weights: dict[str, float],
+) -> Snapshot:
+    from fantasy_baseball.draft.our_players import board_blend
+
+    files = tuple(sorted((f.name, f.stat().st_mtime_ns) for f in folder.glob("*.csv")))
+    key = (str(folder.resolve()), files, tuple(systems), tuple(sorted(weights.items())), season_end)
+    if key not in _SNAPSHOT_CACHE:
+        hitters, pitchers, _ = board_blend(folder, systems, weights)
+        _SNAPSHOT_CACHE[key] = snapshot_from_blend(as_of, season_end, hitters, pitchers)
+    return _SNAPSHOT_CACHE[key]
 
 
 def load_snapshots(
@@ -118,7 +145,6 @@ def load_snapshots(
     """The preseason blend (as of ``season_start``) and every dated rest-of-season
     snapshot, oldest first."""
     from fantasy_baseball.data.ros_pipeline import parse_snapshot_date, ros_snapshot_root
-    from fantasy_baseball.draft.our_players import board_blend
 
     folders = [(season_start, projections_dir / str(season))]
     root = ros_snapshot_root(projections_dir, season)
@@ -127,11 +153,10 @@ def load_snapshots(
             as_of = parse_snapshot_date(d.name) if d.is_dir() else None
             if as_of is not None:
                 folders.append((as_of, d))
-    out = []
-    for as_of, folder in sorted(folders, key=lambda x: x[0]):
-        hitters, pitchers, _ = board_blend(folder, systems, weights)
-        out.append(snapshot_from_blend(as_of, season_end, hitters, pitchers))
-    return out
+    return [
+        _blend_snapshot(folder, as_of, season_end, systems, weights)
+        for as_of, folder in sorted(folders, key=lambda x: x[0])
+    ]
 
 
 def projection_on(
@@ -151,10 +176,13 @@ def projection_on(
 
 @dataclass
 class IdResolver:
-    """Rostered name -> MLBAM id, never guessed. Unique name among players with game
-    logs; a shared name settled by the live roster's MLB team and the projection
-    file's (name, team) id; a name with no game log at all (out all season) by a
-    unique projection name."""
+    """Rostered name -> MLBAM id, never guessed.
+
+    With the live roster's MLB team, the projection file's (name, team) id settles it
+    (whether or not he has a game log). Otherwise a name unique among players with
+    game logs -- unless the projection file puts that id on a different MLB team than
+    the roster does (a same-name player who has played, while the rostered one
+    hasn't). A name with no game log and no roster team: a unique projection name."""
 
     logged: Mapping[str, Mapping[str, set[int]]]  # kind -> normalized name -> ids
     roster_mlb_team: Mapping[tuple[str, str], str]  # (fantasy team, name) -> MLB team
@@ -162,13 +190,16 @@ class IdResolver:
 
     def __call__(self, team: str, name: str, kind: str) -> int | None:
         cand = self.logged.get(kind, {}).get(name, set())
-        if len(cand) == 1:
-            return next(iter(cand))
         mlb = self.roster_mlb_team.get((team, name))
-        mid = self.projected.get((name, mlb)) if mlb else None
-        if mid in cand:
+        if mlb and (name, mlb) in self.projected:
+            return self.projected[(name, mlb)]
+        if len(cand) == 1:
+            mid = next(iter(cand))
+            elsewhere = {t for (n, t), m in self.projected.items() if n == name and m == mid}
+            if mlb and elsewhere and mlb not in elsewhere:
+                return None
             return mid
-        if not cand:
+        if not cand and not mlb:
             ids = {m for (n, _t), m in self.projected.items() if n == name}
             if len(ids) == 1:
                 return next(iter(ids))
@@ -199,16 +230,12 @@ class StintLuck:
         return (self.acquired - self.proj_as_of).days > STALE_DAYS
 
 
-def _slot(entry) -> str:
-    return str(getattr(entry.selected_position, "value", entry.selected_position))
-
-
-def _kind(entry, slot: str) -> str:
-    if slot == "P":
+def _kind(entry) -> str:
+    slot = entry.selected_position
+    if slot in PITCHER_ELIGIBLE:
         return "pitcher"
-    if slot in INACTIVE_SLOTS:
-        positions = {str(getattr(p, "value", p)) for p in entry.positions}
-        return "pitcher" if positions & PITCHER_POSITIONS else "hitter"
+    if slot in BENCH_SLOTS:
+        return "pitcher" if set(entry.positions) & PITCHER_ELIGIBLE else "hitter"
     return "hitter"
 
 
@@ -227,26 +254,26 @@ def stint_luck(
     season_start: date,
     season_end: date,
     today: date,
-) -> tuple[list[StintLuck], list[str]]:
-    """Every stint's luck pieces, and the rostered names that couldn't be resolved.
+) -> tuple[list[StintLuck], list[tuple[str, str]]]:
+    """Every stint's luck pieces, and the rostered players that couldn't be resolved
+    (team, "name (kind)"); they're left out of the team's luck.
     ``games``: kind -> MLBAM id -> his game rows (``date`` plus counts)."""
     stints: list[StintLuck] = []
-    unresolved: list[str] = []
+    unresolved: list[tuple[str, str]] = []
     for team in league.teams:
         open_stint: dict[tuple[int, str], StintLuck] = {}
         last_end: dict[tuple[int, str], date] = {}
         for entry, p_start, p_end in team.ownership_periods(season_start, season_end, today):
-            slot = _slot(entry)
-            kind = _kind(entry, slot)
+            kind = _kind(entry)
             mid = resolve(team.name, player_name(entry.name), kind)
             if mid is None:
-                unresolved.append(f"{team.name}: {entry.name} ({kind})")
+                unresolved.append((team.name, f"{entry.name} ({kind})"))
                 continue
             key = (mid, kind)
             if last_end.get(key) != p_start or key not in open_stint:
                 found = projection_on(snapshots, mid, kind, p_start)
                 if found is None:
-                    unresolved.append(f"{team.name}: {entry.name} ({kind}, no projection)")
+                    unresolved.append((team.name, f"{entry.name} ({kind}, no projection)"))
                     last_end[key] = p_end
                     continue
                 st = StintLuck(team.name, entry.name, kind, mid, p_start, found[1], found[0])
@@ -261,7 +288,7 @@ def stint_luck(
                 if p_start <= date.fromisoformat(g["date"]) < p_end
             ]
             _add_playing_time(st, proj, played, (p_end - p_start).days)
-            if slot not in INACTIVE_SLOTS:
+            if entry.selected_position not in BENCH_SLOTS:
                 _add_performance(st, proj, played)
     return stints, unresolved
 
@@ -320,31 +347,37 @@ _PIT_CATS = (("w", Category.W), ("k", Category.K), ("sv", Category.SV))
 
 
 def team_stat_luck(stints: Iterable[StintLuck]) -> dict[str, dict[str, float]]:
-    """Per team and category, actual minus expected over its active games (rate
-    categories from their components)."""
+    """Per team, actual minus expected over its active games: the counting
+    categories, and the rate categories' numerators (``h``, ``er``, ``bbh``), with the
+    AB and IP they came from (``ab``, ``ip``)."""
     tot: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     for st in stints:
         t = tot[st.team]
         for s, v in st.actual.items():
-            t[f"a_{s}"] += v
+            t[s] += v
         for s, v in st.expected.items():
-            t[f"e_{s}"] += v
-        t["ab" if st.kind == "hitter" else "ip"] += st.ab if st.kind == "hitter" else st.volume
-    out = {}
-    for team, t in tot.items():
-        ab, ip = t["ab"], t["ip"]
-        out[team] = {
-            "R": t["a_r"] - t["e_r"],
-            "HR": t["a_hr"] - t["e_hr"],
-            "RBI": t["a_rbi"] - t["e_rbi"],
-            "SB": t["a_sb"] - t["e_sb"],
-            "AVG": (t["a_h"] - t["e_h"]) / ab if ab else 0.0,
-            "W": t["a_w"] - t["e_w"],
-            "K": t["a_k"] - t["e_k"],
-            "SV": t["a_sv"] - t["e_sv"],
-            "ERA": 9 * (t["a_er"] - t["e_er"]) / ip if ip else 0.0,
-            "WHIP": (t["a_bbh"] - t["e_bbh"]) / ip if ip else 0.0,
-        }
+            t[s] -= v
+        if st.kind == "hitter":
+            t["ab"] += st.ab
+        else:
+            t["ip"] += st.volume
+    return {team: dict(t) for team, t in tot.items()}
+
+
+def expected_stats(
+    stats: Mapping[str, float], luck: Mapping[str, float], entry
+) -> dict[str, float]:
+    """A team's real standings stats minus its performance luck. Rates shift by the
+    luck in their numerator over the TEAM's real AB / IP (``entry.ytd_components()``),
+    not just the resolved players'; the resolved AB / IP stand in only when the
+    standings carry none."""
+    comp = entry.ytd_components()
+    ab = comp.ab if comp.ab > 0 else luck.get("ab", 0.0)
+    ip = comp.ip if comp.ip > 0 else luck.get("ip", 0.0)
+    out = {c: stats[c] - luck.get(c.lower(), 0.0) for c in ("R", "HR", "RBI", "SB", "W", "K", "SV")}
+    out["AVG"] = stats["AVG"] - (luck.get("h", 0.0) / ab if ab else 0.0)
+    out["ERA"] = stats["ERA"] - (9 * luck.get("er", 0.0) / ip if ip else 0.0)
+    out["WHIP"] = stats["WHIP"] - (luck.get("bbh", 0.0) / ip if ip else 0.0)
     return out
 
 
@@ -360,14 +393,17 @@ def compute_luck(
     today: date,
 ) -> dict[str, Any]:
     """The luck page's payload: teams (standings points, points if everyone hit
-    projection, luck by category, playing time) and every stint."""
+    projection, luck by category, playing time, players left out) and every stint.
+    ``standings`` should carry each team's AB and IP in ``extras`` (the refresh's
+    team-YTD standings) so rate luck is spread over the team's real volume."""
     stints, unresolved = stint_luck(
         league, snapshots, games, resolve, season_start, season_end, today
     )
     luck = team_stat_luck(stints)
     real = {e.team_name: e.stats.to_dict() for e in standings.entries}
     expected = {
-        t: {c: stats[c] - luck.get(t, {}).get(c, 0.0) for c in CATS} for t, stats in real.items()
+        e.team_name: expected_stats(real[e.team_name], luck.get(e.team_name, {}), e)
+        for e in standings.entries
     }
     real_pts, exp_pts = score_roto_dict(real), score_roto_dict(expected)
     sgp = {id(st): stint_sgp(st, denoms) for st in stints}
@@ -385,6 +421,7 @@ def compute_luck(
                 "ip_vs_proj": sum(st.pt_got - st.pt_proj for st in mine if st.kind == "pitcher"),
                 "perf_sgp": sum(sgp[id(st)][0] for st in mine),
                 "pt_sgp": sum(sgp[id(st)][1] for st in mine),
+                "unresolved": sorted({who for team, who in unresolved if team == t}),
             }
         )
     teams.sort(key=lambda x: -x["points"])
@@ -415,7 +452,7 @@ def compute_luck(
         "standings_date": standings.effective_date.isoformat(),
         "teams": teams,
         "players": players,
-        "unresolved": sorted(set(unresolved)),
+        "unresolved": sorted({f"{team}: {who}" for team, who in unresolved}),
     }
 
 
@@ -439,47 +476,67 @@ def _line(st: StintLuck, s: Mapping[str, float]) -> dict[str, float]:
     }
 
 
+def rostered_ids(
+    league: League,
+    resolve: Callable[[str, str, str], int | None],
+    season_start: date,
+    season_end: date,
+    today: date,
+) -> dict[str, set[int]]:
+    """kind -> the MLBAM ids of every resolvable player any team rostered."""
+    out: dict[str, set[int]] = {"hitter": set(), "pitcher": set()}
+    for team in league.teams:
+        for entry, _s, _e in team.ownership_periods(season_start, season_end, today):
+            kind = _kind(entry)
+            mid = resolve(team.name, player_name(entry.name), kind)
+            if mid is not None:
+                out[kind].add(mid)
+    return out
+
+
 def run_luck(
     kv,
     league: League,
     standings: Standings,
     config,
     projections_dir: Path,
-    roster_raw: list[dict[str, Any]] | None,
-    opp_rosters_raw: Mapping[str, list[dict[str, Any]]] | None,
+    rosters: Mapping[str, Iterable[Any]],
     today: date,
 ) -> dict[str, Any]:
-    """Assemble the inputs (projection snapshots on disk, every player's game logs and
-    the live rosters' MLB teams from ``kv``) and :func:`compute_luck`."""
-    from fantasy_baseball.data.redis_store import build_ytd_game_logs
+    """Assemble the inputs and :func:`compute_luck`: the projection snapshots on disk,
+    the rostered players' game logs from ``kv`` (names from the game-log rollups), and
+    ``rosters`` (fantasy team -> live roster players with ``.name`` and ``.team``)
+    for the MLB team that settles a shared name."""
+    from fantasy_baseball.data.redis_store import build_ytd_game_logs, get_game_log_totals
     from fantasy_baseball.sgp.denominators import get_sgp_denominators
 
     start, end = date.fromisoformat(config.season_start), date.fromisoformat(config.season_end)
-    weights = dict(config.projection_weights)
+    today = min(today, end)
     snapshots = load_snapshots(
-        projections_dir, config.season_year, start, end, list(config.projection_systems), weights
+        projections_dir,
+        config.season_year,
+        start,
+        end,
+        list(config.projection_systems),
+        dict(config.projection_weights),
     )
-    games: dict[str, dict[int, list[dict[str, Any]]]] = {}
     logged: dict[str, dict[str, set[int]]] = {}
-    for kind in ("hitter", "pitcher"):
-        # MLBAM ids are integers; a key that isn't one can't be joined, so it's skipped.
-        logs = {
-            int(mid): rec
-            for mid, rec in build_ytd_game_logs(kv, config.season_year, kind).items()
-            if str(mid).isdigit()
-        }
-        games[kind] = {mid: rec["games"] for mid, rec in logs.items()}
+    for kind, rollup_kind in (("hitter", "hitters"), ("pitcher", "pitchers")):
         names: dict[str, set[int]] = defaultdict(set)
-        for mid, rec in logs.items():
-            names[normalize_name(rec.get("name", ""))].add(mid)
+        for mid, rec in get_game_log_totals(kv, rollup_kind).items():
+            # MLBAM ids are integers; a key that isn't one can't be joined, so it's skipped.
+            if str(mid).isdigit():
+                names[normalize_name(rec.get("name", ""))].add(int(mid))
         logged[kind] = names
-    roster_team: dict[tuple[str, str], str] = {}
-    for team, players in (opp_rosters_raw or {}).items():
-        for p in players:
-            roster_team[(team, player_name(p.get("name", "")))] = p.get("team") or ""
-    for p in roster_raw or []:
-        roster_team[(config.team_name, player_name(p.get("name", "")))] = p.get("team") or ""
-    resolve = IdResolver(logged, roster_team, _projected_ids(projections_dir, config, weights))
+    roster_team = {
+        (team, player_name(p.name)): p.team or "" for team, ps in rosters.items() for p in ps
+    }
+    resolve = IdResolver(logged, roster_team, snapshots[-1].ids)
+    wanted = rostered_ids(league, resolve, start, end, today)
+    games: dict[str, dict[int, list[dict[str, Any]]]] = {}
+    for kind, ids in wanted.items():
+        logs = build_ytd_game_logs(kv, config.season_year, kind, ids={str(m) for m in ids})
+        games[kind] = {int(mid): rec["games"] for mid, rec in logs.items()}
     return compute_luck(
         league,
         standings,
@@ -489,24 +546,5 @@ def run_luck(
         get_sgp_denominators(config.sgp_overrides),
         start,
         end,
-        min(today, end),
+        today,
     )
-
-
-def _projected_ids(
-    projections_dir: Path, config, weights: dict[str, float]
-) -> dict[tuple[str, str], int]:
-    """(normalized name, MLB team) -> MLBAM id from the newest projection snapshot."""
-    from fantasy_baseball.data.ros_pipeline import latest_ros_snapshot
-    from fantasy_baseball.draft.our_players import board_blend
-
-    latest = latest_ros_snapshot(projections_dir, config.season_year)
-    folder = latest[0] if latest else projections_dir / str(config.season_year)
-    hitters, pitchers, _ = board_blend(folder, list(config.projection_systems), weights)
-    out: dict[tuple[str, str], int] = {}
-    for frame in (hitters, pitchers):
-        for r in frame.itertuples(index=False):
-            mid = getattr(r, "mlbam_id", None)
-            if mid is not None and mid == mid:
-                out[(normalize_name(r.name), str(getattr(r, "team", "") or ""))] = int(mid)
-    return out

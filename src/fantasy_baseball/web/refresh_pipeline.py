@@ -50,7 +50,6 @@ from fantasy_baseball.web.season_data import (
     _load_game_log_totals,
     read_cache,
     read_cache_dict,
-    read_cache_list,
     read_cache_with_meta,
     reset_cache_job,
     set_cache_job,
@@ -1891,29 +1890,44 @@ class RefreshRun:
     # --- Step 14: Luck (analysis.luck) ---
     def _compute_luck(self):
         """Each team's luck with its decisions held fixed (``analysis.luck``): reuses
-        the league_model from Step 4c and the standings; reads every player's game
-        logs (batched) and the committed projection snapshots."""
-        self._progress("Computing luck...")
-        from fantasy_baseball.analysis.luck import run_luck
-        from fantasy_baseball.data.kv_store import get_kv
-        from fantasy_baseball.utils.time_utils import local_today
+        the league_model from Step 4c, the team-YTD standings and the live rosters;
+        reads the rostered players' game logs and the committed projection snapshots.
 
-        assert self.config is not None
-        assert self.league_model is not None
-        assert self.standings is not None
-        project_root = Path(__file__).resolve().parents[3]
-        result = run_luck(
-            get_kv(),
-            self.league_model,
-            self.standings,
-            self.config,
-            project_root / "data" / "projections",
-            read_cache_list(CacheKey.ROSTER),
-            read_cache_dict(CacheKey.OPP_ROSTERS),
-            local_today(),
-        )
-        write_cache(CacheKey.LUCK, result, required=False)
-        self._progress(f"Luck computed: {len(result['players'])} stints")
+        Non-load-bearing, like the draft-value step: a failure here is logged and the
+        refresh continues with the prior cache (required=False) in place.
+        """
+        self._progress("Computing luck...")
+        try:
+            from fantasy_baseball.analysis.luck import run_luck
+            from fantasy_baseball.data.kv_store import get_kv
+            from fantasy_baseball.utils.time_utils import local_today
+
+            assert self.config is not None
+            assert self.league_model is not None
+            standings = self.ytd_standings or self.standings
+            assert standings is not None
+            rosters: dict[str, list[Player]] = dict(self.opp_rosters or {})
+            rosters[self.config.team_name] = list(self.roster_players or [])
+            project_root = Path(__file__).resolve().parents[3]
+            result = run_luck(
+                get_kv(),
+                self.league_model,
+                standings,
+                self.config,
+                project_root / "data" / "projections",
+                rosters,
+                local_today(),
+            )
+            write_cache(CacheKey.LUCK, result, required=False)
+            if result["unresolved"]:
+                log.warning("Luck left out unmatched players: %s", result["unresolved"])
+            self._progress(
+                f"Luck computed: {len(result['players'])} stints, "
+                f"{len(result['unresolved'])} unmatched players left out"
+            )
+        except Exception:
+            log.exception("Luck computation failed; cache unchanged")
+            self._progress("Luck computation failed (continuing)")
 
     # --- Step 15: Transaction analyzer ---
     def _analyze_transactions(self):

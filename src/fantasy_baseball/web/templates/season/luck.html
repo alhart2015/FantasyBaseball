@@ -28,7 +28,7 @@
         {% for t in luck.teams %}
         <tr class="expandable{% if t.team == my_team %} luck-mine{% endif %}" onclick="toggleExpand(this)">
             <td class="rank-num">{{ loop.index }}</td>
-            <td>{{ t.team }}</td>
+            <td>{{ t.team }}{% if t.unresolved %} <span class="luck-stale" title="Left out, no id match: {{ t.unresolved|join(', ') }}">*</span>{% endif %}</td>
             <td>{{ "%.1f"|format(t.points) }}</td>
             <td>{{ "%.1f"|format(t.expected_points) }}</td>
             <td>{{ signed(t.luck_points) }}</td>
@@ -86,7 +86,7 @@
                     {% set e = p.expected[stat] %}
                     {% if stat == "AVG" %}{{ stat }} {{ "%.3f"|format(v) }}/{{ "%.3f"|format(e) }}
                     {% elif stat in ("ERA", "WHIP") %}{{ stat }} {{ "%.2f"|format(v) }}/{{ "%.2f"|format(e) }}
-                    {% else %}{{ stat }} {{ "%.0f"|format(v) }}/{{ "%.0f"|format(e) }}{% endif %}{% if not loop.last %} · {% endif %}
+                    {% else %}{{ stat }} {{ "%.0f"|format(v) }}/{{ "%.0f"|format(e) }}{% endif %}{% if not loop.last %} | {% endif %}
                 {% endfor %}
             </td>
         </tr>
