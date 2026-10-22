@@ -6,8 +6,11 @@ classify it relative to the player's expectation:
 - Sparse cats (HR, SB): expectation = projected_rate * next_window_PA. The
   outcome direction is "above" if next_window_count > expected, "below"
   otherwise (an exact tie counts as "below", matching the strict `>` test).
-- Dense cats (R, RBI, AVG): expectation = empirical median of windows in the
-  same (category, window_days, pt_bucket) cell. Direction same as above.
+- Dense cats (R, RBI, AVG): the same player-relative expectation (#174) --
+  R/RBI: projected per-PA rate * next_window_PA; AVG: projected AVG. Direction
+  same as above. (It was the median of every window in the (window_days,
+  pt_bucket) cell, which measured "a weak hitter stays below median", not
+  streaks.) Next windows with no PA, or no AVG, are dropped.
 
 The output table `continuation_rates` has one row per
 (season_set, category, window_days, pt_bucket, strength_bucket, direction,
@@ -119,13 +122,19 @@ def _continuation_rows_dense(
     if df.empty:
         return []
 
-    # Median of `next_value` per (window_days, pt_bucket) -> the "expectation"
-    # comparator for the next window.
-    medians = df.groupby(["window_days", "pt_bucket"])["next_value"].median().rename("next_median")
-    df = df.merge(medians, left_on=["window_days", "pt_bucket"], right_index=True)
+    # His own expectation for the next window (#174), as the sparse path does.
+    rate_col = "avg" if category == "avg" else f"{category}_per_pa"
+    rates = conn.execute(
+        f"SELECT player_id, season, {rate_col} FROM hitter_projection_rates "
+        f"WHERE {rate_col} IS NOT NULL"
+    ).df()
+    df["season"] = pd.to_datetime(df["window_end"]).dt.year
+    df = df.merge(rates, on=["player_id", "season"])
+    df = df[(df["next_pa"] > 0) & df["next_value"].notna()]
+    expected = df[rate_col] if category == "avg" else df[rate_col] * df["next_pa"]
 
-    # Direction: above expectation if next_value > next_median; below otherwise.
-    df["direction"] = np.where(df["next_value"] > df["next_median"], "above", "below")
+    # Direction: above expectation if next_value > expected; below otherwise.
+    df["direction"] = np.where(df["next_value"] > expected, "above", "below")
 
     # Labels for this category x season_set, joined back.
     labels = conn.execute(

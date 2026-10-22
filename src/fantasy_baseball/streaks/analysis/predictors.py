@@ -91,10 +91,15 @@ def _build_training_frame_dense(
     seasons: list[int],
     window_days: int,
 ) -> pd.DataFrame:
-    """Dense-cat training frame. Target uses the (window_days, pt_bucket)
-    median of next_value computed across the entire labeled population."""
+    """Dense-cat training frame. Target is PLAYER-relative, like the sparse path
+    (#174): the next window beats (hot) or falls short of (cold) his own
+    expectation -- R/RBI: projected per-PA rate x next-window PA; AVG: projected
+    AVG. A population median made the target "a below-median hitter stays below
+    median", which measures roster quality, not streaks. Next windows with no PA
+    (or, for AVG, no AVG) say nothing about a streak and are dropped."""
     label = "hot" if direction == "above" else "cold"
     rate_col = "avg" if category == "avg" else f"{category}_per_pa"
+    expected = f"p.{rate_col}" if category == "avg" else f"p.{rate_col} * n.pa"
     # ``seasons`` is built from ints parsed by ``_parse_season_set`` and never
     # user-supplied, so f-string interpolation is safe.
     season_list_sql = ", ".join(str(s) for s in seasons)
@@ -119,9 +124,9 @@ def _build_training_frame_dense(
             l.label,
             CASE
                 WHEN ? = 'above' THEN
-                    CASE WHEN n.{category} > t.next_median THEN 1 ELSE 0 END
+                    CASE WHEN n.{category} > {expected} THEN 1 ELSE 0 END
                 ELSE
-                    CASE WHEN n.{category} < t.next_median THEN 1 ELSE 0 END
+                    CASE WHEN n.{category} < {expected} THEN 1 ELSE 0 END
             END AS target
         FROM hitter_windows w
         INNER JOIN hitter_windows n
@@ -138,15 +143,10 @@ def _build_training_frame_dense(
         INNER JOIN hitter_projection_rates p
           ON p.player_id = w.player_id
          AND p.season = EXTRACT(YEAR FROM w.window_end)::INTEGER
-        INNER JOIN (
-            SELECT window_days, pt_bucket, MEDIAN({category}) AS next_median
-            FROM hitter_windows
-            GROUP BY window_days, pt_bucket
-        ) t
-          ON t.window_days = w.window_days
-         AND t.pt_bucket = w.pt_bucket
         WHERE w.window_days = ?
           AND p.{rate_col} IS NOT NULL
+          AND n.pa > 0
+          AND n.{category} IS NOT NULL
           AND EXTRACT(YEAR FROM w.window_end)::INTEGER IN ({season_list_sql})
         """,
         [direction, category, label, window_days],
