@@ -857,22 +857,11 @@ class RefreshRun:
         between. Warn so the drift is visible -- defense in depth on the read side,
         mirroring the write-side refusal (same staleness arithmetic + threshold).
         """
-        from fantasy_baseball.data.ros_pipeline import (
-            ROS_SNAPSHOT_STALE_DAYS,
-            parse_snapshot_date,
-            ros_snapshot_days_stale,
-        )
+        from fantasy_baseball.data.ros_pipeline import stale_ros_blob_warning
 
-        snap = parse_snapshot_date(str(snapshot_date)) if snapshot_date else None
-        if snap is None:
-            return
-        days = ros_snapshot_days_stale(snap)
-        if days > ROS_SNAPSHOT_STALE_DAYS:
-            self._progress(
-                f"WARNING: ROS blob snapshot {snapshot_date} is {days} days old "
-                f"(> {ROS_SNAPSHOT_STALE_DAYS}); full-season = YTD + ROS may double-count "
-                f"~{days} days of games. Re-pull fresh ROS CSVs (FanGraphs fetch may be down)."
-            )
+        warning = stale_ros_blob_warning(snapshot_date)
+        if warning is not None:
+            self._progress(warning)
 
     # --- Step 4b: Fetch opponent rosters (raw) ---
     def _fetch_opponent_rosters(self):

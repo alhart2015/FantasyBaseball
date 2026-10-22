@@ -110,6 +110,25 @@ def ros_snapshot_days_stale(snap: date) -> int:
     return (local_today() - snap).days
 
 
+def stale_ros_blob_warning(snapshot_date: object) -> str | None:
+    """The read-side warning for a cached ROS-derived blob (``cache:ros_projections``,
+    ``cache:full_season_projections``) whose stamped ``_ros_snapshot_date`` is older
+    than :data:`ROS_SNAPSHOT_STALE_DAYS`, or ``None`` when it is fresh or carries no
+    datable stamp. One message for every reader (the refresh pipeline, the
+    draft-value report), on the same arithmetic as the write-side guard."""
+    snap = parse_snapshot_date(str(snapshot_date)) if snapshot_date else None
+    if snap is None:
+        return None
+    days = ros_snapshot_days_stale(snap)
+    if days <= ROS_SNAPSHOT_STALE_DAYS:
+        return None
+    return (
+        f"WARNING: ROS blob snapshot {snapshot_date} is {days} days old "
+        f"(> {ROS_SNAPSHOT_STALE_DAYS}); full-season = YTD + ROS may double-count "
+        f"~{days} days of games. Re-pull fresh ROS CSVs (FanGraphs fetch may be down)."
+    )
+
+
 def _require_fresh_ros_snapshot(snap: date, label: str, progress_cb) -> None:
     """Abort the blend unless ``snap`` is within ``ROS_SNAPSHOT_STALE_DAYS`` of
     today. ``label`` is the dir name, for the message only.

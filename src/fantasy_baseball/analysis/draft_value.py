@@ -29,7 +29,7 @@ from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 from fantasy_baseball.utils.time_utils import compute_fraction_remaining, local_today
 from fantasy_baseball.web.season_data import (
-    read_cache_dict,
+    read_cache_with_meta,
 )
 
 logger = logging.getLogger(__name__)
@@ -659,9 +659,19 @@ def load_full_season_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], dic
     Reads ``CacheKey.FULL_SEASON_PROJECTIONS`` from the KV store (Upstash on
     Render, SQLite locally) and parses it via :func:`parse_full_season_lines`.
     Returns ``({}, {})`` when the KV store lacks the blob (unsynced local runtime).
+
+    Only the ROS fetch job writes that blob, so it goes stale silently when the job
+    stops. Its stamped ``_ros_snapshot_date`` is checked the way the refresh checks
+    its own copy (``ros_pipeline.stale_ros_blob_warning``), and a stale one is
+    logged as a warning (#176).
     """
-    payload = read_cache_dict(CacheKey.FULL_SEASON_PROJECTIONS) or {}
-    return parse_full_season_lines(payload)
+    from fantasy_baseball.data.ros_pipeline import stale_ros_blob_warning
+
+    data, meta = read_cache_with_meta(CacheKey.FULL_SEASON_PROJECTIONS)
+    warning = stale_ros_blob_warning(meta.get("_ros_snapshot_date"))
+    if warning is not None:
+        logger.warning("draft value: %s", warning)
+    return parse_full_season_lines(data if isinstance(data, dict) else {})
 
 
 def load_actual_to_date_lines() -> tuple[dict[tuple[int, str], dict[str, Any]], dict[str, Any]]:

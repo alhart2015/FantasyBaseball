@@ -694,3 +694,37 @@ def test_projected_par_curve_matches_inline_construction():
     assert (math.isnan(par.keeper_par) and math.isnan(expected.keeper_par)) or (
         par.keeper_par == expected.keeper_par
     )
+
+
+def _write_full_season(snapshot_date):
+    from fantasy_baseball.data.cache_keys import CacheKey
+    from fantasy_baseball.web.season_data import write_cache
+
+    meta = {"_ros_snapshot_date": snapshot_date} if snapshot_date else None
+    write_cache(CacheKey.FULL_SEASON_PROJECTIONS, {"hitters": [], "pitchers": []}, extra_meta=meta)
+
+
+def test_load_full_season_lines_warns_when_the_blob_is_stale(monkeypatch, caplog):
+    """#176: the full-season blob is only written by the ROS fetch job, so when that
+    job stops the draft-value report must say how old its projections are."""
+    import datetime as _dt
+
+    monkeypatch.setattr(
+        "fantasy_baseball.data.ros_pipeline.local_today", lambda: _dt.date(2026, 6, 10)
+    )
+    _write_full_season("2026-06-01")  # 9 days old, past the threshold
+    dv.load_full_season_lines()
+    assert "draft value: WARNING: ROS blob snapshot 2026-06-01 is 9 days old" in caplog.text
+
+
+def test_load_full_season_lines_is_quiet_when_fresh_or_unstamped(monkeypatch, caplog):
+    import datetime as _dt
+
+    monkeypatch.setattr(
+        "fantasy_baseball.data.ros_pipeline.local_today", lambda: _dt.date(2026, 6, 10)
+    )
+    _write_full_season("2026-06-09")  # 1 day old
+    dv.load_full_season_lines()
+    _write_full_season(None)  # no stamp: nothing to judge
+    dv.load_full_season_lines()
+    assert "days old" not in caplog.text
