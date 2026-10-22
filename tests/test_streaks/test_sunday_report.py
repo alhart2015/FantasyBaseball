@@ -1,4 +1,4 @@
-"""Tests for the Phase 5 Sunday report renderer + orchestrator."""
+"""Tests for the streak report orchestrator (the /streaks page's payload)."""
 
 from __future__ import annotations
 
@@ -9,17 +9,11 @@ from fantasy_baseball.streaks.inference import (
     PlayerCategoryScore,
 )
 from fantasy_baseball.streaks.reports.sunday import (
-    DriverLine,
-    Report,
     ReportRow,
     YahooHitter,
     _composite,
-    _format_cell,
     _max_probability,
     _row_from_scores,
-    _signed,
-    render_markdown,
-    render_terminal,
     resolve_hitters,
 )
 
@@ -70,28 +64,6 @@ def test_composite_counts_hot_minus_cold() -> None:
         _score(player_id=1, category="avg", label="neutral"),
     ]
     assert _composite(scores) == 1
-
-
-def test_signed_uses_true_minus_for_negative() -> None:
-    assert _signed(3) == "+3"
-    assert _signed(0) == "0"
-    assert _signed(-2) == "−2"  # true Unicode minus
-
-
-def test_format_cell_neutral_renders_dash() -> None:
-    s = _score(player_id=1, category="hr", label="neutral")
-    assert _format_cell(s, sparse=True) == "—"
-
-
-def test_format_cell_hot_with_probability() -> None:
-    s = _score(player_id=1, category="r", label="hot", probability=0.715)
-    assert _format_cell(s, sparse=False) == "hot 0.71"
-
-
-def test_format_cell_sparse_cold_without_model_shows_dash_for_probability() -> None:
-    """HR/SB cold has no model in Phase 4; cell should render ``cold —``."""
-    s = _score(player_id=1, category="hr", label="cold", probability=None)
-    assert _format_cell(s, sparse=True) == "cold —"
 
 
 def test_resolve_hitters_drops_pitchers() -> None:
@@ -152,151 +124,6 @@ def _vlad_scores(player_id: int) -> dict:
     }
 
 
-def _build_sample_report() -> Report:
-    judge = _row(
-        name="Aaron Judge",
-        positions=("OF",),
-        player_id=592450,
-        scores=_hart_scores(592450),
-    )
-    vlad = _row(
-        name="Vlad Jr",
-        positions=("1B",),
-        player_id=665489,
-        scores=_vlad_scores(665489),
-    )
-    polanco_scores = {
-        "hr": _score(player_id=1, category="hr", label="neutral"),
-        "r": _score(player_id=1, category="r", label="hot", probability=0.72),
-        "rbi": _score(player_id=1, category="rbi", label="hot", probability=0.69),
-        "sb": _score(player_id=1, category="sb", label="neutral"),
-        "avg": _score(player_id=1, category="avg", label="hot", probability=0.65),
-    }
-    polanco = _row(
-        name="Jorge Polanco",
-        positions=("2B",),
-        player_id=1,
-        scores=polanco_scores,
-    )
-    driver_lines = (
-        DriverLine(
-            player_name="Aaron Judge",
-            category="rbi",
-            label="hot",
-            probability=0.74,
-            drivers=(
-                Driver(feature="xwoba_avg", z_score=1.8),
-                Driver(feature="ev_avg", z_score=1.2),
-            ),
-        ),
-        DriverLine(
-            player_name="Vlad Jr",
-            category="rbi",
-            label="cold",
-            probability=0.78,
-            drivers=(Driver(feature="k_pct", z_score=1.6), Driver(feature="babip", z_score=-1.3)),
-        ),
-    )
-    return Report(
-        report_date=date(2026, 5, 11),
-        window_end=date(2026, 5, 10),
-        team_name="Hart of the Order",
-        league_id=5652,
-        season_set_train="2023-2025",
-        roster_rows=(judge, vlad),
-        fa_rows=(polanco,),
-        driver_lines=driver_lines,
-        skipped=(),
-    )
-
-
-def test_render_markdown_contains_expected_sections() -> None:
-    md = render_markdown(_build_sample_report())
-    assert "# Streaks — Sunday Report — 2026-05-11" in md
-    assert "## Your Roster — Hart of the Order (League 5652)" in md
-    assert "## Top 10 Free Agent Signals" in md
-    assert "## Drivers (top peripheral signal per active prediction)" in md
-    # Roster columns present.
-    assert "HR" in md and "R" in md and "RBI" in md and "SB" in md and "AVG" in md
-    # Hot probability rendered correctly.
-    assert "hot 0.71" in md
-    assert "cold 0.78" in md
-    # Driver lines.
-    assert "xwoba_avg +1.8σ" in md
-    assert "k_pct +1.6σ" in md
-    assert "babip −1.3σ" in md
-
-
-def test_render_markdown_snapshot_matches_golden() -> None:
-    md = render_markdown(_build_sample_report())
-    golden = """# Streaks — Sunday Report — 2026-05-11
-*Models refit on 2023-2025; data through 2026-05-10*
-
-## Your Roster — Hart of the Order (League 5652)
-Sorted by composite (#hot − #cold), tiebreak max continuation probability.
-
-| Player | Pos | Comp | HR | R | RBI | SB | AVG |
-| --- | --- | --- | --- | --- | --- | --- | --- |
-| Aaron Judge | OF | +4 | hot 0.71 | hot 0.68 | hot 0.74 | — | hot 0.62 |
-| Vlad Jr | 1B | −2 | — | — | cold 0.78 | — | cold 0.71 |
-
-## Top 10 Free Agent Signals
-Top 10 available hitters by |composite|, non-neutral cats only.
-
-| Player | Pos | Comp | Active Streaks |
-| --- | --- | --- | --- |
-| Jorge Polanco | 2B | +3 | hot 0.72 R, hot 0.69 RBI, hot 0.65 AVG |
-
-## Drivers (top peripheral signal per active prediction)
-
-**Aaron Judge — RBI hot 0.74**  →  xwoba_avg +1.8σ, ev_avg +1.2σ
-**Vlad Jr — RBI cold 0.78**  →  k_pct +1.6σ, babip −1.3σ
-"""
-    assert md.strip() == golden.strip()
-
-
-def test_render_terminal_contains_expected_content() -> None:
-    term = render_terminal(_build_sample_report(), no_color=True)
-    # Header.
-    assert "Streaks — Sunday Report — 2026-05-11" in term
-    # Roster + FA section headings.
-    assert "Your Roster — Hart of the Order" in term
-    assert "Top 10 Free Agent Signals" in term
-    # Probabilities rendered.
-    assert "hot 0.71" in term
-    assert "cold 0.78" in term
-    # Drivers.
-    assert "Aaron Judge — RBI hot 0.74" in term
-
-
-def test_render_terminal_no_color_strips_ansi() -> None:
-    term = render_terminal(_build_sample_report(), no_color=True)
-    assert "\033[" not in term
-
-
-def test_render_terminal_with_color_inserts_ansi() -> None:
-    term = render_terminal(_build_sample_report(), no_color=False)
-    assert "\033[32m" in term  # green for hot
-    assert "\033[31m" in term  # red for cold
-
-
-def test_report_with_empty_roster_renders_placeholder() -> None:
-    report = Report(
-        report_date=date(2026, 5, 11),
-        window_end=None,
-        team_name="Hart of the Order",
-        league_id=5652,
-        season_set_train="2023-2025",
-        roster_rows=(),
-        fa_rows=(),
-        driver_lines=(),
-        skipped=(),
-    )
-    md = render_markdown(report)
-    assert "_No roster hitters resolved._" in md
-    assert "_No free-agent signals._" in md
-
-
 def test_build_report_end_to_end_against_seeded_db(seeded_fitted_conn) -> None:
     """build_report wires inference + Yahoo data + rendering together.
 
@@ -320,7 +147,7 @@ def test_build_report_end_to_end_against_seeded_db(seeded_fitted_conn) -> None:
     roster = [
         YahooHitter(name="P2", positions=("OF",), yahoo_id="2", status=""),
         YahooHitter(name="P4", positions=("1B",), yahoo_id="4", status=""),
-        # Pitcher — should be filtered.
+        # Pitcher -- should be filtered.
         YahooHitter(name="Tarik Skubal", positions=("SP",), yahoo_id="99", status=""),
     ]
     fas = [
@@ -347,16 +174,17 @@ def test_build_report_end_to_end_against_seeded_db(seeded_fitted_conn) -> None:
         window_days=14,
         top_n_fas=10,
     )
-    # Roster rows only contain hitters — no pitcher snuck in.
+    # Roster rows only contain hitters -- no pitcher snuck in.
     assert all("Tarik" not in r.name for r in report.roster_rows)
     assert len(report.roster_rows) == 2
-    # FA rows zero composite are dropped — assert <= len(fas).
+    # FA rows zero composite are dropped -- assert <= len(fas).
     assert len(report.fa_rows) <= len(fas)
     # window_end reflects the seeded data.
     assert report.window_end is not None
-    # The whole report can be rendered without error.
-    md = render_markdown(report)
-    assert "Hart of the Order" in md
+    # The whole report round-trips through the /streaks page's cache payload.
+    from fantasy_baseball.streaks.dashboard import deserialize_report, serialize_report
+
+    assert deserialize_report(serialize_report(report)) == report
 
 
 def test_build_report_end_to_end_keeps_and_annotates_inactive_roster(
@@ -380,7 +208,7 @@ def test_build_report_end_to_end_keeps_and_annotates_inactive_roster(
     roster = [
         YahooHitter(name="P2", positions=("OF",), yahoo_id="2", status=""),
         YahooHitter(name="P4", positions=("1B",), yahoo_id="4", status=""),
-        # Pitcher — should be filtered.
+        # Pitcher -- should be filtered.
         YahooHitter(name="Tarik Skubal", positions=("SP",), yahoo_id="99", status=""),
     ]
     fas = [
@@ -416,23 +244,6 @@ def test_build_report_end_to_end_keeps_and_annotates_inactive_roster(
     assert all(r.composite == 0 for r in report.roster_rows)
 
 
-def test_report_with_skipped_players_renders_footer() -> None:
-    report = Report(
-        report_date=date(2026, 5, 11),
-        window_end=date(2026, 5, 10),
-        team_name="Hart of the Order",
-        league_id=5652,
-        season_set_train="2023-2025",
-        roster_rows=(),
-        fa_rows=(),
-        driver_lines=(),
-        skipped=("Prospect McProspect",),
-    )
-    md = render_markdown(report)
-    assert "Skipped 1 player(s)" in md
-    assert "Prospect McProspect" in md
-
-
 def _neutral_scores(window_end: date) -> list[PlayerCategoryScore]:
     return [
         _score(player_id=1, category=cat, window_end=window_end)
@@ -464,34 +275,3 @@ def test_row_from_scores_active_when_window_is_recent() -> None:
         today=today,
     )
     assert row.days_since_last_game is None
-
-
-def _report_with_inactive_roster_row() -> Report:
-    row = _row_from_scores(
-        name="Oneil Cruz",
-        positions=("SS",),
-        player_id=1,
-        scores=_neutral_scores(date(2026, 6, 1)),
-        today=date(2026, 6, 1) + timedelta(days=30),
-    )
-    return Report(
-        report_date=date(2026, 7, 1),
-        window_end=date(2026, 6, 1),
-        team_name="Hart of the Order",
-        league_id=5652,
-        season_set_train="2023-2025",
-        roster_rows=(row,),
-        fa_rows=(),
-        driver_lines=(),
-        skipped=(),
-    )
-
-
-def test_render_markdown_shows_inactive_marker() -> None:
-    md = render_markdown(_report_with_inactive_roster_row())
-    assert "Oneil Cruz (inactive - 30 days)" in md
-
-
-def test_render_terminal_shows_inactive_marker() -> None:
-    txt = render_terminal(_report_with_inactive_roster_row(), no_color=True)
-    assert "Oneil Cruz (inactive - 30 days)" in txt
