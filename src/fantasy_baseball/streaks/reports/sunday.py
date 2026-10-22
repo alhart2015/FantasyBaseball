@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import Iterable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
@@ -23,13 +23,19 @@ from fantasy_baseball.streaks.data.projections import discover_projection_files
 from fantasy_baseball.streaks.inference import (
     REPORT_CATEGORIES,
     STALE_TOLERANCE_DAYS,
-    Driver,
     FittedModel,
-    PlayerCategoryScore,
     ScoreSkip,
     score_player_windows,
 )
-from fantasy_baseball.streaks.models import StreakCategory, StreakDirection, StreakLabel
+from fantasy_baseball.streaks.models import (
+    Driver,
+    DriverLine,
+    PlayerCategoryScore,
+    Report,
+    ReportRow,
+    StreakCategory,
+    StreakDirection,
+)
 from fantasy_baseball.utils.ansi import GREEN, RED, RESET, column_widths, pad, visible_width
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter
@@ -64,63 +70,6 @@ class YahooHitter:
     positions: tuple[str, ...]
     yahoo_id: str
     status: str
-
-
-@dataclass(frozen=True)
-class ReportRow:
-    """One player's row in the rendered report.
-
-    ``scores`` is keyed by category for fast cell lookup in the renderer;
-    missing entries render as ``—``.
-
-    ``days_since_last_game`` is set (an int) only when the player's
-    most-recent window is stale (> STALE_TOLERANCE_DAYS before the run
-    date) -- i.e. he is inactive; ``None`` means active/recent.
-    """
-
-    name: str
-    positions: tuple[str, ...]
-    player_id: int
-    composite: int
-    scores: dict[StreakCategory, PlayerCategoryScore]
-    max_probability: float
-    days_since_last_game: int | None = None
-
-    @property
-    def sort_key(self) -> tuple[float, float, str]:
-        """Roster ordering: composite desc, max_probability desc, name asc."""
-        return (-self.composite, -self.max_probability, self.name.lower())
-
-    @property
-    def fa_sort_key(self) -> tuple[float, float, str]:
-        """FA ordering: |composite| desc, max_probability desc, name asc."""
-        return (-abs(self.composite), -self.max_probability, self.name.lower())
-
-
-@dataclass(frozen=True)
-class DriverLine:
-    """One driver-attribution line under the tables."""
-
-    player_name: str
-    category: StreakCategory
-    label: StreakLabel
-    probability: float
-    drivers: tuple[Driver, ...]
-
-
-@dataclass(frozen=True)
-class Report:
-    """Full Sunday report payload — input to both renderers."""
-
-    report_date: date
-    window_end: date | None
-    team_name: str
-    league_id: int
-    season_set_train: str
-    roster_rows: tuple[ReportRow, ...]
-    fa_rows: tuple[ReportRow, ...]
-    driver_lines: tuple[DriverLine, ...]
-    skipped: tuple[str, ...] = field(default_factory=tuple)
 
 
 # --------------------------------------------------------------------- #

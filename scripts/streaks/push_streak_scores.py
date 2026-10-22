@@ -79,8 +79,8 @@ def main(argv: list[str] | None = None) -> int:
     from fantasy_baseball.auth.yahoo_auth import get_league, get_yahoo_session
     from fantasy_baseball.config import load_config
     from fantasy_baseball.data.cache_keys import CacheKey
-    from fantasy_baseball.streaks.dashboard import serialize_report
     from fantasy_baseball.streaks.data.schema import DEFAULT_DB_PATH, get_connection
+    from fantasy_baseball.streaks.payload import serialize_report
     from fantasy_baseball.streaks.pipeline import compute_streak_report
     from fantasy_baseball.web.refresh_pipeline import _push_streak_scores_to_remote
     from fantasy_baseball.web.season_data import write_cache

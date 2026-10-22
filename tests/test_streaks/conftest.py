@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import shutil
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 
 import duckdb
 import pytest
 
 from fantasy_baseball.streaks.data.load_model_fits import upsert_model_fits
 from fantasy_baseball.streaks.data.schema import get_connection
-from fantasy_baseball.streaks.models import ModelFit
+from fantasy_baseball.streaks.models import (
+    Driver,
+    DriverLine,
+    ModelFit,
+    PlayerCategoryScore,
+    Report,
+    ReportRow,
+)
 from tests.test_streaks.test_predictors import _seed_pipeline
 
 
@@ -128,3 +135,83 @@ def seeded_fitted_conn(_seeded_fitted_db_path, tmp_path):
     conn = get_connection(dst)
     yield conn
     conn.close()
+
+
+# Example streak reports, shared by test_payload.py and test_indicator.py.
+
+
+def example_report() -> Report:
+    score_hr = PlayerCategoryScore(
+        player_id=665742,
+        category="hr",
+        label="hot",
+        probability=0.62,
+        drivers=(Driver(feature="barrel_pct", z_score=1.8),),
+        window_end=date(2026, 5, 10),
+    )
+    score_avg = PlayerCategoryScore(
+        player_id=665742,
+        category="avg",
+        label="neutral",
+        probability=None,
+        drivers=(),
+        window_end=date(2026, 5, 10),
+    )
+    row = ReportRow(
+        name="Juan Soto",
+        positions=("OF",),
+        player_id=665742,
+        composite=1,
+        scores={"hr": score_hr, "avg": score_avg},
+        max_probability=0.62,
+    )
+    driver_line = DriverLine(
+        player_name="Juan Soto",
+        category="hr",
+        label="hot",
+        probability=0.62,
+        drivers=(Driver(feature="barrel_pct", z_score=1.8),),
+    )
+    return Report(
+        report_date=date(2026, 5, 11),
+        window_end=date(2026, 5, 10),
+        team_name="Hart of the Order",
+        league_id=5652,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(driver_line,),
+        skipped=("Foo — no_window",),
+    )
+
+
+def example_report_inactive() -> Report:
+    """A report whose single roster row is inactive (days_since_last_game set)."""
+    score = PlayerCategoryScore(
+        player_id=592518,
+        category="hr",
+        label="neutral",
+        probability=None,
+        drivers=(),
+        window_end=date(2026, 5, 1),
+    )
+    row = ReportRow(
+        name="Injured Guy",
+        positions=("1B",),
+        player_id=592518,
+        composite=0,
+        scores={"hr": score},
+        max_probability=0.0,
+        days_since_last_game=30,  # MUST be set explicitly; it is a stored field
+    )
+    return Report(
+        report_date=date(2026, 5, 31),
+        window_end=date(2026, 5, 1),
+        team_name="Hart of the Order",
+        league_id=5652,
+        season_set_train="2023-2025",
+        roster_rows=(row,),
+        fa_rows=(),
+        driver_lines=(),
+        skipped=(),
+    )
