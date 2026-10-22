@@ -1,11 +1,6 @@
-"""Sunday-report orchestrator + formatter.
-
-Knows about Yahoo + report layout. Pure inference lives in
+"""Streak-report orchestrator: Yahoo hitters -> the :class:`Report` the /streaks
+page shows (via :mod:`streaks.dashboard`). Pure inference lives in
 :mod:`streaks.inference` and is invoked from :func:`build_report`.
-
-The orchestrator is split from the renderers so unit tests can hand-build
-a :class:`Report` and snapshot the markdown without touching Yahoo or
-sklearn.
 """
 
 from __future__ import annotations
@@ -30,28 +25,13 @@ from fantasy_baseball.streaks.inference import (
     score_player_windows,
 )
 from fantasy_baseball.streaks.models import StreakCategory, StreakDirection, StreakLabel
-from fantasy_baseball.utils.ansi import GREEN, RED, RESET, column_widths, pad, visible_width
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.positions import is_hitter
 
 logger = logging.getLogger(__name__)
 
 
-# Display labels for the five categories — the column headers shown in
-# the rendered tables.
-_CATEGORY_HEADERS: dict[StreakCategory, str] = {
-    "hr": "HR",
-    "r": "R",
-    "rbi": "RBI",
-    "sb": "SB",
-    "avg": "AVG",
-}
-
-# Sparse cats have no cold model in Phase 4 (per design). When the label
-# is cold for these cats we render ``cold —`` (label, no probability).
-_SPARSE_CATEGORIES: frozenset[StreakCategory] = frozenset({"hr", "sb"})
-
-# Default season year used when scoring 2026 windows — the report itself
+# Default season year used when scoring 2026 windows -- the report itself
 # is parameterized but the scoring season comes from league_config.
 _DEFAULT_SCORING_SEASON = 2026
 
@@ -68,10 +48,9 @@ class YahooHitter:
 
 @dataclass(frozen=True)
 class ReportRow:
-    """One player's row in the rendered report.
+    """One player's row in the report.
 
-    ``scores`` is keyed by category for fast cell lookup in the renderer;
-    missing entries render as ``—``.
+    ``scores`` is keyed by category; a category with no entry has no score.
 
     ``days_since_last_game`` is set (an int) only when the player's
     most-recent window is stale (> STALE_TOLERANCE_DAYS before the run
@@ -110,7 +89,7 @@ class DriverLine:
 
 @dataclass(frozen=True)
 class Report:
-    """Full Sunday report payload — input to both renderers."""
+    """Full streak report payload, cached for the /streaks page."""
 
     report_date: date
     window_end: date | None
@@ -124,7 +103,7 @@ class Report:
 
 
 # --------------------------------------------------------------------- #
-#                       Yahoo player → mlbam_id                          #
+#                       Yahoo player -> mlbam_id                          #
 # --------------------------------------------------------------------- #
 
 
@@ -134,10 +113,10 @@ def build_name_to_mlbam_map(projections_root: Path, *, season: int) -> dict[str,
     Loads every per-system hitter CSV under
     ``{projections_root}/{season}/`` and keys by ``normalize_name(Name)``.
     Conflicts (same normalized name pointing at different MLBAMIDs across
-    systems) are resolved by first-write-wins — they're rare in practice
+    systems) are resolved by first-write-wins -- they're rare in practice
     and the report can tolerate one such miss; logged at WARNING.
 
-    Returns an empty dict when no per-system CSVs are found — the caller
+    Returns an empty dict when no per-system CSVs are found -- the caller
     should treat that as a hard error.
     """
     out: dict[str, int] = {}
@@ -174,12 +153,12 @@ def resolve_hitters(
     """Pair Yahoo hitters with mlbam_ids; collect names we could not resolve.
 
     Returns ``(resolved, unresolved_names)``. Pitcher positions (SP, RP)
-    are filtered out before lookup — pitcher streaks are out of scope.
+    are filtered out before lookup -- pitcher streaks are out of scope.
     """
     resolved: list[tuple[YahooHitter, int]] = []
     unresolved: list[str] = []
     for h in yahoo_hitters:
-        # Drop pitchers — Phase 5 is hitters-only.
+        # Drop pitchers -- Phase 5 is hitters-only.
         if not is_hitter(h.positions):
             continue
         mlbam = name_to_mlbam.get(normalize_name(h.name))
@@ -198,7 +177,7 @@ def resolve_hitters(
 def _composite(scores: Iterable[PlayerCategoryScore]) -> int:
     """``#hot - #cold`` over the player's category scores.
 
-    Counts the label regardless of whether a probability was computed —
+    Counts the label regardless of whether a probability was computed --
     a sparse-cat cold without a model still represents a cold streak.
     """
     composite = 0
@@ -253,7 +232,7 @@ def _row_from_scores(
 def _driver_lines_from_rows(rows: Iterable[ReportRow]) -> list[DriverLine]:
     """Surface every (player, cat) prediction that has both a probability
     and at least one driver attribution. Composite-sorted by row, then
-    by category order — same as the rendered tables for visual continuity.
+    by category order -- same as the rendered tables for visual continuity.
     """
     lines: list[DriverLine] = []
     for row in rows:
@@ -290,9 +269,9 @@ def build_report(
 ) -> Report:
     """Build a :class:`Report` end-to-end from already-fetched Yahoo data.
 
-    Doesn't fetch from Yahoo — the CLI is responsible for that, so this
-    function stays testable without Yahoo mocks. Doesn't refit models —
-    same reasoning; refitting is the CLI's job.
+    Doesn't fetch from Yahoo -- streaks.pipeline does that, so this
+    function stays testable without Yahoo mocks. Doesn't refit models --
+    same reasoning; refitting is streaks.pipeline's job.
     """
     resolved_roster, roster_unresolved = resolve_hitters(roster_hitters, name_to_mlbam)
     resolved_fas, _fa_unresolved = resolve_hitters(fa_hitters, name_to_mlbam)
@@ -335,7 +314,7 @@ def build_report(
     roster_rows.sort(key=lambda r: r.sort_key)
 
     # FA rows. Composite=0 rows aren't useful in the FA section so they
-    # are dropped before sorting — that lets the "top 10 by |composite|"
+    # are dropped before sorting -- that lets the "top 10 by |composite|"
     # logic do the right thing when more than 10 FAs share composite=0.
     fa_rows: list[ReportRow] = []
     for hitter, mlbam in resolved_fas:
@@ -382,272 +361,3 @@ def build_report(
 def _skip_reason_text(skip: ScoreSkip) -> str:
     """One-line summary of an inference-skip for the footer."""
     return f"player_id={skip.player_id} ({skip.reason})"
-
-
-# --------------------------------------------------------------------- #
-#                         Markdown rendering                             #
-# --------------------------------------------------------------------- #
-
-
-def _format_cell(score: PlayerCategoryScore | None, *, sparse: bool) -> str:
-    """Render one category cell.
-
-    - Neutral / missing score: ``—``.
-    - Hot/cold with probability: ``"hot 0.71"``, ``"cold 0.78"``.
-    - Hot/cold without probability: ``"hot —"`` / ``"cold —"``. (Sparse
-      cold has no model; missing projection rate also lands here.)
-    """
-    if score is None or score.label == "neutral":
-        return "—"
-    if score.probability is None:
-        if sparse and score.label == "cold":
-            return "cold —"
-        return f"{score.label} —"
-    return f"{score.label} {score.probability:.2f}"
-
-
-def _signed(n: int) -> str:
-    """Signed composite-score string: ``+3``, ``0``, ``−2`` (true minus)."""
-    if n > 0:
-        return f"+{n}"
-    if n < 0:
-        return f"−{abs(n)}"
-    return "0"
-
-
-def _format_positions(positions: tuple[str, ...]) -> str:
-    return "/".join(positions) if positions else ""
-
-
-def _name_cell(row: ReportRow) -> str:
-    """Player-name cell, with an inactive marker appended when the player's
-    most-recent window is stale (see ReportRow.days_since_last_game). Appended
-    into the name cell rather than added as a column so the fixed header /
-    separator / column-width layout of both renderers is untouched. ASCII only.
-    """
-    if row.days_since_last_game is not None:
-        return f"{row.name} (inactive - {row.days_since_last_game} days)"
-    return row.name
-
-
-def _markdown_separator_row(n_cols: int) -> str:
-    """Three dashes per column — minimal valid markdown separator."""
-    return "|" + "|".join([" --- "] * n_cols) + "|"
-
-
-def _roster_table_markdown(rows: Sequence[ReportRow]) -> list[str]:
-    """Render the roster table — uniform 5-cat grid."""
-    headers = ["Player", "Pos", "Comp", *(_CATEGORY_HEADERS[c] for c in REPORT_CATEGORIES)]
-    lines = [
-        "| " + " | ".join(headers) + " |",
-        _markdown_separator_row(len(headers)),
-    ]
-    for row in rows:
-        cells = [
-            _name_cell(row),
-            _format_positions(row.positions),
-            _signed(row.composite),
-        ]
-        for cat in REPORT_CATEGORIES:
-            cells.append(_format_cell(row.scores.get(cat), sparse=cat in _SPARSE_CATEGORIES))
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
-
-
-def _fa_table_markdown(rows: Sequence[ReportRow]) -> list[str]:
-    """Render the free-agent table — non-neutral cats concatenated."""
-    headers = ["Player", "Pos", "Comp", "Active Streaks"]
-    lines = [
-        "| " + " | ".join(headers) + " |",
-        _markdown_separator_row(len(headers)),
-    ]
-    for row in rows:
-        active: list[str] = []
-        for cat in REPORT_CATEGORIES:
-            score = row.scores.get(cat)
-            if score is None or score.label == "neutral":
-                continue
-            cell = _format_cell(score, sparse=cat in _SPARSE_CATEGORIES)
-            active.append(f"{cell} {_CATEGORY_HEADERS[cat]}")
-        cells = [
-            row.name,
-            _format_positions(row.positions),
-            _signed(row.composite),
-            ", ".join(active) if active else "—",
-        ]
-        lines.append("| " + " | ".join(cells) + " |")
-    return lines
-
-
-def _driver_block_markdown(lines: Sequence[DriverLine]) -> list[str]:
-    out: list[str] = []
-    for line in lines:
-        drivers = ", ".join(_format_driver(d) for d in line.drivers)
-        cat_header = _CATEGORY_HEADERS[line.category]
-        out.append(
-            f"**{line.player_name} — {cat_header} {line.label} "
-            f"{line.probability:.2f}**  →  {drivers}"
-        )
-    return out
-
-
-def _format_driver(driver: Driver) -> str:
-    """``xwoba_avg +1.8σ`` — sigma symbol matches the spec."""
-    sign = "+" if driver.z_score >= 0 else "−"
-    return f"{driver.feature} {sign}{abs(driver.z_score):.1f}σ"
-
-
-def render_markdown(report: Report) -> str:
-    """Render the full report as a markdown string.
-
-    Matches the skeleton in the design spec; intended to be written to
-    ``data/streaks/reports/YYYY-MM-DD.md``.
-    """
-    parts: list[str] = []
-    parts.append(f"# Streaks — Sunday Report — {report.report_date.isoformat()}")
-    window_text = (
-        report.window_end.isoformat() if report.window_end is not None else "(no recent windows)"
-    )
-    parts.append(f"*Models refit on {report.season_set_train}; data through {window_text}*")
-    parts.append("")
-    parts.append(f"## Your Roster — {report.team_name} (League {report.league_id})")
-    parts.append("Sorted by composite (#hot − #cold), tiebreak max continuation probability.")
-    parts.append("")
-    if report.roster_rows:
-        parts.extend(_roster_table_markdown(report.roster_rows))
-    else:
-        parts.append("_No roster hitters resolved._")
-    parts.append("")
-    parts.append("## Top 10 Free Agent Signals")
-    parts.append("Top 10 available hitters by |composite|, non-neutral cats only.")
-    parts.append("")
-    if report.fa_rows:
-        parts.extend(_fa_table_markdown(report.fa_rows))
-    else:
-        parts.append("_No free-agent signals._")
-    parts.append("")
-    if report.driver_lines:
-        parts.append("## Drivers (top peripheral signal per active prediction)")
-        parts.append("")
-        parts.extend(_driver_block_markdown(report.driver_lines))
-        parts.append("")
-    if report.skipped:
-        parts.append(f"_Skipped {len(report.skipped)} player(s): {', '.join(report.skipped)}._")
-        parts.append("")
-    return "\n".join(parts)
-
-
-# --------------------------------------------------------------------- #
-#                       Terminal rendering                               #
-# --------------------------------------------------------------------- #
-
-# ANSI codes for hot/cold cells. Disabled when ``no_color=True`` so the
-# output remains readable when piped to a file or non-TTY. The codes and the
-# width arithmetic that has to ignore them now live in ``utils.ansi``, shared
-# with ``scripts/player_trajectory.py``.
-_ANSI_GREEN = GREEN
-_ANSI_RED = RED
-_ANSI_RESET = RESET
-
-
-def _paint_cell(score: PlayerCategoryScore | None, *, sparse: bool, no_color: bool) -> str:
-    """Same content as ``_format_cell``, plus ANSI color for hot/cold."""
-    text = _format_cell(score, sparse=sparse)
-    if no_color or score is None or score.label == "neutral":
-        return text
-    color = _ANSI_GREEN if score.label == "hot" else _ANSI_RED
-    return f"{color}{text}{_ANSI_RESET}"
-
-
-_column_widths = column_widths
-
-
-_visible_width = visible_width
-
-
-_pad = pad
-
-
-def _render_text_table(rows: Sequence[Sequence[str]]) -> list[str]:
-    """Render a fixed-width text table with simple ASCII separators."""
-    widths = _column_widths(rows)
-    lines: list[str] = []
-    for r_idx, row in enumerate(rows):
-        padded = [_pad(cell, widths[c]) for c, cell in enumerate(row)]
-        lines.append("  ".join(padded).rstrip())
-        if r_idx == 0:
-            lines.append("  ".join("-" * widths[c] for c in range(len(widths))))
-    return lines
-
-
-def render_terminal(report: Report, *, no_color: bool = False) -> str:
-    """Render the report as a single string suitable for ``print``.
-
-    Returns a string rather than printing so callers can choose where the
-    output goes (stdout, a log, a test capture). The CLI prints it.
-    """
-    parts: list[str] = []
-    parts.append(f"Streaks — Sunday Report — {report.report_date.isoformat()}")
-    window_text = (
-        report.window_end.isoformat() if report.window_end is not None else "(no recent windows)"
-    )
-    parts.append(f"Models refit on {report.season_set_train}; data through {window_text}")
-    parts.append("")
-    parts.append(f"Your Roster — {report.team_name} (League {report.league_id})")
-    if report.roster_rows:
-        roster_rows = [
-            ["Player", "Pos", "Comp", *(_CATEGORY_HEADERS[c] for c in REPORT_CATEGORIES)]
-        ]
-        for r in report.roster_rows:
-            row = [
-                _name_cell(r),
-                _format_positions(r.positions),
-                _signed(r.composite),
-            ]
-            for cat in REPORT_CATEGORIES:
-                row.append(
-                    _paint_cell(
-                        r.scores.get(cat), sparse=cat in _SPARSE_CATEGORIES, no_color=no_color
-                    )
-                )
-            roster_rows.append(row)
-        parts.extend(_render_text_table(roster_rows))
-    else:
-        parts.append("(no roster hitters resolved)")
-    parts.append("")
-    parts.append("Top 10 Free Agent Signals")
-    if report.fa_rows:
-        fa_rows = [["Player", "Pos", "Comp", "Active Streaks"]]
-        for r in report.fa_rows:
-            active_chunks: list[str] = []
-            for cat in REPORT_CATEGORIES:
-                score = r.scores.get(cat)
-                if score is None or score.label == "neutral":
-                    continue
-                cell = _paint_cell(score, sparse=cat in _SPARSE_CATEGORIES, no_color=no_color)
-                active_chunks.append(f"{cell} {_CATEGORY_HEADERS[cat]}")
-            fa_rows.append(
-                [
-                    r.name,
-                    _format_positions(r.positions),
-                    _signed(r.composite),
-                    ", ".join(active_chunks) if active_chunks else "—",
-                ]
-            )
-        parts.extend(_render_text_table(fa_rows))
-    else:
-        parts.append("(no free-agent signals)")
-    parts.append("")
-    if report.driver_lines:
-        parts.append("Drivers (top peripheral signal per active prediction)")
-        for line in report.driver_lines:
-            drivers = ", ".join(_format_driver(d) for d in line.drivers)
-            cat_header = _CATEGORY_HEADERS[line.category]
-            parts.append(
-                f"  {line.player_name} — {cat_header} {line.label} "
-                f"{line.probability:.2f}  →  {drivers}"
-            )
-        parts.append("")
-    if report.skipped:
-        parts.append(f"Skipped {len(report.skipped)}: {', '.join(report.skipped)}")
-    return "\n".join(parts)
