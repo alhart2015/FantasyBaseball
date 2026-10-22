@@ -69,9 +69,11 @@ def _seed_full_pipeline(conn) -> None:
                 season=2025,
                 hr_per_pa=0.05 if pid % 2 == 0 else 0.005,
                 sb_per_pa=0.04 if pid % 2 == 0 else 0.004,
-                r_per_pa=None,
-                rbi_per_pa=None,
-                avg=None,
+                # The dense path compares each next window with his own
+                # projection (#174), so the dense cats need one.
+                r_per_pa=0.45 if pid % 2 == 0 else 0.2,
+                rbi_per_pa=0.45 if pid % 2 == 0 else 0.2,
+                avg=0.24 if pid % 2 == 0 else 0.01,
                 n_systems=2,
             )
             for pid in range(1, 9)

@@ -127,8 +127,11 @@ def _seed_pipeline(conn, *, n_players: int = 16, n_days: int = 90, season: int =
                 season=season,
                 hr_per_pa=0.05 if pid % 2 == 0 else 0.005,
                 sb_per_pa=0.04 if pid % 2 == 0 else 0.004,
-                r_per_pa=0.15 if pid % 2 == 0 else 0.10,
-                rbi_per_pa=0.18 if pid % 2 == 0 else 0.10,
+                # Each player's season rate in the fixture above (surge/slump
+                # cycle averaged), so his windows land on both sides of his own
+                # projection -- the dense target is player-relative (#174).
+                r_per_pa=0.49 if pid % 2 == 0 else 0.24,
+                rbi_per_pa=0.49 if pid % 2 == 0 else 0.24,
                 avg=0.275 if pid % 2 == 0 else 0.230,
                 n_systems=2,
             )
@@ -154,18 +157,27 @@ def test_build_training_frame_columns_match_expected() -> None:
     assert "season" in df.columns
 
 
-def test_build_training_frame_hot_dense_target_matches_bucket_median() -> None:
-    """For dense hot, target=1 iff next_value > median(next_value) within (window_days, pt_bucket)."""
+def test_build_training_frame_hot_dense_target_beats_his_own_projection() -> None:
+    """For dense hot, target=1 iff the next window's R beats HIS projected R/PA x
+    next-window PA (#174), not a population median."""
     conn = get_connection(":memory:")
     _seed_pipeline(conn)
     df = build_training_frame(
         conn, category="r", direction="above", season_set="2024", window_days=14
     )
     assert not df.empty
-    assert df["target"].isin([0, 1]).all()
-    # At least some variation — fixture has both above-median and below-median rows.
-    assert df["target"].sum() > 0
-    assert df["target"].sum() < len(df)
+    nxt = conn.execute(
+        "SELECT player_id, window_end - INTERVAL 14 DAY AS window_end, r AS next_r, pa AS next_pa "
+        "FROM hitter_windows WHERE window_days = 14"
+    ).df()
+    df["window_end"] = pd.to_datetime(df["window_end"])
+    nxt["window_end"] = pd.to_datetime(nxt["window_end"])
+    m = df.merge(nxt, on=["player_id", "window_end"], how="left")
+    assert m["next_r"].notna().all()
+    expected = (m["next_r"] > m["season_rate_in_category"] * m["next_pa"]).astype(int)
+    assert (m["target"].to_numpy() == expected.to_numpy()).all()
+    # At least some variation -- windows land on both sides of their own projection.
+    assert 0 < df["target"].sum() < len(df)
 
 
 def test_build_training_frame_filters_to_hot_only_for_above_direction() -> None:
@@ -228,8 +240,8 @@ def test_build_training_frame_includes_season_rate_for_dense_cats() -> None:
         conn, category="r", direction="above", season_set="2024", window_days=14
     )
     assert df["season_rate_in_category"].notna().all()
-    # In the fixture, high-rate players have r_per_pa=0.15 and low-rate=0.10.
-    assert set(df["season_rate_in_category"].round(2)).issubset({0.10, 0.15})
+    # In the fixture, high-rate players have r_per_pa=0.49 and low-rate=0.24.
+    assert set(df["season_rate_in_category"].round(2)).issubset({0.24, 0.49})
 
 
 def _make_synthetic_X_y(
