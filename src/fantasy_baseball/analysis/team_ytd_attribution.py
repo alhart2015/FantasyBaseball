@@ -1,9 +1,9 @@
 """Team-YTD stat attribution via ownership-period x per-game log intersection.
 
-Same attribution model as :mod:`fantasy_baseball.analysis.spoe` -- walk
+Same ownership walk as :mod:`fantasy_baseball.analysis.luck` -- walk
 ``Team.ownership_periods()`` and credit each (player, window) to its team --
 but sums ACTUAL per-game AB from ``data/roster_game_logs.json`` instead of
-SPoE's projection-scaled expected stats.
+projection-scaled expected stats.
 
 Used by :mod:`fantasy_baseball.web.refresh_pipeline` to populate
 ``StandingsEntry.extras[OpportunityStat.AB]`` before

@@ -292,7 +292,7 @@ def write_cache(
     error handler then fails the run and QStash redelivers it.
 
     ``required=False``: for genuinely non-load-bearing keys (auxiliary
-    dashboard panels -- e.g. leverage, SPoE, transactions, finish-odds). A
+    dashboard panels -- e.g. leverage, luck, transactions, finish-odds). A
     write error is logged and swallowed so a transient blip on a cosmetic key
     doesn't abort -- and force a full re-run of -- the whole refresh after the
     load-bearing standings/roster/lineup already wrote successfully.

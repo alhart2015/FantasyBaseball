@@ -2,84 +2,100 @@
 
 {% block title %}Luck — Season Dashboard{% endblock %}
 
+{% macro signed(v, fmt="%+.1f", eps=0.25) -%}
+<span class="{% if v > eps %}luck-positive{% elif v < -eps %}luck-negative{% endif %}">{{ fmt|format(v) }}</span>
+{%- endmacro %}
+
 {% block content %}
-<style>
-    /* Layout-only rules; theming lives in season.css under .page-luck. */
-    .expandable { cursor: pointer; }
-    .expand-content { display: none; }
-    .expand-content.open { display: table-row; }
-</style>
-
 <div class="page-luck">
-<h2>Luck Analysis (SPOE)</h2>
-{% if snapshot_date %}
-<p style="color: var(--text-dim); font-size: 0.9em;">
-    Standings Points Over Expected as of {{ snapshot_date }}. Data updates each refresh.
-    Positive = lucky (outperforming projections). Negative = unlucky.
-</p>
-{% endif %}
+<h2>Luck</h2>
+{% if luck %}
+<p>As of {{ luck.as_of }}</p>
 
-{% if spoe_data %}
-<table class="spoe-table">
+<table class="luck-table">
     <thead>
         <tr>
             <th>#</th>
             <th>Team</th>
-            <th>Actual Pts</th>
-            <th>Projected Pts</th>
-            <th>SPOE</th>
+            <th title="Real standings points">Pts</th>
+            <th title="Points if every player had hit his projection">Expected</th>
+            <th title="Standings points from performance luck">Luck</th>
+            <th title="Performance luck, SGP">Perf</th>
+            <th title="Playing-time luck, SGP (injuries, lost roles)">PT</th>
         </tr>
     </thead>
     <tbody>
-        {% for team in spoe_data %}
-        <tr class="expandable" onclick="toggleExpand(this)">
+        {% for t in luck.teams %}
+        <tr class="expandable{% if t.team == my_team %} luck-mine{% endif %}" onclick="toggleExpand(this)">
             <td class="rank-num">{{ loop.index }}</td>
-            <td>{{ team.team }}</td>
-            <td>{{ "%.1f"|format(team.actual_pts) }}</td>
-            <td>{{ "%.1f"|format(team.projected_pts) }}</td>
-            <td class="{% if team.total_spoe > 0.5 %}spoe-positive{% elif team.total_spoe < -0.5 %}spoe-negative{% endif %}">
-                {{ "%+.1f"|format(team.total_spoe) }}
-            </td>
+            <td>{{ t.team }}</td>
+            <td>{{ "%.1f"|format(t.points) }}</td>
+            <td>{{ "%.1f"|format(t.expected_points) }}</td>
+            <td>{{ signed(t.luck_points) }}</td>
+            <td>{{ signed(t.perf_sgp) }}</td>
+            <td>{{ signed(t.pt_sgp) }}</td>
         </tr>
         <tr class="expand-content">
-            <td colspan="5">
+            <td colspan="7">
                 <table class="detail-table">
-                    <thead>
-                        <tr>
-                            <th>Category</th>
-                            <th>Proj. Stat</th>
-                            <th>Actual Stat</th>
-                            <th>Proj. Pts</th>
-                            <th>Actual Pts</th>
-                            <th>SPOE</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        {% for cat in categories %}
-                        {% set c = team.categories.get(cat, {}) %}
-                        {% set fmt = "%.3f" if cat in rate_stats else "%.1f" %}
-                        <tr>
-                            <td>{{ cat }}</td>
-                            <td>{{ fmt|format(c.get("projected_stat", 0)) }}</td>
-                            <td>{{ fmt|format(c.get("actual_stat", 0)) }}</td>
-                            <td>{{ "%.1f"|format(c.get("projected_pts", 0)) }}</td>
-                            <td>{{ "%.1f"|format(c.get("actual_pts", 0)) }}</td>
-                            <td class="{% if c.get('spoe', 0) > 0.25 %}spoe-positive{% elif c.get('spoe', 0) < -0.25 %}spoe-negative{% endif %}">
-                                {{ "%+.1f"|format(c.get("spoe", 0)) }}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
+                    <thead><tr>{% for c in categories %}<th>{{ c }}</th>{% endfor %}<th title="PA vs projected">PA</th><th title="IP vs projected">IP</th></tr></thead>
+                    <tbody><tr>
+                        {% for c in categories %}<td>{{ signed(t.categories[c]) }}</td>{% endfor %}
+                        <td>{{ "%+.0f"|format(t.pa_vs_proj) }}</td>
+                        <td>{{ "%+.0f"|format(t.ip_vs_proj) }}</td>
+                    </tr></tbody>
                 </table>
             </td>
         </tr>
         {% endfor %}
     </tbody>
 </table>
-{% else %}
-<p style="color: var(--text-dim);">No SPOE data yet. Run a dashboard refresh to compute standings luck analysis.</p>
-{% endif %}
 
+<h3>Players</h3>
+<label>Team
+    <select id="luck-team" onchange="filterLuckPlayers(this.value)">
+        <option value="">All</option>
+        {% for t in luck.teams %}<option value="{{ t.team }}"{% if t.team == my_team %} selected{% endif %}>{{ t.team }}</option>{% endfor %}
+    </select>
+</label>
+<table class="luck-table" id="luck-players">
+    <thead>
+        <tr>
+            <th>Player</th>
+            <th>Team</th>
+            <th title="Date acquired">Got</th>
+            <th title="Total luck, SGP">Luck</th>
+            <th title="Performance luck, SGP">Perf</th>
+            <th title="Playing-time luck, SGP">PT</th>
+            <th title="PA or IP rostered vs projected">Time</th>
+            <th title="Actual / expected, in active games">Line</th>
+        </tr>
+    </thead>
+    <tbody>
+        {% for p in luck.players %}
+        <tr data-team="{{ p.team }}">
+            <td>{{ p.name }}</td>
+            <td>{{ p.team }}</td>
+            <td{% if p.stale %} class="luck-stale" title="projection from {{ p.proj_as_of }}"{% endif %}>{{ p.acquired[5:] }}</td>
+            <td>{{ signed(p.total_sgp) }}</td>
+            <td>{{ signed(p.perf_sgp) }}</td>
+            <td>{{ signed(p.pt_sgp) }}</td>
+            <td>{{ "%.0f"|format(p.pt_got) }}/{{ "%.0f"|format(p.pt_proj) }}</td>
+            <td class="luck-line">
+                {% for stat, v in p.actual.items() %}
+                    {% set e = p.expected[stat] %}
+                    {% if stat == "AVG" %}{{ stat }} {{ "%.3f"|format(v) }}/{{ "%.3f"|format(e) }}
+                    {% elif stat in ("ERA", "WHIP") %}{{ stat }} {{ "%.2f"|format(v) }}/{{ "%.2f"|format(e) }}
+                    {% else %}{{ stat }} {{ "%.0f"|format(v) }}/{{ "%.0f"|format(e) }}{% endif %}{% if not loop.last %} · {% endif %}
+                {% endfor %}
+            </td>
+        </tr>
+        {% endfor %}
+    </tbody>
+</table>
+{% else %}
+<p>No luck data yet. Run a refresh.</p>
+{% endif %}
 </div>
 
 <script>
@@ -87,5 +103,14 @@ function toggleExpand(row) {
     const next = row.nextElementSibling;
     if (next) next.classList.toggle('open');
 }
+function filterLuckPlayers(team) {
+    document.querySelectorAll('#luck-players tbody tr').forEach((tr) => {
+        tr.style.display = !team || tr.dataset.team === team ? '' : 'none';
+    });
+}
+document.addEventListener('DOMContentLoaded', () => {
+    const sel = document.getElementById('luck-team');
+    if (sel) filterLuckPlayers(sel.value);
+});
 </script>
 {% endblock %}

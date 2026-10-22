@@ -572,16 +572,28 @@ def build_hitter_ytd_game_logs(client, season: int) -> dict[str, dict]:
     rollup is empty. ``games`` rows are passed through verbatim;
     ``_load_per_game_hitter_ab`` reads only ``date`` and ``ab``.
     """
+    return build_ytd_game_logs(client, season, "hitter")
+
+
+def build_ytd_game_logs(client, season: int, player_type: str) -> dict[str, dict]:
+    """``{mlbam_id: {"name", "type", "games": [...]}}`` for every hitter or pitcher
+    (``player_type``) the ``game_log_totals`` rollup lists, from the per-player
+    ``game_logs:{season}:{id}:hitting|pitching`` records, read in chunked MGETs.
+    Missing or corrupt per-player logs are skipped; ``{}`` when *client* is
+    ``None`` or the rollup is empty."""
     if client is None:
         return {}
-    rollup = get_game_log_totals(client, "hitters")
+    group, rollup_kind = (
+        ("hitting", "hitters") if player_type == "hitter" else ("pitching", "pitchers")
+    )
+    rollup = get_game_log_totals(client, rollup_kind)
     if not rollup:
         return {}
     ids = list(rollup)
     out: dict[str, dict] = {}
     for start in range(0, len(ids), _GAME_LOG_MGET_CHUNK):
         chunk = ids[start : start + _GAME_LOG_MGET_CHUNK]
-        keys = [_player_game_log_key(season, mid, "hitting") for mid in chunk]
+        keys = [_player_game_log_key(season, mid, group) for mid in chunk]
         for mid, raw in zip(chunk, client.mget(*keys), strict=True):
             if not raw:
                 continue
@@ -593,7 +605,7 @@ def build_hitter_ytd_game_logs(client, season: int) -> dict[str, dict]:
                 continue
             out[mid] = {
                 "name": payload.get("name") or rollup[mid].get("name") or "",
-                "type": "hitter",
+                "type": player_type,
                 "games": payload.get("games") or [],
             }
     return out

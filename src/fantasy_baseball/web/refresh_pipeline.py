@@ -2,7 +2,7 @@
 
 Orchestrates one full data refresh: auth with Yahoo, fetch rosters and
 standings, blend projections, run the lineup optimizer, run Monte Carlo
-simulations, compute SPoE, and write all cache artifacts. Entry point is
+simulations, compute luck, and write all cache artifacts. Entry point is
 ``run_full_refresh``. Progress is tracked in module-level state that the
 web UI polls via ``get_refresh_status``.
 
@@ -15,7 +15,6 @@ that pulls from Yahoo and runs the rest against the last persisted league
 state. See ``docs/stale-data-refresh-runbook.md``.
 """
 
-import json
 import logging
 import os
 import threading
@@ -51,6 +50,7 @@ from fantasy_baseball.web.season_data import (
     _load_game_log_totals,
     read_cache,
     read_cache_dict,
+    read_cache_list,
     read_cache_with_meta,
     reset_cache_job,
     set_cache_job,
@@ -238,29 +238,6 @@ def _push_streak_scores_to_remote(payload: dict) -> None:
         write_cache_to(remote, _CacheKey.STREAK_SCORES, payload)
     except Exception as exc:
         log.warning(f"Failed to mirror streak_scores to remote Upstash: {exc}")
-
-
-def _write_spoe_snapshot(spoe_result: dict) -> None:
-    """Write a daily SPoE snapshot under `spoe_snapshot:YYYY-MM-DD`.
-
-    Separate from the main write_cache path because this key is not
-    under the `cache:` prefix — it's a historical time series for the
-    luck page to optionally render trend charts. No TTL; accumulates.
-    Routes through ``get_kv()`` so it persists in both environments
-    (Upstash on Render, SQLite locally).
-    """
-    snapshot_date = spoe_result.get("snapshot_date")
-    if not snapshot_date:
-        return
-    from fantasy_baseball.data.kv_store import get_kv
-
-    try:
-        get_kv().set(
-            f"spoe_snapshot:{snapshot_date}",
-            json.dumps(spoe_result),
-        )
-    except Exception as exc:
-        log.warning(f"Failed to write spoe_snapshot:{snapshot_date}: {exc}")
 
 
 def _team_ytd_block(comps: "TeamYtdComponents") -> dict[str, float]:
@@ -461,7 +438,7 @@ class RefreshRun:
 
         # Stale-data mode: run every step that does NOT need Yahoo (MLB game
         # logs, projections, standings projection, optimizer, Monte Carlo,
-        # SPoE) against the last league state this pipeline persisted, and
+        # luck) against the last league state this pipeline persisted, and
         # skip the steps that do. Used when Yahoo auth is broken -- a refresh
         # on stale rosters/standings still moves the numbers that depend on
         # new game results, where the alternative is no refresh at all.
@@ -587,7 +564,7 @@ class RefreshRun:
         self._audit_roster()
         self._compute_per_team_leverage()
         self._run_ros_monte_carlo()
-        self._compute_spoe()
+        self._compute_luck()
         self._analyze_transactions()
         self._compute_draft_value()
         self._compute_streaks()
@@ -1911,38 +1888,32 @@ class RefreshRun:
             required=False,
         )
 
-    # --- Step 14: Compute season-to-date SPoE (luck analysis) ---
-    def _compute_spoe(self):
-        # Reuses the league_model loaded in Step 4c. No separate DB
-        # connection needed — SPoE walks Team.ownership_periods() on
-        # the in-memory League object.
-        self._progress("Computing SPoE...")
-        from fantasy_baseball.analysis.spoe import (
-            build_preseason_lookup,
-            compute_current_spoe,
-        )
+    # --- Step 14: Luck (analysis.luck) ---
+    def _compute_luck(self):
+        """Each team's luck with its decisions held fixed (``analysis.luck``): reuses
+        the league_model from Step 4c and the standings; reads every player's game
+        logs (batched) and the committed projection snapshots."""
+        self._progress("Computing luck...")
+        from fantasy_baseball.analysis.luck import run_luck
+        from fantasy_baseball.data.kv_store import get_kv
+        from fantasy_baseball.utils.time_utils import local_today
 
         assert self.config is not None
         assert self.league_model is not None
         assert self.standings is not None
-        assert self.preseason_hitters is not None
-        assert self.preseason_pitchers is not None
-
-        preseason_lookup = build_preseason_lookup(
-            self.preseason_hitters,
-            self.preseason_pitchers,
-        )
-        spoe_result = compute_current_spoe(
+        project_root = Path(__file__).resolve().parents[3]
+        result = run_luck(
+            get_kv(),
             self.league_model,
             self.standings,
-            preseason_lookup,
-            self.config.season_start,
-            self.config.season_end,
+            self.config,
+            project_root / "data" / "projections",
+            read_cache_list(CacheKey.ROSTER),
+            read_cache_dict(CacheKey.OPP_ROSTERS),
+            local_today(),
         )
-
-        write_cache(CacheKey.SPOE, spoe_result, required=False)
-        _write_spoe_snapshot(spoe_result)
-        self._progress(f"SPoE computed for snapshot {spoe_result.get('snapshot_date')}")
+        write_cache(CacheKey.LUCK, result, required=False)
+        self._progress(f"Luck computed: {len(result['players'])} stints")
 
     # --- Step 15: Transaction analyzer ---
     def _analyze_transactions(self):

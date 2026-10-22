@@ -58,7 +58,7 @@ class TestRefreshShape:
             CacheKey.ROSTER_AUDIT,
             CacheKey.LEVERAGE,
             CacheKey.MONTE_CARLO,
-            CacheKey.SPOE,
+            CacheKey.LUCK,
             CacheKey.TRANSACTION_ANALYZER,
             CacheKey.DRAFT_VALUE,
             CacheKey.META,
@@ -620,7 +620,7 @@ class TestSkipYahoo:
             CacheKey.LINEUP_OPTIMAL,
             CacheKey.LEVERAGE,
             CacheKey.MONTE_CARLO,
-            CacheKey.SPOE,
+            CacheKey.LUCK,
             CacheKey.PACE_DEVIATIONS,
             CacheKey.META,
         ]:

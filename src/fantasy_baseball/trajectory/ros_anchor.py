@@ -1,7 +1,7 @@
 """Anchor the in-progress season on YTD actuals plus a rest-of-season projection (#348).
 
 Every other surface on the season dashboard -- projected standings, the Monte Carlo,
-SPoE, leverage, waiver and trade evaluation, deltaRoto -- already prices a player off
+luck, leverage, waiver and trade evaluation, deltaRoto -- already prices a player off
 the ROS blend. The trajectory board was the last thing deriving its own current-season
 figure, by dividing season-to-date SGP by the LEAGUE's elapsed fraction. That is right
 for a player who has taken every one of his team's games and wrong in a specific way for
