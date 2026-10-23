@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import shutil
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
@@ -21,6 +22,7 @@ from fantasy_baseball.data.redis_store import (
 )
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import ScaleInputs, build_board_from_frames
+from fantasy_baseball.draft.state import StateKey
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.rankings import rank_key
@@ -28,6 +30,8 @@ from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     COUNTING_STATS,
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
     HITTING_CATEGORIES,
     PITCHING_CATEGORIES,
 )
@@ -40,32 +44,60 @@ from fantasy_baseball.web.season_data import (
 
 logger = logging.getLogger(__name__)
 
-# Team volumes FROZEN at what the 2026 draft-day board was built with.
-# The live DEFAULT_TEAM_AB/IP constants recalibrate over time (1450 -> 1300
-# on 2026-07-05); this module's whole contract is reproducing the DRAFT-DAY
-# scale so historical par curves and per-pick values stay comparable, the
-# same reason it deliberately ignores sgp_denominators overrides. Do not
-# point these at the live defaults.
-_DRAFT_DAY_TEAM_AB = 5500
-_DRAFT_DAY_TEAM_IP = 1450
-
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-# The completed 2026 draft, frozen in its own folder. The live draft dashboard
-# writes data/draft_state.json and data/draft_state_board.json in a different
-# schema, so reading those paths here broke draft-value whenever the dashboard
-# (or a mock draft) ran (#244). Nothing writes this folder.
-_FROZEN_DRAFT_DIR = _REPO_ROOT / "data" / "frozen_draft_2026"
-_FROZEN_BOARD = _FROZEN_DRAFT_DIR / "draft_state_board.json"
+# Each season's completed draft is frozen in data/frozen_draft_<season_year>/ (#244):
+# the draft state, the board the league drafted against, and meta.json with the
+# team volumes that board was built with. The live draft dashboard rewrites
+# data/draft_state.json and data/draft_state_board.json, so draft-value never reads
+# those; scripts/freeze_draft.py copies them here once the draft is done.
+_FROZEN_STATE_FILE = "draft_state.json"
+_FROZEN_BOARD_FILE = "draft_state_board.json"
+_FROZEN_META_FILE = "meta.json"
 _POSITIONS_JSON = _REPO_ROOT / "data" / "player_positions.json"
 _CONFIG_DIR = _REPO_ROOT / "config"
 _CONFIG = _CONFIG_DIR / "league.yaml"
 _DRAFT_ORDER = _CONFIG_DIR / "draft_order.json"
-_DRAFT_STATE = _FROZEN_DRAFT_DIR / "draft_state.json"
 
 
-def _load_draft_state() -> dict[str, Any]:
-    """The frozen completed-draft snapshot (``_DRAFT_STATE``)."""
-    return cast(dict[str, Any], json.loads(_DRAFT_STATE.read_text(encoding="utf-8")))
+def frozen_draft_dir(season_year: int) -> Path:
+    """Folder holding ``season_year``'s frozen completed draft."""
+    return _REPO_ROOT / "data" / f"frozen_draft_{season_year}"
+
+
+def _frozen_file(config: LeagueConfig, name: str) -> Path:
+    path = frozen_draft_dir(config.season_year) / name
+    if not path.exists():
+        raise FileNotFoundError(
+            f"No frozen {config.season_year} draft ({path} is missing). After the draft, "
+            "run `python scripts/freeze_draft.py` to freeze the dashboard's state and board."
+        )
+    return path
+
+
+def _draft_state_path(config: LeagueConfig) -> Path:
+    return _frozen_file(config, _FROZEN_STATE_FILE)
+
+
+def _frozen_board_path(config: LeagueConfig) -> Path:
+    return _frozen_file(config, _FROZEN_BOARD_FILE)
+
+
+def _load_draft_state(config: LeagueConfig) -> dict[str, Any]:
+    """The season's frozen completed-draft state (either format; see reconstruct_draft)."""
+    text = _draft_state_path(config).read_text(encoding="utf-8")
+    return cast(dict[str, Any], json.loads(text))
+
+
+def _draft_day_volumes(config: LeagueConfig) -> tuple[int, int]:
+    """Team AB / IP the season's draft-day board was built with, from its meta.json.
+
+    The live DEFAULT_TEAM_AB/IP recalibrate over time (IP 1450 -> 1300 on 2026-07-05);
+    this module's whole contract is reproducing the DRAFT-DAY scale so par curves and
+    per-pick values stay comparable, the same reason it ignores sgp_denominators
+    overrides. So the volumes are recorded at freeze time, never read live here.
+    """
+    meta = json.loads(_frozen_file(config, _FROZEN_META_FILE).read_text(encoding="utf-8"))
+    return int(meta["team_ab"]), int(meta["team_ip"])
 
 
 def reproduce_draft_day_board(
@@ -87,6 +119,7 @@ def reproduce_draft_day_board(
     hitters, pitchers, _quality = blend_projections(
         preseason_csvs, config.projection_systems, config.projection_weights
     )
+    team_ab, team_ip = _draft_day_volumes(config)
     positions = load_positions_cache(_POSITIONS_JSON)
     board, scale = build_board_from_frames(
         hitters,
@@ -94,8 +127,8 @@ def reproduce_draft_day_board(
         positions,
         roster_slots=config.roster_slots or None,
         num_teams=config.num_teams,
-        team_ab=_DRAFT_DAY_TEAM_AB,
-        team_ip=_DRAFT_DAY_TEAM_IP,
+        team_ab=team_ab,
+        team_ip=team_ip,
     )
     return board, scale
 
@@ -112,7 +145,8 @@ def frozen_drift_summary(
     systematic drift is worth surfacing (wrong config/vintage) but is not a stop.
 
     Pass ``frozen_var`` (the ``player_id -> VAR`` map from ``_frozen_var_by_player_id``)
-    to reuse a load the caller already did; ``None`` self-loads the default frozen board.
+    to reuse a load the caller already did; ``None`` self-loads the configured season's
+    frozen board.
     A missing/empty frozen board yields an empty summary (cross-check skipped, never raises).
     """
     empty: dict[str, float] = {"joined": 0, "over_tol": 0, "max": 0.0, "median": 0.0}
@@ -162,8 +196,10 @@ def _frozen_var_by_player_id(frozen_path: Path | str | None = None) -> dict[str,
     result is safe to ignore or should fail loud is the ANCHOR's decision
     (``_anchor_board_var_to_frozen``), not this loader's.
     """
-    frozen_path = Path(frozen_path) if frozen_path else _FROZEN_BOARD
     try:
+        if frozen_path is None:
+            frozen_path = _frozen_board_path(load_config(_CONFIG))
+        frozen_path = Path(frozen_path)
         frozen = json.loads(frozen_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:
         logger.warning("draft-value: no frozen VAR anchor (%s): %s", frozen_path, exc)
@@ -359,31 +395,73 @@ class DraftPick:
     team: str
     player_name: str
     is_keeper: bool
+    # Known only from the draft dashboard's format (its player_id carries the type);
+    # None for the legacy CLI format, whose picks are bare names.
+    player_type: PlayerType | None = None
 
 
 def reconstruct_draft(
     config: LeagueConfig | None = None, state: dict[str, Any] | None = None
 ) -> list[DraftPick]:
-    """Reconstruct (team, slot) per 2026 pick from draft_order + draft_state + keepers.
+    """Every keeper and live pick, with the team that made it, from a frozen draft state.
 
-    ``draft_order.json`` ``rounds`` is the full 23x10 snake order; rounds 1-3 (the
-    first 30 slots) are consumed by the 30 keepers, so the 200 live picks map to the
-    remaining slots. ``drafted_players[0:30]`` are the keepers in league.yaml order;
-    ``drafted_players[30:230]`` are the live picks in snake order. Trades are applied
-    on the absolute ``[round-1][slot-1]`` cell before the keeper-round slots are
-    skipped. Pass a pre-parsed ``state`` (draft_state.json) to avoid re-reading it when
-    the caller already has it; ``None`` reads it here.
+    Reads both formats a completed draft has been saved in:
+
+    * **Draft dashboard** (2027 on: ``keepers`` + ``picks``). Each entry already names
+      its team and its ``player_id`` (``<id>::<player_type>``), so nothing is inferred.
+    * **Legacy CLI** (the 2026 draft: ``drafted_players``). Bare names in draft order;
+      teams come from ``draft_order.json``. Its ``rounds`` is the full 23x10 snake
+      order; rounds 1-3 (the first 30 slots) are consumed by the 30 keepers, so the 200
+      live picks map to the remaining slots. ``drafted_players[0:30]`` are the keepers
+      in league.yaml order; ``drafted_players[30:230]`` are the live picks in snake
+      order. Trades are applied on the absolute ``[round-1][slot-1]`` cell before the
+      keeper-round slots are skipped.
+
+    Pass a pre-parsed ``state`` to avoid re-reading it when the caller already has it;
+    ``None`` reads the configured season's frozen state.
     """
     if config is None:
         config = load_config(_CONFIG)
     if state is None:
-        state = _load_draft_state()
-    if "drafted_players" not in state:
+        state = _load_draft_state(config)
+    if "drafted_players" in state:
+        return _picks_from_legacy_state(config, state)
+    if StateKey.PICKS in state and StateKey.KEEPERS in state:
+        return _picks_from_dashboard_state(state)
+    raise ValueError(
+        "Unrecognized draft state: expected the draft dashboard's 'keepers' + 'picks' "
+        f"or the legacy CLI's 'drafted_players'; got keys {sorted(state)[:8]}."
+    )
+
+
+def _pick_type(player_id: str) -> PlayerType:
+    """The player_type suffix of a board ``player_id`` (``<id>::<player_type>``)."""
+    _, sep, suffix = player_id.rpartition("::")
+    try:
+        if not sep:
+            raise ValueError
+        return PlayerType(suffix)
+    except ValueError:
         raise ValueError(
-            "draft state has no 'drafted_players': it is in the live draft dashboard's "
-            f"format, not a completed-draft snapshot. Draft-value reads {_DRAFT_STATE}; "
-            "restore it with `git checkout HEAD -- data/frozen_draft_2026/`."
-        )
+            f"draft pick player_id {player_id!r} has no '::hitter' / '::pitcher' suffix"
+        ) from None
+
+
+def _picks_from_dashboard_state(state: dict[str, Any]) -> list[DraftPick]:
+    """Keepers then live picks (by pick number) from the draft dashboard's state."""
+    picks = [
+        DraftPick(None, k["team"], k["player_name"], True, _pick_type(k["player_id"]))
+        for k in state[StateKey.KEEPERS]
+    ]
+    live = [p for p in state[StateKey.PICKS] if not p.get("undone")]
+    for p in sorted(live, key=lambda p: p["pick_number"]):
+        ptype = _pick_type(p["player_id"])
+        picks.append(DraftPick(p["pick_number"], p["team"], p["player_name"], False, ptype))
+    return picks
+
+
+def _picks_from_legacy_state(config: LeagueConfig, state: dict[str, Any]) -> list[DraftPick]:
+    """Keepers then live picks from the legacy CLI's state (see reconstruct_draft)."""
     order = json.loads(_DRAFT_ORDER.read_text(encoding="utf-8"))
     drafted: list[str] = state["drafted_players"]
     keeper_defs: list[dict[str, Any]] = config.keepers
@@ -534,6 +612,44 @@ def build_par_curve(
     return ParCurve(drafted_vars, keeper_par)
 
 
+def freeze_draft(
+    config: LeagueConfig, state_path: Path, board_path: Path, *, force: bool = False
+) -> Path:
+    """Copy the draft dashboard's finished draft into ``frozen_draft_<season_year>/``.
+
+    Run once, right after the draft. Refuses a state that is not the dashboard's
+    format, a draft that fails the reconstruction gate (e.g. not finished, or a keeper
+    on the wrong team), an empty board, and an existing frozen folder unless ``force``.
+    meta.json records the team volumes the board was built with: ``rebuild_board``
+    builds on the live DEFAULT_TEAM_AB/IP, which is why this must run before those are
+    recalibrated. Returns the frozen folder.
+    """
+    state = json.loads(Path(state_path).read_text(encoding="utf-8"))
+    if StateKey.PICKS not in state or StateKey.KEEPERS not in state:
+        raise ValueError(f"{state_path} is not the draft dashboard's state (no keepers/picks)")
+    gate = validate_reconstruction(reconstruct_draft(config, state=state), config=config)
+    if gate:
+        raise ValueError(f"Refusing to freeze an incomplete or inconsistent draft: {gate}")
+    board = json.loads(Path(board_path).read_text(encoding="utf-8"))
+    if not isinstance(board, list) or not board:
+        raise ValueError(f"{board_path} has no board rows")
+    dest = frozen_draft_dir(config.season_year)
+    if dest.exists() and not force:
+        raise FileExistsError(f"{dest} already exists; pass force=True to replace it")
+    dest.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(state_path, dest / _FROZEN_STATE_FILE)
+    shutil.copyfile(board_path, dest / _FROZEN_BOARD_FILE)
+    meta = {
+        "season_year": config.season_year,
+        "team_ab": DEFAULT_TEAM_AB,
+        "team_ip": DEFAULT_TEAM_IP,
+        "frozen_on": local_today().isoformat(),
+        "source": "draft dashboard (scripts/freeze_draft.py)",
+    }
+    (dest / _FROZEN_META_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    return dest
+
+
 def projected_par_curve(config: LeagueConfig | None = None) -> ParCurve:
     """Preseason (full-season, f=1) drafted par curve, standalone.
 
@@ -554,8 +670,8 @@ def projected_par_curve(config: LeagueConfig | None = None) -> ParCurve:
     if config is None:
         config = load_config(_CONFIG)
     board, _scale = reproduce_draft_day_board(config)
-    board = _anchor_board_var_to_frozen(board, _frozen_var_by_player_id())
-    state = _load_draft_state()
+    board = _anchor_board_var_to_frozen(board, _frozen_var_by_player_id(_frozen_board_path(config)))
+    state = _load_draft_state(config)
     picks = reconstruct_draft(config, state=state)
     bindex = _board_index(board)
     typed_picks = _assign_pick_types(picks, bindex, config.keepers)
@@ -940,7 +1056,10 @@ def _assign_pick_types(
     pick prefers an unclaimed board type (pitcher first, so a two-way second pick
     becomes pitcher), else the same sole-board-type-or-hitter fallback.
 
-    KNOWN LIMITATION: picks carry only a name (draft_state has no per-pick mlbam id),
+    A pick that already carries its ``player_type`` (the dashboard format) keeps it;
+    the inference here is only for the legacy format's bare names.
+
+    KNOWN LIMITATION (legacy format): picks carry only a name (no per-pick id),
     so this cannot distinguish ONE two-way player from TWO DISTINCT same-name players
     of different types (e.g. a hitter and a pitcher both named "Will Smith"). Both are
     treated as a single two-way name and the board's two types are split across the
@@ -964,7 +1083,23 @@ def _assign_pick_types(
     for p in picks:
         norm = normalize_name(p.player_name)
         avail_types = avail.get(norm, set())
-        if p.is_keeper:
+        if p.player_type is not None:
+            # The dashboard format records each pick's type, so nothing is inferred.
+            # A keeper note that disagrees means the dashboard resolved the keeper to
+            # the wrong half of a two-way player: refuse rather than grade the wrong line.
+            note = keeper_notes.get(norm, "") if p.is_keeper else ""
+            noted = None
+            if "batter only" in note:
+                noted = PlayerType.HITTER
+            elif "pitcher only" in note:
+                noted = PlayerType.PITCHER
+            if noted is not None and noted != p.player_type:
+                raise ValueError(
+                    f"Keeper {p.player_name!r} was drafted as a {p.player_type.value} but "
+                    f"its league.yaml note says {note!r}"
+                )
+            ptype = p.player_type
+        elif p.is_keeper:
             note = keeper_notes.get(norm, "")
             if "batter only" in note:
                 ptype = PlayerType.HITTER
@@ -1019,15 +1154,16 @@ def run_draft_value(
     board, scale = reproduce_draft_day_board(config)
     # Load the frozen draft-day VAR once and feed both consumers (the soft drift check
     # and the anchor) instead of reading draft_state_board.json twice.
-    frozen_var = _frozen_var_by_player_id()
+    frozen_var = _frozen_var_by_player_id(_frozen_board_path(config))
     frozen_drift_summary(board, frozen_var=frozen_var)  # soft: logs (INFO) on drift, never raises
     # M7: anchor the f=1 VAR (preseason_var / skill / luck / projected par curve) to the
     # frozen draft-day board; the rebuilt board's VAR drifts, and only its lines+scale
     # are needed (for the to-date rescale). Must precede _board_index (VAR tie-break).
     board = _anchor_board_var_to_frozen(board, frozen_var)
-    # Read the frozen draft_state.json once and share it: reconstruct_draft needs drafted_players,
-    # the gate below needs user_roster.
-    state = _load_draft_state()
+    # Read the frozen draft state once and share it: reconstruct_draft needs the picks,
+    # the gate below needs user_roster (legacy format only; the dashboard format records
+    # every pick's team directly, so there is no reconstruction to cross-check).
+    state = _load_draft_state(config)
     picks = reconstruct_draft(config, state=state)
     # enforce the reconstruction gate against the user's known roster (spec oracle 6b)
     user_roster: list[str] = state.get("user_roster") or []
