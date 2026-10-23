@@ -115,16 +115,14 @@ def test_a_dh_only_bat_is_valued_at_util_and_an_unknown_one_in_the_outfield():
     ]
 
 
-def test_var_is_sgp_over_the_replacement_at_his_best_position():
-    board = pd.DataFrame(
-        {
-            "kind": ["hitter"] * 3 + ["pitcher"] * 3,
-            "positions": [["OF"], ["OF"], ["OF"], ["P"], ["P"], ["P"]],
-            "sgp": [14.0, 12.0, 10.0, 11.0, 9.0, 7.0],
-            "name": list("abcdef"),
-        },
-        index=pd.Index(range(6)),
+def test_var_nets_a_pitcher_against_his_role_floor():
+    """Role comes from his share of starts, not his innings: an injured starter's
+    short season still nets against the SP floor."""
+    levels = {"OF": 12.0, "UTIL": 12.0, "SP": 9.0, "RP": 7.0}
+    got = kb.var(
+        [14.0, 11.0, 11.0],
+        [["OF"], ["P"], ["P"]],
+        levels,
+        [float("nan"), "SP", "RP"],
     )
-    levels, repl = kb.replacement(board, {"OF": 1, "P": 1})
-    assert levels["OF"] == 12.0 and levels["P"] == 9.0 and repl["OF"]["name"] == "b"
-    assert kb.var([14.0, 11.0], [["OF"], ["P"]], levels) == [pytest.approx(2.0), pytest.approx(2.0)]
+    assert got == [pytest.approx(2.0), pytest.approx(2.0), pytest.approx(4.0)]

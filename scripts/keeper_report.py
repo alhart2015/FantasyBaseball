@@ -5,8 +5,8 @@ Rates: our nets' preseason predictions for --season (hitters: --hitter-run's see
 averaged; pitchers: --pitcher-run's seed-averaged predictions). Playing time:
 --hitter-pt / --pitcher-pt, FanGraphs projection CSVs (Depth Charts or Steamer for the
 season: default data/projections/<season>/steamer-*.csv). ZiPS works but is a weak PT
-source: it gives minor leaguers full playing time, which lifts replacement level, and
-its 2027 file is a March 2026 snapshot. Our old starters' rates are corrected for
+source: it gives minor leaguers full playing time, and its 2027 file is a March 2026
+snapshot. VAR is over the measured waiver lines every model uses (#521). Our old starters' rates are corrected for
 age (pitcher_ros.aging, #503; fit on --aging-seasons -- default every season from 2022
 before --season -- with --aging-run's held-out projections, role from the --pitcher-pt
 system's past files, or Steamer's when that system has none; --no-aging to skip). The
@@ -52,7 +52,7 @@ from fantasy_baseball.models.positions import Position, UnknownPositions, player
 from fantasy_baseball.pitcher_ros import aging
 from fantasy_baseball.pitcher_ros.evaluate import read_fangraphs_pitchers
 from fantasy_baseball.pt_model import range_inputs as ri
-from fantasy_baseball.utils.constants import compute_starters_per_position
+from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.web.season_data import read_cache_with_meta
 
@@ -176,7 +176,6 @@ def main() -> int:
 
     config = load_config(CONFIG)
     denoms = league_denominators(CONFIG)
-    starters = compute_starters_per_position(config.roster_slots, config.num_teams)
     people = pd.read_csv(PEOPLE, usecols=["id", "fullName", "birthDate", "mlbDebutDate"])
     names = people.set_index("id")["fullName"]
     slots = load_positions()
@@ -226,7 +225,7 @@ def main() -> int:
         ]
     )
     board["name"] = names.reindex(board.index).fillna("?").to_numpy()
-    levels, repl = kb.replacement(board, starters)
+    levels = position_aware_replacement_levels(denoms)
     teams = pd.concat([fangraphs_teams(hit_pt), fangraphs_teams(pit_pt)])
     teams = teams[~teams.index.duplicated()]
     rostered, written, unread = rosters(config.team_name)
@@ -236,15 +235,7 @@ def main() -> int:
     problems = unread + problems
     if matched.empty:
         raise SystemExit("no rostered player matched the board:\n" + "\n".join(problems))
-    matched["var"] = kb.var(matched["sgp"], matched["positions"], levels)
-
-    def depth(pos: str) -> str:
-        # find_replacement_players' UTIL is the marginal hitter overall, past every
-        # positional and UTIL slot (IF not counted), not the (UTIL slots + 1)-th.
-        if pos != "UTIL":
-            return f"{pos} #{starters[pos] + 1}"
-        positional = sum(n for p, n in starters.items() if p not in ("P", "IF", "UTIL"))
-        return f"{pos} (hitter #{positional + starters[pos] + 1})"
+    matched["var"] = kb.var(matched["sgp"], matched["positions"], levels, matched["role"])
 
     md = [
         f"## {args.season} keeper report ({args.name})",
@@ -255,12 +246,9 @@ def main() -> int:
         "",
         f"Pitchers: {aging_note}.",
         "",
-        "Replacement (first player past the starting slots):",
+        "Replacement (the measured waiver line at each position):",
         "",
-        *[
-            f"- {depth(pos)}: {row['name']}, {row['total_sgp']:.1f} SGP"
-            for pos, row in repl.items()
-        ],
+        *[f"- {pos}: {sgp:.1f} SGP" for pos, sgp in levels.items()],
     ]
     if problems:
         md += ["", "Left out:", "", *[f"- {p}" for p in problems]]

@@ -545,8 +545,6 @@ def build_board_and_context(config_path=None, db_path=None):
     full_board = build_draft_board(
         conn=conn,
         sgp_overrides=config.sgp_overrides,
-        roster_slots=config.roster_slots or None,
-        num_teams=config.num_teams,
         with_ours=True,
     )
     conn.close()

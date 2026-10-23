@@ -17,14 +17,12 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
 from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.replacement import (
-    calculate_replacement_rates,
     position_aware_replacement_levels,
 )
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
     DEFAULT_ROSTER_SLOTS,
-    compute_starters_per_position,
 )
 from fantasy_baseball.utils.positions import can_fill_slot
 
@@ -130,13 +128,11 @@ def _replacement_levels_for_board(
 ) -> dict[str, float]:
     """Position-aware empirical replacement floors for ``board``.
 
-    The floors are a pure function of the FULL board's rate baselines + the
-    slot config, so they are constant for the whole draft -- but
-    ``get_recommendations`` runs once per pick (and per strategy-opponent pick
-    in the simulator, ~250 picks x 100+ sims). Cache the result on
-    ``board.attrs`` keyed by the slot signature: the cache is per-board-object
-    (a freshly built board gets fresh floors) and recomputes if the slot config
-    changes, turning hundreds of redundant full-board pandas scans into one.
+    The floors are the measured waiver lines over the SGP denominators (#521),
+    constant for the whole draft, while ``get_recommendations`` runs once per
+    pick (and per strategy-opponent pick in the simulator, ~250 picks x 100+
+    sims). Cache the result on ``board.attrs`` keyed by the slot signature and
+    denominators: per-board-object, recomputed if either changes.
     """
     # Key the cache on the RESOLVED denominators, not the raw override
     # pairs: get_sgp_denominators normalizes enum/string keys (a plain-Enum
@@ -150,9 +146,7 @@ def _replacement_levels_for_board(
     cached = board.attrs.get("_repl_levels_cache")
     if cached is not None and cached[0] == cache_key:
         return cast(dict[str, float], cached[1])
-    starters = compute_starters_per_position(roster_slots, num_teams)
-    repl_rates = calculate_replacement_rates(board, starters)
-    repl_levels = position_aware_replacement_levels(denoms, repl_rates)
+    repl_levels = position_aware_replacement_levels(denoms)
     board.attrs["_repl_levels_cache"] = (cache_key, repl_levels)
     return repl_levels
 

@@ -14,17 +14,13 @@ from fantasy_baseball.draft import board_ranges, our_hitters, our_pitchers
 from fantasy_baseball.draft.our_players import load_ours, season_mlbam
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
-from fantasy_baseball.sgp.player_value import calculate_player_sgp
-from fantasy_baseball.sgp.replacement import (
-    calculate_replacement_rates,
-    position_aware_replacement_levels,
-)
+from fantasy_baseball.sgp.player_value import REPLACEMENT_RATES, calculate_player_sgp
+from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     DEFAULT_TEAM_AB,
     DEFAULT_TEAM_IP,
     Category,
-    compute_starters_per_position,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 
@@ -46,8 +42,6 @@ class ScaleInputs:
 def build_draft_board(
     conn,
     sgp_overrides: SgpOverrides | None = None,
-    roster_slots: dict[str, int] | None = None,
-    num_teams: int | None = None,
     with_ours: bool = False,
 ) -> pd.DataFrame:
     """Build a ranked draft board from projections and position data in SQLite.
@@ -64,7 +58,7 @@ def build_draft_board(
         hitters, pitchers = board_ranges.attach(conn, year, hitters, pitchers)
     positions = get_positions(conn)
     board, _scale = build_board_from_frames(
-        hitters, pitchers, positions, roster_slots, num_teams, sgp_overrides=sgp_overrides
+        hitters, pitchers, positions, sgp_overrides=sgp_overrides
     )
     return with_range_var(board)
 
@@ -115,8 +109,6 @@ def build_board_from_frames(
     hitters: pd.DataFrame,
     pitchers: pd.DataFrame,
     positions: dict[str, list[str]],
-    roster_slots: dict[str, int] | None = None,
-    num_teams: int | None = None,
     sgp_overrides: SgpOverrides | None = None,
     team_ab: int = DEFAULT_TEAM_AB,
     team_ip: int = DEFAULT_TEAM_IP,
@@ -125,8 +117,8 @@ def build_board_from_frames(
     positions dict.
 
     Shared by build_draft_board (DB source) and the draft-value module (Apr-1
-    CSV source). Returns ``(board, scale)`` where ``scale`` carries the pool-derived
-    rates + floors + team volumes so realized/estimate VAR can be scored on the SAME
+    CSV source). Returns ``(board, scale)`` where ``scale`` carries the fixed
+    rate baselines + floors + team volumes so realized/estimate VAR can be scored on the SAME
     scale. Callers that only need the board (build_draft_board) discard ``scale``.
     """
     # Build normalized lookup for positions.
@@ -152,16 +144,9 @@ def build_board_from_frames(
     denoms = get_sgp_denominators(sgp_overrides)
     pool = pd.concat([hitters, pitchers], ignore_index=True)
 
-    # Two-pass SGP: first with defaults (for ordering), then with
-    # pool-derived replacement rates (for accurate values).
-    pool["total_sgp"] = pool.apply(
-        lambda row: calculate_player_sgp(row, denoms=denoms, team_ab=team_ab, team_ip=team_ip),
-        axis=1,
-    )
-
-    starters = compute_starters_per_position(roster_slots, num_teams)
-    repl_rates = calculate_replacement_rates(pool, starters)
-
+    # AVG / ERA / WHIP are scored against the measured waiver lines' rates, the same
+    # fixed baselines every other model uses (#521), not rates derived from this pool.
+    repl_rates = dict(REPLACEMENT_RATES)
     pool["total_sgp"] = pool.apply(
         lambda row: calculate_player_sgp(
             row,
@@ -226,8 +211,6 @@ def rebuild_board(config_path: Path, board_path: Path) -> int:
         board = build_draft_board(
             conn=conn,
             sgp_overrides=config.sgp_overrides,
-            roster_slots=config.roster_slots or None,
-            num_teams=config.num_teams,
             with_ours=True,
         )
     finally:

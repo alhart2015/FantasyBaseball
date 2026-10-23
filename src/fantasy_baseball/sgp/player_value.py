@@ -1,14 +1,32 @@
 import pandas as pd
 
 from fantasy_baseball.models.player import HitterStats, PitcherStats, PlayerType
-from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP, Category
+from fantasy_baseball.utils.constants import (
+    DEFAULT_TEAM_AB,
+    DEFAULT_TEAM_IP,
+    REPLACEMENT_BY_POSITION,
+    Category,
+)
 from fantasy_baseball.utils.constants import safe_float as _safe
 
 from .denominators import get_sgp_denominators
 
-REPLACEMENT_AVG: float = 0.250
-REPLACEMENT_ERA: float = 4.50
-REPLACEMENT_WHIP: float = 1.35
+# The AVG / ERA / WHIP a player must beat to earn rate SGP: the rates of the
+# measured waiver lines (REPLACEMENT_BY_POSITION), so the rate zero point and the
+# replacement floors come from the same measured players. ERA / WHIP are the
+# replacement starter's; AVG pools the hitter positions' hits over their at-bats.
+# One fixed set for every model (#521): the draft board used to derive these
+# from its own pool, which shifted with the projections.
+_SP_LINE = REPLACEMENT_BY_POSITION["SP"]
+_HITTER_LINES = [REPLACEMENT_BY_POSITION[p] for p in ("C", "1B", "2B", "3B", "SS", "OF")]
+REPLACEMENT_AVG: float = sum(x["h"] for x in _HITTER_LINES) / sum(x["ab"] for x in _HITTER_LINES)
+REPLACEMENT_ERA: float = 9 * _SP_LINE["er"] / _SP_LINE["ip"]
+REPLACEMENT_WHIP: float = (_SP_LINE["bb"] + _SP_LINE["h_allowed"]) / _SP_LINE["ip"]
+REPLACEMENT_RATES: dict[str, float] = {
+    "avg": REPLACEMENT_AVG,
+    "era": REPLACEMENT_ERA,
+    "whip": REPLACEMENT_WHIP,
+}
 
 
 def calculate_counting_sgp(stat_value: float, sgp_denominator: float) -> float:

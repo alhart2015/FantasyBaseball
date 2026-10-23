@@ -106,17 +106,18 @@ def test_to_date_floors_golden_and_delegates_to_replacement_helper(synthetic_sca
     scale = synthetic_scale
     # f=1.0 returns the board's own floors unchanged (cheap projected-side path).
     assert dv._to_date_floors(scale, 1.0) is scale.replacement_levels
-    # f<1 golden values (captured from the pre-M10 hand-rolled implementation).
+    # f<1 golden values (first captured from the pre-M10 hand-rolled implementation;
+    # re-captured for #521, when the rate baselines became the fixed measured ones).
     gold_04 = {
-        "1B": 3.498867,
-        "2B": 3.622112,
-        "3B": 3.559660,
-        "C": 2.973834,
-        "OF": 3.844582,
-        "RP": 2.909401,
-        "SP": 3.005698,
-        "SS": 3.643083,
-        "UTIL": 3.844582,
+        "1B": 3.714064,
+        "2B": 3.841636,
+        "3B": 3.773776,
+        "C": 3.156590,
+        "OF": 4.039233,
+        "RP": 3.083624,
+        "SP": 3.386667,
+        "SS": 3.868013,
+        "UTIL": 4.039233,
     }
     floors = dv._to_date_floors(scale, 0.4)
     for pos, want in gold_04.items():
@@ -902,3 +903,18 @@ def test_freeze_draft_refuses_the_legacy_format(dashboard_draft):
     state_path.write_text(legacy, encoding="utf-8")
     with pytest.raises(ValueError, match="not the draft dashboard's state"):
         dv.freeze_draft(config, state_path, board_path)
+
+
+def test_board_floors_match_the_floors_every_other_model_uses():
+    """#521: the board's replacement levels no longer depend on its own pool, so they
+    equal the plain measured floors (what the trajectory board and keeper report use)
+    at the same denominators and team volumes."""
+    from fantasy_baseball.sgp.player_value import REPLACEMENT_RATES
+    from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+
+    _board, scale = dv.reproduce_draft_day_board()
+    assert scale.repl_rates == REPLACEMENT_RATES
+    plain = position_aware_replacement_levels(
+        scale.denoms, team_ab=scale.team_ab, team_ip=scale.team_ip
+    )
+    assert scale.replacement_levels == pytest.approx(plain)

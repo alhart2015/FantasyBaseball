@@ -125,8 +125,6 @@ def reproduce_draft_day_board(
         hitters,
         pitchers,
         positions,
-        roster_slots=config.roster_slots or None,
-        num_teams=config.num_teams,
         team_ab=team_ab,
         team_ip=team_ip,
     )

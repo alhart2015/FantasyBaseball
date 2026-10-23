@@ -64,8 +64,6 @@ def full_board(config: LeagueConfig) -> pd.DataFrame:
 
     board = build_draft_board(
         conn=conn,
-        roster_slots=config.roster_slots,
-        num_teams=config.num_teams,
     )
     conn.close()
     return board

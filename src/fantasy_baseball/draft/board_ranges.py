@@ -107,7 +107,7 @@ def season_sgp(draws: dict[str, np.ndarray], player_type: str, scale: ScaleInput
     """Each simulated whole season's SGP (rows x draws, ``pt_model.ranges.draw``), scored
     exactly as the board scores a line (``sgp.player_value``, the board's ``scale``):
     counting stats over their denominators, AVG / ERA / WHIP as marginal value over
-    the pool's replacement rates on the season's own AB / IP."""
+    the replacement rates on the season's own AB / IP."""
     d = scale.denoms
     rep = scale.repl_rates
     if player_type == "hitter":
