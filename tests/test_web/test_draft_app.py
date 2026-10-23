@@ -772,3 +772,105 @@ def test_new_draft_returns_500_when_rebuild_fails(tmp_path, monkeypatch):
 
     assert r.status_code == 500
     assert "board rebuild failed" in r.get_json()["error"]
+
+
+# --- Last step of the draft: confirm it is complete, then freeze it (#244) ---
+
+
+@pytest.fixture
+def small_league(tmp_path, monkeypatch):
+    """Two teams, two-player rosters (IL does not count), no keepers: 4 picks."""
+    from fantasy_baseball.analysis import draft_value as dv
+    from fantasy_baseball.web import app as web_app
+    from fantasy_baseball.web.app import create_app
+
+    league_path = tmp_path / "league.yaml"
+    league_path.write_text(
+        "league:\n  team_name: Hart of the Order\n  num_teams: 2\n  season_year: 2031\n"
+        "draft:\n  position: 1\n  teams:\n    1: Hart of the Order\n    2: Opp\n"
+        "keepers: []\nroster_slots:\n  OF: 1\n  P: 1\n  IL: 1\n"
+    )
+    monkeypatch.setenv("DRAFT_LEAGUE_YAML_PATH", str(league_path))
+    monkeypatch.setattr(web_app, "rebuild_board", lambda *a, **kw: 0)
+    monkeypatch.setattr(dv, "frozen_draft_dir", lambda year: tmp_path / f"frozen_draft_{year}")
+    state_path = tmp_path / "draft_state.json"
+    (tmp_path / "draft_state_board.json").write_text('[{"player_id": "1::hitter", "var": 1.0}]')
+    a = create_app(state_path=state_path)
+    a.config["TESTING"] = True
+    with a.test_client() as c:
+        yield c, tmp_path
+
+
+def _draft_picks(client, n, start=0):
+    for i in range(start, start + n):
+        team = client.get("/api/state").get_json()["on_the_clock"]
+        ptype = "hitter" if i % 2 == 0 else "pitcher"
+        r = client.post(
+            "/api/pick",
+            json={
+                "player_id": f"{i}::{ptype}",
+                "player_name": f"P{i}",
+                "position": "OF",
+                "team": team,
+            },
+        )
+        assert r.status_code == 200
+
+
+def test_draft_status_is_complete_only_once_every_roster_is_full(small_league):
+    client, _tmp = small_league
+    client.post("/api/new-draft")
+    _draft_picks(client, 3)
+    assert client.get("/api/draft-status").get_json() == {
+        "complete": False,
+        "frozen": False,
+        "season_year": 2031,
+    }
+    _draft_picks(client, 1, start=3)
+    assert client.get("/api/draft-status").get_json()["complete"] is True
+
+
+def test_freeze_draft_saves_the_finished_draft(small_league):
+    from fantasy_baseball.analysis import draft_value as dv
+
+    client, tmp = small_league
+    client.post("/api/new-draft")
+    _draft_picks(client, 4)
+
+    r = client.post("/api/freeze-draft", json={})
+
+    assert r.status_code == 200
+    frozen = tmp / "frozen_draft_2031"
+    assert {p.name for p in frozen.iterdir()} == {
+        "draft_state.json",
+        "draft_state_board.json",
+        "meta.json",
+    }
+    assert client.get("/api/draft-status").get_json()["frozen"] is True
+    picks = dv.reconstruct_draft(dv.load_config(tmp / "league.yaml"))
+    assert [(p.slot, p.team, p.player_type.value) for p in picks] == [
+        (1, "Hart of the Order", "hitter"),
+        (2, "Opp", "pitcher"),
+        (3, "Opp", "hitter"),
+        (4, "Hart of the Order", "pitcher"),
+    ]
+
+
+def test_freeze_draft_refused_before_every_roster_is_full(small_league):
+    client, tmp = small_league
+    client.post("/api/new-draft")
+    _draft_picks(client, 3)
+    r = client.post("/api/freeze-draft", json={})
+    assert r.status_code == 409
+    assert not (tmp / "frozen_draft_2031").exists()
+
+
+def test_freeze_draft_asks_before_replacing_a_saved_draft(small_league):
+    client, _tmp = small_league
+    client.post("/api/new-draft")
+    _draft_picks(client, 4)
+    assert client.post("/api/freeze-draft", json={}).status_code == 200
+
+    again = client.post("/api/freeze-draft", json={})
+    assert again.status_code == 409 and again.get_json()["already_frozen"] is True
+    assert client.post("/api/freeze-draft", json={"force": True}).status_code == 200

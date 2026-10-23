@@ -22,6 +22,7 @@ from fantasy_baseball.data.redis_store import (
 )
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import ScaleInputs, build_board_from_frames
+from fantasy_baseball.draft.draft_controller import full_roster_size
 from fantasy_baseball.draft.state import StateKey
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
@@ -49,7 +50,8 @@ _REPO_ROOT = Path(__file__).resolve().parents[3]
 # the draft state, the board the league drafted against, and meta.json with the
 # team volumes that board was built with. The live draft dashboard rewrites
 # data/draft_state.json and data/draft_state_board.json, so draft-value never reads
-# those; scripts/freeze_draft.py copies them here once the draft is done.
+# those; the dashboard copies them here (freeze_draft) once you confirm the draft
+# is complete.
 _FROZEN_STATE_FILE = "draft_state.json"
 _FROZEN_BOARD_FILE = "draft_state_board.json"
 _FROZEN_META_FILE = "meta.json"
@@ -68,8 +70,8 @@ def _frozen_file(config: LeagueConfig, name: str) -> Path:
     path = frozen_draft_dir(config.season_year) / name
     if not path.exists():
         raise FileNotFoundError(
-            f"No frozen {config.season_year} draft ({path} is missing). After the draft, "
-            "run `python scripts/freeze_draft.py` to freeze the dashboard's state and board."
+            f"No frozen {config.season_year} draft ({path} is missing). It is saved when "
+            "the draft dashboard asks whether the draft is complete and you answer yes."
         )
     return path
 
@@ -509,8 +511,10 @@ def validate_reconstruction(
         config = load_config(_CONFIG)
     keepers = config.keepers
     n_live = sum(1 for p in picks if not p.is_keeper)
-    if n_live != 200:
-        problems.append(f"non-keeper pick count {n_live} != 200")
+    # Every team ends with a full roster, keepers included (10 x 23 - 30 = 200 here).
+    want_live = config.num_teams * full_roster_size(config.roster_slots) - len(keepers)
+    if n_live != want_live:
+        problems.append(f"non-keeper pick count {n_live} != {want_live}")
     keeper_norm = {(normalize_name(k["name"]), k["team"]) for k in keepers}
     recon_keeper_norm = {(normalize_name(p.player_name), p.team) for p in picks if p.is_keeper}
     missing = keeper_norm - recon_keeper_norm
@@ -617,7 +621,7 @@ def freeze_draft(
 ) -> Path:
     """Copy the draft dashboard's finished draft into ``frozen_draft_<season_year>/``.
 
-    Run once, right after the draft. Refuses a state that is not the dashboard's
+    The dashboard calls this when you confirm the draft is complete. Refuses a state that is not the dashboard's
     format, a draft that fails the reconstruction gate (e.g. not finished, or a keeper
     on the wrong team), an empty board, and an existing frozen folder unless ``force``.
     meta.json records the team volumes the board was built with: ``rebuild_board``
@@ -644,7 +648,7 @@ def freeze_draft(
         "team_ab": DEFAULT_TEAM_AB,
         "team_ip": DEFAULT_TEAM_IP,
         "frozen_on": local_today().isoformat(),
-        "source": "draft dashboard (scripts/freeze_draft.py)",
+        "source": "draft dashboard",
     }
     (dest / _FROZEN_META_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
     return dest

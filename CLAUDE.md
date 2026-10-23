@@ -36,7 +36,6 @@ python scripts/run_lineup.py     # In-season lineup optimizer (requires Yahoo au
 python scripts/simulate_draft.py -s two_closers --scoring-mode vona
 python scripts/compare_strategies.py  # Compare all strategies (slow, ~10min)
 python scripts/fetch_positions.py     # Cache Yahoo position data (run before draft)
-python scripts/freeze_draft.py        # Freeze the finished draft for draft-value (run right after the draft)
 ```
 
 ## Cross-cutting conventions

@@ -801,7 +801,7 @@ def test_unrecognized_draft_state_names_both_formats():
 
 def test_a_season_with_no_frozen_draft_says_how_to_freeze_it():
     cfg = dataclasses.replace(dv.load_config(dv._CONFIG), season_year=1999)
-    with pytest.raises(FileNotFoundError, match=r"scripts/freeze_draft\.py"):
+    with pytest.raises(FileNotFoundError, match="answer yes"):
         dv._load_draft_state(cfg)
 
 

@@ -451,6 +451,57 @@ def _register_writer_routes(app):
         gated = fillers_or_all(picks, open_starters)
         return jsonify([to_recs_json(p) for p in gated[:10]])
 
+    @app.get("/api/draft-status")
+    def draft_status():
+        """Whether every team has a full roster, and whether the draft is frozen.
+
+        The dashboard asks "is the draft complete?" once this says complete and not
+        frozen; a yes posts /api/freeze-draft.
+        """
+        from fantasy_baseball.analysis.draft_value import frozen_draft_dir
+        from fantasy_baseball.config import load_config
+
+        league_yaml = _load_league_yaml()
+        state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
+        season_year = load_config(_league_yaml_path()).season_year
+        return jsonify(
+            {
+                "complete": draft_controller.draft_is_complete(
+                    state, _teams_by_position(league_yaml), league_yaml.get("roster_slots") or {}
+                ),
+                "frozen": frozen_draft_dir(season_year).exists(),
+                "season_year": season_year,
+            }
+        )
+
+    @app.post("/api/freeze-draft")
+    def freeze():
+        """Save the finished draft for draft-value grading (analysis.draft_value)."""
+        from fantasy_baseball.analysis.draft_value import freeze_draft
+        from fantasy_baseball.config import load_config
+
+        body = request.get_json(silent=True) or {}
+        league_yaml = _load_league_yaml()
+        state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
+        roster_slots = league_yaml.get("roster_slots") or {}
+        if not draft_controller.draft_is_complete(
+            state, _teams_by_position(league_yaml), roster_slots
+        ):
+            return jsonify({"error": "not every team has a full roster yet"}), 409
+        config = load_config(_league_yaml_path())
+        try:
+            dest = freeze_draft(
+                config,
+                app.config[CFG_STATE_PATH],
+                app.config[CFG_BOARD_PATH],
+                force=bool(body.get("force")),
+            )
+        except FileExistsError as e:
+            return jsonify({"error": str(e), "already_frozen": True}), 409
+        except (OSError, ValueError) as e:
+            return jsonify({"error": str(e)}), 400
+        return jsonify({"frozen_to": str(dest), "season_year": config.season_year})
+
     @app.get("/api/meta")
     def meta():
         """League metadata the dashboard needs once on page load.

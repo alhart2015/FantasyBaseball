@@ -25,6 +25,10 @@ let playerPosFilter = "";     // canonical position string, "" means no filter
 // League meta cached on page load (teams + snake pick_order + user_team).
 let leagueMeta = { teams: [], user_team: null, pick_order: [] };
 
+// The state version we last asked "is the draft complete?" for, so a "no" is
+// not asked again until the draft changes (an undo + re-pick, say).
+let freezeAskedForVersion = null;
+
 async function fetchBoard() {
   const r = await fetch("/api/board");
   if (!r.ok) return [];
@@ -66,6 +70,54 @@ function renderState(state) {
   // Roster/standings panels need to refresh on every pick — otherwise
   // the user sees stale data until they manually flip tabs.
   refreshInspectorPanel();
+  checkDraftComplete(state);
+}
+
+async function fetchDraftStatus() {
+  const r = await fetch("/api/draft-status");
+  if (!r.ok) return null;
+  return r.json();
+}
+
+function renderFreezeStatus(status) {
+  const el = document.getElementById("freeze-status");
+  if (el) el.textContent = status?.frozen ? `${status.season_year} draft saved for grading` : "";
+}
+
+// Last step of the draft: once every team has a full roster, ask whether the
+// draft is complete; a yes saves it for draft-value grading.
+async function checkDraftComplete(state) {
+  const status = await fetchDraftStatus();
+  renderFreezeStatus(status);
+  if (!status || !status.complete || status.frozen) return;
+  if (freezeAskedForVersion === state.version) return;
+  freezeAskedForVersion = state.version;
+  if (!confirm(
+    "Every team has a full roster. Is the draft complete?\n\n" +
+      "OK saves it so the season dashboard can grade every pick."
+  )) return;
+  await freezeDraft(false);
+}
+
+async function freezeDraft(force) {
+  const r = await fetch("/api/freeze-draft", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ force }),
+  });
+  const body = await r.json();
+  if (r.ok) {
+    renderFreezeStatus({ frozen: true, season_year: body.season_year });
+    alert(`Draft saved. The ${body.season_year} draft will be graded from here.`);
+    return;
+  }
+  if (body.already_frozen && !force) {
+    if (confirm("This season's draft was already saved. Replace it with this one?")) {
+      await freezeDraft(true);
+    }
+    return;
+  }
+  alert(`Draft not saved: ${body.error}`);
 }
 
 function currentRound(state) {

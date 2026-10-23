@@ -9,10 +9,12 @@ from __future__ import annotations
 
 import copy
 import time
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
 from fantasy_baseball.draft.state import Pick, StateKey, read_state
+from fantasy_baseball.models.positions import IL_SLOTS, Position
 
 EMPTY_STATE: dict[str, Any] = {
     StateKey.VERSION: 0,
@@ -136,6 +138,22 @@ def _compute_on_the_clock(
     if picks_so_far >= len(order):
         return None
     return order[picks_so_far]
+
+
+def full_roster_size(roster_slots: dict[str, int]) -> int:
+    """Players each team ends the draft with (keepers + picks): every slot but IL."""
+    return sum(n for slot, n in roster_slots.items() if Position.parse(slot) not in IL_SLOTS)
+
+
+def draft_is_complete(
+    state: dict[str, Any], teams_by_position: dict[int, str], roster_slots: dict[str, int]
+) -> bool:
+    """True once every team has a full roster of keepers plus live picks."""
+    size = full_roster_size(roster_slots)
+    if size == 0 or not teams_by_position:
+        return False
+    owned = Counter(p["team"] for p in state[StateKey.KEEPERS] + state[StateKey.PICKS])
+    return all(owned[team] >= size for team in teams_by_position.values())
 
 
 def apply_pick(
