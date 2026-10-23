@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any, Literal, cast
 
 import pandas as pd
 
@@ -50,12 +50,22 @@ _DRAFT_DAY_TEAM_AB = 5500
 _DRAFT_DAY_TEAM_IP = 1450
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
-_FROZEN_BOARD = _REPO_ROOT / "data" / "draft_state_board.json"
+# The completed 2026 draft, frozen in its own folder. The live draft dashboard
+# writes data/draft_state.json and data/draft_state_board.json in a different
+# schema, so reading those paths here broke draft-value whenever the dashboard
+# (or a mock draft) ran (#244). Nothing writes this folder.
+_FROZEN_DRAFT_DIR = _REPO_ROOT / "data" / "frozen_draft_2026"
+_FROZEN_BOARD = _FROZEN_DRAFT_DIR / "draft_state_board.json"
 _POSITIONS_JSON = _REPO_ROOT / "data" / "player_positions.json"
 _CONFIG_DIR = _REPO_ROOT / "config"
 _CONFIG = _CONFIG_DIR / "league.yaml"
 _DRAFT_ORDER = _CONFIG_DIR / "draft_order.json"
-_DRAFT_STATE = _REPO_ROOT / "data" / "draft_state.json"
+_DRAFT_STATE = _FROZEN_DRAFT_DIR / "draft_state.json"
+
+
+def _load_draft_state() -> dict[str, Any]:
+    """The frozen completed-draft snapshot (``_DRAFT_STATE``)."""
+    return cast(dict[str, Any], json.loads(_DRAFT_STATE.read_text(encoding="utf-8")))
 
 
 def reproduce_draft_day_board(
@@ -367,7 +377,13 @@ def reconstruct_draft(
     if config is None:
         config = load_config(_CONFIG)
     if state is None:
-        state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
+        state = _load_draft_state()
+    if "drafted_players" not in state:
+        raise ValueError(
+            "draft state has no 'drafted_players': it is in the live draft dashboard's "
+            f"format, not a completed-draft snapshot. Draft-value reads {_DRAFT_STATE}; "
+            "restore it with `git checkout HEAD -- data/frozen_draft_2026/`."
+        )
     order = json.loads(_DRAFT_ORDER.read_text(encoding="utf-8"))
     drafted: list[str] = state["drafted_players"]
     keeper_defs: list[dict[str, Any]] = config.keepers
@@ -539,7 +555,7 @@ def projected_par_curve(config: LeagueConfig | None = None) -> ParCurve:
         config = load_config(_CONFIG)
     board, _scale = reproduce_draft_day_board(config)
     board = _anchor_board_var_to_frozen(board, _frozen_var_by_player_id())
-    state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
+    state = _load_draft_state()
     picks = reconstruct_draft(config, state=state)
     bindex = _board_index(board)
     typed_picks = _assign_pick_types(picks, bindex, config.keepers)
@@ -1009,9 +1025,9 @@ def run_draft_value(
     # frozen draft-day board; the rebuilt board's VAR drifts, and only its lines+scale
     # are needed (for the to-date rescale). Must precede _board_index (VAR tie-break).
     board = _anchor_board_var_to_frozen(board, frozen_var)
-    # Read draft_state.json once and share it: reconstruct_draft needs drafted_players,
+    # Read the frozen draft_state.json once and share it: reconstruct_draft needs drafted_players,
     # the gate below needs user_roster.
-    state = json.loads(_DRAFT_STATE.read_text(encoding="utf-8"))
+    state = _load_draft_state()
     picks = reconstruct_draft(config, state=state)
     # enforce the reconstruction gate against the user's known roster (spec oracle 6b)
     user_roster: list[str] = state.get("user_roster") or []

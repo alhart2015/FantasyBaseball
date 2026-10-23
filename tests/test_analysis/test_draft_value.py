@@ -694,3 +694,24 @@ def test_projected_par_curve_matches_inline_construction():
     assert (math.isnan(par.keeper_par) and math.isnan(expected.keeper_par)) or (
         par.keeper_par == expected.keeper_par
     )
+
+
+# --- #244: the frozen draft must not share a file with the live dashboard ---
+
+
+def test_frozen_draft_files_are_not_the_dashboards_working_files():
+    """The dashboard rewrites its state and board in another schema. If draft-value
+    read the same paths, any dashboard or mock-draft session broke it (#244)."""
+    import scripts.run_draft_dashboard as dash
+    from fantasy_baseball.web.app import DEFAULT_STATE_PATH
+
+    frozen = {dv._DRAFT_STATE.resolve(), dv._FROZEN_BOARD.resolve()}
+    assert DEFAULT_STATE_PATH.resolve() not in frozen
+    assert dash.BOARD_PATH.resolve() not in frozen
+    assert dv._DRAFT_STATE.exists() and dv._FROZEN_BOARD.exists()
+
+
+def test_reconstruct_draft_names_the_problem_on_dashboard_format_state():
+    dashboard_state = {"version": 2, "keepers": [], "picks": [], "undo_stack": []}
+    with pytest.raises(ValueError, match="live draft dashboard's format"):
+        dv.reconstruct_draft(state=dashboard_state)
