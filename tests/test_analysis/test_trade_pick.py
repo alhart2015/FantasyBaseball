@@ -153,6 +153,54 @@ def test_worst_of_type_picks_lowest_projection():
     assert worst.name == "Bad"
 
 
+def test_worst_of_type_ranks_by_rest_of_season_not_full_season():
+    """A call-up has a tiny banked line but a strong ROS; a fading vet banked a big
+    April. The MC scores ROS, so the vet -- not the call-up -- is the drop (#300)."""
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    small = {"r": 10, "hr": 3, "rbi": 10, "sb": 1, "h": 25, "ab": 100, "pa": 110, "g": 25}
+    big = {"r": 60, "hr": 20, "rbi": 65, "sb": 8, "h": 110, "ab": 400, "pa": 440, "g": 105}
+    callup = dataclasses.replace(
+        _hit("Callup"),
+        rest_of_season=HitterStats.from_dict(big),
+        full_season_projection=HitterStats.from_dict(small),
+    )
+    vet = dataclasses.replace(
+        _hit("Vet"),
+        rest_of_season=HitterStats.from_dict(small),
+        full_season_projection=HitterStats.from_dict(big),
+    )
+    worst = worst_of_type([callup, vet], PlayerType.HITTER, get_sgp_denominators(None))
+    assert worst.name == "Vet"
+
+
+@pytest.mark.parametrize(
+    ("slot", "status"), [(Position.IL, ""), (Position.BN, "IL10"), (Position.OF, "IL60")]
+)
+def test_worst_of_type_never_drops_an_injured_player(slot, status):
+    """An injured star's ROS is near zero, so a ROS ranking would pick him -- but
+    dropping him frees no active spot and benches the incoming player."""
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    tiny = {"r": 2, "hr": 0, "rbi": 2, "sb": 0, "h": 5, "ab": 20, "pa": 22, "g": 5}
+    hurt = dataclasses.replace(
+        _hit("Hurt"),
+        rest_of_season=HitterStats.from_dict(tiny),
+        selected_position=slot,
+        status=status,
+    )
+    scrub = _hit("Scrub", r=30, hr=2, rbi=25, sb=1, h=80, ab=400, pa=440, g=110)
+    worst = worst_of_type([hurt, scrub], PlayerType.HITTER, get_sgp_denominators(None))
+    assert worst.name == "Scrub"
+
+
+def test_worst_of_type_none_when_only_injured_players():
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    hurt = dataclasses.replace(_hit("Hurt"), selected_position=Position.IL)
+    assert worst_of_type([hurt], PlayerType.HITTER, get_sgp_denominators(None)) is None
+
+
 def test_build_trade_scenario_keeps_sizes_and_moves_player():
     # tests/test_analysis is a package (has __init__.py), so import the sibling
     # fixture by its package-qualified name, not a bare module name.
