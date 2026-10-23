@@ -832,6 +832,7 @@ def test_draft_status_is_complete_only_once_every_roster_is_full(small_league):
 
 def test_freeze_draft_saves_the_finished_draft(small_league):
     from fantasy_baseball.analysis import draft_value as dv
+    from fantasy_baseball.sgp.player_value import REPLACEMENT_RATES
     from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP
 
     client, tmp = small_league
@@ -850,6 +851,7 @@ def test_freeze_draft_saves_the_finished_draft(small_league):
     assert client.get("/api/draft-status").get_json()["saved"] == "same"
     meta = __import__("json").loads((frozen / "meta.json").read_text())
     assert (meta["team_ab"], meta["team_ip"]) == (DEFAULT_TEAM_AB, DEFAULT_TEAM_IP)
+    assert meta["repl_rates"] == REPLACEMENT_RATES
     picks = dv.reconstruct_draft(dv.load_config(tmp / "league.yaml"))
     assert [(p.slot, p.team, p.player_type.value) for p in picks] == [
         (1, "Hart of the Order", "hitter"),

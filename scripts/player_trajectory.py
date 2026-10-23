@@ -50,7 +50,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
-from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+from fantasy_baseball.sgp.replacement import league_replacement_levels
 from fantasy_baseball.trajectory.board import people as board_people
 from fantasy_baseball.trajectory.board import player_names, season_slots
 from fantasy_baseball.trajectory.calibration import load_shipped, span_target
@@ -912,7 +912,6 @@ def main() -> int:
     # so the trajectory is quoted in the same units as a draft board or a keeper line.
     config = load_config(PROJECT_ROOT / "config" / "league.yaml")
     overrides = config.sgp_overrides
-    denoms = get_sgp_denominators(overrides)
 
     # THE SAME loader both boards use, so a name looked up here and the same name on the
     # keeper board cannot be anchored on two different things. It injects season-to-date
@@ -1017,7 +1016,7 @@ def main() -> int:
         ]
 
     horizons = tuple(range(1, args.horizon + 1))
-    levels = position_aware_replacement_levels(denoms)
+    levels = league_replacement_levels(overrides)
     for pool, pid, age, sgp, prior, earlier, slots in queries:
         # The floor is passed INTO the estimator, not subtracted from its answer, so it
         # carries through to the median, the band and the survivor mean instead of

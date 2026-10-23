@@ -2,5 +2,10 @@
   "season_year": 2026,
   "team_ab": 5500,
   "team_ip": 1450,
-  "source": "legacy CLI (scripts/run_draft.py); volumes are what the draft-day board was built with"
+  "source": "legacy CLI (scripts/run_draft.py); volumes are what the draft-day board was built with; repl_rates are the pool-derived rates the pre-#521 board code gave this board's draft-day CSVs",
+  "repl_rates": {
+    "avg": 0.25740640247417285,
+    "era": 4.031691837631045,
+    "whip": 1.2554524093963237
+  }
 }

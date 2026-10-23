@@ -67,7 +67,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union
 from fantasy_baseball.config import load_config
 from fantasy_baseball.data.rosters import RosterSpot, live_rosters, manual_store_active
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
-from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+from fantasy_baseball.sgp.replacement import league_replacement_levels
 from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
 from fantasy_baseball.trajectory.calibration import MAX_HORIZON, span_target
 from fantasy_baseball.trajectory.panel import DEFAULT_PANEL_DIR
@@ -408,7 +408,7 @@ def main() -> int:
 
     config = load_config(PROJECT_ROOT / "config" / "league.yaml")
     overrides = config.sgp_overrides
-    levels = position_aware_replacement_levels(get_sgp_denominators(overrides))
+    levels = league_replacement_levels(overrides)
     horizons = tuple(range(1, args.horizon + 1))
     pools = ["hitter", "pitcher"] if args.pool == "both" else [args.pool]
 

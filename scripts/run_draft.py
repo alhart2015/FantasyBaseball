@@ -291,8 +291,6 @@ def main():
     full_board = build_draft_board(
         conn=conn,
         sgp_overrides=config.sgp_overrides,
-        roster_slots=config.roster_slots or None,
-        num_teams=num_teams,
         with_ours=True,
     )
     conn.close()
@@ -367,7 +365,6 @@ def main():
         filled_positions=filled,
         picks_until_next=tracker.picks_until_next_turn,
         roster_slots=config.roster_slots,
-        num_teams=num_teams,
         scoring_mode=scoring_mode,
         sgp_overrides=config.sgp_overrides,
     )
@@ -495,7 +492,6 @@ def main():
                 filled_positions=filled,
                 picks_until_next=tracker.picks_until_next_turn,
                 roster_slots=config.roster_slots,
-                num_teams=num_teams,
                 scoring_mode=scoring_mode,
                 sgp_overrides=config.sgp_overrides,
             )
@@ -593,7 +589,6 @@ def _handle_user_pick(
         filled_positions=filled,
         picks_until_next=picks_gap,
         roster_slots=roster_slots,
-        num_teams=num_teams,
         scoring_mode=scoring_mode,
         sgp_overrides=config.sgp_overrides if config else None,
     )
@@ -908,7 +903,6 @@ def _get_player_input(
                     filled_positions=filled,
                     picks_until_next=tracker.picks_until_next_turn,
                     roster_slots=roster_slots,
-                    num_teams=num_teams,
                     scoring_mode=scoring_mode,
                     sgp_overrides=sgp_overrides,
                 )

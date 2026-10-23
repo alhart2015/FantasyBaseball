@@ -5,7 +5,6 @@ from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.replacement import (
-    calculate_replacement_rates,
     find_replacement_players,
     position_aware_replacement_levels,
 )
@@ -109,80 +108,6 @@ def _make_pool_with_stats():
         )
 
     return pd.DataFrame(hitters + pitchers)
-
-
-class TestReplacementRates:
-    def test_returns_era_whip_avg(self):
-        pool = _make_pool_with_stats()
-        rates = calculate_replacement_rates(pool)
-        assert "era" in rates
-        assert "whip" in rates
-        assert "avg" in rates
-
-    def test_era_between_reasonable_bounds(self):
-        pool = _make_pool_with_stats()
-        rates = calculate_replacement_rates(pool)
-        assert 3.0 < rates["era"] < 6.0
-
-    def test_whip_between_reasonable_bounds(self):
-        pool = _make_pool_with_stats()
-        rates = calculate_replacement_rates(pool)
-        assert 1.0 < rates["whip"] < 2.0
-
-    def test_avg_between_reasonable_bounds(self):
-        pool = _make_pool_with_stats()
-        rates = calculate_replacement_rates(pool)
-        assert 0.200 < rates["avg"] < 0.300
-
-    def test_empty_pitcher_pool_uses_defaults(self):
-        """When no pitchers exist, ERA and WHIP fall back to hardcoded defaults."""
-        pool = _make_pool_with_stats()
-        hitters_only = pool[pool["player_type"] == "hitter"].copy()
-        rates = calculate_replacement_rates(hitters_only)
-        assert rates["era"] == pytest.approx(4.50)
-        assert rates["whip"] == pytest.approx(1.35)
-
-    def test_empty_hitter_pool_uses_defaults(self):
-        """When no hitters exist, AVG falls back to hardcoded default."""
-        pool = _make_pool_with_stats()
-        pitchers_only = pool[pool["player_type"] == "pitcher"].copy()
-        rates = calculate_replacement_rates(pitchers_only)
-        assert rates["avg"] == pytest.approx(0.250)
-
-    def test_zero_ip_pitchers_excluded_from_band(self):
-        """Pitchers with 0 IP in the band are filtered out, preventing division by zero."""
-        pool = _make_pool_with_stats()
-        # Set IP to 0 for pitchers near the replacement threshold
-        pitcher_mask = pool["player_type"] == "pitcher"
-        pitcher_indices = pool[pitcher_mask].sort_values("total_sgp", ascending=False).index
-        # Zero out IP for pitchers 85-95 (around the 90-starter threshold)
-        for idx in pitcher_indices[85:96]:
-            pool.loc[idx, "ip"] = 0.0
-            pool.loc[idx, "er"] = 0
-            pool.loc[idx, "bb"] = 0
-            pool.loc[idx, "h_allowed"] = 0
-        rates = calculate_replacement_rates(pool)
-        assert rates["era"] > 0
-
-    def test_closers_only_pool(self):
-        """A pool of only RP-eligible pitchers still produces valid rates."""
-        pool = _make_pool_with_stats()
-        # Change all SP to RP
-        pitcher_mask = pool["player_type"] == "pitcher"
-        pool.loc[pitcher_mask, "positions"] = pool.loc[pitcher_mask, "positions"].apply(
-            lambda _: ["RP"]
-        )
-        rates = calculate_replacement_rates(pool)
-        assert 3.0 < rates["era"] < 6.0
-        assert 1.0 < rates["whip"] < 2.0
-
-    def test_sp_only_pool(self):
-        """A pool of only SP-eligible pitchers produces valid rates (already the default)."""
-        pool = _make_pool_with_stats()
-        rates = calculate_replacement_rates(pool)
-        # All pitchers in the helper are SP, so this is just SP-only
-        assert 3.0 < rates["era"] < 6.0
-        assert 1.0 < rates["whip"] < 2.0
 
 
 class TestFindReplacementPlayers:
@@ -360,3 +285,27 @@ class TestPositionAwareReplacementLevels:
         a unified-P floor could not net SV and K correctly at once."""
         levels = position_aware_replacement_levels()
         assert levels["SP"] != pytest.approx(levels["RP"])
+
+
+def test_rate_baselines_are_the_measured_waiver_lines_rates():
+    """#521: one AVG / ERA / WHIP zero point everywhere, taken from the measured
+    waiver lines (the replacement starter's ERA / WHIP; the hitters' pooled AVG)."""
+    from fantasy_baseball.sgp import player_value as pv
+
+    sp = REPLACEMENT_BY_POSITION["SP"]
+    assert pytest.approx(9 * sp["er"] / sp["ip"]) == pv.REPLACEMENT_ERA
+    assert pytest.approx((sp["bb"] + sp["h_allowed"]) / sp["ip"]) == pv.REPLACEMENT_WHIP
+    hitters = [REPLACEMENT_BY_POSITION[p] for p in ("C", "1B", "2B", "3B", "SS", "OF")]
+    assert (
+        pytest.approx(sum(x["h"] for x in hitters) / sum(x["ab"] for x in hitters))
+        == pv.REPLACEMENT_AVG
+    )
+    # The numbers themselves, so a wrong derivation can't pass by matching itself.
+    assert round(pv.REPLACEMENT_AVG, 4) == 0.2455
+    assert round(pv.REPLACEMENT_ERA, 3) == 4.226
+    assert round(pv.REPLACEMENT_WHIP, 3) == 1.287
+    assert pv.REPLACEMENT_RATES == {
+        "avg": pv.REPLACEMENT_AVG,
+        "era": pv.REPLACEMENT_ERA,
+        "whip": pv.REPLACEMENT_WHIP,
+    }

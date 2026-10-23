@@ -6,6 +6,7 @@ import pytest
 from fantasy_baseball.hitter_ros import backtest
 from fantasy_baseball.hitter_ros.evaluate import fantasy_value
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.player_value import REPLACEMENT_AVG
 from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, Category
 
 DENOMS = get_sgp_denominators()
@@ -14,7 +15,7 @@ DENOMS = get_sgp_denominators()
 def _projection(**cols):
     base = {"pa": [600.0], "ab": [540.0], "r": [0.0], "hr": [0.0], "rbi": [0.0], "sb": [0.0]}
     base.update(cols)
-    base.setdefault("avg", [0.250])
+    base.setdefault("avg", [REPLACEMENT_AVG])
     return pd.DataFrame(base, index=pd.Index([1], name="player_id"))
 
 
@@ -24,7 +25,7 @@ def test_value_is_sgp_of_the_counts_and_marginal_hits():
     assert fantasy_value(p, DENOMS).iloc[0] == pytest.approx(30 / DENOMS[Category.HR])
     # A .300 hitter on 540 AB: 27 hits over replacement.
     p = _projection(avg=[0.300])
-    expect = 0.05 * 540 / (DENOMS[Category.AVG] * DEFAULT_TEAM_AB)
+    expect = (0.300 - REPLACEMENT_AVG) * 540 / (DENOMS[Category.AVG] * DEFAULT_TEAM_AB)
     assert fantasy_value(p, DENOMS).iloc[0] == pytest.approx(expect)
 
 

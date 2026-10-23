@@ -45,6 +45,7 @@ from fantasy_baseball.draft.state import (
     read_state,
     write_state,
 )
+from fantasy_baseball.sgp.player_value import REPLACEMENT_RATES
 from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP
 
 DEFAULT_STATE_PATH = Path(__file__).resolve().parents[3] / "data" / "draft_state.json"
@@ -366,8 +367,12 @@ def _register_writer_routes(app):
         except draft_controller.UnresolvedKeeperError as e:
             return jsonify({"error": str(e)}), 400
         # rebuild_board builds on the live defaults; record them with this draft so
-        # freezing it later saves the volumes this board really used.
-        state[StateKey.BOARD_VOLUMES] = {"team_ab": DEFAULT_TEAM_AB, "team_ip": DEFAULT_TEAM_IP}
+        # freezing it later saves the scale this board really used.
+        state[StateKey.BOARD_SCALE] = {
+            "team_ab": DEFAULT_TEAM_AB,
+            "team_ip": DEFAULT_TEAM_IP,
+            "repl_rates": dict(REPLACEMENT_RATES),
+        }
         state = _attach_standings_cache(app, state, league_yaml)
         write_state(state, app.config[CFG_STATE_PATH])
         return jsonify(state)

@@ -15,7 +15,7 @@ blend's rates, as the board does).
 the real season landed above P90 and below P10 (want ~10% each).
 
 Each simulated whole season is also scored in SGP the way the board scores a line (its
-denominators and the pool's replacement rates: draft.board_ranges.season_sgp), giving
+denominators and the fixed replacement rates: draft.board_ranges.season_sgp), giving
 sgp_p10/p50/p90 and sgp_mean; the board turns them into P90 VAR and risk-adjusted VAR
 (board.with_range_var). --backtest also scores sgp_mean as a forecast against the board's
 line.
@@ -165,8 +165,6 @@ def board_scale(season: int, ours_hit, ours_pit, config, conn) -> ScaleInputs:
         hitters,
         pitchers,
         get_positions(conn),
-        config.roster_slots or None,
-        config.num_teams,
         sgp_overrides=config.sgp_overrides,
     )
     return scale
@@ -217,7 +215,7 @@ def main() -> int:
     if not args.backtest:
         target_ours = (load_ours("hitter", args.season), load_ours("pitcher", args.season))
         target = season_inputs(args.season, *target_ours, config, conn)
-        # The board's scale (SGP denominators, the pool's replacement rates, team
+        # The board's scale (SGP denominators, the fixed replacement rates, team
         # volumes), so a season's SGP is the board's.
         scale = board_scale(args.season, *target_ours, config, conn)
     conn.close()

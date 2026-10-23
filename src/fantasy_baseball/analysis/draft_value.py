@@ -88,16 +88,20 @@ def _load_draft_state(config: LeagueConfig) -> dict[str, Any]:
     return cast(dict[str, Any], json.loads(text))
 
 
-def _draft_day_volumes(config: LeagueConfig) -> tuple[int, int]:
-    """Team AB / IP the season's draft-day board was built with, from its meta.json.
+def _draft_day_scale(config: LeagueConfig) -> tuple[int, int, dict[str, float]]:
+    """Team AB, team IP and AVG / ERA / WHIP rate baselines the season's draft-day
+    board was built with, from its meta.json.
 
-    The live DEFAULT_TEAM_AB/IP recalibrate over time (IP 1450 -> 1300 on 2026-07-05);
-    this module's whole contract is reproducing the DRAFT-DAY scale so par curves and
-    per-pick values stay comparable, the same reason it ignores sgp_denominators
-    overrides. So the volumes are recorded at freeze time, never read live here.
+    The live values move over time (DEFAULT_TEAM_IP 1450 -> 1300 on 2026-07-05; the
+    rate baselines became one fixed set in #521, after the 2026 board was scored on
+    rates from its own pool). This module's whole contract is reproducing the
+    DRAFT-DAY scale so par curves, luck and per-pick values stay comparable with the
+    frozen board's VAR, the same reason it ignores sgp_denominators overrides. So they
+    are recorded at freeze time, never read live here.
     """
     meta = json.loads(_frozen_file(config, _FROZEN_META_FILE).read_text(encoding="utf-8"))
-    return int(meta["team_ab"]), int(meta["team_ip"])
+    rates = {k: float(meta["repl_rates"][k]) for k in ("avg", "era", "whip")}
+    return int(meta["team_ab"]), int(meta["team_ip"]), rates
 
 
 def reproduce_draft_day_board(
@@ -119,16 +123,15 @@ def reproduce_draft_day_board(
     hitters, pitchers, _quality = blend_projections(
         preseason_csvs, config.projection_systems, config.projection_weights
     )
-    team_ab, team_ip = _draft_day_volumes(config)
+    team_ab, team_ip, repl_rates = _draft_day_scale(config)
     positions = load_positions_cache(_POSITIONS_JSON)
     board, scale = build_board_from_frames(
         hitters,
         pitchers,
         positions,
-        roster_slots=config.roster_slots or None,
-        num_teams=config.num_teams,
         team_ab=team_ab,
         team_ip=team_ip,
+        repl_rates=repl_rates,
     )
     return board, scale
 
@@ -625,17 +628,18 @@ def freeze_draft(
     gate (e.g. not finished, or a keeper on the wrong team), an empty board, an
     existing frozen draft unless ``force``, and ever replacing a legacy-format one
     (the 2026 draft cannot be re-made). meta.json records the team volumes the board
-    was built with, as stamped at New Draft. The folder is built beside the target
+    was built with and its rate baselines, as stamped at New Draft. The folder is built beside the target
     and swapped in whole, so a failure never leaves a partial freeze. Returns it.
     """
     state = json.loads(Path(state_path).read_text(encoding="utf-8"))
     if StateKey.PICKS not in state or StateKey.KEEPERS not in state:
         raise ValueError(f"{state_path} is not the draft dashboard's state (no keepers/picks)")
-    volumes = state.get(StateKey.BOARD_VOLUMES)
-    if not volumes:
+    board_scale = state.get(StateKey.BOARD_SCALE)
+    if not board_scale:
         raise ValueError(
-            "this draft has no record of the board's team AB/IP; it was started before "
-            "they were recorded. Start it with New Draft to save it for grading."
+            "this draft has no record of the board's scale (team AB/IP, rate baselines); "
+            "it was started before that was recorded. Start it with New Draft to save it "
+            "for grading."
         )
     gate = validate_reconstruction(reconstruct_draft(config, state=state), config=config)
     if gate:
@@ -661,8 +665,9 @@ def freeze_draft(
     shutil.copyfile(board_path, tmp / _FROZEN_BOARD_FILE)
     meta = {
         "season_year": config.season_year,
-        "team_ab": int(volumes["team_ab"]),
-        "team_ip": int(volumes["team_ip"]),
+        "team_ab": int(board_scale["team_ab"]),
+        "team_ip": int(board_scale["team_ip"]),
+        "repl_rates": {k: float(board_scale["repl_rates"][k]) for k in ("avg", "era", "whip")},
         "frozen_on": local_today().isoformat(),
         "source": "draft dashboard",
     }

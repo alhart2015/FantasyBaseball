@@ -435,7 +435,6 @@ def main():
     board = build_draft_board(
         conn=conn,
         sgp_overrides=config.sgp_overrides,
-        num_teams=10,
     )
     conn.close()
 

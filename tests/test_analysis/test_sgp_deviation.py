@@ -3,6 +3,7 @@ import math
 import pytest
 
 from fantasy_baseball.analysis.pace import compute_sgp_deviation
+from fantasy_baseball.sgp.player_value import REPLACEMENT_AVG
 from fantasy_baseball.utils.constants import Category
 
 # Explicit denominators so expected values are hand-computable.
@@ -28,8 +29,12 @@ def test_hitter_full_deviation():
     # counting dev: R (25-20)/10=.5, HR (8-6)/5=.4, RBI (30-20)/10=1.0, SB (6-4)/5=.4 -> 2.3
     # AVG dev: (0.300-0.280)*90/(0.0015*5500) = 1.8/8.25 = 0.2182
     assert out["sgp_dev"] == pytest.approx(2.518, abs=0.005)
-    assert out["actual_sgp"] == pytest.approx(8.845, abs=0.005)
-    assert out["expected_sgp"] == pytest.approx(6.327, abs=0.005)
+    # absolute SGP: counting 8.3 / 6.0 plus AVG over the replacement AVG on 90 AB
+    avg_sgp = 90 / (0.0015 * 5500)
+    assert out["actual_sgp"] == pytest.approx(8.3 + (0.300 - REPLACEMENT_AVG) * avg_sgp, abs=0.005)
+    assert out["expected_sgp"] == pytest.approx(
+        6.0 + (0.280 - REPLACEMENT_AVG) * avg_sgp, abs=0.005
+    )
     # replacement cancels in the delta
     assert out["sgp_dev"] == pytest.approx(out["actual_sgp"] - out["expected_sgp"], abs=1e-6)
 

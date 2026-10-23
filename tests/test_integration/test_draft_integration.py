@@ -64,8 +64,6 @@ def full_board(config: LeagueConfig) -> pd.DataFrame:
 
     board = build_draft_board(
         conn=conn,
-        roster_slots=config.roster_slots,
-        num_teams=config.num_teams,
     )
     conn.close()
     return board
@@ -418,7 +416,6 @@ class TestVonaModeProducesDifferentRankingThanVar:
                 user_roster=[],
                 n=1,
                 roster_slots=config.roster_slots,
-                num_teams=config.num_teams,
                 scoring_mode="var",
             )
             vona_recs = get_recommendations(
@@ -427,7 +424,6 @@ class TestVonaModeProducesDifferentRankingThanVar:
                 user_roster=[],
                 n=1,
                 roster_slots=config.roster_slots,
-                num_teams=config.num_teams,
                 scoring_mode="vona",
                 picks_until_next=12,
             )

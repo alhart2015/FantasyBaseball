@@ -304,8 +304,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
     check is an equality test -- it would refuse every chart this script writes.
     """
     from fantasy_baseball.config import load_config
-    from fantasy_baseball.sgp.denominators import get_sgp_denominators
-    from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+    from fantasy_baseball.sgp.replacement import league_replacement_levels
     from fantasy_baseball.trajectory.board import board_inputs, player_names, season_slots
     from fantasy_baseball.trajectory.model import collapse_split_seasons
     from fantasy_baseball.trajectory.panel import panel_path, season_elapsed_fraction
@@ -321,7 +320,7 @@ def build_payload(max_horizon: int, panel_dir: Path) -> tuple[dict, dict, int]:
 
     config = load_config(PROJECT_ROOT / "config" / "league.yaml")
     overrides = config.sgp_overrides
-    levels = position_aware_replacement_levels(get_sgp_denominators(overrides))
+    levels = league_replacement_levels(overrides)
     horizons = tuple(range(1, max_horizon + 1))
 
     # BOTH pools, era-normalized, with the in-progress season anchored on season-to-date

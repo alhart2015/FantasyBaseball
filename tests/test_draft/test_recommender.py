@@ -165,29 +165,19 @@ class TestSgpOverridesFloorsCacheKey:
         )
         assert len(recs) == 3
 
-    def test_enum_and_string_keys_share_one_cache_entry(self):
-        from fantasy_baseball.draft.recommender import _replacement_levels_for_board
-        from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, Category
+    def test_enum_and_string_keys_give_the_same_floors(self):
+        from fantasy_baseball.sgp.replacement import league_replacement_levels
+        from fantasy_baseball.utils.constants import Category
 
-        board = _make_board()
-        levels_enum = _replacement_levels_for_board(
-            board, DEFAULT_ROSTER_SLOTS, 10, {Category.HR: 5.0}
+        assert league_replacement_levels({"HR": 5.0}) == league_replacement_levels(
+            {Category.HR: 5.0}
         )
-        cache_key = board.attrs["_repl_levels_cache"][0]
-        levels_str = _replacement_levels_for_board(board, DEFAULT_ROSTER_SLOTS, 10, {"HR": 5.0})
-        # Same normalized key -> cache hit, identical floors either way.
-        assert board.attrs["_repl_levels_cache"][0] == cache_key
-        assert levels_str == levels_enum
 
-    def test_mixed_enum_and_string_keys_sort_without_typeerror(self):
-        from fantasy_baseball.draft.recommender import _replacement_levels_for_board
-        from fantasy_baseball.utils.constants import DEFAULT_ROSTER_SLOTS, Category
+    def test_mixed_enum_and_string_keys_work(self):
+        from fantasy_baseball.sgp.replacement import league_replacement_levels
+        from fantasy_baseball.utils.constants import Category
 
-        board = _make_board()
-        levels = _replacement_levels_for_board(
-            board, DEFAULT_ROSTER_SLOTS, 10, {Category.HR: 5.0, "ERA": 0.05}
-        )
-        assert levels
+        assert league_replacement_levels({Category.HR: 5.0, "ERA": 0.05})
 
 
 class TestRecommendationCoercion:

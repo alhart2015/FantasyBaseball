@@ -3,7 +3,7 @@ from typing import Any
 import pandas as pd
 
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_AVG,
     REPLACEMENT_ERA,
@@ -88,73 +88,6 @@ def _get_eligible_players(pool: pd.DataFrame, position: str) -> pd.DataFrame:
     if position == "OF":
         return pool[pool["positions"].apply(lambda pos: "OF" in pos)]
     return pool[pool["positions"].apply(lambda pos: position in pos)]
-
-
-def calculate_replacement_rates(
-    player_pool: pd.DataFrame,
-    starters_per_position: dict[str, int] | None = None,
-) -> dict[str, float]:
-    """Derive replacement-level rate stats from the player pool.
-
-    Averages ERA/WHIP/AVG across a band of ±5 players around the
-    replacement threshold to smooth noise from any single player.
-    Falls back to hardcoded defaults when the pool is empty.
-    """
-    if starters_per_position is None:
-        starters_per_position = dict(STARTERS_PER_POSITION)
-
-    rates: dict[str, float] = {}
-
-    # Pitcher replacement rates
-    num_p_starters = starters_per_position.get("P", 90)
-    pitchers = _get_eligible_players(player_pool, "P")
-    pitchers = pitchers.sort_values("total_sgp", ascending=False).reset_index(drop=True)
-
-    if len(pitchers) > num_p_starters:
-        lo = max(0, num_p_starters - 5)
-        hi = min(len(pitchers), num_p_starters + 6)
-        band = pitchers.iloc[lo:hi]
-        band = band[band["ip"] > 0]
-        if not band.empty:
-            total_er = band["er"].sum()
-            total_ip = band["ip"].sum()
-            total_bb = band["bb"].sum()
-            total_ha = band["h_allowed"].sum()
-            rates["era"] = calculate_era(total_er, total_ip)
-            rates["whip"] = calculate_whip(total_bb, total_ha, total_ip)
-        else:
-            rates["era"] = REPLACEMENT_ERA
-            rates["whip"] = REPLACEMENT_WHIP
-    else:
-        rates["era"] = REPLACEMENT_ERA
-        rates["whip"] = REPLACEMENT_WHIP
-
-    # Hitter replacement rates
-    all_hitters = (
-        player_pool[player_pool["positions"].apply(is_hitter)]
-        .sort_values("total_sgp", ascending=False)
-        .reset_index(drop=True)
-    )
-
-    positional_hitter_slots = sum(
-        n for pos, n in starters_per_position.items() if pos not in ("P", "IF", "UTIL")
-    )
-    util_slots = starters_per_position.get("UTIL", 0)
-    total_hitter_starters = positional_hitter_slots + util_slots
-
-    if len(all_hitters) > total_hitter_starters:
-        lo = max(0, total_hitter_starters - 5)
-        hi = min(len(all_hitters), total_hitter_starters + 6)
-        band = all_hitters.iloc[lo:hi]
-        band = band[band["ab"] > 0]
-        if not band.empty:
-            rates["avg"] = calculate_avg(band["h"].sum(), band["ab"].sum())
-        else:
-            rates["avg"] = REPLACEMENT_AVG
-    else:
-        rates["avg"] = REPLACEMENT_AVG
-
-    return rates
 
 
 # Hitter positions for which REPLACEMENT_BY_POSITION carries a waiver line.
@@ -277,3 +210,18 @@ def position_aware_replacement_levels(
         "RP", denoms, replacement_era, replacement_whip, team_ip=team_ip, fraction=fraction
     )
     return levels
+
+
+def league_replacement_levels(sgp_overrides: SgpOverrides | None) -> dict[str, float]:
+    """The league's replacement floors: THE source for every live model.
+
+    The measured waiver lines (``REPLACEMENT_BY_POSITION``) scored on the fixed
+    AVG / ERA / WHIP baselines (``REPLACEMENT_RATES``, #521), the league's SGP
+    denominators (pass ``config.sgp_overrides``; ``None`` only where there is no
+    league config) and the default team volumes. The draft board, the recommender,
+    the trajectory boards, the keeper report and the value bars all read their
+    floors here, so none can assemble the inputs differently. The one deliberate
+    exception is draft-value, which rebuilds a past draft day's floors from that
+    day's frozen scale (``position_aware_replacement_levels`` with its inputs).
+    """
+    return position_aware_replacement_levels(get_sgp_denominators(sgp_overrides))

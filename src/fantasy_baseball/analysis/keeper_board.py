@@ -5,8 +5,9 @@ report). A player's season line is our nets' projected rates times the PT source
 playing time (a projection file: FanGraphs Depth Charts or Steamer once out). SGP is
 that line in standings points (``hitter_ros.evaluate.fantasy_value``,
 ``pitcher_ros.evaluate.fantasy_value``); VAR is SGP over the replacement at his best
-position, the first player past the league's starting slots there in the whole
-projected pool (``sgp.replacement`` / ``sgp.var``: the 11th C, 41st OF, 91st P, ...).
+position: the measured waiver lines every model uses
+(``sgp.replacement.position_aware_replacement_levels``, #521), a pitcher's SP or RP
+by his share of starts (``pitcher_board``'s ``role``), not his innings.
 
 Rostered players are matched to the pool by normalized name within player type
 (rosters carry no MLBAM id). A name two players share is settled by MLB team; one
@@ -26,7 +27,6 @@ from fantasy_baseball.data.redis_store import _PLAYER_SUFFIX_RE
 from fantasy_baseball.hitter_ros.evaluate import fantasy_value as hitter_value
 from fantasy_baseball.pitcher_ros.evaluate import fantasy_value as pitcher_value
 from fantasy_baseball.pt_model.range_specs import STARTER_SHARE
-from fantasy_baseball.sgp.replacement import find_replacement_players
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import Category
 from fantasy_baseball.utils.name_utils import normalize_name
@@ -126,23 +126,33 @@ def pitcher_board(
     return out[out["sgp"].notna()]
 
 
-def replacement(
-    board: pd.DataFrame, starters: Mapping[str, int]
-) -> tuple[dict[str, float], dict[str, dict[str, Any]]]:
-    """The replacement SGP per position from this pool (both kinds), and the
-    replacement player's row there."""
-    repl = find_replacement_players(board.rename(columns={"sgp": "total_sgp"}), dict(starters))
-    return {pos: float(row["total_sgp"]) for pos, row in repl.items()}, repl
-
-
 def var(
-    sgp: Iterable[float], positions: Iterable[Sequence[str]], levels: Mapping[str, float]
+    sgp: Iterable[float],
+    positions: Iterable[Sequence[str]],
+    levels: Mapping[str, float],
+    roles: Iterable[Any] | None = None,
 ) -> list[float]:
-    """Each player's VAR: SGP over the replacement at his best eligible position."""
-    return [
-        calculate_var(pd.Series({"total_sgp": v, "positions": list(ps)}), dict(levels))
-        for v, ps in zip(sgp, positions, strict=True)
-    ]
+    """Each player's VAR: SGP over the replacement at his best eligible position.
+
+    ``roles`` ("SP" / "RP" for pitchers, NaN for hitters, as ``pitcher_board`` sets
+    from his share of starts) nets a pitcher against that role's floor, so an
+    injured starter's short season is not read as a reliever's. A pitcher needs
+    one when ``levels`` has SP / RP floors: without innings, ``calculate_var``
+    would read him as a 0-IP reliever.
+    """
+    sgp, positions = list(sgp), list(positions)
+    role_list = [None] * len(sgp) if roles is None else list(roles)
+    out = []
+    for v, ps, role in zip(sgp, positions, role_list, strict=True):
+        if isinstance(role, str) and role in levels:
+            out.append(float(v) - levels[role])
+        elif "P" in ps and ("SP" in levels or "RP" in levels):
+            raise ValueError(f"pitcher needs an SP / RP role for these floors; got {role!r}")
+        else:
+            out.append(
+                calculate_var(pd.Series({"total_sgp": v, "positions": list(ps)}), dict(levels))
+            )
+    return out
 
 
 def match_rostered(

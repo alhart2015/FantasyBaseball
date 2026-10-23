@@ -37,8 +37,6 @@ def main():
     board = build_draft_board(
         conn=conn,
         sgp_overrides=config.sgp_overrides,
-        roster_slots=config.roster_slots or None,
-        num_teams=10,
     )
     conn.close()
 
