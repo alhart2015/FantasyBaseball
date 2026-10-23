@@ -251,8 +251,17 @@ def worst_of_type(
     (YTD + ROS) ranking would drop a call-up or an arm back from the IL, whose
     small banked line hides a strong ROS, and so overstate the partner's loss.
     Players without a rest-of-season projection are skipped (they cannot be scored).
+
+    Injured bodies (IL slot or IL status) are never the drop. Their ROS is near
+    zero, so they would always rank worst -- but dropping one frees no active
+    spot, and the healthy incoming player would land on the bench, where the MC
+    barely plays him, understating what the partner gains.
     """
-    cands = [p for p in roster if p.player_type == ptype and p.rest_of_season is not None]
+    cands = [
+        p
+        for p in roster
+        if p.player_type == ptype and p.rest_of_season is not None and not p.is_on_il()
+    ]
     if not cands:
         return None
     return min(cands, key=lambda p: calculate_player_sgp(p.rest_of_season, denoms=denoms))
