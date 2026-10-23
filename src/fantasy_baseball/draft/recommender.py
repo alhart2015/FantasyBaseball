@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from typing import cast
 
 import pandas as pd
 
@@ -120,35 +119,14 @@ def calculate_vona_scores(
     return dict(zip(available["player_id"], vona_series, strict=False))
 
 
-def _replacement_levels_for_board(
-    board: pd.DataFrame,
-    roster_slots: dict[str, int],
-    num_teams: int | None,
-    sgp_overrides: SgpOverrides | None = None,
-) -> dict[str, float]:
-    """Position-aware empirical replacement floors for ``board``.
+def _replacement_levels(sgp_overrides: SgpOverrides | None = None) -> dict[str, float]:
+    """Position-aware empirical replacement floors: the measured waiver lines over
+    the fixed AVG/ERA/WHIP baselines (#521), at the league's SGP denominators.
 
-    The floors are the measured waiver lines over the SGP denominators (#521),
-    constant for the whole draft, while ``get_recommendations`` runs once per
-    pick (and per strategy-opponent pick in the simulator, ~250 picks x 100+
-    sims). Cache the result on ``board.attrs`` keyed by the slot signature and
-    denominators: per-board-object, recomputed if either changes.
+    A handful of SGP sums with no board scan, so it is computed per call rather
+    than cached.
     """
-    # Key the cache on the RESOLVED denominators, not the raw override
-    # pairs: get_sgp_denominators normalizes enum/string keys (a plain-Enum
-    # sort would TypeError) and resolves duplicate spellings last-write-wins,
-    # so two dicts that resolve differently can never share a cache entry.
-    denoms = get_sgp_denominators(sgp_overrides)
-    overrides_key = (
-        tuple(sorted((c.value, v) for c, v in denoms.items())) if sgp_overrides else None
-    )
-    cache_key = (num_teams, tuple(sorted(roster_slots.items())), overrides_key)
-    cached = board.attrs.get("_repl_levels_cache")
-    if cached is not None and cached[0] == cache_key:
-        return cast(dict[str, float], cached[1])
-    repl_levels = position_aware_replacement_levels(denoms)
-    board.attrs["_repl_levels_cache"] = (cache_key, repl_levels)
-    return repl_levels
+    return position_aware_replacement_levels(get_sgp_denominators(sgp_overrides))
 
 
 def get_recommendations(
@@ -159,7 +137,6 @@ def get_recommendations(
     filled_positions: dict[str, int] | None = None,
     picks_until_next: int | None = None,
     roster_slots: dict[str, int] | None = None,
-    num_teams: int | None = None,
     scoring_mode: str = "var",
     sgp_overrides: SgpOverrides | None = None,
 ) -> list[Recommendation]:
@@ -187,7 +164,7 @@ def get_recommendations(
     # Empirical waiver floors over the fixed AVG/ERA/WHIP baselines (#521), the
     # basis build_draft_board scored ``total_sgp`` on. A board file built before
     # #521 was scored on other rates: rebuild it (--rebuild-board / New Draft).
-    repl_levels = _replacement_levels_for_board(board, roster_slots, num_teams, sgp_overrides)
+    repl_levels = _replacement_levels(sgp_overrides)
 
     # Only recompute VAR for top candidates (by pre-computed VAR).
     # The full pool sets replacement levels accurately, but iterating

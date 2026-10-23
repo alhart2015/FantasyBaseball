@@ -224,7 +224,6 @@ def _rank_var_vona(ctx: RecommendContext) -> list[RankedPick]:
         filled_positions=ctx.filled_positions,
         picks_until_next=ctx.picks_until_next,
         roster_slots=ctx.config.roster_slots,
-        num_teams=ctx.config.num_teams,
         scoring_mode=ctx.scoring_mode,
         sgp_overrides=ctx.config.sgp_overrides,
     )
