@@ -252,3 +252,38 @@ def test_resume_or_init_returns_isolated_copies():
     state_b = resume_or_init(Path("also/does/not/exist.json"))
     assert state_b["picks"] == []
     assert state_b["projected_standings_cache"] == {}
+
+
+def test_full_roster_size_counts_every_slot_but_il():
+    from fantasy_baseball.draft.draft_controller import full_roster_size
+
+    slots = {"C": 1, "OF": 4, "UTIL": 2, "P": 9, "BN": 2, "IL": 2}
+    assert full_roster_size(slots) == 18
+
+
+def test_draft_is_complete_needs_every_team_full():
+    from fantasy_baseball.draft.draft_controller import draft_is_complete
+
+    teams = {1: "A", 2: "B"}
+    slots = {"OF": 1, "P": 1, "IL": 1}
+    state = {
+        "keepers": [{"team": "A"}],
+        "picks": [{"team": "B"}, {"team": "B"}, {"team": "A"}],
+        "on_the_clock": "A",  # the fallback snake runs longer than the rosters
+    }
+    assert draft_is_complete(state, teams, slots)
+    state["picks"] = state["picks"][:-1]
+    assert not draft_is_complete(state, teams, slots)
+    assert not draft_is_complete(state, teams, {})
+
+
+def test_draft_is_complete_when_the_pick_order_runs_out():
+    """Traded picks can leave a team short of a full roster; the draft is still
+    over once nobody is on the clock."""
+    from fantasy_baseball.draft.draft_controller import draft_is_complete
+
+    teams = {1: "A", 2: "B"}
+    slots = {"OF": 1, "P": 1}
+    state = {"keepers": [], "picks": [{"team": "A"}] * 3, "on_the_clock": None}
+    assert draft_is_complete(state, teams, slots)
+    assert not draft_is_complete({**state, "picks": []}, teams, slots)  # never started

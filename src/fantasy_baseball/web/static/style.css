@@ -630,3 +630,10 @@ body {
   padding: 4px 12px;
 }
 .recent-picks #undo-btn { margin-left: auto; flex-shrink: 0; }
+
+/* "<year> draft saved for grading", shown beside New Draft once frozen. */
+.freeze-status {
+  font-size: 12px;
+  color: var(--field);
+  margin-right: 8px;
+}

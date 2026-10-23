@@ -1,3 +1,4 @@
+import dataclasses
 import json as _json
 from collections import Counter
 
@@ -146,7 +147,7 @@ def test_build_preseason_board_returns_scale_and_soft_frozen():
     assert not board.empty
     assert set(scale.replacement_levels) >= {"C", "1B", "SS", "OF", "SP", "RP"}
     # LITERAL pin, deliberately not the live DEFAULT_TEAM_* constants: the
-    # draft-day scale is frozen (see _DRAFT_DAY_TEAM_AB/IP) so historical
+    # draft-day scale is frozen (frozen_draft_2026/meta.json) so historical
     # par curves survive future recalibrations of the live defaults.
     assert scale.team_ab == 5500 and scale.team_ip == 1450
     assert {"era", "whip", "avg"} <= set(scale.repl_rates)
@@ -168,7 +169,8 @@ def test_reconstruct_draft_shape_and_gate():
     # ENFORCE the known-roster gate (spec oracle 6b): the user's roster must
     # reconstruct exactly. Infer the user's team from its keepers, then assert its
     # reconstructed roster is a superset of state["user_roster"].
-    state = _json.loads(dv._DRAFT_STATE.read_text(encoding="utf-8"))
+    cfg = dv.load_config(dv._CONFIG)
+    state = _json.loads(dv._draft_state_path(cfg).read_text(encoding="utf-8"))
     user_roster = state["user_roster"]
     keepers = dv.load_config(dv._CONFIG).keepers
     keeper_team = {nn(k["name"]): k["team"] for k in keepers}
@@ -684,7 +686,7 @@ def test_projected_par_curve_matches_inline_construction():
     config = load_config(dv._CONFIG)
     board, _scale = dv.reproduce_draft_day_board(config)
     board = dv._anchor_board_var_to_frozen(board, dv._frozen_var_by_player_id())
-    state = json.loads(dv._DRAFT_STATE.read_text(encoding="utf-8"))
+    state = json.loads(dv._draft_state_path(config).read_text(encoding="utf-8"))
     picks = dv.reconstruct_draft(config, state=state)
     bindex = dv._board_index(board)
     typed = dv._assign_pick_types(picks, bindex, config.keepers)
@@ -694,3 +696,209 @@ def test_projected_par_curve_matches_inline_construction():
     assert (math.isnan(par.keeper_par) and math.isnan(expected.keeper_par)) or (
         par.keeper_par == expected.keeper_par
     )
+
+
+# --- #244: a frozen draft per season, readable in both saved formats ---
+
+
+def _as_dashboard_state(config):
+    """The frozen 2026 draft rewritten in the draft dashboard's format, with each
+    pick's type taken from the legacy path's own type assignment."""
+    board, _scale = dv.reproduce_draft_day_board(config)
+    bindex = dv._board_index(board)
+    typed = dv._assign_pick_types(dv.reconstruct_draft(config), bindex, config.keepers)
+
+    def entry(pick, ptype, i):
+        return {
+            "pick_number": pick.slot,
+            "round": 0 if pick.is_keeper else (pick.slot - 1) // config.num_teams + 1,
+            "team": pick.team,
+            "player_id": f"fg{i}::{ptype.value}",
+            "player_name": pick.player_name,
+            "position": "",
+            "timestamp": 0.0,
+            "undone": False,
+        }
+
+    keepers = [entry(p, t, i) for i, (p, t) in enumerate(typed) if p.is_keeper]
+    picks = [entry(p, t, i) for i, (p, t) in enumerate(typed) if not p.is_keeper]
+    picks.reverse()  # order on disk must not matter: pick_number decides
+    return {"version": 7, "keepers": keepers, "picks": picks, "undo_stack": []}, typed
+
+
+def test_dashboard_format_reconstructs_the_same_draft_as_the_legacy_format():
+    config = dv.load_config(dv._CONFIG)
+    state, legacy_typed = _as_dashboard_state(config)
+
+    picks = dv.reconstruct_draft(config, state=state)
+
+    def shape(p):
+        return (p.slot, p.team, p.player_name, p.is_keeper)
+
+    assert [shape(p) for p in picks] == [shape(p) for p, _t in legacy_typed]
+    assert dv.validate_reconstruction(picks, config=config) == []
+    bindex = dv._board_index(dv.reproduce_draft_day_board(config)[0])
+    assert dv._assign_pick_types(picks, bindex, config.keepers) == [
+        (dataclasses.replace(p, player_type=t), t) for p, t in legacy_typed
+    ]
+
+
+def test_run_draft_value_grades_a_dashboard_draft_like_the_legacy_one(season_kv, monkeypatch):
+    legacy_players, legacy_teams = dv.run_draft_value(fraction=0.5)
+    state, _typed = _as_dashboard_state(dv.load_config(dv._CONFIG))
+    monkeypatch.setattr(dv, "_load_draft_state", lambda _config: state)
+
+    players, teams = dv.run_draft_value(fraction=0.5)
+
+    assert players == legacy_players
+    assert teams == legacy_teams
+
+
+def test_dashboard_pick_keeps_its_own_type_and_skips_undone_picks():
+    state = {
+        "keepers": [],
+        "picks": [
+            {"pick_number": 2, "team": "B", "player_id": "9::pitcher", "player_name": "X"},
+            {"pick_number": 1, "team": "A", "player_id": "8::hitter", "player_name": "X"},
+            {
+                "pick_number": 3,
+                "team": "C",
+                "player_id": "7::hitter",
+                "player_name": "Y",
+                "undone": True,
+            },
+        ],
+    }
+    picks = dv.reconstruct_draft(dv.load_config(dv._CONFIG), state=state)
+    assert [(p.slot, p.team, p.player_type) for p in picks] == [
+        (1, "A", dv.PlayerType.HITTER),
+        (2, "B", dv.PlayerType.PITCHER),
+    ]
+
+
+def test_dashboard_pick_without_a_type_suffix_is_refused():
+    state = {
+        "keepers": [],
+        "picks": [
+            {"pick_number": 1, "team": "A", "player_id": "Juan Soto", "player_name": "Juan Soto"}
+        ],
+    }
+    with pytest.raises(ValueError, match="no '::hitter' / '::pitcher' suffix"):
+        dv.reconstruct_draft(dv.load_config(dv._CONFIG), state=state)
+
+
+def test_keeper_type_that_contradicts_its_note_is_refused():
+    pick = dv.DraftPick(None, "T", "Shohei Ohtani", True, dv.PlayerType.PITCHER)
+    keepers = [{"name": "Shohei Ohtani", "team": "T", "note": "batter only"}]
+    with pytest.raises(ValueError, match="batter only"):
+        dv._assign_pick_types([pick], {}, keepers)
+
+
+def test_unrecognized_draft_state_names_both_formats():
+    with pytest.raises(ValueError, match=r"'keepers' \+ 'picks'.*'drafted_players'"):
+        dv.reconstruct_draft(dv.load_config(dv._CONFIG), state={"version": 1})
+
+
+def test_a_season_with_no_frozen_draft_says_how_to_freeze_it():
+    cfg = dataclasses.replace(dv.load_config(dv._CONFIG), season_year=1999)
+    with pytest.raises(FileNotFoundError, match="answer yes"):
+        dv._load_draft_state(cfg)
+
+
+def test_frozen_draft_files_are_not_the_dashboards_working_files():
+    """The dashboard rewrites its state and board. If draft-value read the same
+    paths, any dashboard or mock-draft session broke it (#244)."""
+    import scripts.run_draft_dashboard as dash
+    from fantasy_baseball.web.app import DEFAULT_STATE_PATH
+
+    cfg = dv.load_config(dv._CONFIG)
+    frozen = {dv._draft_state_path(cfg).resolve(), dv._frozen_board_path(cfg).resolve()}
+    assert DEFAULT_STATE_PATH.resolve() not in frozen
+    assert dash.BOARD_PATH.resolve() not in frozen
+
+
+@pytest.fixture
+def dashboard_draft(tmp_path, monkeypatch):
+    """A finished dashboard draft on disk, and a frozen root under tmp_path."""
+    config = dv.load_config(dv._CONFIG)
+    state, _typed = _as_dashboard_state(config)
+    # As stamped at New Draft; deliberately not the live defaults, so the test
+    # proves the freeze records the board's volumes, not today's constants.
+    state["board_volumes"] = {"team_ab": 5400, "team_ip": 1350}
+    state_path = tmp_path / "live" / "draft_state.json"
+    board_path = tmp_path / "live" / "draft_state_board.json"
+    state_path.parent.mkdir()
+    state_path.write_text(_json.dumps(state), encoding="utf-8")
+    board_path.write_text(_json.dumps([{"player_id": "1::hitter", "var": 1.0}]), encoding="utf-8")
+    monkeypatch.setattr(dv, "frozen_draft_dir", lambda year: tmp_path / f"frozen_draft_{year}")
+    return config, state, state_path, board_path
+
+
+def test_freeze_draft_copies_state_and_board_and_records_volumes(dashboard_draft):
+    config, state, state_path, board_path = dashboard_draft
+    dest = dv.freeze_draft(config, state_path, board_path)
+
+    assert _json.loads((dest / "draft_state.json").read_text(encoding="utf-8")) == state
+    assert (dest / "draft_state_board.json").read_bytes() == board_path.read_bytes()
+    assert dv._draft_day_volumes(config) == (5400, 1350)
+    assert dv._load_draft_state(config) == state
+    assert not dest.with_name(dest.name + ".tmp").exists()
+    assert not dest.with_name(dest.name + ".old").exists()
+
+
+def test_freeze_draft_refuses_a_draft_without_board_volumes(dashboard_draft):
+    config, state, state_path, board_path = dashboard_draft
+    del state["board_volumes"]
+    state_path.write_text(_json.dumps(state), encoding="utf-8")
+    with pytest.raises(ValueError, match="Start it with New Draft"):
+        dv.freeze_draft(config, state_path, board_path)
+
+
+def test_freeze_draft_never_replaces_a_legacy_draft(dashboard_draft):
+    config, _state, state_path, board_path = dashboard_draft
+    dest = dv.frozen_draft_dir(config.season_year)
+    dest.mkdir()
+    legacy = dv._REPO_ROOT / "data" / "frozen_draft_2026" / "draft_state.json"
+    (dest / "draft_state.json").write_bytes(legacy.read_bytes())
+    with pytest.raises(ValueError, match="never replaced"):
+        dv.freeze_draft(config, state_path, board_path, force=True)
+    assert (dest / "draft_state.json").read_bytes() == legacy.read_bytes()
+
+
+def test_saved_draft_status_tells_this_draft_from_another(dashboard_draft):
+    config, state, state_path, board_path = dashboard_draft
+    year = config.season_year
+    assert dv.saved_draft_status(year, state) == "none"
+    dv.freeze_draft(config, state_path, board_path)
+    assert dv.saved_draft_status(year, state) == "same"
+    other = {
+        **state,
+        "picks": [{**state["picks"][0], "player_id": "x::hitter"}, *state["picks"][1:]],
+    }
+    assert dv.saved_draft_status(year, other) == "different"
+
+
+def test_freeze_draft_refuses_to_overwrite_without_force(dashboard_draft):
+    config, _state, state_path, board_path = dashboard_draft
+    dv.freeze_draft(config, state_path, board_path)
+    with pytest.raises(FileExistsError):
+        dv.freeze_draft(config, state_path, board_path)
+    dv.freeze_draft(config, state_path, board_path, force=True)
+
+
+def test_freeze_draft_refuses_an_unfinished_draft(dashboard_draft):
+    config, state, state_path, board_path = dashboard_draft
+    state["picks"] = state["picks"][1:]
+    state_path.write_text(_json.dumps(state), encoding="utf-8")
+    with pytest.raises(ValueError, match="non-keeper pick count 199"):
+        dv.freeze_draft(config, state_path, board_path)
+    assert not dv.frozen_draft_dir(config.season_year).exists()
+
+
+def test_freeze_draft_refuses_the_legacy_format(dashboard_draft):
+    config, _state, state_path, board_path = dashboard_draft
+    legacy_path = dv._REPO_ROOT / "data" / "frozen_draft_2026" / "draft_state.json"
+    legacy = legacy_path.read_text(encoding="utf-8")
+    state_path.write_text(legacy, encoding="utf-8")
+    with pytest.raises(ValueError, match="not the draft dashboard's state"):
+        dv.freeze_draft(config, state_path, board_path)
