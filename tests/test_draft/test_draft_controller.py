@@ -269,8 +269,21 @@ def test_draft_is_complete_needs_every_team_full():
     state = {
         "keepers": [{"team": "A"}],
         "picks": [{"team": "B"}, {"team": "B"}, {"team": "A"}],
+        "on_the_clock": "A",  # the fallback snake runs longer than the rosters
     }
     assert draft_is_complete(state, teams, slots)
     state["picks"] = state["picks"][:-1]
     assert not draft_is_complete(state, teams, slots)
     assert not draft_is_complete(state, teams, {})
+
+
+def test_draft_is_complete_when_the_pick_order_runs_out():
+    """Traded picks can leave a team short of a full roster; the draft is still
+    over once nobody is on the clock."""
+    from fantasy_baseball.draft.draft_controller import draft_is_complete
+
+    teams = {1: "A", 2: "B"}
+    slots = {"OF": 1, "P": 1}
+    state = {"keepers": [], "picks": [{"team": "A"}] * 3, "on_the_clock": None}
+    assert draft_is_complete(state, teams, slots)
+    assert not draft_is_complete({**state, "picks": []}, teams, slots)  # never started

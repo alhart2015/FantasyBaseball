@@ -823,7 +823,7 @@ def test_draft_status_is_complete_only_once_every_roster_is_full(small_league):
     _draft_picks(client, 3)
     assert client.get("/api/draft-status").get_json() == {
         "complete": False,
-        "frozen": False,
+        "saved": "none",
         "season_year": 2031,
     }
     _draft_picks(client, 1, start=3)
@@ -832,6 +832,7 @@ def test_draft_status_is_complete_only_once_every_roster_is_full(small_league):
 
 def test_freeze_draft_saves_the_finished_draft(small_league):
     from fantasy_baseball.analysis import draft_value as dv
+    from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP
 
     client, tmp = small_league
     client.post("/api/new-draft")
@@ -846,7 +847,9 @@ def test_freeze_draft_saves_the_finished_draft(small_league):
         "draft_state_board.json",
         "meta.json",
     }
-    assert client.get("/api/draft-status").get_json()["frozen"] is True
+    assert client.get("/api/draft-status").get_json()["saved"] == "same"
+    meta = __import__("json").loads((frozen / "meta.json").read_text())
+    assert (meta["team_ab"], meta["team_ip"]) == (DEFAULT_TEAM_AB, DEFAULT_TEAM_IP)
     picks = dv.reconstruct_draft(dv.load_config(tmp / "league.yaml"))
     assert [(p.slot, p.team, p.player_type.value) for p in picks] == [
         (1, "Hart of the Order", "hitter"),
@@ -874,3 +877,18 @@ def test_freeze_draft_asks_before_replacing_a_saved_draft(small_league):
     again = client.post("/api/freeze-draft", json={})
     assert again.status_code == 409 and again.get_json()["already_frozen"] is True
     assert client.post("/api/freeze-draft", json={"force": True}).status_code == 200
+
+
+def test_a_correction_after_saving_shows_as_a_different_draft(small_league):
+    client, _tmp = small_league
+    client.post("/api/new-draft")
+    _draft_picks(client, 4)
+    assert client.post("/api/freeze-draft", json={}).status_code == 200
+
+    client.post("/api/undo")
+    _draft_picks(client, 1, start=10)
+
+    status = client.get("/api/draft-status").get_json()
+    assert status["complete"] is True and status["saved"] == "different"
+    assert client.post("/api/freeze-draft", json={"force": True}).status_code == 200
+    assert client.get("/api/draft-status").get_json()["saved"] == "same"

@@ -28,6 +28,7 @@ let leagueMeta = { teams: [], user_team: null, pick_order: [] };
 // The state version we last asked "is the draft complete?" for, so a "no" is
 // not asked again until the draft changes (an undo + re-pick, say).
 let freezeAskedForVersion = null;
+let freezeInFlight = false;
 
 async function fetchBoard() {
   const r = await fetch("/api/board");
@@ -79,45 +80,60 @@ async function fetchDraftStatus() {
   return r.json();
 }
 
+// The header note: what is saved for grading, and whether it is THIS draft.
 function renderFreezeStatus(status) {
   const el = document.getElementById("freeze-status");
-  if (el) el.textContent = status?.frozen ? `${status.season_year} draft saved for grading` : "";
+  if (!el) return;
+  const y = status?.season_year;
+  const text = {
+    same: `${y} draft saved for grading`,
+    different: `a different ${y} draft is saved`,
+    legacy: `${y} draft already saved (old tool) -- check season_year`,
+  };
+  el.textContent = (status && text[status.saved]) || "";
 }
 
-// Last step of the draft: once every team has a full roster, ask whether the
-// draft is complete; a yes saves it for draft-value grading.
+// Last step of the draft: once it is complete, ask whether to save it for
+// draft-value grading -- whenever it is not already the saved draft, so a mock
+// saved earlier, or a correction after saving, is asked about again.
 async function checkDraftComplete(state) {
   const status = await fetchDraftStatus();
   renderFreezeStatus(status);
-  if (!status || !status.complete || status.frozen) return;
+  if (!status || !status.complete || freezeInFlight) return;
+  if (status.saved !== "none" && status.saved !== "different") return;
   if (freezeAskedForVersion === state.version) return;
   freezeAskedForVersion = state.version;
+  const replaces = status.saved === "different"
+    ? `\n\nThis replaces the different ${status.season_year} draft saved earlier (a mock, or before a correction).`
+    : "";
   if (!confirm(
-    "Every team has a full roster. Is the draft complete?\n\n" +
-      "OK saves it so the season dashboard can grade every pick."
+    `Every team has a full roster. Is the ${status.season_year} draft complete?\n\n` +
+      "OK saves it so the season dashboard can grade every pick." + replaces
   )) return;
-  await freezeDraft(false);
+  await freezeDraft(status.saved === "different");
 }
 
 async function freezeDraft(force) {
-  const r = await fetch("/api/freeze-draft", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ force }),
-  });
-  const body = await r.json();
-  if (r.ok) {
-    renderFreezeStatus({ frozen: true, season_year: body.season_year });
-    alert(`Draft saved. The ${body.season_year} draft will be graded from here.`);
-    return;
-  }
-  if (body.already_frozen && !force) {
-    if (confirm("This season's draft was already saved. Replace it with this one?")) {
-      await freezeDraft(true);
+  freezeInFlight = true;
+  try {
+    const r = await fetch("/api/freeze-draft", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ force }),
+    });
+    let body = {};
+    try { body = await r.json(); } catch (_) { body = { error: `server error (${r.status})` }; }
+    if (r.ok) {
+      renderFreezeStatus({ saved: "same", season_year: body.season_year });
+      alert(`Draft saved. The ${body.season_year} draft will be graded from here.`);
+      return;
     }
-    return;
+    alert(`Draft not saved: ${body.error}`);
+  } catch (e) {
+    alert(`Draft not saved: ${e}`);
+  } finally {
+    freezeInFlight = false;
   }
-  alert(`Draft not saved: ${body.error}`);
 }
 
 function currentRound(state) {

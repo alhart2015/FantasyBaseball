@@ -35,6 +35,7 @@ from typing import Any, cast
 import yaml
 from flask import Flask, jsonify, render_template, request
 
+from fantasy_baseball.config import LeagueConfig
 from fantasy_baseball.draft import draft_controller
 from fantasy_baseball.draft.board import rebuild_board
 from fantasy_baseball.draft.state import (
@@ -44,6 +45,7 @@ from fantasy_baseball.draft.state import (
     read_state,
     write_state,
 )
+from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP
 
 DEFAULT_STATE_PATH = Path(__file__).resolve().parents[3] / "data" / "draft_state.json"
 
@@ -83,6 +85,11 @@ def _league_yaml_path() -> Path:
 def _load_league_yaml() -> dict[str, Any]:
     path = str(_league_yaml_path())
     return _read_league_yaml(path, os.path.getmtime(path))
+
+
+def _season_year(league_yaml: dict[str, Any]) -> int:
+    """league.yaml's season_year, read off the cached parse (same default as load_config)."""
+    return int((league_yaml.get("league") or {}).get("season_year", LeagueConfig.season_year))
 
 
 def _teams_by_position(league_yaml: dict[str, Any]) -> dict[int, str]:
@@ -358,6 +365,9 @@ def _register_writer_routes(app):
             )
         except draft_controller.UnresolvedKeeperError as e:
             return jsonify({"error": str(e)}), 400
+        # rebuild_board builds on the live defaults; record them with this draft so
+        # freezing it later saves the volumes this board really used.
+        state[StateKey.BOARD_VOLUMES] = {"team_ab": DEFAULT_TEAM_AB, "team_ip": DEFAULT_TEAM_IP}
         state = _attach_standings_cache(app, state, league_yaml)
         write_state(state, app.config[CFG_STATE_PATH])
         return jsonify(state)
@@ -453,23 +463,24 @@ def _register_writer_routes(app):
 
     @app.get("/api/draft-status")
     def draft_status():
-        """Whether every team has a full roster, and whether the draft is frozen.
+        """Whether the draft is complete, and how it compares with the saved one.
 
-        The dashboard asks "is the draft complete?" once this says complete and not
-        frozen; a yes posts /api/freeze-draft.
+        ``saved`` is ``none`` / ``same`` / ``different`` / ``legacy``
+        (``draft_value.saved_draft_status``). The dashboard asks "is the draft
+        complete?" when complete and saved is ``none`` or ``different`` (a mock, or
+        a correction after saving); a yes posts /api/freeze-draft.
         """
-        from fantasy_baseball.analysis.draft_value import frozen_draft_dir
-        from fantasy_baseball.config import load_config
+        from fantasy_baseball.analysis.draft_value import saved_draft_status
 
         league_yaml = _load_league_yaml()
         state = draft_controller.resume_or_init(app.config[CFG_STATE_PATH])
-        season_year = load_config(_league_yaml_path()).season_year
+        season_year = _season_year(league_yaml)
         return jsonify(
             {
                 "complete": draft_controller.draft_is_complete(
                     state, _teams_by_position(league_yaml), league_yaml.get("roster_slots") or {}
                 ),
-                "frozen": frozen_draft_dir(season_year).exists(),
+                "saved": saved_draft_status(season_year, state),
                 "season_year": season_year,
             }
         )
@@ -500,6 +511,9 @@ def _register_writer_routes(app):
             return jsonify({"error": str(e), "already_frozen": True}), 409
         except (OSError, ValueError) as e:
             return jsonify({"error": str(e)}), 400
+        except Exception as e:  # anything else still answers in JSON for the dashboard
+            logging.getLogger(__name__).exception("freezing the draft failed")
+            return jsonify({"error": f"freezing failed: {e}"}), 500
         return jsonify({"frozen_to": str(dest), "season_year": config.season_year})
 
     @app.get("/api/meta")

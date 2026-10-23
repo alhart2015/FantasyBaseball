@@ -31,8 +31,6 @@ from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     COUNTING_STATS,
-    DEFAULT_TEAM_AB,
-    DEFAULT_TEAM_IP,
     HITTING_CATEGORIES,
     PITCHING_CATEGORIES,
 )
@@ -619,18 +617,26 @@ def build_par_curve(
 def freeze_draft(
     config: LeagueConfig, state_path: Path, board_path: Path, *, force: bool = False
 ) -> Path:
-    """Copy the draft dashboard's finished draft into ``frozen_draft_<season_year>/``.
+    """Save the draft dashboard's finished draft as ``frozen_draft_<season_year>/``.
 
-    The dashboard calls this when you confirm the draft is complete. Refuses a state that is not the dashboard's
-    format, a draft that fails the reconstruction gate (e.g. not finished, or a keeper
-    on the wrong team), an empty board, and an existing frozen folder unless ``force``.
-    meta.json records the team volumes the board was built with: ``rebuild_board``
-    builds on the live DEFAULT_TEAM_AB/IP, which is why this must run before those are
-    recalibrated. Returns the frozen folder.
+    The dashboard calls this when you confirm the draft is complete. Refuses a state
+    that is not the dashboard's format, one without the board's build volumes (a
+    draft started before they were recorded), a draft that fails the reconstruction
+    gate (e.g. not finished, or a keeper on the wrong team), an empty board, an
+    existing frozen draft unless ``force``, and ever replacing a legacy-format one
+    (the 2026 draft cannot be re-made). meta.json records the team volumes the board
+    was built with, as stamped at New Draft. The folder is built beside the target
+    and swapped in whole, so a failure never leaves a partial freeze. Returns it.
     """
     state = json.loads(Path(state_path).read_text(encoding="utf-8"))
     if StateKey.PICKS not in state or StateKey.KEEPERS not in state:
         raise ValueError(f"{state_path} is not the draft dashboard's state (no keepers/picks)")
+    volumes = state.get(StateKey.BOARD_VOLUMES)
+    if not volumes:
+        raise ValueError(
+            "this draft has no record of the board's team AB/IP; it was started before "
+            "they were recorded. Start it with New Draft to save it for grading."
+        )
     gate = validate_reconstruction(reconstruct_draft(config, state=state), config=config)
     if gate:
         raise ValueError(f"Refusing to freeze an incomplete or inconsistent draft: {gate}")
@@ -638,20 +644,65 @@ def freeze_draft(
     if not isinstance(board, list) or not board:
         raise ValueError(f"{board_path} has no board rows")
     dest = frozen_draft_dir(config.season_year)
-    if dest.exists() and not force:
+    saved = saved_draft_status(config.season_year, state)
+    if saved == "legacy":
+        raise ValueError(
+            f"{dest} holds the {config.season_year} draft from the old draft tool and is "
+            "never replaced. Is league.yaml's season_year set to this draft's season?"
+        )
+    if saved != "none" and not force:
         raise FileExistsError(f"{dest} already exists; pass force=True to replace it")
-    dest.mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(state_path, dest / _FROZEN_STATE_FILE)
-    shutil.copyfile(board_path, dest / _FROZEN_BOARD_FILE)
+    tmp = dest.with_name(dest.name + ".tmp")
+    if tmp.exists():
+        shutil.rmtree(tmp)
+    tmp.mkdir(parents=True)
+    # Write the state that passed the gate, not a re-read of the file.
+    (tmp / _FROZEN_STATE_FILE).write_text(json.dumps(state), encoding="utf-8")
+    shutil.copyfile(board_path, tmp / _FROZEN_BOARD_FILE)
     meta = {
         "season_year": config.season_year,
-        "team_ab": DEFAULT_TEAM_AB,
-        "team_ip": DEFAULT_TEAM_IP,
+        "team_ab": int(volumes["team_ab"]),
+        "team_ip": int(volumes["team_ip"]),
         "frozen_on": local_today().isoformat(),
         "source": "draft dashboard",
     }
-    (dest / _FROZEN_META_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    (tmp / _FROZEN_META_FILE).write_text(json.dumps(meta, indent=2) + "\n", encoding="utf-8")
+    old = dest.with_name(dest.name + ".old")
+    if old.exists():
+        shutil.rmtree(old)
+    if dest.exists():
+        dest.rename(old)
+    tmp.rename(dest)
+    if old.exists():
+        shutil.rmtree(old)
     return dest
+
+
+SavedDraft = Literal["none", "same", "different", "legacy"]
+
+
+def _pick_identity(state: dict[str, Any]) -> list[tuple[Any, ...]]:
+    return [
+        (p.get("pick_number"), p["team"], p["player_id"])
+        for p in state.get(StateKey.KEEPERS, []) + state.get(StateKey.PICKS, [])
+        if not p.get("undone")
+    ]
+
+
+def saved_draft_status(season_year: int, state: dict[str, Any]) -> SavedDraft:
+    """How the season's frozen draft compares with ``state`` (a dashboard state).
+
+    ``none``: nothing saved. ``same``: saved, with exactly these keepers and picks.
+    ``different``: saved, but another draft (a mock, or before a correction).
+    ``legacy``: saved by the old draft tool, which is never replaced.
+    """
+    path = frozen_draft_dir(season_year) / _FROZEN_STATE_FILE
+    if not path.exists():
+        return "none"
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    if "drafted_players" in saved:
+        return "legacy"
+    return "same" if _pick_identity(saved) == _pick_identity(state) else "different"
 
 
 def projected_par_curve(config: LeagueConfig | None = None) -> ParCurve:

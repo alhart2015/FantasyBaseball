@@ -822,6 +822,9 @@ def dashboard_draft(tmp_path, monkeypatch):
     """A finished dashboard draft on disk, and a frozen root under tmp_path."""
     config = dv.load_config(dv._CONFIG)
     state, _typed = _as_dashboard_state(config)
+    # As stamped at New Draft; deliberately not the live defaults, so the test
+    # proves the freeze records the board's volumes, not today's constants.
+    state["board_volumes"] = {"team_ab": 5400, "team_ip": 1350}
     state_path = tmp_path / "live" / "draft_state.json"
     board_path = tmp_path / "live" / "draft_state_board.json"
     state_path.parent.mkdir()
@@ -832,15 +835,47 @@ def dashboard_draft(tmp_path, monkeypatch):
 
 
 def test_freeze_draft_copies_state_and_board_and_records_volumes(dashboard_draft):
-    from fantasy_baseball.utils.constants import DEFAULT_TEAM_AB, DEFAULT_TEAM_IP
-
     config, state, state_path, board_path = dashboard_draft
     dest = dv.freeze_draft(config, state_path, board_path)
 
     assert _json.loads((dest / "draft_state.json").read_text(encoding="utf-8")) == state
     assert (dest / "draft_state_board.json").read_bytes() == board_path.read_bytes()
-    assert dv._draft_day_volumes(config) == (DEFAULT_TEAM_AB, DEFAULT_TEAM_IP)
+    assert dv._draft_day_volumes(config) == (5400, 1350)
     assert dv._load_draft_state(config) == state
+    assert not dest.with_name(dest.name + ".tmp").exists()
+    assert not dest.with_name(dest.name + ".old").exists()
+
+
+def test_freeze_draft_refuses_a_draft_without_board_volumes(dashboard_draft):
+    config, state, state_path, board_path = dashboard_draft
+    del state["board_volumes"]
+    state_path.write_text(_json.dumps(state), encoding="utf-8")
+    with pytest.raises(ValueError, match="Start it with New Draft"):
+        dv.freeze_draft(config, state_path, board_path)
+
+
+def test_freeze_draft_never_replaces_a_legacy_draft(dashboard_draft):
+    config, _state, state_path, board_path = dashboard_draft
+    dest = dv.frozen_draft_dir(config.season_year)
+    dest.mkdir()
+    legacy = dv._REPO_ROOT / "data" / "frozen_draft_2026" / "draft_state.json"
+    (dest / "draft_state.json").write_bytes(legacy.read_bytes())
+    with pytest.raises(ValueError, match="never replaced"):
+        dv.freeze_draft(config, state_path, board_path, force=True)
+    assert (dest / "draft_state.json").read_bytes() == legacy.read_bytes()
+
+
+def test_saved_draft_status_tells_this_draft_from_another(dashboard_draft):
+    config, state, state_path, board_path = dashboard_draft
+    year = config.season_year
+    assert dv.saved_draft_status(year, state) == "none"
+    dv.freeze_draft(config, state_path, board_path)
+    assert dv.saved_draft_status(year, state) == "same"
+    other = {
+        **state,
+        "picks": [{**state["picks"][0], "player_id": "x::hitter"}, *state["picks"][1:]],
+    }
+    assert dv.saved_draft_status(year, other) == "different"
 
 
 def test_freeze_draft_refuses_to_overwrite_without_force(dashboard_draft):

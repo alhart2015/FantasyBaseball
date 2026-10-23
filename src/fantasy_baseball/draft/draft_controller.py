@@ -148,7 +148,14 @@ def full_roster_size(roster_slots: dict[str, int]) -> int:
 def draft_is_complete(
     state: dict[str, Any], teams_by_position: dict[int, str], roster_slots: dict[str, int]
 ) -> bool:
-    """True once every team has a full roster of keepers plus live picks."""
+    """True once the pick order has run out, or every team has a full roster.
+
+    The pick order running out (``on_the_clock`` None after picks) covers traded
+    picks that leave teams with uneven counts; the full-roster test covers a draft
+    with no custom order, whose fallback snake runs longer than the rosters.
+    """
+    if state[StateKey.PICKS] and state.get(StateKey.ON_THE_CLOCK) is None:
+        return True
     size = full_roster_size(roster_slots)
     if size == 0 or not teams_by_position:
         return False
