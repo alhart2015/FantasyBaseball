@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from fantasy_baseball.streaks.models import StreakLabel
 from fantasy_baseball.utils.name_utils import normalize_name
 
 
@@ -23,7 +24,7 @@ from fantasy_baseball.utils.name_utils import normalize_name
 class Indicator:
     """One Lineup-page chip: tone + label + tooltip."""
 
-    tone: Literal["hot", "cold", "neutral"]
+    tone: StreakLabel
     label: str
     tooltip: str
 
@@ -118,7 +119,7 @@ def build_indicator(name: str, payload: dict[str, Any] | None) -> Indicator | No
         return Indicator(tone="neutral", label="—", tooltip="No streak data")
 
     composite = row["composite"]
-    tone: Literal["hot", "cold", "neutral"]
+    tone: StreakLabel
     if composite > 0:
         tone = "hot"
     elif composite < 0:

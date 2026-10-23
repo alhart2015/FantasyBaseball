@@ -31,12 +31,13 @@ import numpy as np
 import pandas as pd
 from scipy.stats import poisson
 
-from fantasy_baseball.streaks.models import PtBucket, StreakCategory
+from fantasy_baseball.streaks.models import (
+    DENSE_CATEGORIES,
+    SPARSE_CATEGORIES,
+    PtBucket,
+)
 
 logger = logging.getLogger(__name__)
-
-DENSE_CATEGORIES: tuple[StreakCategory, ...] = ("r", "rbi", "avg")
-SPARSE_CATEGORIES: tuple[StreakCategory, ...] = ("hr", "sb")
 
 # A "hot" label only means something when the window reflects a real workload.
 # The sub-"high" PT buckets (5-19 PA) collapse the sparse-cat empirical p90 to 1,

@@ -8,7 +8,7 @@ import math
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 import pandas as pd
 
@@ -21,10 +21,16 @@ from fantasy_baseball.data.redis_store import (
 )
 from fantasy_baseball.data.yahoo_players import load_positions_cache
 from fantasy_baseball.draft.board import ScaleInputs, build_board_from_frames
+from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.sgp.player_value import calculate_player_sgp
 from fantasy_baseball.sgp.rankings import rank_key
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
+from fantasy_baseball.utils.constants import (
+    COUNTING_STATS,
+    HITTING_CATEGORIES,
+    PITCHING_CATEGORIES,
+)
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
 from fantasy_baseball.utils.time_utils import compute_fraction_remaining, local_today
@@ -218,8 +224,23 @@ def _anchor_board_var_to_frozen(board: pd.DataFrame, frozen_var: dict[str, float
     return board
 
 
-_COUNTING_HIT = ("r", "hr", "rbi", "sb", "ab")  # ab is volume (scales)
-_COUNTING_PIT = ("w", "k", "sv", "ip")  # ip is volume (scales)
+# A scored stat line: the five roto categories plus the volume stat (ab/ip) that
+# scales with them. The counting subset (volume included) is what to-date scaling
+# multiplies by ``fraction``; rates (avg/era/whip) are held.
+_LINE_KEYS: dict[PlayerType, tuple[str, ...]] = {
+    PlayerType.HITTER: (*(c.value.lower() for c in HITTING_CATEGORIES), "ab"),
+    PlayerType.PITCHER: (*(c.value.lower() for c in PITCHING_CATEGORIES), "ip"),
+}
+_COUNTING_KEYS: dict[PlayerType, tuple[str, ...]] = {
+    PlayerType.HITTER: (
+        *(c.value.lower() for c in HITTING_CATEGORIES if c in COUNTING_STATS),
+        "ab",
+    ),
+    PlayerType.PITCHER: (
+        *(c.value.lower() for c in PITCHING_CATEGORIES if c in COUNTING_STATS),
+        "ip",
+    ),
+}
 
 
 def _sgp(line: dict[str, Any], scale: ScaleInputs, team_ab: float, team_ip: float) -> float:
@@ -263,7 +284,7 @@ def _to_date_floors(scale: ScaleInputs, fraction: float) -> dict[str, float]:
 def score_var(
     line: dict[str, Any],
     positions: list[str],
-    player_type: str,
+    player_type: PlayerType,
     scale: ScaleInputs,
     fraction: float = 1.0,
     scale_counting: bool = True,
@@ -273,11 +294,11 @@ def score_var(
 
     ``fraction < 1.0`` applies the YTD to-date scaling: the team volumes scale by
     ``fraction`` and the position floors are recomputed on the same to-date scale,
-    while rates (AVG/ERA/WHIP) are held. ``player_type`` is ``"hitter"`` or
-    ``"pitcher"``. The to-date floors default to ``_to_date_floors(scale, fraction)``
-    (which early-returns the board floors at ``fraction==1.0``, so the projected path
-    stays cheap); pass a prebuilt ``floors`` to reuse one dict across the many YTD calls
-    at a fixed ``fraction`` instead of rebuilding it each call.
+    while rates (AVG/ERA/WHIP) are held. The to-date floors default to
+    ``_to_date_floors(scale, fraction)`` (which early-returns the board floors at
+    ``fraction==1.0``, so the projected path stays cheap); pass a prebuilt ``floors``
+    to reuse one dict across the many YTD calls at a fixed ``fraction`` instead of
+    rebuilding it each call.
 
     ``scale_counting`` governs the LINE's counting stats. The EXPECTED / par side
     (a projected full-season line) keeps the default ``True`` so its counting stats
@@ -286,13 +307,10 @@ def score_var(
     as-is -- per the spec, only the team denominators scale on the actual side.
     Double-scaling the actual line understates every player's to-date value.
     """
-    # player_type must be "hitter"/"pitcher" (StrEnum-compatible) so calculate_player_sgp
-    # dispatches (player.get("player_type") == PlayerType.HITTER/PITCHER, player_value.py:104,121).
     scaled: dict[str, Any] = dict(line)
     scaled["player_type"] = player_type
-    counting = _COUNTING_HIT if player_type == "hitter" else _COUNTING_PIT
     if fraction != 1.0 and scale_counting:
-        for k in counting:
+        for k in _COUNTING_KEYS[player_type]:
             if scaled.get(k) is not None:
                 scaled[k] = scaled[k] * fraction
     team_ab = scale.team_ab * fraction
@@ -306,7 +324,7 @@ def score_var(
     # mid-season (its to-date ip ~90 would otherwise route to the RP floor, and the actual
     # and par sides could land on opposite sides of the cutoff). f in {0, 1} needs no
     # rescale.
-    if player_type == "pitcher" and fraction not in (0.0, 1.0):
+    if player_type == PlayerType.PITCHER and fraction not in (0.0, 1.0):
         # par line carries its pre-scale projected ip; the actual line extrapolates its
         # accumulated ip to full-season pace (ip / f).
         raw_ip = line.get("ip", 0.0)
@@ -463,18 +481,13 @@ def _var_for_row(
         return float(row["var"])
     if scale is None:
         raise ValueError("scale is required when fraction != 1.0")
-    ptype = str(row["player_type"])
-    keys = (
-        ("r", "hr", "rbi", "sb", "avg", "ab")
-        if ptype == "hitter"
-        else ("w", "k", "sv", "era", "whip", "ip")
-    )
-    line = {k: row[k] for k in keys}
+    ptype = PlayerType(row["player_type"])
+    line = {k: row[k] for k in _LINE_KEYS[ptype]}
     return score_var(line, list(row["positions"]), ptype, scale, fraction, floors=floors)
 
 
 def build_par_curve(
-    typed_picks: list[tuple[DraftPick, str]],
+    typed_picks: list[tuple[DraftPick, PlayerType]],
     bindex: dict[str, Any],
     fraction: float = 1.0,
     scale: ScaleInputs | None = None,
@@ -710,7 +723,7 @@ class PlayerValue:
 
     team: str
     name: str
-    player_type: str
+    player_type: PlayerType
     slot: int | None
     baseline_kind: str
     preseason_var: float | None
@@ -725,7 +738,7 @@ class PlayerValue:
 def compute_player_value(
     team: str,
     name: str,
-    player_type: str,
+    player_type: PlayerType,
     positions: list[str],
     baseline_proj: float,
     baseline_ytd: float,
@@ -820,7 +833,7 @@ class TeamRollup:
     """Per-team draft-value roll-up: sum, per-player average, and credited count.
 
     ``sum_value`` sums the chosen-horizon per-player values (``value_proj`` when
-    ``horizon == "proj"``, else ``value_ytd``); ``avg_value`` divides by the number
+    ``horizon == "proj"``, ``value_ytd`` when ``"ytd"``); ``avg_value`` divides by the number
     of credited players (``NaN`` when none are credited). ``credited_count`` is that
     number: every drafted pick + keeper credited to the team that drafted/kept the
     player, regardless of a later drop or trade.
@@ -835,17 +848,19 @@ class TeamRollup:
 def roll_up_team(
     team: str,
     player_values: list[PlayerValue],
-    horizon: str = "proj",
+    horizon: Literal["proj", "ytd"] = "proj",
 ) -> TeamRollup:
     """Roll a team's per-player values into sum, per-player average, and count.
 
-    ``horizon`` picks ``value_proj`` (``"proj"``) or ``value_ytd`` (otherwise). Only
+    ``horizon`` picks ``value_proj`` (``"proj"``) or ``value_ytd`` (``"ytd"``). Only
     finite values are credited (values can be ``0.0`` or negative, so filter on
     ``is not None``, never truthiness; ``NaN`` is also dropped so an unmatched keeper's
     NaN par cannot poison the whole team sum). ``avg_value`` is ``NaN`` when no player
     is credited. ``player_values`` covers every drafted pick + keeper credited to the
     team, so the sum, average, and credited count grade the full draft.
     """
+    if horizon not in ("proj", "ytd"):
+        raise ValueError(f"horizon must be 'proj' or 'ytd', got {horizon!r}")
     attr = "value_proj" if horizon == "proj" else "value_ytd"
     # Dropping NaN avoids poisoning the sum, but NaN means a player couldn't be graded
     # (e.g. keeper_par is NaN because no keeper matched the board) -- surface it rather
@@ -874,27 +889,27 @@ def roll_up_team(
     return TeamRollup(team, total, avg, n)
 
 
-def _default_positions(player_type: str) -> list[str]:
+def _default_positions(player_type: PlayerType) -> list[str]:
     """Off-board default positions matching the board's default-attach convention."""
-    return ["OF"] if player_type == "hitter" else ["SP"]
+    return ["OF"] if player_type == PlayerType.HITTER else ["SP"]
 
 
-def _resolve_type(avail_types: set[str]) -> str:
+def _resolve_type(avail_types: set[PlayerType]) -> PlayerType:
     """Fallback type when notes/claims don't decide: the sole board type, else hitter.
 
-    ``avail_types`` is drawn from {"hitter", "pitcher"}, so a 2-element set is always
+    ``avail_types`` is drawn from ``PlayerType``, so a 2-element set is always
     {hitter, pitcher} and an empty set is off-board -- both default to hitter.
     """
     if len(avail_types) == 1:
         return next(iter(avail_types))
-    return "hitter"
+    return PlayerType.HITTER
 
 
 def _assign_pick_types(
     picks: list[DraftPick],
     bindex: dict[str, Any],
     keepers: list[dict[str, Any]],
-) -> list[tuple[DraftPick, str]]:
+) -> list[tuple[DraftPick, PlayerType]]:
     """Assign a player_type to every pick, two-way aware.
 
     Draft-pick names are bare (no Yahoo " (Batter)"/" (Pitcher)" suffix), so a
@@ -918,27 +933,27 @@ def _assign_pick_types(
     reconstruct_draft. Accepted for v1 (no such collision in the 2026 draft); revisit
     if the reconstruction ever gains mlbam ids.
     """
-    avail: dict[str, set[str]] = {}
+    avail: dict[str, set[PlayerType]] = {}
     for key in bindex:
-        norm, ptype = key.rsplit("::", 1)
-        avail.setdefault(norm, set()).add(ptype)
+        norm, type_str = key.rsplit("::", 1)
+        avail.setdefault(norm, set()).add(PlayerType(type_str))
     keeper_notes: dict[str, str] = {}
     for k in keepers:
         note = k.get("note")
         if note:
             keeper_notes[normalize_name(k["name"])] = str(note).lower()
 
-    claimed: dict[str, set[str]] = {}
-    result: list[tuple[DraftPick, str]] = []
+    claimed: dict[str, set[PlayerType]] = {}
+    result: list[tuple[DraftPick, PlayerType]] = []
     for p in picks:
         norm = normalize_name(p.player_name)
         avail_types = avail.get(norm, set())
         if p.is_keeper:
             note = keeper_notes.get(norm, "")
             if "batter only" in note:
-                ptype = "hitter"
+                ptype = PlayerType.HITTER
             elif "pitcher only" in note:
-                ptype = "pitcher"
+                ptype = PlayerType.PITCHER
             elif len(avail_types) > 1:
                 # Two-way keeper (board carries both types) with no recognized
                 # disambiguating note. Refuse to guess: a reworded or missing note
@@ -954,7 +969,9 @@ def _assign_pick_types(
         else:  # drafted
             unclaimed = avail_types - claimed.get(norm, set())
             if unclaimed:
-                ptype = "pitcher" if "pitcher" in unclaimed else next(iter(unclaimed))
+                ptype = (
+                    PlayerType.PITCHER if PlayerType.PITCHER in unclaimed else next(iter(unclaimed))
+                )
             else:
                 ptype = _resolve_type(avail_types)
         claimed.setdefault(norm, set()).add(ptype)
@@ -1132,14 +1149,14 @@ def build_draft_value_cache(players: list[PlayerValue], teams: list[TeamRollup])
     out_teams: list[dict[str, Any]] = []
     for tr in sorted(teams, key=lambda t: _rank(t.avg_value), reverse=True):
         roster = by_team.get(tr.team, [])
-        types_by_name: dict[str, set[str]] = {}
+        types_by_name: dict[str, set[PlayerType]] = {}
         for p in roster:
-            types_by_name.setdefault(p.name, set()).add(str(p.player_type))
+            types_by_name.setdefault(p.name, set()).add(p.player_type)
         out_players: list[dict[str, Any]] = []
         for p in sorted(roster, key=lambda p: _rank(p.value_proj), reverse=True):
             suffix = ""
             if len(types_by_name.get(p.name, ())) > 1:
-                suffix = " (P)" if str(p.player_type) == "pitcher" else " (H)"
+                suffix = " (P)" if p.player_type == PlayerType.PITCHER else " (H)"
             out_players.append(
                 {
                     "name": p.name,

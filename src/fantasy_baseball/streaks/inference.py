@@ -38,16 +38,18 @@ from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 
 from fantasy_baseball.streaks.analysis.predictors import (
-    DENSE_CATS,
     EXPECTED_FEATURE_COLUMNS,
     PHASE_4_MODELS,
-    SPARSE_CATS,
-    SPARSE_HOT_COLD_METHOD,
     build_training_frame,
     fit_one_model,
+    model_cold_method,
 )
 from fantasy_baseball.streaks.data.load_model_fits import upsert_model_fits
 from fantasy_baseball.streaks.models import (
+    COLD_METHODS,
+    DENSE_CATEGORIES,
+    STREAK_CATEGORIES,
+    STREAK_DIRECTIONS,
     ColdMethod,
     ModelFit,
     StreakCategory,
@@ -60,7 +62,7 @@ logger = logging.getLogger(__name__)
 
 # Five categories scored in the Sunday report. Order is the canonical
 # column order used by :mod:`streaks.reports.sunday`.
-REPORT_CATEGORIES: tuple[StreakCategory, ...] = ("hr", "r", "rbi", "sb", "avg")
+REPORT_CATEGORIES: tuple[StreakCategory, ...] = STREAK_CATEGORIES
 
 # A player whose most-recent scoreable window ends more than this many days
 # before the run date has no *current* streak: his hot/cold label is frozen at
@@ -261,9 +263,9 @@ def refit_models_for_report(
             continue
 
         fit_result = fit_one_model(X, y, groups)
-        cold_method: ColdMethod = SPARSE_HOT_COLD_METHOD if cat in SPARSE_CATS else "empirical"
+        cold_method: ColdMethod = model_cold_method(cat)
         cutoffs: tuple[float, float, float, float] | None = None
-        if cat in DENSE_CATS:
+        if cat in DENSE_CATEGORIES:
             cutoffs = _dense_quintile_cutoffs(
                 conn,
                 category=cat,
@@ -330,8 +332,8 @@ def refit_models_for_report(
 # Literals downstream, DuckDB returns plain strings and the report layer is
 # downstream of any future schema corruption — narrow + validate here.
 _VALID_REPORT_CATEGORIES: frozenset[str] = frozenset(REPORT_CATEGORIES)
-_VALID_DIRECTIONS: frozenset[str] = frozenset({"above", "below"})
-_VALID_COLD_METHODS: frozenset[str] = frozenset({"empirical", "poisson_p10", "poisson_p20"})
+_VALID_DIRECTIONS: frozenset[str] = frozenset(STREAK_DIRECTIONS)
+_VALID_COLD_METHODS: frozenset[str] = frozenset(COLD_METHODS)
 
 
 def _narrow_category(value: str) -> StreakCategory:
@@ -562,16 +564,6 @@ def top_drivers(
     return tuple(Driver(feature=name, z_score=z) for name, _mag, z in contributions[:k])
 
 
-def _label_cold_method(category: StreakCategory) -> ColdMethod:
-    """Per-cat partition of ``hitter_streak_labels`` to read from.
-
-    Mirrors the Phase 4 training partition: dense cats are labeled with
-    ``empirical``; sparse cats are labeled twice (poisson_p10 and
-    poisson_p20) and we read the p20 row to match the training cohort.
-    """
-    return SPARSE_HOT_COLD_METHOD if category in SPARSE_CATS else "empirical"
-
-
 # Defense-in-depth guard for the label loader: even though ``category``
 # is typed as :data:`StreakCategory` (a Literal), Python does not enforce
 # Literal membership at runtime and the table is shared with Phase 4
@@ -648,19 +640,21 @@ def _load_labels(
             for pid, row in windows.items()
         ]
     )
+    # Read each category's training partition (model_cold_method): dense cats are
+    # labeled once (empirical); sparse cats twice (poisson_p10/p20), and the p20 row
+    # matches the training cohort.
+    partition_sql = " OR ".join("(l.category = ? AND l.cold_method = ?)" for _ in REPORT_CATEGORIES)
+    partition_params = [v for cat in REPORT_CATEGORIES for v in (cat, model_cold_method(cat))]
     df = conn.execute(
-        """
+        f"""
         SELECT l.player_id, l.category, l.cold_method, l.label
         FROM hitter_streak_labels l
         INNER JOIN targets t
           ON t.player_id = l.player_id AND t.window_end = l.window_end
         WHERE l.window_days = ?
-          AND (
-            (l.category IN ('r', 'rbi', 'avg') AND l.cold_method = 'empirical')
-            OR (l.category IN ('hr', 'sb') AND l.cold_method = 'poisson_p20')
-          )
+          AND ({partition_sql})
         """,
-        [int(window_days)],
+        [int(window_days), *partition_params],
     ).df()
     out: dict[tuple[int, StreakCategory], StreakLabel] = {}
     for row in df.itertuples(index=False):
@@ -886,7 +880,7 @@ def _score_one(
     if model is None or season_rate is None or peripherals_null:
         return base
 
-    if category in DENSE_CATS:
+    if category in DENSE_CATEGORIES:
         assert model.dense_quintile_cutoffs is not None
         strength = _dense_streak_strength(
             value=float(window[category]),
