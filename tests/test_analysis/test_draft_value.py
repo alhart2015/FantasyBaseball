@@ -106,18 +106,17 @@ def test_to_date_floors_golden_and_delegates_to_replacement_helper(synthetic_sca
     scale = synthetic_scale
     # f=1.0 returns the board's own floors unchanged (cheap projected-side path).
     assert dv._to_date_floors(scale, 1.0) is scale.replacement_levels
-    # f<1 golden values (first captured from the pre-M10 hand-rolled implementation;
-    # re-captured for #521, when the rate baselines became the fixed measured ones).
+    # f<1 golden values (captured from the pre-M10 hand-rolled implementation).
     gold_04 = {
-        "1B": 3.714064,
-        "2B": 3.841636,
-        "3B": 3.773776,
-        "C": 3.156590,
-        "OF": 4.039233,
-        "RP": 3.083624,
-        "SP": 3.386667,
-        "SS": 3.868013,
-        "UTIL": 4.039233,
+        "1B": 3.498867,
+        "2B": 3.622112,
+        "3B": 3.559660,
+        "C": 2.973834,
+        "OF": 3.844582,
+        "RP": 2.909401,
+        "SP": 3.005698,
+        "SS": 3.643083,
+        "UTIL": 3.844582,
     }
     floors = dv._to_date_floors(scale, 0.4)
     for pos, want in gold_04.items():
@@ -825,7 +824,11 @@ def dashboard_draft(tmp_path, monkeypatch):
     state, _typed = _as_dashboard_state(config)
     # As stamped at New Draft; deliberately not the live defaults, so the test
     # proves the freeze records the board's volumes, not today's constants.
-    state["board_volumes"] = {"team_ab": 5400, "team_ip": 1350}
+    state["board_scale"] = {
+        "team_ab": 5400,
+        "team_ip": 1350,
+        "repl_rates": {"avg": 0.251, "era": 4.4, "whip": 1.31},
+    }
     state_path = tmp_path / "live" / "draft_state.json"
     board_path = tmp_path / "live" / "draft_state_board.json"
     state_path.parent.mkdir()
@@ -841,7 +844,7 @@ def test_freeze_draft_copies_state_and_board_and_records_volumes(dashboard_draft
 
     assert _json.loads((dest / "draft_state.json").read_text(encoding="utf-8")) == state
     assert (dest / "draft_state_board.json").read_bytes() == board_path.read_bytes()
-    assert dv._draft_day_volumes(config) == (5400, 1350)
+    assert dv._draft_day_scale(config) == (5400, 1350, {"avg": 0.251, "era": 4.4, "whip": 1.31})
     assert dv._load_draft_state(config) == state
     assert not dest.with_name(dest.name + ".tmp").exists()
     assert not dest.with_name(dest.name + ".old").exists()
@@ -849,7 +852,7 @@ def test_freeze_draft_copies_state_and_board_and_records_volumes(dashboard_draft
 
 def test_freeze_draft_refuses_a_draft_without_board_volumes(dashboard_draft):
     config, state, state_path, board_path = dashboard_draft
-    del state["board_volumes"]
+    del state["board_scale"]
     state_path.write_text(_json.dumps(state), encoding="utf-8")
     with pytest.raises(ValueError, match="Start it with New Draft"):
         dv.freeze_draft(config, state_path, board_path)
@@ -909,12 +912,35 @@ def test_board_floors_match_the_floors_every_other_model_uses():
     """#521: the board's replacement levels no longer depend on its own pool, so they
     equal the plain measured floors (what the trajectory board and keeper report use)
     at the same denominators and team volumes."""
+    from fantasy_baseball.data.projections import blend_projections
+    from fantasy_baseball.data.yahoo_players import load_positions_cache
+    from fantasy_baseball.draft.board import build_board_from_frames
     from fantasy_baseball.sgp.player_value import REPLACEMENT_RATES
     from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 
-    _board, scale = dv.reproduce_draft_day_board()
+    cfg = dv.load_config(dv._CONFIG)
+    hitters, pitchers, _ = blend_projections(
+        dv._REPO_ROOT / "data" / "projections" / "2026",
+        cfg.projection_systems,
+        cfg.projection_weights,
+    )
+    _board, scale = build_board_from_frames(
+        hitters, pitchers, load_positions_cache(dv._POSITIONS_JSON)
+    )
     assert scale.repl_rates == REPLACEMENT_RATES
     plain = position_aware_replacement_levels(
         scale.denoms, team_ab=scale.team_ab, team_ip=scale.team_ip
     )
     assert scale.replacement_levels == pytest.approx(plain)
+
+
+def test_draft_value_rebuilds_2026_on_its_draft_day_rates():
+    """The 2026 board was scored on rates from its own pool, before #521. Draft-value
+    must rebuild that scale, or luck (est_proj - frozen preseason VAR) would mix two
+    zero points."""
+    meta = _json.loads(
+        (dv._REPO_ROOT / "data" / "frozen_draft_2026" / "meta.json").read_text(encoding="utf-8")
+    )
+    _board, scale = dv.reproduce_draft_day_board()
+    assert scale.repl_rates == meta["repl_rates"]
+    assert scale.repl_rates["era"] == pytest.approx(4.0317, abs=1e-4)

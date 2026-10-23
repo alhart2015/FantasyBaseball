@@ -7,7 +7,7 @@ that line in standings points (``hitter_ros.evaluate.fantasy_value``,
 ``pitcher_ros.evaluate.fantasy_value``); VAR is SGP over the replacement at his best
 position: the measured waiver lines every model uses
 (``sgp.replacement.position_aware_replacement_levels``, #521), a pitcher's SP or RP
-by his innings (``sgp.var``).
+by his share of starts (``pitcher_board``'s ``role``), not his innings.
 
 Rostered players are matched to the pool by normalized name within player type
 (rosters carry no MLBAM id). A name two players share is settled by MLB team; one
@@ -136,8 +136,9 @@ def var(
 
     ``roles`` ("SP" / "RP" for pitchers, NaN for hitters, as ``pitcher_board`` sets
     from his share of starts) nets a pitcher against that role's floor, so an
-    injured starter's short season is not read as a reliever's. Without it, or for
-    a role ``levels`` lacks, ``calculate_var`` decides.
+    injured starter's short season is not read as a reliever's. A pitcher needs
+    one when ``levels`` has SP / RP floors: without innings, ``calculate_var``
+    would read him as a 0-IP reliever.
     """
     sgp, positions = list(sgp), list(positions)
     role_list = [None] * len(sgp) if roles is None else list(roles)
@@ -145,6 +146,8 @@ def var(
     for v, ps, role in zip(sgp, positions, role_list, strict=True):
         if isinstance(role, str) and role in levels:
             out.append(float(v) - levels[role])
+        elif "P" in ps and ("SP" in levels or "RP" in levels):
+            raise ValueError(f"pitcher needs an SP / RP role for these floors; got {role!r}")
         else:
             out.append(
                 calculate_var(pd.Series({"total_sgp": v, "positions": list(ps)}), dict(levels))

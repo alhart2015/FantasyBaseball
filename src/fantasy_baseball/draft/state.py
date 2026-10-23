@@ -58,9 +58,10 @@ class StateKey(StrEnum):
     ON_THE_CLOCK = "on_the_clock"
     UNDO_STACK = "undo_stack"
     PROJECTED_STANDINGS_CACHE = "projected_standings_cache"
-    # Team AB/IP the board was built with, stamped at New Draft right after the
-    # rebuild, so freezing the draft records the volumes the board really used.
-    BOARD_VOLUMES = "board_volumes"
+    # Team AB/IP and AVG/ERA/WHIP rate baselines the board was built with, stamped
+    # at New Draft right after the rebuild, so freezing the draft records the scale
+    # the board really used.
+    BOARD_SCALE = "board_scale"
 
 
 @dataclass

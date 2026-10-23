@@ -300,6 +300,10 @@ def test_rate_baselines_are_the_measured_waiver_lines_rates():
         pytest.approx(sum(x["h"] for x in hitters) / sum(x["ab"] for x in hitters))
         == pv.REPLACEMENT_AVG
     )
+    # The numbers themselves, so a wrong derivation can't pass by matching itself.
+    assert round(pv.REPLACEMENT_AVG, 4) == 0.2455
+    assert round(pv.REPLACEMENT_ERA, 3) == 4.226
+    assert round(pv.REPLACEMENT_WHIP, 3) == 1.287
     assert pv.REPLACEMENT_RATES == {
         "avg": pv.REPLACEMENT_AVG,
         "era": pv.REPLACEMENT_ERA,

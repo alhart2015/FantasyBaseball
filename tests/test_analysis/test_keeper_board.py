@@ -126,3 +126,9 @@ def test_var_nets_a_pitcher_against_his_role_floor():
         [float("nan"), "SP", "RP"],
     )
     assert got == [pytest.approx(2.0), pytest.approx(2.0), pytest.approx(4.0)]
+
+
+def test_var_refuses_a_pitcher_without_a_role_against_sp_rp_floors():
+    """Without a role (or innings) calculate_var would net him as a 0-IP reliever."""
+    with pytest.raises(ValueError, match="SP / RP role"):
+        kb.var([11.0], [["P"]], {"SP": 9.0, "RP": 7.0})

@@ -165,8 +165,6 @@ def board_scale(season: int, ours_hit, ours_pit, config, conn) -> ScaleInputs:
         hitters,
         pitchers,
         get_positions(conn),
-        config.roster_slots or None,
-        config.num_teams,
         sgp_overrides=config.sgp_overrides,
     )
     return scale

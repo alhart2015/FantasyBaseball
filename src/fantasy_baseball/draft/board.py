@@ -29,8 +29,9 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class ScaleInputs:
-    """Pool-derived scale a board was built on, so realized/estimate VAR can be
-    scored on the SAME scale as the board. Returned by build_board_from_frames."""
+    """The scale a board was built on (denominators, AVG / ERA / WHIP rate baselines,
+    replacement floors, team volumes), so realized/estimate VAR can be scored on the
+    SAME scale as the board. Returned by build_board_from_frames."""
 
     denoms: dict[Category, float]
     repl_rates: dict[str, Any]
@@ -112,6 +113,7 @@ def build_board_from_frames(
     sgp_overrides: SgpOverrides | None = None,
     team_ab: int = DEFAULT_TEAM_AB,
     team_ip: int = DEFAULT_TEAM_IP,
+    repl_rates: dict[str, float] | None = None,
 ) -> tuple[pd.DataFrame, ScaleInputs]:
     """Compute a ranked draft board from already-loaded projection frames + a
     positions dict.
@@ -120,6 +122,10 @@ def build_board_from_frames(
     CSV source). Returns ``(board, scale)`` where ``scale`` carries the fixed
     rate baselines + floors + team volumes so realized/estimate VAR can be scored on the SAME
     scale. Callers that only need the board (build_draft_board) discard ``scale``.
+
+    ``repl_rates`` (AVG / ERA / WHIP) defaults to ``REPLACEMENT_RATES``, the one set
+    every model scores against (#521). Only draft-value passes others: it rebuilds a
+    past draft day on the rates that board was actually scored with.
     """
     # Build normalized lookup for positions.
     # When names collide after normalization (e.g. 'José Ramírez' the 3B
@@ -146,7 +152,7 @@ def build_board_from_frames(
 
     # AVG / ERA / WHIP are scored against the measured waiver lines' rates, the same
     # fixed baselines every other model uses (#521), not rates derived from this pool.
-    repl_rates = dict(REPLACEMENT_RATES)
+    repl_rates = dict(REPLACEMENT_RATES if repl_rates is None else repl_rates)
     pool["total_sgp"] = pool.apply(
         lambda row: calculate_player_sgp(
             row,
