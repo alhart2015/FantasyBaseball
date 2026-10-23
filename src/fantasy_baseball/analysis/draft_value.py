@@ -27,9 +27,9 @@ from fantasy_baseball.sgp.rankings import rank_key
 from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
+    COUNTING_STATS,
     HITTING_CATEGORIES,
     PITCHING_CATEGORIES,
-    RATE_STATS,
 )
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.utils.rate_stats import calculate_avg, calculate_era, calculate_whip
@@ -231,9 +231,15 @@ _LINE_KEYS: dict[PlayerType, tuple[str, ...]] = {
     PlayerType.HITTER: (*(c.value.lower() for c in HITTING_CATEGORIES), "ab"),
     PlayerType.PITCHER: (*(c.value.lower() for c in PITCHING_CATEGORIES), "ip"),
 }
-_RATE_KEYS = frozenset(c.value.lower() for c in RATE_STATS)
 _COUNTING_KEYS: dict[PlayerType, tuple[str, ...]] = {
-    t: tuple(k for k in keys if k not in _RATE_KEYS) for t, keys in _LINE_KEYS.items()
+    PlayerType.HITTER: (
+        *(c.value.lower() for c in HITTING_CATEGORIES if c in COUNTING_STATS),
+        "ab",
+    ),
+    PlayerType.PITCHER: (
+        *(c.value.lower() for c in PITCHING_CATEGORIES if c in COUNTING_STATS),
+        "ip",
+    ),
 }
 
 
@@ -288,10 +294,11 @@ def score_var(
 
     ``fraction < 1.0`` applies the YTD to-date scaling: the team volumes scale by
     ``fraction`` and the position floors are recomputed on the same to-date scale,
-    while rates (AVG/ERA/WHIP) are held. The to-date floors default to ``_to_date_floors(scale, fraction)``
-    (which early-returns the board floors at ``fraction==1.0``, so the projected path
-    stays cheap); pass a prebuilt ``floors`` to reuse one dict across the many YTD calls
-    at a fixed ``fraction`` instead of rebuilding it each call.
+    while rates (AVG/ERA/WHIP) are held. The to-date floors default to
+    ``_to_date_floors(scale, fraction)`` (which early-returns the board floors at
+    ``fraction==1.0``, so the projected path stays cheap); pass a prebuilt ``floors``
+    to reuse one dict across the many YTD calls at a fixed ``fraction`` instead of
+    rebuilding it each call.
 
     ``scale_counting`` governs the LINE's counting stats. The EXPECTED / par side
     (a projected full-season line) keeps the default ``True`` so its counting stats

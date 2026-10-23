@@ -10,13 +10,18 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Literal
+from typing import Literal, get_args
 
 PtBucket = Literal["low", "mid", "high"]
 StreakCategory = Literal["hr", "r", "rbi", "sb", "avg"]
 StreakLabel = Literal["hot", "cold", "neutral"]
 ColdMethod = Literal["empirical", "poisson_p10", "poisson_p20"]
 StreakDirection = Literal["above", "below"]
+
+# Runtime views of the Literals above, for validating strings read back from DuckDB.
+STREAK_CATEGORIES: tuple[StreakCategory, ...] = get_args(StreakCategory)
+STREAK_DIRECTIONS: tuple[StreakDirection, ...] = get_args(StreakDirection)
+COLD_METHODS: tuple[ColdMethod, ...] = get_args(ColdMethod)
 
 # Dense cats get empirical p10/p90 labels; sparse cats (count-poor) get
 # skill-relative Poisson cold thresholds and are modeled hot-only.

@@ -27,6 +27,7 @@ from sklearn.preprocessing import StandardScaler
 from fantasy_baseball.streaks.data.load_model_fits import upsert_model_fits
 from fantasy_baseball.streaks.models import (
     SPARSE_CATEGORIES,
+    STREAK_CATEGORIES,
     ModelFit,
     StreakCategory,
     StreakDirection,
@@ -49,11 +50,20 @@ PHASE_4_MODELS: tuple[tuple[StreakCategory, StreakDirection], ...] = (
 # Defense-in-depth guard for SQL interpolation in the helpers below: even
 # though ``category`` is typed as ``StreakCategory`` (a Literal), Python does
 # not enforce Literal membership at runtime.
-_VALID_CATEGORIES: frozenset[str] = frozenset({"hr", "r", "rbi", "sb", "avg"})
+_VALID_CATEGORIES: frozenset[str] = frozenset(STREAK_CATEGORIES)
 
 # Sparse hot rows are duplicated across poisson_p10/poisson_p20 in
 # hitter_streak_labels. Phase 4 dedupes to a single partition for training.
 SPARSE_HOT_COLD_METHOD: Literal["poisson_p20"] = "poisson_p20"
+
+# The label partition a model trains (and scores) on: one per category.
+ModelColdMethod = Literal["empirical", "poisson_p20"]
+
+
+def model_cold_method(category: StreakCategory) -> ModelColdMethod:
+    """Label partition for ``category``: empirical for dense, poisson_p20 for sparse."""
+    return SPARSE_HOT_COLD_METHOD if category in SPARSE_CATEGORIES else "empirical"
+
 
 # Final ordered list of feature column names in the training frame.
 EXPECTED_FEATURE_COLUMNS: tuple[str, ...] = (
@@ -617,7 +627,7 @@ class PerModelResult:
     permutation_importance: dict[str, tuple[float, float]]
     n_train_rows: int
     n_val_rows: int
-    cold_method: Literal["empirical", "poisson_p20"]
+    cold_method: ModelColdMethod
 
 
 @dataclass(frozen=True)
@@ -719,9 +729,7 @@ def _fit_one_phase_4_model(
         n_repeats=10,
         random_state=random_state,
     )
-    cold_method: Literal["empirical", "poisson_p20"] = (
-        SPARSE_HOT_COLD_METHOD if category in SPARSE_CATEGORIES else "empirical"
-    )
+    cold_method = model_cold_method(category)
     return PerModelResult(
         fit=fit_result,
         evaluation=eval_result,
