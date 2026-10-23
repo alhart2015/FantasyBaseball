@@ -153,6 +153,27 @@ def test_worst_of_type_picks_lowest_projection():
     assert worst.name == "Bad"
 
 
+def test_worst_of_type_ranks_by_rest_of_season_not_full_season():
+    """A call-up has a tiny banked line but a strong ROS; a fading vet banked a big
+    April. The MC scores ROS, so the vet -- not the call-up -- is the drop (#300)."""
+    from fantasy_baseball.sgp.denominators import get_sgp_denominators
+
+    small = {"r": 10, "hr": 3, "rbi": 10, "sb": 1, "h": 25, "ab": 100, "pa": 110, "g": 25}
+    big = {"r": 60, "hr": 20, "rbi": 65, "sb": 8, "h": 110, "ab": 400, "pa": 440, "g": 105}
+    callup = dataclasses.replace(
+        _hit("Callup"),
+        rest_of_season=HitterStats.from_dict(big),
+        full_season_projection=HitterStats.from_dict(small),
+    )
+    vet = dataclasses.replace(
+        _hit("Vet"),
+        rest_of_season=HitterStats.from_dict(small),
+        full_season_projection=HitterStats.from_dict(big),
+    )
+    worst = worst_of_type([callup, vet], PlayerType.HITTER, get_sgp_denominators(None))
+    assert worst.name == "Vet"
+
+
 def test_build_trade_scenario_keeps_sizes_and_moves_player():
     # tests/test_analysis is a package (has __init__.py), so import the sibling
     # fixture by its package-qualified name, not a bare module name.
