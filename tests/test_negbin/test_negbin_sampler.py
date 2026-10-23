@@ -187,3 +187,16 @@ def test_apply_variance_wires_banded_sb_dispersion(monkeypatch):
     assert abs(sb.mean() - 2.0) < 0.05  # unbiased (no +2.6% inflation)
     assert abs(sb.var() / expected_var - 1.0) < 0.12
     assert np.all(sb >= 0)
+
+
+def test_pitcher_correlation_is_the_measured_matrix():
+    """#198: the copula matrix is measured (scripts/calibrate_stat_dispersion.py), not
+    the old one-number 0.729 for every er/bb/h pair. Walks and hits barely move
+    together (2022-2024: +0.195); earned runs move with hits far more than with walks."""
+    from fantasy_baseball.utils.constants import PITCHER_CORRELATION
+
+    c = np.array(PITCHER_CORRELATION)
+    i = {k: n for n, k in enumerate(PITCHER_CORR_STATS)}
+    assert np.allclose(c, c.T) and np.all(np.linalg.eigvalsh(c) > 0)
+    assert c[i["bb"], i["h_allowed"]] < 0.3
+    assert c[i["er"], i["h_allowed"]] > c[i["er"], i["bb"]] > c[i["bb"], i["h_allowed"]]

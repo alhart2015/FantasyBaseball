@@ -1,5 +1,7 @@
 """Calibrate per-stat Negative-Binomial dispersion from projection-vs-actual
-residuals, conditional on realized playing time (2022-2024).
+residuals, conditional on realized playing time (2022-2024), and the correlation
+between a player's stats that the Monte Carlo's Gaussian copula draws with
+(HITTER_CORRELATION / PITCHER_CORRELATION, #198).
 
 Mirrors scripts/calibrate_playing_time.py's data handling. Emits a
 STAT_DISPERSION dict (per-stat r, with a Poisson sentinel) for paste into
@@ -20,6 +22,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 from scipy.optimize import minimize_scalar
+from scipy.special import ndtri
 from scipy.stats import nbinom, poisson
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -216,6 +219,99 @@ def build_residuals(kind: str) -> dict[str, pd.DataFrame]:
     }
 
 
+def build_joint(kind: str) -> pd.DataFrame:
+    """One row per player-season with every stat's actual and mu (``build_residuals``'
+    rows, joined across stats), so the copula correlation is measured on the same
+    player-seasons for each pair. ``<key>_x`` actual, ``<key>_mu`` mean."""
+    is_hitter = kind == "hitters"
+    pt = "PA" if is_hitter else "IP"
+    colmap = HITTER_COLS if is_hitter else PITCHER_COLS
+    cols = [pt, *colmap.values()]
+    out = []
+    for year in YEARS:
+        proj = _blend_proj(year, kind, cols)
+        actual = _read(STATS_DIR / f"{kind}-{year}.csv", cols)
+        if proj.empty or actual.empty:
+            continue
+        m = proj.merge(actual, on="MLBAMID", suffixes=("_proj", "_act"))
+        m = m[(m[f"{pt}_act"] > 0) & (m[f"{pt}_proj"] > 0)]
+        d = pd.DataFrame({"year": year}, index=m.index)
+        for key, col in colmap.items():
+            d[f"{key}_x"] = m[f"{col}_act"].astype(float)
+            d[f"{key}_mu"] = (m[f"{col}_proj"] / m[f"{pt}_proj"] * m[f"{pt}_act"]).astype(float)
+        out.append(d)
+    return pd.concat(out, ignore_index=True) if out else pd.DataFrame()
+
+
+def copula_scores(
+    x: np.ndarray, mu: np.ndarray, r: np.ndarray, rng: np.random.Generator
+) -> np.ndarray:
+    """Normal scores of randomized PITs under NegBin(mu, r) (r inf = Poisson): the
+    latent z the MC's copula maps through each stat's marginal."""
+    x = np.asarray(x, float)
+    lo, hi = np.empty_like(x), np.empty_like(x)
+    pois = np.isinf(r)
+    hi[pois] = poisson.cdf(x[pois], mu[pois])
+    lo[pois] = poisson.cdf(x[pois] - 1, mu[pois])
+    p = r[~pois] / (r[~pois] + mu[~pois])
+    hi[~pois] = nbinom.cdf(x[~pois], r[~pois], p)
+    lo[~pois] = nbinom.cdf(x[~pois] - 1, r[~pois], p)
+    u = lo + rng.random(len(x)) * (hi - lo)
+    return np.asarray(ndtri(np.clip(u, 1e-6, 1 - 1e-6)))
+
+
+def copula_correlation(
+    joint: pd.DataFrame,
+    keys: list[str],
+    dispersion: dict,
+    n_draws: int = 20,
+    seed: int = 198,
+) -> np.ndarray:
+    """Correlation of the copula scores for each pair of stats, on the rows where both
+    have a positive mean (a 0-mean stat draws 0 whatever its z), averaged over
+    ``n_draws`` PIT jitters. Then nudged to the nearest positive-definite matrix so
+    the MC's Cholesky works (pairwise rows can differ, e.g. sv only for relievers)."""
+    from fantasy_baseball.utils.dispersion import resolve_dispersion_r
+
+    rng = np.random.default_rng(seed)
+    z = {}
+    for key in keys:
+        mu = joint[f"{key}_mu"].to_numpy()
+        ok = mu > 0
+        zk = np.full((n_draws, len(joint)), np.nan)
+        r = resolve_dispersion_r(dispersion[key], mu[ok])
+        x = joint[f"{key}_x"].to_numpy()[ok]
+        for t in range(n_draws):
+            zk[t, ok] = copula_scores(x, mu[ok], r, rng)
+        z[key] = zk
+    k = len(keys)
+    c = np.eye(k)
+    for i in range(k):
+        for j in range(i + 1, k):
+            both = ~np.isnan(z[keys[i]][0]) & ~np.isnan(z[keys[j]][0])
+            rho = np.mean(
+                [
+                    np.corrcoef(z[keys[i]][t, both], z[keys[j]][t, both])[0, 1]
+                    for t in range(n_draws)
+                ]
+            )
+            c[i, j] = c[j, i] = rho
+    w, v = np.linalg.eigh(c)
+    if w.min() < 1e-6:
+        c = v @ np.diag(np.clip(w, 1e-6, None)) @ v.T
+        d = np.sqrt(np.diag(c))
+        c = c / np.outer(d, d)
+    return c
+
+
+def _emit_correlation(name: str, keys: list[str], c: np.ndarray) -> None:
+    print(f"\n{name}: list[list[float]] = [")
+    print("    #  " + "  ".join(f"{k:>6}" for k in keys))
+    for i, key in enumerate(keys):
+        print("    [" + ", ".join(f"{c[i, j]:+.3f}" for j in range(len(keys))) + f"],  # {key}")
+    print("]")
+
+
 def loso_coverage(data: pd.DataFrame, levels: tuple[float, ...] = (0.50, 0.80)) -> pd.DataFrame:
     """Leave-one-season-out coverage: fit r on the other years, test on the held-out."""
     rows = []
@@ -334,6 +430,16 @@ def main() -> None:
             print(diag.to_string(index=False))
 
     _emit_dispersion(dispersion)
+
+    print("\n" + "=" * 72)
+    print("COPULA CORRELATIONS (normal scores of PITs under the fitted marginals)")
+    for kind, keys, name in (
+        ("hitters", HITTER_CORR_STATS, "HITTER_CORRELATION"),
+        ("pitchers", PITCHER_CORR_STATS, "PITCHER_CORRELATION"),
+    ):
+        joint = build_joint(kind)
+        print(f"\n  {kind}: {len(joint)} player-seasons")
+        _emit_correlation(name, keys, copula_correlation(joint, keys, dispersion))
 
 
 if __name__ == "__main__":
