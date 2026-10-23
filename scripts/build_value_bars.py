@@ -32,7 +32,7 @@ sys.stdout.reconfigure(encoding="utf-8", errors="replace")  # type: ignore[union
 
 from fantasy_baseball.config import load_config
 from fantasy_baseball.sgp.denominators import get_sgp_denominators
-from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+from fantasy_baseball.sgp.replacement import league_replacement_levels
 from fantasy_baseball.trajectory.board import (
     _collapse,
     _pitcher_slots,
@@ -85,7 +85,7 @@ def main() -> int:
     out = args.out or (PROJECT_ROOT / VALUE_BARS_PATH)
 
     config = load_config(PROJECT_ROOT / "config" / "league.yaml")
-    levels = position_aware_replacement_levels(get_sgp_denominators(config.sgp_overrides))
+    levels = league_replacement_levels(config.sgp_overrides)
     ranks = league_ranks(config.num_teams, config.keepers_per_team)
 
     panels: dict[str, pd.DataFrame] = {}

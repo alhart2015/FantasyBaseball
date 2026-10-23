@@ -3,7 +3,7 @@ from typing import Any
 import pandas as pd
 
 from fantasy_baseball.models.player import PlayerType
-from fantasy_baseball.sgp.denominators import get_sgp_denominators
+from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
 from fantasy_baseball.sgp.player_value import (
     REPLACEMENT_AVG,
     REPLACEMENT_ERA,
@@ -210,3 +210,18 @@ def position_aware_replacement_levels(
         "RP", denoms, replacement_era, replacement_whip, team_ip=team_ip, fraction=fraction
     )
     return levels
+
+
+def league_replacement_levels(sgp_overrides: SgpOverrides | None) -> dict[str, float]:
+    """The league's replacement floors: THE source for every live model.
+
+    The measured waiver lines (``REPLACEMENT_BY_POSITION``) scored on the fixed
+    AVG / ERA / WHIP baselines (``REPLACEMENT_RATES``, #521), the league's SGP
+    denominators (pass ``config.sgp_overrides``; ``None`` only where there is no
+    league config) and the default team volumes. The draft board, the recommender,
+    the trajectory boards, the keeper report and the value bars all read their
+    floors here, so none can assemble the inputs differently. The one deliberate
+    exception is draft-value, which rebuilds a past draft day's floors from that
+    day's frozen scale (``position_aware_replacement_levels`` with its inputs).
+    """
+    return position_aware_replacement_levels(get_sgp_denominators(sgp_overrides))

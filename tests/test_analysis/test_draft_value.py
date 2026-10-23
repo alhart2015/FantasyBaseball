@@ -916,7 +916,10 @@ def test_board_floors_match_the_floors_every_other_model_uses():
     from fantasy_baseball.data.yahoo_players import load_positions_cache
     from fantasy_baseball.draft.board import build_board_from_frames
     from fantasy_baseball.sgp.player_value import REPLACEMENT_RATES
-    from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+    from fantasy_baseball.sgp.replacement import (
+        league_replacement_levels,
+        position_aware_replacement_levels,
+    )
 
     cfg = dv.load_config(dv._CONFIG)
     hitters, pitchers, _ = blend_projections(
@@ -932,6 +935,11 @@ def test_board_floors_match_the_floors_every_other_model_uses():
         scale.denoms, team_ab=scale.team_ab, team_ip=scale.team_ip
     )
     assert scale.replacement_levels == pytest.approx(plain)
+    # ...and the live board, at the league's denominators, is the one shared source.
+    _board, live = build_board_from_frames(
+        hitters, pitchers, load_positions_cache(dv._POSITIONS_JSON), sgp_overrides=cfg.sgp_overrides
+    )
+    assert live.replacement_levels == pytest.approx(league_replacement_levels(cfg.sgp_overrides))
 
 
 def test_draft_value_rebuilds_2026_on_its_draft_day_rates():

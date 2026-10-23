@@ -52,7 +52,7 @@ from fantasy_baseball.models.positions import Position, UnknownPositions, player
 from fantasy_baseball.pitcher_ros import aging
 from fantasy_baseball.pitcher_ros.evaluate import read_fangraphs_pitchers
 from fantasy_baseball.pt_model import range_inputs as ri
-from fantasy_baseball.sgp.replacement import position_aware_replacement_levels
+from fantasy_baseball.sgp.replacement import league_replacement_levels
 from fantasy_baseball.utils.name_utils import normalize_name
 from fantasy_baseball.web.season_data import read_cache_with_meta
 
@@ -225,7 +225,7 @@ def main() -> int:
         ]
     )
     board["name"] = names.reindex(board.index).fillna("?").to_numpy()
-    levels = position_aware_replacement_levels(denoms)
+    levels = league_replacement_levels(config.sgp_overrides)
     teams = pd.concat([fangraphs_teams(hit_pt), fangraphs_teams(pit_pt)])
     teams = teams[~teams.index.duplicated()]
     rostered, written, unread = rosters(config.team_name)

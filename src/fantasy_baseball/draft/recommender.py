@@ -14,10 +14,8 @@ from fantasy_baseball.draft.roster_state import (
 )
 from fantasy_baseball.models.player import PlayerType
 from fantasy_baseball.models.positions import Position
-from fantasy_baseball.sgp.denominators import SgpOverrides, get_sgp_denominators
-from fantasy_baseball.sgp.replacement import (
-    position_aware_replacement_levels,
-)
+from fantasy_baseball.sgp.denominators import SgpOverrides
+from fantasy_baseball.sgp.replacement import league_replacement_levels
 from fantasy_baseball.sgp.var import calculate_var
 from fantasy_baseball.utils.constants import (
     CLOSER_SV_THRESHOLD,
@@ -119,16 +117,6 @@ def calculate_vona_scores(
     return dict(zip(available["player_id"], vona_series, strict=False))
 
 
-def _replacement_levels(sgp_overrides: SgpOverrides | None = None) -> dict[str, float]:
-    """Position-aware empirical replacement floors: the measured waiver lines over
-    the fixed AVG/ERA/WHIP baselines (#521), at the league's SGP denominators.
-
-    A handful of SGP sums with no board scan, so it is computed per call rather
-    than cached.
-    """
-    return position_aware_replacement_levels(get_sgp_denominators(sgp_overrides))
-
-
 def get_recommendations(
     board: pd.DataFrame,
     drafted: list[str],
@@ -143,7 +131,7 @@ def get_recommendations(
     """Get top draft pick recommendations.
 
     Replacement floors are position-aware empirical waiver lines
-    (:func:`position_aware_replacement_levels`) -- static per-position and
+    (:func:`league_replacement_levels`) -- static per-position and
     SP/RP constants over fixed AVG/ERA/WHIP baselines (#521), not the old per-pick
     demand floors, so in-draft positional scarcity (e.g. a run on catchers) is not
     reflected in the VAR floor itself; it is surfaced via the scarcity note
@@ -164,7 +152,7 @@ def get_recommendations(
     # Empirical waiver floors over the fixed AVG/ERA/WHIP baselines (#521), the
     # basis build_draft_board scored ``total_sgp`` on. A board file built before
     # #521 was scored on other rates: rebuild it (--rebuild-board / New Draft).
-    repl_levels = _replacement_levels(sgp_overrides)
+    repl_levels = league_replacement_levels(sgp_overrides)
 
     # Only recompute VAR for top candidates (by pre-computed VAR).
     # The full pool sets replacement levels accurately, but iterating

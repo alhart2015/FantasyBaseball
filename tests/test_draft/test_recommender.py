@@ -166,16 +166,18 @@ class TestSgpOverridesFloorsCacheKey:
         assert len(recs) == 3
 
     def test_enum_and_string_keys_give_the_same_floors(self):
-        from fantasy_baseball.draft.recommender import _replacement_levels
+        from fantasy_baseball.sgp.replacement import league_replacement_levels
         from fantasy_baseball.utils.constants import Category
 
-        assert _replacement_levels({"HR": 5.0}) == _replacement_levels({Category.HR: 5.0})
+        assert league_replacement_levels({"HR": 5.0}) == league_replacement_levels(
+            {Category.HR: 5.0}
+        )
 
     def test_mixed_enum_and_string_keys_work(self):
-        from fantasy_baseball.draft.recommender import _replacement_levels
+        from fantasy_baseball.sgp.replacement import league_replacement_levels
         from fantasy_baseball.utils.constants import Category
 
-        assert _replacement_levels({Category.HR: 5.0, "ERA": 0.05})
+        assert league_replacement_levels({Category.HR: 5.0, "ERA": 0.05})
 
 
 class TestRecommendationCoercion:
