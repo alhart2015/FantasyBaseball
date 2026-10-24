@@ -60,7 +60,7 @@ def test_copula_preserves_sign_of_correlation():
     r_er = np.full(n, 4.0)
     sv = _negbin_copula_counts(mu_sv, r_sv, z[:, i_sv], 1.0)
     er = _negbin_copula_counts(mu_er, r_er, z[:, i_er], 1.0)
-    # PITCHER_CORRELATION has sv vs er at -0.309 (#198) -> realized correlation negative.
+    # PITCHER_CORRELATION has sv vs er at -0.151 (#198) -> realized correlation negative.
     assert np.corrcoef(sv, er)[0, 1] < -0.1
 
 

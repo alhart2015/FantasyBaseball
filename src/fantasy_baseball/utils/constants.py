@@ -388,20 +388,24 @@ HITTER_CORRELATION: list[list[float]] = [
 # ERA/WHIP emerge from er/bb/h_allowed components, so we correlate those.
 # MEASURED (#198), not derived: the correlation of each pitcher-season's copula
 # scores -- normal scores of randomized PITs under the STAT_DISPERSION marginals,
-# means = projected rate x realized IP -- 2022-2024, 1,904 pitcher-seasons (the sv
-# pairs on the 392 with projected saves). Regenerate with
-# scripts/calibrate_stat_dispersion.py. 2025 held out agrees within ~0.05 (bb-h
-# +0.171, er-bb +0.381, er-h +0.778). The old matrix set er/bb/h to one 0.729
+# means = projected rate x realized IP -- 2022-2024, 1,904 pitcher-seasons.
+# Regenerate with scripts/calibrate_stat_dispersion.py, which also prints the 2025
+# holdout (bb-h +0.171, er-bb +0.381, er-h +0.778) and each pair's row count. A
+# recovery test (known correlations drawn through the same marginals) reads the
+# w/k/er/bb/h pairs back within ~0.03. The sv pairs are measured only on the 43
+# role-stable closers (projected and actual 20+ SV, the sv dispersion fit's rule):
+# a few saves are too few to measure from, and job loss is the role mixture's draw.
+# So they're rough (roughly +/-0.3 each). The old matrix set er/bb/h to one 0.729
 # borrowed from ERA/WHIP-level correlations; walks and hits barely move together.
 PITCHER_CORR_STATS: list[str] = ["w", "k", "sv", "er", "bb", "h_allowed"]
 PITCHER_CORRELATION: list[list[float]] = [
     #    w      k      sv     er     bb     h_a
-    [+1.000, +0.080, +0.062, -0.255, -0.126, -0.253],  # w
-    [+0.080, +1.000, +0.140, -0.152, -0.016, -0.217],  # k
-    [+0.062, +0.140, +1.000, -0.309, -0.182, -0.246],  # sv
-    [-0.255, -0.152, -0.309, +1.000, +0.428, +0.756],  # er
-    [-0.126, -0.016, -0.182, +0.428, +1.000, +0.195],  # bb
-    [-0.253, -0.217, -0.246, +0.756, +0.195, +1.000],  # h_allowed
+    [+1.000, +0.080, -0.196, -0.255, -0.126, -0.253],  # w
+    [+0.080, +1.000, +0.061, -0.151, -0.015, -0.217],  # k
+    [-0.196, +0.061, +1.000, -0.151, -0.163, +0.035],  # sv
+    [-0.255, -0.151, -0.151, +1.000, +0.428, +0.756],  # er
+    [-0.126, -0.015, -0.163, +0.428, +1.000, +0.194],  # bb
+    [-0.253, -0.217, +0.035, +0.756, +0.194, +1.000],  # h_allowed
 ]
 
 # Replacement-level full-season stats for waiver pickups.
