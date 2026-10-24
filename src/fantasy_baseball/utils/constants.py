@@ -369,6 +369,10 @@ ROS_PLAYING_TIME_QUANTILES: dict[str, list[dict[str, object]]] = {
 # Column order: r, hr, rbi, sb, h
 # AVG emerges from h/ab, so we correlate h (hits) with the counting stats.
 # h-to-counting correlations derived from AVG correlations with R/HR/RBI/SB.
+# NOT re-measured yet (the pitcher matrix was, #198): the measured 2022-2024 copula
+# matrix differs (e.g. r-hr +0.454, sb with anything ~0), printed by
+# scripts/calibrate_stat_dispersion.py. Hitting counting spreads already check out
+# honest (~1.0, #391/#393), so a change here needs that re-check first.
 HITTER_CORR_STATS: list[str] = ["r", "hr", "rbi", "sb", "h"]
 HITTER_CORRELATION: list[list[float]] = [
     #    r      hr     rbi    sb     h
@@ -382,16 +386,26 @@ HITTER_CORRELATION: list[list[float]] = [
 # Pitcher correlated stats and their correlation matrix.
 # Column order: w, k, sv, er, bb, h_allowed
 # ERA/WHIP emerge from er/bb/h_allowed components, so we correlate those.
-# er/bb/h_allowed correlations derived from ERA/WHIP correlations with W/K/SV.
+# MEASURED (#198), not derived: the correlation of each pitcher-season's copula
+# scores -- normal scores of randomized PITs under the STAT_DISPERSION marginals,
+# means = projected rate x realized IP -- 2022-2024, 1,904 pitcher-seasons.
+# Regenerate with scripts/calibrate_stat_dispersion.py, which also prints the 2025
+# holdout (bb-h +0.171, er-bb +0.381, er-h +0.778) and each pair's row count. A
+# recovery test (known correlations drawn through the same marginals) reads the
+# w/k/er/bb/h pairs back within ~0.03. The sv pairs are measured only on the 43
+# role-stable closers (projected and actual 20+ SV, the sv dispersion fit's rule):
+# a few saves are too few to measure from, and job loss is the role mixture's draw.
+# So they're rough (roughly +/-0.3 each). The old matrix set er/bb/h to one 0.729
+# borrowed from ERA/WHIP-level correlations; walks and hits barely move together.
 PITCHER_CORR_STATS: list[str] = ["w", "k", "sv", "er", "bb", "h_allowed"]
 PITCHER_CORRELATION: list[list[float]] = [
     #    w      k      sv     er     bb     h_a
-    [+1.000, +0.366, +0.030, -0.057, -0.105, -0.057],  # w
-    [+0.366, +1.000, +0.115, -0.237, -0.317, -0.237],  # k
-    [+0.030, +0.115, +1.000, -0.341, -0.345, -0.341],  # sv
-    [-0.057, -0.237, -0.341, +1.000, +0.729, +0.729],  # er
-    [-0.105, -0.317, -0.345, +0.729, +1.000, +0.729],  # bb
-    [-0.057, -0.237, -0.341, +0.729, +0.729, +1.000],  # h_allowed
+    [+1.000, +0.080, -0.196, -0.255, -0.126, -0.253],  # w
+    [+0.080, +1.000, +0.061, -0.151, -0.015, -0.217],  # k
+    [-0.196, +0.061, +1.000, -0.151, -0.163, +0.035],  # sv
+    [-0.255, -0.151, -0.151, +1.000, +0.428, +0.756],  # er
+    [-0.126, -0.015, -0.163, +0.428, +1.000, +0.194],  # bb
+    [-0.253, -0.217, +0.035, +0.756, +0.194, +1.000],  # h_allowed
 ]
 
 # Replacement-level full-season stats for waiver pickups.
