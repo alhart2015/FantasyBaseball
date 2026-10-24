@@ -415,8 +415,8 @@ PITCHER_CORRELATION: list[list[float]] = [
 # PITCHER_CORR_STATS. Hot hitters play more; shelled pitchers lose innings. Measured
 # 2022-2024 on the same rows as the matrices above; regenerate with
 # scripts/calibrate_stat_dispersion.py.
-HITTER_PT_CORRELATION: list[float] = [+0.197, +0.169, +0.168, +0.087, +0.334]
-PITCHER_PT_CORRELATION: list[float] = [+0.146, +0.125, +0.117, -0.381, -0.310, -0.293]
+HITTER_PT_CORRELATION: list[float] = [+0.197, +0.168, +0.168, +0.089, +0.334]
+PITCHER_PT_CORRELATION: list[float] = [+0.146, +0.125, +0.120, -0.382, -0.310, -0.293]
 
 # Replacement-level full-season stats for waiver pickups.
 # REPLACEMENT_HITTER/SP/RP are the legacy flat lines, still used by

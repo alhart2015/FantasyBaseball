@@ -264,17 +264,17 @@ def copula_scores(
     return np.asarray(ndtri(np.clip(u, 1e-6, 1 - 1e-6)))
 
 
-def copula_correlation(
+def copula_score_draws(
     joint: pd.DataFrame,
     keys: list[str],
     dispersion: dict,
     n_draws: int = 20,
     seed: int = 198,
-) -> np.ndarray:
-    """Correlation of the copula scores for each pair of stats, on the rows where both
-    have a positive mean (a 0-mean stat draws 0 whatever its z), averaged over
-    ``n_draws`` PIT jitters. Then nudged to the nearest positive-definite matrix so
-    the MC's Cholesky works (pairwise rows can differ, e.g. sv only for relievers)."""
+) -> dict[str, np.ndarray]:
+    """Per stat, ``n_draws`` x rows of copula scores (randomized-PIT jitters), NaN where
+    the stat's mean is 0 (a 0-mean stat draws 0 whatever its z). Shared by
+    ``copula_correlation`` and ``pt_link`` so the stat matrix and the playing-time
+    link are measured on the same draws."""
     from fantasy_baseball.utils.dispersion import resolve_dispersion_r
 
     rng = np.random.default_rng(seed)
@@ -288,6 +288,15 @@ def copula_correlation(
         for t in range(n_draws):
             zk[t, ok] = copula_scores(x, mu[ok], r, rng)
         z[key] = zk
+    return z
+
+
+def copula_correlation(keys: list[str], z: dict[str, np.ndarray]) -> np.ndarray:
+    """Correlation of the copula scores for each pair of stats, on the rows where both
+    are scored, averaged over the jitter draws. Then nudged to the nearest
+    positive-definite matrix so the MC's Cholesky works (pairwise rows can differ,
+    e.g. sv only for relievers)."""
+    n_draws = len(next(iter(z.values())))
     k = len(keys)
     c = np.eye(k)
     for i in range(k):
@@ -311,7 +320,9 @@ def copula_correlation(
 def pt_scores(joint: pd.DataFrame, kind: str) -> np.ndarray:
     """Normal score of each player-season's realized playing time under the MC's own
     full-season playing-time distribution for his projected volume (the inverse of
-    ``utils.playing_time.scale_from_uniform`` at fraction 1)."""
+    ``utils.playing_time.scale_from_uniform`` at fraction 1). Like the MC, uniforms
+    stay inside the ladder's p01..p99; quantiles floored at 0 are made strictly
+    increasing so the inversion is well defined."""
     from fantasy_baseball.models.player import PlayerType
     from fantasy_baseball.utils.constants import QUANTILE_LEVELS
     from fantasy_baseball.utils.playing_time import (
@@ -322,32 +333,27 @@ def pt_scores(joint: pd.DataFrame, kind: str) -> np.ndarray:
 
     ptype = PlayerType.HITTER if kind == "hitters" else PlayerType.PITCHER
     levels = np.asarray(QUANTILE_LEVELS)
+    ramp = np.arange(len(levels)) * 1e-9
     out = np.empty(len(joint))
     for i, (ratio, vol) in enumerate(zip(joint["pt_ratio"], joint["pt_vol"], strict=True)):
         mean_scale, cv = playing_time_params(ptype, vol)
         eff_mean, eff_sd = playing_time_moments(mean_scale, cv, 1.0)
         q = np.maximum(0.0, eff_mean + np.asarray(playing_time_shape(ptype, vol)) * eff_sd)
-        out[i] = np.interp(ratio, q, levels)
+        out[i] = np.interp(ratio, np.maximum.accumulate(q) + ramp, levels)
     return np.asarray(ndtri(out))
 
 
-def pt_link(joint: pd.DataFrame, keys: list[str], dispersion: dict, kind: str) -> np.ndarray:
+def pt_link(
+    joint: pd.DataFrame, keys: list[str], z: dict[str, np.ndarray], kind: str
+) -> np.ndarray:
     """Correlation of the playing-time score with each stat's copula score (#537):
     how far a player's performance (given his playing time) and his playing time
-    move together. Same rows and PIT jitter averaging as ``copula_correlation``."""
-    from fantasy_baseball.utils.dispersion import resolve_dispersion_r
-
-    rng = np.random.default_rng(537)
+    move together, on the same draws as ``copula_correlation``."""
     zpt = pt_scores(joint, kind)
     out = np.empty(len(keys))
     for i, key in enumerate(keys):
-        mu = joint[f"{key}_mu"].to_numpy()
-        ok = mu > 0
-        r = resolve_dispersion_r(dispersion[key], mu[ok])
-        x = joint[f"{key}_x"].to_numpy()[ok]
-        out[i] = np.mean(
-            [np.corrcoef(zpt[ok], copula_scores(x, mu[ok], r, rng))[0, 1] for _ in range(20)]
-        )
+        ok = ~np.isnan(z[key][0])
+        out[i] = np.mean([np.corrcoef(zpt[ok], zt[ok])[0, 1] for zt in z[key]])
     return out
 
 
@@ -486,8 +492,14 @@ def main() -> None:
     ):
         joint = build_joint(kind)
         print(f"\n  {kind}: {len(joint)} player-seasons")
-        _emit_correlation(name, keys, copula_correlation(joint, keys, dispersion))
-        link = pt_link(joint, keys, dispersion, kind)
+        z = copula_score_draws(joint, keys, dispersion)
+        corr = copula_correlation(keys, z)
+        _emit_correlation(name, keys, corr)
+        link = pt_link(joint, keys, z, kind)
+        joint_min = np.linalg.eigvalsh(
+            np.block([[np.ones((1, 1)), link[None, :]], [link[:, None], corr]])
+        ).min()
+        print(f"  joint (playing time + stats) matrix smallest eigenvalue: {joint_min:+.3f}")
         prefix = name.split("_")[0]
         print(f"\n{prefix}_PT_CORRELATION: list[float] = [")
         print("    " + ", ".join(f"{v:+.3f}" for v in link) + ",  # " + ", ".join(keys))

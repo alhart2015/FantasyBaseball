@@ -1302,26 +1302,45 @@ def test_low_volume_arm_fill_replaces_only_his_own_innings():
     assert out["ros_ip"].mean() < 20.0, out["ros_ip"].mean()
 
 
-def test_playing_time_link_ties_performance_to_playing_time():
+def test_playing_time_link_ties_performance_to_playing_time(monkeypatch):
     """#537: with the link, a hitter's draws that get more playing time also hit
     better per PA (hits are linked strongest); with it off they do not."""
     import fantasy_baseball.simulation as sim
 
     players = [{"pa": 600, "ab": 540, "h": 150, "r": 80, "hr": 25, "rbi": 80, "sb": 10}]
+    measured = sim.HITTER_PT_LINK
 
-    def rate_vs_pt(link):
-        old = sim.HITTER_PT_LINK
-        sim.HITTER_PT_LINK = link
-        try:
-            b = sim._apply_variance_batch(
-                players, "hitter", np.random.default_rng(5), 1.0, 20000, suppress_repl=True
-            )
-        finally:
-            sim.HITTER_PT_LINK = old
+    def rate_vs_pt(link, fraction=1.0):
+        monkeypatch.setattr(sim, "HITTER_PT_LINK", link)
+        b = sim._apply_variance_batch(
+            players, "hitter", np.random.default_rng(5), fraction, 20000, suppress_repl=True
+        )
         scale = b.scales[:, 0]
         ok = scale > 0.2
         per_pa = b.counts["h"][ok, 0] / scale[ok]
         return np.corrcoef(scale[ok], per_pa)[0, 1]
 
-    assert rate_vs_pt(sim.HITTER_PT_LINK) > 0.15
-    assert abs(rate_vs_pt(np.zeros_like(sim.HITTER_PT_LINK))) < 0.03
+    assert rate_vs_pt(measured) > 0.15
+    assert abs(rate_vs_pt(np.zeros_like(measured))) < 0.03
+    # In-season draws keep the link off until the in-season replay checks it (#394).
+    assert abs(rate_vs_pt(measured, fraction=0.5)) < 0.03
+
+
+def test_saves_are_left_out_of_the_playing_time_link():
+    import fantasy_baseball.simulation as sim
+
+    assert sim.PITCHER_PT_LINK[sim.PITCHER_IDX["sv"]] == 0.0
+    assert sim.PITCHER_PT_LINK[sim.PITCHER_IDX["er"]] < 0
+
+
+def test_an_invalid_link_is_refused():
+    """corr - link link' must stay positive definite, or the copula would draw from a
+    broken distribution with only a numpy warning."""
+    import pytest
+
+    import fantasy_baseball.simulation as sim
+
+    with pytest.raises(ValueError, match="not positive definite"):
+        sim._check_pt_link(np.eye(2), np.array([0.8, 0.8]), "test")
+    sim._check_pt_link(sim.HITTER_CORR_MATRIX, sim.HITTER_PT_LINK, "hitters")
+    sim._check_pt_link(sim.PITCHER_CORR_MATRIX, sim.PITCHER_PT_LINK, "pitchers")

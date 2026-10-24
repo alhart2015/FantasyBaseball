@@ -85,9 +85,33 @@ HITTER_CORR_MATRIX = np.array(HITTER_CORRELATION)
 PITCHER_CORR_MATRIX = np.array(PITCHER_CORRELATION)
 
 # Each stat latent's correlation with the player's playing-time latent (#537): hot
-# hitters play more, shelled pitchers lose innings. See _copula_latents.
+# hitters play more, shelled pitchers lose innings. See _copula_latents. SV is left
+# out: its mean rides the closer-role mixture, not the playing-time scale, so the
+# link measured on an IP-scaled save mean doesn't carry over.
 HITTER_PT_LINK = np.array(HITTER_PT_CORRELATION)
-PITCHER_PT_LINK = np.array(PITCHER_PT_CORRELATION)
+PITCHER_PT_LINK = np.array(
+    [
+        0.0 if s == "sv" else c
+        for s, c in zip(PITCHER_CORR_STATS, PITCHER_PT_CORRELATION, strict=True)
+    ]
+)
+
+
+def _check_pt_link(corr: np.ndarray, link: np.ndarray, label: str) -> None:
+    """The joint (playing time + stats) correlation must be valid, i.e. the conditional
+    covariance ``corr - link link'`` positive definite, or the copula would silently
+    draw from a broken distribution (numpy only warns)."""
+    smallest = float(np.linalg.eigvalsh(corr - np.outer(link, link)).min())
+    if smallest <= 1e-9:
+        raise ValueError(
+            f"{label}: correlation matrix minus the playing-time link is not positive "
+            f"definite (smallest eigenvalue {smallest:+.3g}); re-measure them together "
+            "(scripts/calibrate_stat_dispersion.py)"
+        )
+
+
+_check_pt_link(HITTER_CORR_MATRIX, HITTER_PT_LINK, "hitters")
+_check_pt_link(PITCHER_CORR_MATRIX, PITCHER_PT_LINK, "pitchers")
 
 _U_EPS = 1e-9
 
@@ -477,11 +501,26 @@ def _copula_latents(
     so every stat latent is still N(0, 1) with ``corr_matrix`` between stats (each
     stat's spread is unchanged), while it moves with the playing-time draw as
     measured (#537). Shape ``us.shape + (n_stats,)``.
+
+    The link was measured on FULL-SEASON playing time, so callers pass a zero link
+    for an in-season draw (``_pt_link_for``) until the in-season replay checks it
+    (#394).
     """
     z_pt = ndtri(np.clip(us, _U_EPS, 1.0 - _U_EPS))
     cond_cov = corr_matrix - np.outer(pt_link, pt_link)
     z = rng.multivariate_normal(np.zeros(len(pt_link)), cond_cov, size=us.shape)
     return np.asarray(z + z_pt[..., None] * pt_link)
+
+
+def _pt_link_for(
+    is_hitter: bool, fraction_remaining: float, ros_horizon: float | None
+) -> np.ndarray:
+    """The playing-time link for this draw: the measured one on a full-season draw,
+    zero in-season (see ``_copula_latents``)."""
+    link = HITTER_PT_LINK if is_hitter else PITCHER_PT_LINK
+    if fraction_remaining < 1.0 or ros_horizon is not None:
+        return np.zeros_like(link)
+    return link
 
 
 def _playing_time_scales(
@@ -490,7 +529,8 @@ def _playing_time_scales(
     rng: np.random.Generator,
     fraction_remaining: float,
 ) -> np.ndarray:
-    """Per-player playing-time multiplier (1.0 == exactly as projected).
+    """Per-player playing-time multiplier (1.0 == exactly as projected): the
+    scales of ``_playing_time_scales_and_uniforms``.
 
     Draws ``u ~ Uniform(0, 1)`` per player and maps it through the empirical
     standardized-z ladder for the player's projected volume (``utils.playing_time``),
@@ -499,7 +539,8 @@ def _playing_time_scales(
     hitters/SP with a ceiling near full health, role-change upside for relievers --
     instead of a symmetric Normal clipped at a flat (and physically impossible) 2.0.
     Over a partial season only the remaining playing time is at risk, so the haircut
-    and spread are damped inside ``scale_from_uniform``.
+    and spread are damped inside ``scale_from_uniform``. The uniforms behind them are
+    what the copula's playing-time link reads (``_copula_latents``).
     """
     return _playing_time_scales_and_uniforms(players, player_type, rng, fraction_remaining)[0]
 
@@ -510,8 +551,9 @@ def _playing_time_scales_and_uniforms(
     rng: np.random.Generator,
     fraction_remaining: float,
 ) -> tuple[np.ndarray, np.ndarray]:
-    """``_playing_time_scales`` plus the uniforms behind them, for the copula's
-    playing-time link (``_copula_latents``)."""
+    """Per-player playing-time multipliers and the uniforms behind them (see
+    ``_playing_time_scales``); production draws go through here so the copula can
+    tie performance to the same playing-time draw."""
     is_hitter = player_type == PlayerType.HITTER
     n = len(players)
     us = rng.random(n)
@@ -724,7 +766,8 @@ def _apply_variance(
 ) -> list[dict]:
     """Apply playing-time and correlated performance variance to a list of players.
 
-    Two independent sources of variance per player:
+    Two sources of variance per player, tied together on a full-season draw (#537:
+    a draw that plays more also performs better, like real players):
 
     - Playing time: a two-sided multiplier ``scale`` from the calibrated
       playing-time model (``_playing_time_scales``). ``scale`` can exceed 1.0
@@ -744,7 +787,7 @@ def _apply_variance(
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
     corr_matrix = HITTER_CORR_MATRIX if is_hitter else PITCHER_CORR_MATRIX
-    pt_link = HITTER_PT_LINK if is_hitter else PITCHER_PT_LINK
+    pt_link = _pt_link_for(is_hitter, fraction_remaining, None)
     idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
     n_corr = len(idx_map)
 
@@ -854,7 +897,8 @@ def _apply_variance_batch(
     per-stat values the scalar path yields, but with a leading iteration axis --
     and whose ``frac_missed`` is the per-(iter, player) playing-time shortfall.
     Identical model: per-player playing-time scale (calibrated z-ladder), a
-    correlated NegBin/Poisson copula draw, and replacement-level injury backfill.
+    correlated NegBin/Poisson copula draw (tied to the playing-time draw on a
+    full-season draw, #537), and replacement-level injury backfill.
     Injuries are not reported (the ROS MC discards them); only the stat values
     are needed downstream.
 
@@ -910,7 +954,7 @@ def _apply_variance_batch(
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
     corr_matrix = HITTER_CORR_MATRIX if is_hitter else PITCHER_CORR_MATRIX
-    pt_link = HITTER_PT_LINK if is_hitter else PITCHER_PT_LINK
+    pt_link = _pt_link_for(is_hitter, fraction_remaining, ros_horizon)
     idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
     n_corr = len(idx_map)
     n_players = len(players)
