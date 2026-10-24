@@ -236,6 +236,10 @@ def build_joint(kind: str) -> pd.DataFrame:
         m = proj.merge(actual, on="MLBAMID", suffixes=("_proj", "_act"))
         m = m[(m[f"{pt}_act"] > 0) & (m[f"{pt}_proj"] > 0)]
         d = pd.DataFrame({"year": year}, index=m.index)
+        # Playing time: realized / projected, and the projected volume that picks
+        # the MC's playing-time curve for him.
+        d["pt_ratio"] = (m[f"{pt}_act"] / m[f"{pt}_proj"]).astype(float)
+        d["pt_vol"] = m[f"{pt}_proj"].astype(float)
         for key, col in colmap.items():
             d[f"{key}_x"] = m[f"{col}_act"].astype(float)
             d[f"{key}_mu"] = (m[f"{col}_proj"] / m[f"{pt}_proj"] * m[f"{pt}_act"]).astype(float)
@@ -302,6 +306,49 @@ def copula_correlation(
         d = np.sqrt(np.diag(c))
         c = c / np.outer(d, d)
     return c
+
+
+def pt_scores(joint: pd.DataFrame, kind: str) -> np.ndarray:
+    """Normal score of each player-season's realized playing time under the MC's own
+    full-season playing-time distribution for his projected volume (the inverse of
+    ``utils.playing_time.scale_from_uniform`` at fraction 1)."""
+    from fantasy_baseball.models.player import PlayerType
+    from fantasy_baseball.utils.constants import QUANTILE_LEVELS
+    from fantasy_baseball.utils.playing_time import (
+        playing_time_moments,
+        playing_time_params,
+        playing_time_shape,
+    )
+
+    ptype = PlayerType.HITTER if kind == "hitters" else PlayerType.PITCHER
+    levels = np.asarray(QUANTILE_LEVELS)
+    out = np.empty(len(joint))
+    for i, (ratio, vol) in enumerate(zip(joint["pt_ratio"], joint["pt_vol"], strict=True)):
+        mean_scale, cv = playing_time_params(ptype, vol)
+        eff_mean, eff_sd = playing_time_moments(mean_scale, cv, 1.0)
+        q = np.maximum(0.0, eff_mean + np.asarray(playing_time_shape(ptype, vol)) * eff_sd)
+        out[i] = np.interp(ratio, q, levels)
+    return np.asarray(ndtri(out))
+
+
+def pt_link(joint: pd.DataFrame, keys: list[str], dispersion: dict, kind: str) -> np.ndarray:
+    """Correlation of the playing-time score with each stat's copula score (#537):
+    how far a player's performance (given his playing time) and his playing time
+    move together. Same rows and PIT jitter averaging as ``copula_correlation``."""
+    from fantasy_baseball.utils.dispersion import resolve_dispersion_r
+
+    rng = np.random.default_rng(537)
+    zpt = pt_scores(joint, kind)
+    out = np.empty(len(keys))
+    for i, key in enumerate(keys):
+        mu = joint[f"{key}_mu"].to_numpy()
+        ok = mu > 0
+        r = resolve_dispersion_r(dispersion[key], mu[ok])
+        x = joint[f"{key}_x"].to_numpy()[ok]
+        out[i] = np.mean(
+            [np.corrcoef(zpt[ok], copula_scores(x, mu[ok], r, rng))[0, 1] for _ in range(20)]
+        )
+    return out
 
 
 def _emit_correlation(name: str, keys: list[str], c: np.ndarray) -> None:
@@ -440,6 +487,11 @@ def main() -> None:
         joint = build_joint(kind)
         print(f"\n  {kind}: {len(joint)} player-seasons")
         _emit_correlation(name, keys, copula_correlation(joint, keys, dispersion))
+        link = pt_link(joint, keys, dispersion, kind)
+        prefix = name.split("_")[0]
+        print(f"\n{prefix}_PT_CORRELATION: list[float] = [")
+        print("    " + ", ".join(f"{v:+.3f}" for v in link) + ",  # " + ", ".join(keys))
+        print("]")
 
 
 if __name__ == "__main__":

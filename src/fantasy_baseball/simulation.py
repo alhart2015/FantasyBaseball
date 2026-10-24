@@ -10,7 +10,7 @@ from typing import Any, cast
 
 import numpy as np
 from scipy.special import _ufuncs as _scu  # Boost-backed nbinom ppf (see _nbinom_ppf_fast)
-from scipy.special import ndtr, pdtr, pdtrik
+from scipy.special import ndtr, ndtri, pdtr, pdtrik
 
 from fantasy_baseball.distributions import build_distributions
 from fantasy_baseball.mc_fill import (
@@ -40,10 +40,12 @@ from fantasy_baseball.utils.constants import (
     DEFAULT_TEAM_IP,
     HITTER_CORR_STATS,
     HITTER_CORRELATION,
+    HITTER_PT_CORRELATION,
     HITTING_COUNTING,
     LINEUP_LOCK_DAYS,
     PITCHER_CORR_STATS,
     PITCHER_CORRELATION,
+    PITCHER_PT_CORRELATION,
     PITCHING_COUNTING,
     QUANTILE_LEVELS,
     REGULAR_SEASON_DAYS,
@@ -81,6 +83,11 @@ PITCHER_IDX = {s: i for i, s in enumerate(PITCHER_CORR_STATS)}
 # Gaussian layer).
 HITTER_CORR_MATRIX = np.array(HITTER_CORRELATION)
 PITCHER_CORR_MATRIX = np.array(PITCHER_CORRELATION)
+
+# Each stat latent's correlation with the player's playing-time latent (#537): hot
+# hitters play more, shelled pitchers lose innings. See _copula_latents.
+HITTER_PT_LINK = np.array(HITTER_PT_CORRELATION)
+PITCHER_PT_LINK = np.array(PITCHER_PT_CORRELATION)
 
 _U_EPS = 1e-9
 
@@ -455,6 +462,28 @@ def _full_season_sv(player: Any) -> float:
     return safe_float(player.to_flat_dict().get("sv", 0.0))
 
 
+def _copula_latents(
+    rng: np.random.Generator,
+    corr_matrix: np.ndarray,
+    pt_link: np.ndarray,
+    us: np.ndarray,
+) -> np.ndarray:
+    """The copula's unit-variance stat latents, one vector per playing-time uniform.
+
+    Drawn conditional on each player's playing-time latent ``z_pt = Phi^-1(us)``:
+
+        z_stats | z_pt ~ N(pt_link * z_pt, corr_matrix - pt_link pt_link')
+
+    so every stat latent is still N(0, 1) with ``corr_matrix`` between stats (each
+    stat's spread is unchanged), while it moves with the playing-time draw as
+    measured (#537). Shape ``us.shape + (n_stats,)``.
+    """
+    z_pt = ndtri(np.clip(us, _U_EPS, 1.0 - _U_EPS))
+    cond_cov = corr_matrix - np.outer(pt_link, pt_link)
+    z = rng.multivariate_normal(np.zeros(len(pt_link)), cond_cov, size=us.shape)
+    return np.asarray(z + z_pt[..., None] * pt_link)
+
+
 def _playing_time_scales(
     players: list,
     player_type: str,
@@ -472,6 +501,17 @@ def _playing_time_scales(
     Over a partial season only the remaining playing time is at risk, so the haircut
     and spread are damped inside ``scale_from_uniform``.
     """
+    return _playing_time_scales_and_uniforms(players, player_type, rng, fraction_remaining)[0]
+
+
+def _playing_time_scales_and_uniforms(
+    players: list,
+    player_type: str,
+    rng: np.random.Generator,
+    fraction_remaining: float,
+) -> tuple[np.ndarray, np.ndarray]:
+    """``_playing_time_scales`` plus the uniforms behind them, for the copula's
+    playing-time link (``_copula_latents``)."""
     is_hitter = player_type == PlayerType.HITTER
     n = len(players)
     us = rng.random(n)
@@ -481,7 +521,7 @@ def _playing_time_scales(
         mean_scale, cv_pt = playing_time_params(player_type, vol)
         ladder = playing_time_shape(player_type, vol)
         out[i] = scale_from_uniform(mean_scale, cv_pt, ladder, float(us[i]), fraction_remaining)
-    return out
+    return out, us
 
 
 # Hitter positions are every REPLACEMENT_BY_POSITION key that isn't a pitcher role,
@@ -704,6 +744,7 @@ def _apply_variance(
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
     corr_matrix = HITTER_CORR_MATRIX if is_hitter else PITCHER_CORR_MATRIX
+    pt_link = HITTER_PT_LINK if is_hitter else PITCHER_PT_LINK
     idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
     n_corr = len(idx_map)
 
@@ -711,9 +752,10 @@ def _apply_variance(
     if n == 0:
         return []
 
-    scales = _playing_time_scales(players, player_type, rng, fraction_remaining)
-    # Correlated unit-variance latents (the Gaussian copula's Gaussian layer).
-    all_z = rng.multivariate_normal(np.zeros(n_corr), corr_matrix, size=n)
+    scales, us = _playing_time_scales_and_uniforms(players, player_type, rng, fraction_remaining)
+    # Correlated unit-variance latents (the Gaussian copula's Gaussian layer), tied
+    # to each player's playing-time draw (#537).
+    all_z = _copula_latents(rng, corr_matrix, pt_link, us)
 
     # Per-(player, correlated-stat) NegBin mean (projection * playing-time scale)
     # and dispersion r (scalar or mu-banded, resolved from that mean). idx_map's
@@ -868,6 +910,7 @@ def _apply_variance_batch(
     is_hitter = player_type == PlayerType.HITTER
     counting_cols = HITTING_COUNTING if is_hitter else PITCHING_COUNTING
     corr_matrix = HITTER_CORR_MATRIX if is_hitter else PITCHER_CORR_MATRIX
+    pt_link = HITTER_PT_LINK if is_hitter else PITCHER_PT_LINK
     idx_map = HITTER_IDX if is_hitter else PITCHER_IDX
     n_corr = len(idx_map)
     n_players = len(players)
@@ -967,9 +1010,10 @@ def _apply_variance_batch(
             pin_role=availability_variance_off,
         )
 
-    # One flattened copula draw over every (iter, player, stat) cell. C-order
-    # ravel keeps mu/r/z aligned, same as the scalar path's per-team draw.
-    all_z = rng.multivariate_normal(np.zeros(n_corr), corr_matrix, size=(n_iter, n_players))
+    # One flattened copula draw over every (iter, player, stat) cell, tied to each
+    # (iter, player)'s playing-time uniform (#537). C-order ravel keeps mu/r/z
+    # aligned, same as the scalar path's per-team draw.
+    all_z = _copula_latents(rng, corr_matrix, pt_link, us)
     counts = _negbin_copula_counts(mu_mat.ravel(), r_mat.ravel(), all_z.ravel(), fr_var).reshape(
         n_iter, n_players, n_corr
     )

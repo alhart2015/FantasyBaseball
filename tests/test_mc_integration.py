@@ -108,7 +108,7 @@ _LEGACY_DEFAULT_COUNTS = {
 }
 
 
-def test_variance_batch_default_matches_legacy_columns():
+def test_variance_batch_default_matches_legacy_columns(monkeypatch):
     """RNG-stream-STABILITY: default path is byte-identical to pre-4a.
 
     This is NOT merely an arithmetic-equality check. The 4a refactor must not
@@ -119,7 +119,14 @@ def test_variance_batch_default_matches_legacy_columns():
     (extra draw, moved copula sampling), these pinned literals will diverge for a
     non-bug reason -- DO NOT "fix" that by re-pinning the snapshot; fix the rng
     drift instead.
+
+    The playing-time link (#537) changes the copula's VALUES on purpose without
+    touching the rng stream, so it is switched off here: with it off the draws
+    must be byte-identical to the snapshot.
     """
+    import fantasy_baseball.simulation as sim
+
+    monkeypatch.setattr(sim, "HITTER_PT_LINK", np.zeros_like(sim.HITTER_PT_LINK))
     rng = np.random.default_rng(12345)
     result = _apply_variance_batch(_players(), "hitter", rng, 0.4, 5)
     assert isinstance(result, VarianceBatch)
@@ -1293,3 +1300,28 @@ def test_low_volume_arm_fill_replaces_only_his_own_innings():
         _solo_eff_pitcher(part), 0.5, np.random.default_rng(8), 4000
     )
     assert out["ros_ip"].mean() < 20.0, out["ros_ip"].mean()
+
+
+def test_playing_time_link_ties_performance_to_playing_time():
+    """#537: with the link, a hitter's draws that get more playing time also hit
+    better per PA (hits are linked strongest); with it off they do not."""
+    import fantasy_baseball.simulation as sim
+
+    players = [{"pa": 600, "ab": 540, "h": 150, "r": 80, "hr": 25, "rbi": 80, "sb": 10}]
+
+    def rate_vs_pt(link):
+        old = sim.HITTER_PT_LINK
+        sim.HITTER_PT_LINK = link
+        try:
+            b = sim._apply_variance_batch(
+                players, "hitter", np.random.default_rng(5), 1.0, 20000, suppress_repl=True
+            )
+        finally:
+            sim.HITTER_PT_LINK = old
+        scale = b.scales[:, 0]
+        ok = scale > 0.2
+        per_pa = b.counts["h"][ok, 0] / scale[ok]
+        return np.corrcoef(scale[ok], per_pa)[0, 1]
+
+    assert rate_vs_pt(sim.HITTER_PT_LINK) > 0.15
+    assert abs(rate_vs_pt(np.zeros_like(sim.HITTER_PT_LINK))) < 0.03

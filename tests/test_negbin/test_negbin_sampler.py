@@ -178,7 +178,9 @@ def test_apply_variance_wires_banded_sb_dispersion(monkeypatch):
     ]
     # Stub PT scale to 1.0 so mu == projection (frac_missed=0, no repl backfill).
     monkeypatch.setattr(
-        sim, "_playing_time_scales", lambda players, ptype, rng, fr: np.ones(len(players))
+        sim,
+        "_playing_time_scales_and_uniforms",
+        lambda players, ptype, rng, fr: (np.ones(len(players)), rng.random(len(players))),
     )
     adj = sim._apply_variance(players, PlayerType.HITTER, rng, [], 1.0)
     sb = np.array([a["sb"] for a in adj])

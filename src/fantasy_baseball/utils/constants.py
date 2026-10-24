@@ -369,10 +369,14 @@ ROS_PLAYING_TIME_QUANTILES: dict[str, list[dict[str, object]]] = {
 # Column order: r, hr, rbi, sb, h
 # AVG emerges from h/ab, so we correlate h (hits) with the counting stats.
 # h-to-counting correlations derived from AVG correlations with R/HR/RBI/SB.
-# NOT re-measured yet (the pitcher matrix was, #198): the measured 2022-2024 copula
-# matrix differs (e.g. r-hr +0.454, sb with anything ~0), printed by
-# scripts/calibrate_stat_dispersion.py. Hitting counting spreads already check out
-# honest (~1.0, #391/#393), so a change here needs that re-check first.
+# KEPT ON PURPOSE as a team-level stand-in (#537 / #538): the within-player matrix
+# measured the pitcher way is lower (r-hr +0.454, r-rbi +0.370, sb with anything ~0;
+# printed by scripts/calibrate_stat_dispersion.py, and the method recovers known
+# values within 0.06). But real teams' hitting categories move together more than
+# that plus the playing-time link produce (2022-2025 synthetic teams: real 3.91,
+# this matrix + link 3.96, measured + link 3.75), because something links different
+# players. This matrix overstates one player's links and stands in for that; switch
+# to the measured one once #538 models the cross-player link.
 HITTER_CORR_STATS: list[str] = ["r", "hr", "rbi", "sb", "h"]
 HITTER_CORRELATION: list[list[float]] = [
     #    r      hr     rbi    sb     h
@@ -403,6 +407,16 @@ PITCHER_CORRELATION: list[list[float]] = [
     [-0.126, -0.016, -0.182, +0.428, +1.000, +0.195],  # bb
     [-0.253, -0.217, -0.246, +0.756, +0.195, +1.000],  # h_allowed
 ]
+
+# Playing time <-> performance link (#537): the correlation between a player's
+# playing-time draw (normal score of his realized/projected PA or IP under the MC's
+# own full-season playing-time distribution) and each stat's copula score (his
+# performance GIVEN that playing time), aligned with HITTER_CORR_STATS /
+# PITCHER_CORR_STATS. Hot hitters play more; shelled pitchers lose innings. Measured
+# 2022-2024 on the same rows as the matrices above; regenerate with
+# scripts/calibrate_stat_dispersion.py.
+HITTER_PT_CORRELATION: list[float] = [+0.197, +0.169, +0.168, +0.087, +0.334]
+PITCHER_PT_CORRELATION: list[float] = [+0.146, +0.125, +0.117, -0.381, -0.310, -0.293]
 
 # Replacement-level full-season stats for waiver pickups.
 # REPLACEMENT_HITTER/SP/RP are the legacy flat lines, still used by
